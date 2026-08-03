@@ -256,10 +256,20 @@ def main() -> int:
     if SRC_DB == DEFAULT_SRC_DB:
         load_project_env(PROJECT_ROOT)
         SRC_DB = portfolio_db_path(PROJECT_ROOT)
+    # "db-backup", NOT "portfolio-db". This job READS the database through
+    # SQLite's online-backup API, which is explicitly safe while other writers
+    # work (and _integrity_ok below is what actually proves the snapshot good).
+    # Claiming the database's exclusive write set bought no safety and cost
+    # every scheduled run that overlapped any writer: JobLock is fail-fast with
+    # zero wait, so on 2026-08-03 the 02:45 run gave up 12 ms in with
+    # "write set busy: portfolio-db" while an hourly onboard job -- started at
+    # 01:17 and still running at 03:20 -- held it. Four consecutive scheduled
+    # backups were lost that way. The lock this job does need is against ANOTHER
+    # backup: two concurrent runs would race on dest_dir and its retention prune.
     lock = (
         nullcontext()
-        if inherited_lock_is_valid(PROJECT_ROOT, "portfolio-db")
-        else JobLock(PROJECT_ROOT, "backup_db_direct", ["portfolio-db"])
+        if inherited_lock_is_valid(PROJECT_ROOT, "db-backup")
+        else JobLock(PROJECT_ROOT, "backup_db_direct", ["db-backup"])
     )
     try:
         with lock:
