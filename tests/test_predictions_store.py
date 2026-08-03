@@ -188,6 +188,29 @@ def test_outcome_summary_counts_by_outcome(db: Path) -> None:
     assert summary == {"met": 2, "missed": 1, "mixed": 1, "pending": 1}
 
 
+def test_record_strips_inline_markdown_from_kpi_name(db: Path) -> None:
+    """kpi_name is a scalar (matcher key + rendered label); prediction_md is
+    prose and must keep its markdown untouched."""
+    pid = record(
+        ticker="GOOG",
+        source_kind="llm_bear_case",
+        prediction_md="**Cloud margin** expansion accelerating",
+        made_at=datetime(2025, 11, 1, tzinfo=UTC),
+        kpi_name="**cloud_operating_margin**",
+        db_path=db,
+    )
+    assert pid is not None
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT kpi_name, prediction_md FROM predictions WHERE id = ?", (pid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "cloud_operating_margin"
+    assert row[1] == "**Cloud margin** expansion accelerating"
+
+
 def test_record_returns_none_when_db_missing(tmp_path: Path) -> None:
     missing = tmp_path / "no.db"
     pid = record(

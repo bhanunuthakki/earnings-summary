@@ -162,6 +162,11 @@ def record(
     conclusion: str | None = None,
 ) -> int:
     """Insert one ledger row for a compose attempt and return its id."""
+    from llm.postprocess import strip_inline_markdown
+
+    # headline/conclusion are scalars (rendered plain in the standup thread and
+    # the workspace feed), not prose — an LLM-extracted condition_label/
+    # decision_summary or a distilled conclusion can carry inline markdown.
     cur = conn.execute(
         "INSERT INTO standup_messages("
         "  user_id, ticker, signal_kind, signature_sha, status, score, "
@@ -176,8 +181,8 @@ def record(
             score,
             session_id,
             turn_id,
-            conclusion,
-            signal.headline,
+            strip_inline_markdown(conclusion) if conclusion is not None else None,
+            strip_inline_markdown(signal.headline),
             json.dumps(signal.evidence, default=str, ensure_ascii=False),
             _now_iso(now),
         ),

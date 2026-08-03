@@ -121,6 +121,13 @@ def record(
     (ticker, source_kind, source_doc_id, kpi_name, target_period). When the
     natural key is incomplete (no kpi_name, no target_period), allows
     duplicates — matcher pipelines can dedupe later."""
+    from llm.postprocess import strip_inline_markdown
+
+    # kpi_name is a scalar (matcher key + rendered label); prediction_md is
+    # deliberately left untouched — it is prose that bear_case_grader writes
+    # already formatted.
+    if kpi_name is not None:
+        kpi_name = strip_inline_markdown(kpi_name)
     conn = _open(db_path)
     if conn is None:
         return None
