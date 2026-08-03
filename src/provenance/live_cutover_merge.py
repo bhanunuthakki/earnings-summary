@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
+import os
+from collections.abc import Generator, Iterable
+from contextlib import contextmanager
 from pathlib import Path
 from sqlite3 import Connection
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from provenance.immutable_artifact import require_no_reparse_points
+from provenance.latest_state_activation import (
+    CandidateFileIdentity,
+    candidate_file_identity,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Bumped through 0271 (2026-08-02). Migrations 0261-0269 add the governed
@@ -444,6 +451,14 @@ def plan_live_cutover_merge(
     """Plan exact live-authoritative deltas over one governed substrate."""
     live_path = live_database.resolve()
     governed_path = governed_database.resolve()
+    with _source_write_denial_fence((live_path, governed_path)):
+        return _plan_live_cutover_merge(live_path, governed_path)
+
+
+def _plan_live_cutover_merge(
+    live_path: Path,
+    governed_path: Path,
+) -> LiveCutoverMergePlan:
     if live_path == governed_path:
         raise LiveCutoverMergeError("live and governed databases must be distinct")
     live_source_before = _source_snapshot_sha256(live_path)
@@ -519,7 +534,7 @@ def plan_live_cutover_merge(
             raise LiveCutoverMergeError("governed source changed while planning")
         commitment_payload = {
             "policy_name": "additive_live_operational_authority_merge",
-            "policy_version": "4",
+            "policy_version": "5",
             "live_database": str(live_path),
             "governed_database": str(governed_path),
             "live_source_sha256": live_source_before,
@@ -531,7 +546,7 @@ def plan_live_cutover_merge(
         }
         return LiveCutoverMergePlan(
             policy_name="additive_live_operational_authority_merge",
-            policy_version="4",
+            policy_version="5",
             live_database=str(live_path),
             governed_database=str(governed_path),
             live_source_sha256=live_source_before,
@@ -555,33 +570,76 @@ def apply_live_cutover_merge(
     expected_plan_sha256: str,
 ) -> LiveCutoverMergeReceipt:
     """Copy the governed DB and atomically merge the committed live deltas."""
+    live_path = live_database.resolve()
+    governed_path = governed_database.resolve()
+    with _source_write_denial_fence((live_path, governed_path)):
+        return _apply_live_cutover_merge(
+            live_path,
+            governed_path,
+            destination_database,
+            expected_plan_sha256=expected_plan_sha256,
+        )
+
+
+def _apply_live_cutover_merge(
+    live_path: Path,
+    governed_path: Path,
+    destination_database: Path,
+    *,
+    expected_plan_sha256: str,
+) -> LiveCutoverMergeReceipt:
     destination = destination_database.resolve()
-    source_paths = {live_database.resolve(), governed_database.resolve()}
+    source_paths = {live_path, governed_path}
     if destination in source_paths:
         raise LiveCutoverMergeError("destination must not replace either source database")
     if destination.exists():
         raise LiveCutoverMergeError("destination already exists")
-    plan = plan_live_cutover_merge(live_database, governed_database)
+    plan = _plan_live_cutover_merge(live_path, governed_path)
     if plan.plan_sha256 != expected_plan_sha256:
         raise LiveCutoverMergeError(
             "plan commitment mismatch; rerun dry-run and review the new authority delta"
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    _copy_database(governed_database.resolve(), destination)
     applied: list[AppliedMergeTable] = []
-    connection = connect_sqlite(
-        destination,
-        role=SQLiteConnectionRole.WRITER,
-        schema_preflight=True,
-    )
-    live_connection = connect_sqlite(
-        live_database.resolve(),
-        role=SQLiteConnectionRole.READ_ONLY,
-    )
+    connection: Connection | None = None
+    live_connection: Connection | None = None
+    owned_destination_identity: CandidateFileIdentity | None = None
     try:
+        if _source_snapshot_sha256(live_path) != plan.live_source_sha256:
+            raise LiveCutoverMergeError("live source changed after plan acceptance")
+        if _source_snapshot_sha256(governed_path) != plan.governed_source_sha256:
+            raise LiveCutoverMergeError("governed source changed after plan acceptance")
+        owned_destination_identity = _copy_database(governed_path, destination)
+        if _source_snapshot_sha256(governed_path) != plan.governed_source_sha256:
+            raise LiveCutoverMergeError("governed source changed during candidate copy")
+        _require_owned_destination(destination, owned_destination_identity)
+        connection = connect_sqlite(
+            destination,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
+        live_connection = connect_sqlite(
+            live_path,
+            role=SQLiteConnectionRole.READ_ONLY,
+        )
+        live_connection.execute("BEGIN")
+        live_connection.execute("SELECT version_num FROM alembic_version").fetchone()
+        if _source_snapshot_sha256(live_path) != plan.live_source_sha256:
+            raise LiveCutoverMergeError("live source changed after plan acceptance")
         with connection:
             for table_plan in plan.tables:
-                _stage_live_table(connection, live_connection, table_plan)
+                staged_row_count, staged_rows_sha256 = _stage_live_table(
+                    connection,
+                    live_connection,
+                    table_plan,
+                )
+                if (
+                    staged_row_count != table_plan.live_row_count
+                    or staged_rows_sha256 != table_plan.live_rows_sha256
+                ):
+                    raise LiveCutoverMergeError(
+                        f"{table_plan.table} staged live rows differ from the reviewed plan"
+                    )
                 before = connection.total_changes
                 _merge_table(connection, table_plan)
                 changed_rows = connection.total_changes - before
@@ -606,41 +664,59 @@ def apply_live_cutover_merge(
                 "candidate integrity failed after additive merge: "
                 f"quick_check={quick_check}, foreign_keys={foreign_key_violations}"
             )
+        checkpoint = tuple(connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone())
+        if checkpoint[0] != 0 or checkpoint[1] != 0:
+            raise LiveCutoverMergeError(
+                "candidate WAL checkpoint failed after additive merge: "
+                f"busy={checkpoint[0]}, remaining={checkpoint[1]}"
+            )
     except Exception:
-        live_connection.close()
-        connection.close()
-        destination.unlink(missing_ok=True)
+        if live_connection is not None:
+            live_connection.close()
+        if connection is not None:
+            connection.close()
+        _remove_owned_destination(destination, owned_destination_identity)
         raise
     else:
         live_connection.close()
         connection.close()
+    _require_owned_destination(destination, owned_destination_identity)
     return LiveCutoverMergeReceipt(
         plan=plan,
         destination_database=str(destination),
         applied_tables=tuple(applied),
         quick_check=quick_check,
         foreign_key_violations=foreign_key_violations,
-        destination_sha256=_file_sha256(destination),
+        destination_sha256=_stable_file_sha256(
+            destination,
+            expected_identity=owned_destination_identity,
+        ),
     )
 
 
-def _copy_database(source_path: Path, destination_path: Path) -> None:
+def _copy_database(
+    source_path: Path,
+    destination_path: Path,
+) -> CandidateFileIdentity:
     source = connect_sqlite(source_path, role=SQLiteConnectionRole.READ_ONLY)
     destination = connect_sqlite(
         destination_path,
         role=SQLiteConnectionRole.SNAPSHOT_DESTINATION,
         schema_preflight=False,
     )
+    owned_identity = candidate_file_identity(destination_path)
     try:
         source.backup(destination)
     except Exception:
         destination.close()
         source.close()
-        destination_path.unlink(missing_ok=True)
+        _remove_owned_destination(destination_path, owned_identity)
         raise
     else:
         destination.close()
         source.close()
+    _require_owned_destination(destination_path, owned_identity)
+    return owned_identity
 
 
 def _merge_table(connection: Connection, plan: MergeTablePlan) -> None:
@@ -697,24 +773,62 @@ def _stage_live_table(
     destination: Connection,
     live: Connection,
     plan: MergeTablePlan,
-) -> None:
+) -> tuple[int, str]:
     destination.execute("DROP TABLE IF EXISTS temp._live_authority_rows")
     destination.execute(
         f"CREATE TEMP TABLE _live_authority_rows AS "  # nosec B608
         f"SELECT * FROM main.{_quote(plan.table)} WHERE 0"
     )
-    columns = tuple(
-        str(row["name"]) for row in live.execute(f"PRAGMA table_info({_quote(plan.table)})")
+    schema = tuple(
+        TableColumn(
+            name=str(row["name"]),
+            type=str(row["type"]),
+            notnull=int(row["notnull"]),
+            default=row["dflt_value"],
+            pk=int(row["pk"]),
+        )
+        for row in live.execute(f"PRAGMA table_info({_quote(plan.table)})")
     )
+    columns = tuple(column.name for column in schema)
     placeholders = ", ".join("?" for _ in columns)
     # The placeholder count comes only from the inspected schema.
     insert_sql = f"INSERT INTO temp._live_authority_rows VALUES ({placeholders})"  # nosec B608
     # The table identifier is schema-derived and double-quoted.
-    cursor = live.execute(
-        f"SELECT * FROM {_quote(plan.table)}"  # nosec B608
+    live.create_function(
+        "_cutover_value_key",
+        1,
+        _value_sort_key,
+        deterministic=True,
     )
+    order_sql = _content_order_sql(
+        None,
+        schema=schema,
+        primary_key=plan.primary_key,
+        integer_primary_key_is_total=_integer_primary_key_is_total(
+            live,
+            database="main",
+            table=plan.table,
+            schema=schema,
+            primary_key=plan.primary_key,
+        ),
+    )
+    digest = _new_rows_digest(
+        scope="complete_table",
+        table=plan.table,
+        schema=schema,
+        primary_key=plan.primary_key,
+    )
+    cursor = live.execute(
+        f"SELECT * FROM {_quote(plan.table)} ORDER BY {order_sql}"  # nosec B608
+    )
+    row_count = 0
     while rows := cursor.fetchmany(1_000):
-        destination.executemany(insert_sql, (tuple(row) for row in rows))
+        staged_rows = tuple(tuple(row) for row in rows)
+        destination.executemany(insert_sql, staged_rows)
+        for row in staged_rows:
+            _update_rows_digest(digest, row)
+        row_count += len(staged_rows)
+    return row_count, digest.hexdigest()
 
 
 def _delta_manifest(
@@ -738,7 +852,18 @@ def _delta_manifest(
             _value_sort_key,
             deterministic=True,
         )
-        order_sql = _deterministic_order_sql("src", columns)
+        order_sql = _content_order_sql(
+            "src",
+            schema=schema,
+            primary_key=primary_key,
+            integer_primary_key_is_total=_integer_primary_key_is_total(
+                governed,
+                database="live_delta",
+                table=table,
+                schema=schema,
+                primary_key=primary_key,
+            ),
+        )
         digest = _new_rows_digest(
             scope="selected_live_delta",
             table=table,
@@ -802,7 +927,18 @@ def _table_rows_sha256(
         _value_sort_key,
         deterministic=True,
     )
-    order_sql = _deterministic_order_sql(None, columns)
+    order_sql = _content_order_sql(
+        None,
+        schema=schema,
+        primary_key=primary_key,
+        integer_primary_key_is_total=_integer_primary_key_is_total(
+            connection,
+            database="main",
+            table=table,
+            schema=schema,
+            primary_key=primary_key,
+        ),
+    )
     digest = _new_rows_digest(
         scope="complete_table",
         table=table,
@@ -873,6 +1009,58 @@ def _value_sort_key(value: object) -> bytes:
 def _deterministic_order_sql(alias: str | None, columns: tuple[str, ...]) -> str:
     prefix = f"{alias}." if alias else ""
     return ", ".join(f"_cutover_value_key({prefix}{_quote(column)})" for column in columns)
+
+
+def _content_order_sql(
+    alias: str | None,
+    *,
+    schema: tuple[TableColumn, ...],
+    primary_key: tuple[str, ...],
+    integer_primary_key_is_total: bool,
+) -> str:
+    """Use an indexable order only for a proven-total integer primary key.
+
+    A single non-null ``INTEGER PRIMARY KEY`` is unique and therefore has one
+    canonical numeric order, including SQLite's exceptional non-rowid DESC
+    declaration. Other key shapes retain the encoded value order because
+    their type/collation can be heterogeneous and must remain explicit in the
+    content commitment.
+    """
+    if integer_primary_key_is_total and len(primary_key) == 1:
+        key = primary_key[0]
+        key_column = next(column for column in schema if column.name == key)
+        if key_column.pk == 1 and key_column.type.strip().upper() == "INTEGER":
+            prefix = f"{alias}." if alias else ""
+            return f"{prefix}{_quote(key)}"
+    return _deterministic_order_sql(
+        alias,
+        tuple(column.name for column in schema),
+    )
+
+
+def _integer_primary_key_is_total(
+    connection: Connection,
+    *,
+    database: str,
+    table: str,
+    schema: tuple[TableColumn, ...],
+    primary_key: tuple[str, ...],
+) -> bool:
+    if len(primary_key) != 1:
+        return False
+    key = primary_key[0]
+    key_column = next(column for column in schema if column.name == key)
+    if key_column.pk != 1 or key_column.type.strip().upper() != "INTEGER":
+        return False
+    if database not in {"main", "live_delta"}:
+        raise LiveCutoverMergeError("unsupported database alias for content ordering")
+    return (
+        connection.execute(
+            f"SELECT 1 FROM {_quote(database)}.{_quote(table)} "  # nosec B608
+            f"WHERE {_quote(key)} IS NULL LIMIT 1"
+        ).fetchone()
+        is None
+    )
 
 
 def _database_path(connection: Connection) -> str:
@@ -997,6 +1185,65 @@ def _canonical_sha(value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+@contextmanager
+def _source_write_denial_fence(paths: tuple[Path, ...]) -> Generator[None, None, None]:
+    """Pin SQLite source pathnames and deny replacement/write during admission."""
+    if os.name != "nt":
+        raise LiveCutoverMergeError(
+            "source write-denial fence requires Windows file-sharing semantics"
+        )
+    components: list[Path] = []
+    for database in paths:
+        require_no_reparse_points(database)
+        components.append(database)
+        for suffix in ("-wal", "-journal"):
+            sidecar = Path(f"{database}{suffix}")
+            require_no_reparse_points(sidecar)
+            if sidecar.exists():
+                components.append(sidecar)
+    unique = tuple(dict.fromkeys(Path(os.path.abspath(path)) for path in components))
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    handles: list[int] = []
+    try:
+        for path in unique:
+            handle = create_file(
+                str(path),
+                0x80000000,
+                0x00000001,
+                None,
+                3,
+                0x00000080,
+                None,
+            )
+            if handle == wintypes.HANDLE(-1).value:
+                error = ctypes.get_last_error()
+                raise LiveCutoverMergeError(
+                    f"cannot acquire source write-denial fence for {path}: {error}"
+                )
+            handles.append(int(handle))
+        yield
+    finally:
+        for handle in reversed(handles):
+            close_handle(wintypes.HANDLE(handle))
+
+
 def _source_snapshot_sha256(path: Path) -> str:
     """Bind the immutable SQLite main file and any committed WAL bytes."""
     digest = hashlib.sha256()
@@ -1026,9 +1273,82 @@ def _source_snapshot_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _file_sha256(path: Path) -> str:
+def _require_owned_destination(
+    path: Path,
+    expected_identity: CandidateFileIdentity | None,
+) -> None:
+    if expected_identity is None:
+        raise LiveCutoverMergeError("candidate destination ownership was not established")
+    require_no_reparse_points(path)
+    current = candidate_file_identity(path)
+    if (current.device, current.inode) != (
+        expected_identity.device,
+        expected_identity.inode,
+    ):
+        raise LiveCutoverMergeError("candidate destination identity changed")
+
+
+def _remove_owned_destination(
+    path: Path,
+    expected_identity: CandidateFileIdentity | None,
+) -> None:
+    if expected_identity is None or not path.exists():
+        return
+    _require_owned_destination(path, expected_identity)
+    require_no_reparse_points(path)
+    current = candidate_file_identity(path)
+    if (current.device, current.inode) != (
+        expected_identity.device,
+        expected_identity.inode,
+    ):
+        raise LiveCutoverMergeError("candidate cleanup identity changed before unlink")
+    path.unlink()
+
+
+def _stable_file_sha256(
+    path: Path,
+    *,
+    expected_identity: CandidateFileIdentity,
+) -> str:
+    require_no_reparse_points(path)
+    lexical_before = path.lstat()
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
+    try:
+        before = os.fstat(descriptor)
+        if (int(before.st_dev), int(before.st_ino)) != (
+            expected_identity.device,
+            expected_identity.inode,
+        ) or (int(lexical_before.st_dev), int(lexical_before.st_ino)) != (
+            expected_identity.device,
+            expected_identity.inode,
+        ):
+            raise LiveCutoverMergeError("candidate changed before final hashing")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    lexical_after = path.lstat()
+    before_state = (
+        int(before.st_dev),
+        int(before.st_ino),
+        int(before.st_size),
+        int(before.st_mtime_ns),
+        int(before.st_ctime_ns),
+    )
+    after_state = (
+        int(after.st_dev),
+        int(after.st_ino),
+        int(after.st_size),
+        int(after.st_mtime_ns),
+        int(after.st_ctime_ns),
+    )
+    if before_state != after_state or (
+        int(lexical_after.st_dev),
+        int(lexical_after.st_ino),
+    ) != (expected_identity.device, expected_identity.inode):
+        raise LiveCutoverMergeError("candidate changed during final hashing")
     return digest.hexdigest()
