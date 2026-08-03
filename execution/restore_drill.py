@@ -316,18 +316,35 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _drill_archive(live_db: Path) -> tuple[bool, dict[str, object]]:
-    """Prove the db_gc archive still restores, without touching the live DB.
+    """Verify archive recovery evidence without touching the live DB.
 
-    The snapshot drill above covers portfolio.db; this covers the append-only
-    archive sidecar — the other half of the recovery story, and until now
-    never exercised. Absent archive = nothing pruned yet = vacuously ok.
-    Failure here fails the drill (unlike the archive BACKUP leg, which is
-    best-effort): a drill that cannot verify the archive has not done its job.
+    The snapshot drill above covers portfolio.db; this covers its archive
+    sidecar. Run-keyed archives get a restore drill. Legacy archives are
+    preservation-only and get a read-only integrity/hash/inventory check.
+    Absent archive = nothing pruned yet = vacuously ok. Failure here fails the
+    drill (unlike the archive BACKUP leg, which is best-effort).
     """
     archive = live_db.parent / "archive" / db_gc.ARCHIVE_NAME
     if not archive.exists():
         return True, {"status": "no_archive"}
     try:
+        preservation = gc_restore.inspect_preservation_archive(archive)
+        if preservation.legacy_tables:
+            ok = (
+                preservation.integrity_check == "ok"
+                and preservation.quick_check == "ok"
+                and preservation.foreign_key_violation_count == 0
+            )
+            return ok, {
+                "status": "preservation_only" if ok else "archive_unverified",
+                "size_bytes": preservation.size_bytes,
+                "sha256": preservation.sha256,
+                "integrity_check": preservation.integrity_check,
+                "quick_check": preservation.quick_check,
+                "foreign_key_violation_count": preservation.foreign_key_violation_count,
+                "table_row_counts": preservation.table_row_counts,
+                "legacy_tables": preservation.legacy_tables,
+            }
         report = gc_restore.run_restore(live_db, mode="drill")
     except Exception as exc:  # a drill that errors is a failed drill
         return False, {
