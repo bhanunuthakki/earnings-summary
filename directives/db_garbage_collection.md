@@ -23,26 +23,48 @@ fact history far deeper than any reader's window, and (future) telemetry age.
 `execution/db_gc.py` — single-purpose CLI, dry-run by default, `--apply` to
 write. Rows deleted from the ARCHIVED tables (financial_facts,
 metric_computation_attempts, validation_issues, the telemetry trio) are first
-copied, schema-identical, into `data/archive/portfolio_gc_archive.db` (with a
-`gc_manifest` per-pass log; UNIQUE identity indexes + INSERT OR IGNORE make
-re-archiving idempotent). Two planes are NOT archived and NOT reversible by
-INSERT ... SELECT: the 0225 resolution-plane cascade deletes
-(fact_observation_revisions / legacy_fact_evidence_match_revisions /
-fact_selection_decisions), and the pre-delete `supersedes_id = NULL` rewrite
-on SURVIVING facts (the sidecar holds the doomed rows' originals, not the
-survivors'). Restore is therefore governed by the fail-closed audit in
-`src/provenance/gc_recovery.py` (`execution/audit_gc_recovery.py`), which can
-refuse — not by a hand-written INSERT.
+copied into `data/archive/portfolio_gc_archive.db` before removal. The archive
+is **append-only and run-keyed** (2026-08-03 redesign): each table mirrors the
+live columns BY NAME plus `gc_run_id` (the archiving run's `run_at`;
+rowid-keyed tables also carry `gc_source_rowid`), with `UNIQUE(gc_run_id, key)`
+as the idempotency conflict target, logged per pass in `gc_manifest`.
 
-That restore is only safe because archiving is idempotent: each sidecar table
-carries a UNIQUE index on its identity column (`id`, or the source rowid for
-rowid-keyed tables) and the copy is `INSERT OR IGNORE`, so an apply that
-aborts after the archive pass and is then retried re-archives nothing. The
-sidecar therefore holds **exactly one copy per id** — a second copy would
-double-insert on restore, so it is a defect, not noise. `gc_manifest` records
-the rows each pass actually added (0 for a re-archive), and a legacy sidecar
-carrying duplicates is collapsed once, loudly logged as
-`gc_archive_deduplicated`, before its index is created.
+Why run-keyed, not one-copy-per-id: `financial_facts` has no AUTOINCREMENT,
+so SQLite recycles ids after a prune lowers `max(id)` — an id is not a stable
+identity across time. Under the run key, a retry within a run adds nothing,
+an identical payload is never duplicated across runs (payload guard), and a
+recycled id becomes a **run-attributed variant** instead of either silent
+loss (#1130's OR IGNORE) or a permanent prune dead-end (#1140's abort). The
+cross-run payload guard excludes the columns the GC rewrites on live rows
+after archiving (`_RECYCLED_ID_IGNORED_COLUMNS`, currently
+`financial_facts.supersedes_id`) so a post-null re-archive is not mistaken for
+a new variant (adversarial review #1). Schema drift is handled at archive
+time: a live column added by a migration is mirrored into the archive (NULL on
+older rows), and a DROPPED live column is a loud abort — never a positional
+copy, which silently misfiles values when a drop+add keeps the column count.
+
+Two planes are NOT archived and NOT reversible by restore: the 0225
+resolution-plane cascade deletes (fact_observation_revisions /
+legacy_fact_evidence_match_revisions / fact_selection_decisions), and the
+pre-delete `supersedes_id = NULL` rewrite on SURVIVING facts (the sidecar
+holds the doomed rows' originals, not the survivors'). Restore is therefore
+governed by the fail-closed audit in `src/provenance/gc_recovery.py`
+(`execution/audit_gc_recovery.py`), which can refuse.
+
+**Restore = `execution/gc_restore.py`**, never a bare `INSERT ... SELECT`
+(rows can legitimately appear under multiple runs). It classifies each
+archived row — *restorable* (absent from main, restored verbatim),
+*identical* (skipped), *conflict* (present with a different payload; NEVER
+touched, exit 4) — restoring the latest variant per key or `--run <id>`
+exactly. `--apply` runs under the same run-lock / schema-preflight /
+protected-window guards as db_gc; `--drill` proves restorability into a
+throwaway schema-clone without touching main and is exercised on a schedule
+by `restore_drill.py` — a backup you have never restored is not a backup.
+
+**Archive retention**: keep every run. Growth is slow (tens of MB/quarter
+steady-state after the one-off deep prunes); revisit with a deliberate
+age-out policy only if the sidecar passes ~1 GB, and never age out runs the
+restore drill has not verified since.
 
 ## Policies & parameters
 
