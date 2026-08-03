@@ -76,7 +76,8 @@ _DB_TARGETS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _fts_table_present(conn: sqlite3.Connection, name: str) -> bool:
+def _table_present(conn: sqlite3.Connection, name: str) -> bool:
+    """True when ``name`` is a table (incl. FTS5 virtual tables) in this DB."""
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
     ).fetchone()
@@ -89,6 +90,12 @@ def sweep_db(conn: sqlite3.Connection, *, apply: bool) -> Counter[str]:
     conn.row_factory = sqlite3.Row
     for table, id_col, col in _DB_TARGETS:
         target = f"{table}.{col}"
+        # Skip a target whose table this DB doesn't have (e.g. a checkout that
+        # predates the migration adding it) — a generic sweep must degrade, not
+        # crash, on a missing table. At head every target table exists.
+        if not _table_present(conn, table):
+            tally[f"{target} table absent"] += 1
+            continue
         # Identifiers come from the _DB_TARGETS module literal, never from
         # input; values are bound parameters.
         rows = conn.execute(
@@ -116,7 +123,7 @@ def sweep_db(conn: sqlite3.Connection, *, apply: bool) -> Counter[str]:
         # batch_alter can silently drop. If we rewrote any body, rebuild the
         # index from the base table so the search mirror matches whether or not
         # the trigger fired. No-op when FTS5 is unavailable (table absent).
-        if tally.get("analyst_notes.body updated") and _fts_table_present(
+        if tally.get("analyst_notes.body updated") and _table_present(
             conn, "analyst_notes_fts"
         ):
             conn.execute("INSERT INTO analyst_notes_fts(analyst_notes_fts) VALUES ('rebuild')")
