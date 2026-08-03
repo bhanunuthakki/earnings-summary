@@ -17,8 +17,12 @@ Codex failures fall back to the Claude subscription transport and are ledgered
 as such; ``LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude`` is the reversible rollback
 switch. Explicit provider-family model ids remain on their requested family.
 
-``call_llm_with_web`` remains Claude-only: the Codex membership wrapper is
-intentionally answer-only with tools and web disabled.
+``call_llm_with_web`` is Codex-first too: the same primary/backup order as
+``call_llm``, with the Codex leg opting into the membership wrapper's
+``web_search="live"`` mode so it can fetch fresh pages. Falls back to the
+existing Claude WebSearch/WebFetch tool-call path on an OPERATIONAL Codex
+failure only — never as a routing preference (2026-08-03 owner ratification;
+see directives/llm_calls.md and procedures/llm-ops.TRANSPORTS.md).
 
 Second backend: ``src/llm/gemini_backend.py`` calls the Gemini Developer API
 directly (metered key) with the same call contract. ``call_llm`` routes a
@@ -34,7 +38,8 @@ Public API:
     DEFAULT_TIMEOUT_SECONDS, CLAUDE_WEB_TIMEOUT_SECONDS, CLAUDE_WEB_TOOLS.
     LLMBudgetExceeded — raised when a hard per-purpose monthly cap is over.
     call_llm(...) — single-shot LLM call. Canonical entry point.
-    call_llm_with_web(...) — same, with Claude WebSearch + WebFetch tools.
+    call_llm_with_web(...) — same, web-grounded: Codex `web_search="live"`
+        first, Claude WebSearch/WebFetch tools as the operational fallback.
 
 Note on module-level state: ``_setup_verified`` and ``_claude_cli_path`` are
 intentionally kept as live globals in ``src/llm_client.py`` (read via late
@@ -2188,25 +2193,41 @@ def call_llm_with_web(
     force_budget_bypass: bool = False,
     max_budget_usd: float | None = None,
 ) -> str:
-    """LLM call with Claude WebSearch + WebFetch tools enabled.
+    """Web-grounded LLM call — Codex-first, Claude WebSearch/WebFetch as the
+    operational fallback.
 
-    Setup invariants are the same as `_call_claude` (subscription billing
-    via the CLI, UTF-8, stdin prompt, JSON output for ledger capture). On
-    Claude failure, falls through to plain `_call_claude` (which has its
-    own Gemini fallback) so a memo is always produced even when web tools
-    are unavailable.
+    Routing mirrors ``call_llm``: an explicit ``model`` argument is a forced
+    Claude request and bypasses Codex entirely (same "explicit model = forced
+    family" contract as the plain path). Otherwise, whenever
+    ``_primary_subscription_backend() == "codex"`` (the production default;
+    ``LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude`` is the reversible rollback),
+    the Codex membership wrapper runs FIRST with ``web_search="live"`` so it
+    can fetch fresh pages. An OPERATIONAL Codex failure — never a routing
+    preference — falls through to this function's Claude WebSearch/WebFetch
+    path below, which itself falls through to plain ``_call_claude`` (no web
+    tools) on failure, with Codex re-entry disabled on that final hop (it
+    already failed once). A memo is always produced even when every
+    web-search transport is unavailable. 2026-08-03 owner ratification: see
+    directives/llm_calls.md and procedures/llm-ops.TRANSPORTS.md.
 
     Use for memo generation, fact-finding on recent news, anything where
-    the upstream context is stale and Claude needs to look something up.
+    the upstream context is stale and the model needs to look something up.
 
-    Same per-purpose budget enforcement as `_call_claude`; pass
-    ``force_budget_bypass=True`` to skip the check.
+    Same per-purpose MONTHLY budget enforcement as `_call_claude`
+    (``_enforce_budget_pre_call``, backend-agnostic); pass
+    ``force_budget_bypass=True`` to skip it.
 
-    ``max_budget_usd`` sets the per-run agentic $-cap. It can only LOWER the hard
-    module ceiling (``CLAUDE_WEB_MAX_BUDGET_USD``), never raise it — a tiered
-    caller passes its budget here and the run is clamped to ``min(requested,
-    ceiling)``. This is the S2 invariant: no caller can spend above the structural
-    maximum, whatever budget it asks for.
+    ``max_budget_usd`` / ``CLAUDE_WEB_MAX_BUDGET_USD`` is a Claude-CLI-only
+    HARD PER-CALL cost ceiling enforced via ``--max-budget-usd``. It applies
+    only to the Claude WebSearch/WebFetch leg — Codex is membership-billed
+    with no per-call price and the wrapper reports no token usage, so there
+    is no dollar figure to clamp on the Codex leg. That is a deliberate gap,
+    not a silently dropped concept: the per-purpose MONTHLY budget above
+    still gates every leg (Codex included) identically, and Codex's own
+    isolation (read-only sandbox, no shell/apps) bounds a runaway call's
+    blast radius even without a $-ceiling. A tiered caller's ``max_budget_usd``
+    is clamped to ``min(requested, CLAUDE_WEB_MAX_BUDGET_USD)`` — the S2
+    invariant — for whichever call actually reaches the Claude leg.
 
     Model selection mirrors ``call_llm``: pass an explicit ``model`` to force
     one, or leave it ``None`` (the default) to resolve from ``purpose`` via
@@ -2216,6 +2237,7 @@ def call_llm_with_web(
     web-enabled callers (e.g. the news structurer) be retuned centrally in
     ``LLM_MODELS``. Callers passing an explicit ``model`` are unaffected.
     """
+    explicit_model = model is not None
     if model is None:
         if purpose is None:
             log.warning({"event": "llm_web_call_no_purpose", "fallback": DEFAULT_MODEL})
@@ -2235,6 +2257,59 @@ def call_llm_with_web(
         except Exception as hook_exc:
             log.debug({"event": "prompt_override_hook_failed", "error": str(hook_exc)[:120]})
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
+
+    codex_fell_back = False
+    fallback_from_provider: str | None = None
+    fallback_from_transport: str | None = None
+    if not explicit_model and _primary_subscription_backend() == _PRIMARY_CODEX:
+        from llm.codex_backend import call_codex_llm
+
+        codex_model = (
+            resolved_model
+            if resolved_model.startswith("gpt-")
+            else _codex_model_for(resolved_model)
+        )
+        try:
+            text = call_codex_llm(
+                prompt,
+                model=codex_model,
+                # The wrapper's own default (600s) is too short for a
+                # multi-round-trip web search; reuse this function's own
+                # (web-appropriate, default 1800s) timeout instead of
+                # inheriting the short plain-call default.
+                timeout_seconds=timeout_seconds,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope or "web",
+                run_id=run_id,
+                web_search="live",
+            )
+            capture_exchange(
+                prompt=prompt,
+                response=text,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope or "web",
+                model=codex_model,
+                run_id=run_id,
+                backend="codex",
+            )
+            return text
+        except (OSError, RuntimeError, ValueError) as codex_error:
+            from log_redact import redact
+
+            log.warning(
+                {
+                    "event": "codex_web_backend_failed_falling_back_to_claude",
+                    "purpose": purpose,
+                    "error": f"{type(codex_error).__name__}: {redact(codex_error)[:200]}",
+                }
+            )
+            codex_fell_back = True
+            fallback_from_provider = "openai"
+            fallback_from_transport = "subscription_cli"
+
+    fallback_used = "claude" if fallback_from_provider is not None else None
     _verify_setup_once()
     import llm_client  # late import — state lives on llm_client for test compat
 
@@ -2271,6 +2346,7 @@ def call_llm_with_web(
             scope=scope or "web",
             run_id=run_id,
             error=f"[quota_blocked] {msg}",
+            fallback_used=fallback_used,
             prompt=prompt,
             provider="anthropic",
             transport="subscription_cli",
@@ -2278,6 +2354,8 @@ def call_llm_with_web(
             attempts=0,
             retries=0,
             failure_class="quota_blocked",
+            fallback_from_provider=fallback_from_provider,
+            fallback_from_transport=fallback_from_transport,
         )
         raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
 
@@ -2302,6 +2380,7 @@ def call_llm_with_web(
         # Hard cost ceiling so the web path (the only agentic, multi-tool call)
         # cannot run away on cost if the model ignores the prompt's advisory
         # "AT MOST 2 searches" budget. Degrades like any other web-call failure.
+        # Claude-CLI-only — see the docstring's budget/cost note.
         "--max-budget-usd",
         str(effective_budget_usd),
     ]
@@ -2338,12 +2417,15 @@ def call_llm_with_web(
             run_id=run_id,
             response_text=text,
             meta=meta,
+            fallback_used=fallback_used,
             prompt=prompt,
             provider="anthropic",
             transport="subscription_cli",
             auth_class="subscription",
             attempts=1,
             retries=0,
+            fallback_from_provider=fallback_from_provider,
+            fallback_from_transport=fallback_from_transport,
         )
         # Opt-in full-text capture (see _call_claude). scope tags it as a web
         # call so the replay step can flag web-grounded purposes (Gemini has no
@@ -2375,6 +2457,7 @@ def call_llm_with_web(
             scope=scope or "web",
             run_id=run_id,
             error=web_error_msg,
+            fallback_used=fallback_used,
             prompt=prompt,
             provider="anthropic",
             transport="subscription_cli",
@@ -2382,6 +2465,8 @@ def call_llm_with_web(
             attempts=1,
             retries=0,
             failure_class=web_info.kind,
+            fallback_from_provider=fallback_from_provider,
+            fallback_from_transport=fallback_from_transport,
         )
         if web_info.kind == "usage_limit":
             # Engage the breaker here too — the plain-path fall-through below
@@ -2398,6 +2483,9 @@ def call_llm_with_web(
         # Fall through to non-web path so the caller still gets output. The
         # plain _call_claude path records its own ledger row(s), carries the
         # retry/breaker policy, and raises LLMQuotaExhausted when blocked.
+        # allow_codex_fallback=False when Codex already failed once above —
+        # a second internal attempt inside _call_claude would be a silent
+        # re-entry into a transport this call already gave up on.
         return _call_claude(
             prompt,
             model=resolved_model,
@@ -2406,4 +2494,5 @@ def call_llm_with_web(
             ticker=ticker,
             scope=scope,
             run_id=run_id,
+            allow_codex_fallback=not codex_fell_back,
         )

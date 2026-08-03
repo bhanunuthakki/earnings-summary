@@ -2,14 +2,41 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
+import json
 import logging
+import subprocess
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import llm_client
 from llm import cli as llm_cli
 from llm import codex_backend
+
+
+def _good_cli_response(text: str = "ok") -> str:
+    """Minimal `claude -p --output-format json` success envelope (mirrors the
+    fixture in tests/test_llm_web_model_resolution.py — small enough to
+    duplicate rather than share, per repo convention)."""
+    return json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": text,
+            "total_cost_usd": 0.001,
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 5,
+            },
+        }
+    )
 
 
 def test_empty_codex_response_is_ledgered_only_as_failure(
@@ -21,7 +48,9 @@ def test_empty_codex_response_is_ledgered_only_as_failure(
         usage=SimpleNamespace(input_tokens=1, cached_input_tokens=0, output_tokens=0),
     )
 
-    def call_empty(prompt: str, *, model: str, timeout_seconds: int) -> SimpleNamespace:
+    def call_empty(
+        prompt: str, *, model: str, timeout_seconds: int, web_search: str = "disabled"
+    ) -> SimpleNamespace:
         return result
 
     def load_empty_wrapper() -> object:
@@ -164,6 +193,226 @@ def test_explicit_claude_model_bypasses_codex_primary(
         == "explicit Claude"
     )
     assert seen["model"] == "claude-opus-4-8"
+
+
+# --- call_llm_with_web: the SAME Codex-primary routing, mirrored -----------
+#
+# The guard hole this file exists to close: this file's name reads as "full
+# Codex-primary routing coverage", but until now it only ever exercised
+# call_llm. src/llm/cli.py has exactly two public entry points (call_llm and
+# call_llm_with_web) and the web path had ZERO routing assertions — a purpose
+# routed through call_llm_with_web (recent_developments, news_structuring,
+# model_frontier_research, the research-task web pass) could silently stay
+# Claude-first forever with this file's tests all green. These four tests
+# mirror the call_llm block above one-for-one; the meta-guard further down
+# makes a THIRD entry point impossible to add without matching coverage.
+
+
+def _web_claude_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shared setup for tests exercising call_llm_with_web's CLAUDE leg (either
+    as the Codex fallback or the explicit-model bypass): bypass
+    _verify_setup_once (avoids a real shutil.which) and no-op the quota
+    breaker check, mirroring tests/test_llm_web_model_resolution.py's
+    capture_web_cmd fixture."""
+    monkeypatch.setattr(llm_client, "_setup_verified", True)
+    monkeypatch.setattr(llm_client, "_claude_cli_path", r"C:\fake\claude.cmd")
+    monkeypatch.setattr(llm_cli, "quota_block_active", lambda: None)
+
+
+def test_web_default_purpose_routes_to_codex_before_claude(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    seen: dict[str, object] = {}
+
+    def fake_codex(prompt: str, **kwargs: object) -> str:
+        seen.update(kwargs, prompt=prompt)
+        return "codex web answer"
+
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
+    monkeypatch.setattr(
+        llm_cli.subprocess,
+        "run",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("Claude web subprocess must not run when Codex primary succeeds")
+        ),
+    )
+
+    assert (
+        llm_cli.call_llm_with_web("question", purpose="recent_developments", ticker="NU")
+        == "codex web answer"
+    )
+    assert seen["model"] == "gpt-5.6-terra"  # recent_developments -> DEFAULT_MODEL -> Terra tier
+    assert seen["purpose"] == "recent_developments"
+    assert seen["ticker"] == "NU"
+    assert seen["web_search"] == "live"  # the whole point of routing web calls to Codex
+
+
+def test_web_codex_primary_failure_falls_back_to_claude_web(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    _web_claude_fixture(monkeypatch)
+    calls: list[str] = []
+
+    def fail_codex(prompt: str, **kwargs: object) -> str:
+        calls.append("codex")
+        raise RuntimeError("membership transport temporarily unavailable")
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append("claude_web")
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout=_good_cli_response("claude web fallback"), stderr=""
+        )
+
+    records: list[dict[str, object]] = []
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
+    monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(llm_cli, "record_llm_call", lambda **kwargs: records.append(kwargs))
+
+    result = llm_cli.call_llm_with_web("question", purpose="recent_developments", ticker="NU")
+
+    assert result == "claude web fallback"
+    assert calls == ["codex", "claude_web"]
+    (record,) = records
+    assert record["fallback_used"] == "claude"
+    assert record["fallback_from_provider"] == "openai"
+    assert record["fallback_from_transport"] == "subscription_cli"
+
+
+def test_web_codex_then_claude_web_failure_does_not_reenter_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    _web_claude_fixture(monkeypatch)
+    calls: list[str] = []
+
+    def fail_codex(prompt: str, **kwargs: object) -> str:
+        calls.append("codex")
+        raise RuntimeError("codex unavailable")
+
+    def fail_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append("claude_web")
+        raise subprocess.TimeoutExpired(cmd=["claude"], timeout=1)
+
+    def fake_plain_claude(prompt: str, **kwargs: object) -> str:
+        calls.append("claude_plain")
+        assert kwargs["allow_codex_fallback"] is False
+        return "plain fallback, no codex retry"
+
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
+    monkeypatch.setattr(llm_cli.subprocess, "run", fail_run)
+    monkeypatch.setattr(llm_cli, "_call_claude", fake_plain_claude)
+    monkeypatch.setattr(llm_cli, "record_llm_call", lambda **_kwargs: None)
+
+    result = llm_cli.call_llm_with_web("question", purpose="recent_developments")
+
+    assert result == "plain fallback, no codex retry"
+    assert calls == ["codex", "claude_web", "claude_plain"]
+
+
+def test_web_explicit_claude_model_bypasses_codex_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    _web_claude_fixture(monkeypatch)
+
+    monkeypatch.setattr(
+        codex_backend,
+        "call_codex_llm",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("an explicit Claude model on the web path is a forced-family request")
+        ),
+    )
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert cmd[cmd.index("--model") + 1] == "claude-opus-4-8"
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout=_good_cli_response("explicit claude web"), stderr=""
+        )
+
+    monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(llm_cli, "record_llm_call", lambda **_kwargs: None)
+
+    result = llm_cli.call_llm_with_web(
+        "question", model="claude-opus-4-8", purpose="recent_developments"
+    )
+    assert result == "explicit claude web"
+
+
+# --- META-GUARD: a third entry point cannot be added silently ---------------
+
+
+def _module_call_entry_points(source: str) -> set[str]:
+    """Top-level `def call_*` names in a module's source — the public LLM
+    entry points that MUST have routing coverage in this file. This is the
+    guard for the guard hole that let call_llm_with_web go unpinned: a file
+    named 'codex primary routing' read as full coverage while only ever
+    calling call_llm."""
+    tree = ast.parse(source)
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("call_")
+    }
+
+
+def _routing_covered_entry_points(test_source: str) -> set[str]:
+    """Entry point names this test file actually CALLS (``<obj>.<name>(...)``)
+    — a mention in a comment, docstring, or string literal doesn't count."""
+    tree = ast.parse(test_source)
+    covered: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            covered.add(node.func.attr)
+    return covered
+
+
+def test_every_public_cli_entry_point_has_routing_coverage() -> None:
+    """META-GUARD: AST-enumerates src/llm/cli.py's public `call_*` entry
+    points and asserts each is actually CALLED somewhere in this file. A
+    third entry point (e.g. a future `call_llm_streaming` variant) added
+    without a matching routing test here now fails CI instead of silently
+    inheriting whatever the module happens to default to."""
+    cli_source = inspect.getsource(llm_cli)
+    entry_points = _module_call_entry_points(cli_source)
+    assert entry_points >= {"call_llm", "call_llm_with_web"}, (
+        "expected at least the two known entry points — did llm/cli.py move "
+        "or get renamed without updating this guard?"
+    )
+    this_test_source = Path(__file__).read_text(encoding="utf-8")
+    covered = _routing_covered_entry_points(this_test_source)
+    missing = entry_points - covered
+    assert not missing, (
+        f"src/llm/cli.py has public entry point(s) {sorted(missing)} with NO "
+        "routing test in tests/test_codex_primary_routing.py — add a "
+        "Codex-primary/Claude-fallback/no-reentry/explicit-bypass test block "
+        "for each, mirroring the call_llm and call_llm_with_web coverage above."
+    )
+
+
+def test_meta_guard_detects_an_unpinned_entry_point() -> None:
+    """Self-test: a guard that cannot demonstrate detection of a KNOWN
+    violation is a no-op guard (repo standing rule). Feed the meta-guard's
+    own comparison a synthetic module exposing a THIRD entry point this file
+    does not call, and assert the diff actually catches it — proving the
+    guard above would have failed loudly on the exact defect class (a
+    real-but-uncovered entry point) that motivated this file's expansion."""
+    synthetic_source = (
+        "def call_llm(*a, **k): ...\n"
+        "def call_llm_with_web(*a, **k): ...\n"
+        "def call_llm_via_teleport(*a, **k): ...\n"  # the unpinned violation
+    )
+    entry_points = _module_call_entry_points(synthetic_source)
+    assert entry_points == {"call_llm", "call_llm_with_web", "call_llm_via_teleport"}
+
+    this_test_source = Path(__file__).read_text(encoding="utf-8")
+    covered = _routing_covered_entry_points(this_test_source)
+    missing = entry_points - covered
+    assert missing == {"call_llm_via_teleport"}, (
+        f"meta-guard self-test failed to detect the synthetic violation: {missing!r} "
+        "— the guard above would be a no-op"
+    )
 
 
 def test_metered_fallback_requires_reviewed_purpose_and_hard_budget(
