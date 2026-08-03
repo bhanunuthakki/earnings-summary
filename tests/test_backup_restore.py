@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tested backup-restore drill (sre-3, 2026-06-18 hardening refresh).
 
 A backup you have never restored is not a backup. Exercises cron/restore_db.py
@@ -262,3 +263,100 @@ def test_latest_ignores_newer_plaintext_snapshot(
     assert restore_db.list_snapshots(backup_dir) == [encrypted]
     with pytest.raises(RuntimeError, match="legacy migration"):
         restore_db.restore_snapshot(injected, tmp_path / "unsafe.db", force=False)
+
+
+def _make_archive(live_db: Path) -> Path:
+    """Create data/archive/portfolio_gc_archive.db beside *live_db*."""
+    archive = live_db.parent / "archive" / backup_db.ARCHIVE_PREFIX
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(archive))
+    try:
+        conn.execute("CREATE TABLE gc_manifest (run_at TEXT, rows_archived INTEGER)")
+        conn.execute("INSERT INTO gc_manifest VALUES ('r1', 5)")
+        conn.commit()
+    finally:
+        conn.close()
+    return archive
+
+
+def _prime_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    live = tmp_path / "live.db"
+    _make_db(live, "e2e")
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(backup_db, "SRC_DB", live)
+    monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
+    monkeypatch.setenv("EARNINGS_SUMMARY_SECRETS_DIR", str(tmp_path / "secrets"))
+    accounting: tuple[sqlite3.Connection, str] = (sqlite3.connect(":memory:"), "backup-test")
+
+    def _start(*_a: object) -> tuple[sqlite3.Connection, str]:
+        return accounting
+
+    def _finish(
+        acc: tuple[sqlite3.Connection, str], *, success: bool, error_msg: str | None = None
+    ) -> None:
+        acc[0].close()
+
+    monkeypatch.setattr(backup_db, "_start_accounting", _start)
+    monkeypatch.setattr(backup_db, "_finish_accounting", _finish)
+    return live, backup_dir
+
+
+def test_backup_captures_archive_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    _make_archive(live)
+    assert backup_db.main() == 0
+    archive_snaps = sorted(backup_dir.glob(f"{backup_db.ARCHIVE_PREFIX}.*.gz.enc"))
+    assert len(archive_snaps) == 1, "archive sidecar was not backed up"
+    # It decrypts + gunzips back to a valid, non-empty archive DB.
+    recovered = tmp_path / "recovered_archive.db"
+    restore_db.restore_snapshot(archive_snaps[-1], recovered, force=False)
+    conn = sqlite3.connect(str(recovered))
+    try:
+        assert conn.execute("SELECT rows_archived FROM gc_manifest").fetchone()[0] == 5
+    finally:
+        conn.close()
+
+
+def test_missing_archive_does_not_fail_db_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    # No archive created.
+    assert backup_db.main() == 0
+    assert restore_db.list_snapshots(backup_dir), "primary DB backup must still run"
+    assert not list(backup_dir.glob(f"{backup_db.ARCHIVE_PREFIX}.*.gz.enc"))
+
+
+def test_unchanged_archive_is_not_re_encrypted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    _make_archive(live)
+    assert backup_db.main() == 0
+    first = sorted(backup_dir.glob(f"{backup_db.ARCHIVE_PREFIX}.*.gz.enc"))
+    assert len(first) == 1
+    # A second run with the archive untouched must not write a new snapshot.
+    assert backup_db.main() == 0
+    second = sorted(backup_dir.glob(f"{backup_db.ARCHIVE_PREFIX}.*.gz.enc"))
+    assert second == first
+
+
+def test_archive_backup_failure_does_not_fail_primary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    _make_archive(live)
+
+    real = backup_db._consistent_snapshot
+
+    def _boom_on_archive(src_db: Path, tmp_path: Path) -> None:
+        # _consistent_snapshot is shared with the primary backup; only the
+        # archive leg (source under archive/) should fail.
+        if src_db.parent.name == "archive":
+            raise RuntimeError("simulated archive snapshot failure")
+        real(src_db, tmp_path)
+
+    monkeypatch.setattr(backup_db, "_consistent_snapshot", _boom_on_archive)
+    # Primary DB backup succeeds; the archive leg swallows its error.
+    assert backup_db.main() == 0
+    assert not list(backup_dir.glob(f"{backup_db.ARCHIVE_PREFIX}.*.gz.enc"))
