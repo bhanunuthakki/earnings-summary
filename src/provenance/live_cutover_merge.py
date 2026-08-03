@@ -13,7 +13,16 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from provenance.immutable_artifact import require_no_reparse_points
+from provenance.immutable_artifact import (
+    ImmutableArtifactConflictError,
+    ImmutableArtifactSnapshot,
+    assert_artifact_unchanged,
+    path_aliases_any,
+    publish_text_no_clobber,
+    read_stable_artifact,
+    require_canonical_text_artifact,
+    require_no_reparse_points,
+)
 from provenance.latest_state_activation import (
     CandidateFileIdentity,
     candidate_file_identity,
@@ -408,6 +417,34 @@ class MergeTablePlan(BaseModel):
     selected_delta_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class SourceComponentState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    label: str
+    identity: CandidateFileIdentity | None
+
+
+class CutoverSourceHealthReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_name: str
+    database: str
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_state: tuple[SourceComponentState, ...]
+    alembic_revision: str
+    integrity_check: str
+    foreign_key_violations: int = Field(ge=0)
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CutoverSourceHealthArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    artifact_path: str
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class LiveCutoverMergePlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -417,6 +454,8 @@ class LiveCutoverMergePlan(BaseModel):
     governed_database: str
     live_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     governed_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    live_health_receipt: CutoverSourceHealthArtifact
+    governed_health_receipt: CutoverSourceHealthArtifact
     alembic_revision: str
     tables: tuple[MergeTablePlan, ...]
     governed_table_count: int = Field(ge=0)
@@ -444,30 +483,154 @@ class LiveCutoverMergeReceipt(BaseModel):
     destination_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+def audit_cutover_source_health(database: Path) -> CutoverSourceHealthReceipt:
+    """Run one exhaustive health audit bound to an immutable SQLite snapshot."""
+
+    path = database.resolve()
+    with _source_write_denial_fence((path,)):
+        state_before = _source_physical_state(path)
+        source_sha256 = _source_snapshot_sha256(path)
+        connection = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            revision = _revision(connection)
+            if revision != _AUTHORITY_SCHEMA_REVISION:
+                raise LiveCutoverMergeError(
+                    "health audit revision mismatch: "
+                    f"expected={_AUTHORITY_SCHEMA_REVISION}, actual={revision}"
+                )
+            tables = _table_names(connection)
+            if tables != set(AUTHORITY_TABLES_0259):
+                raise LiveCutoverMergeError(
+                    "health audit table-set does not match the exhaustive authority registry"
+                )
+            integrity_rows = tuple(
+                str(row[0]) for row in connection.execute("PRAGMA integrity_check").fetchall()
+            )
+            if integrity_rows != ("ok",):
+                detail = integrity_rows[0] if integrity_rows else "no result"
+                raise LiveCutoverMergeError(f"source integrity_check failed: {detail}")
+            foreign_key_violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
+            if foreign_key_violations:
+                raise LiveCutoverMergeError(
+                    f"source has {foreign_key_violations} foreign-key violation(s)"
+                )
+        finally:
+            connection.close()
+        if state_before != _source_physical_state(path):
+            raise LiveCutoverMergeError("source changed during exhaustive health audit")
+        fields = {
+            "schema_name": "live-cutover-source-health/v1",
+            "database": str(path),
+            "source_sha256": source_sha256,
+            "source_state": tuple(
+                SourceComponentState(label=label, identity=identity)
+                for label, identity in state_before
+            ),
+            "alembic_revision": revision,
+            "integrity_check": "ok",
+            "foreign_key_violations": foreign_key_violations,
+        }
+        draft = CutoverSourceHealthReceipt.model_validate({**fields, "receipt_sha256": "0" * 64})
+        return draft.model_copy(update={"receipt_sha256": _health_receipt_sha256(draft)})
+
+
+def _sqlite_namespace(path: Path) -> tuple[Path, ...]:
+    resolved = path.resolve()
+    return (
+        resolved,
+        *(Path(f"{resolved}{suffix}").resolve() for suffix in ("-wal", "-shm", "-journal")),
+    )
+
+
+def _validate_plan_artifact_topology(
+    live: Path,
+    governed: Path,
+    live_health: Path,
+    governed_health: Path,
+) -> None:
+    if path_aliases_any(live, {governed}):
+        raise LiveCutoverMergeError("live and governed databases must be distinct files")
+    source_namespace = set(_sqlite_namespace(live)) | set(_sqlite_namespace(governed))
+    if path_aliases_any(live_health, source_namespace | {governed_health}):
+        raise LiveCutoverMergeError("live health receipt aliases a protected cutover artifact")
+    if path_aliases_any(governed_health, source_namespace | {live_health}):
+        raise LiveCutoverMergeError("governed health receipt aliases a protected cutover artifact")
+
+
+def _validate_apply_artifact_topology(
+    live: Path,
+    governed: Path,
+    live_health: Path,
+    governed_health: Path,
+    destination: Path,
+    receipt: Path,
+) -> None:
+    _validate_plan_artifact_topology(live, governed, live_health, governed_health)
+    source_namespace = set(_sqlite_namespace(live)) | set(_sqlite_namespace(governed))
+    destination_namespace = set(_sqlite_namespace(destination))
+    health_artifacts = {live_health.resolve(), governed_health.resolve()}
+    for component in destination_namespace:
+        if path_aliases_any(component, source_namespace | health_artifacts | {receipt}):
+            raise LiveCutoverMergeError(
+                "destination namespace aliases a protected cutover artifact"
+            )
+    if path_aliases_any(receipt, source_namespace | destination_namespace | health_artifacts):
+        raise LiveCutoverMergeError("receipt aliases a protected cutover artifact")
+
+
 def plan_live_cutover_merge(
     live_database: Path,
     governed_database: Path,
+    *,
+    live_health_receipt: Path,
+    governed_health_receipt: Path,
 ) -> LiveCutoverMergePlan:
     """Plan exact live-authoritative deltas over one governed substrate."""
     live_path = live_database.resolve()
     governed_path = governed_database.resolve()
     with _source_write_denial_fence((live_path, governed_path)):
-        return _plan_live_cutover_merge(live_path, governed_path)
+        return _plan_live_cutover_merge(
+            live_path,
+            governed_path,
+            live_health_receipt=live_health_receipt,
+            governed_health_receipt=governed_health_receipt,
+        )
 
 
 def _plan_live_cutover_merge(
     live_path: Path,
     governed_path: Path,
+    *,
+    live_health_receipt: Path,
+    governed_health_receipt: Path,
 ) -> LiveCutoverMergePlan:
-    if live_path == governed_path:
-        raise LiveCutoverMergeError("live and governed databases must be distinct")
+    _validate_plan_artifact_topology(
+        live_path,
+        governed_path,
+        live_health_receipt,
+        governed_health_receipt,
+    )
+    live_state_before = _source_physical_state(live_path)
+    governed_state_before = _source_physical_state(governed_path)
     live_source_before = _source_snapshot_sha256(live_path)
     governed_source_before = _source_snapshot_sha256(governed_path)
+    live_health, live_health_snapshot = _admit_source_health(
+        "live",
+        live_path,
+        live_health_receipt,
+        source_state=live_state_before,
+        source_sha256=live_source_before,
+    )
+    governed_health, governed_health_snapshot = _admit_source_health(
+        "governed",
+        governed_path,
+        governed_health_receipt,
+        source_state=governed_state_before,
+        source_sha256=governed_source_before,
+    )
     live = connect_sqlite(live_path, role=SQLiteConnectionRole.READ_ONLY)
     governed = connect_sqlite(governed_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
-        _require_healthy("live", live)
-        _require_healthy("governed", governed)
         revision = _require_same_revision(live, governed)
         live_tables = _require_source_schema_contract(live, governed, revision=revision)
         plans: list[MergeTablePlan] = []
@@ -526,19 +689,21 @@ def _plan_live_cutover_merge(
                     selected_delta_sha256=selected_delta_sha256,
                 )
             )
-        live_source_after = _source_snapshot_sha256(live_path)
-        governed_source_after = _source_snapshot_sha256(governed_path)
-        if live_source_before != live_source_after:
+        if live_state_before != _source_physical_state(live_path):
             raise LiveCutoverMergeError("live source changed while planning")
-        if governed_source_before != governed_source_after:
+        if governed_state_before != _source_physical_state(governed_path):
             raise LiveCutoverMergeError("governed source changed while planning")
+        _assert_health_artifact_unchanged(live_health_snapshot)
+        _assert_health_artifact_unchanged(governed_health_snapshot)
         commitment_payload = {
             "policy_name": "additive_live_operational_authority_merge",
-            "policy_version": "5",
+            "policy_version": "7",
             "live_database": str(live_path),
             "governed_database": str(governed_path),
             "live_source_sha256": live_source_before,
             "governed_source_sha256": governed_source_before,
+            "live_health_receipt": live_health.model_dump(mode="json"),
+            "governed_health_receipt": governed_health.model_dump(mode="json"),
             "alembic_revision": revision,
             "tables": [plan.model_dump(mode="json") for plan in plans],
             "governed_table_count": governed_count,
@@ -546,11 +711,13 @@ def _plan_live_cutover_merge(
         }
         return LiveCutoverMergePlan(
             policy_name="additive_live_operational_authority_merge",
-            policy_version="5",
+            policy_version="7",
             live_database=str(live_path),
             governed_database=str(governed_path),
             live_source_sha256=live_source_before,
             governed_source_sha256=governed_source_before,
+            live_health_receipt=live_health,
+            governed_health_receipt=governed_health,
             alembic_revision=revision,
             tables=tuple(plans),
             governed_table_count=governed_count,
@@ -562,12 +729,68 @@ def _plan_live_cutover_merge(
         live.close()
 
 
+def _health_receipt_sha256(receipt: CutoverSourceHealthReceipt) -> str:
+    return _canonical_sha(receipt.model_dump(mode="json", exclude={"receipt_sha256"}))
+
+
+def _admit_source_health(
+    label: str,
+    database: Path,
+    artifact_path: Path,
+    *,
+    source_state: tuple[tuple[str, CandidateFileIdentity | None], ...],
+    source_sha256: str,
+) -> tuple[CutoverSourceHealthArtifact, ImmutableArtifactSnapshot]:
+    try:
+        snapshot, payload = read_stable_artifact(artifact_path)
+        receipt = CutoverSourceHealthReceipt.model_validate_json(payload)
+        require_canonical_text_artifact(snapshot, receipt.model_dump_json())
+    except (ImmutableArtifactConflictError, OSError, ValueError) as exc:
+        raise LiveCutoverMergeError(f"{label} health receipt is invalid") from exc
+    if receipt.receipt_sha256 != _health_receipt_sha256(receipt):
+        raise LiveCutoverMergeError(f"{label} health receipt commitment is invalid")
+    expected_state = tuple(
+        SourceComponentState(label=component_label, identity=identity)
+        for component_label, identity in source_state
+    )
+    if (
+        receipt.schema_name != "live-cutover-source-health/v1"
+        or receipt.database != str(database)
+        or receipt.source_sha256 != source_sha256
+        or receipt.source_state != expected_state
+        or receipt.alembic_revision != _AUTHORITY_SCHEMA_REVISION
+        or receipt.integrity_check != "ok"
+        or receipt.foreign_key_violations != 0
+    ):
+        raise LiveCutoverMergeError(
+            f"{label} health receipt does not match the fenced source snapshot"
+        )
+    return (
+        CutoverSourceHealthArtifact(
+            artifact_path=str(snapshot.path),
+            artifact_sha256=snapshot.file_sha256,
+            receipt_sha256=receipt.receipt_sha256,
+        ),
+        snapshot,
+    )
+
+
+def _assert_health_artifact_unchanged(snapshot: ImmutableArtifactSnapshot) -> None:
+    try:
+        assert_artifact_unchanged(snapshot)
+    except (ImmutableArtifactConflictError, OSError) as exc:
+        raise LiveCutoverMergeError("source health receipt changed while planning") from exc
+
+
 def apply_live_cutover_merge(
     live_database: Path,
     governed_database: Path,
     destination_database: Path,
     *,
     expected_plan_sha256: str,
+    live_health_receipt: Path,
+    governed_health_receipt: Path,
+    receipt_path: Path,
 ) -> LiveCutoverMergeReceipt:
     """Copy the governed DB and atomically merge the committed live deltas."""
     live_path = live_database.resolve()
@@ -578,6 +801,9 @@ def apply_live_cutover_merge(
             governed_path,
             destination_database,
             expected_plan_sha256=expected_plan_sha256,
+            live_health_receipt=live_health_receipt,
+            governed_health_receipt=governed_health_receipt,
+            receipt_path=receipt_path,
         )
 
 
@@ -587,14 +813,28 @@ def _apply_live_cutover_merge(
     destination_database: Path,
     *,
     expected_plan_sha256: str,
+    live_health_receipt: Path,
+    governed_health_receipt: Path,
+    receipt_path: Path,
 ) -> LiveCutoverMergeReceipt:
     destination = destination_database.resolve()
-    source_paths = {live_path, governed_path}
-    if destination in source_paths:
-        raise LiveCutoverMergeError("destination must not replace either source database")
-    if destination.exists():
-        raise LiveCutoverMergeError("destination already exists")
-    plan = _plan_live_cutover_merge(live_path, governed_path)
+    receipt_destination = receipt_path.resolve()
+    _validate_apply_artifact_topology(
+        live_path,
+        governed_path,
+        live_health_receipt,
+        governed_health_receipt,
+        destination,
+        receipt_destination,
+    )
+    if any(component.exists() for component in _sqlite_namespace(destination)):
+        raise LiveCutoverMergeError("destination SQLite namespace already exists")
+    plan = _plan_live_cutover_merge(
+        live_path,
+        governed_path,
+        live_health_receipt=live_health_receipt,
+        governed_health_receipt=governed_health_receipt,
+    )
     if plan.plan_sha256 != expected_plan_sha256:
         raise LiveCutoverMergeError(
             "plan commitment mismatch; rerun dry-run and review the new authority delta"
@@ -604,13 +844,11 @@ def _apply_live_cutover_merge(
     connection: Connection | None = None
     live_connection: Connection | None = None
     owned_destination_identity: CandidateFileIdentity | None = None
+    live_source_state = _source_physical_state(live_path)
+    governed_source_state = _source_physical_state(governed_path)
     try:
-        if _source_snapshot_sha256(live_path) != plan.live_source_sha256:
-            raise LiveCutoverMergeError("live source changed after plan acceptance")
-        if _source_snapshot_sha256(governed_path) != plan.governed_source_sha256:
-            raise LiveCutoverMergeError("governed source changed after plan acceptance")
         owned_destination_identity = _copy_database(governed_path, destination)
-        if _source_snapshot_sha256(governed_path) != plan.governed_source_sha256:
+        if governed_source_state != _source_physical_state(governed_path):
             raise LiveCutoverMergeError("governed source changed during candidate copy")
         _require_owned_destination(destination, owned_destination_identity)
         connection = connect_sqlite(
@@ -624,7 +862,7 @@ def _apply_live_cutover_merge(
         )
         live_connection.execute("BEGIN")
         live_connection.execute("SELECT version_num FROM alembic_version").fetchone()
-        if _source_snapshot_sha256(live_path) != plan.live_source_sha256:
+        if live_source_state != _source_physical_state(live_path):
             raise LiveCutoverMergeError("live source changed after plan acceptance")
         with connection:
             for table_plan in plan.tables:
@@ -680,18 +918,27 @@ def _apply_live_cutover_merge(
     else:
         live_connection.close()
         connection.close()
-    _require_owned_destination(destination, owned_destination_identity)
-    return LiveCutoverMergeReceipt(
-        plan=plan,
-        destination_database=str(destination),
-        applied_tables=tuple(applied),
-        quick_check=quick_check,
-        foreign_key_violations=foreign_key_violations,
-        destination_sha256=_stable_file_sha256(
-            destination,
-            expected_identity=owned_destination_identity,
-        ),
-    )
+    try:
+        with _source_write_denial_fence((destination,)):
+            _require_owned_destination(destination, owned_destination_identity)
+            _require_candidate_sidecars_absent(destination)
+            receipt = LiveCutoverMergeReceipt(
+                plan=plan,
+                destination_database=str(destination),
+                applied_tables=tuple(applied),
+                quick_check=quick_check,
+                foreign_key_violations=foreign_key_violations,
+                destination_sha256=_stable_file_sha256(
+                    destination,
+                    expected_identity=owned_destination_identity,
+                ),
+            )
+            publish_text_no_clobber(receipt_destination, receipt.model_dump_json())
+            _require_owned_destination(destination, owned_destination_identity)
+    except Exception:
+        _remove_owned_destination(destination, owned_destination_identity)
+        raise
+    return receipt
 
 
 def _copy_database(
@@ -1242,6 +1489,39 @@ def _source_write_denial_fence(paths: tuple[Path, ...]) -> Generator[None, None,
     finally:
         for handle in reversed(handles):
             close_handle(wintypes.HANDLE(handle))
+
+
+def _source_physical_state(
+    path: Path,
+) -> tuple[tuple[str, CandidateFileIdentity | None], ...]:
+    """Capture cheap source identities while the denial fence owns the pathnames."""
+    states: list[tuple[str, CandidateFileIdentity | None]] = []
+    for label, component in (
+        ("main", path),
+        ("wal", Path(f"{path}-wal")),
+        ("journal", Path(f"{path}-journal")),
+    ):
+        require_no_reparse_points(component)
+        if component.is_file():
+            identity = candidate_file_identity(component)
+            if label == "journal" and identity.size_bytes:
+                raise LiveCutoverMergeError(
+                    "source has a non-empty rollback journal; checkpoint it before admission"
+                )
+            states.append((label, identity))
+            continue
+        if component.exists() or label == "main":
+            raise LiveCutoverMergeError(f"invalid SQLite source component: {component}")
+        states.append((label, None))
+    return tuple(states)
+
+
+def _require_candidate_sidecars_absent(path: Path) -> None:
+    remaining = [str(component) for component in _sqlite_namespace(path)[1:] if component.exists()]
+    if remaining:
+        raise LiveCutoverMergeError(
+            "candidate sidecars remain after final checkpoint: " + ", ".join(remaining)
+        )
 
 
 def _source_snapshot_sha256(path: Path) -> str:
