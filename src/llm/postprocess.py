@@ -11,13 +11,21 @@ Deliberately conservative: only a SHORT lead (≤2 lines before the first blank
 line / heading) whose first words match a first-person process-narration
 pattern is dropped. Content that opens with a heading, a claim, or data is
 never touched, and the stripper never empties a document.
+
+``strip_inline_markdown`` is the SCALAR-field sibling: LLM extraction paths
+were observed persisting markdown inside scalar fields (a Say-Do metric name
+stored as ``**Risk-adj. NIM**``, a thesis priority stored as
+``**Priority #1 — Mexico momentum**``), which then renders raw in surfaces
+that treat scalars as plain text. The rule across persist paths: scalars are
+plain, prose/body fields keep markdown (``ui.prose.render_prose`` owns that
+boundary). Apply this at persist time, not in prompts — prompts drift.
 """
 
 from __future__ import annotations
 
 import re
 
-__all__ = ["strip_llm_preamble"]
+__all__ = ["strip_inline_markdown", "strip_llm_preamble"]
 
 # First-person process narration openers ("Having exhausted…", "I now have…",
 # "I've gathered…", "Writing from…"). Matched against the lead line only.
@@ -48,6 +56,38 @@ _HERE_IS_RX = re.compile(
 
 # The meta lead must be short — a real paragraph is content, however it opens.
 _MAX_META_LINES = 2
+
+
+# Inline-markdown shapes for SCALAR fields. Paired markers only: an unpaired
+# ``**`` (e.g. the filing-footnote marker in ``Commerce (**)``) must survive,
+# and lone underscores are never touched so snake_case identifiers survive.
+_BOLD_STAR_RX = re.compile(r"\*\*([^*]+)\*\*")
+_BOLD_UNDER_RX = re.compile(r"__([^_]+)__")
+# Single-star italic: content may not start/end with whitespace or ``*``, so
+# arithmetic like "5 * 3 * 2" is left alone.
+_ITALIC_STAR_RX = re.compile(r"\*([^*\s](?:[^*]*[^*\s])?)\*")
+_CODE_SPAN_RX = re.compile(r"`([^`]+)`")
+_HEADING_MARK_RX = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.MULTILINE)
+
+
+def strip_inline_markdown(text: str) -> str:
+    """Reduce a SCALAR field to plain text: unwrap ``**bold**`` / ``__bold__``
+    / ``*italic*`` / `` `code` `` pairs and drop leading heading markers.
+    Idempotent; unpaired markers and intra-word underscores are untouched."""
+    if not text:
+        return text
+    out = text
+    # Fixpoint loop so nested shapes like ``**a *b* c**`` fully unwrap.
+    while True:
+        step = _HEADING_MARK_RX.sub("", out)
+        step = _BOLD_STAR_RX.sub(r"\1", step)
+        step = _BOLD_UNDER_RX.sub(r"\1", step)
+        step = _ITALIC_STAR_RX.sub(r"\1", step)
+        step = _CODE_SPAN_RX.sub(r"\1", step)
+        if step == out:
+            break
+        out = step
+    return out.strip()
 
 
 def _is_meta_lead(line: str) -> bool:

@@ -100,6 +100,7 @@ sys.path.insert(0, str(SRC_DIR))
 import comments  # noqa: E402
 import db  # noqa: E402
 from comments import Comment, ThreadEntry  # noqa: E402
+from compute.holdings_sanitize import sanitize_holdings_scalars  # noqa: E402
 from llm_client import (  # noqa: E402
     JSON_FENCE_RE,
     call_llm,
@@ -1172,12 +1173,17 @@ Return ONLY the JSON object. No markdown fence, no prose.
             "dry_run": not apply,
         }
 
+    # Scalars plain, prose markdown-ok: the LLM patch may wrap KPI names /
+    # priorities in `**bold**` — strip before the payload hits disk.
+    markdown_stripped = sanitize_holdings_scalars(payload)
+
     if apply:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     return {
         "summary": f"edit_structured: {diff}",
         "diff_summary": diff,
+        "markdown_stripped": markdown_stripped,
         "fields_touched": touched,
         "updated_fields": {f: payload[f] for f in touched},  # new values for the diff preview
         "dry_run": not apply,
@@ -1606,6 +1612,9 @@ No markdown fence, no prose outside the JSON.
             "fields_touched": [],
             "dry_run": not apply,
         }
+
+    # Scalars plain: pinned/excluded names come straight from the LLM.
+    sanitize_holdings_scalars(payload)
 
     if apply:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

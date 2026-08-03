@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from llm.postprocess import strip_llm_preamble
+from llm.postprocess import strip_inline_markdown, strip_llm_preamble
 
 _OBSERVED_LEAK = (
     "Having exhausted my web budget, I now have enough data to write the memo. "
@@ -126,3 +126,100 @@ def test_persist_memo_strips_preamble_before_summary(tmp_path) -> None:
     # The note summary line derives from the STRIPPED body.
     assert "web budget" not in note_body
     assert "Deposit costs fell 40 bps" in note_body
+
+
+# ---------------------------------------------------------------------------
+# strip_inline_markdown — scalars plain, prose fields keep markdown
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("dirty", "plain"),
+    [
+        ("**Risk-adj. NIM**", "Risk-adj. NIM"),
+        ("**Priority #1 — Mexico momentum**", "Priority #1 — Mexico momentum"),
+        ("## Where the next dollar works hardest", "Where the next dollar works hardest"),
+        ("__ROE__", "ROE"),
+        ("*deposit beta*", "deposit beta"),
+        ("`take_rate`", "take_rate"),
+        ("**a *b* c**", "a b c"),  # nested shapes fully unwrap
+        ("  Net take rate  ", "Net take rate"),  # scalars are also trimmed
+    ],
+)
+def test_inline_markdown_is_stripped(dirty: str, plain: str) -> None:
+    assert strip_inline_markdown(dirty) == plain
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Commerce (**)",  # filing-footnote marker: unpaired ** must survive
+        "risk_adj_nim",  # intra-word underscores (snake_case) untouched
+        "5 * 3 * 2",  # arithmetic stars are not italics
+        "Priority #1 — Mexico momentum",  # already plain
+        "",
+    ],
+)
+def test_non_markdown_scalars_are_untouched(text: str) -> None:
+    assert strip_inline_markdown(text) == text
+
+
+def test_strip_inline_markdown_is_idempotent() -> None:
+    once = strip_inline_markdown("**Priority #1 — *Mexico* momentum**")
+    assert strip_inline_markdown(once) == once
+
+
+def test_persist_memo_scalars_land_plain_but_body_keeps_markdown(tmp_path) -> None:
+    """Persist boundary: an LLM `**bold**` title and a summary line with
+    inline markdown land as plain scalars; body_md keeps its markdown for
+    render_prose."""
+    import sqlite3
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    from advisor.memos import persist_memo
+    from alembic import command
+    from identity import DEFAULT_USER_ID
+
+    project_root = Path(__file__).resolve().parents[1]
+    db = tmp_path / "memos.db"
+    cfg = Config(str(project_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(project_root / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
+    command.stamp(cfg, "0059_kpi_facts_restatement")
+    command.upgrade(cfg, "head")
+
+    body = (
+        "## Where the next dollar works hardest\n"
+        "MELI deserves the next dollar on **take-rate** durability.\n"
+    )
+    result = persist_memo(
+        db_path=db,
+        user_id=DEFAULT_USER_ID,
+        kind="next_dollar",
+        ticker="MELI",
+        counter_ticker=None,
+        title="**Where the next dollar works hardest**",
+        body_md=body,
+        context={},
+        write_ledger=False,
+    )
+    assert result.ok
+    conn = sqlite3.connect(str(db))
+    try:
+        (title, body_md) = conn.execute(
+            "SELECT title, body_md FROM advisor_memos WHERE id = ?", (result.memo_id,)
+        ).fetchone()
+        (note_body,) = conn.execute(
+            "SELECT body FROM analyst_notes WHERE source_ref = ?",
+            (f"advisor_memo:{result.memo_id}",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert title == "Where the next dollar works hardest"
+    # Prose body is markdown-ok — render_prose owns that boundary.
+    assert body_md == body
+    # The derived note scalar is plain: no `**` from title or summary line.
+    assert "**" not in note_body
+    assert "take-rate durability" in note_body

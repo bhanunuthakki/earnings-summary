@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from compute.say_do import persist_manifest
 from compute.say_do_extractor import (
     MAX_TRANSCRIPT_CHARS,
     CommitmentParseError,
@@ -323,6 +324,36 @@ def test_parse_strips_markdown_fences() -> None:
     response = '```json\n{"commitments": []}\n```'
     manifest = parse_llm_response(response, context=_CTX)
     assert manifest.commitments == []
+
+
+def test_markdown_wrapped_kpi_name_persists_plain(conn: sqlite3.Connection) -> None:
+    """Persist boundary: kpi_name is a SCALAR — an LLM response wrapping it
+    in `**bold**` (observed live 2026-08-02) must land plain in
+    management_commitments. The strip lives on CommitmentInput so both the
+    --auto parse path and an --apply manifest hit it."""
+    _, segment_id = _seed_transcript(conn, "NU", "We expect risk-adj. NIM...", "2025-12-31")
+    ctx = TranscriptContext(
+        ticker="NU",
+        period_made=datetime(2025, 12, 31),
+        transcript_segment_id=segment_id,
+    )
+    response = """{
+      "commitments": [
+        {
+          "kpi_name": "**Risk-adj. NIM**",
+          "comparator": "ge",
+          "target_value": "10",
+          "unit": "percent",
+          "period_target": "2026-03-31",
+          "narrative": "We expect risk-adjusted NIM of at least 10%."
+        }
+      ]
+    }"""
+    manifest = parse_llm_response(response, context=ctx)
+    assert manifest.commitments[0].kpi_name == "Risk-adj. NIM"
+    persist_manifest(conn, manifest)
+    (kpi_name,) = conn.execute("SELECT kpi_name FROM management_commitments").fetchone()
+    assert kpi_name == "Risk-adj. NIM"
 
 
 def test_parse_invalid_json_raises() -> None:

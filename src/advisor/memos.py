@@ -185,12 +185,16 @@ def persist_memo(
     row is the system of record and must survive a partial memory write.
     Public: the Socratic flow (P2.4) persists through the same path, passing
     the parsed stance + owner-chosen horizon."""
-    from llm.postprocess import strip_llm_preamble
+    from llm.postprocess import strip_inline_markdown, strip_llm_preamble
 
     # B8: every advisor memo body passes the preamble stripper at persist time
     # so leaked process narration never reaches the memo record, the note
     # summary line, or the ledger echo.
     body_md = strip_llm_preamble(body_md)
+    # Scalar/prose split: body_md keeps markdown (render_prose owns that
+    # boundary), but title and the derived note/ledger summary line are
+    # SCALARS rendered plain — LLM-authored `**bold**` must not persist there.
+    title = strip_inline_markdown(title)
     memo = insert_memo(
         user_id=user_id,
         kind=kind,
@@ -205,7 +209,7 @@ def persist_memo(
     )
     note_id: int | None = None
     ledger_id: int | None = None
-    summary = _memo_summary_line(body_md)
+    summary = strip_inline_markdown(_memo_summary_line(body_md))
     try:
         # Clean body — exactly "{title} — {summary}". The memo's identity rides
         # the provenance columns (source='advisor', source_ref, context), NOT

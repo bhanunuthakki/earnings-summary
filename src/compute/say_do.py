@@ -21,9 +21,10 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from compute.thesis_evaluator import Comparator
+from llm.postprocess import strip_inline_markdown
 from models.facts import Unit
 
 
@@ -53,6 +54,15 @@ class CommitmentInput(BaseModel):
     target_value: Decimal
     unit: Unit
     narrative: str = Field(min_length=1, max_length=1000)
+
+    # kpi_name is a SCALAR (joined against kpi_definitions.name and rendered
+    # plain in the Say-Do table) — LLM responses were observed wrapping it in
+    # markdown (`**Risk-adj. NIM**`). narrative is a near-verbatim quote and
+    # is left untouched. mode="before" so stripping precedes the length gate.
+    @field_validator("kpi_name", mode="before")
+    @classmethod
+    def _kpi_name_plain(cls, v: object) -> object:
+        return strip_inline_markdown(v) if isinstance(v, str) else v
 
 
 class CommitmentExtractionManifest(BaseModel):
