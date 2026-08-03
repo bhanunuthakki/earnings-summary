@@ -127,7 +127,7 @@ def inspect_preservation_archive(archive_path: Path) -> PreservationArchiveRepor
     resolved = archive_path.resolve(strict=True)
     sha256_before = _sha256(resolved)
     size_before = resolved.stat().st_size
-    conn = sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)
+    conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
     try:
         tables = [
             str(row[0])
