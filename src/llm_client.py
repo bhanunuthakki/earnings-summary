@@ -1243,12 +1243,13 @@ def generate_recent_developments(
     max_web_results: int = _MAX_WEB_RESULTS_PER_NEWS_CALL,
     max_excerpt_chars: int = _MAX_EXCERPT_CHARS_PER_NEWS_ITEM,
 ) -> str:
-    """Recent-developments brief sourced via Claude WebSearch + WebFetch.
+    """Recent-developments brief sourced via live web grounding.
 
     Routes through `call_llm_with_web` so the model can pull current news
     from Bloomberg / Reuters / CNBC / FT / WSJ / company press releases and
-    cite URLs inline. On Claude failure, `call_llm_with_web` falls back to
-    plain `_call_claude` (no web), then to Gemini per the standard chain.
+    cite URLs inline. Codex-first (`web_search="live"`); on an OPERATIONAL
+    Codex failure falls back to Claude WebSearch/WebFetch, then to plain
+    `_call_claude` (no web), then to Gemini per the standard chain.
 
     Used by the §8 Recent developments section. Output is markdown, with
     sources as inline links the section renderer passes through unchanged.
