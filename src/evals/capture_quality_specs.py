@@ -275,6 +275,16 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "Treating low-quality or circular sourcing as primary evidence.",
     ),
     _q(
+        "disclosure_thesis_materiality",
+        "P1",
+        "cold",
+        "judgment",
+        "Elevate a disclosure change only when it restricts measuring the thesis' KPIs or "
+        "break rules, naming the affected input; default to not_material.",
+        "Elevating drift with no measurement impact, or suppressing a change that removes "
+        "a tier-1 KPI/break-rule input from observability.",
+    ),
+    _q(
         "earnings_tone_diff",
         "P1",
         "warm",

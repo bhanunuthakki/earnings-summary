@@ -99,6 +99,32 @@ def test_0271_is_idempotent_when_columns_preexist(tmp_path: Path) -> None:
     assert set(COLUMNS) <= _column_names(path)
 
 
+def test_0271_downgrade_survives_orphan_triggers(tmp_path: Path) -> None:
+    """Regression (CI shard 6, 2026-08-02): partial-schema DBs (stamped past
+    early migrations) legitimately carry triggers whose subject tables were
+    never created — e.g. trg_ask_answer_audit_record_llm referencing
+    llm_calls. SQLite's NATIVE ``DROP COLUMN`` re-validates every trigger in
+    the schema and fails on the orphan; the downgrade must use the
+    batch-rebuild path instead."""
+    path = tmp_path / "thesis-materiality-orphan-trigger.db"
+    config = _stamp_parent(
+        path,
+        table_sql=(
+            _EVENTS_SQL
+            + "; CREATE TABLE ask_answer_audit (id INTEGER PRIMARY KEY, answer TEXT)"
+            + "; CREATE TRIGGER trg_orphan AFTER INSERT ON ask_answer_audit BEGIN "
+            "INSERT INTO llm_calls_missing_table (x) VALUES (1); END"
+        ),
+    )
+    command.upgrade(config, REVISION)
+    assert set(COLUMNS) <= _column_names(path)
+    command.downgrade(config, PARENT)
+    names_after = _column_names(path)
+    assert not (set(COLUMNS) & names_after)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
+
+
 def test_0271_partial_schema_may_omit_disclosure_events(tmp_path: Path) -> None:
     path = tmp_path / "missing-disclosure-events.db"
     config = _stamp_parent(path, table_sql="")

@@ -173,7 +173,7 @@ class TestValidationIssuesCollapse:
         assert raised.startswith("2026-07-26")
         assert first.startswith("2026-07-24") and last.startswith("2026-07-26")
         assert count == 3 and fp is not None
-        # Singleton untouched.
+        # Singleton kept as one row — but fingerprinted, not stranded.
         assert (
             conn.execute("SELECT COUNT(*) FROM validation_issues WHERE ticker = 'WIX'").fetchone()[
                 0
@@ -211,6 +211,8 @@ class TestValidationIssuesCollapse:
         report = _run(gc_db, apply=False, policies=["validation-issues"])
         (pol,) = report.policies
         assert pol.rows_deleted["validation_issues"] == 2
+        # Both survivors are planned for a fingerprint (dup group + singleton).
+        assert pol.detail["fingerprint_backfilled"] == 2
         conn = sqlite3.connect(gc_db)
         assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 4
         assert (
@@ -219,6 +221,197 @@ class TestValidationIssuesCollapse:
             ).fetchone()[0]
             == 0
         )
+
+
+class TestNullFingerprintBackfill:
+    """Regression: every NULL fingerprint is backfilled, not just dup survivors.
+
+    Before this, ``collapse_validation_issues`` backfilled only rows matching
+    ``rn = 1 AND n > 1``. A row that was always a singleton kept its NULL
+    fingerprint, and ``record_issue`` matches on ``WHERE fingerprint = ?``,
+    which never matches NULL — so the row could never be re-opened, updated,
+    or resolved and sat in the open-issue count forever (196 such rows
+    survived the 2026-08-02 production apply).
+    """
+
+    def _seed_singleton(self, db: Path, *, ticker: str = "NU") -> None:
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO validation_issues (run_id, source_doc_id, ticker, severity,"
+            " rule, raw_value, expected, raised_at, fingerprint, occurrence_count)"
+            " VALUES ('run0', 7, ?, 'warn', 'PLAUSIBLE_RANGE', 'x=1', 'x<1',"
+            " '2026-07-24 04:00:00', NULL, 1)",
+            (ticker,),
+        )
+        conn.commit()
+        conn.close()
+
+    def _record_with_rule(
+        self, db: Path, *, ticker: str = "NU", rule: str = "PLAUSIBLE_RANGE"
+    ) -> int:
+        """Re-detect the seeded defect through the real lifecycle writer."""
+        from pipeline.validation_issue_store import record_issue
+
+        conn = sqlite3.connect(db)
+        try:
+            issue_id = record_issue(
+                conn,
+                run_id="run-after-gc",
+                source_doc_id=7,
+                ticker=ticker,
+                severity="warn",
+                rule=rule,
+                raw_value="x=1",
+                expected="x<1",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return issue_id
+
+    def test_singleton_gets_fingerprint_and_record_issue_updates_it(self, gc_db: Path) -> None:
+        self._seed_singleton(gc_db)
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        # No duplicates at all — the old `if apply and doomed_total` gate also
+        # skipped the backfill entirely on exactly this shape.
+        assert pol.rows_deleted["validation_issues"] == 0
+        assert pol.detail["duplicate_groups"] == 0
+        assert pol.detail["fingerprint_backfilled"] == 1
+
+        conn = sqlite3.connect(gc_db)
+        seeded_id, fingerprint, first, last, count = conn.execute(
+            "SELECT id, fingerprint, first_seen_at, last_seen_at, occurrence_count"
+            " FROM validation_issues"
+        ).fetchone()
+        conn.close()
+        assert fingerprint is not None
+        assert (
+            fingerprint == hashlib.sha256(b"7\x1fNU\x1fPLAUSIBLE_RANGE\x1fx=1\x1fx<1").hexdigest()
+        )
+        assert first.startswith("2026-07-24") and last.startswith("2026-07-24")
+        assert count == 1
+
+        # The point of the fingerprint: the next detection UPDATEs this row
+        # rather than inserting a second one.
+        assert self._record_with_rule(gc_db) == seeded_id
+        conn = sqlite3.connect(gc_db)
+        rows = conn.execute("SELECT id, run_id, occurrence_count FROM validation_issues").fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0] == (seeded_id, "run-after-gc", 2)
+
+    def test_second_apply_is_a_noop(self, gc_db: Path) -> None:
+        self._seed_singleton(gc_db)
+        _run(gc_db, apply=True, policies=["validation-issues"])
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        assert pol.rows_deleted["validation_issues"] == 0
+        assert pol.rows_updated["validation_issues"] == 0
+        assert pol.detail["fingerprint_backfilled"] == 0
+
+    def test_ticker_case_variants_collapse_as_one_defect(self, gc_db: Path) -> None:
+        """The defect-group key mirrors issue_fingerprint's normalization.
+
+        ``issue_fingerprint`` upper-cases the ticker, so 'nu' and 'NU' are one
+        defect. The group key used to partition on the raw ticker, which put
+        them in two groups that computed one fingerprint — the second UPDATE
+        would hit uq_validation_issues_fingerprint. Aligned, they are simply
+        one duplicate group.
+        """
+        self._seed_singleton(gc_db, ticker="NU")
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO validation_issues (run_id, source_doc_id, ticker, severity,"
+            " rule, raw_value, expected, raised_at, fingerprint, occurrence_count)"
+            " VALUES ('run-legacy', 7, 'nu', 'warn', 'PLAUSIBLE_RANGE', 'x=1', 'x<1',"
+            " '2026-07-20 04:00:00', NULL, 1)"
+        )
+        conn.commit()
+        conn.close()
+
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        assert pol.detail["duplicate_groups"] == 1
+        assert pol.detail["fingerprint_collisions"] == 0
+        assert pol.rows_deleted["validation_issues"] == 1
+
+        conn = sqlite3.connect(gc_db)
+        rows = conn.execute("SELECT ticker, fingerprint FROM validation_issues").fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0][0] == "NU" and rows[0][1] is not None
+
+    def test_collision_with_fingerprinted_row_is_archived_not_written(self, gc_db: Path) -> None:
+        """A NULL row whose fingerprint is already owned is a true duplicate.
+
+        The one normalization the group key cannot mirror in SQL: a NULL
+        ``rule`` reaches ``issue_fingerprint`` as the literal string "None", so
+        a NULL rule and the rule 'None' are two groups with one fingerprint.
+        The loser goes through archive+delete, never an UPDATE the partial
+        unique index would reject mid-batch.
+        """
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO validation_issues (run_id, source_doc_id, ticker, severity,"
+            " rule, raw_value, expected, raised_at, fingerprint, occurrence_count)"
+            " VALUES ('run-legacy', 7, 'NU', 'warn', NULL, 'x=1', 'x<1',"
+            " '2026-07-20 04:00:00', NULL, 1)"
+        )
+        conn.commit()
+        conn.close()
+        kept_id = self._record_with_rule(gc_db, rule="None")
+
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        assert pol.detail["fingerprint_collisions"] == 1
+        assert pol.detail["fingerprint_backfilled"] == 0
+        assert pol.rows_deleted["validation_issues"] == 1
+
+        conn = sqlite3.connect(gc_db)
+        rows = conn.execute("SELECT id FROM validation_issues").fetchall()
+        conn.close()
+        assert rows == [(kept_id,)]
+        arc = gc_db.parent / "archive" / db_gc.ARCHIVE_NAME
+        aconn = sqlite3.connect(arc)
+        archived = aconn.execute("SELECT run_id FROM validation_issues").fetchall()
+        aconn.close()
+        assert archived == [("run-legacy",)]
+
+    def test_referenced_collision_is_stranded_loudly_not_deleted(self, gc_db: Path) -> None:
+        """An FK-referenced collision can be neither fingerprinted nor deleted."""
+        conn = sqlite3.connect(gc_db)
+        cur = conn.execute(
+            "INSERT INTO validation_issues (run_id, source_doc_id, ticker, severity,"
+            " rule, raw_value, expected, raised_at, fingerprint, occurrence_count)"
+            " VALUES ('run-legacy', 7, 'NU', 'warn', NULL, 'x=1', 'x<1',"
+            " '2026-07-20 04:00:00', NULL, 1)"
+        )
+        conn.execute(
+            "INSERT INTO fact_selection_decisions (target_table, target_row_id,"
+            " validation_issue_id) VALUES ('kpi_facts', 1, ?)",
+            (cur.lastrowid,),
+        )
+        conn.commit()
+        conn.close()
+        self._record_with_rule(gc_db, rule="None")
+
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        assert pol.detail["fingerprint_blocked_referenced"] == 1
+        assert pol.detail["fingerprint_collisions"] == 0
+        assert pol.rows_deleted["validation_issues"] == 0
+
+        conn = sqlite3.connect(gc_db)
+        assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 2
+        # Stranded, but reported — never silently "fixed".
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM validation_issues WHERE fingerprint IS NULL"
+            ).fetchone()[0]
+            == 1
+        )
+        conn.close()
 
 
 class TestTelemetryRetention:
@@ -848,3 +1041,146 @@ class TestIncidentHardening:
         report = _run(gc_db, apply=True, policies=["facts-depth", "maintenance"], vacuum=True)
         maint = report.policies[-1]
         assert maint.detail.get("vacuum") == 1
+
+
+class TestArchiveIdempotency:
+    """Re-archiving a doomed set must never leave two sidecar copies of one row.
+
+    Prod, 2026-08-02: a facts-depth apply aborted after the archive pass (FK
+    preflight conflict, since fixed) and the retry archived the same 796,668
+    financial_facts rows again — 1,593,336 sidecar rows over 796,668 distinct
+    ids. The documented contract is that any prune is reversible with one
+    INSERT ... SELECT; with duplicates present that restore double-inserts.
+    """
+
+    @staticmethod
+    def _attached(db: Path) -> sqlite3.Connection:
+        conn = sqlite3.connect(db)
+        db_gc.attach_archive(conn, db.parent / "archive" / db_gc.ARCHIVE_NAME)
+        return conn
+
+    def test_id_keyed_table_archived_twice_keeps_one_copy_per_id(self, gc_db: Path) -> None:
+        conn = self._attached(gc_db)
+        _seed_quarters(conn, "EVAL", 4)
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) SELECT id FROM financial_facts")
+        doomed = conn.execute("SELECT COUNT(*) FROM _gc_doomed").fetchone()[0]
+        assert doomed > 0
+
+        first = db_gc._archive_doomed(
+            conn, table="financial_facts", run_at="2026-08-02T20:40:20", policy="facts-depth"
+        )
+        second = db_gc._archive_doomed(
+            conn, table="financial_facts", run_at="2026-08-02T20:43:39", policy="facts-depth"
+        )
+
+        assert first == doomed
+        assert second == 0  # the retry adds nothing
+        total, distinct = conn.execute(
+            'SELECT COUNT(*), COUNT(DISTINCT id) FROM gcarc."financial_facts"'
+        ).fetchone()
+        assert total == distinct == doomed
+        # Both passes are still logged; the retry honestly records zero rows.
+        assert [
+            r[0]
+            for r in conn.execute(
+                "SELECT rows_archived FROM gc_manifest WHERE source_table='financial_facts'"
+                " ORDER BY run_at"
+            )
+        ] == [doomed, 0]
+
+    def test_rowid_keyed_table_archived_twice_keeps_one_copy_per_row(self, gc_db: Path) -> None:
+        # ingestion_runs has no id column in this fixture, so telemetry falls
+        # back to rowid — the archive carries identity in its own rowid.
+        conn = self._attached(gc_db)
+        conn.executemany(
+            "INSERT INTO ingestion_runs (run_id, started_at) VALUES (?, '2026-01-01')",
+            [("r1",), ("r2",), ("r3",)],
+        )
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) SELECT rowid FROM ingestion_runs")
+
+        first = db_gc._archive_doomed(
+            conn, table="ingestion_runs", run_at="t1", policy="telemetry", id_col="rowid"
+        )
+        second = db_gc._archive_doomed(
+            conn, table="ingestion_runs", run_at="t2", policy="telemetry", id_col="rowid"
+        )
+
+        assert (first, second) == (3, 0)
+        assert [
+            r[0] for r in conn.execute('SELECT run_id FROM gcarc."ingestion_runs" ORDER BY run_id')
+        ] == ["r1", "r2", "r3"]
+        # Verbatim-restore contract: the sidecar exposes exactly the live columns.
+        assert [r[1] for r in conn.execute('PRAGMA gcarc.table_info("ingestion_runs")')] == [
+            r[1] for r in conn.execute('PRAGMA main.table_info("ingestion_runs")')
+        ]
+
+    def test_legacy_duplicated_sidecar_is_collapsed_on_next_archive(self, gc_db: Path) -> None:
+        conn = self._attached(gc_db)
+        _seed_quarters(conn, "EVAL", 3)
+        rows = conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
+        # Reproduce a pre-fix sidecar: schema mirror with no identity index,
+        # populated twice by an abort-then-retry.
+        conn.execute(
+            'CREATE TABLE gcarc."financial_facts" AS SELECT * FROM main."financial_facts" WHERE 0'
+        )
+        for _ in range(2):
+            conn.execute('INSERT INTO gcarc."financial_facts" SELECT * FROM main."financial_facts"')
+        assert (
+            conn.execute('SELECT COUNT(*) FROM gcarc."financial_facts"').fetchone()[0] == 2 * rows
+        )
+
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) SELECT id FROM financial_facts")
+        added = db_gc._archive_doomed(
+            conn, table="financial_facts", run_at="t1", policy="facts-depth"
+        )
+
+        assert added == 0  # every doomed row was already archived
+        total, distinct = conn.execute(
+            'SELECT COUNT(*), COUNT(DISTINCT id) FROM gcarc."financial_facts"'
+        ).fetchone()
+        assert total == distinct == rows
+
+    def test_apply_aborted_after_archive_then_retried_archives_each_fact_once(
+        self, gc_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end replay of the prod incident: abort post-archive, then retry.
+
+        Exactly the 2026-08-02 sequence — the first facts-depth apply died
+        after the archive pass and the retry archived the same rows again.
+        """
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES ('EVAL', 'evaluation')"
+        )
+        _seed_quarters(conn, "EVAL", 30)
+        conn.commit()
+        conn.close()
+
+        original = db_gc._delete_batches
+
+        def abort_after_archive(*args: object, **kwargs: object) -> int:
+            raise db_gc.GcAbortedError("simulated post-archive abort")
+
+        monkeypatch.setattr(db_gc, "_delete_batches", abort_after_archive)
+        with pytest.raises(db_gc.GcAbortedError, match="simulated post-archive abort"):
+            _run(gc_db, apply=True, policies=["facts-depth"])
+
+        arc = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
+        after_abort = arc.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
+        assert after_abort > 0  # the aborted run really did archive
+        arc.close()
+
+        monkeypatch.setattr(db_gc, "_delete_batches", original)
+        report = _run(gc_db, apply=True, policies=["facts-depth"])
+        (pol,) = report.policies
+        deleted = pol.rows_deleted["financial_facts"]
+        assert deleted == after_abort  # the retry prunes the same set
+
+        arc = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
+        total, distinct = arc.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT id) FROM financial_facts"
+        ).fetchone()
+        assert total == distinct == deleted

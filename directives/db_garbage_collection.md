@@ -25,6 +25,16 @@ write. Every deleted row is first copied, schema-identical, into
 `data/archive/portfolio_gc_archive.db` (with a `gc_manifest` run log), so any
 prune is reversible with one `INSERT ... SELECT`.
 
+That restore is only safe because archiving is idempotent: each sidecar table
+carries a UNIQUE index on its identity column (`id`, or the source rowid for
+rowid-keyed tables) and the copy is `INSERT OR IGNORE`, so an apply that
+aborts after the archive pass and is then retried re-archives nothing. The
+sidecar therefore holds **exactly one copy per id** — a second copy would
+double-insert on restore, so it is a defect, not noise. `gc_manifest` records
+the rows each pass actually added (0 for a re-archive), and a legacy sidecar
+carrying duplicates is collapsed once, loudly logged as
+`gc_archive_deduplicated`, before its index is created.
+
 ## Policies & parameters
 
 | Policy | What | Default | Owner-tunable |

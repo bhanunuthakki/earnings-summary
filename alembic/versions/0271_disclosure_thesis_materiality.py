@@ -69,6 +69,24 @@ def downgrade() -> None:
     if _INDEX in existing_indexes:
         op.drop_index(_INDEX, table_name=_EVENTS)
     existing = {col["name"] for col in insp.get_columns(_EVENTS)}
-    for column in _COLUMNS:
-        if column.name in existing:
-            op.drop_column(_EVENTS, column.name)
+    to_drop = [column.name for column in _COLUMNS if column.name in existing]
+    if not to_drop:
+        return
+    # batch_alter_table (table rebuild) under legacy_alter_table, NOT native
+    # DROP COLUMN: SQLite re-validates EVERY trigger in the schema both on a
+    # native drop and on the rebuild's final RENAME, and partial-schema
+    # databases legitimately carry triggers whose subject tables were never
+    # created (e.g. trg_ask_answer_audit_record_llm referencing llm_calls on
+    # a DB stamped past the llm_calls migration). legacy_alter_table=ON skips
+    # that global validation during the rename; disclosure_events itself has
+    # no triggers/FTS, so nothing that should be rewritten is skipped.
+    is_sqlite = bind.dialect.name == "sqlite"
+    if is_sqlite:
+        bind.exec_driver_sql("PRAGMA legacy_alter_table = ON")
+    try:
+        with op.batch_alter_table(_EVENTS) as batch:
+            for name in to_drop:
+                batch.drop_column(name)
+    finally:
+        if is_sqlite:
+            bind.exec_driver_sql("PRAGMA legacy_alter_table = OFF")
