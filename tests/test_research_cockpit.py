@@ -39,6 +39,7 @@ from pipeline.research_cockpit import (  # noqa: E402
     attractiveness_tone,
     build_cockpit_rows,
     compute_attractiveness,
+    dcf_sanity_flags,
     eval_attractiveness,
     latest_dcf_runs,
     render_research_cockpit,
@@ -1102,6 +1103,27 @@ def test_latest_dcf_runs_nulls_gap_on_sanity_flag(conn: sqlite3.Connection) -> N
     assert gap is None
     assert fv == 60.0
     assert px == 100.0
+
+
+def test_dcf_sanity_flags_ignores_newer_segment_row(conn: sqlite3.Connection) -> None:
+    _insert_minimal_dcf_run(
+        conn,
+        ticker="FLAGSEG",
+        npv_per_share=60.0,
+        live_price=100.0,
+        created_at=_iso(NOW - timedelta(days=1)),
+        sanity_flag="outlier",
+    )
+    _insert_minimal_dcf_run(
+        conn,
+        ticker="FLAGSEG",
+        npv_per_share=80.0,
+        live_price=100.0,
+        created_at=_iso(NOW),
+        segment_name="Consumer",
+    )
+
+    assert "FLAGSEG" in dcf_sanity_flags(conn)
 
 
 def test_render_staleness_dots(rows: dict[str, list[CockpitRow]]) -> None:
