@@ -71,11 +71,18 @@ def load_or_create_key(path: Path | None = None) -> bytes:
 
 
 def _temp_destination(destination: Path) -> tuple[int, Path]:
+    """A temp file whose final ``os.replace`` to ``destination`` is atomic.
+
+    Staging happens IN the destination directory, so same-volume atomicity
+    holds by construction. The previous version staged in the system temp dir
+    and merely CHECKED the volumes matched — true only while the backup
+    destination lived on C:. The 2026-08-02 switch of Google Drive to Stream
+    mode moved the destination to a virtual drive (G:) and every backup died
+    on the check. A dot-prefixed name keeps Drive from publishing the partial
+    file under the final name while it is still being written.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staging_dir = Path(tempfile.gettempdir()).resolve()
-    if staging_dir.anchor.lower() != destination.resolve().anchor.lower():
-        raise RuntimeError("backup staging and destination must be on the same volume")
-    fd, name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=staging_dir)
+    fd, name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
     return fd, Path(name)
 
 
