@@ -69,6 +69,22 @@ def test_health_console_is_brief_plus_two_chip_cards(tmp_path: Path, probe_down:
     assert "Whole-book macro stress" not in html
 
 
+def test_health_pane_switcher_is_sticky_with_underline_active_chips(
+    tmp_path: Path, probe_down: None
+) -> None:
+    """Owner directive 2026-08-02: each card's pane-switcher chip row pins
+    below the shell topbar (``.k-chip-tabs-sticky``, the bare-row sibling of
+    ``.k-toolbar-sticky``) since a fetched pane can run well past one screen,
+    and the default-active chip carries the shared underline modifier
+    (``.k-chip-tab`` + ``.is-on``) instead of a filled-pill recolor. The
+    ``data-hc-pane`` switcher hook must survive untouched."""
+    html = render_portfolio_health_panel(tmp_path / "missing.db")
+    assert html.count('class="hc-tabs k-chip-tabs-sticky"') == 2
+    assert 'class="k-chip k-chip-btn k-chip-tab is-on" data-hc-pane="hcp-thesis"' in html
+    assert 'class="k-chip k-chip-btn k-chip-tab is-on" data-hc-pane="hcp-bets"' in html
+    assert 'class="k-chip k-chip-btn k-chip-tab" data-hc-pane="hcp-exposure"' in html
+
+
 def test_health_console_cut_sections_became_ask_doorways(tmp_path: Path, probe_down: None) -> None:
     """Red Team and the macro-stress lens are on-demand Ask questions now
     (Law-2 data-ask-q doorways on the brief), not standing sections."""

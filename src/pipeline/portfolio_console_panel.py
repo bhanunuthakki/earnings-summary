@@ -73,10 +73,11 @@ def _lazy_section_placeholder(endpoint: str, label: str) -> str:
 
 
 # Health console (owner directive 2026-07-30): the read, then exactly TWO
-# chip-tab cards — nothing below the fold. Chips (.k-chip-btn + the kit's
-# .is-on active state) swap panes in place; each pane fetches its fragment on
+# chip-tab cards — nothing below the fold. Chips (.k-chip-btn.k-chip-tab +
+# the kit's .is-on active state, restyled 2026-08-02 to a 2px underline —
+# never a filled pill) swap panes in place; each pane fetches its fragment on
 # first activation, so the console shell paints instantly. Layout-only CSS —
-# the chips/pills are the kit.
+# the chips/pills/sticky band are all the kit (.k-chip-tabs-sticky).
 _HEALTH_CSS = """<style>
 .hc-card { min-width: 0; }
 .hc-h { margin: 0 0 4px; font-size: var(--fs-title); }
@@ -152,7 +153,7 @@ _HEALTH_CARDS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
 
 def _health_card(anchor: str, question: str, tabs: tuple[tuple[str, str], ...]) -> str:
     chips = "".join(
-        f'<button type="button" class="k-chip k-chip-btn{" is-on" if i == 0 else ""}" '
+        f'<button type="button" class="k-chip k-chip-btn k-chip-tab{" is-on" if i == 0 else ""}" '
         f'data-hc-pane="hcp-{key}">{escape(label)}</button>'
         for i, (key, label) in enumerate(tabs)
     )
@@ -162,10 +163,15 @@ def _health_card(anchor: str, question: str, tabs: tuple[tuple[str, str], ...]) 
         '<p class="cc-loading">Loading…</p></div>'
         for i, (key, _label) in enumerate(tabs)
     )
+    # k-chip-tabs-sticky (ui/controls.py): the pane-switcher row pins below the
+    # shell topbar too — each card's fetched pane (thesis rollup, drawdown/
+    # crowding tables, …) can run well past one screen, and without this the
+    # chip row that swaps panes scrolls away with it (owner directive
+    # 2026-08-02).
     return (
         f'<div class="console-sec hc-card" id="csec-{escape(anchor)}">'
         f'<h2 class="hc-h">{escape(question)}</h2>'
-        f'<div class="hc-tabs">{chips}</div>{panes}</div>'
+        f'<div class="hc-tabs k-chip-tabs-sticky">{chips}</div>{panes}</div>'
     )
 
 

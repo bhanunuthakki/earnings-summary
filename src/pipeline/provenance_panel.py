@@ -4,6 +4,11 @@ The System theme exposes one Provenance tab with Coverage kept first and an
 anchor navigation band. Each diagnostic already has a standalone panel route,
 so this assembler defers those database-heavy builders until their section is
 revealed instead of serially building all eleven before first paint.
+
+The anchor nav renders ``panel_toolbar(sticky=True)`` (owner directive
+2026-08-02): across eleven sections (coverage/validation/evals/…) it stays
+pinned below the shell topbar as the owner scrolls instead of scrolling away
+after the first section.
 """
 
 from __future__ import annotations
@@ -48,7 +53,7 @@ def render_provenance_panel(
     """
     del db_path, repo_root, user_id
     nav = "".join(
-        f'<button type="button" class="k-chip k-chip-btn" '
+        f'<button type="button" class="k-chip k-chip-btn k-chip-tab" '
         f'data-prov-jump="prov-{anchor}">{escape(label)}</button>'
         for anchor, label, _panel_id in _SECTIONS
     )
@@ -56,6 +61,7 @@ def render_provenance_panel(
         "Provenance",
         filters=nav,
         suppress_title=True,
+        sticky=True,
     )
     body = "".join(
         f'<div class="prov-sec" id="prov-{anchor}">'

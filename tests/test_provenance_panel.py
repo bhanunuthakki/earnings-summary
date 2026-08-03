@@ -60,6 +60,17 @@ def test_assembler_composes_all_eight_sections(tmp_path: Path) -> None:
     assert 'href="#prov-' not in html
 
 
+def test_nav_band_is_sticky_with_underline_active_chips(tmp_path: Path) -> None:
+    """Owner directive 2026-08-02: across eleven sections the anchor nav must
+    stay pinned below the shell topbar (``.k-toolbar-sticky``) rather than
+    scrolling away, and its chips use the shared underline-active modifier
+    (``.k-chip-tab``) instead of a per-console reinvention."""
+    html = render_provenance_panel(_empty_db(tmp_path), tmp_path)
+    assert 'class="k-toolbar k-toolbar-sticky"' in html
+    for anchor in _SECTIONS:
+        assert f'class="k-chip k-chip-btn k-chip-tab" data-prov-jump="prov-{anchor}"' in html
+
+
 def test_coverage_leads_prominently(tmp_path: Path) -> None:
     """The owner: 'Coverage already makes sense, keep it prominent.' It is the
     first section, not buried mid-page."""

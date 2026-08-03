@@ -262,6 +262,21 @@ def test_ledger_console_renders_one_merged_nav_band(db_path: Path) -> None:
     assert ">Ledger</h2>" not in html
 
 
+def test_ledger_console_nav_band_is_sticky_with_underline_chips(db_path: Path) -> None:
+    """Owner directive 2026-08-02: the merged Ledger band pins below the shell
+    topbar (``.k-toolbar-sticky``) and every chip — both the feed's own
+    ``extra_nav`` chips and the console's section chips — shares the
+    underline-active ``.k-chip-tab`` modifier, one primitive for the whole
+    band."""
+    from pipeline.ledger_console_panel import render_ledger_console
+
+    html = render_ledger_console(db_path)
+    assert 'class="k-toolbar k-toolbar-sticky"' in html
+    assert 'class="k-chip k-chip-btn k-chip-tab" data-ledger-jump="ledger-jump-capture"' in html
+    assert 'class="k-chip k-chip-btn k-chip-tab" data-console-jump="csec-triage"' in html
+    assert 'class="k-chip k-chip-btn k-chip-tab" data-console-jump="csec-journal"' in html
+
+
 def test_standalone_ledger_panel_keeps_its_internal_toolbar(db_path: Path) -> None:
     """The legacy non-console rendering is unchanged by the embedded seam:
     the default (embedded=False) still carries the internal chip toolbar."""

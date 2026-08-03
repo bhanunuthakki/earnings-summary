@@ -241,7 +241,10 @@ def test_ledger_console_renders_one_chrome(ctx: tuple[FlaskClient, Path]) -> Non
     client, _db = ctx
     html = client.get("/api/panel/musings").data.decode()
     # One nav band: the feed's jump chips merged into the console toolbar…
-    assert html.count('<div class="k-toolbar">') == 1
+    # (sticky per owner directive 2026-08-02 — .k-toolbar-sticky, not a bare
+    # .k-toolbar — but still exactly ONE band, never two.)
+    assert html.count('class="k-toolbar k-toolbar-sticky"') == 1
+    assert 'class="k-toolbar"' not in html  # never a second, non-sticky band
     assert 'data-ledger-jump="ledger-jump-capture"' in html
     assert 'data-console-jump="csec-triage"' in html
     assert 'data-console-jump="csec-journal"' in html
