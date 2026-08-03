@@ -73,11 +73,17 @@ def _pid_alive(pid: int) -> bool:
     if sys.platform == "win32":
         import ctypes
 
-        kernel32 = ctypes.windll.kernel32
+        # use_last_error=True + ctypes.get_last_error() is the ONLY reliable
+        # way to read Win32 error state through ctypes: plain
+        # kernel32.GetLastError() can be clobbered by ctypes' own internal
+        # API calls between the failing call and the query, misreading a LIVE
+        # holder as dead and breaking its lock (2026-08-03 adversarial
+        # review, #6).
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             # Access denied means the process exists but is not ours — alive.
-            return kernel32.GetLastError() == _ERROR_ACCESS_DENIED
+            return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
         try:
             code = ctypes.c_ulong()
             ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
@@ -143,24 +149,37 @@ def acquire_run_lock(
     )
     deadline = time.monotonic() + max(0.0, timeout_s)
     holder: dict[str, object] | None = None
-    while True:
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            holder = _read_holder(lock_path)
-            holder_pid = holder.get("pid") if holder else None
-            if not (isinstance(holder_pid, int) and _pid_alive(holder_pid)):
-                # Stale (dead holder or unreadable payload): break and retry.
-                with suppress(OSError):
-                    lock_path.unlink()
+    # The lock file must become visible ALREADY CARRYING its payload: the old
+    # O_CREAT|O_EXCL-then-write left a window where a concurrent acquirer read
+    # an empty file, judged it stale, and broke a live lock (2026-08-03
+    # adversarial review, #5). Write the payload to a private temp file, then
+    # claim the lock name atomically — os.link fails with FileExistsError if
+    # the name is taken (both POSIX and NTFS), giving O_EXCL semantics on a
+    # fully-written file.
+    tmp_path = lock_path.with_name(f"{lock_path.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    try:
+        while True:
+            try:
+                os.link(tmp_path, lock_path)
+            except FileExistsError:
+                holder = _read_holder(lock_path)
+                holder_pid = holder.get("pid") if holder else None
+                if not (isinstance(holder_pid, int) and _pid_alive(holder_pid)):
+                    # Stale: dead holder, or an unreadable payload — which,
+                    # now that creation is atomic-with-payload, can only be
+                    # real corruption, never a half-written live lock.
+                    with suppress(OSError):
+                        lock_path.unlink()
+                    continue
+                if time.monotonic() >= deadline:
+                    raise RunLockHeldError(lock_path, holder) from None
+                time.sleep(poll_s)
                 continue
-            if time.monotonic() >= deadline:
-                raise RunLockHeldError(lock_path, holder) from None
-            time.sleep(poll_s)
-            continue
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(payload)
-        return RunLock(lock_path=lock_path, pid=os.getpid())
+            return RunLock(lock_path=lock_path, pid=os.getpid())
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
 
 
 @contextmanager

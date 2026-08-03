@@ -459,7 +459,16 @@ class TestFactsDepth:
             " line_item, value, extracted_by)"
             " VALUES ('EVAL', '2011-03-31', 'Q1', 'revenue', 1, 's1')"
         )
-        # Attempts grid rows for EVAL's oldest pruned quarter and newest quarter.
+        # Attempts grid rows: one for a period the prune kills entirely
+        # (2019-03-31: quarterly rows doomed, no FY shares that period_end),
+        # one for a period whose QUARTERLY rows are doomed but whose FY row
+        # survives the 12-FY window (2018-12-31 — the grid row must stay: the
+        # engine still discovers the period from the surviving fact), and one
+        # for the newest live quarter.
+        conn.execute(
+            "INSERT INTO metric_computation_attempts (ticker, period_end,"
+            " fiscal_period_type, formula_id) VALUES ('EVAL', '2019-03-31', 'Q1', 1)"
+        )
         conn.execute(
             "INSERT INTO metric_computation_attempts (ticker, period_end,"
             " fiscal_period_type, formula_id) VALUES ('EVAL', '2018-12-31', 'Q4', 1)"
@@ -523,10 +532,17 @@ class TestFactsDepth:
         assert q("SELECT COUNT(*) FROM financial_facts WHERE ticker='GONE'") == 0
         # Attempts cascade: pruned-period attempt gone, live-period attempt kept.
         assert (
-            q("SELECT COUNT(*) FROM metric_computation_attempts WHERE period_end='2018-12-31'") == 0
+            # Fully-dead period: every fact at 2019-03-31 was doomed.
+            q("SELECT COUNT(*) FROM metric_computation_attempts WHERE period_end='2019-03-31'") == 0
         )
         assert (
             q("SELECT COUNT(*) FROM metric_computation_attempts WHERE period_end='2026-03-31'") == 1
+        )
+        assert (
+            # Mixed period: quarterly facts doomed but the FY row survives the
+            # 12-FY window, so the period is still discoverable — its grid row
+            # must NOT be cascade-deleted (2026-08-03 adversarial review, #7).
+            q("SELECT COUNT(*) FROM metric_computation_attempts WHERE period_end='2018-12-31'") == 1
         )
         assert pol.rows_deleted["metric_computation_attempts"] == 1
         # Everything deleted is archived.
