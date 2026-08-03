@@ -1522,9 +1522,21 @@ def test_windows_command_line_parser_rejects_unmatched_quote() -> None:
         _PARSE_WINDOWS_COMMAND_LINE('python "execution/db_gc.py --apply')
 
 
-def test_internal_live_process_census_blocks_inaccessible_process(
+@pytest.mark.parametrize(
+    "image_name",
+    (
+        "python.exe",
+        "python3.13.exe",
+        "dotnet.exe",
+        "svchost.exe",
+        "custom-maintenance.exe",
+        "unknown",
+    ),
+)
+def test_internal_live_process_census_blocks_inaccessible_writer_capability(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    image_name: str,
 ) -> None:
     current, baseline, archive = _paths(tmp_path)
     _database(current)
@@ -1542,7 +1554,7 @@ def test_internal_live_process_census_blocks_inaccessible_process(
             ProcessCensusObservation(
                 pid=3,
                 parent_pid=1,
-                image_name="python.exe",
+                image_name=image_name,
                 command_line_status="access_denied",
                 command_line=None,
                 working_directory=None,
@@ -1557,6 +1569,105 @@ def test_internal_live_process_census_blocks_inaccessible_process(
 
     assert receipt.recovery_ready is False
     assert "live_process_census_incomplete" in receipt.blockers
+
+
+@pytest.mark.parametrize(
+    "image_name",
+    ("System Idle Process", "System", "Secure System", "Registry", "Memory Compression"),
+)
+def test_internal_live_process_census_records_inert_kernel_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    image_name: str,
+) -> None:
+    current, baseline, archive = _paths(tmp_path)
+    _database(current)
+    _database(baseline)
+    _archive(archive)
+
+    import provenance.gc_recovery as recovery
+
+    unsealed = LiveProcessCensus(
+        schema_version="gc-recovery-live-process-census/v1",
+        captured_at=datetime.now(UTC),
+        collector="powershell-get-ciminstance-win32-process/v1",
+        exit_code=0,
+        processes=(
+            ProcessCensusObservation(
+                pid=4,
+                parent_pid=0,
+                image_name=image_name,
+                command_line_status="access_denied",
+                command_line=None,
+                working_directory=None,
+            ),
+        ),
+        census_sha256="0" * 64,
+    )
+    census = unsealed.model_copy(update={"census_sha256": unsealed.computed_census_sha256()})
+    monkeypatch.setattr(recovery, "_collect_live_process_census", lambda: census)
+
+    receipt = _audit(current, baseline, archive)
+
+    assert "live_process_census_incomplete" not in receipt.blockers
+
+
+@pytest.mark.parametrize(
+    ("image_name", "expected_blocked"),
+    (
+        ("System", False),
+        ("svchost.exe", True),
+        ("python.exe", True),
+        ("python3.13.exe", True),
+        ("dotnet.exe", True),
+        ("custom-maintenance.exe", True),
+        ("unknown", True),
+    ),
+)
+def test_admitted_process_census_distinguishes_inaccessible_writer_capability(
+    tmp_path: Path,
+    image_name: str,
+    expected_blocked: bool,
+) -> None:
+    current, baseline, archive = _paths(tmp_path)
+    _database(current)
+    _database(baseline)
+    _archive(archive)
+    admission, _admission_sha = _admission(current, baseline, archive)
+    receipt = GcRecoveryAdmissionReceipt.model_validate_json(admission.read_bytes())
+    census_path = Path(receipt.process_census_artifact)
+    census = RecoveryProcessCensus.model_validate_json(census_path.read_bytes())
+    inaccessible = ProcessCensusObservation(
+        pid=4,
+        parent_pid=0,
+        image_name=image_name,
+        command_line_status="access_denied",
+        command_line=None,
+        working_directory=None,
+    )
+    changed = census.model_copy(update={"processes": (*census.processes, inaccessible)})
+    _write_sealed_model(census_path, changed)
+    admission_sha = _reseal_admission(
+        admission,
+        receipt,
+        process_census_artifact_sha256=_sha256(census_path),
+        process_census_artifact_size_bytes=census_path.stat().st_size,
+        process_census_total_count=len(changed.processes),
+        process_command_line_access_denied_count=1,
+    )
+
+    recovery = audit_gc_recovery(
+        current,
+        baseline_database=baseline,
+        archive_database=archive,
+        admission_receipt_path=admission,
+        expected_admission_receipt_sha256=admission_sha,
+        expected_activation_receipt_sha256=_activation_receipt_sha(admission),
+        expected_current_revision=REVISION,
+        expected_baseline_revision=REVISION,
+    )
+
+    assert ("process_census_incomplete" in recovery.blockers) is expected_blocked
 
 
 def test_runtime_authority_requires_available_committed_blob(tmp_path: Path) -> None:
