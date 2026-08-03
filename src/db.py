@@ -31,8 +31,25 @@ from sec_identity import sec_user_agent
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-DB_PATH = os.path.join(DATA_DIR, "portfolio.db")
+
+# The DB default honors EARNINGS_SUMMARY_DB_PATH, matching
+# runtime.job_runtime.portfolio_db_path exactly. Without this, the cron job
+# lock and the schema-drift preflight (both env-aware, via portfolio_db_path)
+# could guard one database while this module's default — which the best-effort
+# LLM cost ledger falls back to — silently wrote to another. The env var is an
+# operator's declared "use THIS db everywhere"; configure_runtime_db already
+# re-points db.set_db_path to it for the long-running poller/server, and the
+# two runtime tests assert db.DB_PATH tracks it. Honoring it at import closes
+# the gap for cron children that never call configure_runtime_db. Unset (the
+# universal case in CI/dev and every scheduled run) => the checkout default,
+# unchanged.
+_CONFIGURED_DB_PATH = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+if _CONFIGURED_DB_PATH:
+    DB_PATH = os.fspath(Path(_CONFIGURED_DB_PATH).expanduser().resolve())
+    DATA_DIR = os.path.dirname(DB_PATH)
+else:
+    DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+    DB_PATH = os.path.join(DATA_DIR, "portfolio.db")
 FMP_DIR = os.path.join(DATA_DIR, "historical", "fmp")
 
 

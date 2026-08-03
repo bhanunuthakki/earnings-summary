@@ -136,6 +136,37 @@ schtasks /create /f /tn "earnings-summary\model_eval_sweep" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\model_eval_sweep.task.xml"           REM Sun 02:00 -> Sat 20:00
 ```
 
+## Shared job runtime — exit codes & the schema-drift guard
+
+Every cron `run_*.bat` routes through `cron/run_python.bat` → `cron/job_runtime.py --scheduler-wrapper` (the shared runtime in `src/runtime/job_runtime.py`). It serializes overlapping portfolio-DB writes, writes a JSON job-health record under `.tmp/job_health/<job>/`, and — before running any work — refuses to start on schema drift. The exit code Task Scheduler shows as **Last Result** is therefore meaningful on its own; you should rarely need to open a log to know *why* a job stopped:
+
+| Exit code | Meaning | Job-health `status` | What to do |
+|---|---|---|---|
+| `0` | Succeeded (or the wrapped script's own success) | `ok` | — |
+| non-zero from the script | The wrapped script failed; the code is the script's own (e.g. count of failed stages/tickers) | `failed` | Read the job's `.tmp/cron_logs/*.log` |
+| `75` | Another live process already owns the same write set (`portfolio-db`); safe, retryable scheduler contention | `skipped_locked` | Nothing — the next scheduled run retries |
+| `78` | **Schema drift** — the portfolio DB's Alembic revision disagrees with this checkout, so the job refused to run *before* touching anything | `blocked_schema_drift` | See below |
+
+### Exit 78 (schema drift)
+
+The guard exists because a lagging DB revision used to fail **silently**: guarded writers refused correctly, but the best-effort LLM cost ledger (`src/llm_call_ledger.py`) swallowed the refusal by design, so cost rows were dropped while Task Scheduler still recorded success (incident 2026-08-02, seven rows lost). Now a non-exempt job stops loudly with exit 78 and a `blocked_schema_drift` health record, and the dashboard's **Cron Health** tab shows a red drift banner naming the fix.
+
+The health-record `detail` (and the drift banner) names **which side moved**:
+
+- **database behind checkout** → `alembic upgrade head` (migrate the DB to this checkout's head).
+- **revision unknown to the checkout** → the *checkout* is stale; `git pull` it. Do **not** `alembic upgrade head` — it would try to apply migrations that no longer lead anywhere (see the 2026-07-30 stale-checkout incident).
+- **checkout has multiple Alembic heads** → merge the heads in `alembic/versions` before running cron.
+
+**Exempt jobs** run even while drifted, because a drifted DB is exactly when they matter most: `backup_db` (capture a snapshot), `restore-drill` (prove the restore path), `verify-cron` (audit registration). The exempt set lives in `SCHEMA_DRIFT_TOLERANT_JOBS` in `src/runtime/job_runtime.py`.
+
+**Escape hatch (interactive only):** pass `--allow-schema-drift` to `job_runtime.py` to run a job against a drifted DB on purpose. Scheduled jobs that legitimately need this belong in `SCHEMA_DRIFT_TOLERANT_JOBS`, not the flag.
+
+Note: every non-exempt job preflights the DB, so a genuinely forked or behind-DB state stops the **whole fleet** at once — that is intended (don't run cron against an inconsistent DB), but it means one drift event reads as many red jobs, not one.
+
+### Dropped ledger rows that slipped past the guard
+
+The exit-78 gate stops drift-caused drops, but the cost ledger can still drop a row for other reasons (a momentarily locked DB, a missing table). Those are counted — one JSON line per drop — in `data/.health/dropped_llm_ledger_write.jsonl` (beside the DB, so the dashboard and cron fleet, which run from different checkouts, share one counter). `verify_daily_chain.py` surfaces the 24h count in `.tmp/daily_chain_status.json` and prints a `!!!` marker when non-zero, and the **Cron Health** tab shows a "N LLM cost rows lost" banner. A non-zero count is not recoverable — the rows are gone — but it tells you the ledger is losing writes and needs attention.
+
 ## Switching FMP tier
 
 The system reads `FMP_TIER` from `.env` (or `--tier` CLI flag). Tiers:
