@@ -6,12 +6,11 @@ stability, capped, degrade-safe, and spotlight-wrapped inside compose_anchor_blo
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from llm.anchors import (
     WORLDVIEW_ANCHOR_CHAR_CAP,
     compose_anchor_block,
@@ -23,19 +22,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-
-
 @pytest.fixture
-def repo_root(tmp_path: Path) -> Path:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
     return tmp_path
 
 

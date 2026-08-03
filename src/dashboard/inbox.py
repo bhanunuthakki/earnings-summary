@@ -57,13 +57,39 @@ from dashboard.inbox_rank import (
     note_semantic_kind,
 )
 from identity import DEFAULT_USER_ID
+from schema_compat import SchemaRevisionMismatch
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.prose import prose_card_text
 from ui.time import stamp_html
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
 
-__all__ = ["INBOX_CSS", "INBOX_JS", "InboxItem", "collect_inbox", "render_inbox_stream"]
+__all__ = [
+    "INBOX_CSS",
+    "INBOX_JS",
+    "InboxItem",
+    "collect_inbox",
+    "render_inbox_stream",
+    "schema_drift_notice",
+]
+
+# Why every source below re-raises SchemaRevisionMismatch before its
+# ``except sqlite3.Error``:
+#
+# ``SchemaRevisionMismatch`` subclasses ``sqlite3.OperationalError`` (see
+# src/schema_compat.py), so a bare ``except sqlite3.Error`` catches it. These
+# handlers exist to tolerate ONE thing — a table this database does not have
+# yet — and they express that by returning []. That made "your schema is behind
+# the code" render as an inbox with nothing in it: identical, pixel for pixel,
+# to a genuinely quiet morning. During the 2026-08-02 prod drift the whole
+# stream read empty while 21 pending alerts and 45 ledger entries sat in the
+# tables, and nothing on the page said otherwise.
+#
+# Drift is not absence. It propagates, and the surfaces render
+# ``schema_drift_notice`` so the degraded state is visibly distinct from the
+# happy path (design_language D4 / the silent-degradation rule). This mirrors
+# the cron fleet's exit-78 treatment of the same condition.
+_DRIFT_IS_NOT_EMPTY = True
 
 _LEDGER_KIND_LABELS: dict[str, str] = {
     "thesis_update": "Thesis update",
@@ -252,12 +278,15 @@ def collect_inbox_counted(
     is ticker → fraction-of-book for the ranking factor — ``None`` reads the
     morning-pipeline-materialized weight cache beside the DB (a disk read, never
     the live tracker; empty → equal weighting), ``{}`` forces equal weighting.
-    Best-effort: a missing DB or table yields []. The returned list
+    Best-effort: a missing DB or table yields ``([], 0)``. The returned list
     is ordered score-descending (newest first on ties) and capped at
     ``limit``.
     """
     if db_path is None or not Path(db_path).exists():
-        return []
+        # ([], 0) — NOT []. This returns a tuple now; a bare [] unpacks with
+        # "not enough values to unpack" at every caller doing
+        # ``items, total = collect_inbox_counted(...)``, which is every caller.
+        return [], 0
 
     now_dt = _as_naive_utc(now) if now is not None else datetime.now(UTC).replace(tzinfo=None)
     until_n = _as_naive_utc(until) if until is not None else None
@@ -306,6 +335,8 @@ def collect_inbox_counted(
                     limit=limit,
                     db_path=db_path,
                 )
+        except SchemaRevisionMismatch:
+            raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
         except sqlite3.Error:
             alerts = []
         if trigger_kind:
@@ -327,6 +358,8 @@ def collect_inbox_counted(
             actions_by_alert = list_queued_actions_for_alerts(
                 [a.id for a in alerts], db_path=db_path
             )
+        except SchemaRevisionMismatch:
+            raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
         except sqlite3.Error:
             actions_by_alert = {}
         for a in alerts:
@@ -350,6 +383,8 @@ def collect_inbox_counted(
         # digest's separate "Outstanding actions" section.
         try:
             pending = list_pending_actions(user_id=user_id, db_path=db_path)
+        except SchemaRevisionMismatch:
+            raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
         except sqlite3.Error:
             pending = []
         ticker_by_alert: dict[int, str] = {}
@@ -359,6 +394,8 @@ def collect_inbox_counted(
                 for a in list_alerts(user_id=user_id, limit=500, db_path=db_path):
                     ticker_by_alert[a.id] = a.ticker
                     status_by_alert[a.id] = a.status
+            except SchemaRevisionMismatch:
+                raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
             except sqlite3.Error:
                 pass
         for qa in pending:
@@ -394,6 +431,8 @@ def collect_inbox_counted(
     if "ledger" in kinds:
         try:
             entries = list_recent_entries(user_id=user_id, limit=60, db_path=db_path)
+        except SchemaRevisionMismatch:
+            raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
         except (sqlite3.Error, FileNotFoundError, RuntimeError):
             entries = []
         for e in entries:
@@ -418,6 +457,8 @@ def collect_inbox_counted(
     if "note" in kinds:
         try:
             notes = list_notes(user_id=user_id, ticker=ticker, status="open", db_path=db_path)
+        except SchemaRevisionMismatch:
+            raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
         except sqlite3.Error:
             notes = []
         # S15: open notes whose linked decision graded / position exited are
@@ -430,6 +471,8 @@ def collect_inbox_counted(
                 from journal_links import pending_reconciliation_note_ids
 
                 reconcile_why = pending_reconciliation_note_ids(db_path=db_path, user_id=user_id)
+            except SchemaRevisionMismatch:
+                raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
             except Exception:  # pre-0093 schema — plain notes
                 reconcile_why = {}
         for n in notes:
@@ -550,6 +593,8 @@ def _synthesis_items(db_path: Path, *, now: datetime) -> list[InboxItem]:
     a missing table / artifact / unparsable timestamp yields []."""
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except SchemaRevisionMismatch:
+        raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
     except sqlite3.Error:
         return []
     try:
@@ -570,6 +615,8 @@ def _synthesis_items(db_path: Path, *, now: datetime) -> list[InboxItem]:
             ORDER BY generated_at DESC LIMIT 1
             """
         ).fetchone()
+    except SchemaRevisionMismatch:
+        raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
     except sqlite3.Error:
         return []
     finally:
@@ -588,6 +635,27 @@ def _synthesis_items(db_path: Path, *, now: datetime) -> list[InboxItem]:
 # ----------------------------------------------------------------------------
 # Render
 # ----------------------------------------------------------------------------
+
+
+def schema_drift_notice(exc: SchemaRevisionMismatch) -> str:
+    """The degraded block a surface renders when the stream cannot be built.
+
+    Owner language leads, with the engineering receipt behind a hover — the D4
+    rule that a degraded state must be legible AND visibly distinct from the
+    happy path, never a raw diagnostic string and never an empty list.
+
+    The distinction that matters: this says the inbox could not be READ. An
+    empty stream says there is nothing to read. Before this existed both looked
+    the same, so a drifted database presented as a quiet morning.
+    """
+    return (
+        '<div class="ix-degraded" role="status">'
+        "<strong>Inbox unavailable</strong> — the database is on a different schema "
+        "version than this build, so the stream can't be read. Your alerts and notes "
+        "are intact; nothing has been lost. "
+        f'<span class="ix-degraded-why" title="{_esc(str(exc))}">details</span>'
+        "</div>"
+    )
 
 
 def render_inbox_stream(
@@ -1193,6 +1261,15 @@ INBOX_CSS = """
 .ix-memo-open { text-decoration: none; }
 .ix-note-dismiss:hover { color: var(--bad); border-color: var(--bad); }
 .ix-empty { color: var(--muted); font-size: var(--fs-body); padding: 14px 4px; }
+/* Degraded, NOT empty. Deliberately toned so it cannot be mistaken for the
+   quiet-morning .ix-empty line it used to be indistinguishable from. */
+.ix-degraded {
+  color: var(--fg); font-size: var(--fs-body); padding: 12px 14px;
+  border: 1px solid var(--bad); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+.ix-degraded-why { color: var(--muted); font-size: var(--fs-caption);
+  border-bottom: 1px dotted var(--border-2); cursor: help; }
 /* Truncation receipt — the stream is capped, so it says so rather than
    presenting the top N as the whole queue. */
 .ix-more { color: var(--muted); font-size: var(--fs-caption); padding: 10px 4px 2px;

@@ -9,12 +9,10 @@ tests/test_redteam_response.py — this file is about the HTTP contract
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -28,21 +26,9 @@ from redteam.models import Kind, RedTeamLLMItem  # noqa: E402
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def app_repo(tmp_path: Path) -> Path:
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    db_path = data_dir / "portfolio.db"
-    cfg = _cfg(db_path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+def app_repo(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
     return tmp_path
 
 

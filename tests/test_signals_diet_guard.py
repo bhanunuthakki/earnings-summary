@@ -22,13 +22,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from alerts import AlertRow
 from dashboard.inbox import InboxItem, collect_inbox
 from dashboard.inbox_rank import annotate_and_rank
@@ -50,14 +49,8 @@ NOW = datetime(2026, 6, 13, 12, 0, 0)
 
 
 @pytest.fixture
-def full_db(tmp_path: Path) -> Path:
-    db = tmp_path / "diet_guard.db"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def full_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "diet_guard.db", stamp=PRIOR_HEAD)
 
 
 def _seed_signals(db: Path) -> None:

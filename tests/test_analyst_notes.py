@@ -10,6 +10,7 @@ schema, not a hand-rolled approximation.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -40,10 +41,8 @@ def _migrate(db: Path) -> None:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "notes.db"
-    _migrate(db)
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "notes.db", stamp=PRIOR_HEAD)
 
 
 @pytest.fixture

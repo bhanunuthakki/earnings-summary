@@ -109,7 +109,11 @@ from ask.store import (  # noqa: E402
     rename_session,
 )
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
-from dashboard.inbox import collect_inbox, render_inbox_stream  # noqa: E402
+from dashboard.inbox import (  # noqa: E402
+    collect_inbox,
+    render_inbox_stream,
+    schema_drift_notice,
+)
 from dashboard.upcoming import render_upcoming_strip  # noqa: E402
 from dcf import persist as dcf_persist  # noqa: E402
 from dcf import redesign as dcf_redesign  # noqa: E402
@@ -136,6 +140,7 @@ from pipeline.ticker_command_center import (  # noqa: E402
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 from runtime.job_runtime import portfolio_db_path  # noqa: E402
 from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
+from schema_compat import SchemaRevisionMismatch  # noqa: E402
 from server_runtime.access import (  # noqa: E402
     REPORT_CAPABILITY_HEADER,
     ReportCapabilityStore,
@@ -1328,13 +1333,19 @@ def create_app(
         finally:
             conn.close()
         coverage = tier_coverage_summary(repo_root)
-        inbox_html = render_inbox_stream(
-            collect_inbox(db_path, limit=14),
-            db_path=db_path,
-            compact=True,
-            surface="home",
-            show_filters=True,
-        )
+        # Schema drift must not 500 the whole Home page, and must not render as
+        # an empty rail either — the rail says it cannot be read, and the rest
+        # of the cockpit still loads.
+        try:
+            inbox_html = render_inbox_stream(
+                collect_inbox(db_path, limit=14),
+                db_path=db_path,
+                compact=True,
+                surface="home",
+                show_filters=True,
+            )
+        except SchemaRevisionMismatch as exc:
+            inbox_html = schema_drift_notice(exc)
         # The compact earnings look-ahead above the rail — the surviving piece
         # of the retired /digest page.
         upcoming_html = render_upcoming_strip(db_path, datetime.now(UTC).date())

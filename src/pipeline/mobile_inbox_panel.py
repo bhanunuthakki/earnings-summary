@@ -561,11 +561,20 @@ def _senior_partner_brief_section(db_path: Path) -> str:
 
 
 def _inbox_stream_section(db_path: Path) -> str:
-    try:
-        from dashboard.inbox import collect_inbox, render_inbox_stream
+    # Imported OUTSIDE the try: inside it, an import failure would leave
+    # schema_drift_notice unbound and the handler would raise NameError while
+    # trying to report the original error.
+    from dashboard.inbox import collect_inbox, render_inbox_stream, schema_drift_notice
+    from schema_compat import SchemaRevisionMismatch
 
+    try:
         items = collect_inbox(db_path, limit=12)
         return render_inbox_stream(items, db_path=db_path, compact=True, surface="mobile")
+    except SchemaRevisionMismatch as exc:
+        # Named, not lumped into the generic failure line: schema drift has a
+        # specific cause and a specific fix, and the owner should not have to
+        # guess which of many things "unavailable" meant.
+        return schema_drift_notice(exc)
     except Exception:
         return '<div class="mi-failed">Inbox stream unavailable.</div>'
 

@@ -9,32 +9,24 @@ when the substrate is empty.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from openpyxl import load_workbook
 
-from alembic import command
 from alerts import compute_signature_sha, fire_alert, queue_action
 from dashboard.cio_export import export_cio_workbook
 from user_state.ledger import append_entry
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 _FIRED_AT = datetime(2026, 6, 1, 12, 0)  # naive-UTC, per the repo convention
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "portfolio.db"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "portfolio.db", stamp=_PRIOR_HEAD)
 
 
 def test_export_empty_substrate_is_header_only(tmp_path: Path, db_path: Path) -> None:

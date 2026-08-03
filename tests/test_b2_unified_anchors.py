@@ -20,35 +20,23 @@ conversational doorway. Four seams:
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from ask.context import _portfolio_system_context
 from ask.packs import load_packs
 from llm.anchors import load_themes_anchor, load_worldview_anchor
 from synthesis.insights import record_insight
 from synthesis.tenets import record_tenet, scope_key_for
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-
-
 @pytest.fixture
-def repo_root(tmp_path: Path) -> Path:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+def repo_root(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    migrated_db(tmp_path / "data" / "portfolio.db", stamp=PRIOR_HEAD)
     return tmp_path
 
 

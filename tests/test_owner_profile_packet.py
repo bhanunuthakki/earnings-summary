@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -44,10 +45,8 @@ def _build_db(db_path: Path, *, target: str = "head") -> None:
 
 
 @pytest.fixture
-def ctx(tmp_path: Path) -> tuple[FlaskClient, Path, Path]:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+def ctx(tmp_path: Path, migrated_db: Callable[..., Path]) -> tuple[FlaskClient, Path, Path]:
+    db = migrated_db(tmp_path / "data" / "portfolio.db", stamp=_PRIOR_HEAD)
     client = comments_server.create_app(tmp_path).test_client()
     return client, db, tmp_path
 

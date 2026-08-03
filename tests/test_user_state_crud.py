@@ -8,34 +8,21 @@ schema, not a hand-rolled approximation.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from user_state import ledger, registry, sizing
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """tmp_path SQLite stamped at 0059, then upgraded to head — the 5
     Personal CIO tables exist after this fixture runs."""
-    db = tmp_path / "user_state.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+    return migrated_db(tmp_path / "user_state.db", stamp=PRIOR_HEAD)
 
 
 # ----------------------------------------------------------------------------

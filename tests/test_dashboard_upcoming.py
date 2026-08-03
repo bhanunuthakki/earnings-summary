@@ -11,34 +11,21 @@ alembic head and upgraded, mirroring tests/test_dashboard_feed.py.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from dashboard.upcoming import render_upcoming_strip, upcoming_earnings
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 TODAY = date(2026, 5, 27)
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "dashboard_upcoming.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "dashboard_upcoming.db", stamp=PRIOR_HEAD)
 
 
 def _seed_calendar(db_path: Path) -> None:
