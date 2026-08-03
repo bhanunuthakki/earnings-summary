@@ -1184,3 +1184,59 @@ class TestArchiveIdempotency:
             "SELECT COUNT(*), COUNT(DISTINCT id) FROM financial_facts"
         ).fetchone()
         assert total == distinct == deleted
+
+    def test_recycled_id_colliding_with_a_different_archived_row_aborts_loudly(
+        self, gc_db: Path
+    ) -> None:
+        """A reused rowid must never be silently swallowed by INSERT OR IGNORE.
+
+        financial_facts is INTEGER PRIMARY KEY without AUTOINCREMENT, so SQLite
+        hands out max(rowid)+1 and recycles ids once a prune takes the highest
+        rows. The recycled row is a DIFFERENT row wearing an archived id: OR
+        IGNORE would skip it, then the delete batch would remove it from main,
+        losing it from the restore. Fail closed instead.
+        """
+        conn = self._attached(gc_db)
+        conn.execute(
+            "INSERT INTO financial_facts (id, ticker, period_end, fiscal_period_type,"
+            " line_item, value, extracted_by) VALUES"
+            " (4242, 'OLD', '2018-12-31', 'Q4', 'revenue', 1, 'fmp')"
+        )
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) VALUES (4242)")
+        assert (
+            db_gc._archive_doomed(conn, table="financial_facts", run_at="t1", policy="facts-depth")
+            == 1
+        )
+        conn.execute("DELETE FROM financial_facts WHERE id = 4242")
+
+        # Id 4242 comes back around carrying an entirely different fact.
+        conn.execute(
+            "INSERT INTO financial_facts (id, ticker, period_end, fiscal_period_type,"
+            " line_item, value, extracted_by) VALUES"
+            " (4242, 'NEW', '2026-03-31', 'Q1', 'net_income', 999, 'sec_xbrl')"
+        )
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) VALUES (4242)")
+
+        with pytest.raises(db_gc.GcAbortedError, match="recycled a id"):
+            db_gc._archive_doomed(conn, table="financial_facts", run_at="t2", policy="facts-depth")
+
+        # The original archived row is untouched — nothing was overwritten or lost.
+        ticker, value = conn.execute(
+            'SELECT ticker, value FROM gcarc."financial_facts" WHERE id = 4242'
+        ).fetchone()
+        assert (ticker, value) == ("OLD", 1)
+
+    def test_identical_row_rearchived_is_not_mistaken_for_a_recycled_id(self, gc_db: Path) -> None:
+        """The retry path must stay silent — only DIFFERING payloads are collisions."""
+        conn = self._attached(gc_db)
+        _seed_quarters(conn, "EVAL", 3)
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) SELECT id FROM financial_facts")
+        db_gc._archive_doomed(conn, table="financial_facts", run_at="t1", policy="facts-depth")
+        # Same rows, same ids, same payload — a legitimate post-abort retry.
+        assert (
+            db_gc._archive_doomed(conn, table="financial_facts", run_at="t2", policy="facts-depth")
+            == 0
+        )

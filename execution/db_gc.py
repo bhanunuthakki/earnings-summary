@@ -489,6 +489,41 @@ def ensure_archive_identity(
     )
 
 
+def _recycled_id_collisions(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    id_col: str,
+    doomed: str,
+) -> int:
+    """Count doomed rows whose id is already archived under a DIFFERENT payload.
+
+    ``INSERT OR IGNORE`` cannot tell a harmless re-archive from a catastrophic
+    one. financial_facts is ``INTEGER PRIMARY KEY`` without AUTOINCREMENT, so
+    SQLite assigns max(rowid)+1 and RECYCLES ids once a prune removes the
+    highest rows — facts-depth drops orphan tickers entirely, newest rows
+    included, so that is reachable, not theoretical. A recycled id lets a
+    genuinely new row collide with a long-archived one, and OR IGNORE would
+    skip it silently: the row is then deleted from main while the sidecar holds
+    a different row under its id, losing it from the restore.
+
+    Payload equality is the discriminator — a legitimate retry re-archives an
+    identical row, a recycled id does not. The join only visits ids present in
+    BOTH sides, so a first-time archive pass matches nothing and costs nothing.
+    """
+    cols = [str(row[1]) for row in conn.execute(f'PRAGMA main.table_info("{table}")')]
+    # IS NOT, not <>, so NULL-vs-value counts as a difference instead of NULL.
+    mismatch = " OR ".join(f't."{c}" IS NOT a."{c}"' for c in cols)
+    return int(
+        conn.execute(
+            f'SELECT COUNT(*) FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; no user input
+            f'JOIN "{doomed}" d ON d.id = t."{id_col}" '
+            f'JOIN gcarc."{table}" a ON a."{id_col}" = t."{id_col}" '
+            f"WHERE {mismatch}"
+        ).fetchone()[0]
+    )
+
+
 def _archive_doomed(
     conn: sqlite3.Connection,
     *,
@@ -515,13 +550,27 @@ def _archive_doomed(
     rowid is written into the archive's OWN rowid and the implicit INTEGER
     PRIMARY KEY supplies the uniqueness. ``SELECT *`` still yields exactly the
     original columns, so the verbatim-restore contract is unchanged.
+
+    Aborts loudly if an id was recycled (``_recycled_id_collisions``) rather
+    than letting OR IGNORE drop a live row from the archive silently.
     """
     conn.execute(
         f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- internal registry table name; no user input
     )
     archive_cols = {str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')}
     if id_col in archive_cols:
+        # Collapse any legacy duplicates FIRST, so the collision join below sees
+        # at most one archived row per id.
         ensure_archive_identity(conn, schema="gcarc", table=table, id_col=id_col)
+    collisions = _recycled_id_collisions(conn, table=table, id_col=id_col, doomed=doomed)
+    if collisions:
+        raise GcAbortedError(
+            f"{table}: {collisions} doomed row(s) carry an id that is already archived "
+            f"under a different payload — SQLite recycled a {id_col} after an earlier "
+            "prune. Archiving them would silently drop them from the sidecar, so the "
+            "delete would not be reversible. Refusing to prune rows we cannot archive."
+        )
+    if id_col in archive_cols:
         copy_sql = (
             f'INSERT OR IGNORE INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; values remain bound
             f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
