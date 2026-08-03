@@ -21,9 +21,18 @@ fact history far deeper than any reader's window, and (future) telemetry age.
 ## Tool
 
 `execution/db_gc.py` — single-purpose CLI, dry-run by default, `--apply` to
-write. Every deleted row is first copied, schema-identical, into
-`data/archive/portfolio_gc_archive.db` (with a `gc_manifest` run log), so any
-prune is reversible with one `INSERT ... SELECT`.
+write. Rows deleted from the ARCHIVED tables (financial_facts,
+metric_computation_attempts, validation_issues, the telemetry trio) are first
+copied, schema-identical, into `data/archive/portfolio_gc_archive.db` (with a
+`gc_manifest` per-pass log; UNIQUE identity indexes + INSERT OR IGNORE make
+re-archiving idempotent). Two planes are NOT archived and NOT reversible by
+INSERT ... SELECT: the 0225 resolution-plane cascade deletes
+(fact_observation_revisions / legacy_fact_evidence_match_revisions /
+fact_selection_decisions), and the pre-delete `supersedes_id = NULL` rewrite
+on SURVIVING facts (the sidecar holds the doomed rows' originals, not the
+survivors'). Restore is therefore governed by the fail-closed audit in
+`src/provenance/gc_recovery.py` (`execution/audit_gc_recovery.py`), which can
+refuse — not by a hand-written INSERT.
 
 That restore is only safe because archiving is idempotent: each sidecar table
 carries a UNIQUE index on its identity column (`id`, or the source rowid for
@@ -39,15 +48,16 @@ carrying duplicates is collapsed once, loudly logged as
 
 | Policy | What | Default | Owner-tunable |
 |---|---|---|---|
-| `validation-issues` | Collapse duplicate rows per defect key; survivor gets real fingerprint + first/last_seen + occurrence_count | always on | — |
+| `validation-issues` | Collapse duplicates per defect key AND backfill a fingerprint onto EVERY NULL-fingerprint row (singletons included; collisions archived+removed, FK-referenced conflicts logged `gc_validation_fingerprint_stranded`) | always on | — |
 | `telemetry` | Age retention: stage_transitions, source_calls, ingestion_runs | 90 days | `--retention-days` |
 | `facts-depth` | Per-ticker window on financial_facts + attempts-grid cascade | 20 quarters / 12 FY; floors 16 / 12 | `--keep-quarters`, `--keep-fy`, `--include-portfolio` |
-| `maintenance` | ANALYZE always; VACUUM opt-in (exclusivity preflight + hard timeout) | — | `--vacuum`, `--vacuum-timeout-min` (30) |
+| `maintenance` | ANALYZE on every `--apply`; VACUUM opt-in (15s exclusivity preflight + hard timeout) | — | `--vacuum`, `--vacuum-timeout-min` (30) |
 | *(all)* | Rows deleted/updated per committed transaction | 20,000 | `--batch-size` |
 | *(all)* | Whole-run wall-clock budget (loud abort past it) | 120 min | `--max-runtime-min` |
 | *(all)* | Run-lock wait before yielding | 60 s | `--lock-timeout-s` |
 
-Tier behavior (facts-depth): active watchlist / evaluation / index_member →
+Tier behavior (facts-depth): active watchlist / evaluation / index_member /
+etf / `none` →
 windowed; tickers with facts but no active `tracked_companies` row → all rows
 archived out; **portfolio untouched unless `--include-portfolio`**. TTM rows
 and `extracted_by='s1'` rows always survive. Sources are never pruned
@@ -92,9 +102,20 @@ dashboard looking healthy. Standing rules now built into the tool:
   (`--ignore-protected-window` to override, e.g. a supervised recovery).
 - **Budgets**: whole run capped at `--max-runtime-min` (default 120); VACUUM
   gets a 15s exclusivity preflight plus a hard `--vacuum-timeout-min`
-  (default 30) enforced via connection interrupt. Every abort is loud
-  (exit 2, `gc_aborted` on stderr); committed batches stay committed and a
-  re-run resumes from current state.
+  (default 30) enforced via connection interrupt. The Task Scheduler XML's
+  `ExecutionTimeLimit` is PT3H — deliberately ABOVE the in-tool budgets so
+  the tool's own loud aborts fire first (a prior clone carried PT10M, which
+  would have hard-killed a first-Sunday VACUUM mid-run); `RestartOnFailure`
+  is removed so a failed run is never blindly retried. Committed batches
+  stay committed and a re-run resumes from current state.
+- **Exit codes** (what Task Scheduler / job_health show): 0 ok; **2** loud
+  GC abort (`gc_aborted` on stderr: lock held past `--lock-timeout-s`,
+  protected window, runtime budget, recycled-rowid fail-closed, schema-shape
+  or hardlink preflight); **75** = the job_runtime write-set lock
+  (`data/.job_locks/portfolio-db-*.lock`, a SECOND lock distinct from
+  `<db>.write.lock`) was busy — the cron yielded, benign, that week's run is
+  skipped; **1** = unexpected error (e.g. `SchemaRevisionMismatch` if a
+  migration lands mid-run, or a `ValueError` from a floor violation).
 - `alembic/env.py` now sets `busy_timeout=30000` on SQLite, so migrations
   ride out a batch instead of failing instantly.
 
@@ -102,8 +123,8 @@ dashboard looking healthy. Standing rules now built into the tool:
 
 - REGISTERED (2026-08-02, owner-authorized): weekly, Sunday 06:00 PT via
   `cron/db_gc.task.xml` → `cron/run_db_gc.bat` (after the 04:00 pipeline;
-  clear of the Sun 03:00 git-cleanup / 03:30 memory-streamline / ~10:30 eval
-  rungs). The wrapper adds `--vacuum` only when day-of-month <= 7 (first
+  `weekly_validation` — the other Sunday portfolio-db writer — runs 03:00
+  inside db_gc's own protected window, and the ~10:30 eval rung is clear). The wrapper adds `--vacuum` only when day-of-month <= 7 (first
   Sunday). Standing invocation: `--apply --include-portfolio` (all four
   policies). No LLM leg → the quota windows in `llm_quota_scheduling.md` do
   not apply; DB write-lock contention does, hence the slot — and the in-tool
