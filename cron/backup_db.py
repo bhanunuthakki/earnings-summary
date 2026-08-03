@@ -46,7 +46,28 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_SRC_DB = (PROJECT_ROOT / "data" / "portfolio.db").resolve()
 SRC_DB = DEFAULT_SRC_DB
-DEFAULT_DEST = r"C:\Users\Bhanu\My Drive\earnings-summary-db-backups"
+MIRROR_DRIVE_ROOT = Path(r"C:\Users\Bhanu\My Drive")
+
+
+def _google_drive_root() -> Path:
+    """Locate the Google Drive root in either sync mode.
+
+    In Stream mode Drive mounts a virtual drive (usually G:), and the old
+    mirror folder at C:\\Users\\Bhanu\\My Drive lingers on disk as a stale,
+    UNSYNCED leftover until manually deleted. A mounted "<letter>:\\My Drive"
+    can only be the Drive mount, so any non-C: hit wins over the mirror path —
+    checking C: first would keep writing backups into the dead folder while
+    reporting OK. restore_db.py duplicates this deliberately (backup and
+    restore must never resolve to different answers — keep them identical).
+    """
+    for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+        candidate = Path(f"{letter}:/My Drive")
+        if candidate.is_dir():
+            return candidate
+    return MIRROR_DRIVE_ROOT
+
+
+DEFAULT_DEST = _google_drive_root() / "earnings-summary-db-backups"
 DEFAULT_RETAIN = 14
 
 
