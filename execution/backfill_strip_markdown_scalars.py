@@ -65,7 +65,11 @@ def sweep_db(conn: sqlite3.Connection, *, apply: bool) -> Counter[str]:
     conn.row_factory = sqlite3.Row
     for table, id_col, col in _DB_TARGETS:
         target = f"{table}.{col}"
-        rows = conn.execute(f"SELECT {id_col} AS id, {col} AS val FROM {table}").fetchall()
+        # Identifiers come from the _DB_TARGETS module literal, never from
+        # input; values are bound parameters.
+        rows = conn.execute(
+            f"SELECT {id_col} AS id, {col} AS val FROM {table}"  # nosec B608
+        ).fetchall()
         for row in rows:
             tally[f"{target} scanned"] += 1
             val = row["val"]
@@ -77,7 +81,10 @@ def sweep_db(conn: sqlite3.Connection, *, apply: bool) -> Counter[str]:
             tally[f"{target} dirty"] += 1
             print(f"  {target} id={row['id']}: {val!r} -> {plain!r}")
             if apply:
-                conn.execute(f"UPDATE {table} SET {col} = ? WHERE {id_col} = ?", (plain, row["id"]))
+                conn.execute(
+                    f"UPDATE {table} SET {col} = ? WHERE {id_col} = ?",  # nosec B608
+                    (plain, row["id"]),
+                )
                 tally[f"{target} updated"] += 1
     if apply:
         conn.commit()

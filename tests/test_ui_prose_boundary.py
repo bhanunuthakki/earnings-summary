@@ -53,6 +53,11 @@ _SIGNATURE_ALLOWLIST: dict[str, str] = {
         "markdown STRIPPER (**x** -> plaintext x for a news-tile gloss), not an "
         "HTML renderer — emits no tags"
     ),
+    "src/llm/postprocess.py": (
+        "markdown STRIPPER — strip_inline_markdown reduces LLM output persisted "
+        "into SCALAR fields to plaintext at persist time (scalars plain, prose "
+        "via render_prose); emits no tags"
+    ),
 }
 
 
