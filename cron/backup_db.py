@@ -69,6 +69,12 @@ def _google_drive_root() -> Path:
 
 DEFAULT_DEST = _google_drive_root() / "earnings-summary-db-backups"
 DEFAULT_RETAIN = 14
+# The db_gc archive sidecar (execution/db_gc.py) holds the ONLY copy of pruned
+# rows and underpins the "reversible" contract, yet it lived unbacked-up until
+# 2026-08-03. It is append-only, so a snapshot only needs to be newer than the
+# last prune, not daily — keep fewer, and skip re-encrypting an unchanged file.
+ARCHIVE_PREFIX = "portfolio_gc_archive.db"
+DEFAULT_ARCHIVE_RETAIN = 6
 
 
 def _consistent_snapshot(src_db: Path, tmp_path: Path) -> None:
@@ -200,8 +206,49 @@ def _run_backup() -> int:
         _finish_accounting(accounting, success=False, error_msg=str(exc))
         print(f"ERROR: backup failed: {exc}", file=sys.stderr)
         return 1
+    _backup_archive_sidecar(dest_dir)
     _finish_accounting(accounting, success=True)
     return 0
+
+
+def _backup_archive_sidecar(dest_dir: Path) -> None:
+    """Best-effort encrypted snapshot of the db_gc archive sidecar.
+
+    Deliberately non-fatal: a missing archive (GC never ran) or a failed
+    archive snapshot must NOT fail the portfolio.db backup that already
+    succeeded — the archive is a recovery aid, not the primary asset. Skips
+    re-encrypting an archive already captured at its current size+mtime
+    (append-only, so those two fields moving is a reliable change signal).
+    """
+    archive = SRC_DB.parent / "archive" / ARCHIVE_PREFIX
+    if not archive.exists():
+        print("(no db_gc archive to back up — GC has not pruned yet)")
+        return
+    retain = int(os.environ.get("ES_ARCHIVE_BACKUP_RETAIN", str(DEFAULT_ARCHIVE_RETAIN)))
+    existing = sorted(dest_dir.glob(f"{ARCHIVE_PREFIX}.*.gz.enc"))
+    stat = archive.stat()
+    tag = f"{stat.st_size}_{int(stat.st_mtime)}"
+    if existing and existing[-1].name.endswith(f".{tag}.gz.enc"):
+        print(f"(archive unchanged since last backup: {existing[-1].name})")
+        return
+    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+    final_path = dest_dir / f"{ARCHIVE_PREFIX}.{stamp}.{tag}.gz.enc"
+    try:
+        with tempfile.TemporaryDirectory(prefix="archive_backup.") as staging:
+            tmp_path = Path(staging) / ARCHIVE_PREFIX
+            tmp_gz = Path(staging) / f"{ARCHIVE_PREFIX}.gz"
+            _consistent_snapshot(archive, tmp_path)
+            if not _integrity_ok(tmp_path):
+                raise RuntimeError("archive snapshot failed SQLite integrity_check")
+            with open(tmp_path, "rb") as raw, gzip.open(tmp_gz, "wb") as gz:
+                shutil.copyfileobj(raw, gz)
+            encrypt_file(tmp_gz, final_path, key=load_or_create_key())
+        for stale in sorted(dest_dir.glob(f"{ARCHIVE_PREFIX}.*.gz.enc"))[:-retain]:
+            stale.unlink()
+        size_mb = final_path.stat().st_size / 1e6
+        print(f"OK archive backup -> {final_path.name}  ({size_mb:.1f} MB encrypted)")
+    except Exception as exc:  # never fail the primary backup on the archive leg
+        print(f"WARN: archive backup skipped: {exc}", file=sys.stderr)
 
 
 def main() -> int:

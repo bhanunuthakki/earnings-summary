@@ -50,7 +50,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "cron"))
+sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
+import db_gc  # noqa: E402  (execution/db_gc.py — ARCHIVE_NAME + archive attach)
+import gc_restore  # noqa: E402  (execution/gc_restore.py — archive drill)
 import restore_db  # noqa: E402  (cron/restore_db.py — gunzip + integrity + list)
 
 from models.runs import StageStatus  # noqa: E402
@@ -299,13 +302,51 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         raise
-    _finish_accounting(accounting, ok, summary)
+
+    archive_ok, archive_summary = _drill_archive(args.db)
+    summary["archive_drill"] = archive_summary
+    overall_ok = ok and archive_ok
+    _finish_accounting(accounting, overall_ok, summary)
 
     print(json.dumps(summary, indent=2))
 
     if summary.get("status") == "no_snapshot":
         return 2
-    return 0 if ok else 1
+    return 0 if overall_ok else 1
+
+
+def _drill_archive(live_db: Path) -> tuple[bool, dict[str, object]]:
+    """Prove the db_gc archive still restores, without touching the live DB.
+
+    The snapshot drill above covers portfolio.db; this covers the append-only
+    archive sidecar — the other half of the recovery story, and until now
+    never exercised. Absent archive = nothing pruned yet = vacuously ok.
+    Failure here fails the drill (unlike the archive BACKUP leg, which is
+    best-effort): a drill that cannot verify the archive has not done its job.
+    """
+    archive = live_db.parent / "archive" / db_gc.ARCHIVE_NAME
+    if not archive.exists():
+        return True, {"status": "no_archive"}
+    try:
+        report = gc_restore.run_restore(live_db, mode="drill")
+    except Exception as exc:  # a drill that errors is a failed drill
+        return False, {
+            "status": "archive_drill_error",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+    unverified = [t.table for t in report.tables if not t.drill_verified]
+    conflicts = {t.table: t.conflicts for t in report.tables if t.conflicts}
+    ok = not unverified
+    return ok, {
+        "status": "ok" if ok else "archive_unverified",
+        "tables_verified": len(report.tables) - len(unverified),
+        "tables_total": len(report.tables),
+        "unverified_tables": unverified,
+        # Conflicts are surfaced for visibility but do NOT fail the drill: they
+        # mean live rows diverged from the archive (re-ingestion/recycled id),
+        # which is a restore-time human decision, not archive rot.
+        "conflict_tables": conflicts,
+    }
 
 
 if __name__ == "__main__":
