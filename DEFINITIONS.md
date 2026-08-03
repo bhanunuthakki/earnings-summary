@@ -2,6 +2,87 @@
 
 Canonical terminology for this project. Use these terms verbatim in code (variables, functions, types, columns), comments, commit messages, and PR descriptions. New domain terms must be added here before being used.
 
+## CANONICAL ACTIONS
+
+These are the owner-facing verbs that are allowed to mutate durable state. A label names the consequence, not merely the gesture: prefer **Applied — thesis updated** over **Done** or **Saved**. Every persistent action surface owes the same feedback contract: call `CCAction.busy(...)` immediately, call `CCAction.release(...)` on failure while retaining the actionable item, and call `CCAction.receipt(...)` on success before any `CCAction.leave(...)` removal. An endpoint response is not, by itself, a visible receipt.
+
+### Approve / Dismiss
+
+**Mutates.** `approve` accepts the specific proposal in front of the owner; `dismiss` closes or cancels it without accepting it. The noun must always accompany the verb in code and UI because **Approve has three existing semantic families**: queued-action approval executes/applies the queued mutation, positioning approval appends the submitted positioning intent, and research/Tenet proposal approval promotes a proposal (and may apply a saved view or supersede a prior Tenet). Do not introduce an unqualified `approve()` core that conflates them.
+**Reversibility.** Queued-action dismiss is **undoable** through uncancel; research/Tenet and positioning approvals are **append-only** or superseded by a later revision; an applied queued action is **one-way** unless that action defines its own compensating operation. Proposal rejection/dismissal is **one-way** unless its owning workflow exposes reopen.
+**Feedback owed.** Busy labels name the object (`Applying thesis change…`, `Dismissing alert…`); receipts name the durable consequence (`Applied — thesis updated`, `Dismissed — action cancelled`, `Adopted — Tenet is current`). Failures release the original control and retain the proposal.
+**Surfaces.** Governance → Actions and holding alert rails; Positioning; Research proposals and saved views; Worldview Tenet proposals.
+
+### Confirm / Correct / Defer
+
+**Mutates.** `confirm` turns a decision draft into an Owner Decision using the parsed values; `correct` does the same with owner-edited values; both mark the draft terminal. `defer` performs no server write today and only hides/dims the draft for the current client session.
+**Reversibility.** Confirm and Correct are **append-only** decision provenance plus a **one-way** terminal draft transition; later corrections must be new attributable revisions, not silent rewrites. Defer is **undoable** by refreshing or reopening the session because it is not durable.
+**Feedback owed.** `Confirming decision…` / `Applying correction…`, followed by `Recorded — Owner Decision created`; on failure release the draft unchanged. Defer must say `Deferred — this session only`, never imply durable storage.
+**Surfaces.** Mobile Inbox, the desktop Ledger decision-draft queue, and Telegram dispatchers that share the decision-draft action core.
+
+### Ratify / Rewrite / Drop
+
+**Mutates.** These reconcile a proposed decision falsifier: `ratify` accepts it and queues or completes tripwire arming; `rewrite` stores the owner's replacement falsifier; `drop` removes the proposed falsifier so no tripwire watches it. Use **Rewrite** as the owner-facing verb even where a transport payload still uses `edit`.
+**Reversibility.** Ratify and Rewrite are **append-only** decision/falsifier provenance and are superseded by another explicit reconciliation; Drop is a **one-way** removal from the pending proposal, with a later falsifier requiring a new proposal.
+**Feedback owed.** Receipts distinguish immediate from deferred effects: `Armed — tripwire is watching`, `Ratified — queued for arming`, `Rewritten — falsifier updated`, or `Dropped — no tripwire will watch this decision`.
+**Surfaces.** Ledger decision reconciliation and any mobile/Telegram presentation of the same pending-falsifier queue.
+
+### Affirm / Reject / Reaffirm / Retire / Update
+
+**Mutates.** These govern proposed owner-profile facts: `affirm` promotes a proposed fact; `reject` closes a proposed fact without adopting it; `reaffirm` refreshes the evidence that an affirmed fact still holds; `retire` ends an affirmed fact; `update` appends a replacement proposal that supersedes the prior narrative rather than rewriting history.
+**Reversibility.** Affirm, Reaffirm, and Update are **append-only** provenance; Reject and Retire are **one-way** status transitions. A changed belief is represented by Update or a new proposal, not by erasing the prior fact.
+**Feedback owed.** Use consequence-first receipts such as `Affirmed — profile fact is active`, `Rejected — proposal closed`, `Reaffirmed — current as of today`, `Retired — fact no longer active`, and `Proposed — update awaiting review`.
+**Surfaces.** Worldview/Profile governance, Ledger review queues, and weekly accountability packets that link back to the canonical action surface.
+
+### Adopt
+
+**Mutates.** `adopt` records that the owner accepts a derived recommendation or proposed Tenet into durable owner-governed state. For allocation recommendations, the endpoint may expose the more precise dispositions `save_intent`, `hold_accountable`, or `dismiss`; do not relabel those distinct consequences as a generic Adopt button.
+**Reversibility.** Adoption is **append-only**: later owner intent or a later Tenet may supersede it. A workflow may offer an explicit revert/retire action, but adoption itself never deletes its source proposal or provenance.
+**Feedback owed.** The receipt names what became durable (`Saved — allocation intent recorded`, `Adopted — Tenet is current`) and preserves the source link. Failure releases the proposal without changing its displayed status.
+**Surfaces.** Portfolio → Allocation recommendations and Worldview Tenet review/auto-adoption receipts.
+
+### Save / Discuss / Incorporate
+
+**Mutates.** These are the On My Mind ladder verbs. `save` patches the note's ladder state to saved-for-later; `discuss` patches it to discuss and opens the appropriate web thread; `incorporate` find-or-creates an inert proposed research task and marks the note incorporated. None of them fetches, calls an LLM, or publishes a research artifact. `dismiss` belongs to Approve / Dismiss and archives the note.
+**Reversibility.** Save and Discuss are **undoable** by a later ladder choice; Incorporate is **append-only** because the staged task retains provenance and must be disposed of in its own workflow.
+**Feedback owed.** Use `Saved — revisit later`, `Discuss — opening the ticker thread`, or `Queued — proposed research task created`; do not say research was completed. A failed handoff releases the note in place.
+**Surfaces.** On My Mind on the dashboard, ticker-scoped feed cards, and Telegram presentations of the same ladder.
+
+### Resolve / Archive / Route
+
+**Mutates.** These are journal-note lifecycle verbs. `resolve` marks an open note answered/done, optionally with a resolution note; `archive` marks it no longer relevant; `route` rewrites a triage note's kind and intent so it leaves the triage queue, with best-effort reconciliation to its source comment.
+**Reversibility.** Archive is **undoable** through Unarchive. Route is **undoable** only through another explicit reclassification/routing action. Resolve is a **one-way** lifecycle transition; a renewed question is a new or superseding note, not a silent reopen.
+**Feedback owed.** Receipts state `Resolved — journal item closed`, `Archived — Undo`, or `Routed — now a watch item` (naming the selected destination). Failures restore the control and leave the row visible.
+**Surfaces.** Research → Journal, Companies → Triage, Home/holding inboxes, and comment-backed report views.
+
+### Queue / Watch / Build / Pass
+
+**Mutates.** These govern discovery and investment-decision candidates. `queue` moves a discovery candidate to the owner-approved build queue but does not build it; `watch` idempotently adds its ticker to the tracked watchlist without changing candidate status; `build` starts the bounded build pathway, whose worker alone writes `building`/`built` and artifacts; `pass` records an avoid decision with reason/revisit conditions when supplied and may dismiss the candidate. Investment Decision Cards use the same economic meanings even where the transport verb is `research_further` (queue more research) or `promote` (move to evaluation).
+**Reversibility.** Queue is **undoable** by returning the candidate to New or Dismissed. Watch is **one-way** through this action; removal requires tracked-company governance. Build is **one-way** for that run, although later builds supersede artifacts. A reasoned Pass is **append-only** and gradeable; its queue dismissal is **undoable** by reopening, but the recorded pass remains in decision history.
+**Feedback owed.** Distinguish intent from completion: `Queued — ready for a build`, `Watching — added to watchlist`, `Building — job started` then `Built — evaluation artifacts ready`, or `Passed — avoid decision recorded`. Never show `Built` when only queue state changed.
+**Surfaces.** Research → Discovery, Investment Decision Cards, `/discovery` chat actions, and the bounded discovery-build job surface.
+
+### Attest
+
+**Mutates.** `attest` records the owner's explicit claim that a specific position-review memo changed the call; it is the sole owner input to the corresponding Coach P&L target and is idempotent for the same memo.
+**Reversibility.** An attestation is **append-only** evidence. It is never inferred from silence, page dwell time, or a repeated click, and there is no generic unattest action.
+**Feedback owed.** Show `Attesting…` then either `Attested — review changed the call` or `Already attested — no new count`; failures release the button without incrementing any visible score.
+**Surfaces.** Coach position-review memos and the Coach P&L/accountability view.
+
+### Capture
+
+**Mutates.** `capture` appends the owner's raw words and source metadata as an analyst note; downstream classification, draft extraction, or research staging is derived work and must not rewrite the raw capture.
+**Reversibility.** Capture is **append-only** provenance. Corrections create a superseding attributable note/draft action; archive may hide the note from active views but does not erase the capture.
+**Feedback owed.** Show `Capturing…` then `Captured — added to On My Mind` (and, if applicable, a separate honest derivation status such as `Decision draft queued`). On derivation failure, the receipt must distinguish `Captured` from the failed downstream step.
+**Surfaces.** Web/mobile capture boxes, Telegram capture, and any import path that uses the canonical capture-ingest core.
+
+### Grade
+
+**Mutates.** `grade` records an owner-observed outcome or post-exit assessment against an existing decision/position, including exit reason, lessons, and outcome versus thesis. Deterministic scheduled graders are evidence producers, not owner-facing Grade actions, and must remain visibly attributable as system grades.
+**Reversibility.** Owner grading is **undoable/correctable** by an explicit re-grade that preserves who changed the assessment and when; it must never rewrite the original decision thesis or conditions. Automated grades are **append-only** observations or superseding runs.
+**Feedback owed.** Show `Grading…` then `Graded — outcome recorded`; a re-grade says `Re-graded — assessment updated`. Failure releases the form with the owner's entered text intact.
+**Surfaces.** Holding → Position lifecycle, the decision journal/calibration ledger, and scorecards that link each grade back to its source decision.
+
 ## Thought Partner
 
 **Definition.** The program's operating identity — a living system that extracts, explores (Socratically), synthesizes, and learns a user Worldview over time; it treats captures as raw material for thinking, not records to file. Storage is the last step, not the product.
