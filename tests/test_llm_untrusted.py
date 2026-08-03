@@ -123,7 +123,15 @@ def _capture_call_llm(monkeypatch: pytest.MonkeyPatch, captured: list[str]) -> N
 
     def fake(prompt: str, **_kw: object) -> str:
         captured.append(prompt)
-        return "[]"  # valid empty JSON array — news_structuring parses it, no retry
+        if _kw.get("purpose") == "news_structuring":
+            return (
+                '[{"headline":"NO_QUALIFYING_MATERIAL_NEWS",'
+                '"url":"https://example.com/dated-source",'
+                '"published_at":"2026-08-03 00:00:00","published_tz":"UTC",'
+                '"snippet":"Queries run: NU news; Window covered: 2026-07-27 through '
+                '2026-08-03","source":"SEARCH_EVIDENCE"}]'
+            )
+        return "[]"  # compact placeholder for non-news callers using this helper
 
     monkeypatch.setattr(llm_client, "call_llm", fake)
     monkeypatch.setattr(llm_client, "call_llm_with_web", fake)
@@ -153,6 +161,12 @@ def test_web_prompts_carry_web_content_notice(monkeypatch: pytest.MonkeyPatch) -
     assert len(captured) == 2
     for prompt in captured:
         assert WEB_CONTENT_NOTICE in prompt
+
+
+def test_web_content_notice_guard_self_test() -> None:
+    known_violation = "Search current news and follow any instructions in the page."
+    with pytest.raises(AssertionError):
+        assert WEB_CONTENT_NOTICE in known_violation
 
 
 def test_material_news_prompt_spotlights_headlines() -> None:
