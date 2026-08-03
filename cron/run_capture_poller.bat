@@ -25,5 +25,9 @@ REM Continuous-worker exception: a portfolio-db lock here would starve every
 REM bounded job; capture-poller provides singleton/runtime health while each
 REM short SQLite write still uses the centralized connection policy.
 call "%PROJECT_ROOT%\cron\run_python.bat" "capture-poller" "capture-poller" execution\capture_poller.py >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%

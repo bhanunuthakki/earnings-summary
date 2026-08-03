@@ -32,5 +32,9 @@ call "%PROJECT_ROOT%\cron\run_python.bat" "submit-saydo-batch-prepare" "portfoli
 
 echo === %TIME% Submitting + polling SayDo batch === >> "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "submit-saydo-batch-submit" "portfolio-db" execution\submit_saydo_batch.py >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%

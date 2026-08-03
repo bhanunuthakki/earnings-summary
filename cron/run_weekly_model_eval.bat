@@ -29,7 +29,11 @@ cd /d "%PROJECT_ROOT%"
 
 echo === %DATE% %TIME% weekly_model_eval starting === >> "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-model-eval" "portfolio-db" execution\run_weekly_model_eval.py ^
+set "RC=%ERRORLEVEL%"
     --repo-root "%PROJECT_ROOT%" >> "%LOG_FILE%" 2>&1
 echo === %DATE% %TIME% weekly_model_eval done (exit %ERRORLEVEL%) === >> "%LOG_FILE%" 2>&1
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%

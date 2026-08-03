@@ -23,5 +23,9 @@ set LOG_FILE=%LOG_DIR%\fetch_macro_series_%TS%.log
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "fetch-macro-series" "portfolio-db" execution\fetch_macro_series.py > "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "compute-macro-sensitivities" "portfolio-db" execution\compute_macro_sensitivities.py --portfolio >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%

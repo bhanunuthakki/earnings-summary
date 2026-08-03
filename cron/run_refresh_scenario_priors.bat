@@ -20,6 +20,10 @@ cd /d "%PROJECT_ROOT%"
 
 echo === %DATE% %TIME% refresh_scenario_priors starting === >> "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "refresh_scenario_priors" "portfolio-db" execution\set_scenario_priors.py --only-changed --apply --repo-root "%PROJECT_ROOT%" >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 echo === %DATE% %TIME% refresh_scenario_priors done (exit %ERRORLEVEL%) === >> "%LOG_FILE%" 2>&1
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%
