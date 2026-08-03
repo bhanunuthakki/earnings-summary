@@ -12,6 +12,12 @@ metadata, then queries ``schtasks /query /fo csv`` for each declared task.
   missing   — XML exists but no matching task is registered
   disabled  — registered but the task's Status is not Ready/Running
   mismatch  — registered but the scheduled trigger time differs from the XML
+  wrong_root— registered, enabled and on-schedule, but the action executes a
+              wrapper in a DIFFERENT checkout of this repo. The wrappers derive
+              PROJECT_ROOT from their own location (%~dp0..), so the image path
+              alone decides which repo — and which data/portfolio.db — the run
+              uses. The manifest pins the wrapper *filename*, which such a task
+              still matches exactly, so nothing else here can see it
 
 Human-readable table is printed to stdout.  Exit code:
 
@@ -33,6 +39,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
 from xml.etree.ElementTree import ParseError
@@ -86,6 +93,9 @@ class TaskReport:
     mismatch: list[tuple[str, str, str]] = field(
         default_factory=list[tuple[str, str, str]]
     )  # (name, xml_time, sched_time)
+    wrong_root: list[tuple[str, str]] = field(
+        default_factory=list[tuple[str, str]]
+    )  # (name, registered_command)
     scheduler_unavailable: bool = False
 
     @property
@@ -97,6 +107,7 @@ class TaskReport:
             or self.missing
             or self.disabled
             or self.mismatch
+            or self.wrong_root
         )
 
 
@@ -186,6 +197,81 @@ def _query_schtasks() -> dict[str, dict[str, str]] | None:
     return tasks
 
 
+@lru_cache(maxsize=1)
+def _query_task_commands() -> dict[str, str] | None:
+    """Map lower-cased task name -> its registered "Task To Run" command.
+
+    Cached: ``/v`` is markedly slower than the plain query and the answer
+    cannot change within one audit run.
+
+    Needs the verbose form: the plain ``/fo csv /nh`` query used by
+    ``_query_schtasks`` returns only TaskName/Next Run Time/Status, so the
+    action a task actually executes is invisible to it. Headers are kept (no
+    ``/nh``) so the column is found by name rather than a fixed index — the
+    verbose layout is long and locale-dependent.
+
+    Returns None when the command is unavailable, so a scheduler we cannot
+    interrogate degrades to "check skipped" rather than a false accusation
+    that every task runs from the wrong checkout.
+    """
+    try:
+        result = subprocess.run(
+            ["schtasks", "/query", "/fo", "csv", "/v"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    commands: dict[str, str] = {}
+    reader = csv.DictReader(io.StringIO(result.stdout))
+    for row in reader:
+        name = (row.get("TaskName") or "").strip()
+        command = (row.get("Task To Run") or "").strip()
+        # /v repeats the header row between folders; skip those echoes.
+        if not name or name == "TaskName" or not command:
+            continue
+        commands[name.lower()] = command
+    return commands or None
+
+
+def _command_executable(command: str) -> str | None:
+    """Extract the executable path from a "Task To Run" string.
+
+    Handles both ``"C:\\dir with spaces\\run.bat" --flag`` and the bare
+    ``C:\\dir\\run.bat`` form. Arguments are discarded — only the image path
+    decides which checkout a task runs from.
+    """
+    text = command.strip()
+    if not text:
+        return None
+    if text.startswith('"'):
+        closing = text.find('"', 1)
+        if closing == -1:
+            return None
+        return text[1:closing].strip() or None
+    # Unquoted: such a path cannot contain spaces, so the first token is it.
+    return text.split(" ", 1)[0].strip() or None
+
+
+def _is_under(path_text: str, root: Path) -> bool:
+    """Whether ``path_text`` sits inside ``root`` (case-insensitive on Windows)."""
+    try:
+        candidate = Path(path_text)
+        root_text = os.path.normcase(str(root.resolve()))
+        cand_text = os.path.normcase(str(candidate.resolve()))
+    except (OSError, ValueError):
+        return False
+    return cand_text == root_text or cand_text.startswith(root_text + os.sep)
+
+
 def _windows_service_is_running(service_name: str) -> bool:
     """Return whether a named Windows service positively reports RUNNING."""
     try:
@@ -234,6 +320,7 @@ def compare(
     cron_dir: Path = CRON_DIR,
     *,
     manifest: TaskManifest | None = None,
+    project_root: Path | None = None,
 ) -> tuple[TaskReport, list[_XmlTask]]:
     """Parse manifest-declared XMLs and compare against the live scheduler.
 
@@ -243,6 +330,9 @@ def compare(
     cannot be queried, every parsed XML is listed as "missing" so the exit code
     is still non-zero.
     """
+    # Resolved at call time, not bound as a default, so the module global stays
+    # patchable (and a caller can audit a checkout other than this one).
+    root = PROJECT_ROOT if project_root is None else project_root
     report = TaskReport()
     xml_tasks: list[_XmlTask] = []
     if manifest is None and cron_dir.resolve() == CRON_DIR.resolve():
@@ -273,6 +363,11 @@ def compare(
 
     live = _query_schtasks()
     report.scheduler_unavailable = live is None
+    # Which checkout each task actually executes from. A task can be
+    # registered, enabled and on-schedule while running a *different* clone of
+    # this repo — same wrapper filename, different root, its own data/
+    # directory. That drift is invisible to every other check here.
+    commands = _query_task_commands() if live is not None else None
 
     for xt in xml_tasks:
         key = xt.task_name.lower()
@@ -318,6 +413,20 @@ def compare(
             next_run_time = _extract_next_run_time(task_info["next_run"])
             if next_run_time is not None and next_run_time != xt.start_time:
                 report.mismatch.append((xt.task_name, xt.start_time, next_run_time))
+                continue
+
+        # Wrong-checkout check. The cron wrappers derive PROJECT_ROOT from
+        # their own location (%~dp0..), so the registered image path alone
+        # decides which repo — and therefore which data/portfolio.db — the run
+        # uses. A task pointed at a second clone matches the manifest wrapper
+        # name exactly and passes every check above, then runs against that
+        # clone's database. On 2026-07-30 the whole fleet was re-pointed this
+        # way and spent days "succeeding" against a 32KB empty stub.
+        if commands is not None:
+            registered = commands.get(key)
+            exe = _command_executable(registered) if registered else None
+            if exe is not None and not _is_under(exe, root):
+                report.wrong_root.append((xt.task_name, registered or ""))
                 continue
 
         report.ok.append(xt.task_name)
@@ -378,6 +487,15 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
             print(f"    x  {name}: XML={xml_time} vs scheduler={sched_time}")
         print()
 
+    if report.wrong_root:
+        print(
+            f"  WRONG CHECKOUT ({len(report.wrong_root)}) — registered outside "
+            f"{PROJECT_ROOT} (runs against that clone's data/portfolio.db):"
+        )
+        for name, command in report.wrong_root:
+            print(f"    x  {name}: {command}")
+        print()
+
     problems = (
         len(report.manifest_errors)
         + len(report.unparseable)
@@ -385,6 +503,7 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
         + len(report.missing)
         + len(report.disabled)
         + len(report.mismatch)
+        + len(report.wrong_root)
     )
     print(f"  {problems} problem(s) found. Fix: re-run schtasks /create or check the XML.\n")
 
@@ -403,6 +522,10 @@ def report_payload(report: TaskReport, xml_tasks: list[_XmlTask]) -> dict[str, o
         "mismatch": [
             {"task": name, "xml_time": xml_time, "scheduler_time": scheduler_time}
             for name, xml_time, scheduler_time in report.mismatch
+        ],
+        "wrong_root": [
+            {"task": name, "command": command, "expected_root": str(PROJECT_ROOT)}
+            for name, command in report.wrong_root
         ],
         "scheduler_unavailable": report.scheduler_unavailable,
     }
