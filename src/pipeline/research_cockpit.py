@@ -710,31 +710,10 @@ def latest_dcf_runs(
     return out
 
 
-def _dcf_sanity_select(conn: sqlite3.Connection) -> str:
-    """`sanity_flag` when dcf_runs carries the 0182 column, else a NULL alias —
-    so the same SELECT works against pre-migration data dirs."""
-    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
-    return "sanity_flag" if "sanity_flag" in cols else "NULL AS sanity_flag"
-
-
 def dcf_sanity_flags(conn: sqlite3.Connection) -> set[str]:
     """Tickers whose LATEST consolidated dcf_runs row is sanity-flagged
     ('outlier' past the trust limit) — the cockpit badges these rows."""
-    sanity_sel = _dcf_sanity_select(conn)
-    rows = _safe_rows(
-        conn,
-        f"SELECT ticker, {sanity_sel} FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC",
-    )
-    seen: set[str] = set()
-    flagged: set[str] = set()
-    for r in rows:
-        t = str(r["ticker"])
-        if t in seen:
-            continue
-        seen.add(t)
-        if r["sanity_flag"]:
-            flagged.add(t)
-    return flagged
+    return {ticker for ticker, row in latest_dcf_rows(conn).items() if row.sanity_flag}
 
 
 def latest_dcf_scenarios(
