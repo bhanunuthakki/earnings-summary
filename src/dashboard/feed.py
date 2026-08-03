@@ -23,9 +23,17 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from dashboard._styles import CSS
-from dashboard.inbox import INBOX_CSS, INBOX_JS, collect_inbox_counted, render_inbox_stream
+from dashboard.inbox import (
+    INBOX_CSS,
+    INBOX_JS,
+    InboxItem,
+    collect_inbox_counted,
+    render_inbox_stream,
+    schema_drift_notice,
+)
 from identity import DEFAULT_USER_ID
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
+from schema_compat import SchemaRevisionMismatch
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
 
@@ -52,15 +60,26 @@ def render_alert_feed(
     alerts_only = bool(trigger_kind or status)
     # Counted variant: /feed is the WHOLE-stream view, so it owes the owner the
     # remainder the cap dropped rather than presenting the top N as everything.
-    items, total_eligible = collect_inbox_counted(
-        db_path,
-        user_id=user_id,
-        ticker=ticker,
-        status=status,
-        trigger_kind=trigger_kind,
-        kinds=(("alert",) if alerts_only else ("alert", "draft", "ledger", "note", "synthesis")),
-        limit=limit,
-    )
+    drift: SchemaRevisionMismatch | None = None
+    items: list[InboxItem] = []
+    total_eligible = 0
+    try:
+        items, total_eligible = collect_inbox_counted(
+            db_path,
+            user_id=user_id,
+            ticker=ticker,
+            status=status,
+            trigger_kind=trigger_kind,
+            kinds=(
+                ("alert",) if alerts_only else ("alert", "draft", "ledger", "note", "synthesis")
+            ),
+            limit=limit,
+        )
+    except SchemaRevisionMismatch as exc:
+        # The page still renders — but as an explicit "cannot be read", never as
+        # an empty stream. An unreadable inbox and a quiet one must not look
+        # alike (the defect this handling exists for).
+        drift = exc
 
     body = StringIO()
     body.write('<div class="l1-shell">')
@@ -68,20 +87,24 @@ def render_alert_feed(
         body,
         total=total_eligible,
         active=_active_filters(ticker=ticker, trigger_kind=trigger_kind, status=status),
+        unreadable=drift is not None,
     )
     # One band only: the category chips (rendered by the stream) head the list —
     # no separate "Stream / N shown" title band over them (design_language §6.1).
     body.write('<section class="dash-section dash-feed">')
-    body.write(
-        render_inbox_stream(
-            items,
-            db_path=db_path,
-            surface="feed",
-            show_filters=True,
-            hidden_count=max(0, total_eligible - len(items)),
-            empty_text="No items match the current filters.",
+    if drift is not None:
+        body.write(schema_drift_notice(drift))
+    else:
+        body.write(
+            render_inbox_stream(
+                items,
+                db_path=db_path,
+                surface="feed",
+                show_filters=True,
+                hidden_count=max(0, total_eligible - len(items)),
+                empty_text="No items match the current filters.",
+            )
         )
-    )
     body.write("</section>")
     _render_footer(body)
     body.write("</div>")
@@ -93,14 +116,25 @@ def render_alert_feed(
 # ----------------------------------------------------------------------------
 
 
-def _render_header(body: StringIO, total: int, active: list[tuple[str, str, str]]) -> None:
+def _render_header(
+    body: StringIO,
+    total: int,
+    active: list[tuple[str, str, str]],
+    *,
+    unreadable: bool = False,
+) -> None:
     body.write('<header class="l1-header">')
     body.write("<h1>Inbox feed</h1>")
-    body.write(
-        f'<div class="l1-subtitle">{total} shown · ranked by what matters now — '
-        "newest and most material first. Filter the stream by category below, or "
-        "hover a card to expand it.</div>"
-    )
+    if unreadable:
+        # "0 shown" would be a lie of exactly the kind this whole change exists
+        # to remove — it states a count for a stream that could not be counted.
+        body.write('<div class="l1-subtitle">The stream could not be read — see below.</div>')
+    else:
+        body.write(
+            f'<div class="l1-subtitle">{total} shown · ranked by what matters now — '
+            "newest and most material first. Filter the stream by category below, or "
+            "hover a card to expand it.</div>"
+        )
     # Only the filters actually narrowing the view are shown — each a removable
     # chip linking back to the feed without that one constraint. Nothing
     # filtered → no chrome band at all (no "ALL · ALL · ALL" noise).
