@@ -13,12 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-# Bumped 0259 → 0260 (2026-07-31, pre_earnings_brief plumbing): 0260 adds one
-# COLUMN (ticker_settings.auto_pre_earnings_brief) and one llm_budgets ROW —
-# no tables — so the exhaustive 0259 table registry below remains exact and
-# the count is unchanged.
-_AUTHORITY_SCHEMA_REVISION = "0260_pre_earnings_brief_plumbing"
-_AUTHORITY_SCHEMA_TABLE_COUNT = 309
+# Bumped through 0271 (2026-08-02). Migrations 0261-0269 add the governed
+# latest-state and population-operation planes; 0262 adds the live-operational
+# news_events table. 0270-0271 add no tables. The closed registry remains
+# explicit so a future migration cannot silently inherit an authority class.
+_AUTHORITY_SCHEMA_REVISION = "0271_disclosure_thesis_materiality"
+_AUTHORITY_SCHEMA_TABLE_COUNT = 329
 GOVERNED_TABLES_0259: frozenset[str] = frozenset(
     [
         "alembic_version",
@@ -179,6 +179,26 @@ GOVERNED_TABLES_0259: frozenset[str] = frozenset(
         "source_obligation_revisions",
         "source_observation_taxonomy_assertions",
         "source_taxonomy_components",
+        # Added after the original 0259 registry; all remain governed substrate.
+        "canonical_resolution_operation_ledger",
+        "database_runtime_identity",
+        "document_processing_operation_ledger",
+        "latest_governed_document_entries",
+        "latest_governed_fact_entries",
+        "latest_governed_narrative_entries",
+        "latest_governed_narrative_fts",
+        "latest_governed_narrative_fts_config",
+        "latest_governed_narrative_fts_data",
+        "latest_governed_narrative_fts_docsize",
+        "latest_governed_narrative_fts_idx",
+        "latest_governed_population_operation_ledger",
+        "latest_governed_population_operation_ledger_v2",
+        "latest_governed_refresh_changes",
+        "latest_governed_refresh_receipts",
+        "latest_governed_refresh_runs",
+        "latest_governed_refresh_stage",
+        "latest_governed_scope_heads",
+        "metric_ontology_operation_ledger",
     ]
 )
 OPERATIONAL_TABLES_0259: frozenset[str] = frozenset(
@@ -280,6 +300,7 @@ OPERATIONAL_TABLES_0259: frozenset[str] = frozenset(
         "model_eval_verdicts",
         "model_pin_overrides",
         "news",
+        "news_events",
         "numerical_claims",
         "optimizer_nominations",
         "owner_profile_facts",
@@ -498,7 +519,7 @@ def plan_live_cutover_merge(
             raise LiveCutoverMergeError("governed source changed while planning")
         commitment_payload = {
             "policy_name": "additive_live_operational_authority_merge",
-            "policy_version": "3",
+            "policy_version": "4",
             "live_database": str(live_path),
             "governed_database": str(governed_path),
             "live_source_sha256": live_source_before,
@@ -510,7 +531,7 @@ def plan_live_cutover_merge(
         }
         return LiveCutoverMergePlan(
             policy_name="additive_live_operational_authority_merge",
-            policy_version="3",
+            policy_version="4",
             live_database=str(live_path),
             governed_database=str(governed_path),
             live_source_sha256=live_source_before,

@@ -18,6 +18,37 @@ from schema_compat import expected_head
 
 _AUTHORITY_TABLES = cutover.GOVERNED_TABLES_0259 | cutover.OPERATIONAL_TABLES_0259
 
+_POST_0260_GOVERNED_TABLES = frozenset(
+    {
+        "canonical_resolution_operation_ledger",
+        "database_runtime_identity",
+        "document_processing_operation_ledger",
+        "latest_governed_document_entries",
+        "latest_governed_fact_entries",
+        "latest_governed_narrative_entries",
+        "latest_governed_narrative_fts",
+        "latest_governed_narrative_fts_config",
+        "latest_governed_narrative_fts_data",
+        "latest_governed_narrative_fts_docsize",
+        "latest_governed_narrative_fts_idx",
+        "latest_governed_population_operation_ledger",
+        "latest_governed_population_operation_ledger_v2",
+        "latest_governed_refresh_changes",
+        "latest_governed_refresh_receipts",
+        "latest_governed_refresh_runs",
+        "latest_governed_refresh_stage",
+        "latest_governed_scope_heads",
+        "metric_ontology_operation_ledger",
+    }
+)
+
+
+def test_authority_registry_tracks_current_schema() -> None:
+    assert expected_head() == "0271_disclosure_thesis_materiality"
+    assert _POST_0260_GOVERNED_TABLES <= cutover.GOVERNED_TABLES_0259
+    assert "news_events" in cutover.OPERATIONAL_TABLES_0259
+    assert len(_AUTHORITY_TABLES) == 329
+
 
 def _database(
     path: Path,
@@ -33,7 +64,7 @@ def _database(
             CREATE TABLE alembic_version (
                 version_num TEXT PRIMARY KEY
             );
-            INSERT INTO alembic_version VALUES ('0260_pre_earnings_brief_plumbing');
+            INSERT INTO alembic_version VALUES ('0271_disclosure_thesis_materiality');
             CREATE TABLE alerts (
                 event_id INTEGER PRIMARY KEY,
                 state TEXT NOT NULL,
@@ -78,7 +109,7 @@ def test_plan_is_content_bound_and_excludes_governed_substrate(tmp_path: Path) -
 
     plan = plan_live_cutover_merge(live, governed)
 
-    assert plan.policy_version == "3"
+    assert plan.policy_version == "4"
     assert [table.table for table in plan.tables] == ["alerts"]
     assert plan.tables[0].added_row_count == 1
     assert plan.tables[0].changed_row_count == 1
