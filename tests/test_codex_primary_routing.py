@@ -227,7 +227,7 @@ def test_web_default_purpose_routes_to_codex_before_claude(
 
     def fake_codex(prompt: str, **kwargs: object) -> str:
         seen.update(kwargs, prompt=prompt)
-        return "codex web answer"
+        return "codex web answer https://reuters.com/x"
 
     monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
     monkeypatch.setattr(
@@ -240,7 +240,7 @@ def test_web_default_purpose_routes_to_codex_before_claude(
 
     assert (
         llm_cli.call_llm_with_web("question", purpose="recent_developments", ticker="NU")
-        == "codex web answer"
+        == "codex web answer https://reuters.com/x"
     )
     assert seen["model"] == "gpt-5.6-terra"  # recent_developments -> DEFAULT_MODEL -> Terra tier
     assert seen["purpose"] == "recent_developments"
@@ -469,3 +469,82 @@ def test_metered_fallback_never_honors_budget_bypass(
     monkeypatch.setattr(llm_cli, "OPENROUTER_FALLBACK_PURPOSES", frozenset({"approved_purpose"}))
     with pytest.raises(llm_cli.LLMBudgetExceeded, match="cannot bypass"):
         llm_cli._authorize_metered_openrouter_fallback("approved_purpose", force_budget_bypass=True)
+
+
+# ---------------------------------------------------------------------------
+# Groundedness gate on the Codex web leg (measured defect, 2026-08-03).
+#
+# Codex returned the recent_developments template's own sanctioned escape
+# hatch ("*No material news in the last 7 days.*", 0 URLs) for NU/MELI/UBER
+# while Claude found real material news for all three the same day. The call
+# SUCCEEDED — exit 0, well-formatted, confidently wrong — so neither the
+# routing guard nor the operational fallback could see it. These pin the gate
+# that converts "cited nothing" into a loud fallback.
+# ---------------------------------------------------------------------------
+
+
+def test_uncited_codex_web_answer_falls_back_to_claude(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact production shape: Codex 'succeeds' with the template's
+    say-nothing output and zero citations -> treated as operational failure,
+    Claude serves the answer."""
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    # The Claude leg runs for real here, so it needs the same CLI-setup bypass
+    # the other Claude-leg tests use — without it this passes on a machine that
+    # HAS the claude binary and fails in CI, which is exactly what it did.
+    _web_claude_fixture(monkeypatch)
+    calls: list[str] = []
+
+    def fake_codex(prompt: str, **kwargs: object) -> str:
+        calls.append("codex")
+        return "### Material news\n\n*No material news in the last 7 days.*"
+
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
+
+    # After the gate fires the CLAUDE WEB leg runs (a subprocess), not
+    # _call_claude — mock that seam the way the routing tests above do.
+    def fake_run(*_a: object, **_k: object) -> subprocess.CompletedProcess[str]:
+        calls.append("claude")
+        return subprocess.CompletedProcess(
+            args=["claude"],
+            returncode=0,
+            stdout=_good_cli_response("### Material news - **Real** https://reuters.com/x"),
+            stderr="",
+        )
+
+    monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
+
+    out = llm_cli.call_llm_with_web("brief please", purpose="recent_developments")
+    assert calls == ["codex", "claude"], f"expected codex->claude fallback, got {calls}"
+    assert "reuters.com" in out, "the served answer must be the GROUNDED one"
+
+
+def test_cited_codex_web_answer_is_served_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discriminating half: a Codex answer that DOES cite is served directly —
+    proving the gate keys on grounding, not on 'is it Codex'."""
+    monkeypatch.setenv("LLM_PRIMARY_SUBSCRIPTION_BACKEND", "codex")
+    calls: list[str] = []
+
+    def fake_codex(prompt: str, **kwargs: object) -> str:
+        calls.append("codex")
+        return "### Material news\n- **Item** [Source: FT, https://ft.com/a]"
+
+    def fake_claude(prompt: str, **kwargs: object) -> str:  # pragma: no cover
+        calls.append("claude")
+        return "should not be reached"
+
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
+    monkeypatch.setattr(
+        llm_cli.subprocess,
+        "run",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("grounded Codex answer must not reach the Claude web leg")
+        ),
+    )
+
+    out = llm_cli.call_llm_with_web("brief please", purpose="recent_developments")
+    assert calls == ["codex"], f"grounded Codex answer must not fall back, got {calls}"
+    assert "ft.com" in out

@@ -2192,6 +2192,7 @@ def call_llm_with_web(
     run_id: str | None = None,
     force_budget_bypass: bool = False,
     max_budget_usd: float | None = None,
+    require_grounding: bool = True,
 ) -> str:
     """Web-grounded LLM call — Codex-first, Claude WebSearch/WebFetch as the
     operational fallback.
@@ -2228,6 +2229,12 @@ def call_llm_with_web(
     blast radius even without a $-ceiling. A tiered caller's ``max_budget_usd``
     is clamped to ``min(requested, CLAUDE_WEB_MAX_BUDGET_USD)`` — the S2
     invariant — for whichever call actually reaches the Claude leg.
+
+    ``require_grounding`` (default True) enforces the groundedness gate on the
+    Codex leg: a web-grounded answer that cites no source did not search, so it
+    is treated as an operational failure and falls through to Claude rather
+    than being served. Pass False only for a web purpose whose output
+    legitimately carries no URL.
 
     Model selection mirrors ``call_llm``: pass an explicit ``model`` to force
     one, or leave it ``None`` (the default) to resolve from ``purpose`` via
@@ -2284,6 +2291,28 @@ def call_llm_with_web(
                 run_id=run_id,
                 web_search="live",
             )
+            # GROUNDEDNESS GATE (measured defect, 2026-08-03). A web-grounded
+            # answer that cites NOTHING did not actually search — and the
+            # failure is invisible, because the model returns a confident,
+            # correctly-formatted answer with exit code 0. Measured on the real
+            # recent_developments prompt: Codex returned the template's own
+            # sanctioned escape hatch ("*No material news in the last 7 days.*",
+            # 57 chars, 0 URLs) for NU/MELI/UBER while Claude found real
+            # material news for all three the same day; MELI came back in 15.5s,
+            # too fast to have searched. The prompt is written against Claude's
+            # tool loop (it names web_search/web_fetch, front-loads HARD CAPS,
+            # and offers an explicit say-nothing output), so a transport swap
+            # silently changed behaviour. Routing was correct; only the OUTPUT
+            # was wrong, which is precisely what the routing guard cannot see.
+            # Treat an uncited web answer as an OPERATIONAL failure so it falls
+            # through to the Claude web leg below and is ledgered as a fallback
+            # rather than served as a finding. A genuine no-news day still
+            # resolves correctly: Claude runs and also reports no news.
+            if require_grounding and "http" not in text:
+                raise RuntimeError(
+                    "codex web answer cited no sources — ungrounded, treating as "
+                    "an operational failure"
+                )
             capture_exchange(
                 prompt=prompt,
                 response=text,

@@ -40,6 +40,22 @@ implemented in `src/llm/cli.py` and re-exported by `src/llm_client.py`. It:
    WebSearch/WebFetch tool-call path on an OPERATIONAL Codex failure only —
    never as a routing preference. Every other Codex call site keeps the
    `"disabled"` default (byte-identical to before this changed).
+   **GROUNDEDNESS GATE (`require_grounding`, default True)**: a Codex web
+   answer citing no source is treated as an OPERATIONAL failure and falls
+   through to the Claude leg. Measured 2026-08-03: on the real
+   `recent_developments` prompt Codex returned that template's own sanctioned
+   escape hatch ("*No material news in the last 7 days.*", 0 URLs) for
+   NU/MELI/UBER while Claude found real material news for all three the same
+   day — exit 0, well-formatted, confidently wrong, so neither the routing
+   guard nor the operational fallback could see it. Root cause is
+   prompt/transport coupling, not a Codex capability limit: the template is
+   written against Claude's tool loop (names `web_search`/`web_fetch`,
+   front-loads HARD CAPS, offers an explicit say-nothing output), and Codex
+   searches correctly when asked plainly. Until that prompt is made
+   transport-neutral, expect the Codex web leg to fail this gate often and
+   the Claude leg to serve — correct output at the cost of one wasted call.
+   Pass `require_grounding=False` only for a web purpose whose output
+   legitimately carries no URL.
    **Budget-cap nuance**: the Claude web leg's hard per-call
    `--max-budget-usd` ceiling (`CLAUDE_WEB_MAX_BUDGET_USD`, $2) is a
    Claude-CLI-only mechanism — Codex is membership-billed with no per-call
