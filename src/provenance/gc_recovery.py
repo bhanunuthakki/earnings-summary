@@ -66,6 +66,10 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SHA256 = r"^[0-9a-f]{64}$"
 _MAX_ADMISSION_TTL = timedelta(minutes=30)
 _ARCHIVE_VARIANT_LIMIT = 64
+# Archive-only metadata columns the run-keyed sidecar carries on top of the
+# live table's mirror (execution/db_gc.py ARCHIVE_META_COLUMNS + the historic
+# archive_run_id spelling _audit_manifest accepts).
+_ARCHIVE_META_COLUMNS = frozenset({"gc_run_id", "archive_run_id", "gc_source_rowid"})
 _CANONICAL_LISTENER = "127.0.0.1:7421"
 _GC_ARCHIVE_NAME = "portfolio_gc_archive.db"
 _CANONICAL_REPOSITORY = Path(__file__).resolve().parents[2]
@@ -2428,8 +2432,19 @@ def _audit_archived_table(
     if _table_columns(current, table) != columns:
         raise ValueError(f"{table} baseline/current columns differ")
     archive_present = _table_exists(archive, table)
-    if archive_present and _table_columns(archive, table) != columns:
-        raise ValueError(f"{table} archive columns differ from baseline")
+    if archive_present:
+        # The run-keyed archive (execution/db_gc.py, 2026-08-03) carries
+        # gc_run_id — the very column _audit_manifest requires for
+        # row_level_run_identity_present — plus gc_source_rowid on rowid-keyed
+        # tables. Excuse exactly that meta set; any other divergence from the
+        # baseline mirror is still a hard error.
+        archive_mirror = tuple(
+            column
+            for column in _table_columns(archive, table)
+            if column not in _ARCHIVE_META_COLUMNS
+        )
+        if archive_mirror != columns:
+            raise ValueError(f"{table} archive columns differ from baseline")
     primary_key = _primary_key_columns(baseline, table)
     if primary_key != ("id",) or _primary_key_columns(current, table) != primary_key:
         raise ValueError(f"{table} baseline/current primary key differs")

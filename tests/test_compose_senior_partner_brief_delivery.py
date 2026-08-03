@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import cast
 
@@ -8,6 +9,24 @@ import pytest
 import execution.compose_senior_partner_brief as sender
 from advisor.senior_partner_brief import BriefResult, SeniorPartnerBrief
 from capture import telegram
+
+_STANDUP_MESSAGES_SCHEMA = """
+CREATE TABLE standup_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL DEFAULT 'bhanu',
+    ticker TEXT,
+    signal_kind TEXT NOT NULL,
+    signature_sha TEXT NOT NULL,
+    status TEXT NOT NULL,
+    score REAL,
+    session_id TEXT,
+    turn_id INTEGER,
+    conclusion TEXT,
+    headline TEXT,
+    evidence_json TEXT,
+    created_at TEXT NOT NULL
+);
+"""
 
 
 def _brief() -> SeniorPartnerBrief:
@@ -102,3 +121,34 @@ def test_sender_exits_nonzero_when_telegram_delivery_fails(
 
     assert exit_code == 1
     assert recorded_statuses == ["compose_failed"]
+
+
+def test_record_standup_message_strips_inline_markdown_from_headline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """headline lands on standup_messages through the same raw-INSERT shape
+    ``standup.ledger.record`` uses — it is a scalar, and the brief's
+    highest-priority decision title is LLM-authored and may carry markdown."""
+    db_path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(_STANDUP_MESSAGES_SCHEMA)
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sender, "open_conn", lambda _path: sqlite3.connect(str(db_path)))
+
+    sender._record_standup_message(
+        db_path,
+        iso_year=2026,
+        iso_week=30,
+        status="delivered",
+        headline="**Cut MELI, add NU** — the highest-priority decision",
+        artifact_id=2104,
+    )
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        (headline,) = conn.execute("SELECT headline FROM standup_messages").fetchone()
+    finally:
+        conn.close()
+    assert headline == "Cut MELI, add NU — the highest-priority decision"

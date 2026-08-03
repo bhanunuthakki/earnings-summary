@@ -54,9 +54,15 @@ CORE_SCHEDULED_DATA_PATHS = (
 # BELOW the runtime, not a caller of it. It is also deliberately cheaper — a
 # 5s busy_timeout rather than the writer policy's 30s, because the probe runs
 # before EVERY scheduled job and a stalled preflight would delay the whole
-# cron fleet. Broad directory-level debt allowlists are prohibited.
+# cron fleet. gc_restore.py's --drill mode opens a THROWAWAY temp SQLite DB
+# (a TemporaryDirectory scratch file, never the portfolio DB) as its own main
+# schema and ATTACHes the live DB + archive read-only; routing that through
+# connect_sqlite would wrongly impose the writer WAL/busy_timeout policy and a
+# schema preflight the empty scratch DB cannot satisfy. Broad directory-level
+# debt allowlists are prohibited.
 INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
     "execution/fix_kpi_series.py": 1,
+    "execution/gc_restore.py": 1,
     "src/schema_compat.py": 1,
     "src/sqlite_runtime.py": 2,
 }

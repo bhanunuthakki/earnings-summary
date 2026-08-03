@@ -13,7 +13,10 @@ Run once now:
     powershell -ExecutionPolicy Bypass -File cron\backup_project.ps1
 
 Destination defaults to a Google Drive folder; override with ES_BACKUP_ROOT.
-To skip the ~12 GB re-pullable FMP cache, add 'data\historical\fmp' to $xd below.
+The re-pullable FMP cache (data\historical\fmp) is EXCLUDED via $xd: mirroring
+it produced 153k files that Drive could only upload 14k of, leaving the backup
+~9% complete with no error anywhere. Do not re-add it without a plan for the
+upload backlog.
 #>
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -43,7 +46,15 @@ $xd = @(
     '.git', 'venv', '.tmp', '.cache', 'cache', 'logs', '__pycache__',
     '.pytest_cache', '.claude', 'node_modules',
     (Join-Path $repo 'data\llm_capture'),
-    (Join-Path $repo 'data\secrets')
+    (Join-Path $repo 'data\secrets'),
+    # Re-pullable FMP API cache. Measured 2026-08-02: mirroring it made this job
+    # emit 153,347 files, of which Google Drive had uploaded only 14,459 — the
+    # off-machine copy sat ~9% complete and said nothing, because robocopy
+    # succeeded locally and Drive's backlog is invisible from here. Excluding it
+    # drops the job to ~14k files so the upload can actually finish. Every file
+    # here is re-fetchable from FMP; the irreplaceable state is the DB snapshot,
+    # which backup_db.py handles separately.
+    (Join-Path $repo 'data\historical\fmp')
 )
 $xf = @('*.pyc', '*.db', '*.db-wal', '*.db-shm', 'portfolio.db.bak*', '.env', '.env.*', 'credentials.json', 'token.json', '*credential*', '*secret*', '*.pem', '*.key', '*.pfx', '*.p12')
 robocopy $repo $dst /MIR /XD $xd /XF $xf /R:1 /W:1 /NP /NFL /NDL
