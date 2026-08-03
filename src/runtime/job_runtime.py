@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from contextvars import ContextVar
@@ -24,7 +25,14 @@ from uuid import uuid4
 
 
 class JobAlreadyRunningError(RuntimeError):
-    """A mutable write set is already owned by another live process."""
+    """A mutable write set is already owned by another live process.
+
+    ``retryable`` distinguishes contention worth waiting out (another process
+    holds the lock and may release) from self-conflict that waiting can only
+    deadlock (this context already holds the set and nesting is not allowed).
+    """
+
+    retryable: bool = True
 
 
 _CONTEXT_LOCK_CLAIMS: ContextVar[dict[str, tuple[str, int]] | None] = ContextVar(
@@ -222,68 +230,107 @@ class HealthRecord:
 class JobLock(AbstractContextManager["JobLock"]):
     """Atomic file locks for named mutable write sets, portable on Windows."""
 
-    def __init__(self, repo_root: Path, job_name: str, write_sets: list[str]) -> None:
+    #: Contention is waited out, not instantly fatal. The old zero-wait
+    #: behavior contradicted this module's own exit-75 comment ("safe,
+    #: retryable scheduler contention") — nothing anywhere retried, so on
+    #: 2026-08-03 thirteen scheduled jobs were skipped_locked, several after
+    #: losing a 12 ms race to a holder that released moments later. 30 s
+    #: matches run_lock's default; ES_JOB_LOCK_WAIT_S overrides fleet-wide.
+    _POLL_S = 2.0
+
+    def __init__(
+        self,
+        repo_root: Path,
+        job_name: str,
+        write_sets: list[str],
+        *,
+        wait_s: float | None = None,
+    ) -> None:
         self._repo_root = repo_root.resolve()
         self._job_name = job_name
         self._write_sets = sorted(set(write_sets))
         self._claims: list[tuple[Path, str, bool]] = []
+        if wait_s is None:
+            try:
+                wait_s = float(os.environ.get("ES_JOB_LOCK_WAIT_S", "30"))
+            except ValueError:
+                wait_s = 30.0
+        self._wait_s = max(0.0, wait_s)
 
     def __enter__(self) -> JobLock:
         try:
             for write_set in self._write_sets:
-                path = _write_set_lock_path(self._repo_root, write_set)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                key = str(path.resolve()).casefold()
-                context_claims = dict(_CONTEXT_LOCK_CLAIMS.get() or {})
-                inherited = context_claims.get(key)
-                if inherited is not None:
-                    if not _ALLOW_NESTED_LOCKS.get():
-                        raise JobAlreadyRunningError(f"write set busy: {write_set}")
-                    token, depth = inherited
-                    owner = _read_lock_owner(path)
-                    if owner is None or owner.pid != os.getpid() or owner.token != token:
-                        raise JobAlreadyRunningError(
-                            f"nested write-set ownership changed: {write_set}"
-                        )
-                    context_claims[key] = (token, depth + 1)
-                    _CONTEXT_LOCK_CLAIMS.set(context_claims)
-                    self._claims.append((path, token, False))
-                    continue
-                token = uuid4().hex
-                with _lock_transition_guard(path):
+                deadline = time.monotonic() + self._wait_s
+                while True:
                     try:
-                        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                    except FileExistsError as exc:
-                        observed_owner = _read_lock_owner(path)
-                        if observed_owner is None or _owner_is_live(observed_owner):
-                            raise JobAlreadyRunningError(f"write set busy: {write_set}") from exc
-                        # Compare the ownership token again immediately before
-                        # deletion.  The OS guard serializes cooperating
-                        # contenders; the token also prevents a stale observer
-                        # from deleting a successor written by another actor.
-                        if _read_lock_owner(path) != observed_owner:
-                            raise JobAlreadyRunningError(
-                                f"write set ownership changed: {write_set}"
-                            ) from exc
-                        path.unlink()
-                        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                    with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
-                        json.dump(
-                            {
-                                "job": self._job_name,
-                                "pid": os.getpid(),
-                                "token": token,
-                                "process_start": _process_start_identity(os.getpid()),
-                            },
-                            lock_file,
-                        )
-                    context_claims[key] = (token, 1)
-                    _CONTEXT_LOCK_CLAIMS.set(context_claims)
-                    self._claims.append((path, token, True))
+                        self._claim_one(write_set)
+                        break
+                    except JobAlreadyRunningError as exc:
+                        if not exc.retryable or time.monotonic() >= deadline:
+                            raise
+                        time.sleep(self._POLL_S)
         except Exception:
             self.__exit__(None, None, None)
             raise
         return self
+
+    def _claim_one(self, write_set: str) -> None:
+        """One acquisition attempt for one write set; raises on contention."""
+        path = _write_set_lock_path(self._repo_root, write_set)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        key = str(path.resolve()).casefold()
+        context_claims = dict(_CONTEXT_LOCK_CLAIMS.get() or {})
+        inherited = context_claims.get(key)
+        if inherited is not None:
+            if not _ALLOW_NESTED_LOCKS.get():
+                # Self-conflict: THIS context already holds the set. Waiting
+                # cannot release it — fail immediately, never retry.
+                error = JobAlreadyRunningError(f"write set busy: {write_set}")
+                error.retryable = False
+                raise error
+            token, depth = inherited
+            owner = _read_lock_owner(path)
+            if owner is None or owner.pid != os.getpid() or owner.token != token:
+                # Broken invariant, not contention — retrying re-reads the
+                # same corrupt state forever. Fail loud immediately.
+                error = JobAlreadyRunningError(f"nested write-set ownership changed: {write_set}")
+                error.retryable = False
+                raise error
+            context_claims[key] = (token, depth + 1)
+            _CONTEXT_LOCK_CLAIMS.set(context_claims)
+            self._claims.append((path, token, False))
+            return
+        token = uuid4().hex
+        with _lock_transition_guard(path):
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError as exc:
+                observed_owner = _read_lock_owner(path)
+                if observed_owner is None or _owner_is_live(observed_owner):
+                    raise JobAlreadyRunningError(f"write set busy: {write_set}") from exc
+                # Compare the ownership token again immediately before
+                # deletion.  The OS guard serializes cooperating
+                # contenders; the token also prevents a stale observer
+                # from deleting a successor written by another actor.
+                if _read_lock_owner(path) != observed_owner:
+                    raise JobAlreadyRunningError(
+                        f"write set ownership changed: {write_set}"
+                    ) from exc
+                path.unlink()
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+                json.dump(
+                    {
+                        "job": self._job_name,
+                        "pid": os.getpid(),
+                        "token": token,
+                        "process_start": _process_start_identity(os.getpid()),
+                    },
+                    lock_file,
+                )
+            context_claims[key] = (token, 1)
+            _CONTEXT_LOCK_CLAIMS.set(context_claims)
+            self._claims.append((path, token, True))
 
     def inheritance_proof(self) -> str:
         """Opaque child proof, validated against the still-live lock records."""
@@ -331,9 +378,16 @@ def portfolio_db_path(repo_root: Path) -> Path:
 
 def _write_set_lock_path(repo_root: Path, write_set: str) -> Path:
     if write_set == "portfolio-db":
-        db_path = portfolio_db_path(repo_root)
-        digest = hashlib.sha256(str(db_path).casefold().encode("utf-8")).hexdigest()[:20]
-        return db_path.parent / ".job_locks" / f"portfolio-db-{digest}.lock"
+        # THE database write lock is src/run_lock.py's file, sitting next to
+        # the DB. Until 2026-08-03 this returned a hashed .job_locks path
+        # instead — a SECOND lock file for the same resource, so a JobLock
+        # holder and a run_lock holder (db_gc, the morning pipeline) never
+        # actually excluded each other. Two lock systems, one database, zero
+        # mutual exclusion. Both now converge on run_lock's file; payloads are
+        # mutually intelligible (pid for liveness, token for ownership).
+        from run_lock import lock_path_for
+
+        return lock_path_for(portfolio_db_path(repo_root))
     return repo_root / ".tmp" / "job_locks" / f"{_safe_name(write_set)}.lock"
 
 

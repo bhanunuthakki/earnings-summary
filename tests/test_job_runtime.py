@@ -161,7 +161,12 @@ def test_concurrent_stale_lock_contenders_leave_one_owner(
     def contend(name: str) -> None:
         start.wait()
         try:
-            with JobLock(tmp_path, name, ["portfolio-db"]):
+            # wait_s=0 pins this test's actual subject: the stale-break RACE
+            # must leave exactly one owner, with the loser observing busy at
+            # that instant. With the default bounded wait the loser would
+            # simply acquire after the winner releases — correct behavior,
+            # but it hides the single-winner invariant this test exists for.
+            with JobLock(tmp_path, name, ["portfolio-db"], wait_s=0):
                 outcomes.append(f"acquired:{name}")
                 release.wait(timeout=2)
         except JobAlreadyRunningError:

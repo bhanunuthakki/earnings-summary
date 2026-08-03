@@ -29,7 +29,13 @@ set "LOGFILE=%LOGDIR%\onboard_pending_%TS%.log"
 echo [%TS%] PROJECT_ROOT=%PROJECT_ROOT% > "%LOGFILE%"
 
 set PYTHONUTF8=1
-call "%PROJECT_ROOT%\cron\run_python.bat" "onboard-pending" "portfolio-db" -u "execution\onboard_pending_tickers.py" >> "%LOGFILE%" 2>&1
+REM Write set "onboard-pending", NOT "portfolio-db". A full run regularly
+REM outlives its hourly trigger (2h observed), and wrapper-holding the DB write
+REM set for that long starved every other scheduled writer (13 jobs
+REM skipped_locked on 2026-08-03). The script now claims portfolio-db itself,
+REM per ticker, releasing between tickers; the wrapper's job here is only to
+REM stop hourly runs stacking on each other -- which "onboard-pending" does.
+call "%PROJECT_ROOT%\cron\run_python.bat" "onboard-pending" "onboard-pending" -u "execution\onboard_pending_tickers.py" >> "%LOGFILE%" 2>&1
 set RC=%ERRORLEVEL%
 
 echo [exit %RC%] %LOGFILE%
