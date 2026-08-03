@@ -18,7 +18,15 @@ To skip the ~12 GB re-pullable FMP cache, add 'data\historical\fmp' to $xd below
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $py   = Join-Path $repo 'venv\Scripts\python.exe'
-$root = if ($env:ES_BACKUP_ROOT) { $env:ES_BACKUP_ROOT } else { 'C:\Users\Bhanu\My Drive\earnings-summary-backup' }
+# Drive root works in either sync mode: in Stream mode Drive mounts a virtual
+# drive (usually G:) and the old C:\...\My Drive folder lingers on disk stale
+# and UNSYNCED, so any mounted "<letter>:\My Drive" must win over the mirror
+# path. Mirrors _google_drive_root() in cron/backup_db.py / cron/restore_db.py.
+$driveRoot = 'C:\Users\Bhanu\My Drive'
+foreach ($l in [char[]]('DEFGHIJKLMNOPQRSTUVWXYZ')) {
+    if (Test-Path -LiteralPath "$($l):\My Drive") { $driveRoot = "$($l):\My Drive"; break }
+}
+$root = if ($env:ES_BACKUP_ROOT) { $env:ES_BACKUP_ROOT } else { Join-Path $driveRoot 'earnings-summary-backup' }
 
 Write-Host "=== 1/2  consistent DB snapshot (AES-256-GCM encrypted) ==="
 & $py (Join-Path $repo 'cron\backup_db.py')

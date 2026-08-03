@@ -44,7 +44,29 @@ from runtime.job_runtime import JobLock, inherited_lock_is_valid, portfolio_db_p
 from runtime.secrets import load_project_env  # noqa: E402
 
 DEFAULT_DB = (PROJECT_ROOT / "data" / "portfolio.db").resolve()
-DEFAULT_BACKUP_DIR = Path(r"C:\Users\Bhanu\My Drive\earnings-summary-db-backups")
+
+MIRROR_DRIVE_ROOT = Path(r"C:\Users\Bhanu\My Drive")
+
+
+def _google_drive_root() -> Path:
+    """Locate the Google Drive root in either sync mode.
+
+    In Stream mode Drive mounts a virtual drive (usually G:), and the old
+    mirror folder at C:\\Users\\Bhanu\\My Drive lingers on disk as a stale,
+    UNSYNCED leftover until manually deleted. A mounted "<letter>:\\My Drive"
+    can only be the Drive mount, so any non-C: hit wins over the mirror path —
+    checking C: first would keep writing backups into the dead folder while
+    reporting OK. backup_db.py duplicates this deliberately (its restore
+    counterpart must never drift to a different answer — keep them identical).
+    """
+    for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+        candidate = Path(f"{letter}:/My Drive")
+        if candidate.is_dir():
+            return candidate
+    return MIRROR_DRIVE_ROOT
+
+
+DEFAULT_BACKUP_DIR = _google_drive_root() / "earnings-summary-db-backups"
 
 
 def configured_backup_dir() -> Path:
