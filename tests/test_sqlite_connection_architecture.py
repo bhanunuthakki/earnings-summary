@@ -49,10 +49,15 @@ CORE_SCHEDULED_DATA_PATHS = (
 # The runtime implementation owns persistent application connections. The
 # repair CLI retains one explicit arbitrary-URI seam so operators can inspect
 # or repair an isolated SQLite copy addressed by a full URI; its normal path
-# still uses connect_sqlite. Broad directory-level debt allowlists are
-# prohibited.
+# still uses connect_sqlite. schema_compat's drift probe cannot route through
+# connect_sqlite at all: sqlite_runtime imports schema_compat, so the guard is
+# BELOW the runtime, not a caller of it. It is also deliberately cheaper — a
+# 5s busy_timeout rather than the writer policy's 30s, because the probe runs
+# before EVERY scheduled job and a stalled preflight would delay the whole
+# cron fleet. Broad directory-level debt allowlists are prohibited.
 INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
     "execution/fix_kpi_series.py": 1,
+    "src/schema_compat.py": 1,
     "src/sqlite_runtime.py": 2,
 }
 SQLITE_RUNTIME_CALLS = 2
