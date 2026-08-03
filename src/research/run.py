@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from llm.prompt_registry import PromptTemplate, register
 from research.proposals import create_proposal, get_task, set_task_status
 from research.tier import resolve_tier
 
@@ -78,6 +79,27 @@ def _call_struct(prompt: str, *, purpose: str, required_keys: tuple[str, ...]) -
 # --- pass 1: fetch (web, no write) ---
 
 
+RESEARCH_FETCH_TEMPLATE = register(
+    PromptTemplate(
+        template_id="research.fetch-evidence",
+        body=(
+            "Search the web before answering. An answer that cites no source is invalid.\n\n"
+            "Find recent PUBLIC evidence bearing on this investor question. Run at most 2 "
+            "searches and open at most 6 sources. Return JSON ONLY: "
+            '{{"findings": [{{"point": "...", "source_url": "...", "date": '
+            '"YYYY-MM-DD"}}], "search_evidence": {{"queries": ["..."], '
+            '"window_covered": "...", "sources_opened": ["https://..."]}}}}. '
+            "No opinion — just sourced facts. An empty findings list is valid only when "
+            "search_evidence states the queries run, the window covered, and dated sources "
+            "opened; never return it when search did not run.\n\n"
+            "Company: {ticker}\nQuestion: {claim}"
+        ),
+        variables=("ticker", "claim"),
+        description="Web-only evidence fetch for the isolated research pass",
+    )
+)
+
+
 def _parse_findings(raw: str) -> tuple[dict[str, str], ...]:
     try:
         doc: object = json.loads(raw)
@@ -99,12 +121,7 @@ def _fetch_evidence(
     claim: str, ticker: str | None, budget_usd: float, *, web: WebCall | None = None
 ) -> Evidence:
     caller = web or _call_web
-    prompt = (
-        "Find recent PUBLIC evidence bearing on this investor question. Use AT MOST 2 web "
-        'searches. Return JSON ONLY: {"findings": [{"point": "...", "source_url": "...", '
-        '"date": "YYYY-MM-DD"}]}. No opinion — just sourced facts.\n\n'
-        f"Company: {ticker or 'n/a'}\nQuestion: {claim}"
-    )
+    prompt = RESEARCH_FETCH_TEMPLATE.render(ticker=ticker or "n/a", claim=claim)
     raw = caller(prompt, purpose="research_fetch", ticker=ticker, max_budget_usd=budget_usd)
     return Evidence(findings=_parse_findings(raw), raw=raw)
 

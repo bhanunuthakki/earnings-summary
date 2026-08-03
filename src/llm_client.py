@@ -1165,19 +1165,21 @@ _MAX_EXCERPT_CHARS_PER_NEWS_ITEM: int = 400
 RECENT_DEVELOPMENTS_TEMPLATE = register(
     PromptTemplate(
         template_id="recent_developments.brief",
-        body="""You are a senior equity analyst preparing a recent-developments
+        body="""Search the web before answering. An answer that cites no source is invalid.
+
+You are a senior equity analyst preparing a recent-developments
 brief for {ticker} for an analyst-grade research memo. Bar: every item
 must move the thesis or be tracking a specific known catalyst — pure news
 recap earns an automatic rewrite.
 
-{anchor_block}Search the web for {ticker} news from the last {news_days} days. Prioritize
+{anchor_block}Cover {ticker} news from the last {news_days} days. Prioritize
 Bloomberg, Reuters, CNBC, FT, WSJ, and company press releases. Skip blog
 spam, opinion pieces with no new information, recapitulation of older news,
 and analyst initiation reports unless they include a non-obvious data point.
 
 WEB BUDGET (HARD CAPS — do not exceed):
-- Issue AT MOST 2 web_search queries total.
-- Open AT MOST {max_web_results} URLs via web_fetch across the entire call.
+- Run at most 2 searches total.
+- Open at most {max_web_results} sources across the entire call.
 - For each fetched article, quote AT MOST {max_excerpt_chars} characters
   inline. Paraphrase the rest. Long verbatim quotes do not improve the
   memo and burn input tokens with no marginal value.
@@ -1218,8 +1220,10 @@ RANKING + filtering rules:
 ### Watch this week
 - [1-3 items: upcoming earnings calls (this ticker or named peers), scheduled disclosures, investor days, regulatory dockets within the next ~7 days. Format: `**Date · Event** — what to watch for`]
 
-If no material news found in the window, write `*No material news in the last
-{news_days} days.*` under "Material news" and skip the other two sections.
+If no material news remains after searching, write `*No material news found.
+Searches run: [query 1]; [query 2]. Window covered: [YYYY-MM-DD] through
+[YYYY-MM-DD]. Sources checked: [outlet, URL]; [...].*` under "Material news"
+and skip the other two sections. This branch still requires dated source URLs.
 Do not pad with stale or low-signal items just to fill the section.
 """,
         variables=(
@@ -1291,8 +1295,9 @@ _NEWS_STRUCTURING_RETRY_PREAMBLE = (
 def _parse_news_json_array(raw: str) -> list[object] | None:
     """Parse an LLM response into a JSON array, tolerating ```json fences.
 
-    Returns None when the text isn't a JSON array (the caller retries once, then
-    degrades to []). An empty array is a valid response ("no determinable news").
+    Returns None when the text isn't a valid evidenced JSON array (the caller
+    retries once, then degrades to []). A bare empty array is invalid: evidenced
+    no-news uses the prompt's SEARCH_EVIDENCE sentinel, which is removed here.
     """
     stripped = raw.strip()
     if stripped.startswith("```"):
@@ -1303,7 +1308,32 @@ def _parse_news_json_array(raw: str) -> list[object] | None:
         return None
     if not isinstance(payload, list):
         return None
-    return cast("list[object]", payload)
+    rows = cast("list[object]", payload)
+    if not rows:
+        return None
+    parsed: list[object] = []
+    for row_obj in rows:
+        if not isinstance(row_obj, dict):
+            parsed.append(row_obj)
+            continue
+        row = cast("dict[str, object]", row_obj)
+        if row.get("source") != "SEARCH_EVIDENCE":
+            parsed.append(row)
+            continue
+        url = row.get("url")
+        published_at = row.get("published_at")
+        snippet = row.get("snippet")
+        if not (
+            isinstance(url, str)
+            and url.startswith(("http://", "https://"))
+            and isinstance(published_at, str)
+            and re.search(r"\b20\d{2}-\d{2}-\d{2}\b", published_at)
+            and isinstance(snippet, str)
+            and "Queries run:" in snippet
+            and "Window covered:" in snippet
+        ):
+            return None
+    return parsed
 
 
 # P0 prompt-registry migration (llm_quality_program_2026_07.md). Body derived
@@ -1315,7 +1345,7 @@ def _parse_news_json_array(raw: str) -> list[object] | None:
 NEWS_STRUCTURING_TEMPLATE = register(
     PromptTemplate(
         template_id="news_structuring.items",
-        body='You are sourcing recent news for a long-term investor in {ticker} and returning it as STRUCTURED DATA (not prose).\n\n{anchor_clause}Search the web for {ticker} news from the last {news_days} days. Prioritize Bloomberg, Reuters, CNBC, FT, WSJ, and company press releases. Skip blog spam, opinion pieces with no new information, and pure stock-price chatter.\n\nWEB BUDGET (HARD CAPS): issue AT MOST 2 web_search queries; open AT MOST {max_web_results} URLs via web_fetch.\n\n{WEB_CONTENT_NOTICE}\n\nReturn ONLY a JSON array, one object per distinct story, EXACTLY:\n[{{"headline": "<title>", "url": "<canonical article url>", "published_at": "YYYY-MM-DD HH:MM:SS", "published_tz": "UTC", "snippet": "<one-sentence gloss>", "source": "<outlet, e.g. Reuters>"}}]\n\nHARD RULES:\n- published_at: the publication timestamp where you can determine it, formatted \'YYYY-MM-DD HH:MM:SS\' (24-hour, a space not \'T\', no zone suffix). Give it in UTC and set published_tz to \'UTC\'. If you only know the US/Eastern wall-clock time, return that and set published_tz to \'ET\'.\n- If you CANNOT determine a publication date for a story from its source, OMIT that story entirely. Never guess or fabricate a date.\n- url must be the real article URL (it is the dedup key). Omit any item without one.\n- Output the JSON array and nothing else: no markdown fences, no prose.',
+        body='Search the web before answering. An answer that cites no source is invalid.\n\nYou are sourcing recent news for a long-term investor in {ticker} and returning it as STRUCTURED DATA (not prose). Before producing JSON, run at least one search and open at least one dated source even if you expect no qualifying story.\n\n{anchor_clause}Cover {ticker} news from the last {news_days} days. Prioritize Bloomberg, Reuters, CNBC, FT, WSJ, and company press releases. Skip blog spam, opinion pieces with no new information, and pure stock-price chatter.\n\nWEB BUDGET (HARD CAPS): run at most 2 searches; open at most {max_web_results} sources.\n\n{WEB_CONTENT_NOTICE}\n\nReturn ONLY a JSON array, one object per distinct story, EXACTLY:\n[{{"headline": "<title>", "url": "<canonical article url>", "published_at": "YYYY-MM-DD HH:MM:SS", "published_tz": "UTC", "snippet": "<one-sentence gloss>", "source": "<outlet, e.g. Reuters>"}}]\n\nHARD RULES:\n- published_at: the publication timestamp where you can determine it, formatted \'YYYY-MM-DD HH:MM:SS\' (24-hour, a space not \'T\', no zone suffix). Give it in UTC and set published_tz to \'UTC\'. If you only know the US/Eastern wall-clock time, return that and set published_tz to \'ET\'.\n- If you CANNOT determine a publication date for a story from its source, OMIT that story entirely. Never guess or fabricate a date.\n- url must be the real article URL (it is the dedup key). Omit any item without one.\n- A bare [] is INVALID. If the searches find no qualifying story, return one audit object in the SAME array shape: {{"headline":"NO_QUALIFYING_MATERIAL_NEWS","url":"<real dated source URL opened>","published_at":"YYYY-MM-DD HH:MM:SS","published_tz":"UTC","snippet":"Queries run: <queries>; Window covered: <start> through <end>; no qualifying material story found.","source":"SEARCH_EVIDENCE"}}. This proves you looked; the caller removes the audit object before persistence.\n- Output the JSON array and nothing else: no markdown fences, no prose.',
         variables=(
             "ticker",
             "anchor_clause",

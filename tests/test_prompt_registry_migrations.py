@@ -31,15 +31,18 @@ def _legacy_news_structuring(
 ) -> str:
     """Verbatim reconstruction of the pre-migration concatenation."""
     return (
+        "Search the web before answering. An answer that cites no source is invalid.\n\n"
         f"You are sourcing recent news for a long-term investor in {ticker} and "
-        f"returning it as STRUCTURED DATA (not prose).\n\n"
+        f"returning it as STRUCTURED DATA (not prose). Before producing JSON, run "
+        f"at least one search and open at least one dated source even if you expect "
+        f"no qualifying story.\n\n"
         f"{anchor_clause}"
-        f"Search the web for {ticker} news from the last {news_days} days. "
+        f"Cover {ticker} news from the last {news_days} days. "
         f"Prioritize Bloomberg, Reuters, CNBC, FT, WSJ, and company press "
         f"releases. Skip blog spam, opinion pieces with no new information, and "
         f"pure stock-price chatter.\n\n"
-        f"WEB BUDGET (HARD CAPS): issue AT MOST 2 web_search queries; open AT "
-        f"MOST {max_web_results} URLs via web_fetch.\n\n"
+        f"WEB BUDGET (HARD CAPS): run at most 2 searches; open at most "
+        f"{max_web_results} sources.\n\n"
         f"{WEB_CONTENT_NOTICE}\n\n"
         "Return ONLY a JSON array, one object per distinct story, EXACTLY:\n"
         '[{"headline": "<title>", "url": "<canonical article url>", '
@@ -54,6 +57,13 @@ def _legacy_news_structuring(
         "source, OMIT that story entirely. Never guess or fabricate a date.\n"
         "- url must be the real article URL (it is the dedup key). Omit any item "
         "without one.\n"
+        "- A bare [] is INVALID. If the searches find no qualifying story, return "
+        "one audit object in the SAME array shape: "
+        '{"headline":"NO_QUALIFYING_MATERIAL_NEWS","url":"<real dated source URL '
+        'opened>","published_at":"YYYY-MM-DD HH:MM:SS","published_tz":"UTC",'
+        '"snippet":"Queries run: <queries>; Window covered: <start> through <end>; '
+        'no qualifying material story found.","source":"SEARCH_EVIDENCE"}. This '
+        "proves you looked; the caller removes the audit object before persistence.\n"
         "- Output the JSON array and nothing else: no markdown fences, no prose."
     )
 
@@ -91,19 +101,21 @@ def test_news_structuring_byte_identity(ticker: str, anchor: str, days: int, max
 def _legacy_recent_developments(
     ticker: str, anchor_block: str, news_days: int, max_web_results: int, max_excerpt_chars: int
 ) -> str:
-    return f"""You are a senior equity analyst preparing a recent-developments
+    return f"""Search the web before answering. An answer that cites no source is invalid.
+
+You are a senior equity analyst preparing a recent-developments
 brief for {ticker} for an analyst-grade research memo. Bar: every item
 must move the thesis or be tracking a specific known catalyst — pure news
 recap earns an automatic rewrite.
 
-{anchor_block}Search the web for {ticker} news from the last {news_days} days. Prioritize
+{anchor_block}Cover {ticker} news from the last {news_days} days. Prioritize
 Bloomberg, Reuters, CNBC, FT, WSJ, and company press releases. Skip blog
 spam, opinion pieces with no new information, recapitulation of older news,
 and analyst initiation reports unless they include a non-obvious data point.
 
 WEB BUDGET (HARD CAPS — do not exceed):
-- Issue AT MOST 2 web_search queries total.
-- Open AT MOST {max_web_results} URLs via web_fetch across the entire call.
+- Run at most 2 searches total.
+- Open at most {max_web_results} sources across the entire call.
 - For each fetched article, quote AT MOST {max_excerpt_chars} characters
   inline. Paraphrase the rest. Long verbatim quotes do not improve the
   memo and burn input tokens with no marginal value.
@@ -144,8 +156,10 @@ RANKING + filtering rules:
 ### Watch this week
 - [1-3 items: upcoming earnings calls (this ticker or named peers), scheduled disclosures, investor days, regulatory dockets within the next ~7 days. Format: `**Date · Event** — what to watch for`]
 
-If no material news found in the window, write `*No material news in the last
-{news_days} days.*` under "Material news" and skip the other two sections.
+If no material news remains after searching, write `*No material news found.
+Searches run: [query 1]; [query 2]. Window covered: [YYYY-MM-DD] through
+[YYYY-MM-DD]. Sources checked: [outlet, URL]; [...].*` under "Material news"
+and skip the other two sections. This branch still requires dated source URLs.
 Do not pad with stale or low-signal items just to fill the section.
 """
 
