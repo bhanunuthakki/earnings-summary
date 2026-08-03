@@ -15,13 +15,19 @@ import provenance.latest_state_benchmark as benchmark_module
 from provenance.latest_governed_state import LatestGovernedStateError
 from provenance.latest_state_benchmark import (
     AdapterRefresh,
+    BudgetResult,
     FixtureCounts,
+    HistoryIndependenceEvidence,
     LatestStateBenchmarkBudgets,
     LatestStateBenchmarkConfig,
     LatestStateSqliteAdapter,
     QueryPlanProof,
+    ReadMeasurement,
+    RefreshMeasurement,
     RefusedBenchmarkPathError,
+    StorageEvidence,
     benchmark_scope_id,
+    evaluate_benchmark_budgets,
     production_benchmark_budgets,
     production_benchmark_config,
     run_latest_state_benchmark,
@@ -639,15 +645,63 @@ def test_exact_work_read_and_resume_ratchets_pass(tmp_path: Path) -> None:
     )
 
 
-def test_production_admission_recomputes_exact_profile_and_budgets(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    report = _run(tmp_path)
-    monkeypatch.setattr(benchmark_module, "production_benchmark_config", lambda: report.config)
-    monkeypatch.setattr(benchmark_module, "production_benchmark_budgets", lambda: report.budgets)
+def test_production_admission_budget_boundaries_use_fixed_measurements() -> None:
+    """Admission is a deterministic <= decision, not a machine-speed test.
 
-    assert verify_production_benchmark_report(report)
+    Minimal typed models carry only the measurements this decision reads. The
+    live production-scale measurement remains in execution/benchmark_latest_state.py,
+    outside the CI test suite.
+    """
+    budgets = production_benchmark_budgets()
+
+    def results_with(
+        name: str | None = None, actual: float | None = None
+    ) -> tuple[BudgetResult, ...]:
+        values = {
+            "hot_path_seconds": float(budgets.max_hot_path_seconds),
+            "hot_path_peak_python_memory_bytes": float(budgets.max_peak_python_memory_bytes),
+            "latest_state_incremental_allocated_pages": float(budgets.max_allocated_sqlite_pages),
+            "no_op_milliseconds": budgets.max_noop_milliseconds,
+            "small_delta_milliseconds": budgets.max_small_delta_milliseconds,
+            "fact_read_p95_milliseconds": budgets.max_fact_read_p95_milliseconds,
+            "narrative_read_p95_milliseconds": budgets.max_narrative_read_p95_milliseconds,
+            "history_latency_ratio": budgets.max_history_latency_ratio,
+        }
+        if name is not None and actual is not None:
+            values[name] = actual
+        return evaluate_benchmark_budgets(
+            budgets,
+            hot_path_wall_seconds=values["hot_path_seconds"],
+            peak_memory=int(values["hot_path_peak_python_memory_bytes"]),
+            no_op=RefreshMeasurement.model_construct(
+                wall_milliseconds=values["no_op_milliseconds"]
+            ),
+            delta=RefreshMeasurement.model_construct(
+                wall_milliseconds=values["small_delta_milliseconds"]
+            ),
+            storage=StorageEvidence.model_construct(
+                latest_state_incremental_allocated_pages=int(
+                    values["latest_state_incremental_allocated_pages"]
+                )
+            ),
+            fact_read=ReadMeasurement.model_construct(
+                p95_milliseconds=values["fact_read_p95_milliseconds"]
+            ),
+            narrative_read=ReadMeasurement.model_construct(
+                p95_milliseconds=values["narrative_read_p95_milliseconds"]
+            ),
+            history=HistoryIndependenceEvidence.model_construct(
+                latency_ratio=values["history_latency_ratio"]
+            ),
+        )
+
+    at_boundary = results_with()
+    assert all(result.passed for result in at_boundary)
+
+    for boundary in at_boundary:
+        increment = 1.0 if boundary.maximum >= 1.0 else 0.01
+        above = results_with(boundary.name, boundary.maximum + increment)
+        assert [result.name for result in above if not result.passed] == [boundary.name]
 
 
 def test_report_is_schema_validated_canonical_and_atomic(
@@ -1091,7 +1145,6 @@ def test_python_memory_gate_starts_after_cold_baseline(
 def test_hot_path_wall_budget_excludes_ungated_fixture_prep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import provenance.latest_state_benchmark as benchmark_module
 
     clock = {"seconds": 0.0}
 

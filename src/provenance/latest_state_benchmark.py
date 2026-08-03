@@ -2149,7 +2149,7 @@ def _semantic_work(work: RefreshWorkVector) -> tuple[int, ...]:
     )
 
 
-def _budget_results(
+def evaluate_benchmark_budgets(
     budgets: LatestStateBenchmarkBudgets,
     *,
     hot_path_wall_seconds: float,
@@ -2253,7 +2253,7 @@ def verify_production_benchmark_report(report: LatestStateBenchmarkReport) -> bo
         report.resume,
         report.history_independence,
     )
-    expected_budget_results = _budget_results(
+    expected_budget_results = evaluate_benchmark_budgets(
         expected_budgets,
         hot_path_wall_seconds=report.hot_path_wall_seconds,
         peak_memory=report.peak_python_memory_bytes,
@@ -2553,7 +2553,7 @@ def run_latest_state_benchmark(
         resume,
         history,
     )
-    budget_results = _budget_results(
+    budget_results = evaluate_benchmark_budgets(
         budgets,
         hot_path_wall_seconds=hot_path_wall,
         peak_memory=peak_memory,
