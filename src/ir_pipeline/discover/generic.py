@@ -59,6 +59,10 @@ _PERIOD_RESULTS_RX = re.compile(
     r"\b(?:earnings|results?|financials?|report)\b",
     re.IGNORECASE,
 )
+_HTML_LISTING_PAGE_RX = re.compile(
+    r"/(?:default|index)(?:\.[a-z0-9]+)?/?$",
+    re.IGNORECASE,
+)
 
 # Nav links worth following to reach the doc-bearing page (bare "Financials",
 # "Quarterly Earnings", "SEC filings", "Investor news", "Events & presentations",
@@ -450,6 +454,13 @@ def _is_document_anchor(
         return False
     combined = f"{parsed.path} {text}"
     year, quarter = _guess_period(combined)
+    if (
+        _HTML_LISTING_PAGE_RX.search(parsed.path)
+        and year is None
+        and quarter is None
+        and not _DOC_HREF_RX.search(url)
+    ):
+        return False
     return bool(
         _DOC_HREF_RX.search(url)
         or _HTML_RELEASE_RX.search(combined)

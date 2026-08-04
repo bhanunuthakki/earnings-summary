@@ -10,7 +10,17 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
-from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
+from provenance.evidence_ledger import (
+    ContentBlob,
+    DocumentVersion,
+    EvidenceLedger,
+    SourceObservation,
+)
+from provenance.issuer_registry import (
+    IssuerEntity,
+    IssuerRegistry,
+    LegacyIssuerBindingRevision,
+)
 from provenance.source_coverage_reconcile import (
     ExpectedDocumentImport,
     ExpectedDocumentWithdrawalImport,
@@ -32,11 +42,15 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
+def _conn(
+    tmp_path: Path,
+    *,
+    target_revision: str = "0224_expected_document_lifecycle",
+) -> sqlite3.Connection:
     path = tmp_path / "expectation-lifecycle.db"
     config = _config(path)
     command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0224_expected_document_lifecycle")
+    command.upgrade(config, target_revision)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     ledger = EvidenceLedger(conn)
@@ -90,12 +104,13 @@ def _request(
     *,
     expected_documents: tuple[ExpectedDocumentImport, ...] = (),
     withdrawals: tuple[ExpectedDocumentWithdrawalImport, ...] = (),
+    issuer_id: str = "issuer-acme",
 ) -> SourceCoverageImport:
     stamp = STAMP + timedelta(hours=revision - 1)
     return SourceCoverageImport(
         inventory_key="ACME:sec-submissions",
         revision=revision,
-        issuer_id="issuer-acme",
+        issuer_id=issuer_id,
         ticker="ACME",
         source_kind="sec_submissions",
         source_url="https://data.sec.gov/submissions/CIK0000000001.json",
@@ -187,5 +202,296 @@ def test_disappearing_expectation_requires_exact_withdrawal_and_is_not_deleted(
         assert current is not None
         assert (current[0], current[1]) == ("withdrawn_by_authority", 2)
         assert str(current[2]).startswith("source-snapshot:")
+    finally:
+        conn.close()
+
+
+def test_cross_authority_supersession_binds_exact_replacement(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    try:
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            SourceObservation(
+                observation_id="sec-exhibit-observation",
+                idempotency_key="sec-exhibit-observation",
+                source_kind="sec",
+                source_url="https://www.sec.gov/Archives/exhibit-991.htm",
+                blob_sha256=A,
+                source_published_at=None,
+                filing_at=STAMP,
+                accepted_at=STAMP,
+                observed_at=STAMP,
+                retrieved_at=STAMP,
+                retrieval_config_sha256=B,
+                collector_code_version="sec-native@1",
+            )
+        )
+        ledger.persist(
+            DocumentVersion(
+                document_version_id="sec-exhibit-document",
+                document_key="sec-exhibit-document",
+                version_sequence=1,
+                observation_id="sec-exhibit-observation",
+                blob_sha256=A,
+                issuer_id="issuer-acme",
+                ticker="ACME",
+                document_type="press_release",
+                form_type="EX-99.1",
+                accession_number="0000000001-26-000002",
+                exhibit_id="EX-99.1",
+                language="en",
+                recorded_at=STAMP,
+            )
+        )
+        conn.commit()
+        reconcile_source_coverage(conn, _request(1, expected_documents=(_expected(),)))
+        withdrawal = ExpectedDocumentWithdrawalImport(
+            expected_document_key="ACME:2026Q1:10-Q",
+            status="superseded_by_authority",
+            reason_code="sec_exhibit_replaces_publisher_candidate",
+            reason_details=(("authority", "SEC Exhibit 99.1"),),
+            authority_observation_id="sec-exhibit-observation",
+            replacement_document_version_id="sec-exhibit-document",
+        )
+
+        reconcile_source_coverage(conn, _request(2, withdrawals=(withdrawal,)))
+
+        row = conn.execute(
+            "SELECT authority_observation_id, reason_details_json "
+            "FROM v_expected_document_lifecycle_current"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "sec-exhibit-observation"
+        assert "sec-exhibit-document" in str(row[1])
+    finally:
+        conn.close()
+
+
+def test_cross_authority_supersession_rejects_unowned_replacement(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    try:
+        reconcile_source_coverage(conn, _request(1, expected_documents=(_expected(),)))
+        withdrawal = ExpectedDocumentWithdrawalImport(
+            expected_document_key="ACME:2026Q1:10-Q",
+            status="superseded_by_authority",
+            reason_code="sec_exhibit_replaces_publisher_candidate",
+            reason_details=(("authority", "SEC Exhibit 99.1"),),
+            authority_observation_id="authority-observation",
+            replacement_document_version_id="missing-document",
+        )
+
+        with pytest.raises(ValueError, match="replacement document does not exist"):
+            reconcile_source_coverage(conn, _request(2, withdrawals=(withdrawal,)))
+    finally:
+        conn.close()
+
+
+def test_supersession_rejects_authority_observed_after_reconciliation_cutoff(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    try:
+        future = STAMP + timedelta(hours=2)
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            SourceObservation(
+                observation_id="future-authority-observation",
+                idempotency_key="future-authority-observation",
+                source_kind="sec",
+                source_url="https://www.sec.gov/Archives/future-exhibit.htm",
+                blob_sha256=A,
+                source_published_at=None,
+                filing_at=future,
+                accepted_at=future,
+                observed_at=future,
+                retrieved_at=future,
+                retrieval_config_sha256=B,
+                collector_code_version="sec-native@1",
+            )
+        )
+        ledger.persist(
+            DocumentVersion(
+                document_version_id="future-authority-document",
+                document_key="future-authority-document",
+                version_sequence=1,
+                observation_id="future-authority-observation",
+                blob_sha256=A,
+                issuer_id="issuer-acme",
+                ticker="ACME",
+                document_type="press_release",
+                form_type="EX-99.1",
+                accession_number="0000000001-26-000003",
+                exhibit_id="EX-99.1",
+                language="en",
+                recorded_at=future,
+            )
+        )
+        conn.commit()
+        reconcile_source_coverage(conn, _request(1, expected_documents=(_expected(),)))
+        withdrawal = ExpectedDocumentWithdrawalImport(
+            expected_document_key="ACME:2026Q1:10-Q",
+            status="superseded_by_authority",
+            reason_code="sec_exhibit_replaces_publisher_candidate",
+            reason_details=(("authority", "future SEC exhibit"),),
+            authority_observation_id="future-authority-observation",
+            replacement_document_version_id="future-authority-document",
+        )
+
+        with pytest.raises(ValueError, match="observation is unavailable at reconciliation cutoff"):
+            reconcile_source_coverage(conn, _request(2, withdrawals=(withdrawal,)))
+    finally:
+        conn.close()
+
+
+def test_supersession_rejects_replacement_recorded_after_reconciliation_cutoff(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    try:
+        future = STAMP + timedelta(hours=2)
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            SourceObservation(
+                observation_id="current-authority-observation",
+                idempotency_key="current-authority-observation",
+                source_kind="sec",
+                source_url="https://www.sec.gov/Archives/current-exhibit.htm",
+                blob_sha256=A,
+                source_published_at=None,
+                filing_at=STAMP,
+                accepted_at=STAMP,
+                observed_at=STAMP,
+                retrieved_at=STAMP,
+                retrieval_config_sha256=B,
+                collector_code_version="sec-native@1",
+            )
+        )
+        ledger.persist(
+            DocumentVersion(
+                document_version_id="future-recorded-document",
+                document_key="future-recorded-document",
+                version_sequence=1,
+                observation_id="current-authority-observation",
+                blob_sha256=A,
+                issuer_id="issuer-acme",
+                ticker="ACME",
+                document_type="press_release",
+                form_type="EX-99.1",
+                accession_number="0000000001-26-000004",
+                exhibit_id="EX-99.1",
+                language="en",
+                recorded_at=future,
+            )
+        )
+        conn.commit()
+        reconcile_source_coverage(conn, _request(1, expected_documents=(_expected(),)))
+        withdrawal = ExpectedDocumentWithdrawalImport(
+            expected_document_key="ACME:2026Q1:10-Q",
+            status="superseded_by_authority",
+            reason_code="sec_exhibit_replaces_publisher_candidate",
+            reason_details=(("authority", "future-recorded SEC exhibit"),),
+            authority_observation_id="current-authority-observation",
+            replacement_document_version_id="future-recorded-document",
+        )
+
+        with pytest.raises(
+            ValueError, match="replacement document is unavailable at reconciliation cutoff"
+        ):
+            reconcile_source_coverage(conn, _request(2, withdrawals=(withdrawal,)))
+    finally:
+        conn.close()
+
+
+def test_supersession_compares_canonical_issuer_identity_at_cutoff(tmp_path: Path) -> None:
+    conn = _conn(tmp_path, target_revision="0227_issuer_reporting_registry")
+    try:
+        registry = IssuerRegistry(conn)
+        registry.persist(
+            IssuerEntity(
+                issuer_id="issuer-acme",
+                idempotency_key="issuer-acme",
+                entity_kind="operating_company",
+                created_at=STAMP,
+            )
+        )
+        for recorded_id in ("legacy-request-acme", "legacy-document-acme"):
+            registry.persist(
+                LegacyIssuerBindingRevision(
+                    binding_revision_id=f"binding:{recorded_id}",
+                    idempotency_key=f"binding:{recorded_id}",
+                    recorded_issuer_id=recorded_id,
+                    revision=1,
+                    issuer_id="issuer-acme",
+                    outcome="selected",
+                    decision_kind="deterministic",
+                    reason_code="test_canonical_identity",
+                    reason_details=(("fixture", recorded_id),),
+                    material_dissent=False,
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                    supersedes_binding_revision_id=None,
+                )
+            )
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            SourceObservation(
+                observation_id="canonical-authority-observation",
+                idempotency_key="canonical-authority-observation",
+                source_kind="sec",
+                source_url="https://www.sec.gov/Archives/canonical-exhibit.htm",
+                blob_sha256=A,
+                source_published_at=None,
+                filing_at=STAMP,
+                accepted_at=STAMP,
+                observed_at=STAMP,
+                retrieved_at=STAMP,
+                retrieval_config_sha256=B,
+                collector_code_version="sec-native@1",
+            )
+        )
+        ledger.persist(
+            DocumentVersion(
+                document_version_id="canonical-authority-document",
+                document_key="canonical-authority-document",
+                version_sequence=1,
+                observation_id="canonical-authority-observation",
+                blob_sha256=A,
+                issuer_id="legacy-document-acme",
+                ticker="ACME",
+                document_type="press_release",
+                form_type="EX-99.1",
+                accession_number="0000000001-26-000005",
+                exhibit_id="EX-99.1",
+                language="en",
+                recorded_at=STAMP,
+            )
+        )
+        conn.commit()
+        reconcile_source_coverage(
+            conn,
+            _request(
+                1,
+                expected_documents=(_expected(),),
+                issuer_id="legacy-request-acme",
+            ),
+        )
+        withdrawal = ExpectedDocumentWithdrawalImport(
+            expected_document_key="ACME:2026Q1:10-Q",
+            status="superseded_by_authority",
+            reason_code="sec_exhibit_replaces_publisher_candidate",
+            reason_details=(("authority", "canonical SEC exhibit"),),
+            authority_observation_id="canonical-authority-observation",
+            replacement_document_version_id="canonical-authority-document",
+        )
+
+        reconcile_source_coverage(
+            conn,
+            _request(2, withdrawals=(withdrawal,), issuer_id="legacy-request-acme"),
+        )
+
+        assert conn.execute(
+            "SELECT status FROM v_expected_document_lifecycle_current"
+        ).fetchone() == ("superseded_by_authority",)
     finally:
         conn.close()

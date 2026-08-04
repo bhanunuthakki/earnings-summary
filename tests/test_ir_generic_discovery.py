@@ -215,6 +215,32 @@ def test_inventory_requires_explicit_authority_for_cross_host_files() -> None:
     assert not inventory.authority_complete
 
 
+def test_press_release_listing_page_is_navigation_not_a_document() -> None:
+    root = "https://ir.rubrik.com/"
+    listing = "https://ir.rubrik.com/news-events/press-releases/default.aspx"
+    release = "https://ir.rubrik.com/news-events/press-releases/detail/2026-results.aspx"
+    renderer = _Renderer(
+        {
+            root: [
+                (listing, "Press Releases"),
+                (release, "Rubrik Announces Fourth Quarter and Fiscal 2026 Results"),
+            ],
+            listing: [],
+        }
+    )
+
+    inventory = discover_document_inventory(
+        ir_url=root,
+        render=renderer,
+        fetch_filename=_no_fetch,
+        rate_limit_s=0,
+        check_robots=False,
+    )
+
+    assert [candidate.url for candidate in inventory.candidates] == [release]
+    assert listing in renderer.calls
+
+
 def test_precise_to_candidates_maps_aliases() -> None:
     cands = precise_to_candidates(
         {"deck": "u-deck", "spreadsheet": "u-sheet", "transcript": "u-tx"}, "rc"
