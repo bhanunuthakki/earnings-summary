@@ -7,6 +7,15 @@
     "edgar": "26.1",
     "xule": "30052"
   },
+  "build_provenance": {
+    "python": "3.13.11",
+    "arelle_git_commit": "9c1ce7e70d270385c723b185020a91416d724715",
+    "arelle_wheel_sha256": "eb2511bf95ad34c94441282b7e683c637ee73cd45b76b6649c9a35ca858e603a",
+    "edgar_git_commit": "99e94b6c6f5ca2ef06a9c2f29b0a4290a7f959db",
+    "xule_git_commit": "40f774ced269ee6637a96d51db244efd6337e689",
+    "bridge_source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "launcher_source_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
   "execution": {
     "isolated_python": true,
     "internet_connectivity": "os_denied",

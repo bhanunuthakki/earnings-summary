@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlparse
 from pydantic import BaseModel, ConfigDict, Field
 
 from filings.inline_xbrl_processor import (
+    ApprovedProcessorBundle,
     InlineXbrlProcessorRequest,
     InlineXbrlProcessorResult,
     ProcessorBundleManifest,
@@ -79,8 +80,11 @@ def ingest_sec_filing_xbrl(
     conn: sqlite3.Connection,
     request: FilingXbrlIngestRequest,
     *,
-    manifest: ProcessorBundleManifest,
+    approved_bundle: ApprovedProcessorBundle,
 ) -> FilingXbrlIngestResult:
+    if not isinstance(cast(object, approved_bundle), ApprovedProcessorBundle):
+        raise ValueError("filing-XBRL ingest requires an approved processor bundle")
+    manifest = approved_bundle.manifest
     captured = load_captured_sec_filing_package(
         conn,
         inventory_key=request.inventory_key,
@@ -117,7 +121,7 @@ def ingest_sec_filing_xbrl(
             expected_cik=request.expected_cik,
             package_member_set_sha256=member_set_sha,
         ),
-        manifest=manifest,
+        approved_bundle=approved_bundle,
         runtime_root=request.runtime_root,
         bundle_python=request.bundle_python,
         sandbox_launcher=request.sandbox_launcher,
