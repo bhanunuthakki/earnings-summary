@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
@@ -22,6 +23,44 @@ from provenance.latest_state_activation import (
     audit_candidate_coverage,
     audit_governed_candidate,
 )
+
+
+def test_compressed_size_treats_low_dword_as_unsigned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "compressed.db"
+    path.write_bytes(b"x")
+
+    class _GetCompressedFileSize:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, _path: str, high_pointer: object) -> int:
+            del high_pointer
+            if self.restype is ctypes.c_uint32:
+                return 0xFF423000
+            return ctypes.c_int32(0xFF423000).value
+
+    class _Kernel32:
+        GetCompressedFileSizeW = _GetCompressedFileSize()
+
+    def fake_win_dll(_name: str, *, use_last_error: bool) -> _Kernel32:
+        del use_last_error
+        return _Kernel32()
+
+    def fake_set_last_error(_value: int) -> None:
+        return None
+
+    monkeypatch.setattr(
+        clone_module.ctypes,
+        "WinDLL",
+        fake_win_dll,
+    )
+    monkeypatch.setattr(clone_module.ctypes, "set_last_error", fake_set_last_error)
+    monkeypatch.setattr(clone_module.ctypes, "get_last_error", lambda: 0)
+
+    assert clone_module._compressed_size(path) == 0xFF423000
 
 
 def _sha256(path: Path) -> str:
