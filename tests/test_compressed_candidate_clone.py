@@ -59,8 +59,18 @@ def test_compressed_size_treats_low_dword_as_unsigned(
         fake_win_dll,
         raising=False,
     )
-    monkeypatch.setattr(clone_module.ctypes, "set_last_error", fake_set_last_error)
-    monkeypatch.setattr(clone_module.ctypes, "get_last_error", lambda: 0)
+    monkeypatch.setattr(
+        clone_module.ctypes,
+        "set_last_error",
+        fake_set_last_error,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        clone_module.ctypes,
+        "get_last_error",
+        lambda: 0,
+        raising=False,
+    )
 
     assert clone_module._compressed_size(path) == 0xFF423000
 
