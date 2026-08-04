@@ -1,9 +1,9 @@
 {
   "schema_version": "filing-xbrl-bundle-approval/v1",
-  "manifest_sha256": "ce538af8dacab683da6ad3f1f534f760d91c8b755c360b1d0971e7ca9dd3a789",
-  "manifest_artifact_sha256": "05b4e60bcdc4ac447b6c3e54c3b448eea3ae5626504c24948014d80ab6d18dcb",
-  "runtime_artifact_sha256": "345bd63c4ab58b4fd0b06c7b73ea8b799abf812baaad3469b5d310c7dc630c77",
+  "manifest_sha256": "122183bde923bee794229f934f6769502029476a81be783be510b16e58b94afe",
+  "manifest_artifact_sha256": "4fa530ffba968a25c6457106877cb428aed9fba3774373dde2c973172cfa34a8",
+  "runtime_artifact_sha256": "ac5e38b248bff7bc031f654b085d376b69ce6413709b7292f338663cdd9eed7d",
   "sandbox_launcher_sha256": "e275726019dfcf8c67dfa131a5fad9538643bbdb62b6c1f1137bca8ad54ea716",
-  "bridge_source_sha256": "67d1951e23daa09144eddcac64c08030b40577fdebc7c5ed12dd81ccd7092f0f",
+  "bridge_source_sha256": "85a048978eacd410def667d3e8a9ca1c5eff87f7df5bc86f70376e54b22a67bc",
   "launcher_source_sha256": "831e2d4636990272aec6cddacb8f177c2d236dd0a2a998c3dc265f7b2cdc77ae"
 }

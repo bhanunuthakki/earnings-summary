@@ -26,7 +26,7 @@ _PROTOCOL = "filing-xbrl-bridge.v1"
 _SANDBOX_CONTRACT = "earnings-xbrl-os-sandbox.v1"
 _COORDINATES = {"arelle": "2.39.8", "edgar": "26.1", "xule": "30052"}
 _SHA256_LENGTH = 64
-JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+JsonValue: TypeAlias = bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"] | None
 
 
 class _Session(Protocol):
