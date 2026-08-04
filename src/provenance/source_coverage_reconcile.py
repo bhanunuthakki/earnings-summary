@@ -18,6 +18,11 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from provenance.issuer_registry import (
+    IdentifierType,
+    IssuerRegistry,
+    UnresolvedIssuerIdentityError,
+)
 from provenance.search_index_lineage import sealed_index_lineage
 from provenance.source_coverage import (
     CoverageAssessment,
@@ -139,6 +144,12 @@ class ExpectedDocumentWithdrawalImport(_ClosedModel):
     status: Literal["withdrawn_by_authority", "superseded_by_authority"]
     reason_code: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
     reason_details: tuple[tuple[str, str], ...] = Field(min_length=1)
+    authority_observation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    replacement_document_version_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+    )
 
     @model_validator(mode="after")
     def _validate_details(self) -> Self:
@@ -147,6 +158,16 @@ class ExpectedDocumentWithdrawalImport(_ClosedModel):
             raise ValueError("withdrawal reason details require non-empty values")
         if len(keys) != len(set(keys)):
             raise ValueError("withdrawal reason detail keys must be unique")
+        if self.status == "superseded_by_authority":
+            if (
+                self.authority_observation_id is None
+                or self.replacement_document_version_id is None
+            ):
+                raise ValueError(
+                    "authority supersession requires its replacement document and observation"
+                )
+        elif self.replacement_document_version_id is not None:
+            raise ValueError("only authority supersession may identify a replacement document")
         return self
 
 
@@ -459,6 +480,7 @@ def _expectation_lifecycle(
                 "expected"
             )
             document_id = current_by_key[key].expected_document_id
+            authority_observation_id = request.source_observation_id
             reason_code = "authority_inventory_current"
             reason_details = (("snapshot_revision", str(request.revision)),)
         else:
@@ -466,7 +488,15 @@ def _expectation_lifecycle(
             status = withdrawal.status
             document_id = None
             reason_code = withdrawal.reason_code
-            reason_details = withdrawal.reason_details
+            authority_observation_id = (
+                withdrawal.authority_observation_id or request.source_observation_id
+            )
+            reason_details = _validated_withdrawal_details(
+                conn,
+                request=request,
+                withdrawal=withdrawal,
+                authority_observation_id=authority_observation_id,
+            )
         semantic = {
             "inventory_key": request.inventory_key,
             "expected_document_key": key,
@@ -474,7 +504,7 @@ def _expectation_lifecycle(
             "revision": lifecycle_revision,
             "status": status,
             "expected_document_id": document_id,
-            "authority_observation_id": request.source_observation_id,
+            "authority_observation_id": authority_observation_id,
             "reason_code": reason_code,
             "reason_details": reason_details,
             "effective_at": request.completed_at,
@@ -493,7 +523,7 @@ def _expectation_lifecycle(
                 revision=lifecycle_revision,
                 status=status,
                 expected_document_id=document_id,
-                authority_observation_id=request.source_observation_id,
+                authority_observation_id=authority_observation_id,
                 reason_code=reason_code,
                 reason_details=reason_details,
                 effective_at=request.completed_at,
@@ -503,6 +533,56 @@ def _expectation_lifecycle(
             )
         )
     return tuple(records)
+
+
+def _validated_withdrawal_details(
+    conn: sqlite3.Connection,
+    *,
+    request: SourceCoverageImport,
+    withdrawal: ExpectedDocumentWithdrawalImport,
+    authority_observation_id: str,
+) -> tuple[tuple[str, str], ...]:
+    observation = conn.execute(
+        "SELECT retrieved_at FROM evidence_source_observations WHERE observation_id = ?",
+        (authority_observation_id,),
+    ).fetchone()
+    if observation is None:
+        raise ValueError("withdrawal authority observation does not exist")
+    if _timeline(datetime.fromisoformat(str(observation[0]))) > _timeline(request.reconciled_at):
+        raise ValueError("withdrawal authority observation is unavailable at reconciliation cutoff")
+    replacement_id = withdrawal.replacement_document_version_id
+    if replacement_id is None:
+        return withdrawal.reason_details
+    replacement = conn.execute(
+        "SELECT observation_id, issuer_id, recorded_at FROM evidence_document_versions "
+        "WHERE document_version_id = ?",
+        (replacement_id,),
+    ).fetchone()
+    if replacement is None:
+        raise ValueError("authority supersession replacement document does not exist")
+    if _timeline(datetime.fromisoformat(str(replacement[2]))) > _timeline(request.reconciled_at):
+        raise ValueError(
+            "authority supersession replacement document is unavailable at reconciliation cutoff"
+        )
+    if str(replacement[0]) != authority_observation_id:
+        raise ValueError("authority supersession observation does not own the replacement")
+    expected_issuer = _supersession_canonical_issuer_id(
+        conn,
+        request.issuer_id,
+        request.reconciled_at,
+    )
+    replacement_issuer = _supersession_canonical_issuer_id(
+        conn,
+        str(replacement[1]),
+        request.reconciled_at,
+    )
+    if replacement_issuer != expected_issuer:
+        raise ValueError("authority supersession replacement crosses issuer identity")
+    return (
+        *withdrawal.reason_details,
+        ("replacement_document_version_id", replacement_id),
+        ("replacement_authority_observation_id", authority_observation_id),
+    )
 
 
 def _inventory_component(
@@ -861,18 +941,59 @@ def _canonical_issuer_id(conn: sqlite3.Connection, issuer_id: str, reconciled_at
     return str(resolved[1])
 
 
-def _authority_identifier(issuer_id: str) -> tuple[str, str] | None:
+def _supersession_canonical_issuer_id(
+    conn: sqlite3.Connection,
+    issuer_id: str,
+    reconciled_at: datetime,
+) -> str:
+    """Resolve supersession ownership through the canonical cutoff-aware registry."""
+
+    if not _table_exists(conn, "issuer_entities"):
+        # Historical schemas predate canonical issuer identity. Their immutable
+        # evidence IDs remain the only available ownership boundary.
+        return issuer_id
+    direct = conn.execute(
+        "SELECT issuer_id FROM issuer_entities WHERE issuer_id = ? AND created_at <= ?",
+        (issuer_id, reconciled_at),
+    ).fetchone()
+    if direct is not None:
+        return str(direct[0])
+    registry = IssuerRegistry(conn)
+    try:
+        authority_identity = _authority_identifier(issuer_id)
+        if authority_identity is None:
+            canonical = registry.canonicalize_recorded_issuer(
+                issuer_id,
+                knowledge_at=reconciled_at,
+            )
+        else:
+            canonical = registry.resolve_identifier(
+                authority_identity[0],
+                authority_identity[1],
+                knowledge_at=reconciled_at,
+            )
+    except UnresolvedIssuerIdentityError as exc:
+        raise ValueError(
+            "authority supersession issuer identity is unresolved at reconciliation cutoff"
+        ) from exc
+    if canonical.material_dissent:
+        raise ValueError(
+            "authority supersession issuer identity has material dissent at reconciliation cutoff"
+        )
+    return canonical.issuer_id
+
+
+def _authority_identifier(issuer_id: str) -> tuple[IdentifierType, str] | None:
     prefix, separator, value = issuer_id.partition(":")
     if not separator or not value:
         return None
-    identifier_type = {
-        "sec-cik": "sec_cik",
-        "sec_cik": "sec_cik",
-        "lei": "lei",
-        "sedar-profile": "sedar_profile",
-        "sedar_profile": "sedar_profile",
-    }.get(prefix)
-    return None if identifier_type is None else (identifier_type, value)
+    if prefix in {"sec-cik", "sec_cik"}:
+        return "sec_cik", value
+    if prefix == "lei":
+        return "lei", value
+    if prefix in {"sedar-profile", "sedar_profile"}:
+        return "sedar_profile", value
+    return None
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
