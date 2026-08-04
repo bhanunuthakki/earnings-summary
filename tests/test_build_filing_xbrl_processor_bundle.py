@@ -29,6 +29,12 @@ _load_approved_bundle_for_test = cast(
 )
 
 
+def _write_offline_cache(runtime: Path) -> None:
+    cache_member = runtime / "offline-cache" / "https" / "taxonomy.example" / "2026.xsd"
+    cache_member.parent.mkdir(parents=True)
+    cache_member.write_bytes(b"sealed taxonomy")
+
+
 def test_bundle_builder_seals_full_runtime_and_exact_replay(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     python = runtime / "Scripts" / "python.exe"
@@ -38,6 +44,7 @@ def test_bundle_builder_seals_full_runtime_and_exact_replay(tmp_path: Path) -> N
         ROOT / "execution" / "filing_xbrl_bridge.py",
         runtime / "earnings_summary_xbrl_bridge.py",
     )
+    _write_offline_cache(runtime)
     launcher = tmp_path / "launcher.exe"
     launcher.write_bytes(b"launcher")
     output = tmp_path / "qualified.json"
@@ -53,16 +60,40 @@ def test_bundle_builder_seals_full_runtime_and_exact_replay(tmp_path: Path) -> N
 
     assert first.published is True
     assert second.published is False
-    assert first.runtime_member_count == 2
+    assert first.runtime_member_count == 3
     sealed = load_processor_bundle_manifest(output)
     assert sealed.execution.runtime_artifact_sha256 == first.runtime_artifact_sha256
     assert [member.relative_path for member in sealed.execution.runtime_members] == [
         "Scripts/python.exe",
         "earnings_summary_xbrl_bridge.py",
+        "offline-cache/https/taxonomy.example/2026.xsd",
     ]
     assert json.loads(output.read_text())["execution"]["sandbox_launcher_sha256"] == (
         first.sandbox_launcher_sha256
     )
+
+
+def test_bundle_builder_rejects_missing_offline_taxonomy_cache(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    python = runtime / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
+    shutil.copyfile(
+        ROOT / "execution" / "filing_xbrl_bridge.py",
+        runtime / "earnings_summary_xbrl_bridge.py",
+    )
+    launcher = tmp_path / "launcher.exe"
+    launcher.write_bytes(b"launcher")
+
+    with pytest.raises(ValueError, match="offline taxonomy cache"):
+        build_filing_xbrl_processor_bundle(
+            FilingXbrlBundleBuildRequest(
+                template=ROOT / "config" / "filing_xbrl_processor_bundle.json",
+                runtime_root=runtime,
+                sandbox_launcher=launcher,
+                output=tmp_path / "qualified.json",
+            )
+        )
 
 
 def test_bundle_builder_rejects_mutable_bytecode(tmp_path: Path) -> None:
@@ -100,6 +131,7 @@ def test_approved_bundle_loader_rejects_unsealed_manifest(tmp_path: Path) -> Non
         ROOT / "execution" / "filing_xbrl_bridge.py",
         runtime / "earnings_summary_xbrl_bridge.py",
     )
+    _write_offline_cache(runtime)
     launcher = tmp_path / "launcher.exe"
     launcher.write_bytes(b"launcher")
     output = tmp_path / "qualified.json"

@@ -106,6 +106,8 @@ def build_filing_xbrl_processor_bundle(
     members_tuple = tuple(members)
     if not members_tuple:
         raise ValueError("bundle runtime is empty")
+    if not any(member.relative_path.startswith("offline-cache/") for member in members_tuple):
+        raise ValueError("bundle runtime has no sealed offline taxonomy cache")
     if tuple(member.relative_path for member in members_tuple) != tuple(
         sorted(member.relative_path for member in members_tuple)
     ):
