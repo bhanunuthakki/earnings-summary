@@ -52,10 +52,12 @@ def test_compressed_size_treats_low_dword_as_unsigned(
     def fake_set_last_error(_value: int) -> None:
         return None
 
+    monkeypatch.delattr(clone_module.ctypes, "WinDLL", raising=False)
     monkeypatch.setattr(
         clone_module.ctypes,
         "WinDLL",
         fake_win_dll,
+        raising=False,
     )
     monkeypatch.setattr(clone_module.ctypes, "set_last_error", fake_set_last_error)
     monkeypatch.setattr(clone_module.ctypes, "get_last_error", lambda: 0)
