@@ -30,7 +30,7 @@ from provenance.immutable_artifact import publish_text_no_clobber
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR = "0271_disclosure_thesis_materiality"
-HEAD = "0272_archive_generation_catalog"
+HEAD = "0273_post_earnings_readout_budget"
 STAMP = datetime(2026, 8, 2, 22, 0, tzinfo=UTC)
 EMPTY_REFERENCE_ROOT = sha256(b"[]").hexdigest()
 

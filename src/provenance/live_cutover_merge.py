@@ -32,9 +32,10 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 # Bumped through 0272 (2026-08-02). Migrations 0261-0269 add the governed
 # latest-state and population-operation planes; 0262 adds the live-operational
 # news_events table. 0270-0271 add no tables. 0272 adds the three operational
-# archive-publication catalog tables. The closed registry remains explicit so
-# a future migration cannot silently inherit an authority class.
-_AUTHORITY_SCHEMA_REVISION = "0272_archive_generation_catalog"
+# archive-publication catalog tables. 0273 seeds a budget row and adds no tables.
+# The closed registry remains explicit so a future migration cannot silently
+# inherit an authority class.
+_AUTHORITY_SCHEMA_REVISION = "0273_post_earnings_readout_budget"
 _AUTHORITY_SCHEMA_TABLE_COUNT = 332
 GOVERNED_TABLES_0259: frozenset[str] = frozenset(
     [

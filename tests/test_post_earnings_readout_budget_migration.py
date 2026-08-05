@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import runpy
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
-from alembic.config import Config
-
-from alembic import command
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0272_archive_generation_catalog"
-HEAD = "0273_post_earnings_readout_budget"
-
+_MIGRATION = runpy.run_path(
+    str(PROJECT_ROOT / "alembic" / "versions" / "0273_post_earnings_readout_budget.py")
+)
 _PRE_DDL = """
 CREATE TABLE llm_budgets (
     purpose TEXT PRIMARY KEY,
@@ -27,14 +30,19 @@ CREATE TABLE llm_budgets (
 """
 
 
-def _config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
+def _invoke_migration(db: Path, operation: str) -> None:
+    migration_fn = cast("Callable[[], None]", _MIGRATION[operation])
+    engine = sa.create_engine(f"sqlite:///{db}")
+    try:
+        with engine.begin() as connection:
+            context = MigrationContext.configure(connection)
+            with Operations.context(context):
+                migration_fn()
+    finally:
+        engine.dispose()
 
 
-def _migrated_db(tmp_path: Path) -> Path:
+def test_upgrade_seeds_skip_mode_budget_and_downgrade_is_scoped(tmp_path: Path) -> None:
     db = tmp_path / "readout-budget.db"
     conn = sqlite3.connect(db)
     try:
@@ -47,14 +55,8 @@ def _migrated_db(tmp_path: Path) -> Path:
         conn.commit()
     finally:
         conn.close()
-    cfg = _config(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, HEAD)
-    return db
 
-
-def test_upgrade_seeds_skip_mode_budget_and_downgrade_is_scoped(tmp_path: Path) -> None:
-    db = _migrated_db(tmp_path)
+    _invoke_migration(db, "upgrade")
     conn = sqlite3.connect(db)
     try:
         row = conn.execute(
@@ -65,7 +67,7 @@ def test_upgrade_seeds_skip_mode_budget_and_downgrade_is_scoped(tmp_path: Path) 
     finally:
         conn.close()
 
-    command.downgrade(_config(db), PRIOR_HEAD)
+    _invoke_migration(db, "downgrade")
     conn = sqlite3.connect(db)
     try:
         assert (
