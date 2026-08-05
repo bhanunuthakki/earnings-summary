@@ -222,6 +222,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # the next in-window run — bump ONLY when _PROMPT_HEADER / the section
     # assembly is materially rewritten.
     "pre_earnings_brief": "v1",
+    # Persisted post-earnings readout (src/earnings_readout.py). A version bump
+    # supersedes within each reported period on its next generation/request.
+    "post_earnings_readout": "v1",
     # Rubric-audited prose purposes (Chip 2). Bump when the generating prompt
     # in llm_client.extract_qa_vs_prepared_themes / generate_qa_topics is
     # materially rewritten and re-run `run_llm_evals.py --purpose <p>`.

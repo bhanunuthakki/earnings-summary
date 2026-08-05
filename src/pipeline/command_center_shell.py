@@ -2832,6 +2832,31 @@ SHELL_JS = r"""
   // fetch follows it and the body is simply discarded.)
   if (peekBody) peekBody.addEventListener('click', function (ev) {
     if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+    var readoutBtn = ev.target.closest
+      ? ev.target.closest('button[data-generate-readout]') : null;
+    if (readoutBtn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (readoutBtn.disabled) return;
+      CCAction.busy(readoutBtn, 'Generating…');
+      fetch('/api/earnings-readout/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker: readoutBtn.getAttribute('data-generate-readout') })
+      }).then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+      }).then(function (r) {
+        if (!r.ok) throw new Error((r.body && r.body.error) || ('HTTP ' + r.status));
+        if (peekFragUrl) loadPeek(peekFragUrl, null);
+      }).catch(function (e) {
+        CCAction.release(readoutBtn);
+        var d = document.createElement('div');
+        d.className = 'cc-empty';
+        d.textContent = 'Readout generation failed (' + e.message + ').';
+        peekBody.insertBefore(d, peekBody.firstChild);
+      });
+      return;
+    }
     var a = ev.target.closest ? ev.target.closest('a[href^="/approve"]') : null;
     if (!a) return;
     ev.preventDefault();

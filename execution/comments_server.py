@@ -3537,6 +3537,52 @@ def create_app(
         attested = attest_review_changed(db_path, memo_id)
         return {"memo_id": memo_id, "ok": True, "attested": attested}
 
+    @app.route("/api/earnings-readout/generate", methods=["POST", "OPTIONS"])
+    def generate_earnings_readout_api():
+        """Persist the latest reported-quarter readout on explicit request.
+
+        Evaluation names can reach the paid path only through this owner action;
+        the scheduled generator's query remains structurally portfolio-only.
+        """
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from earnings_readout import (
+            BUDGET_SKIPPED,
+            ReadoutUnavailableError,
+            generate_for_ticker,
+        )
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        try:
+            ticker = ticker_validation.safe_ticker(str(body.get("ticker") or ""))
+        except ValueError:
+            return ({"error": "valid ticker required"}, 400)
+        try:
+            outcome = generate_for_ticker(db_path, repo_root, ticker)
+        except ReadoutUnavailableError as exc:
+            return ({"error": str(exc)}, 404)
+        except Exception:
+            app.logger.exception(
+                "post_earnings_readout_request_failed",
+                extra={"ticker": ticker, "correlation_id": get_correlation_id()},
+            )
+            return (
+                {
+                    "error": "readout generation failed; retry the request",
+                    "correlation_id": get_correlation_id(),
+                },
+                503,
+            )
+        payload = {
+            "status": outcome.status,
+            "ticker": outcome.ticker,
+            "fiscal_period": outcome.fiscal_period,
+            "artifact_id": outcome.artifact_id,
+        }
+        if outcome.status == BUDGET_SKIPPED:
+            return ({**payload, "error": "monthly readout budget exhausted"}, 409)
+        return payload
+
     register_content_routes(
         app,
         ContentRouteContext(

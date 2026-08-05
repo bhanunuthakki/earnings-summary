@@ -374,6 +374,11 @@ LLM_MODELS: dict[str, str] = {
     # alert-firing judgment. ≤2 calls per name per earnings cycle (artifact
     # input-hash cache + T-1 refresh gate), budget 'skip' mode ($5/mo, 0260).
     "pre_earnings_brief": DEFAULT_MODEL,
+    # Post-earnings readout (src/earnings_readout.py): the same long-context
+    # analytical-writing tier, persisted per selected transcript period_end.
+    # Scheduled scope is portfolio-only; evaluation names are explicit-request
+    # only. Input-hash caching makes unchanged quarters free.
+    "post_earnings_readout": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,

@@ -168,10 +168,10 @@ def render_diet_panel(db_path: Path) -> str:
 # ruling 2026-07-30: the diet should be pre/post-ER readouts grounded in real
 # data, the transcript, and the thesis — not headline aggregation). One row
 # per book name (portfolio + evaluation), soonest-reporting first. Both chips
-# are JIT doorways (D2: the label IS the deliverable; NOTHING pre-generates):
-# the pre-ER chip opens the existing earnings-prep peek, the post-ER chip the
-# earnings-readout peek — each assembled at click time with an "ask" doorway
-# for the full LLM narrative.
+# are doorways into deterministic templates. The pre-ER artifact pre-generates
+# for portfolio + owner-opted evaluation names; the post-ER artifact
+# pre-generates for portfolio names only, while evaluation names require the
+# explicit generate action inside the readout peek.
 # ---------------------------------------------------------------------------
 
 
@@ -199,7 +199,8 @@ def _readouts_section(db_path: Path, list_types: dict[str, str], today: date) ->
         '<div class="diet-sec first"><h3 class="diet-sec-h" title="The reading lane: '
         "pre-ER prep and post-ER readouts on your book. Pre-ER briefs pre-generate in "
         "the earnings week for every held name and for evaluation names you switch on "
-        '(auto-brief); everything else assembles on demand.">Earnings readouts</h3>'
+        "(auto-brief). Post-ER artifacts pre-generate only for held names; evaluation "
+        'names generate only on explicit request.">Earnings readouts</h3>'
     )
     book = sorted(t for t, lt in list_types.items() if lt in _BOOK_PRIORITY)
     if not book:
@@ -276,7 +277,8 @@ def _readout_row(
         f'data-peek-url="/api/peek/earnings-readout?ticker={tq}" '
         f'data-peek-title="Post-ER readout — {tq}" '
         'title="Post-earnings readout — actuals vs what you track, the transcript, '
-        'and the thesis, assembled on demand">post-ER readout</button>'
+        'and the thesis; persisted automatically for held names and on request for evaluations">'
+        "post-ER readout</button>"
     )
     # The auto-brief opt-in (0260) is an EVALUATION-name choice: held names are
     # always in the generator's scope, so their row carries no toggle.

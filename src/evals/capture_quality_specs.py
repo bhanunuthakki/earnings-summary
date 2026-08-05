@@ -607,6 +607,14 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "A generic preview, an invented figure, or ignoring the owner's stated watch items.",
     ),
     _q(
+        "post_earnings_readout",
+        "P2",
+        "cold",
+        "synthesis",
+        "Update the owner's thesis from one reported quarter using actuals, transcript evidence, and open watch items.",
+        "An invented figure or quote, blurred fact-versus-inference, or no falsifiable next-quarter checks.",
+    ),
+    _q(
         "presentation_brief",
         "P2",
         "cold",

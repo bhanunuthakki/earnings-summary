@@ -62,8 +62,8 @@ def test_registered_eval_mode_debt_is_fully_paid_down(tmp_path: Path) -> None:
 
 
 def test_specs_are_prioritized_and_performance_bounded() -> None:
-    # 74 legacy purposes + lens:* + pre_earnings_brief + disclosure_thesis_materiality.
-    assert len(CAPTURE_QUALITY_SPECS) == 77
+    # 74 legacy purposes + lens:* + pre/post earnings + disclosure thesis materiality.
+    assert len(CAPTURE_QUALITY_SPECS) == 78
     assert CAPTURE_QUALITY_SPECS[CAPTURE_QUALITY_PURPOSES[0]].priority == "P0"
     assert CAPTURE_QUALITY_SPECS[CAPTURE_QUALITY_PURPOSES[0]].traffic_tier == "hot"
     assert CAPTURE_QUALITY_SPECS["saydo_commitment_extract"].priority == "P0"

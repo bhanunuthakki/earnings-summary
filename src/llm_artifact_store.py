@@ -603,6 +603,45 @@ def history(
         conn.close()
 
 
+def quarter_index(
+    *,
+    ticker: str,
+    purpose: str,
+    scope: str = "ticker",
+    limit: int = 40,
+    db_path: Path | str | None = None,
+) -> list[Artifact]:
+    """Return the current artifact for each fiscal period, newest period first.
+
+    ``history`` stays scoped to one logical period and returns its supersession
+    chain. This reader is the orthogonal ticker x quarter index: it omits
+    superseded rows and spans every non-null fiscal period for the purpose.
+    """
+    conn = _open(db_path)
+    if conn is None:
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT * FROM llm_artifacts
+            WHERE COALESCE(ticker,'') = COALESCE(?, '')
+              AND scope = ? AND purpose = ?
+              AND fiscal_period IS NOT NULL
+              AND superseded_by_id IS NULL
+            ORDER BY fiscal_period DESC, generated_at DESC
+            LIMIT ?
+            """,
+            (ticker, scope, purpose, int(limit)),
+        ).fetchall()
+        return [_row_to_artifact(row) for row in rows]
+    except sqlite3.Error as exc:
+        log.warning({"event": "artifact_quarter_index_failed", "error": str(exc)})
+        return []
+    finally:
+        conn.close()
+
+
 def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     """Open a connection or return None when the DB or table is unavailable.
     Best-effort pattern matches llm_call_ledger so the LLM pipeline never

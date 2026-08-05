@@ -1377,10 +1377,16 @@ def test_earnings_prep_peek_ignores_brief_for_other_er_date(repo: Path, db_path:
 # --------------------------------------------------------------------------- #
 
 
-def _seed_readout_ticker(db_path: Path, ticker: str = "NU") -> None:
+def _seed_readout_ticker(
+    db_path: Path, ticker: str = "NU", *, list_type: str = "portfolio"
+) -> None:
     _seed_prep_ticker(db_path, ticker)
     conn = sqlite3.connect(str(db_path))
     try:
+        conn.execute(
+            "UPDATE tracked_companies SET list_type = ? WHERE ticker = ?",
+            (list_type, ticker),
+        )
         conn.execute(
             "CREATE TABLE IF NOT EXISTS earnings_surprises (ticker TEXT, release_date TEXT, "
             "eps_estimate TEXT, eps_actual TEXT, eps_surprise_pct TEXT, "
@@ -1391,6 +1397,44 @@ def _seed_readout_ticker(db_path: Path, ticker: str = "NU") -> None:
             "eps_surprise_pct, revenue_estimate, revenue_actual, revenue_surprise_pct) "
             "VALUES (?, '2026-07-20', '0.12', '0.15', '25.0', '3.1B', '3.0B', '-3.2')",
             (ticker,),
+        )
+        conn.execute(
+            "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256, "
+            "fetched_at, fetch_status, raw_bytes_size, source_url) VALUES "
+            "(9000, ?, 'transcript', 'earnings_call', 'transcript.txt', ?, "
+            "'2026-07-20', 'ok', 100, 'https://example.test/transcript')",
+            (ticker, "a" * 64),
+        )
+        conn.executescript(
+            "CREATE TABLE IF NOT EXISTS transcripts ("
+            "id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, ticker TEXT NOT NULL, "
+            "call_date TEXT, fiscal_period_type TEXT, period_end TEXT, source_url TEXT);"
+            "CREATE TABLE IF NOT EXISTS transcript_segments ("
+            "id INTEGER PRIMARY KEY, transcript_id INTEGER NOT NULL, seq INTEGER NOT NULL, "
+            "speaker TEXT, speaker_role TEXT, time_code_start TEXT, time_code_end TEXT, "
+            "text TEXT NOT NULL);"
+            "CREATE TABLE IF NOT EXISTS llm_artifacts ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, "
+            "scope TEXT NOT NULL DEFAULT 'ticker', purpose TEXT NOT NULL, "
+            "fiscal_period TEXT, content_md TEXT, content_json TEXT, "
+            "input_sha256 TEXT NOT NULL, output_sha256 TEXT, model TEXT, "
+            "prompt_version TEXT NOT NULL DEFAULT 'v1', "
+            "generated_at TIMESTAMP NOT NULL, expires_at TIMESTAMP, "
+            "superseded_by_id INTEGER, dirty INTEGER NOT NULL DEFAULT 0, "
+            "dirty_reason TEXT, source_doc_ids TEXT, parent_artifact_ids TEXT, "
+            "llm_call_id INTEGER);"
+        )
+        conn.execute(
+            "INSERT INTO transcripts (id, document_id, ticker, call_date, "
+            "fiscal_period_type, period_end, source_url) VALUES "
+            "(9000, 9000, ?, '2026-07-20', 'Q2', '2026-06-30', "
+            "'https://example.test/transcript')",
+            (ticker,),
+        )
+        conn.execute(
+            "INSERT INTO transcript_segments (transcript_id, seq, speaker, speaker_role, "
+            "time_code_start, text) VALUES "
+            "(9000, 1, 'CEO', 'executive', '00:01', 'Management discussed the quarter.')"
         )
         conn.commit()
     finally:
@@ -1428,9 +1472,11 @@ def test_earnings_readout_peek_assembles_grounded_readout(repo: Path, db_path: P
     assert "Re-check Mexico deposit ramp." in html
     # Valuation stance reused verbatim.
     assert "Valuation stance" in html
-    # The governed-LLM narrative doorway, thesis-tied and count-phrased.
-    assert "ask for the full readout" in html
-    assert "last 8 quarters" in html
+    # Missing persisted artifact: deterministic evidence remains visible and
+    # the dedicated action is the only paid doorway.
+    assert 'data-generate-readout="NU"' in html
+    assert "generate persisted readout" in html
+    assert "ask for the full readout" not in html
 
 
 def test_earnings_readout_peek_warn_status_renders_warn_toned_pill(
@@ -1463,6 +1509,45 @@ def test_earnings_readout_peek_route_serves_and_404s(client: FlaskClient, db_pat
     assert client.get("/api/peek/earnings-readout").status_code == 404
 
 
+def test_evaluation_readout_is_explicit_on_request_and_persists(
+    client: FlaskClient, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import earnings_readout
+    from llm_artifact_store import read_current
+
+    _seed_readout_ticker(db_path, list_type="evaluation")
+    before = client.get("/api/peek/earnings-readout?ticker=NU")
+    body = before.get_data(as_text=True)
+    assert "Evaluation names generate only when you request them" in body
+    assert 'data-generate-readout="NU"' in body
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        earnings_readout,
+        "call_llm",
+        lambda prompt, **kwargs: (
+            calls.append(str(kwargs["ticker"]))
+            or "## Quarter in one line\nPersisted evaluation readout."
+        ),
+    )
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *a, **k: None)
+    response = client.post("/api/earnings-readout/generate", json={"ticker": "NU"})
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "generated"
+    assert calls == ["NU"]
+    artifact = read_current(
+        ticker="NU",
+        purpose=earnings_readout.PURPOSE,
+        fiscal_period="2026-06-30",
+        db_path=db_path,
+    )
+    assert artifact is not None
+    after = client.get("/api/peek/earnings-readout?ticker=NU").get_data(as_text=True)
+    assert "Persisted evaluation readout" in after
+    assert 'data-generate-readout="NU"' not in after
+
+
 def test_earnings_readout_peek_degrades_without_quarter_data(repo: Path, db_path: Path) -> None:
     """A tracked name with no surprises/KPI/tone rows still renders the honest
     header — hide-don't-stub, never a blank or broken memo."""
@@ -1473,7 +1558,8 @@ def test_earnings_readout_peek_degrades_without_quarter_data(repo: Path, db_path
     assert html is not None
     assert "no reported quarter on record yet" in html
     assert "Vs street" not in html
-    assert "ask for the full readout" in html
+    assert "no selected quarterly transcript" in html
+    assert "data-generate-readout" not in html
 
 
 # ----------------------------------------------------------------------------

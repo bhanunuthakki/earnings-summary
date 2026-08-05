@@ -48,6 +48,7 @@ WEALTH_CONTEXT_SCRIPT = "refresh_wealth_context_snapshot.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 STANDUP_SCRIPT = "run_standup.py"
 PRE_ER_BRIEF_SCRIPT = "generate_pre_earnings_briefs.py"
+POST_ER_READOUT_SCRIPT = "generate_post_earnings_readouts.py"
 FEED_SCRIPT = "build_alert_feed.py"
 VALIDATE_SCRIPT = "run_validation_engine.py"
 
@@ -169,6 +170,7 @@ def test_all_stages_succeed(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -228,6 +230,7 @@ def test_stage1_failure_still_runs_feed(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -266,6 +269,7 @@ def test_feed_failure_still_runs_validation(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -324,6 +328,7 @@ def test_all_stages_fail_exit_code_counts_failures(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -382,6 +387,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -533,6 +539,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -569,6 +576,7 @@ def test_skip_validation_removes_only_stage3(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
     ]
     assert VALIDATE_SCRIPT not in fake.scripts
@@ -616,6 +624,22 @@ def test_stage1b_standup_runs_after_triggers_with_user_and_db_path(
     assert _has_flag(standup_argv, "--user-id", "alice")
     assert _has_flag(standup_argv, "--db-path", str(db_path))
     assert "--max-cost-usd" not in standup_argv
+
+
+def test_skip_post_earnings_readouts_removes_only_stage1d(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main(["--skip-post-earnings-readouts"])
+
+    assert rc == 0
+    assert POST_ER_READOUT_SCRIPT not in fake.scripts
+    assert PRE_ER_BRIEF_SCRIPT in fake.scripts
+    assert TRIGGERS_SCRIPT in fake.scripts
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_1d_post_earnings_readouts"] == "skipped"
 
 
 def test_standup_failure_still_runs_feed(
@@ -781,6 +805,7 @@ def test_skip_news_removes_only_stage0(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -833,6 +858,7 @@ def test_news_failure_does_not_stop_triggers(
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         PRE_ER_BRIEF_SCRIPT,
+        POST_ER_READOUT_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]

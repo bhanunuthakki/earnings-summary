@@ -2461,18 +2461,20 @@ _PREP_CSS = """
 
 
 def render_earnings_readout_peek(db_path: Path, repo_root: Path, ticker: str) -> str | None:
-    """The on-demand POST-earnings readout for one name — the counterpart of
-    :func:`render_earnings_prep_peek`, assembled at click time (D2: nothing
-    pre-generates) and grounded in what the platform actually recorded about
-    the just-reported quarter:
+    """The persisted POST-earnings readout plus its deterministic source template.
+
+    Portfolio artifacts pre-generate in the morning pipeline. Evaluation-name
+    artifacts are generated only by the explicit action rendered here. Until
+    an artifact exists, this remains a zero-token deterministic template
+    grounded in what the platform recorded about the just-reported quarter:
 
     header (last reported date + thesis breach pill) · beat/miss vs street
     (latest quarter + the 8-quarter base rate) · tier-1 KPI moves latest-vs-
     prior · the call-tone shift summary (``earnings_tone`` alert, when one
     fired) · the transcript doorway (``/source/<doc_id>``) · your open watch
     items ("did they answer it?") · what last quarter's signals queued for
-    this call · the valuation stance — then the ask-engine doorway for the
-    full LLM narrative readout. Every block is best-effort (a missing table
+    this call · the valuation stance — then the dedicated persisted-generation
+    doorway. Every block is best-effort (a missing table
     drops its block, never the memo); ``None`` (→ the route 404s) only when
     the ticker isn't a tracked, non-archived name."""
     t = (ticker or "").strip().upper()
@@ -2492,6 +2494,7 @@ def render_earnings_readout_peek(db_path: Path, repo_root: Path, ticker: str) ->
             tracked = None
         if tracked is None:
             return None
+        list_type = str(tracked[0])
         header = _readout_header(conn, t)
         surprise = _readout_surprise(conn, t)
         kpis = _readout_kpi_moves(conn, t)
@@ -2504,22 +2507,55 @@ def render_earnings_readout_peek(db_path: Path, repo_root: Path, ticker: str) ->
     watch = _prep_watch_items(db_path, t, heading="What you said to watch — did they answer it?")
     ledger = _prep_ledger_notes(db_path, t, heading="Queued for this call last quarter")
 
-    ask_q = (
-        f"Write the post-earnings readout for {t}'s most recent reported quarter: "
-        "compare the reported actuals and KPI moves to my thesis's break rules and the "
-        "KPIs I track, pull what management actually said on the call — especially where "
-        "it answers my open questions and watch items — say where the quarter confirmed "
-        "or pressured the thesis, and end with what to verify next quarter. Ground every "
-        "claim in the transcript and reported figures, last 8 quarters."
-    )
+    persisted = ""
+    quarter = None
+    try:
+        from earnings_readout import PURPOSE as _READOUT_PURPOSE
+        from earnings_readout import latest_reported_quarter
+        from llm_artifact_store import read_current
+
+        quarter = latest_reported_quarter(db_path, t)
+        art = (
+            read_current(
+                ticker=t,
+                purpose=_READOUT_PURPOSE,
+                fiscal_period=quarter.period_end,
+                db_path=db_path,
+            )
+            if quarter is not None
+            else None
+        )
+    except Exception:
+        art = None
+    if art is not None and (art.content_md or "").strip():
+        persisted = (
+            '<div class="prep-sec"><h4>Persisted post-earnings readout</h4>'
+            f'<div class="synthesis-body">{render_prose((art.content_md or "")[:30000])}</div>'
+            f'<p class="muted">quarter ended {escape(str(art.fiscal_period or ""))} · '
+            f"artifact #{art.id}</p></div>"
+        )
+
+    action = ""
+    if not persisted and quarter is not None:
+        note = (
+            "Evaluation names generate only when you request them."
+            if list_type == "evaluation"
+            else "Portfolio names also generate automatically after the morning trigger pass."
+        )
+        action = (
+            f'<button type="button" class="k-btn k-btn-primary k-btn-sm" '
+            f'data-generate-readout="{escape(t, quote=True)}">generate persisted readout</button>'
+            f'<span class="muted">{escape(note)}</span>'
+        )
+    elif quarter is None:
+        action = '<span class="muted">Cannot persist yet: no selected quarterly transcript.</span>'
     foot = (
         '<div class="cc-peek-foot">'
-        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="{escape(ask_q, quote=True)}">'
-        "ask for the full readout →</button>"
+        f"{action}"
         f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
     )
     return (
-        f'<div class="cc-prep">{header}{surprise}{kpis}{tone}{transcript}{watch}{ledger}'
+        f'<div class="cc-prep">{header}{persisted}{surprise}{kpis}{tone}{transcript}{watch}{ledger}'
         f"{valuation}</div>{foot}<style>{_PREP_CSS}</style>"
     )
 
