@@ -2,3 +2,8 @@
 # Keep them out of EOL translation so a CRLF checkout can't make the on-disk
 # bytes differ from what the harness wrote (it writes/reads LF explicitly).
 tests/golden/workspace/** -text
+
+# Approved filing-XBRL runtime source digests are byte commitments.
+execution/filing_xbrl_bridge.py text eol=lf
+execution/filing_xbrl_appcontainer_launcher.cs text eol=lf
+config/filing_xbrl_processor_approval.json text eol=lf

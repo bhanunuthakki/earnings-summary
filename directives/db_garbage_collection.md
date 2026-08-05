@@ -1,6 +1,6 @@
 # DB Garbage Collection
 
-> Status: RATIFIED 2026-07-31 (owner), amended 2026-08-02. The historical
+> Status: RATIFIED 2026-07-31 (owner), amended 2026-08-03. The historical
 > 20Q/12FY facts-depth policy remains available for read-only measurement, but
 > destructive facts-depth apply is disabled pending an immutable
 > archive-generation migration and explicit cutover. Weekly GC remains
@@ -60,6 +60,17 @@ exactly. `--apply` runs under the same run-lock / schema-preflight /
 protected-window guards as db_gc; `--drill` proves restorability into a
 throwaway schema-clone without touching main and is exercised on a schedule
 by `restore_drill.py` — a backup you have never restored is not a backup.
+
+**Legacy sidecar owner decision (2026-08-03):** an existing archive table
+without `gc_run_id` is preservation-only forensic evidence. `gc_restore`
+must not upgrade that artifact in place or bulk-reinsert it into
+`portfolio.db`; its scheduled drill verifies SQLite integrity, foreign-key
+health, content hash, and table inventory without mutation. Emergency
+`gc_restore --apply` remains available only for fully run-keyed archives.
+Future deep-history access must use the immutable, sealed read-only archive
+generation boundary below. This decision does not authorize facts-depth
+pruning, which remains disabled, and does not disable the currently supported
+validation-issues/telemetry GC policies from creating run-keyed archive rows.
 
 **Archive retention**: keep every run. Growth is slow (tens of MB/quarter
 steady-state after the one-off deep prunes); revisit with a deliberate
@@ -180,5 +191,5 @@ is authorized by a seal or receipt alone.
 1. Ratify archive root, generation interval, and operational hot-window bounds.
 2. Approve a sealed live-derived clone rehearsal and production-scale proof.
 3. Approve a separate live migration/cutover and rollback window.
-4. Decide whether old GC sidecar artifacts are imported, retained, or retired
-   after restore equivalence is proven.
+4. Define the retention and backup horizon for the preservation-only legacy GC
+   sidecar after sealed read-only archive access is operational.

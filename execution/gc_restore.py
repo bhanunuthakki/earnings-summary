@@ -1,9 +1,11 @@
-"""Restore rows from the db_gc archive sidecar back into data/portfolio.db.
+"""Restore run-keyed rows from the db_gc archive sidecar into portfolio.db.
 
-The counterpart to execution/db_gc.py's archive-then-delete: the sidecar
-(data/archive/portfolio_gc_archive.db) is append-only and run-keyed
-(UNIQUE(gc_run_id, key) per table), so restoring is classify-then-apply,
-never a bare INSERT ... SELECT:
+The current db_gc sidecar format is append-only and run-keyed
+(UNIQUE(gc_run_id, key) per table), so restoring is classify-then-apply, never
+a bare INSERT ... SELECT. A legacy sidecar without gc_run_id is preservation-
+only forensic evidence: this command will neither upgrade it in place nor
+bulk-reinsert it into the live database. ``inspect_preservation_archive``
+provides the read-only integrity/hash/inventory check for that artifact.
 
 * **restorable** — archived key absent from main: restored verbatim (columns
   copied BY NAME; main columns added since archiving default to NULL).
@@ -40,6 +42,7 @@ Structured JSON events go to stderr; stdout is one JSON report.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import sys
@@ -90,6 +93,83 @@ class GcRestoreReport(BaseModel):
     tables: list[TableRestoreReport] = Field(default_factory=list[TableRestoreReport])
 
 
+class PreservationArchiveReport(BaseModel):
+    path: str
+    size_bytes: int = Field(ge=0)
+    sha256: str
+    integrity_check: str
+    quick_check: str
+    foreign_key_violation_count: int = Field(ge=0)
+    table_row_counts: dict[str, int] = Field(default_factory=dict[str, int])
+    legacy_tables: list[str] = Field(default_factory=list[str])
+
+
+def _preservation_only_error(tables: list[str]) -> db_gc.GcAbortedError:
+    joined = ", ".join(tables)
+    return db_gc.GcAbortedError(
+        f"legacy archive table(s) {joined} predate run-keying and form a "
+        "preservation-only forensic archive by owner decision; gc_restore will "
+        "not mutate or bulk-reinsert them. Preserve the sidecar and use a sealed "
+        "read-only archive generation for historical access"
+    )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def inspect_preservation_archive(archive_path: Path) -> PreservationArchiveReport:
+    """Inspect an archive without modifying it or attaching it to a writer."""
+    resolved = archive_path.resolve(strict=True)
+    sha256_before = _sha256(resolved)
+    size_before = resolved.stat().st_size
+    conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        tables = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name != 'gc_manifest' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
+        table_row_counts = {
+            table: int(
+                conn.execute(
+                    f'SELECT COUNT(*) FROM "{table}"'  # nosec B608 -- sqlite_master identifier
+                ).fetchone()[0]
+            )
+            for table in tables
+        }
+        legacy_tables = [
+            table for table in tables if db_gc.GC_RUN_ID_COL not in _columns(conn, "main", table)
+        ]
+        integrity_check = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
+        quick_check = str(conn.execute("PRAGMA quick_check").fetchone()[0])
+        foreign_key_violation_count = len(conn.execute("PRAGMA foreign_key_check").fetchall())
+    finally:
+        conn.close()
+    sha256_after = _sha256(resolved)
+    size_after = resolved.stat().st_size
+    if sha256_before != sha256_after or size_before != size_after:
+        raise db_gc.GcAbortedError(
+            "archive changed during preservation inspection; retry in a quiescent window"
+        )
+    return PreservationArchiveReport(
+        path=str(resolved),
+        size_bytes=size_after,
+        sha256=sha256_after,
+        integrity_check=integrity_check,
+        quick_check=quick_check,
+        foreign_key_violation_count=foreign_key_violation_count,
+        table_row_counts=table_row_counts,
+        legacy_tables=legacy_tables,
+    )
+
+
 def _archive_tables(conn: sqlite3.Connection) -> list[str]:
     return [
         str(row[0])
@@ -126,10 +206,7 @@ class _TablePlan:
         self.live_schema = live_schema
         arc_cols = _columns(conn, "gcarc", table)
         if db_gc.GC_RUN_ID_COL not in arc_cols:
-            raise db_gc.GcAbortedError(
-                f"{table}: archive predates run-keying (no {db_gc.GC_RUN_ID_COL}); "
-                "run gc_restore --apply or db_gc --apply once to upgrade it in place"
-            )
+            raise _preservation_only_error([table])
         self.mirror = [c for c in arc_cols if c not in db_gc.ARCHIVE_META_COLUMNS]
         live_cols = _columns(conn, live_schema, table)
         dropped = sorted(set(self.mirror) - set(live_cols))
@@ -341,10 +418,14 @@ def run_restore(
             db_gc.attach_archive(conn, archive)
         try:
             selected = tables if tables else _archive_tables(conn)
+            legacy_tables = sorted(
+                table
+                for table in selected
+                if db_gc.GC_RUN_ID_COL not in _columns(conn, "gcarc", table)
+            )
+            if legacy_tables:
+                raise _preservation_only_error(legacy_tables)
             for table in selected:
-                if mode == "apply":
-                    # Upgrades a legacy sidecar in place and syncs columns.
-                    db_gc.sync_archive_schema(conn, table=table)
                 plan = _TablePlan(conn, table, run_filter, live_schema)
                 table_report = _classify(conn, plan, run_filter)
                 if mode == "apply":
@@ -384,7 +465,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--run", default=None, help="restore exactly this gc_run_id's rows")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--apply", action="store_true", help="write restorable rows into main")
+    mode.add_argument(
+        "--apply",
+        action="store_true",
+        help="write rows from a run-keyed archive; legacy sidecars are refused",
+    )
     mode.add_argument(
         "--drill",
         action="store_true",

@@ -11,6 +11,7 @@ does not exist.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import sqlite3
 from pathlib import Path
 
@@ -216,6 +217,24 @@ class TestArchiveDrillLeg:
         conn.close()
         return live
 
+    @staticmethod
+    def _live_with_legacy_archive(tmp_path: Path) -> Path:
+        live = tmp_path / "portfolio.db"
+        archive = live.parent / "archive" / "portfolio_gc_archive.db"
+        archive.parent.mkdir(parents=True)
+
+        live_conn = sqlite3.connect(live)
+        live_conn.execute("CREATE TABLE financial_facts (id INTEGER PRIMARY KEY, ticker TEXT)")
+        live_conn.commit()
+        live_conn.close()
+
+        archive_conn = sqlite3.connect(archive)
+        archive_conn.execute("CREATE TABLE financial_facts (id INTEGER PRIMARY KEY, ticker TEXT)")
+        archive_conn.execute("INSERT INTO financial_facts VALUES (1, 'NU')")
+        archive_conn.commit()
+        archive_conn.close()
+        return live
+
     def test_no_archive_is_vacuously_ok(self, tmp_path: Path) -> None:
         live = tmp_path / "portfolio.db"
         sqlite3.connect(live).close()
@@ -232,6 +251,23 @@ class TestArchiveDrillLeg:
         total = summary["tables_total"]
         assert isinstance(verified, int) and isinstance(total, int)
         assert verified == total >= 1
+
+    def test_legacy_archive_is_verified_as_preservation_only(self, tmp_path: Path) -> None:
+        live = self._live_with_legacy_archive(tmp_path)
+        archive = live.parent / "archive" / "portfolio_gc_archive.db"
+        before = archive.read_bytes()
+
+        ok, summary = restore_drill._drill_archive(live)
+
+        assert ok is True
+        assert summary["status"] == "preservation_only"
+        assert summary["legacy_tables"] == ["financial_facts"]
+        assert summary["integrity_check"] == "ok"
+        assert summary["quick_check"] == "ok"
+        assert summary["foreign_key_violation_count"] == 0
+        assert summary["table_row_counts"] == {"financial_facts": 1}
+        assert summary["sha256"] == hashlib.sha256(before).hexdigest()
+        assert archive.read_bytes() == before
 
     def test_conflict_is_surfaced_but_not_a_failure(self, tmp_path: Path) -> None:
         live = self._live_with_archive(tmp_path)

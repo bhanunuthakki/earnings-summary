@@ -13,7 +13,8 @@ repos:
         args:
           - --exclude-files
           - >-
-            ^(?:evals[\\/]golden[\\/]metric_lifecycle_triage\.json|
+            ^(?:config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|
+            evals[\\/]golden[\\/]metric_lifecycle_triage\.json|
             tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|
             test_peer_selection|test_validate_environment)\.py)$
 

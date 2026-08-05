@@ -333,9 +333,17 @@ def _file_is_compressed(path: Path) -> bool:
 
 
 def _compressed_size(path: Path) -> int:
-    high = ctypes.c_ulong(0)
-    low = int(ctypes.windll.kernel32.GetCompressedFileSizeW(str(path), ctypes.byref(high)))
-    if low == 0xFFFFFFFF and ctypes.windll.kernel32.GetLastError() != 0:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_compressed_file_size = kernel32.GetCompressedFileSizeW
+    get_compressed_file_size.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    get_compressed_file_size.restype = ctypes.c_uint32
+    high = ctypes.c_uint32(0)
+    ctypes.set_last_error(0)
+    low = int(get_compressed_file_size(str(path), ctypes.byref(high)))
+    if low == 0xFFFFFFFF and ctypes.get_last_error() != 0:
         raise LatestStateActivationError("could not read compressed file size")
     return (int(high.value) << 32) | low
 

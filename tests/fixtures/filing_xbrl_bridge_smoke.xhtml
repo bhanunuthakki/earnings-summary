@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:iso4217="http://www.xbrl.org/2003/iso4217"
+  xmlns:ix="http://www.xbrl.org/2013/inlineXBRL"
+  xmlns:link="http://www.xbrl.org/2003/linkbase"
+  xmlns:smoke="https://example.test/earnings-summary/smoke/2026"
+  xmlns:xbrli="http://www.xbrl.org/2003/instance"
+  xmlns:xlink="http://www.w3.org/1999/xlink">
+  <head><title>Offline filing-XBRL smoke fixture</title></head>
+  <body>
+    <div style="display:none">
+      <ix:header>
+        <ix:references>
+          <link:schemaRef xlink:type="simple" xlink:href="filing_xbrl_bridge_smoke.xsd"/>
+        </ix:references>
+        <ix:resources>
+          <xbrli:context id="duration-2025">
+            <xbrli:entity>
+              <xbrli:identifier scheme="http://www.sec.gov/CIK">0000000001</xbrli:identifier>
+            </xbrli:entity>
+            <xbrli:period>
+              <xbrli:startDate>2025-01-01</xbrli:startDate>
+              <xbrli:endDate>2025-12-31</xbrli:endDate>
+            </xbrli:period>
+          </xbrli:context>
+          <xbrli:unit id="USD"><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unit>
+        </ix:resources>
+      </ix:header>
+    </div>
+    <p>
+      Revenue:
+      <ix:nonFraction
+        id="fact-1"
+        name="smoke:Revenue"
+        contextRef="duration-2025"
+        unitRef="USD"
+        decimals="0">10</ix:nonFraction>
+    </p>
+  </body>
+</html>

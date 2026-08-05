@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,13 +21,21 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from filings.inline_xbrl_processor import (  # noqa: E402
     ProcessorPackageMember,
-    load_processor_bundle_manifest,
+    load_approved_processor_bundle_manifest,
+)
+from provenance.immutable_artifact import (  # noqa: E402
+    population_database_lock_resources,
+    validate_population_database_target,
 )
 from provenance.sec_filing_xbrl_ingest import (  # noqa: E402
     FilingXbrlIngestRequest,
     ingest_sec_filing_xbrl,
 )
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
+from runtime.job_runtime import (  # noqa: E402
+    JobAlreadyRunningError,
+    JobLock,
+    portfolio_db_path,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _MEMBERS = TypeAdapter(tuple[ProcessorPackageMember, ...])
@@ -58,7 +67,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bundle-manifest",
         type=Path,
-        default=PROJECT_ROOT / "config" / "filing_xbrl_processor_bundle.json",
+        required=True,
+        help="Canonical external bundle manifest approved by the committed review seal",
     )
     parser.add_argument(
         "--offline-artifact-manifest",
@@ -77,7 +87,10 @@ def _offline_artifacts(path: Path | None) -> tuple[ProcessorPackageMember, ...]:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    manifest = load_processor_bundle_manifest(args.bundle_manifest)
+    approved_bundle = load_approved_processor_bundle_manifest(
+        args.bundle_manifest,
+    )
+    database = Path(os.path.abspath(args.db))
     request = FilingXbrlIngestRequest(
         inventory_key=str(args.inventory_key),
         accession_number=str(args.accession),
@@ -91,15 +104,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     write_sets = [
         f"filing-xbrl-accession:{request.accession_number}",
-        f"filing-xbrl-bundle:{manifest.manifest_sha256}",
+        f"filing-xbrl-bundle:{approved_bundle.manifest.manifest_sha256}",
+        "filing-xbrl-package-cache:"
+        + str(Path(os.path.abspath(request.runtime_root.parent / "filing-xbrl-package-cache"))),
     ]
     if request.apply:
-        write_sets.append(f"sqlite:{args.db.resolve()}")
+        write_sets.extend(
+            population_database_lock_resources(
+                database,
+                portfolio_db_path(PROJECT_ROOT),
+            )
+        )
     try:
         with JobLock(PROJECT_ROOT, "ingest-sec-filing-xbrl", write_sets):
+            database = validate_population_database_target(
+                database,
+                portfolio_db_path(PROJECT_ROOT),
+            )
             role = SQLiteConnectionRole.WRITER if request.apply else SQLiteConnectionRole.READ_ONLY
             conn = connect_sqlite(
-                args.db,
+                database,
                 role=role,
                 schema_preflight=request.apply,
             )
@@ -109,7 +133,11 @@ def main(argv: list[str] | None = None) -> int:
                     accession=request.accession_number,
                     mode="apply" if request.apply else "dry_run",
                 )
-                result = ingest_sec_filing_xbrl(conn, request, manifest=manifest)
+                result = ingest_sec_filing_xbrl(
+                    conn,
+                    request,
+                    approved_bundle=approved_bundle,
+                )
             finally:
                 conn.close()
     except JobAlreadyRunningError:

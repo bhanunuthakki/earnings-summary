@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +14,7 @@ from provenance.latest_governed_state import (
     LatestGovernedCohortAudit,
     LatestGovernedScopeAudit,
 )
-from provenance.latest_state_activation import build_governed_candidate_seal
+from provenance.latest_state_activation import CandidateSeal, build_governed_candidate_seal
 from provenance.latest_state_rehearsal import (
     ActivationBoundaryRequirements,
     AdmissionBundle,
@@ -39,6 +40,24 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 _HEAD_REVISION = expected_head()
+
+
+def _seal_candidate(database: Path, revision: str, *, wal: bool = False) -> None:
+    with sqlite3.connect(database) as conn:
+        if wal:
+            conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(
+            """
+            CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);
+            CREATE TABLE source_taxonomy_components (component_id TEXT PRIMARY KEY);
+            INSERT INTO source_taxonomy_components VALUES ('component-1');
+            CREATE TABLE fact_cell_canonical_binding_revisions (
+              binding_revision_id TEXT PRIMARY KEY
+            );
+            INSERT INTO fact_cell_canonical_binding_revisions VALUES ('binding-1');
+            """
+        )
+        conn.execute("INSERT INTO alembic_version VALUES (?)", (revision,))
 
 
 def _artifact(path: Path, payload: str = "evidence") -> ArtifactCommitment:
@@ -254,20 +273,7 @@ def test_post_mutation_seal_is_exact_and_refuses_uncheckpointed_sidecars(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "candidate.db"
-    with sqlite3.connect(database) as conn:
-        conn.executescript(
-            f"""
-            CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);
-            INSERT INTO alembic_version VALUES
-              ('{_HEAD_REVISION}');
-            CREATE TABLE source_taxonomy_components (component_id TEXT PRIMARY KEY);
-            INSERT INTO source_taxonomy_components VALUES ('component-1');
-            CREATE TABLE fact_cell_canonical_binding_revisions (
-              binding_revision_id TEXT PRIMARY KEY
-            );
-            INSERT INTO fact_cell_canonical_binding_revisions VALUES ('binding-1');
-            """
-        )
+    _seal_candidate(database, _HEAD_REVISION)
 
 
 def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
@@ -275,25 +281,25 @@ def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "candidate.db"
-    with sqlite3.connect(database) as conn:
-        conn.executescript(
-            f"""
-            CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);
-            INSERT INTO alembic_version VALUES
-              ('{_HEAD_REVISION}');
-            CREATE TABLE source_taxonomy_components (component_id TEXT PRIMARY KEY);
-            INSERT INTO source_taxonomy_components VALUES ('component-1');
-            CREATE TABLE fact_cell_canonical_binding_revisions (
-              binding_revision_id TEXT PRIMARY KEY
-            );
-            INSERT INTO fact_cell_canonical_binding_revisions VALUES ('binding-1');
-            """
-        )
+    _seal_candidate(database, _HEAD_REVISION)
 
     def portfolio_path(_repo_root: Path) -> Path:
         return tmp_path / "never-live.db"
 
+    monkeypatch.setattr(seal_cli, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(seal_cli, "portfolio_db_path", portfolio_path)
+    reparse_checks: list[Path] = []
+    real_require_no_reparse_points = seal_cli.require_no_reparse_points
+
+    def record_reparse_check(path: Path) -> None:
+        reparse_checks.append(path)
+        real_require_no_reparse_points(path)
+
+    monkeypatch.setattr(
+        seal_cli,
+        "require_no_reparse_points",
+        record_reparse_check,
+    )
     seal_path = tmp_path / "candidate-seal.json"
 
     exit_code = seal_cli.main(
@@ -312,6 +318,7 @@ def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
     assert exit_code == 0
     assert json.loads(seal_path.read_text(encoding="utf-8"))["sha256"] == _sha256(database)
     assert not Path(f"{database}-wal").exists()
+    assert reparse_checks.count(Path(f"{database}-wal")) >= 4
     assert (
         seal_cli.main(
             [
@@ -345,6 +352,242 @@ def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
             database,
             expected_revision=_HEAD_REVISION,
         )
+
+
+@pytest.mark.parametrize("target", ["database", "seal"])
+def test_seal_cli_refuses_every_live_sqlite_sidecar_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    database = tmp_path / "candidate.db"
+    _seal_candidate(database, _HEAD_REVISION)
+    live = tmp_path / "live" / "portfolio.db"
+
+    def portfolio_path(_repo_root: Path) -> Path:
+        return live
+
+    monkeypatch.setattr(seal_cli, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(seal_cli, "portfolio_db_path", portfolio_path)
+    target_path = {
+        "database": Path(f"{live}-wal"),
+        "seal": Path(f"{live}-shm"),
+    }[target]
+    arguments = [
+        "--repo-root",
+        str(tmp_path),
+        "--database",
+        str(target_path if target == "database" else database),
+        "--expected-revision",
+        _HEAD_REVISION,
+        "--seal",
+        str(target_path if target == "seal" else tmp_path / "candidate.seal.json"),
+    ]
+    assert seal_cli.main(arguments) == 2
+    assert not target_path.exists()
+
+
+@pytest.mark.parametrize("sidecar_suffix", ["-wal", "-journal"])
+def test_seal_cli_refuses_candidate_sidecar_hardlink_to_live_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sidecar_suffix: str,
+) -> None:
+    database = tmp_path / "candidate.db"
+    live = tmp_path / "live" / "portfolio.db"
+    live.parent.mkdir(parents=True)
+    _seal_candidate(database, _HEAD_REVISION)
+    _seal_candidate(live, _HEAD_REVISION)
+    candidate_sidecar = Path(f"{database}{sidecar_suffix}")
+    os.link(live, candidate_sidecar)
+    live_sha256 = _sha256(live)
+
+    def portfolio_path(_repo_root: Path) -> Path:
+        return live
+
+    monkeypatch.setattr(seal_cli, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(seal_cli, "portfolio_db_path", portfolio_path)
+
+    assert (
+        seal_cli.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--database",
+                str(database),
+                "--expected-revision",
+                _HEAD_REVISION,
+                "--seal",
+                str(tmp_path / "candidate.seal.json"),
+            ]
+        )
+        == 2
+    )
+    assert _sha256(live) == live_sha256
+
+
+@pytest.mark.parametrize("shared_member", ["main", "wal"])
+def test_seal_cli_refuses_candidate_family_hardlink_to_non_live_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shared_member: str,
+) -> None:
+    database = tmp_path / "candidate.db"
+    backup = tmp_path / "preserved-backup.db"
+    _seal_candidate(backup, _HEAD_REVISION)
+    if shared_member == "main":
+        os.link(backup, database)
+    else:
+        _seal_candidate(database, _HEAD_REVISION)
+        os.link(backup, Path(f"{database}-wal"))
+    database_sha256 = _sha256(database)
+    backup_sha256 = _sha256(backup)
+
+    def portfolio_path(_repo_root: Path) -> Path:
+        return tmp_path / "never-live.db"
+
+    monkeypatch.setattr(seal_cli, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(seal_cli, "portfolio_db_path", portfolio_path)
+
+    assert (
+        seal_cli.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--database",
+                str(database),
+                "--expected-revision",
+                _HEAD_REVISION,
+                "--seal",
+                str(tmp_path / "candidate.seal.json"),
+            ]
+        )
+        == 2
+    )
+    assert _sha256(database) == database_sha256
+    assert _sha256(backup) == backup_sha256
+
+
+def test_seal_cli_rechecks_candidate_family_after_long_seal_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "candidate.db"
+    backup = tmp_path / "preserved-backup.db"
+    _seal_candidate(database, _HEAD_REVISION)
+    _seal_candidate(backup, _HEAD_REVISION)
+    backup_sha256 = _sha256(backup)
+    destination = tmp_path / "candidate.seal.json"
+    real_build_seal = seal_cli.build_governed_candidate_seal
+
+    def build_then_substitute_sidecar(
+        database_path: Path,
+        *,
+        expected_revision: str,
+    ) -> CandidateSeal:
+        seal = real_build_seal(
+            database_path,
+            expected_revision=expected_revision,
+        )
+        os.link(backup, Path(f"{database_path}-shm"))
+        return seal
+
+    def portfolio_path(_repo_root: Path) -> Path:
+        return tmp_path / "never-live.db"
+
+    monkeypatch.setattr(seal_cli, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(seal_cli, "portfolio_db_path", portfolio_path)
+    monkeypatch.setattr(
+        seal_cli,
+        "build_governed_candidate_seal",
+        build_then_substitute_sidecar,
+    )
+
+    assert (
+        seal_cli.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--database",
+                str(database),
+                "--expected-revision",
+                _HEAD_REVISION,
+                "--seal",
+                str(destination),
+            ]
+        )
+        == 2
+    )
+    assert not destination.exists()
+    assert _sha256(backup) == backup_sha256
+
+
+def test_seal_cli_refuses_caller_controlled_decoy_repo_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical_root = tmp_path / "canonical"
+    decoy_root = tmp_path / "decoy"
+    actual_live = canonical_root / "data" / "portfolio.db"
+    actual_live.parent.mkdir(parents=True)
+    _seal_candidate(actual_live, _HEAD_REVISION)
+    live_sha256 = _sha256(actual_live)
+    monkeypatch.setattr(seal_cli, "PROJECT_ROOT", canonical_root)
+
+    assert (
+        seal_cli.main(
+            [
+                "--repo-root",
+                str(decoy_root),
+                "--database",
+                str(actual_live),
+                "--expected-revision",
+                _HEAD_REVISION,
+                "--seal",
+                str(tmp_path / "candidate.seal.json"),
+            ]
+        )
+        == 2
+    )
+    assert _sha256(actual_live) == live_sha256
+
+
+def test_seal_cli_allows_explicit_pre_head_isolated_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "pre-head-candidate.db"
+    expected_revision = "pre_head_test_revision"
+    _seal_candidate(database, expected_revision, wal=True)
+    with sqlite3.connect(database) as conn:
+        checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        assert checkpoint is not None and int(checkpoint[0]) == 0
+
+    def isolated_portfolio_db_path(_repo_root: Path) -> Path:
+        return tmp_path / "never-live.db"
+
+    monkeypatch.setattr(seal_cli, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(seal_cli, "portfolio_db_path", isolated_portfolio_db_path)
+    seal_path = tmp_path / "pre-head-candidate.seal.json"
+
+    assert (
+        seal_cli.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--database",
+                str(database),
+                "--expected-revision",
+                expected_revision,
+                "--seal",
+                str(seal_path),
+            ]
+        )
+        == 0
+    )
+    seal = json.loads(seal_path.read_text(encoding="utf-8"))
+    assert seal["revision"] == [expected_revision]
+    assert seal["sha256"] == _sha256(database)
 
 
 def test_terminal_receipt_separates_rehearsal_from_future_live_boundary(
