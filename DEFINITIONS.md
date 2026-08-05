@@ -83,6 +83,18 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Feedback owed.** Show `Grading…` then `Graded — outcome recorded`; a re-grade says `Re-graded — assessment updated`. Failure releases the form with the owner's entered text intact.
 **Surfaces.** Holding → Position lifecycle, the decision journal/calibration ledger, and scorecards that link each grade back to its source decision.
 
+## Pre-Earnings Brief
+
+**Definition.** A persisted, ticker-scoped preparation artifact for one expected earnings event. It states what the quarter must show, the numbers to check, what to listen for, and the thesis pressure points. Portfolio names generate automatically inside the configured pre-earnings window; evaluation names do so only when `auto_pre_earnings_brief` is explicitly enabled.
+**Lives in.** `llm_artifacts` with `purpose='pre_earnings_brief'`; `src/earnings_brief.py`; morning pipeline stage 1c; the Earnings Prep peek.
+**Not to be confused with.** The deterministic Earnings Prep template, which is a zero-token fallback, or a generic Ask response, which is conversational and is not the canonical persisted deliverable.
+
+## Post-Earnings Readout
+
+**Definition.** A persisted, ticker-scoped investor artifact for one selected reported fiscal quarter. It separates reported results, management explanation, thesis inference, and falsifiable next-quarter checks. Portfolio names generate automatically after the morning trigger pass; evaluation names generate only from an explicit owner request.
+**Lives in.** `llm_artifacts` with `purpose='post_earnings_readout'` and `fiscal_period=<selected transcript period_end>`; `src/earnings_readout.py`; morning pipeline stage 1d; the Post-ER Readout peek. `llm_artifact_store.quarter_index` is the canonical ticker x quarter reader.
+**Not to be confused with.** The deterministic Post-ER template, which assembles recorded facts without an LLM and burns zero tokens, or a generic Ask response, which is not persisted or quarter-indexed.
+
 ## Thought Partner
 
 **Definition.** The program's operating identity — a living system that extracts, explores (Socratically), synthesizes, and learns a user Worldview over time; it treats captures as raw material for thinking, not records to file. Storage is the last step, not the product.

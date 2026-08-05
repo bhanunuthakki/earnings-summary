@@ -153,7 +153,7 @@ def eligible_tickers(
 # ---------------------------------------------------------------------------
 
 
-def _watch_items_text(db_path: Path, t: str) -> str:
+def watch_items_text(db_path: Path, t: str) -> str:
     try:
         from user_state.notes import list_notes
 
@@ -165,7 +165,7 @@ def _watch_items_text(db_path: Path, t: str) -> str:
     return "\n".join(f"- [{n.kind}] {n.body.strip()}" for n in notes)
 
 
-def _queued_notes_text(db_path: Path, t: str) -> str:
+def queued_notes_text(db_path: Path, t: str) -> str:
     try:
         from user_state.ledger import list_entries
 
@@ -177,7 +177,7 @@ def _queued_notes_text(db_path: Path, t: str) -> str:
     return "\n".join(f"- {e.body.strip()} (queued {str(e.created_at)[:10]})" for e in entries)
 
 
-def _tone_text(db_path: Path, t: str) -> str:
+def tone_text(db_path: Path, t: str) -> str:
     try:
         alerts = list_alerts(ticker=t, limit=50, db_path=db_path)
     except sqlite3.Error:
@@ -203,7 +203,7 @@ def _tone_text(db_path: Path, t: str) -> str:
     return "\n".join(lines)
 
 
-def _kpi_text(conn: sqlite3.Connection, t: str, today: date) -> str:
+def kpi_text(conn: sqlite3.Connection, t: str, today: date) -> str:
     try:
         from pipeline.research_cockpit import (
             _tier1_kpi_deltas,  # pyright: ignore[reportPrivateUsage]
@@ -223,7 +223,7 @@ def _kpi_text(conn: sqlite3.Connection, t: str, today: date) -> str:
     return "\n".join(lines)
 
 
-def _valuation_text(conn: sqlite3.Connection, t: str) -> str:
+def valuation_text(conn: sqlite3.Connection, t: str) -> str:
     try:
         row = conn.execute(
             "SELECT live_price, npv_per_share, over_under_pct, COALESCE(sanity_flag, '') "
@@ -277,8 +277,8 @@ def assemble_context(db_path: Path, repo_root: Path, t: str, *, today: date) -> 
     except sqlite3.Error:
         conn = None
     try:
-        kpis = _kpi_text(conn, t, today) if conn is not None else ""
-        valuation = _valuation_text(conn, t) if conn is not None else ""
+        kpis = kpi_text(conn, t, today) if conn is not None else ""
+        valuation = valuation_text(conn, t) if conn is not None else ""
     finally:
         if conn is not None:
             conn.close()
@@ -292,9 +292,9 @@ def assemble_context(db_path: Path, repo_root: Path, t: str, *, today: date) -> 
         for s in (
             _section("Thesis, break rules & prior context (anchors)", anchor),
             _section("Tracked tier-1 KPIs — latest vs prior", kpis),
-            _section("Your open watch items & questions", _watch_items_text(db_path, t)),
-            _section("Queued from last quarter's signals", _queued_notes_text(db_path, t)),
-            _section("Last call's tone shifts", _tone_text(db_path, t)),
+            _section("Your open watch items & questions", watch_items_text(db_path, t)),
+            _section("Queued from last quarter's signals", queued_notes_text(db_path, t)),
+            _section("Last call's tone shifts", tone_text(db_path, t)),
             _section("Valuation stance", valuation),
             _section("Retrieved evidence", _evidence_text(db_path, repo_root, t)),
         )

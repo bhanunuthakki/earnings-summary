@@ -207,6 +207,10 @@ _STANDUP_TIMEOUT_S = 900
 # earnings cycle). A busy week is ~3-5 calls at ~60-90s each; 10 min is
 # generous. Budget 'skip' mode (0260) means a blown cap exits fast and clean.
 _PRE_ER_BRIEF_TIMEOUT_S = 600
+# Stage 1d (post-earnings readouts): one cached Sonnet-tier synthesis per
+# portfolio name's newly selected quarterly transcript. Evaluation names are
+# structurally excluded and can spend only through the explicit cockpit action.
+_POST_ER_READOUT_TIMEOUT_S = 900
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
@@ -227,6 +231,7 @@ STAGE_WEALTH_CONTEXT = "stage_0j_wealth_context"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_STANDUP = "stage_1b_standup"
 STAGE_PRE_ER_BRIEF = "stage_1c_pre_earnings_briefs"
+STAGE_POST_ER_READOUT = "stage_1d_post_earnings_readouts"
 STAGE_FEED = "stage_2_feed"
 STAGE_VALIDATE = "stage_3_validate"
 _ALL_STAGE_KEYS = (
@@ -247,6 +252,7 @@ _ALL_STAGE_KEYS = (
     STAGE_TRIGGERS,
     STAGE_STANDUP,
     STAGE_PRE_ER_BRIEF,
+    STAGE_POST_ER_READOUT,
     STAGE_FEED,
     STAGE_VALIDATE,
 )
@@ -670,6 +676,25 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
             )
         )
 
+    # Stage 1d -- persisted post-earnings readouts. The generator itself
+    # selects only active portfolio names and keys each artifact to the
+    # selected transcript's period_end. Repeated mornings are cache hits;
+    # evaluation names never enter this scheduled process.
+    if not args.skip_triggers and not args.skip_post_earnings_readouts:
+        readout_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_POST_ER_READOUT,
+                label="Stage 1d - post-earnings readouts (generate_post_earnings_readouts.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "generate_post_earnings_readouts.py"),
+                    *readout_db_args,
+                ],
+                timeout_s=_POST_ER_READOUT_TIMEOUT_S,
+            )
+        )
+
     stages.append(
         _Stage(
             key=STAGE_FEED,
@@ -906,6 +931,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Skip stage 1c (pre-earnings brief generation). The stage is "
         "already a no-op outside each name's 7-day pre-ER window and is "
         "idempotent inside it; skip it to run a brief-free pipeline.",
+    )
+    parser.add_argument(
+        "--skip-post-earnings-readouts",
+        action="store_true",
+        help="Skip stage 1d (portfolio-only persisted post-earnings readouts).",
     )
     parser.add_argument(
         "--force",

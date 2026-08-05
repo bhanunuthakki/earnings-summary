@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ def _write_capture(repo: Path, purpose: str, prompt: str, *, version: str | None
     directory = repo / "data" / "llm_capture"
     directory.mkdir(parents=True, exist_ok=True)
     row = {
-        "captured_at": "2026-07-27T12:00:00",
+        "captured_at": datetime.now(UTC).isoformat(),
         "purpose": purpose,
         "prompt_version": version or prompt_version_for(purpose),
         "ticker": "NU",
@@ -54,7 +55,7 @@ def test_plan_ignores_newer_fallback_backend_capture(tmp_path: Path) -> None:
     _write_capture(tmp_path, purpose, "primary")
     path = tmp_path / "data" / "llm_capture" / "capture_2026-07-27.jsonl"
     fallback = {
-        "captured_at": "2026-07-27T12:01:00",
+        "captured_at": datetime.now(UTC).isoformat(),
         "purpose": purpose,
         "prompt_version": prompt_version_for(purpose),
         "ticker": "NU",
