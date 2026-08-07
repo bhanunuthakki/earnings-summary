@@ -108,10 +108,10 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ## Testing, CI & Merge Velocity Discipline
 
-- **Merge Frequency & PR Sizing:** Never batch days/weeks of work into giant feature branches. Land small, intent-driven PRs frequently (e.g. migration/model → script CLI → UI cockpit). With 270+ Alembic migrations and golden snapshot tests, small merges prevent migration head collisions, unreviewable diff cascades, and broken agent self-annealing loops.
-- **Fast Local Feedback (`make check-fast`):** Use `make check-fast` (runs format + lint + typecheck + `pytest` on changed test files only) during active agent/developer iteration. Use `make check` for complete pre-push verification, or `FAST_PUSH=1 git push` to delegate full matrix testing to CI.
-- **Multi-Threaded Test Execution:** Pytest is configured for process multi-threading (`pytest -n auto --dist=loadfile`). Keep tests hermetic; use the session-scoped `migrated_db` template builder in `tests/conftest.py` rather than re-running Alembic migrations from scratch inside test functions.
-- **Ratchet Quality Gates:** Ruff linting and strict Pyright type-checking use diff-aware ratchets against `origin/main`. PRs must be clean on changed lines/files and must not increase the overall Pyright error count, while pre-existing legacy baselines are paid down incrementally.
+- **Merge Frequency & PR Sizing:** Never batch weeks of work into giant feature branches. Land small, intent-driven PRs frequently (e.g. migration/model → script CLI → UI cockpit). With 270+ Alembic migrations and golden snapshot tests, small merges prevent migration head collisions and unreviewable diff cascades.
+- **Fast Local Feedback (`make check-fast`):** Use `make check-fast` (format + lint + typecheck + `pytest` on changed test files only) during active iteration. Use `make check` for complete pre-push verification, or `FAST_PUSH=1 git push` to delegate full matrix testing to CI.
+- **Multi-Threaded Test Execution:** Pytest uses process multi-threading (`pytest -n auto --dist=loadfile`). Keep tests hermetic; use session-scoped `migrated_db` in `tests/conftest.py` rather than re-running Alembic migrations from scratch inside test functions.
+- **Ratchet Quality Gates:** Ruff linting and strict Pyright type-checking use diff-aware ratchets against `origin/main`. PRs must be clean on changed lines/files and must not increase overall Pyright error counts.
 
 ## Security
 
