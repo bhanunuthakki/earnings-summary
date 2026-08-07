@@ -36,10 +36,16 @@
   --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif; /* @kind font */
   --serif: 'Source Serif 4', 'Source Serif Pro', Georgia, serif; /* @kind font */
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; /* @kind font */
+  --fs-stat: 24px;
   --fs-display: 22px;
+  --fs-header-title: 17px;
   --fs-title: 16px;
+  --fs-serif-body: 14.5px;
   --fs-body: 13px;
   --fs-caption: 11px;
+  --fs-mono-sm: 10px;
+  --fs-micro: 9.5px;
+  --fs-nano: 9px;
   --sp-half: 2px;
   --sp-1: 4px;
   --sp-2: 8px;
@@ -47,12 +53,6 @@
   --sp-4: 16px;
   --sp-5: 24px;
   --sp-6: 32px;
-  --fs-stat: 24px;
-  --fs-header-title: 17px;
-  --fs-serif-body: 14.5px;
-  --fs-mono-sm: 10px;
-  --fs-micro: 9.5px;
-  --fs-nano: 9px;
   --sidebar-width: 240px;
   --main-max-width: 1240px;
   --drawer-width: 540px;

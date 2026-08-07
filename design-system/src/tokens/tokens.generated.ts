@@ -76,10 +76,16 @@ export const FONT_TOKENS = {
 } as const;
 
 export const TYPE_SCALE = {
+  "fs-stat": "24px",
   "fs-display": "22px",
+  "fs-header-title": "17px",
   "fs-title": "16px",
+  "fs-serif-body": "14.5px",
   "fs-body": "13px",
   "fs-caption": "11px",
+  "fs-mono-sm": "10px",
+  "fs-micro": "9.5px",
+  "fs-nano": "9px",
 } as const;
 
 export const SPACING_SCALE = {
@@ -93,12 +99,6 @@ export const SPACING_SCALE = {
 } as const;
 
 export const CHROME_TOKENS = {
-  "fs-stat": "24px",
-  "fs-header-title": "17px",
-  "fs-serif-body": "14.5px",
-  "fs-mono-sm": "10px",
-  "fs-micro": "9.5px",
-  "fs-nano": "9px",
   "sidebar-width": "240px",
   "main-max-width": "1240px",
   "drawer-width": "540px",

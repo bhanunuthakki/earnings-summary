@@ -80,14 +80,26 @@ def test_palette_css_rejects_unknown_default() -> None:
         palette_css("sepia")
 
 
-def test_type_scale_is_the_four_step_importance_ladder() -> None:
-    """The semantic scale is a public contract for every renderer: four steps,
-    strictly descending, named by importance — display > title > body > caption."""
-    order = ["fs-display", "fs-title", "fs-body", "fs-caption"]
+def test_type_scale_is_the_work_os_semantic_ladder() -> None:
+    """The semantic scale is a public contract for every renderer: steps,
+    strictly descending, named by importance — stat > display > header-title >
+    title > serif-body > body > caption > mono-sm > micro > nano."""
+    order = [
+        "fs-stat",
+        "fs-display",
+        "fs-header-title",
+        "fs-title",
+        "fs-serif-body",
+        "fs-body",
+        "fs-caption",
+        "fs-mono-sm",
+        "fs-micro",
+        "fs-nano",
+    ]
     assert list(TYPE_SCALE) == order
     sizes = [float(TYPE_SCALE[k].removesuffix("px")) for k in order]
     assert sizes == sorted(sizes, reverse=True)
-    assert len(set(sizes)) == 4
+    assert len(set(sizes)) == 10
 
 
 def test_spacing_scale_ascends() -> None:

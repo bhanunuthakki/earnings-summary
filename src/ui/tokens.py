@@ -136,38 +136,36 @@ FONT_TOKENS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Semantic type scale (UI polish foundation, 2026-06-11; collapsed to four
-# steps design-sync 2026-07-19).
+# Semantic type scale (UI polish foundation, v4 Masterwork Work OS Edition,
+# 2026-08-07).
 #
-# Size encodes IMPORTANCE, not surface. Before this scale the ten renderers
-# carried 34 distinct font sizes (8.5px-100px); the same component rendered
-# at different sizes on different surfaces (.kpi-value: 22px shell vs 18px
-# ticker page; h1: 24px shell vs 26px digest). Every rule picks the step
-# that matches the element's importance:
+# Size encodes IMPORTANCE, not surface. Evolved to the 10-step Work OS scale
+# to support information-dense financial copilot workspaces (Harvey/Legora level)
+# with ultra-deep obsidian ground (#090a0c) and clear visual hierarchy:
 #
-#   --fs-display  the page's one dominant element: page title, hero stat
-#   --fs-title    panel / drawer / card titles + real sub-section headings
-#                 (the h2/h3 tier)
-#   --fs-body     default UI text: tables, inputs, buttons, tabs, reading prose
-#   --fs-caption  everything smaller: table headers, stamps, hints, sublabels,
-#                 chips, badges, kind tags, axis marks
-#
-# Four steps, not six: --fs-section (14px) folded into --fs-body (or --fs-title
-# for real headings) and --fs-micro (10px) into --fs-caption — a six-step ramp
-# on a 13px base gave two pairs (14/13, 11.5/10) too close to read as distinct
-# tiers. --fs-caption rounded 11.5px → 11px in the same pass.
-#
-# Two sanctioned escapes, nothing else: the workspace report's 60px identity
-# ticker (a deliberate brand moment) and `font-size: 0.93em` for inline
-# code/mono inside running text (an optical correction — mono renders larger
-# than sans at equal px — not an importance level).
+#   --fs-stat          metric stat numbers, hero ticker symbols (24px)
+#   --fs-display       the page's one dominant element: page title, hero stat (22px)
+#   --fs-header-title  governed target card titles, panel hero headers (17px)
+#   --fs-title         panel / drawer / card titles + real sub-section headings (16px)
+#   --fs-serif-body    editorial thesis prose, reading memo paragraphs (14.5px)
+#   --fs-body          default UI text: tables, inputs, buttons, tabs (13px)
+#   --fs-caption       everything smaller: table headers, stamps, sublabels, chips, badges (11px)
+#   --fs-mono-sm       timestamp badges, locator tags, mono annotations (10px)
+#   --fs-micro         nav layer section headers, micro uppercase labels (9.5px)
+#   --fs-nano          provenance source chips (.src-chip) (9px)
 #
 # Queued UI sessions build on these names — treat them as a public contract.
 TYPE_SCALE: dict[str, str] = {
+    "fs-stat": "24px",
     "fs-display": "22px",
+    "fs-header-title": "17px",
     "fs-title": "16px",
+    "fs-serif-body": "14.5px",
     "fs-body": "13px",
     "fs-caption": "11px",
+    "fs-mono-sm": "10px",
+    "fs-micro": "9.5px",
+    "fs-nano": "9px",
 }
 
 # Spacing scale — gaps, paddings, and margins snap to these steps so density
@@ -183,15 +181,8 @@ SPACING_SCALE: dict[str, str] = {
     "sp-6": "32px",
 }
 
-# Chrome & Work OS tokens: corner radii, layout dimensions, blur filters,
-# specialized typography extensions, and motion timing.
+# Chrome & Work OS tokens: corner radii, layout dimensions, blur filters, and motion timing.
 CHROME_TOKENS: dict[str, str] = {
-    "fs-stat": "24px",
-    "fs-header-title": "17px",
-    "fs-serif-body": "14.5px",
-    "fs-mono-sm": "10px",
-    "fs-micro": "9.5px",
-    "fs-nano": "9px",
     "sidebar-width": "240px",
     "main-max-width": "1240px",
     "drawer-width": "540px",

@@ -1,6 +1,6 @@
 # Design language — the canonical UI guidelines
 
-**Status:** canonical (v3, 2026-06-11). Supersedes the scattered conventions in
+**Status:** canonical (v4, 2026-08-07 Masterwork Work OS Edition). Supersedes the scattered conventions in
 individual renderer docstrings. Sources of truth in code:
 `src/ui/tokens.py` (values) and `src/ui/controls.py` (components). Every HTML
 surface composes its `<style>` as `palette_css(...) + controls_css(...) +
@@ -9,26 +9,29 @@ re-skin type, color, or controls.
 
 The voice of the product is **calm desk, deep drawers**: a quiet, dense,
 dark instrument panel for daily work; an editorial paper reading surface for
-briefs. Premium here means *restraint* — one accent, one radius, one shadow,
-mono only where mono means something.
+briefs. Premium here means *restraint* — curated color swatches, one radius hierarchy,
+one motion, mono only where mono means something.
 
 ---
 
 ## 1. Type
 
-Semantic importance steps (`src/ui/tokens.py::TYPE_SCALE`). Size encodes **importance, not surface**: the same kind of element renders the same size on every screen.
+Semantic steps (`src/ui/tokens.py::TYPE_SCALE`). Size encodes **importance, not surface**: the same kind of element renders the same size on every screen.
 
-| Token          | px   | Use for                                                            |
-|----------------|------|--------------------------------------------------------------------|
-| `--fs-display` | 22   | The page's ONE dominant element: page title, hero stat            |
-| `--fs-title`   | 16   | Panel / drawer / card titles + real sub-section headings (h2/h3)   |
-| `--fs-body`    | 13   | Default UI text: tables, inputs, buttons, tabs, reading prose      |
-| `--fs-caption` | 11   | Everything smaller: table headers, stamps, hints, sublabels, chips, badges, kind tags, axis marks |
+| Token               | px   | Use for                                                            |
+|---------------------|------|--------------------------------------------------------------------|
+| `--fs-stat`         | 24   | Metric stat numbers, hero ticker symbols                            |
+| `--fs-display`      | 22   | The page's ONE dominant element: page title, hero stat             |
+| `--fs-header-title` | 17   | Governed target card titles, panel hero headers                     |
+| `--fs-title`        | 16   | Panel / drawer / card titles + real sub-section headings (h2/h3)   |
+| `--fs-serif-body`   | 14.5 | Editorial thesis prose, reading memo paragraphs                     |
+| `--fs-body`         | 13   | Default UI text: tables, inputs, buttons, tabs, reading prose      |
+| `--fs-caption`      | 11   | Everything smaller: table headers, stamps, hints, sublabels, chips, badges, kind tags, axis marks |
+| `--fs-mono-sm`      | 10   | Timestamp badges, locator tags, mono sublabels                     |
+| `--fs-micro`        | 9.5  | Nav layer section headers, micro uppercase labels                  |
+| `--fs-nano`         | 9    | Provenance source chips (`.src-chip`)                              |
 
-Four importance steps (`TYPE_SCALE`), strictly descending: `--fs-display` > `--fs-title` > `--fs-body` > `--fs-caption`.
-
-**Chrome & Work OS Typography Extensions (`CHROME_TOKENS`):**
-Registered layout/chrome tokens for specialized components (e.g. `--fs-stat: 24px` metric numbers, `--fs-header-title: 17px` governed target cards, `--fs-serif-body: 14.5px` thesis reading prose, `--fs-mono-sm: 10px` mono stamps, `--fs-micro: 9.5px` nav layer titles, `--fs-nano: 9px` provenance source chips). Specialized controls pick tokens from `CHROME_TOKENS` without altering the 4-step importance hierarchy in `TYPE_SCALE`.
+The scale encodes the Work OS hierarchy in strict descending order. Font roles (`FONT_TOKENS`): `--sans` (Inter) is the UI; `--serif` (Source Serif 4) is reading prose in reports; `--mono` (JetBrains Mono) is **only** tickers, numbers, code, timestamps, and locators. Mono is an annotation voice, not a theme — a label or button in mono is drift.
 
 In a **data table** this resolves the obvious way: numeric cells are mono (`font-feature-settings: 'tnum', 'zero'`), but the row labels and column headers are sans — never put `font-family: var(--mono)` on the whole table. Every value cell is a `<td>` and every label/header a `<th>`, so the entire rule is `.matrix td { font-family: var(--mono); }` and the `<th>` inherit the UI sans.
 
