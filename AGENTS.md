@@ -106,6 +106,13 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 - **Compose the kit; never reinvent a component.** Anything rendered — a button, a status badge, a chip/tag, a callout, a ticker label — uses the `src/ui/controls.py` primitive, not freehand CSS: buttons → `.k-btn`(`-primary`/`-quiet`/`-danger`/`-sm`); filled status pill → `.k-pill`(+`-ok/-warn/-bad`); outline kind/filter tag → `.k-chip`(+tones/`-mono`/`-btn`); callout block → `.k-well`; ticker+name → `ticker_label()`; rendered prose → `ui.prose.render_prose`. A surface adds **layout only** (width/flex/grid/gap), and preserves JS-hook classes *alongside* the kit class (e.g. `class="ix-act k-btn k-btn-quiet k-btn-sm"`). Using on-scale tokens (`var(--fs-body)`, `var(--radius)`, a `color-mix` tone fill) does NOT make a hand-rolled button/pill compliant — it is still §4 drift.
 - **The guard is partial — `tests/test_ui_controls.py` auto-enforces tokens + the `kit-badge` component check (a reinvented filled status pill fails CI); the rest of §4 is on you.** A NEW `src/**.py` that emits `var(--` must be added to that file's `REGISTERED` set and be token-clean (or quarantined) or CI fails. **Run `python -m pytest tests/test_ui_controls.py -q` for any frontend change** — targeted test selection misses the surface-discovery + component checks. Touching a report renderer also needs `GOLDEN_REGEN=1 python -m pytest tests/test_workspace_golden.py` and a diff review.
 
+## Testing, CI & Merge Velocity Discipline
+
+- **Merge Frequency & PR Sizing:** Never batch days/weeks of work into giant feature branches. Land small, intent-driven PRs frequently (e.g. migration/model → script CLI → UI cockpit). With 270+ Alembic migrations and golden snapshot tests, small merges prevent migration head collisions, unreviewable diff cascades, and broken agent self-annealing loops.
+- **Fast Local Feedback (`make check-fast`):** Use `make check-fast` (runs format + lint + typecheck + `pytest` on changed test files only) during active agent/developer iteration. Use `make check` for complete pre-push verification, or `FAST_PUSH=1 git push` to delegate full matrix testing to CI.
+- **Multi-Threaded Test Execution:** Pytest is configured for process multi-threading (`pytest -n auto --dist=loadfile`). Keep tests hermetic; use the session-scoped `migrated_db` template builder in `tests/conftest.py` rather than re-running Alembic migrations from scratch inside test functions.
+- **Ratchet Quality Gates:** Ruff linting and strict Pyright type-checking use diff-aware ratchets against `origin/main`. PRs must be clean on changed lines/files and must not increase the overall Pyright error count, while pre-existing legacy baselines are paid down incrementally.
+
 ## Security
 
 - Repo credential files: `.env`, `credentials.json`, `token.json` (global no-log/no-commit rules apply). Pass keys to scripts via environment variables, never CLI args; `src/log_redact.py` is the canonical redaction helper.
@@ -126,4 +133,5 @@ The app's in-app LLM transport (`src/llm/cli.py` → subscription `claude` CLI) 
 ## General Code Standards — see global AGENTS.md
 
 The full backend/code standards (typing, the NEVER/ALWAYS lists, classification, testing discipline, the pre-push checklist, PR conventions, Deep Modules) live in the global `AGENTS.md` and apply here unchanged — do not duplicate them in this file. The one repo nuance: a single `cast(...)` at a validated JSON / external-data boundary (right after an `isinstance`/schema check) is the accepted pattern here; never `# type: ignore` (this matches the global NEVER list's JSON-boundary exception). See `src/log_redact.py` for the canonical credential-redaction helper the global secret-handling rules reference.
+
 
