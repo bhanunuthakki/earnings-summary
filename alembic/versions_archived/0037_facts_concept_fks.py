@@ -76,7 +76,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for index, table in [
+    for index, _table in [
         ("idx_financial_facts_concept", "financial_facts"),
         ("idx_commitments_concept", "management_commitments"),
         ("idx_segment_facts_entity", "segment_facts"),

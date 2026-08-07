@@ -1,5 +1,8 @@
 @echo off
 REM Process all open comments on a ticker's latest report.
+REM
+REM Routed through run_python.bat for managed runtime, lock, and job health.
+REM
 REM Usage:
 REM   process_comments.bat NU              (dry-run preview)
 REM   process_comments.bat NU --apply      (actually mutate files)
@@ -13,4 +16,5 @@ if "%~1"=="" (
 set "REPO_ROOT=%~dp0"
 if "%REPO_ROOT:~-1%"=="\" set "REPO_ROOT=%REPO_ROOT:~0,-1%"
 
-python "%REPO_ROOT%\execution\process_report_comments.py" --ticker %1 --repo-root "%REPO_ROOT%" %2 %3 %4
+"%REPO_ROOT%\cron\run_python.bat" "%REPO_ROOT%\execution\process_report_comments.py" --ticker %1 --repo-root "%REPO_ROOT%" %2 %3 %4
+exit /b %ERRORLEVEL%

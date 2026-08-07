@@ -3,6 +3,8 @@ REM Refresh FMP financial data for a ticker (or all tracked).
 REM Pulls income statement / balance sheet / cash flow / segments / key_metrics
 REM into data/historical/fmp/<TICKER>_*.json.
 REM
+REM Routed through run_python.bat for managed runtime, lock, and job health.
+REM
 REM Usage:
 REM   refresh_fmp.bat NU           (one ticker, last 8 quarters)
 REM   refresh_fmp.bat --all        (all tracked tickers)
@@ -21,7 +23,8 @@ set LIMIT=%2
 if "%LIMIT%"=="" set LIMIT=8
 
 if "%~1"=="--all" (
-  python "%REPO_ROOT%\execution\fetch_fmp_historical_data.py" --all --limit %LIMIT%
+  "%REPO_ROOT%\cron\run_python.bat" "%REPO_ROOT%\execution\fetch_fmp_historical_data.py" --all --limit %LIMIT%
 ) else (
-  python "%REPO_ROOT%\execution\fetch_fmp_historical_data.py" --ticker %1 --limit %LIMIT%
+  "%REPO_ROOT%\cron\run_python.bat" "%REPO_ROOT%\execution\fetch_fmp_historical_data.py" --ticker %1 --limit %LIMIT%
 )
+exit /b %ERRORLEVEL%

@@ -46,7 +46,6 @@ import sqlalchemy as sa
 
 from alembic import op
 
-
 revision: str = "0195_business_factor_exposures"
 
 down_revision: str | Sequence[str] | None = "0194_research_triage"

@@ -16,28 +16,30 @@ REM
 REM Stage 2 only runs if stage 1 exits 0 — partial failures don't poison
 REM the DB with half a refresh.
 
-setlocal
+setlocal EnableDelayedExpansion
 set PYTHONUTF8=1
 set "PROJECT_ROOT=%~dp0.."
 for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
-set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
+set "LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')"`) do set "TS=%%t"
 
-set LOG_FILE=%LOG_DIR%\backfill_earnings_surprises_%TS%.log
+set "LOG_FILE=%LOG_DIR%\backfill_earnings_surprises_%TS%.log"
 
 cd /d "%PROJECT_ROOT%"
 
 echo === backfill_earnings_surprises.py === >> "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "backfill-earnings-surprises-fetch" "portfolio-db" execution\backfill_earnings_surprises.py >> "%LOG_FILE%" 2>&1
-if errorlevel 1 (
-    echo === backfill FAILED with exit code %errorlevel%; skipping ingest === >> "%LOG_FILE%" 2>&1
-    exit /b %errorlevel%
+set "STAGE1_RC=!ERRORLEVEL!"
+if !STAGE1_RC! neq 0 (
+    echo === backfill FAILED with exit code !STAGE1_RC!; skipping ingest === >> "%LOG_FILE%" 2>&1
+    endlocal & exit /b %STAGE1_RC%
 )
 
 echo. >> "%LOG_FILE%" 2>&1
 echo === ingest_earnings_surprises.py === >> "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "backfill-earnings-surprises-ingest" "portfolio-db" execution\ingest_earnings_surprises.py >> "%LOG_FILE%" 2>&1
+set "STAGE2_RC=!ERRORLEVEL!"
 
-endlocal
+endlocal & exit /b %STAGE2_RC%

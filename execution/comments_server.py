@@ -571,6 +571,21 @@ def create_app(
         app.logger.error("unhandled request failure: %s", error, exc_info=True)
         return _client_error("request failed; retry the request", 500)
 
+    @app.teardown_request
+    def close_request_db(exception: Exception | None = None) -> None:
+        db_conn = g.pop("request_read_db", None)
+        if db_conn is not None:
+            with contextlib.suppress(Exception):
+                db_conn.close()
+
+    def get_read_db() -> sqlite3.Connection:
+        if "request_read_db" not in g:
+            db_path = repo_root / "data" / "portfolio.db"
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+            conn.row_factory = sqlite3.Row
+            g.request_read_db = conn
+        return g.request_read_db
+
     @app.before_request
     def csrf_origin_guard():
         # CSRF defense-in-depth for the unauthenticated localhost control plane.

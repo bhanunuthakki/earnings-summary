@@ -510,14 +510,30 @@ def poll_once(
     def bump(key: str) -> None:
         counts[key] = counts.get(key, 0) + 1
 
+    allowed_chat_id = None
+    try:
+        from capture.token_store import load_chat_id
+        allowed_chat_id = load_chat_id()
+    except Exception:
+        allowed_chat_id = None
+
+    env_allowed = os.environ.get("TELEGRAM_ALLOWED_CHAT_ID")
+    if env_allowed:
+        with contextlib.suppress(ValueError):
+            allowed_chat_id = int(env_allowed.strip())
+
     for update in updates:
         bump(f"kind_{update.kind}")
         if update.chat_id is not None:
-            # Persist the owner's chat id so the coach can INITIATE (governed
-            # pings) without waiting for an inbound message. Best-effort.
+            if allowed_chat_id is not None and update.chat_id != allowed_chat_id:
+                log.warning({"event": "telegram_unauthorized_chat_id", "chat_id": update.chat_id})
+                bump("unauthorized_chat_id")
+                continue
             from capture.token_store import save_chat_id
 
             save_chat_id(update.chat_id)
+            if allowed_chat_id is None:
+                allowed_chat_id = update.chat_id
         if update.kind == "text" and update.text:
             if update.text.lstrip().startswith("/"):
                 # Telegram bot commands (/start, /review, ...) are chrome, not

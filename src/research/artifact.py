@@ -25,11 +25,12 @@ The SSRF guard (``is_safe_url``) blocks non-http(s) schemes and private / loopba
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import ipaddress
 import logging
 import re
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -201,33 +202,34 @@ def html_to_text(html: str) -> str:
 
 
 def fetch_url_text(url: str, *, timeout: int = _FETCH_TIMEOUT, max_bytes: int = _MAX_BYTES) -> str:
-    """Fetch ``url`` (SSRF-guarded, byte-capped) and return its readable text.
+    """Fetch ``url`` (SSRF-guarded via ir_pipeline._net, byte-capped) and return its readable text.
     Raises ``ArtifactFetchError`` on an unsafe target or a network/status failure."""
     if not is_safe_url(url):
         raise ArtifactFetchError(f"refusing to fetch unsafe or non-http(s) url: {url!r}")
-    import requests
+    from ir_pipeline._net import UnsafeURLError, build_public_opener, ensure_safe_public_url
 
-    resp = None
     try:
-        resp = requests.get(url, headers={"User-Agent": _UA}, timeout=timeout, stream=True)
-        resp.raise_for_status()
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in resp.iter_content(chunk_size=16_384):
-            if not chunk:
-                continue
-            chunks.append(chunk)
-            total += len(chunk)
-            if total > max_bytes:
-                break
-        encoding = resp.encoding or "utf-8"
-        html = b"".join(chunks).decode(encoding, "replace")
-    except requests.RequestException as exc:
+        ensure_safe_public_url(url)
+        opener = build_public_opener()
+        req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        with opener.open(req, timeout=timeout) as resp:
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = resp.read(16_384)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > max_bytes:
+                    break
+            content_type = resp.headers.get("Content-Type", "")
+            encoding = "utf-8"
+            if "charset=" in content_type:
+                encoding = content_type.split("charset=")[-1].split(";")[0].strip()
+            html = b"".join(chunks).decode(encoding, "replace")
+    except (UnsafeURLError, urllib.error.URLError, OSError, ValueError) as exc:
         raise ArtifactFetchError(f"fetch failed for {url!r}: {exc}") from exc
-    finally:
-        if resp is not None:
-            with contextlib.suppress(Exception):
-                resp.close()
     return html_to_text(html)
 
 

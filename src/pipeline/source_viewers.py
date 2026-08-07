@@ -223,7 +223,7 @@ def _doc_meta_html(doc: _DocRow) -> str:
         bits.append(f'<span class="sv-meta">{escape(doc.accession_number)}{filed}</span>')
     if doc.fetched_at:
         bits.append(f'<span class="sv-meta">fetched {escape(doc.fetched_at[:10])}</span>')
-    if doc.source_url:
+    if doc.source_url and doc.source_url.strip().lower().startswith(("http://", "https://")):
         bits.append(
             f'<a href="{escape(doc.source_url)}" target="_blank" rel="noopener" '
             'style="font-size:var(--fs-caption);">original source ↗</a>'

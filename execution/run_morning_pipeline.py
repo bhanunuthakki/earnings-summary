@@ -759,6 +759,33 @@ def _echo_captured_output(stdout: str | bytes | None, stderr: str | bytes | None
         sys.stderr.write(stderr)
 
 
+STATE_FILE = PROJECT_ROOT / ".tmp" / "morning_pipeline" / "state.json"
+
+
+def _load_completed_stages() -> set[str]:
+    """Load completed stages from state.json if updated within 18h."""
+    if not STATE_FILE.exists():
+        return set()
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        if time.time() - float(data.get("updated_at", 0)) > 18 * 3600:
+            return set()
+        return set(data.get("completed_stages", []))
+    except Exception:
+        return set()
+
+
+def _record_completed_stage(stage_key: str) -> None:
+    """Record completed stage key to state.json."""
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        completed = _load_completed_stages()
+        completed.add(stage_key)
+        STATE_FILE.write_text(json.dumps({"completed_stages": list(completed), "updated_at": time.time()}), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _run_stage(stage: _Stage) -> _StageResult:
     """Invoke one stage as a subprocess; echo its output under a header.
 
@@ -812,6 +839,7 @@ def _run_stage(stage: _Stage) -> _StageResult:
 
     if proc.returncode == 0:
         sys.stdout.write(f"[{stage.key}] OK (exit 0, {elapsed}s)\n")
+        _record_completed_stage(stage.key)
         return _StageResult(
             key=stage.key,
             status=StageStatus.OK,

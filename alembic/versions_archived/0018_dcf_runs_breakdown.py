@@ -30,6 +30,7 @@ import json
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0018_dcf_runs_breakdown"
@@ -62,7 +63,7 @@ def upgrade() -> None:
         else:
             b["seg"].append(r)
 
-    for ticker, parts in by_ticker.items():
+    for _ticker, parts in by_ticker.items():
         agg_rows = parts["agg"]
         seg_rows = parts["seg"]
         if not seg_rows:
@@ -113,7 +114,7 @@ def upgrade() -> None:
             "note": "consolidated_minus_segments",
         }
 
-        breakdown = segment_components + [overhead_component]
+        breakdown = [*segment_components, overhead_component]
         bind.execute(
             sa.text("UPDATE dcf_runs SET breakdown_json = :bj WHERE id = :id"),
             {"bj": json.dumps(breakdown), "id": keep.id},

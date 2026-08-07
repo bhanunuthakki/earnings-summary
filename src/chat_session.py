@@ -32,6 +32,8 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, Field
 
+from ticker_validation import safe_ticker
+
 log = logging.getLogger(__name__)
 
 _STREAM_TIMEOUT_SECONDS = 120.0
@@ -57,13 +59,10 @@ class ChatStore(BaseModel):
     thread: list[ChatTurn] = Field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Storage
-# ---------------------------------------------------------------------------
-
 
 def _chat_path(repo_root: Path, ticker: str, report_date: date) -> Path:
-    out = repo_root / "data" / "report_chats" / ticker.upper()
+    st = safe_ticker(ticker)
+    out = repo_root / "data" / "report_chats" / st
     out.mkdir(parents=True, exist_ok=True)
     return out / f"{report_date.isoformat()}.json"
 

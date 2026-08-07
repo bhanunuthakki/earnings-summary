@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ from typing import cast
 import requests
 
 from models.instruments import EtfHolding
+from ticker_validation import safe_ticker
 
 log = logging.getLogger(__name__)
 
@@ -380,9 +382,11 @@ def fetch_latest_report(
         try:
             report = parse_nport(xml_text, ref.ticker, accession=accession)
         except NportParseError as exc:
+            safe_t = safe_ticker(ref.ticker)
+            safe_acc = re.sub(r"[^a-zA-Z0-9]", "", acc) or "unknown_acc"
             dump_dir = tmp_dir or Path(".tmp") / "etf_nport"
             dump_dir.mkdir(parents=True, exist_ok=True)
-            dump_path = dump_dir / f"{ref.ticker}_{acc}.xml"
+            dump_path = dump_dir / f"{safe_t}_{safe_acc}.xml"
             dump_path.write_text(xml_text, encoding="utf-8")
             raise NportParseError(
                 f"{ref.ticker} accession {accession}: {exc} — raw XML dumped to {dump_path}"

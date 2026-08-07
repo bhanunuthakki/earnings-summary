@@ -205,13 +205,12 @@ def migrated_db(
         cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db.as_posix()}")
         return cfg
 
-    def build(dest: Path, *, stamp: str, target: str = "head") -> Path:
+    def build(dest: Path, *, stamp: str = "head", target: str = "head") -> Path:
         key = (stamp, target)
         template = _DB_TEMPLATES.get(key)
         if template is None or not template.exists():
             safe = f"{stamp}__{target}".replace("/", "_").replace("\\", "_")
             template = cache_dir / f"{safe}.db"
-            command.stamp(_config(template), stamp)
             command.upgrade(_config(template), target)
             _DB_TEMPLATES[key] = template
         dest.parent.mkdir(parents=True, exist_ok=True)

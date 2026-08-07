@@ -1693,11 +1693,13 @@ def call_llm(
         except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as gemini_error:
             if backend == "gemini":
                 raise  # explicitly forced: the caller wants Gemini's answer or its error
+            from log_redact import redact
+
             log.warning(
                 {
                     "event": "gemini_backend_failed_falling_back_to_claude",
                     "purpose": purpose,
-                    "error": f"{type(gemini_error).__name__}: {str(gemini_error)[:200]}",
+                    "error": f"{type(gemini_error).__name__}: {redact(str(gemini_error)[:200])}",
                 }
             )
             fallback_from_provider = "google"
@@ -1735,11 +1737,16 @@ def call_llm(
             # requests.RequestException subclasses OSError, so network failures land here.
             if backend == "openrouter":
                 raise  # explicitly forced: the caller wants OpenRouter's answer or its error
+            from log_redact import redact
+
             log.warning(
                 {
                     "event": "openrouter_backend_failed_falling_back_to_claude",
                     "purpose": purpose,
-                    "error": f"{type(openrouter_error).__name__}: {str(openrouter_error)[:200]}",
+                    "error": (
+                        f"{type(openrouter_error).__name__}: "
+                        f"{redact(str(openrouter_error)[:200])}"
+                    ),
                 }
             )
             fallback_from_provider = "openrouter"

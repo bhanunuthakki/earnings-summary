@@ -222,7 +222,7 @@ def download_file(token: str, file_path: str, dest: Path | str) -> Path:
         with urllib.request.urlopen(url, timeout=120) as resp:
             out.write_bytes(resp.read())
     except OSError as exc:
-        raise TelegramError(f"telegram file download failed: {exc}") from exc
+        raise TelegramError(f"telegram file download failed: {redact(exc)}") from exc
     return out
 
 

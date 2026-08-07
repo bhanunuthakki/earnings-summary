@@ -45,7 +45,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ticker_validation import safe_ticker
 
@@ -195,6 +195,8 @@ class ThreadEntry(BaseModel):
 
 class Comment(BaseModel):
     """One inline comment."""
+
+    model_config = ConfigDict(validate_assignment=True)
 
     id: str  # cmt_<date>_<6-char-hex>
     anchor: Anchor

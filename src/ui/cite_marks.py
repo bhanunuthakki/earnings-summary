@@ -150,7 +150,8 @@ CITE_MARKS_JS = r"""
       var c = map[n];
       if (!c) return m;
       var href = c.href || c.source_url || '';
-      if (href && !/^https?:/.test(href)) href = base + href;
+      if (href && /^javascript:/i.test(href.trim())) href = '';
+      else if (href && !/^https?:/i.test(href) && !/^\//.test(href)) href = base + href;
       var pop = popHtml(c);
       if (value) {
         var badge = href
@@ -335,8 +336,10 @@ def linkify(text: str, payload: CitationsPayload | None, *, href_base: str = "")
         c = by_n.get(n)
         if c is None:
             return m.group(0)
-        href = str(c.get("href") or c.get("source_url") or "")
-        if href and not _ABS_URL_RX.match(href):
+        href = str(c.get("href") or c.get("source_url") or "").strip()
+        if href.lower().startswith("javascript:"):
+            href = ""
+        elif href and not _ABS_URL_RX.match(href) and not href.startswith("/"):
             href = href_base + href
         pop = _cite_pop_html(c)
         if value:

@@ -350,16 +350,18 @@ def _classify_gemini_failure(exc: Exception) -> None:
     to Claude, or raise for a forced backend="gemini" call) applies.
     """
     _ensure_genai()
+    from log_redact import redact
+
     if isinstance(exc, (google_exceptions.Unauthenticated, google_exceptions.PermissionDenied)):
         raise llm_cli.LLMSetupError(
             f"Gemini API key rejected ({type(exc).__name__}). {GEMINI_API_KEY_HINT}\n"
-            f"API error: {str(exc)[:300]}"
+            f"API error: {redact(str(exc)[:300])}"
         ) from exc
     if isinstance(exc, google_exceptions.InvalidArgument) and any(
         marker in str(exc) for marker in _AUTH_ERROR_MARKERS
     ):
         raise llm_cli.LLMSetupError(
-            f"Gemini API key invalid. {GEMINI_API_KEY_HINT}\nAPI error: {str(exc)[:300]}"
+            f"Gemini API key invalid. {GEMINI_API_KEY_HINT}\nAPI error: {redact(str(exc)[:300])}"
         ) from exc
 
 

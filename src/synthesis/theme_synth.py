@@ -100,7 +100,14 @@ def run_synthesis(
             continue
         try:
             result = synth(ticker, group)
-        except Exception:
+        except Exception as exc:
+            # Hard stops (budget exhausted, auth failure) must propagate — they
+            # affect every scope, not just this one. Soft failures (parse, net)
+            # are per-scope and safely degrade.
+            from llm.cli import LLMBudgetExceeded, LLMSetupError
+
+            if isinstance(exc, (LLMBudgetExceeded, LLMSetupError)):
+                raise
             counts["failed"] += 1
             continue
         if result is None:

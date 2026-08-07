@@ -327,6 +327,21 @@ def _correct_same_document_fact(
     return inc_id
 
 
+def _validate_financial_fact_plausibility(line_item: str, value: Decimal, unit: str) -> None:
+    """Pre-persist plausibility gate for financial facts to prevent extreme scale errors."""
+    try:
+        val_float = float(value)
+    except (TypeError, ValueError):
+        return
+    item_lower = line_item.lower()
+    if item_lower in ("revenue", "net_income", "total_assets", "operating_income") and abs(val_float) > 1e14:
+        log.error("implausible_magnitude_rejected line_item=%s value=%s unit=%s", line_item, value, unit)
+        raise ValueError(f"Implausible financial fact magnitude for {line_item}: {value} {unit}")
+    if "shares" in item_lower and val_float < 0:
+        log.error("implausible_negative_shares_rejected line_item=%s value=%s", line_item, value)
+        raise ValueError(f"Negative share count implausible for {line_item}: {value}")
+
+
 def insert_with_restatement_detection(
     conn: sqlite3.Connection,
     *,
@@ -369,6 +384,7 @@ def insert_with_restatement_detection(
     OR IGNORE — adopting this helper is opt-in to avoid behavior changes
     in the load path until extractor-by-extractor wiring lands.
     """
+    _validate_financial_fact_plausibility(line_item, value, unit)
     incumbent_id = find_incumbent(
         conn,
         ticker=ticker,

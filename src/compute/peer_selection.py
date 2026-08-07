@@ -556,12 +556,14 @@ def _stable_get(
     try:
         resp = requests_mod.get(url, params=params, timeout=20)
     except Exception as exc:  # network best-effort — any failure → skip this file
+        from log_redact import redact
+
         log.info(
             {
                 "event": "peer_fetch_http_error",
                 "symbol": symbol,
                 "endpoint": endpoint,
-                "error": str(exc)[:120],
+                "error": redact(str(exc)[:120]),
             }
         )
         return None

@@ -108,7 +108,7 @@ def upgrade() -> None:
             op.add_column(_TRANSCRIPTS, sa.Column("selection_reason", sa.Text(), nullable=True))
 
         transcript_indexes = _index_names(bind, _TRANSCRIPTS)
-        if _TRANSCRIPT_PERIOD_COLUMNS <= transcript_columns:
+        if transcript_columns >= _TRANSCRIPT_PERIOD_COLUMNS:
             if _TRANSCRIPT_PERIOD_INDEX in transcript_indexes:
                 op.drop_index(_TRANSCRIPT_PERIOD_INDEX, table_name=_TRANSCRIPTS)
             if _ACTIVE_TRANSCRIPT_PERIOD_INDEX not in transcript_indexes:
@@ -191,7 +191,7 @@ def downgrade() -> None:
                 batch.drop_column("superseded_at")
                 batch.drop_column("superseded_by_id")
                 batch.drop_column("is_active")
-            if _TRANSCRIPT_PERIOD_COLUMNS <= transcript_columns:
+            if transcript_columns >= _TRANSCRIPT_PERIOD_COLUMNS:
                 op.create_index(
                     _TRANSCRIPT_PERIOD_INDEX,
                     _TRANSCRIPTS,

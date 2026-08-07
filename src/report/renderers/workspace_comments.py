@@ -438,11 +438,11 @@ JS = r"""
   }
 
   function renderCommentCard(c) {
-    var statusClass = 'cmt-status-' + c.status;
+    var statusClass = 'cmt-status-' + escapeHtml(c.status);
     var head = '<div class="cmt-card-head">'
-      + '<span class="cmt-status ' + statusClass + '">' + c.status + '</span>'
-      + (c.intent ? '<span class="cmt-intent">' + c.intent + '</span>' : '')
-      + '<span class="cmt-time">' + (c.created_at || '').substring(0, 16).replace('T', ' ') + '</span>'
+      + '<span class="cmt-status ' + statusClass + '">' + escapeHtml(c.status) + '</span>'
+      + (c.intent ? '<span class="cmt-intent">' + escapeHtml(c.intent) + '</span>' : '')
+      + '<span class="cmt-time">' + escapeHtml((c.created_at || '').substring(0, 16).replace('T', ' ')) + '</span>'
       + '</div>';
     var body = '<div class="cmt-body">' + escapeHtml(c.comment) + '</div>';
     var resolution = c.resolution_note
