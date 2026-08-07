@@ -12,7 +12,7 @@
 PY ?= python
 BASE ?= origin/main
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
-CHANGED = $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
+CHANGED := $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
 
 .PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-changed check check-fast ci-local
 
@@ -50,7 +50,7 @@ test:  ## Run the full test suite
 	pytest -q
 
 test-changed:  ## Run pytest only on changed test files vs BASE
-	@changed_tests=$$(git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- 'tests/test_*.py'); \
+	@changed_tests=$$(git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- 'tests/test_*.py' 'tests/**/test_*.py'); \
 	if [ -n "$$changed_tests" ]; then pytest -q $$changed_tests; else echo "no changed test files"; fi
 
 check: format-changed lint-changed typecheck-changed test  ## Pre-push gate: your-lines format + your-files lint/types + tests

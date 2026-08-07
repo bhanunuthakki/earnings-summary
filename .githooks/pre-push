@@ -53,7 +53,7 @@ fi
 # or set FAST_PUSH=1 to execute tests on changed test files only.
 if has pytest; then
   if [ "${FAST_PUSH:-0}" = "1" ]; then
-    changed_tests=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- 'tests/test_*.py' 2>/dev/null || true)
+    changed_tests=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- 'tests/test_*.py' 'tests/**/test_*.py' 2>/dev/null || true)
     if [ -n "$changed_tests" ]; then
       run pytest -q $changed_tests
     else
@@ -64,11 +64,13 @@ if has pytest; then
   fi
 fi
 
-stubs="C:/Users/Bhanu/.gemini/snippets/sync_agent_stubs.py"
+home_dir="${USERPROFILE:-${HOME}}"
+stubs="${home_dir}/.gemini/snippets/sync_agent_stubs.py"
+guide_test="${home_dir}/.gemini/snippets/test_guide_generation.py"
 if has python && [ -f "$stubs" ]; then
   run python "$stubs" --check
-  if python -c "import pytest" >/dev/null 2>&1; then
-    run python -m pytest "C:/Users/Bhanu/.gemini/snippets/test_guide_generation.py" -q
+  if python -c "import pytest" >/dev/null 2>&1 && [ -f "$guide_test" ]; then
+    run python -m pytest "$guide_test" -q
   fi
 fi
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -35,10 +36,14 @@ os.environ.setdefault(
     "EARNINGS_SUMMARY_ENV_FILE",
     os.path.join(os.path.dirname(__file__), ".pytest-no-external-env"),
 )
+_worker_suffix = (
+    f"-{os.environ['PYTEST_XDIST_WORKER']}" if "PYTEST_XDIST_WORKER" in os.environ else ""
+)
 os.environ.setdefault(
     "EARNINGS_SUMMARY_SECRETS_DIR",
     os.path.join(
-        os.environ.get("TEMP", os.path.dirname(__file__)), "earnings-summary-pytest-secrets"
+        tempfile.gettempdir(),
+        f"earnings-summary-pytest-secrets{_worker_suffix}",
     ),
 )
 # Production is Codex-first. Unit tests pin the reversible Claude mode so
@@ -197,7 +202,7 @@ def migrated_db(
     def _config(db: Path) -> Config:
         cfg = Config(str(project_root / "alembic.ini"))
         cfg.set_main_option("script_location", str(project_root / "alembic"))
-        cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
+        cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db.as_posix()}")
         return cfg
 
     def build(dest: Path, *, stamp: str, target: str = "head") -> Path:

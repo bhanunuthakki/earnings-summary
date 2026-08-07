@@ -45,10 +45,16 @@ jobs:
               - 'execution/**'
               - 'tests/**'
               - 'alembic/**'
+              - 'cron/**'
+              - 'scripts/**'
+              - '.githooks/**'
               - 'config/**'
               - 'templates/**'
               - 'pyproject.toml'
+              - 'requirements.txt'
               - 'requirements.lock'
+              - '.bandit-baseline.json'
+              - 'alembic.ini'
               - '.github/workflows/**'
               - 'Makefile'
             python:
@@ -56,6 +62,8 @@ jobs:
               - 'execution/**/*.py'
               - 'tests/**/*.py'
               - 'alembic/**/*.py'
+              - 'cron/**/*.py'
+              - 'scripts/**/*.py'
               - 'pyproject.toml'
               - 'requirements.lock'
 
@@ -152,6 +160,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: requirements.lock
       - name: Install ruff
         run: |
           pip install --require-hashes -r requirements.lock
@@ -166,7 +175,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            git fetch --no-tags origin "${{ github.base_ref }}"
             base="origin/${{ github.base_ref }}"
           else
             base="${{ github.event.before }}"
@@ -318,6 +327,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: requirements.lock
       - name: Install scanners + runtime deps
         run: |
           python -m pip install --upgrade pip
