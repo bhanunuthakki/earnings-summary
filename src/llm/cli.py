@@ -975,13 +975,21 @@ _CODEX_MODEL_BY_CLAUDE_TIER: dict[str, str] = {
 }
 
 
-def _primary_subscription_backend() -> str:
+PRIMARY_CODEX = _PRIMARY_CODEX
+PRIMARY_CLAUDE = _PRIMARY_CLAUDE
+
+
+def primary_subscription_backend() -> str:
     value = os.environ.get(PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, _PRIMARY_CODEX).strip().lower()
     if value not in {_PRIMARY_CODEX, _PRIMARY_CLAUDE}:
         raise LLMSetupError(
             f"{PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR} must be 'codex' or 'claude', got {value!r}"
         )
     return value
+
+
+def _primary_subscription_backend() -> str:
+    return primary_subscription_backend()
 
 
 def _codex_model_for(claude_model: str) -> str:
@@ -1585,52 +1593,23 @@ def call_llm(
                 backend=backend,
             )
 
-    from llm.model_ladder import CLAUDE as _CLAUDE_FAMILY
-    from llm.model_ladder import GEMINI as _GEMINI_FAMILY  # late — avoids import cycle
-    from llm.model_ladder import OPENROUTER as _OPENROUTER_FAMILY
-    from llm.model_ladder import family_of
+    from llm.model_ladder import (
+        GEMINI as _GEMINI_FAMILY,
+    )
+    from llm.model_ladder import (
+        OPENROUTER as _OPENROUTER_FAMILY,
+    )
+    from llm.model_ladder import (
+        family_of,
+    )
+    from llm.resolver import resolve_model_and_backend
 
-    # Model-first: resolve the intended model (DB pin → LLM_MODELS → DEFAULT).
-    explicit_model = model is not None
-    if model is None:
-        if purpose is None:
-            log.warning({"event": "llm_call_no_purpose", "fallback": DEFAULT_MODEL})
-            resolved_model = DEFAULT_MODEL
-        else:
-            resolved_model = _model_for(purpose)
-    else:
-        resolved_model = model
-
-    # Prompt-override auto-apply (meta_eval_governance.md §10 Q1): a cleanly
-    # promoted prompt-A/B variant applies its edits to PRODUCTION traffic here
-    # (the prompt-side twin of the model_pin_overrides read above). Eval/meta
-    # scopes are exempt inside the hook (replays stay byte-identical — I1) and
-    # anchor failures fail OPEN to the original prompt. Best-effort, always.
-    if purpose is not None:
-        try:
-            from llm.prompt_ab import apply_prompt_override
-
-            prompt = apply_prompt_override(purpose, scope, prompt)
-        except Exception as hook_exc:
-            log.debug({"event": "prompt_override_hook_failed", "error": str(hook_exc)[:120]})
-
-    # Backend from the resolved model's family; explicit `backend` arg overrides.
-    if backend is not None:
-        resolved_backend = backend
-    else:
-        _family = family_of(resolved_model)
-        if _family == _GEMINI_FAMILY:
-            resolved_backend = "gemini"
-        elif _family == _OPENROUTER_FAMILY:
-            resolved_backend = "openrouter"
-        elif (
-            _family == _CLAUDE_FAMILY
-            and not explicit_model
-            and _primary_subscription_backend() == _PRIMARY_CODEX
-        ):
-            resolved_backend = "codex"
-        else:
-            resolved_backend = "claude"
+    # Model and backend resolution via canonical single-point resolver
+    resolved_model, resolved_backend = resolve_model_and_backend(
+        purpose=purpose,
+        model=model,
+        backend=backend,
+    )
 
     codex_fell_back = False
     primary_codex_error: Exception | None = None

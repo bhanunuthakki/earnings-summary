@@ -95,6 +95,22 @@ stance (2026-07-02): fine for this platform's research prompts, provided **no SS
 train on them. Revisit before routing any purpose whose prompt could contain
 personal data.
 
+## Candidate discovery is a free catalog fetch, not a benchmark score (owner directive 2026-08-06)
+
+`frontier.run_frontier_research` discovers new OpenRouter candidates by
+reading `https://openrouter.ai/api/v1/models` directly (a plain HTTP GET, no
+LLM call, no tokens) and keeping the cheapest not-yet-known models. It does
+NOT assign any capability score at discovery time — earlier revisions tried
+scoring candidates against the Artificial Analysis Intelligence Index (a
+general reasoning/coding composite, the wrong instrument for this
+finance-specific pipeline) first as fixed tiers, then as a continuous delta;
+both were retired. A freshly discovered candidate is capability-neutral
+(`promise = 0.5`) until this pipeline's own `model_eval_verdicts` — real
+judged output on real production purposes — says otherwise. The transport,
+provider-pinning, and eval-gating rules on this page are unchanged; only how
+new candidates ENTER the pool got cheaper and more honest about what it does
+and doesn't know. See `meta_eval_governance.md` §10.4.
+
 ## Relationship to the meta-eval governance design
 
 This backend is the *transport* + the model-identity guardrails. WHICH purposes

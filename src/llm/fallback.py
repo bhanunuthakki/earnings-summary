@@ -115,69 +115,48 @@ def is_fallback_disabled() -> bool:
 
 def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     """
-    Last-resort Gemini call invoked when the Claude CLI fails operationally
-    (timeout, non-zero exit, empty stdout, binary missing). Reads GEMINI_API_KEY
-    (or GOOGLE_API_KEY) from the environment — populated by load_dotenv() at
-    module init.
-
-    Three exit paths:
-      1. ``LLM_FALLBACK_DISABLED=1`` — fallback explicitly disabled by operator.
-         Raises a clean RuntimeError naming only the Claude failure (no
-         misleading Gemini error attached). Use this when the Gemini key is
-         known-invalid or fallback is unwanted for any reason.
-      2. No key configured at all — same RuntimeError but with setup hint.
-      3. Key configured + fallback enabled — fire the Gemini call. If Gemini
-         itself errors (bad key, quota, etc.), the exception propagates and
-         the caller's ledger writer records it.
-
-    Setup-class Claude errors (``claude`` binary missing) are NOT routed here —
-    they propagate from ``_verify_setup_once()`` before the subprocess call
-    ever runs.
+    Last-resort Gemini call invoked when the primary subscription CLI fails operationally.
+    Delegates to ``llm.gemini_backend.call_gemini`` using central model resolution.
     """
     if is_fallback_disabled():
         log.info(
             {
-                "event": "claude_cli_failed_fallback_disabled",
+                "event": "cli_failed_fallback_disabled",
                 "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
                 "fallback_state": "disabled_by_env",
             }
         )
         raise RuntimeError(
-            f"Claude CLI failed and Gemini fallback is disabled "
+            f"Primary CLI failed and Gemini fallback is disabled "
             f"(LLM_FALLBACK_DISABLED=1).\n"
-            f"Claude error: {_describe(claude_error)}"
+            f"Primary error: {_describe(claude_error)}"
         ) from claude_error
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "Claude CLI failed AND no Gemini fallback configured. "
-            f"Original Claude error: {_describe(claude_error)}\n"
+            "Primary CLI failed AND no Gemini fallback configured. "
+            f"Original error: {_describe(claude_error)}\n"
             "Add GEMINI_API_KEY=<your-key> to .env to enable the fallback path "
             "(or set LLM_FALLBACK_DISABLED=1 to explicitly opt out)."
         ) from claude_error
 
+    from llm.gemini_backend import call_gemini
+    from llm.resolver import resolve_model_and_backend
+
+    model, _ = resolve_model_and_backend(purpose=None, model=GEMINI_FALLBACK_MODEL)
     log.warning(
         {
-            "event": "claude_cli_failed_falling_back_to_gemini",
+            "event": "primary_cli_failed_falling_back_to_gemini",
             "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
-            "gemini_model": GEMINI_FALLBACK_MODEL,
+            "gemini_model": model,
         }
     )
-    _ensure_genai()
-    genai.configure(api_key=api_key)
-    model_obj = genai.GenerativeModel(GEMINI_FALLBACK_MODEL)
-    # request_options={"timeout": ...} is the deprecated google-generativeai
-    # mechanism; on a future migration to google-genai translate this to the
-    # client's request timeout. Without it a hung call blocks forever.
-    response = model_obj.generate_content(
-        prompt, request_options={"timeout": GEMINI_REQUEST_TIMEOUT_S}
-    )
-    text = (response.text or "").strip() if hasattr(response, "text") else ""
-    if not text:
+    try:
+        return call_gemini(prompt, model=model, timeout_seconds=int(GEMINI_REQUEST_TIMEOUT_S))
+    except Exception as gemini_err:
         raise RuntimeError(
-            "Both LLMs failed: Claude CLI errored AND Gemini fallback returned empty response.\n"
-            f"Claude error: {_describe(claude_error)}"
+            "Both LLMs failed: Primary CLI errored AND Gemini fallback call failed.\n"
+            f"Gemini error: {type(gemini_err).__name__}: {str(gemini_err)[:200]}\n"
+            f"Original error: {_describe(claude_error)}"
         ) from claude_error
-    log.info({"event": "gemini_fallback_done", "response_chars": len(text)})
-    return text

@@ -268,87 +268,251 @@ def retry_budget(kind: str) -> int:
     return 1
 
 
+_EPOCH_RX = re.compile(r"\|(\d{10})\b")
+
+# The api_error_status when it arrives EMBEDDED IN TEXT rather than as an
+# envelope field — the parse-ValueError path renders it as "api_status=404"
+# (llm_call_ledger.parse_claude_json_output). Found by live probe 2026-07-24:
+# without this, a real 404 classified as MALFORMED and earned 3 pointless
+# retries instead of CONFIG's immediate stop.
+_TEXT_STATUS_RX = re.compile(r"api_status=(\d{3})\b")
+
+_USAGE_PHRASES = (
+    "usage limit reached",
+    "usage limit",
+    "limit will reset",
+    "weekly limit",
+    "5-hour limit",
+    "out of extra usage",
+)
+_AUTH_PHRASES = (
+    "authentication",
+    "oauth token",
+    "token has expired",
+    "invalid api key",
+    "please run /login",
+    "not logged in",
+    "credit balance",  # billing exhaustion is operator-actionable like auth
+)
+_OVERLOADED_PHRASES = (
+    "overloaded",
+    "internal server error",
+    "connection error",
+    "connection reset",
+    "econnreset",
+    "econnrefused",
+    "etimedout",
+    "fetch failed",
+    "network",
+    "socket hang up",
+)
+_RATE_PHRASES = ("rate limit", "rate_limit", "too many requests")
+
+
 # ---------------------------------------------------------------------------
-# The quota circuit breaker (cross-process, file-based)
+# The quota circuit breaker (SQLite WAL cross-process table + loose file fallback)
 # ---------------------------------------------------------------------------
 
 
-def _breaker_path() -> Path | None:
-    """Next to the resolved DB so every process sees the same breaker. None
-    when no DB is resolvable (tests with no DB → breaker inert, calls proceed)."""
+def _breaker_db_path(db_path: Path | str | None = None) -> Path | None:
+    """Resolve database path for the circuit breaker."""
     try:
         from db_paths import resolve_db_path
 
-        db = resolve_db_path(None)
+        p = resolve_db_path(db_path)
+        return Path(p) if p else None
     except Exception:
         return None
-    if db is None:
+
+
+def _breaker_path() -> Path | None:
+    """Backward compatibility alias for tests patching _breaker_path."""
+    return _breaker_db_path(None)
+
+
+def quota_block_active(
+    path: Path | None = None,
+    *,
+    provider: str = "anthropic",
+    db_path: Path | str | None = None,
+) -> datetime | None:
+    """The breaker's ``blocked_until`` if it is in the future, else None."""
+    target_path = path or _breaker_path() or _breaker_db_path(db_path)
+    if target_path is None:
         return None
-    return Path(db).parent / _BREAKER_FILENAME
 
-
-def quota_block_active(*, path: Path | None = None) -> datetime | None:
-    """The breaker's ``blocked_until`` if it is in the future, else None.
-
-    Fail-open on every read problem: a corrupt/unreadable breaker file must
-    never block calls — the worst case is the pre-breaker behavior (doomed
-    subprocess spawns), never a stuck-closed transport.
-    """
-    p = path if path is not None else _breaker_path()
-    if p is None or not p.exists():
+    # Loose JSON file compatibility path for unit tests / file-backed breaker
+    if target_path.suffix == ".json" or not target_path.name.endswith(".db"):
+        if target_path.exists() and target_path.is_file():
+            try:
+                payload: object = json.loads(target_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    raw = cast("dict[str, object]", payload).get("blocked_until")
+                    if isinstance(raw, str):
+                        until = datetime.fromisoformat(raw)
+                        return until if until > _now() else None
+            except Exception:
+                return None
         return None
+
+    if not target_path.exists():
+        return None
+
+    import sqlite3
+
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
     try:
-        payload: object = json.loads(p.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            return None
-        raw = cast("dict[str, object]", payload).get("blocked_until")
-        if not isinstance(raw, str):
-            return None
-        until = datetime.fromisoformat(raw)
-    except (OSError, ValueError):
-        return None
-    return until if until > _now() else None
+        conn = connect_sqlite(str(target_path), role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            conn.execute("PRAGMA busy_timeout = 30000;")
+            row = conn.execute(
+                "SELECT blocked_until FROM llm_circuit_breakers WHERE provider = ?",
+                (provider,),
+            ).fetchone()
+            if row and row[0]:
+                until = datetime.fromisoformat(row[0])
+                return until if until > _now() else None
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError):
+        pass
+
+    return None
 
 
-def record_quota_exhausted(info: FailureInfo, *, path: Path | None = None) -> datetime:
-    """Engage the breaker. Returns the blocked_until it wrote (or would have).
-
-    Uses the classified reset time when the message carried one; else
-    now + DEFAULT_PROBE_MINUTES. Atomic write (tmp + replace) — concurrent
-    writers converge on either's value, both of which are valid."""
+def record_quota_exhausted(
+    info: FailureInfo,
+    path: Path | None = None,
+    *,
+    provider: str = "anthropic",
+    db_path: Path | str | None = None,
+) -> datetime:
+    """Engage the breaker. Returns the blocked_until it wrote."""
     until = info.retry_after or (_now() + timedelta(minutes=DEFAULT_PROBE_MINUTES))
-    p = path if path is not None else _breaker_path()
-    if p is None:
+    now_iso = _now().isoformat()
+    until_iso = until.isoformat()
+
+    target_path = path or _breaker_path() or _breaker_db_path(db_path)
+    if target_path is None:
         return until
-    payload = {
-        "blocked_until": until.isoformat(),
-        "reason": info.detail[:400],
-        "set_at": _now().isoformat(),
-    }
-    try:
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, p)
-        log.warning(
-            {
-                "event": "llm_quota_breaker_engaged",
-                "blocked_until": payload["blocked_until"],
-                "reason": info.detail[:200],
+
+    # Loose JSON file compatibility path for unit tests / file-backed breaker
+    if target_path.suffix == ".json" or not target_path.name.endswith(".db"):
+        try:
+            payload = {
+                "blocked_until": until_iso,
+                "reason": info.detail[:400],
+                "set_at": now_iso,
             }
+            tmp = target_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, target_path)
+            log.warning(
+                {
+                    "event": "llm_quota_breaker_engaged",
+                    "provider": provider,
+                    "blocked_until": until_iso,
+                    "reason": info.detail[:200],
+                }
+            )
+        except OSError as exc:
+            log.warning({"event": "llm_quota_breaker_write_failed", "error": str(exc)})
+        return until
+
+    if not target_path.exists():
+        return until
+
+    import sqlite3
+
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    try:
+        conn = connect_sqlite(
+            str(target_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True
         )
-    except OSError as exc:
-        log.warning({"event": "llm_quota_breaker_write_failed", "error": str(exc)})
+        try:
+            conn.execute("PRAGMA busy_timeout = 30000;")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS llm_circuit_breakers (
+                    provider TEXT PRIMARY KEY,
+                    blocked_until TEXT NOT NULL,
+                    reason TEXT,
+                    set_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO llm_circuit_breakers (provider, blocked_until, reason, set_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(provider) DO UPDATE SET
+                    blocked_until = excluded.blocked_until,
+                    reason = excluded.reason,
+                    set_at = excluded.set_at
+                """,
+                (provider, until_iso, info.detail[:400], now_iso),
+            )
+            conn.commit()
+
+            log.warning(
+                {
+                    "event": "llm_quota_breaker_engaged",
+                    "provider": provider,
+                    "blocked_until": until_iso,
+                    "reason": info.detail[:200],
+                }
+            )
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        log.warning(
+            {"event": "llm_quota_breaker_write_failed", "provider": provider, "error": str(exc)}
+        )
+
     return until
 
 
-def clear_quota_block(*, path: Path | None = None) -> None:
-    """Disengage after a successful call. Idempotent; failures are logged only
-    (a stale file self-expires via its timestamp anyway)."""
-    p = path if path is not None else _breaker_path()
-    if p is None or not p.exists():
+def clear_quota_block(
+    path: Path | None = None,
+    *,
+    provider: str = "anthropic",
+    db_path: Path | str | None = None,
+) -> None:
+    """Disengage after a successful call. Atomic delete."""
+    target_path = path or _breaker_path() or _breaker_db_path(db_path)
+    if target_path is None:
         return
+
+    if target_path.suffix == ".json" or not target_path.name.endswith(".db"):
+        if target_path.exists() and target_path.is_file():
+            try:
+                target_path.unlink()
+                log.info({"event": "llm_quota_breaker_cleared", "provider": provider})
+            except OSError as exc:
+                log.warning({"event": "llm_quota_breaker_clear_failed", "error": str(exc)})
+        return
+
+    if not target_path.exists():
+        return
+
+    import sqlite3
+
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
     try:
-        p.unlink()
-        log.info({"event": "llm_quota_breaker_cleared"})
-    except OSError as exc:
-        log.warning({"event": "llm_quota_breaker_clear_failed", "error": str(exc)})
+        conn = connect_sqlite(
+            str(target_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True
+        )
+        try:
+            conn.execute("PRAGMA busy_timeout = 30000;")
+            conn.execute("DELETE FROM llm_circuit_breakers WHERE provider = ?", (provider,))
+            conn.commit()
+            log.info({"event": "llm_quota_breaker_cleared", "provider": provider})
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        log.warning(
+            {"event": "llm_quota_breaker_clear_failed", "provider": provider, "error": str(exc)}
+        )

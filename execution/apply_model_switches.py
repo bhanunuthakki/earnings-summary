@@ -394,6 +394,146 @@ class SwitchResult:
         self.reason = reason
 
 
+def record_eval_case(
+    *,
+    purpose: str,
+    model_id: str,
+    provider: str,
+    raw_task_prompt: str,
+    raw_model_response: str,
+    judge_model: str,
+    judge_backend: str,
+    judge_verdict: str,
+    judge_rationale: str,
+    facet_scores_json: str | None = None,
+    cumulative_tokens_used: int = 0,
+    cumulative_cost_usd: float = 0.0,
+    db_path: Path | str | None = None,
+) -> None:
+    from db_paths import resolve_db_path
+    from log_redact import redact
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    resolved_path = resolve_db_path(db_path)
+    if resolved_path is None:
+        return
+    main_db = Path(resolved_path)
+    evals_db = main_db.parent / "portfolio_evals.db"
+
+    # Redact raw prompt & response before writing
+    redacted_prompt = redact(raw_task_prompt)
+    redacted_response = redact(raw_model_response)
+    now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
+
+    conn = connect_sqlite(str(evals_db), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000;")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS eval_case_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                eval_run_id TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                raw_task_prompt TEXT NOT NULL,
+                raw_model_response TEXT NOT NULL,
+                judge_model TEXT NOT NULL,
+                judge_backend TEXT NOT NULL,
+                judge_verdict TEXT NOT NULL,
+                judge_rationale TEXT NOT NULL,
+                facet_scores_json TEXT,
+                cumulative_tokens_used INTEGER NOT NULL DEFAULT 0,
+                cumulative_cost_usd REAL NOT NULL DEFAULT 0.0,
+                recorded_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO eval_case_history (
+                eval_run_id, purpose, model_id, provider, raw_task_prompt, raw_model_response,
+                judge_model, judge_backend, judge_verdict, judge_rationale, facet_scores_json,
+                cumulative_tokens_used, cumulative_cost_usd, recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid.uuid4().hex,
+                purpose,
+                model_id,
+                provider,
+                redacted_prompt,
+                redacted_response,
+                judge_model,
+                judge_backend,
+                judge_verdict,
+                judge_rationale,
+                facet_scores_json,
+                cumulative_tokens_used,
+                cumulative_cost_usd,
+                now_iso,
+            ),
+        )
+        conn.commit()
+    except Exception as exc:
+        log.warning({"event": "eval_case_history_write_failed", "error": str(exc)})
+    finally:
+        conn.close()
+
+
+def effective_cost_ratio(
+    purpose: str, candidate_model: str, incumbent_model: str, db_path: Path | str | None = None
+) -> float:
+    """Calculate projected/empirical cost ratio between candidate and incumbent model.
+
+    Queries portfolio_evals.db for actual cumulative cost USD across recent cases
+    when available; falls back to list price ratio when no empirical data exists.
+    """
+    from db_paths import resolve_db_path
+    from llm.model_ladder import model_rank
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    resolved_path = resolve_db_path(db_path)
+    if resolved_path is not None:
+        main_db = Path(resolved_path)
+        evals_db = main_db.parent / "portfolio_evals.db"
+
+        if evals_db.exists():
+            try:
+                conn = connect_sqlite(str(evals_db), role=SQLiteConnectionRole.READ_ONLY)
+                try:
+                    conn.execute("PRAGMA busy_timeout = 30000;")
+                    cand_row = conn.execute(
+                        "SELECT SUM(cumulative_cost_usd), COUNT(*) FROM eval_case_history WHERE purpose = ? AND model_id = ?",
+                        (purpose, candidate_model),
+                    ).fetchone()
+                    inc_row = conn.execute(
+                        "SELECT SUM(cumulative_cost_usd), COUNT(*) FROM eval_case_history WHERE purpose = ? AND model_id = ?",
+                        (purpose, incumbent_model),
+                    ).fetchone()
+                    if (
+                        cand_row
+                        and inc_row
+                        and cand_row[1] >= 3
+                        and inc_row[1] >= 3
+                        and cand_row[0] is not None
+                        and inc_row[0] is not None
+                        and inc_row[0] > 0
+                    ):
+                        return float(cand_row[0] / cand_row[1]) / float(inc_row[0] / inc_row[1])
+                finally:
+                    conn.close()
+            except Exception as exc:
+                log.warning({"event": "effective_cost_ratio_query_failed", "error": str(exc)})
+
+    # Fallback: ratio of blended list prices
+    cand_rank = model_rank(candidate_model)
+    inc_rank = model_rank(incumbent_model)
+    if cand_rank is None or inc_rank is None or inc_rank <= 0.0:
+        return 1.0
+    return cand_rank / inc_rank
+
+
 def evaluate_switches(
     db_path: Path,
     *,
@@ -412,12 +552,6 @@ def evaluate_switches(
         return results
 
     for purpose, candidate in pairs:
-        # ---- Infrastructure check first ----
-        # A newest verdict of CANDIDATE_ERRORED means the candidate backend is
-        # operationally broken (the 2026-06-28 sweep: Gemini CLI failing 60-100%
-        # of runs, recorded as quality losses). Surface it as an infra alert and
-        # skip streak evaluation — an errored week is neither switch nor keep
-        # evidence, and the streak checks would misread it.
         latest = _latest_verdict_with_time(db_path, purpose, candidate)
         if latest is not None and latest[0] == CANDIDATE_ERRORED:
             verdict_date = latest[1][:10]
@@ -446,10 +580,6 @@ def evaluate_switches(
             )
             continue
 
-        # ---- Forward switch check ----
-        # Streak over GRADED verdicts only (streak-neutral labels excluded) +
-        # the pooled Wilson gate (§2.4): the streak says "consistently at
-        # parity", the pooled 95% lower bound says "on enough evidence".
         recent = _recent_verdicts(
             db_path, purpose, candidate, consecutive_switch, exclude=STREAK_NEUTRAL
         )
@@ -466,8 +596,6 @@ def evaluate_switches(
                     )
                 )
                 continue
-            # A manual lock (revert_model_switch.py --lock) is a HUMAN decision
-            # the auto loop must never overwrite (§10 Q3 remediation).
             setter = _active_override_set_by(db_path, purpose)
             if setter is not None and setter.startswith("manual"):
                 results.append(
@@ -481,6 +609,26 @@ def evaluate_switches(
                     )
                 )
                 continue
+
+            # Check Effective Cost Headroom Gate (< 0.90 ratio)
+            from llm.cli import DEFAULT_MODEL, LLM_MODELS
+
+            incumbent = current_override or LLM_MODELS.get(purpose, DEFAULT_MODEL)
+            cost_ratio = effective_cost_ratio(purpose, candidate, incumbent, db_path=db_path)
+
+            if cost_ratio >= 0.90:
+                results.append(
+                    SwitchResult(
+                        purpose,
+                        candidate,
+                        "COST_RATIO_HELD",
+                        None,
+                        f"streak met but effective cost ratio {cost_ratio:.2f} >= 0.90 threshold — "
+                        "candidate offers insufficient cost headroom",
+                    )
+                )
+                continue
+
             pooled = _pooled_parity_evidence(db_path, purpose, candidate, consecutive_switch)
             lbs = {j: wilson_lower_bound(w, n) for j, (w, n) in pooled.items()}
             min_lb = min(lbs.values()) if lbs else 0.0
@@ -503,6 +651,7 @@ def evaluate_switches(
                 "latest_verdicts": recent,
                 "wilson_lower_bound": round(min_lb, 4),
                 "wilson_pooled": {j: [w, n] for j, (w, n) in pooled.items()},
+                "cost_ratio": round(cost_ratio, 4),
                 "run_id": uuid.uuid4().hex[:8],
                 "applied_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
             }
@@ -530,6 +679,7 @@ def evaluate_switches(
                     f"{consecutive_switch} consecutive SWITCH_DOWN verdicts",
                 )
             )
+
             continue
 
         # ---- Regression / revert check ----

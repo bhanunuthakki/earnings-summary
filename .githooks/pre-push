@@ -49,8 +49,20 @@ EOF
 fi
 
 # The whole-repo strict Pyright comparison is a CI ratchet because the checkout
-# carries a reviewed legacy baseline. Full tests remain the local blocking gate.
-if has pytest; then run pytest -q; fi
+# carries a reviewed legacy baseline. Full tests remain the local blocking gate,
+# or set FAST_PUSH=1 to execute tests on changed test files only.
+if has pytest; then
+  if [ "${FAST_PUSH:-0}" = "1" ]; then
+    changed_tests=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- 'tests/test_*.py' 2>/dev/null || true)
+    if [ -n "$changed_tests" ]; then
+      run pytest -q $changed_tests
+    else
+      printf 'FAST_PUSH=1: no changed test files — skipping full pytest suite.\n' >&2
+    fi
+  else
+    run pytest -q
+  fi
+fi
 
 stubs="C:/Users/Bhanu/.gemini/snippets/sync_agent_stubs.py"
 if has python && [ -f "$stubs" ]; then

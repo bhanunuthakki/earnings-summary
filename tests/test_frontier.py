@@ -1,6 +1,6 @@
 """Tests for the frontier-research overlay (src/llm/frontier.py) and the
-model_ladder PR3 additions (backend_for, ladder_sha, JUDGE_POOL). All LLM calls
-are DI'd fakes — the suite never spends."""
+model_ladder PR3 additions (backend_for, ladder_sha, JUDGE_POOL). All network
+calls are DI'd fakes — the suite never spends and never hits the real network."""
 
 from __future__ import annotations
 
@@ -8,11 +8,15 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from llm.frontier import (
     FRONTIER_PURPOSE,
     frontier_sha,
     load_candidate_models,
     merged_cheaper_candidates,
+    merged_is_cheaper,
+    merged_rank,
     promise_of,
     run_frontier_research,
 )
@@ -86,6 +90,23 @@ def test_judge_pool_spans_two_families() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Merged price lookup (static ladder union discovered overlay)
+# ---------------------------------------------------------------------------
+
+
+def test_merged_rank_covers_overlay_models(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    _seed_candidate(db_path, "prov/cheap-model", input_usd=0.05, output_usd=0.10)
+    assert merged_rank(db_path, "claude-sonnet-5") == pytest.approx(3.142857, rel=1e-4)
+    assert merged_rank(db_path, "prov/cheap-model") == pytest.approx(0.0571428, rel=1e-4)
+    assert merged_rank(db_path, "nonexistent-model") is None
+    assert merged_is_cheaper(db_path, "prov/cheap-model", "claude-sonnet-5") is True
+    assert merged_is_cheaper(db_path, "claude-sonnet-5", "prov/cheap-model") is False
+    # Unpriced side -> not cheaper (unknown cost is not evidence of savings).
+    assert merged_is_cheaper(db_path, "nonexistent-model", "claude-sonnet-5") is False
+
+
+# ---------------------------------------------------------------------------
 # Overlay reads + the merged pool
 # ---------------------------------------------------------------------------
 
@@ -135,62 +156,114 @@ def test_frontier_sha_changes_with_overlay(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Research (DI'd web call — never spends)
+# Catalog-fetch research (DI'd fake HTTP GET — never hits the real network)
 # ---------------------------------------------------------------------------
 
 
-def _web_returning(payload: str) -> Callable[..., str]:
-    def _call(prompt: str, **kwargs: object) -> str:
-        assert kwargs.get("purpose") == FRONTIER_PURPOSE
-        assert kwargs.get("scope") == "meta_eval"
-        return payload
+def _catalog_returning(data: list[dict[str, object]]) -> Callable[[str], object]:
+    def _get(url: str) -> object:
+        assert url == "https://openrouter.ai/api/v1/models"
+        return {"data": data}
 
-    return _call
+    return _get
+
+
+def _openrouter_row(
+    model_id: str, *, prompt_usd_per_token: float, completion_usd_per_token: float
+) -> dict[str, object]:
+    return {
+        "id": model_id,
+        "pricing": {
+            "prompt": str(prompt_usd_per_token),
+            "completion": str(completion_usd_per_token),
+        },
+    }
+
+
+def test_research_no_llm_call_involved(tmp_path: Path) -> None:
+    """The purpose id still exists for ledger/isolation bookkeeping continuity,
+    but run_frontier_research makes zero LLM calls — only an HTTP GET."""
+    assert FRONTIER_PURPOSE == "model_frontier_research"
 
 
 def test_research_validates_and_upserts(tmp_path: Path) -> None:
     db_path = _db(tmp_path)
-    payload = """
-    {"candidates": [
-      {"model_id": "mistralai/new-cheap", "family": "openrouter",
-       "input_usd_per_mtok": 0.15, "output_usd_per_mtok": 0.45, "promise": 0.7,
-       "source_url": "https://openrouter.ai/models", "notes": "new + cheap"},
-      {"model_id": "not-a-slug", "family": "openrouter",
-       "input_usd_per_mtok": 0.1, "output_usd_per_mtok": 0.2},
-      {"model_id": "gemini-9-ultra", "family": "gemini",
-       "input_usd_per_mtok": -1, "output_usd_per_mtok": 5},
-      {"model_id": "deepseek/deepseek-chat", "family": "openrouter",
-       "input_usd_per_mtok": 0.3, "output_usd_per_mtok": 1.1}
-    ]}
-    """
-    n = run_frontier_research(db_path, web_call=_web_returning(payload))
-    # Only the first row survives: bad slug dropped, negative price dropped,
-    # already-known static-ladder id dropped (the checked-in ladder is the
-    # price authority for its own rows).
+    data = [
+        _openrouter_row(
+            "mistralai/new-cheap", prompt_usd_per_token=0.15e-6, completion_usd_per_token=0.45e-6
+        ),
+        {"id": "not-a-slug", "pricing": {"prompt": "0.0000001", "completion": "0.0000002"}},
+        {"id": "gemini-9-ultra", "pricing": {"prompt": "-1", "completion": "5"}},
+        # Already in the static ladder -> skipped (the checked-in ladder is
+        # the price authority for its own rows).
+        _openrouter_row(
+            "deepseek/deepseek-chat", prompt_usd_per_token=0.3e-6, completion_usd_per_token=1.1e-6
+        ),
+    ]
+    n = run_frontier_research(db_path, http_get=_catalog_returning(data))
     assert n == 1
     models = load_candidate_models(db_path)
     assert set(models) == {"mistralai/new-cheap"}
-    assert models["mistralai/new-cheap"].promise == 0.7
+    assert models["mistralai/new-cheap"].promise == 0.5  # neutral: no capability guess
+    assert models["mistralai/new-cheap"].input_usd_per_mtok == pytest.approx(0.15)
+    assert models["mistralai/new-cheap"].output_usd_per_mtok == pytest.approx(0.45)
 
 
-def test_research_upsert_updates_prices(tmp_path: Path) -> None:
+def test_research_caps_to_cheapest_n(tmp_path: Path) -> None:
+    """Hundreds of catalog rows -> only the cheapest _MAX_CATALOG_ROWS survive,
+    deterministically (no LLM judgment call needed)."""
     db_path = _db(tmp_path)
-    first = '{"candidates": [{"model_id": "prov/m1", "family": "openrouter", "input_usd_per_mtok": 0.5, "output_usd_per_mtok": 1.0}]}'
-    second = '{"candidates": [{"model_id": "prov/m1", "family": "openrouter", "input_usd_per_mtok": 0.2, "output_usd_per_mtok": 0.6, "promise": 0.9}]}'
-    assert run_frontier_research(db_path, web_call=_web_returning(first)) == 1
-    assert run_frontier_research(db_path, web_call=_web_returning(second)) == 1
+    data = [
+        _openrouter_row(
+            f"prov/model-{i}", prompt_usd_per_token=i * 1e-6, completion_usd_per_token=i * 2e-6
+        )
+        for i in range(1, 51)
+    ]
+    n = run_frontier_research(db_path, http_get=_catalog_returning(data))
+    assert n == 12
+    models = load_candidate_models(db_path)
+    # The 12 cheapest are model-1..model-12.
+    assert set(models) == {f"prov/model-{i}" for i in range(1, 13)}
+
+
+def test_research_reprices_already_discovered_row(tmp_path: Path) -> None:
+    """An overlay row IS eligible for re-pricing on a later pass — only the
+    static ladder is off-limits."""
+    db_path = _db(tmp_path)
+    first = [
+        _openrouter_row("prov/m1", prompt_usd_per_token=0.5e-6, completion_usd_per_token=1.0e-6)
+    ]
+    second = [
+        _openrouter_row("prov/m1", prompt_usd_per_token=0.2e-6, completion_usd_per_token=0.6e-6)
+    ]
+    assert run_frontier_research(db_path, http_get=_catalog_returning(first)) == 1
+    assert run_frontier_research(db_path, http_get=_catalog_returning(second)) == 1
     m = load_candidate_models(db_path)["prov/m1"]
-    assert m.input_usd_per_mtok == 0.2
-    assert m.promise == 0.9
+    assert m.input_usd_per_mtok == pytest.approx(0.2)
 
 
 def test_research_failure_degrades_to_zero(tmp_path: Path) -> None:
     db_path = _db(tmp_path)
 
-    def _broken(prompt: str, **kwargs: object) -> str:
-        raise RuntimeError("web transport down")
+    def _broken(url: str) -> object:
+        raise RuntimeError("network down")
 
-    assert run_frontier_research(db_path, web_call=_broken) == 0
+    assert run_frontier_research(db_path, http_get=_broken) == 0
     assert load_candidate_models(db_path) == {}
-    # Unparseable output degrades the same way.
-    assert run_frontier_research(db_path, web_call=_web_returning("not json")) == 0
+    # Malformed top-level shape degrades the same way.
+    assert run_frontier_research(db_path, http_get=lambda url: {"unexpected": True}) == 0
+    assert run_frontier_research(db_path, http_get=lambda url: ["not", "a", "dict"]) == 0
+
+
+def test_research_drops_zero_and_negative_prices(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    data = [
+        {"id": "prov/free-model", "pricing": {"prompt": "0", "completion": "0"}},
+        {"id": "prov/bad-model", "pricing": {"prompt": "-0.001", "completion": "0.002"}},
+        _openrouter_row(
+            "prov/valid-model", prompt_usd_per_token=0.1e-6, completion_usd_per_token=0.2e-6
+        ),
+    ]
+    n = run_frontier_research(db_path, http_get=_catalog_returning(data))
+    assert n == 1
+    assert set(load_candidate_models(db_path)) == {"prov/valid-model"}

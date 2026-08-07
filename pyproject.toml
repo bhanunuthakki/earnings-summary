@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pytest-xdist>=3.5",
     "alembic>=1.13",
     "sqlalchemy>=2.0",
     "ruff>=0.5",
@@ -156,5 +157,12 @@ reportAny = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -n auto --dist=loadfile"
 pythonpath = ["src", "scratch"]
+markers = [
+    "unit: Fast unit tests with no DB or network dependency",
+    "integration: Subsystem integration tests using SQLite or disk",
+    "slow: Heavy end-to-end pipelines, vector search, or benchmark tests",
+    "golden: HTML/CSS golden rendering and triage snapshot tests",
+    "db: Tests executing database migrations or transactions",
+]

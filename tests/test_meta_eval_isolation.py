@@ -23,12 +23,19 @@ import pytest
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
-# Every meta-machinery purpose introduced by the governance build (PR2-PR5).
+# Every meta-machinery purpose introduced by the governance build (PR2-PR5)
+# that ACTUALLY calls an LLM — i.e. carries a prompt, a model pin, and needs
+# capture/coverage isolation for that call. ``model_frontier_research`` is
+# deliberately absent: since 2026-08-06 it pulls OpenRouter's public model
+# catalog (a plain HTTP GET, no LLM call at all — see llm/frontier.py's module
+# docstring), so the prompt/version/pin invariants below don't apply to it. It
+# remains excluded from production cost accounting in llm/capture.py and
+# evals/coverage.py regardless (still infrastructure, not a user-facing
+# purpose) — those lists are supersets and untouched by this change.
 META_MACHINERY_PURPOSES = frozenset(
     {
         "case_difficulty_classify",
         "optimizer_nominator",
-        "model_frontier_research",
         "query_criteria_derive",
         "prompt_variant_propose",
     }
@@ -101,14 +108,12 @@ def test_i2_prompt_templates_carry_no_bookkeeping_fields() -> None:
     """Experiment identity travels in ledger COLUMNS (purpose/scope/run_id),
     never in prompt text: no meta template interpolates run/experiment ids."""
     from evals.sampler import _CLASSIFY_INSTRUCTIONS  # pyright: ignore[reportPrivateUsage]
-    from llm.frontier import FRONTIER_PROMPT
     from llm.nominator import NOMINATOR_PROMPT
     from llm.prompt_ab import PROPOSE_PROMPT
     from llm.query_criteria import DERIVE_PROMPT
 
     for name, template in {
         "classify": _CLASSIFY_INSTRUCTIONS,
-        "frontier": FRONTIER_PROMPT,
         "nominator": NOMINATOR_PROMPT,
         "propose": PROPOSE_PROMPT,
         "derive": DERIVE_PROMPT,

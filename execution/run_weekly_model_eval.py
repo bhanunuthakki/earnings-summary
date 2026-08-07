@@ -4,11 +4,13 @@ This is the activated, closed-loop version of the model-downgrade eval
 (directives/model_eval_loop.md + meta_eval_governance.md §1.4/§10.1). One run
 does four things in order:
 
-  0. STEER (monthly / on frontier change): refresh the pareto frontier
-     (``model_frontier_research`` — discovered models auto-enter the TEST pool)
-     and re-run the Opus nominator (``optimizer_nominator``) so the sweep tests
-     the highest leverage×promise (purpose, candidate) pairs next. Both degrade
-     deterministically — steering never stalls the loop.
+  0. STEER (on frontier change, or forced via --nominate): refresh the pareto
+     frontier — a plain HTTP GET against OpenRouter's public model catalog, no
+     LLM call, no tokens (``model_frontier_research`` — discovered models
+     auto-enter the TEST pool) — and re-run the Opus nominator
+     (``optimizer_nominator``) so the sweep tests the highest leverage×promise
+     (purpose, candidate) pairs next. Both degrade deterministically — steering
+     never stalls the loop.
   1. HARVEST a bounded, rotating sample of tickers: force the incumbent model to
      re-run on real prompts (with LLM_CAPTURE_DIR set, in a SUBPROCESS) so fresh
      prompt cases land in the capture dir. Rotating by ISO week keeps weekly cost
@@ -257,14 +259,14 @@ def main() -> int:
         "=== weekly model-eval loop %s ===", datetime.now(UTC).replace(tzinfo=None).isoformat()
     )
 
-    # ---- 0. Steer (monthly / on frontier change) ----
+    # ---- 0. Steer (on frontier change) ----
     from llm.frontier import run_frontier_research
     from llm.nominator import nomination_run_due, pending_nominations, run_nominator
 
     if not args.skip_nominate and (args.nominate or nomination_run_due(db_path)):
-        log.info("--- step 0: frontier research + nomination ---")
+        log.info("--- step 0: frontier catalog refresh + nomination ---")
         upserted = run_frontier_research(db_path)
-        log.info("frontier research: %d candidate(s) refreshed", upserted)
+        log.info("frontier catalog refresh: %d candidate(s) refreshed", upserted)
         run_nominator(db_path)
     nominations = pending_nominations(db_path)
     if nominations:

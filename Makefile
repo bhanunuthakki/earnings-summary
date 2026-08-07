@@ -14,7 +14,7 @@ BASE ?= origin/main
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
 CHANGED = $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
 
-.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test check ci-local
+.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-changed check check-fast ci-local
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -49,7 +49,14 @@ typecheck-changed:  ## pyright strict on files changed vs BASE (the enforceable 
 test:  ## Run the full test suite
 	pytest -q
 
+test-changed:  ## Run pytest only on changed test files vs BASE
+	@changed_tests=$$(git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- 'tests/test_*.py'); \
+	if [ -n "$$changed_tests" ]; then pytest -q $$changed_tests; else echo "no changed test files"; fi
+
 check: format-changed lint-changed typecheck-changed test  ## Pre-push gate: your-lines format + your-files lint/types + tests
+
+check-fast: format-changed lint-changed typecheck-changed test-changed  ## Fast inner-loop gate: format + lint + typecheck + changed-tests
 
 ci-local:  ## Mirror CI locally (format-check on changed + full tests)
 	$(MAKE) lint-changed && $(MAKE) test
+

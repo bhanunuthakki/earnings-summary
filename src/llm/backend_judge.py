@@ -146,12 +146,24 @@ REJECT = "REJECT"
 INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
 
 
+_BRAND_SELF_ID_RX = re.compile(
+    r"(?i)\b(as an? (ai|language model|assistant) (trained|created|developed)? (by|from|at)? (anthropic|google|openai|meta|mistral|deepseek|qwen)?|"
+    r"i am (claude|gemini|gpt-4|gpt-5|chatgpt|deepseek))\b"
+)
+
+
+def _scrub_brand_self_id(text: str) -> str:
+    """Scrub provider self-identification phrases from model responses before judging."""
+    return _BRAND_SELF_ID_RX.sub("[AI assistant]", text)
+
+
 _PROMPT_TEMPLATE = """\
 You are grading two AI assistants' answers to the SAME task, head to head, for a
 financial-analysis pipeline. The task was issued for the purpose "{purpose}".
 
 You are NOT told which model wrote which answer. Judge only the text in front of
-you. Do not reward length; a tighter answer that fully does the task is better.
+you. Do NOT reward wordiness or length. A concise, dense response that answers the prompt
+with zero padding is STRICTLY PREFERRED over a verbose or repetitive response.
 
 === TASK GIVEN TO BOTH ===
 {prompt}
@@ -194,18 +206,13 @@ def build_judge_prompt(
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS,
     criteria_block: str | None = None,
 ) -> str:
-    """Assemble the brand-blind A/B judge prompt for one pass.
-
-    ``criteria_block`` (§3.3) is the optional per-case checklist rendered by
-    ``query_criteria.render_criteria_block`` — it lands between the responses
-    and the facet instructions and adds the per-item output contract. Absent ⇒
-    the legacy 4-facet prompt, byte-identical to before."""
+    """Assemble the brand-blind A/B judge prompt for one pass with brand scrubbing."""
     block = f"\n{criteria_block}\n" if criteria_block else ""
     return _PROMPT_TEMPLATE.format(
         purpose=purpose or "(unspecified)",
         prompt=_truncate(task_prompt, max_prompt_chars),
-        response_a=response_a,
-        response_b=response_b,
+        response_a=_scrub_brand_self_id(response_a),
+        response_b=_scrub_brand_self_id(response_b),
         criteria_block=block,
     )
 

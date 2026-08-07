@@ -1169,3 +1169,52 @@ PR1 (inventory) is unchanged and remains the right first step. Deltas from §7:
 - **PR6** adds the 3-family RISKY judging surface + the RISKY remediation/revert panel affordance
   (Q3/Q5a) and the frontier/rotation views.
 - **New small PR (after PR1):** `purpose=None` hard-deprecation (Q6).
+
+### 10.4 Frontier discovery without an external benchmark (owner directive 2026-08-06)
+
+Two earlier revisions of this subsystem both missed the same point, worth
+recording so it isn't re-tried a third time:
+
+1. **First attempt**: score every candidate against the Artificial Analysis
+   Intelligence Index and bucket scores into three named capability tiers.
+   Wrong on two axes at once. AA's index is a general
+   reasoning/coding/agentic-tool-use composite — it was never measuring
+   "good at earnings-summary / DCF / thesis-tracking work," which is this
+   pipeline's actual domain. And fixed tier cutoffs go stale silently as the
+   frontier compresses (scores refresh, boundaries don't).
+2. **Second attempt**: drop the tiers, keep AA but compare scores
+   continuously (a signed delta + a Pareto-domination check) instead of
+   banding them. Fixed the tiering problem, not the domain-mismatch problem —
+   still importing a general benchmark into a finance-specific pipeline, and
+   still paying a MONTHLY Opus + `WebSearch` call to do it (expensive, and the
+   token cost bought almost nothing: OpenRouter's own catalog already
+   publishes exact prices for the hundreds of open-weight models that call
+   was mostly there to discover).
+
+**What actually replaced both**: `run_frontier_research` now does a plain
+`GET https://openrouter.ai/api/v1/models` — no LLM call, no tokens, can run as
+often as useful — and keeps the cheapest not-yet-known models, deterministically
+(sort by price, cap the count; no LLM judgment call needed for that either).
+Claude/Gemini pricing, which changes rarely and covers only a handful of
+tiers, is tracked by the existing manual cross-project `/refresh-frontier`
+restamp instead of an LLM call from inside this repo.
+
+**Capability comes from THIS pipeline's own judged history, not an external
+score.** `model_eval_verdicts` — real KEEP/SWITCH verdicts on real
+earnings-summary / DCF / thesis-tracking purposes (`backend_judge.py` /
+`model_eval.py`) — is the actual finance benchmark; no import substitutes for
+it. A freshly discovered candidate carries a neutral `promise = 0.5` (no
+capability guess at discovery time) and stays that way until the sweep
+actually tests it — the `optimizer_nominator` already receives per-purpose
+`last_verdicts` and per-candidate verdict history (`verdicts_json`) to weigh,
+unchanged by any of this.
+
+**Judge selection is the one place a real cold-start problem exists** — a
+brand-new judge has no verdict history to be graded against, unlike a
+generator candidate. This stays MANUAL / ON-DEMAND, not automated: a human
+triggers a backtest (candidate judge re-grades cases with an existing
+recorded verdict, compared against the incumbent judge's verdict on the same
+cases) before a swap. See `model_ladder.py`'s `DEEPSEEK_JUDGE_MODEL` rotation
+comment for the procedure. Judge quality is the measurement instrument for
+every promotion in this system, so a swap is a deliberate action, never a
+scheduled one.

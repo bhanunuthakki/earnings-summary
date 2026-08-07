@@ -1,16 +1,30 @@
-"""Pareto-frontier research + the candidate_models overlay
-(meta_eval_governance.md §10.1 — owner decision Q5b, PR3).
+"""Pareto-frontier candidate discovery + the candidate_models overlay
+(meta_eval_governance.md §10.1 — owner decision Q5b, PR3; revised 2026-08-06).
 
 The static ``model_ladder.MODEL_LADDER`` is a hand-edited constant; OpenRouter
 alone exposes hundreds of open-weight models nobody curated. This module makes
-the candidate pool DATA-REFRESHED:
+the candidate pool DATA-REFRESHED, cheaply:
 
-* ``model_frontier_research`` — a MONTHLY Opus+web purpose that re-verifies the
-  cross-provider cost/performance frontier (Claude · Gemini · OpenRouter),
-  surfaces newly-released / newly-cheap models, and scores each candidate's
-  *promise* (cheap × plausibly-capable). It automates the manual
-  ``/refresh-frontier`` restamp for the OPTIMIZER's pool; the checked-in ladder
-  stays the price source of truth for its own seed rows.
+* ``run_frontier_research`` — pulls OpenRouter's public model catalog
+  (``GET https://openrouter.ai/api/v1/models``, no auth, no LLM call, no
+  tokens) and upserts the cheapest not-yet-known models into
+  ``candidate_models``. This can run as often as useful — it costs an HTTP
+  request, not a metered LLM call.
+
+  An earlier revision of this module ran a MONTHLY Opus+``WebSearch`` pass and
+  scored each candidate against the Artificial Analysis Intelligence Index.
+  Both choices were wrong for this pipeline: the token-intensive search was
+  unnecessary (OpenRouter's own catalog already gives exact prices, and
+  Claude/Gemini pricing changes rarely enough to track by the existing manual
+  cross-project ``/refresh-frontier`` restamp instead), and AA's index measures
+  general reasoning/coding/agentic-tool-use — not finance-specific competence.
+
+  This pipeline's actual finance benchmark is ``model_eval_verdicts``: judged
+  output on real earnings-summary / DCF / thesis-tracking purposes
+  (``backend_judge.py`` / ``model_eval.py``). A newly discovered candidate is
+  UNSCORED until that loop grades it — same as any static-ladder model. No
+  external index stands in for that judgment. See
+  ``directives/meta_eval_governance.md`` §10.4.
 * ``candidate_models`` — the overlay table research upserts into. Discovered
   rows AUTO-ENTER the TEST pool (owner decision): eligible for
   ``scope="model_eval"`` replay immediately. Production routing is untouched —
@@ -22,10 +36,9 @@ the candidate pool DATA-REFRESHED:
   discovered slugs still dispatch correctly via ``model_ladder.backend_for``'s
   slash-slug convention.
 
-Isolation: research is meta machinery — ``scope="meta_eval"``,
-``CAPTURE_DENYLIST``, excluded from the workload inventory (EVAL_SCOPES). It
-reads *about* models; it never touches a production generation prompt (I2/I5).
-Any research failure degrades to the existing pool — steering never stalls.
+Isolation: research reads *about* models, not from them — it never touches a
+production generation prompt. Any research failure (network, malformed
+response) degrades to the existing pool and returns 0 — steering never stalls.
 """
 
 from __future__ import annotations
@@ -40,94 +53,33 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from llm.model_ladder import (
-    CLAUDE,
-    GEMINI,
-    MODEL_LADDER,
-    OPENROUTER,
-    cheaper_candidates,
-    model_rank,
-)
-from llm.prompt_registry import PromptTemplate, register
+from llm.model_ladder import MODEL_LADDER, OPENROUTER, cheaper_candidates, model_rank
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
 FRONTIER_PURPOSE = "model_frontier_research"
 
-# Validation clamps for researched rows (fail-closed: a row outside these is
+OPENROUTER_MODELS_ENDPOINT = "https://openrouter.ai/api/v1/models"
+_CATALOG_TIMEOUT_SECONDS = 15
+
+# Validation clamps for catalog rows (fail-closed: a row outside these is
 # dropped + logged, never upserted).
-_MAX_RESEARCH_ROWS = 12
+_MAX_CATALOG_ROWS = 12
 _MAX_USD_PER_MTOK = 1000.0
-_FAMILIES = (CLAUDE, GEMINI, OPENROUTER)
 
-# Instruction scaffold for model_frontier_research (v3 — prompt_versions).
-FRONTIER_PROMPT_TEMPLATE = register(
-    PromptTemplate(
-        template_id="model_frontier.research",
-        body="""Search the web before answering. An answer that cites no source is invalid.
-
-You are refreshing the candidate-model frontier for an LLM cost optimizer.
-
-Research CURRENT general-availability API pricing and
-capability signals for language models across three providers:
-- Anthropic Claude tiers (family "claude"),
-- Google Gemini tiers (family "gemini"),
-- open-weight models served via OpenRouter (family "openrouter", ids are
-  provider/model slugs like "deepseek/deepseek-chat").
-
-Also flag any INDEPENDENT (non-Anthropic, non-Google) model that would make a
-better cheap JUDGE than the incumbent (currently deepseek/deepseek-v4-flash).
-Judging is this platform's measurement instrument — every model and prompt
-promotion rests on judged verdicts — so a cheaper or sharper independent judge
-is worth surfacing even when it is unsuitable as a production generator. Note
-its context window (a judge prompt must never truncate) and any public
-judge-agreement benchmark you can verify.
-
-Goal: surface models that could serve as CHEAPER candidates for analytical /
-extraction / classification workloads — especially newly released or newly
-re-priced models, and the most promising handful of OpenRouter open-weight
-models (do NOT list hundreds; pick the few worth testing).
-
-The models already known to the optimizer (do not re-list them):
-{known_ids}
-
-WEB BUDGET (HARD CAPS): run at most 6 searches and open at most 12 sources.
-
-Respond with ONLY a JSON object:
-{{"candidates": [
-  {{"model_id": "<exact API/OpenRouter id>",
-   "family": "claude" | "gemini" | "openrouter",
-   "input_usd_per_mtok": <number>,
-   "output_usd_per_mtok": <number>,
-   "promise": <0..1 — cheap x plausibly-capable for analytical text work>,
-   "source_url": "<pricing page you verified>",
-   "notes": "<one line: what it is / why promising>"}},
-  ...
-], "search_evidence": {{
-  "queries": ["<query actually run>", "..."],
-  "sources_opened": ["<source URL actually opened>", "..."],
-  "checked_at": "YYYY-MM-DD"
-}}}}
-Prices must be the provider's public list prices in USD per million tokens.
-Omit anything you could not verify. An empty candidates list is valid only when
-search_evidence names the queries run, dated sources opened, and coverage of all
-three provider families. Never use an empty list as a substitute for searching.
-""",
-        variables=("known_ids",),
-        description="Web-sourced current model-price and capability frontier",
-    )
-)
-
-# Compatibility for isolation checks and callers that inspect the prompt body.
-FRONTIER_PROMPT = FRONTIER_PROMPT_TEMPLATE.body
-
-WebCall = Callable[..., str]
+HttpGet = Callable[[str], object]
 
 
 @dataclass(frozen=True, slots=True)
 class CandidateModel:
-    """One overlay row — a frontier-discovered (or manually added) candidate."""
+    """One overlay row — a frontier-discovered (or manually added) candidate.
+
+    ``promise`` defaults NEUTRAL (0.5) for a catalog-discovered row: at
+    discovery time there is no capability signal to assign one from — this
+    pipeline deliberately does not substitute a general benchmark for one.
+    Real value accrues via ``model_eval_verdicts`` as the sweep actually tests
+    the candidate on production purposes."""
 
     model_id: str
     family: str
@@ -185,9 +137,31 @@ def load_candidate_models(db_path: Path) -> dict[str, CandidateModel]:
 
 def promise_of(db_path: Path, model_id: str) -> float:
     """The overlay's promise score for a model (0.5 neutral for static-ladder
-    models — they earned their place by being curated)."""
+    models — they earned their place by being curated — and for freshly
+    discovered ones, which carry no capability signal yet)."""
     row = load_candidate_models(db_path).get(model_id)
     return row.promise if row is not None else 0.5
+
+
+def merged_rank(db_path: Path, model_id: str) -> float | None:
+    """Blended $/MTok across the merged pool — static ladder first (the
+    checked-in price is authoritative for its own rows), else the discovered
+    overlay. None when the model is in neither."""
+    static = model_rank(model_id)
+    if static is not None:
+        return static
+    row = load_candidate_models(db_path).get(model_id)
+    return row.blended_usd_per_mtok if row is not None else None
+
+
+def merged_is_cheaper(db_path: Path, candidate_id: str, incumbent_id: str) -> bool:
+    """Strictly-cheaper across the merged pool. False when either side is
+    unpriced — unknown cost is not evidence of savings."""
+    cand = merged_rank(db_path, candidate_id)
+    inc = merged_rank(db_path, incumbent_id)
+    if cand is None or inc is None:
+        return False
+    return cand < inc
 
 
 def merged_cheaper_candidates(
@@ -229,112 +203,104 @@ def frontier_sha(db_path: Path) -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
-def _validate_candidate(entry: dict[str, object], rejected: set[str]) -> CandidateModel | None:
-    """Fail-closed row validation (closed vocabulary + price sanity). Ids in
-    ``rejected`` — the static ladder (its prices live in code) plus rows already
-    validated this response (dedup) — are dropped; overlay rows are NOT in the
-    set, so a research pass can re-verify/re-price them."""
-    mid = entry.get("model_id")
-    fam = entry.get("family")
-    if not isinstance(mid, str) or not mid.strip() or not isinstance(fam, str):
+def _default_http_get(url: str) -> object:
+    import requests
+
+    resp = requests.get(url, timeout=_CATALOG_TIMEOUT_SECONDS)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _extract_openrouter_row(entry: object) -> CandidateModel | None:
+    """One row of OpenRouter's ``/models`` response -> a validated candidate,
+    or None. Fail-closed: a malformed or nonsensical row is dropped, not
+    coerced. OpenRouter reports per-token USD strings; converted to $/MTok
+    here to match this pipeline's price basis."""
+    if not isinstance(entry, dict):
         return None
-    mid = mid.strip()
-    if fam not in _FAMILIES or mid in rejected:
+    row = cast("dict[str, object]", entry)
+    mid = row.get("id")
+    if not isinstance(mid, str) or "/" not in mid:
         return None
-    # Id shape must match the family it claims (an openrouter id is a slug).
-    if fam == OPENROUTER and "/" not in mid:
+    pricing = row.get("pricing")
+    if not isinstance(pricing, dict):
         return None
-    if fam == CLAUDE and not mid.startswith("claude"):
-        return None
-    if fam == GEMINI and not mid.startswith("gemini"):
-        return None
+    pricing_dict = cast("dict[str, object]", pricing)
     try:
-        input_usd = float(cast("float | int | str", entry.get("input_usd_per_mtok")))
-        output_usd = float(cast("float | int | str", entry.get("output_usd_per_mtok")))
+        input_usd_per_token = float(cast("float | int | str", pricing_dict.get("prompt")))
+        output_usd_per_token = float(cast("float | int | str", pricing_dict.get("completion")))
     except (TypeError, ValueError):
         return None
+    input_usd = input_usd_per_token * 1_000_000.0
+    output_usd = output_usd_per_token * 1_000_000.0
+    # Excludes exactly-zero (free/rate-limited variants that don't reflect a
+    # real production price signal) as well as nonsense/negative values.
     if not (0.0 < input_usd < _MAX_USD_PER_MTOK and 0.0 < output_usd < _MAX_USD_PER_MTOK):
         return None
-    promise_raw = entry.get("promise")
-    promise = float(promise_raw) if isinstance(promise_raw, (int, float)) else 0.5
-    promise = min(1.0, max(0.0, promise))
     return CandidateModel(
         model_id=mid,
-        family=fam,
+        family=OPENROUTER,
         input_usd_per_mtok=input_usd,
         output_usd_per_mtok=output_usd,
-        promise=promise,
+        promise=0.5,  # neutral — no capability signal at discovery time
     )
 
 
 def run_frontier_research(
     db_path: Path,
     *,
-    web_call: WebCall | None = None,
+    http_get: HttpGet | None = None,
     run_id: str | None = None,
 ) -> int:
-    """One monthly research pass: web-verify the frontier, validate fail-closed,
-    upsert ``candidate_models`` (discovered rows auto-enter the TEST pool).
-    Returns the number of rows upserted; ANY failure returns 0 with a warning —
-    the loop proceeds on the existing pool (steering never stalls)."""
+    """One catalog-refresh pass: pull OpenRouter's public model list (no LLM,
+    no tokens), keep the cheapest models not already known to the optimizer,
+    and upsert them into ``candidate_models`` (discovered rows auto-enter the
+    TEST pool). Returns the number of rows upserted; ANY failure (network,
+    malformed response) returns 0 with a warning — the loop proceeds on the
+    existing pool (steering never stalls)."""
     rid = run_id or uuid.uuid4().hex
-    # The prompt lists EVERYTHING tracked (static + overlay) to discourage
-    # redundant listing; validation rejects only STATIC ladder ids — the
-    # checked-in ladder is the price authority for its own rows, while overlay
-    # rows may be RE-verified/re-priced by a later research pass (that refresh
-    # is the point of the monthly cadence).
-    tracked = set(MODEL_LADDER) | set(load_candidate_models(db_path))
-    prompt = FRONTIER_PROMPT_TEMPLATE.render(known_ids=", ".join(sorted(tracked)))
-    rejected: set[str] = set(MODEL_LADDER)
-    if web_call is None:
-        from llm.cli import call_llm_with_web
-
-        web_call = call_llm_with_web
+    getter = http_get or _default_http_get
     try:
-        raw = web_call(
-            prompt,
-            purpose=FRONTIER_PURPOSE,
-            scope="meta_eval",
-            run_id=rid,
-        )
-        from llm.structured import parse_json_payload
-
-        payload = parse_json_payload(raw, expect="object", required_keys=("candidates",))
+        payload = getter(OPENROUTER_MODELS_ENDPOINT)
     except Exception as exc:
         log.warning(
-            "frontier research failed (%s: %s) — keeping the existing pool",
+            "frontier catalog fetch failed (%s: %s) — keeping the existing pool",
             type(exc).__name__,
             str(exc)[:200],
         )
         return 0
     if not isinstance(payload, dict):
         return 0
-    candidates_raw = cast("dict[str, object]", payload).get("candidates")
-    if not isinstance(candidates_raw, list):
+    entries = cast("dict[str, object]", payload).get("data")
+    if not isinstance(entries, list):
         return 0
-    validated: list[CandidateModel] = []
+
+    # Only STATIC ladder ids are off-limits — the checked-in ladder is the
+    # price authority for its own rows. An already-discovered overlay row IS
+    # eligible here, so a re-fetch can catch OpenRouter re-pricing it; that
+    # refresh is the point of running this repeatedly.
+    candidates: list[CandidateModel] = []
     dropped = 0
-    for entry_obj in cast("list[object]", candidates_raw)[:_MAX_RESEARCH_ROWS]:
-        if not isinstance(entry_obj, dict):
-            dropped += 1
-            continue
-        entry = cast("dict[str, object]", entry_obj)
-        cand = _validate_candidate(entry, rejected)
+    for entry in cast("list[object]", entries):
+        cand = _extract_openrouter_row(entry)
         if cand is None:
             dropped += 1
             continue
-        validated.append(cand)
-        rejected.add(cand.model_id)  # in-response dedup
+        if cand.model_id in MODEL_LADDER:
+            continue
+        candidates.append(cand)
     if dropped:
-        log.info("frontier research: %d row(s) dropped by validation", dropped)
-    if not validated:
+        log.info("frontier catalog: %d row(s) dropped by validation", dropped)
+    if not candidates:
         return 0
-    return _upsert_candidates(
-        db_path,
-        validated,
-        research_run_id=rid,
-        raw_entries=cast("list[object]", candidates_raw),
-    )
+
+    # Cheapest first, capped — "do not list hundreds, keep the few worth
+    # testing" is now a deterministic sort instead of an LLM judgment call.
+    # Already-discovered rows outside this window simply keep their last
+    # known price rather than being evicted.
+    candidates.sort(key=lambda c: c.blended_usd_per_mtok)
+    selected = candidates[:_MAX_CATALOG_ROWS]
+    return _upsert_candidates(db_path, selected, research_run_id=rid)
 
 
 def _upsert_candidates(
@@ -342,24 +308,8 @@ def _upsert_candidates(
     candidates: list[CandidateModel],
     *,
     research_run_id: str,
-    raw_entries: list[object],
 ) -> int:
     """Best-effort write (telemetry-grade: a failed write logs, never raises)."""
-    # source_url/notes ride along from the raw entries when present.
-    extras: dict[str, tuple[str | None, str | None]] = {}
-    for entry_obj in raw_entries:
-        if not isinstance(entry_obj, dict):
-            continue
-        entry = cast("dict[str, object]", entry_obj)
-        mid = entry.get("model_id")
-        if not isinstance(mid, str):
-            continue
-        url = entry.get("source_url")
-        notes = entry.get("notes")
-        extras[mid.strip()] = (
-            url if isinstance(url, str) else None,
-            notes if isinstance(notes, str) else None,
-        )
     now = datetime.now(UTC).replace(tzinfo=None).isoformat()
     try:
         conn = connect_sqlite(
@@ -372,20 +322,17 @@ def _upsert_candidates(
                 log.warning("candidate_models table absent — research result not persisted")
                 return 0
             for cand in candidates:
-                url, notes = extras.get(cand.model_id, (None, None))
                 conn.execute(
                     """
                     INSERT INTO candidate_models
                         (model_id, family, input_usd_per_mtok, output_usd_per_mtok,
-                         promise, source, status, source_url, notes, research_run_id,
-                         first_seen_at, verified_at)
+                         promise, source, status, source_url, notes,
+                         research_run_id, first_seen_at, verified_at)
                     VALUES (?, ?, ?, ?, ?, 'frontier_research', 'active', ?, ?, ?, ?, ?)
                     ON CONFLICT(model_id) DO UPDATE SET
                         input_usd_per_mtok = excluded.input_usd_per_mtok,
                         output_usd_per_mtok = excluded.output_usd_per_mtok,
-                        promise = excluded.promise,
                         source_url = excluded.source_url,
-                        notes = excluded.notes,
                         research_run_id = excluded.research_run_id,
                         verified_at = excluded.verified_at
                     """,
@@ -395,8 +342,8 @@ def _upsert_candidates(
                         cand.input_usd_per_mtok,
                         cand.output_usd_per_mtok,
                         cand.promise,
-                        url,
-                        notes,
+                        f"https://openrouter.ai/models/{cand.model_id}",
+                        "auto-discovered from the OpenRouter model catalog (cheapest not yet known)",
                         research_run_id,
                         now,
                         now,
@@ -408,5 +355,5 @@ def _upsert_candidates(
     except sqlite3.Error as exc:
         log.warning("candidate_models upsert failed: %s", exc)
         return 0
-    log.info("frontier research: %d candidate(s) upserted", len(candidates))
+    log.info("frontier catalog: %d candidate(s) upserted", len(candidates))
     return len(candidates)

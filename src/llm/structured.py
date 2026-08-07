@@ -139,20 +139,16 @@ def call_llm_structured(
     expect: Literal["object", "array"] = "object",
     required_keys: tuple[str, ...] = (),
     schema: TypeAdapter[T] | None = None,
+    domain_guardrail: Callable[[object], tuple[bool, str]] | None = None,
+    max_escalation_tier: int = 1,
     db_path: Path | str | None = None,
 ) -> T | object:
-    """``call_llm`` + strict parse + one retry-with-feedback, loud on failure.
+    """``call_llm`` + strict parse + P3 Cascade Router tier escalation, loud on failure.
 
-    ``db_path`` scopes the call's DB-backed layers (model pins, prompt A/B,
-    budget, llm_calls ledger) to an explicit DB — pass it whenever the caller
-    itself took an explicit ``db_path`` instead of relying on a
-    ``db.set_db_path`` bootstrap, or the cost row lands in the wrong DB (see
-    ``call_llm``).
-
-    Returns the parsed dict/list. Raises:
-      * whatever ``call_llm`` raises for call failures (hard stops included —
-        budget/setup problems must never be reshaped into parse errors);
-      * ``StructuredParseError`` when both attempts returned unusable JSON.
+    Attempts structured extraction using the primary purpose model.
+    On schema or domain_guardrail failure, attempts 1 repair.
+    If repair fails and max_escalation_tier >= 1, escalates to higher tier model
+    (e.g., Sonnet/Pro) to complete extraction.
     """
     raw = call_llm(
         prompt,
@@ -167,7 +163,12 @@ def call_llm_structured(
     )
     try:
         parsed = parse_json_payload(raw, expect=expect, required_keys=required_keys)
-        return schema.validate_python(parsed) if schema is not None else parsed
+        validated = schema.validate_python(parsed) if schema is not None else parsed
+        if domain_guardrail is not None:
+            ok, g_reason = domain_guardrail(validated)
+            if not ok:
+                raise ValueError(f"Domain guardrail validation failed: {g_reason}")
+        return validated
     except (ValueError, ValidationError) as first_exc:
         log.warning(
             {
@@ -178,6 +179,8 @@ def call_llm_structured(
                 "raw_head": raw[:200],
             }
         )
+
+    # Attempt 2: Same tier with repair preamble
     raw_retry = call_llm(
         _RETRY_PREAMBLE + prompt,
         purpose=purpose,
@@ -191,8 +194,72 @@ def call_llm_structured(
     )
     try:
         parsed = parse_json_payload(raw_retry, expect=expect, required_keys=required_keys)
-        return schema.validate_python(parsed) if schema is not None else parsed
+        validated = schema.validate_python(parsed) if schema is not None else parsed
+        if domain_guardrail is not None:
+            ok, g_reason = domain_guardrail(validated)
+            if not ok:
+                raise ValueError(f"Domain guardrail validation failed: {g_reason}")
+        return validated
     except (ValueError, ValidationError) as retry_exc:
+        # Check for P3 Cascade Escalation to higher tier
+        from llm.cli import DEFAULT_MODEL
+        from llm.resolver import resolve_model_and_backend
+
+        is_explicit_model = model is not None
+        primary_model, _ = resolve_model_and_backend(purpose=purpose, model=model)
+
+        if max_escalation_tier >= 1 and not is_explicit_model and primary_model != DEFAULT_MODEL:
+            log.warning(
+                {
+                    "event": "p3_cascade_escalation_triggered",
+                    "purpose": purpose,
+                    "ticker": ticker,
+                    "reason": str(retry_exc),
+                    "primary_model": primary_model,
+                    "target_model": DEFAULT_MODEL,
+                }
+            )
+
+            raw_escalated = call_llm(
+                _RETRY_PREAMBLE + prompt,
+                purpose=purpose,
+                model=DEFAULT_MODEL,
+                backend="claude",
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                timeout_seconds=timeout_seconds,
+                db_path=db_path,
+            )
+            try:
+                parsed_esc = parse_json_payload(
+                    raw_escalated, expect=expect, required_keys=required_keys
+                )
+                validated_esc = (
+                    schema.validate_python(parsed_esc) if schema is not None else parsed_esc
+                )
+                if domain_guardrail is not None:
+                    ok_esc, g_reason_esc = domain_guardrail(validated_esc)
+                    if not ok_esc:
+                        raise ValueError(
+                            f"Domain guardrail validation failed on escalated tier: {g_reason_esc}"
+                        )
+                return validated_esc
+            except (ValueError, ValidationError) as esc_exc:
+                log.error(
+                    {
+                        "event": "llm_structured_parse_failed_after_cascade",
+                        "purpose": purpose,
+                        "ticker": ticker,
+                        "error": str(esc_exc),
+                        "raw_head": raw_escalated[:200],
+                    }
+                )
+                raise StructuredParseError(
+                    f"{purpose}: LLM returned unusable JSON on primary and escalated tiers: {esc_exc}",
+                    raw_head=raw_escalated[:500],
+                ) from esc_exc
+
         log.error(
             {
                 "event": "llm_structured_parse_failed_twice",

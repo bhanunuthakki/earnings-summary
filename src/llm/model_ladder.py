@@ -43,7 +43,17 @@ OPENROUTER = "openrouter"
 @dataclass(frozen=True, slots=True)
 class ModelCost:
     """Cost descriptor for one model. ``blended_usd_per_mtok`` is the rank key
-    (lower = cheaper). All prices are public API list prices ($/MTok)."""
+    (lower = cheaper). All prices are public API list prices ($/MTok).
+
+    Deliberately price-only — no capability/benchmark field. An earlier
+    revision carried an Artificial Analysis Intelligence Index score here;
+    that was the wrong instrument for a finance pipeline (it measures general
+    reasoning/coding/agentic-tool-use, not finance-specific competence) and
+    required a token-intensive Opus+web call to keep current. This system's
+    own ``model_eval_verdicts`` — judged output on real earnings-summary / DCF
+    / thesis-tracking purposes — IS the capability signal; see
+    ``directives/meta_eval_governance.md`` §10.4 and
+    ``frontier.py``'s module docstring."""
 
     model_id: str
     family: str
@@ -123,15 +133,23 @@ MODEL_LADDER: dict[str, ModelCost] = {
 # fast and the price/quality frontier moves monthly, so a judge pinned once and
 # forgotten becomes a stale instrument measuring everything else.
 #
-# The rotation already has a home: ``model_frontier_research`` (MONTHLY, Opus +
-# web, src/llm/frontier.py) re-verifies the frontier and upserts discovered
-# models into ``candidate_models``. When it surfaces a cheaper-or-better
-# independent (non-Anthropic, non-Google) model — or a new public judge
-# benchmark lands — re-verify a candidate as a JUDGE before swapping:
+# Rotation is MANUAL / ON-DEMAND (owner directive 2026-08-06) — there is no
+# recurring automated job for this, deliberately: judge quality is the
+# measurement instrument for every promotion in this system, so a swap should
+# be a considered human action, not something a schedule decides. Nothing
+# scouts "a good judge" automatically either — ``model_frontier_research``
+# (src/llm/frontier.py) only refreshes the cheap-GENERATOR-candidate pool from
+# OpenRouter's public catalog now (a plain HTTP GET, no LLM call); it doesn't
+# assess judging capability, which no external benchmark can answer for this
+# pipeline's own tasks anyway (see its module docstring). When a rotation is
+# warranted, vet the candidate against THIS pipeline's own history before
+# swapping:
 #   1. smoke-test it on a known-answer pair (the specific-vs-vague check);
-#   2. run one backtest with BOTH the incumbent and candidate judge and compare
-#      their verdicts on the same cases — a judge swap that changes verdicts is
-#      the thing you are trying to detect, not a detail;
+#   2. backtest it against a sample of cases with an EXISTING recorded verdict
+#      (``model_eval_verdicts``): re-grade the same case with the candidate
+#      judge and compare against the incumbent judge's recorded verdict — a
+#      judge swap that changes verdicts is the thing you are trying to detect,
+#      not a detail;
 #   3. keep >=2 DISTINCT families in DEFAULT_JUDGES at all times.
 # Judge quality is the measurement instrument for every promotion in this
 # system; drift here silently biases model AND prompt selection.
