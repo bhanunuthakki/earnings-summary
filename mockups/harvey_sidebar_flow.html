@@ -1,0 +1,1402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Equity Research OS — Harvey/Legora Masterwork Edition</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      /* Typography Tokens */
+      --fs-stat: 24px;
+      --fs-header-title: 17px;
+      --fs-display: 22px;
+      --fs-title: 16px;
+      --fs-serif-body: 14.5px;
+      --fs-body: 13px;
+      --fs-caption: 11px;
+      --fs-mono-sm: 10px;
+      --fs-micro: 9.5px;
+      --fs-nano: 9px;
+
+      /* Layout & Dimension Tokens */
+      --sidebar-width: 240px;
+      --main-max-width: 1240px;
+      --drawer-width: 540px;
+      --header-height: 48px;
+      --toast-offset-bottom: 28px;
+      --toast-offset-right: 28px;
+      --dot-size: 6px;
+      --ticker-width: 34px;
+      --bar-track-height: 8px;
+
+      --grid-card-lg: 340px;
+      --grid-card-md: 280px;
+      --grid-card-sm: 240px;
+
+      /* Spacing Tokens */
+      --sp-half: 2px;
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 24px;
+      --sp-6: 32px;
+
+      /* Border Width Tokens */
+      --bw-thin: 1px;
+      --bw-thick: 2px;
+
+      /* Motion & Elevate Tokens */
+      --lift-sm: -1px;
+      --lift-md: -2px;
+      --toast-hide-y: 100px;
+
+      /* Blur Tokens */
+      --blur-sm: 6px;
+      --blur-md: 16px;
+      --blur-lg: 24px;
+
+      /* Radius Tokens */
+      --radius-sm: 2px;
+      --radius-md: 3px;
+      --radius: 8px;
+      --radius-card: 10px;
+      --radius-drawer: 14px;
+      --radius-full: 999px;
+
+      /* Font Family Tokens */
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --serif: 'Source Serif 4', Georgia, serif;
+      --mono: 'JetBrains Mono', monospace;
+
+      /* Palette Tokens */
+      --bg: #090a0c;
+      --sidebar-bg: #0e0f12;
+      --surface: #121316;
+      --paper: #18191d;
+      --glass-drawer: rgba(18, 19, 22, 0.75);
+      
+      --border: rgba(255, 255, 255, 0.06);
+      --border-2: rgba(255, 255, 255, 0.12);
+      --hairline: rgba(255, 255, 255, 0.04);
+
+      --fg: #f4f3ef;
+      --fg-soft: #c5c2b8;
+      --muted: #7c7e87;
+
+      --ok: #4ade80;
+      --warn: #f5c66a;
+      --bad: #f08a8a;
+      --accent: #8aa8ff;
+      --accent-contrast: #090a0c;
+      --accent-soft: rgba(138, 168, 255, 0.12);
+      --mark: #b08d5f;
+      --series-qqq: #5b8def;
+
+      --transition: 150ms ease;
+      --transition-fluid: 250ms cubic-bezier(0.16, 1, 0.3, 1);
+      
+      /* Shadow Tokens */
+      --shadow-btn-primary: 0 2px 10px rgba(138, 168, 255, 0.22);
+      --shadow-btn-primary-hover: 0 4px 16px rgba(138, 168, 255, 0.38);
+      --shadow-pop: 0 16px 48px -8px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.06);
+      --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      --shadow-card-hover: 0 12px 28px -6px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.1);
+      --shadow-drawer: -16px 0 48px rgba(0, 0, 0, 0.75);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      background-color: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      line-height: 1.5;
+      letter-spacing: -0.015em;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* CONTROL KIT */
+    .k-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--sp-2);
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      font-weight: 500;
+      letter-spacing: -0.015em;
+      padding: var(--sp-2) var(--sp-3);
+      border-radius: var(--radius);
+      border: var(--bw-thin) solid transparent;
+      cursor: pointer;
+      transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease, color 150ms ease;
+      text-decoration: none;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .k-btn:hover { transform: translateY(var(--lift-sm)); }
+    .k-btn:active { transform: translateY(0) scale(0.98); }
+    
+    .k-btn-primary { 
+      background-color: var(--accent); 
+      color: var(--accent-contrast); 
+      border-color: var(--accent);
+      box-shadow: var(--shadow-btn-primary);
+    }
+    .k-btn-primary:hover { 
+      box-shadow: var(--shadow-btn-primary-hover);
+      filter: brightness(1.08); 
+    }
+    
+    .k-btn-quiet { 
+      background-color: transparent; 
+      color: var(--fg-soft); 
+      border-color: var(--border); 
+    }
+    .k-btn-quiet:hover { 
+      color: var(--fg); 
+      border-color: var(--border-2); 
+      background-color: var(--paper); 
+    }
+    
+    .k-btn-sm { font-size: var(--fs-caption); padding: var(--sp-1) var(--sp-2); }
+
+    /* Quiet Status Dots */
+    .k-dot {
+      width: var(--dot-size);
+      height: var(--dot-size);
+      border-radius: var(--radius-full);
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .k-dot-ok { background-color: var(--ok); }
+    .k-dot-warn { background-color: var(--warn); }
+    .k-dot-bad { background-color: var(--bad); }
+
+    .k-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      font-family: var(--sans);
+      font-size: var(--fs-caption);
+      font-weight: 600;
+      padding: var(--sp-1) var(--sp-2);
+      border-radius: var(--radius-full);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .k-pill-ok { 
+      background-color: color-mix(in srgb, var(--ok) 12%, transparent); 
+      color: var(--ok); 
+      border: var(--bw-thin) solid color-mix(in srgb, var(--ok) 28%, transparent); 
+    }
+    .k-pill-warn { 
+      background-color: color-mix(in srgb, var(--warn) 12%, transparent); 
+      color: var(--warn); 
+      border: var(--bw-thin) solid color-mix(in srgb, var(--warn) 28%, transparent); 
+    }
+
+    .k-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      font-family: var(--sans);
+      font-size: var(--fs-caption);
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      padding: var(--sp-1) var(--sp-2);
+      border-radius: var(--radius-full);
+      background-color: var(--paper);
+      color: var(--fg-soft);
+      border: var(--bw-thin) solid var(--border);
+      cursor: pointer;
+      transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+    }
+    .k-chip:hover { 
+      transform: translateY(var(--lift-sm));
+      border-color: var(--border-2); 
+      color: var(--fg); 
+    }
+    .k-chip-mono { font-family: var(--mono); }
+
+    .drill-handle {
+      border-bottom: var(--bw-thin) dotted var(--accent);
+      color: var(--fg);
+      cursor: pointer;
+      padding: 0 var(--sp-half);
+      border-radius: var(--radius-sm);
+      transition: color var(--transition), background-color var(--transition);
+    }
+    .drill-handle:hover { 
+      color: var(--accent); 
+      border-bottom-style: solid; 
+      background-color: rgba(138, 168, 255, 0.08);
+    }
+
+    .src-chip {
+      font-family: var(--mono);
+      font-size: var(--fs-nano);
+      padding: var(--sp-1) var(--sp-1);
+      border-radius: var(--radius-md);
+      background-color: var(--paper);
+      color: var(--muted);
+      border: var(--bw-thin) solid var(--border);
+      text-decoration: none;
+      cursor: pointer;
+      transition: color var(--transition), border-color var(--transition);
+    }
+    .src-chip:hover { color: var(--accent); border-color: var(--accent); }
+
+    .k-ticker { display: inline-flex; align-items: baseline; gap: var(--sp-2); }
+    .k-ticker-symbol { 
+      font-family: var(--mono); 
+      font-weight: 600; 
+      color: var(--fg); 
+      text-decoration: none; 
+      cursor: pointer; 
+      transition: color var(--transition);
+    }
+    .k-ticker-symbol:hover { color: var(--accent); }
+    .k-ticker-name { 
+      font-family: var(--sans); 
+      font-size: var(--fs-caption); 
+      color: var(--muted); 
+    }
+
+    /* Abstracted Utility Classes for Zero Raw Pixel Leaks */
+    .t-mono, .num, .matrix-table td.num, .matrix-table th.num {
+      font-family: var(--mono);
+      font-feature-settings: 'tnum', 'zero';
+    }
+    .k-num-pos { color: var(--ok); }
+    
+    .k-well {
+      padding: var(--sp-3);
+      background-color: var(--paper);
+      border: var(--bw-thin) solid var(--border);
+      border-radius: var(--radius);
+    }
+    .k-well-compact {
+      padding: var(--sp-2) var(--sp-3);
+      background-color: var(--paper);
+      border-radius: var(--radius);
+    }
+    .k-ticker-width {
+      width: var(--ticker-width);
+      display: inline-block;
+      font-size: var(--fs-caption);
+    }
+    .picker-container {
+      display: flex;
+      gap: var(--sp-1);
+      background-color: var(--paper);
+      padding: var(--sp-1);
+      border-radius: var(--radius);
+      border: var(--bw-thin) solid var(--border);
+    }
+    .picker-btn {
+      padding: var(--sp-1) var(--sp-2);
+      font-size: var(--fs-caption);
+    }
+    .stat-heading {
+      font-size: var(--fs-caption);
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .stat-subtext {
+      font-size: var(--fs-caption);
+      color: var(--muted);
+      margin-top: var(--sp-1);
+    }
+
+    /* Grid Layout Classes */
+    .card-grid-action { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap: var(--sp-4); }
+    .card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-4); }
+    .card-grid-risk { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-4); }
+    
+    .stat-number { font-family: var(--mono); font-size: var(--fs-stat); font-weight: 600; margin-top: var(--sp-1); }
+
+    /* LAYOUT SHELL WITH 3-LAYER SIDEBAR */
+    .app-sidebar {
+      width: var(--sidebar-width);
+      min-width: var(--sidebar-width);
+      background-color: var(--sidebar-bg);
+      border-right: var(--bw-thin) solid var(--border);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: var(--sp-4) var(--sp-3);
+      user-select: none;
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--sp-1) var(--sp-3) var(--sp-1);
+      border-bottom: var(--bw-thin) solid var(--hairline);
+      margin-bottom: var(--sp-3);
+    }
+    .sidebar-logo {
+      font-family: var(--mono);
+      font-weight: 600;
+      font-size: var(--fs-body);
+      color: var(--fg);
+      letter-spacing: 0.05em;
+    }
+    .sidebar-logo span { color: var(--accent); }
+
+    .sidebar-cmd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--paper);
+      border: var(--bw-thin) solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--sp-2) var(--sp-3);
+      color: var(--muted);
+      font-size: var(--fs-caption);
+      cursor: pointer;
+      margin-bottom: var(--sp-3);
+      transition: border-color var(--transition), color var(--transition);
+    }
+    .sidebar-cmd:hover { border-color: var(--border-2); color: var(--fg-soft); }
+
+    .nav-layer-title {
+      font-size: var(--fs-micro);
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: var(--sp-3) var(--sp-2) var(--sp-1) var(--sp-2);
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-3);
+      color: var(--fg-soft);
+      font-size: var(--fs-body);
+      font-weight: 500;
+      border-radius: var(--radius);
+      cursor: pointer;
+      text-decoration: none;
+      transition: background-color var(--transition), color var(--transition);
+      margin-bottom: var(--sp-1);
+    }
+    .nav-item:hover { background-color: var(--paper); color: var(--fg); }
+    .nav-item.is-active { background-color: var(--paper); color: var(--fg); font-weight: 600; box-shadow: inset 0 0 0 var(--bw-thin) var(--border); }
+    .nav-svg-icon { opacity: 0.85; flex-shrink: 0; }
+
+    .sidebar-footer {
+      border-top: var(--bw-thin) solid var(--hairline);
+      padding-top: var(--sp-3);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-2);
+    }
+
+    .app-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+
+    .app-header {
+      height: var(--header-height);
+      border-bottom: var(--bw-thin) solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--sp-5);
+      background-color: var(--bg);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .header-breadcrumb {
+      font-size: var(--fs-body);
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+    }
+    .header-breadcrumb span.active { color: var(--fg); font-weight: 600; }
+
+    .main-content {
+      max-width: var(--main-max-width);
+      width: 100%;
+      margin: 0 auto;
+      padding: var(--sp-5);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-5);
+      user-select: text;
+    }
+
+    .screen-view { display: none; flex-direction: column; gap: var(--sp-5); }
+    .screen-view.is-active { display: flex; }
+
+    .dashboard-2col { display: grid; grid-template-columns: 2.2fr 1fr; gap: var(--sp-5); }
+    @media (max-width: 1024px) { .dashboard-2col { grid-template-columns: 1fr; } }
+
+    /* CARD ANIMATIONS & FLUID DISMISSAL (ZERO LAYOUT POP) */
+    .k-card {
+      background: var(--surface);
+      border: var(--bw-thin) solid var(--border);
+      border-radius: var(--radius-card);
+      padding: var(--sp-4);
+      box-shadow: var(--shadow-card);
+      transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms ease, opacity 220ms cubic-bezier(0.16, 1, 0.3, 1), max-height 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms, margin 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms, padding 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms;
+      overflow: hidden;
+      user-select: text;
+    }
+    .k-card-interactive:hover {
+      transform: translateY(var(--lift-md));
+      box-shadow: var(--shadow-card-hover);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+    .card-dismissing {
+      transform: scale(0.97) translateY(var(--lift-md)) !important;
+      opacity: 0 !important;
+      max-height: 0 !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+      margin-top: 0 !important;
+      margin-bottom: 0 !important;
+      border-color: transparent !important;
+    }
+
+    /* Tabular Alignment & Strict Grid Padding */
+    .matrix-table { 
+      width: 100%; 
+      border-collapse: separate; 
+      border-spacing: 0;
+      background-color: var(--surface); 
+      border: var(--bw-thin) solid var(--border); 
+      border-radius: var(--radius-card); 
+      overflow: hidden; 
+      box-shadow: var(--shadow-card);
+      user-select: text;
+    }
+    .matrix-table th { 
+      font-family: var(--sans); 
+      font-size: var(--fs-caption); 
+      font-weight: 600; 
+      letter-spacing: 0.05em;
+      color: var(--muted); 
+      text-transform: uppercase; 
+      padding: var(--sp-3) var(--sp-4); 
+      text-align: left; 
+      border-bottom: var(--bw-thin) solid var(--border); 
+      background-color: var(--paper); 
+    }
+    .matrix-table th.num, .matrix-table td.num { 
+      text-align: right; 
+    }
+    .matrix-table td { 
+      padding: var(--sp-3) var(--sp-4); 
+      border-bottom: var(--bw-thin) solid var(--hairline); 
+      font-size: var(--fs-body); 
+    }
+    .matrix-table tr:last-child td { border-bottom: none; }
+    .matrix-table tr:hover td { background-color: color-mix(in srgb, var(--paper) 50%, transparent); }
+
+    .toast-notice {
+      position: fixed; bottom: var(--toast-offset-bottom); right: var(--toast-offset-right); 
+      background: var(--glass-drawer);
+      backdrop-filter: blur(var(--blur-md));
+      -webkit-backdrop-filter: blur(var(--blur-md));
+      border: var(--bw-thin) solid var(--accent); 
+      color: var(--fg); 
+      padding: var(--sp-3) var(--sp-5); 
+      border-radius: var(--radius-card); 
+      box-shadow: var(--shadow-pop); 
+      display: flex; align-items: center; gap: var(--sp-2); z-index: 300; 
+      transform: translateY(var(--toast-hide-y)); opacity: 0; 
+      transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1), opacity 250ms ease;
+    }
+    .toast-notice.is-show { transform: translateY(0); opacity: 1; }
+
+    /* DRAWER & SCRIM */
+    .drawer-scrim {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(var(--blur-sm));
+      -webkit-backdrop-filter: blur(var(--blur-sm));
+      z-index: 240;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 280ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .drawer-scrim.is-open { opacity: 1; pointer-events: auto; }
+
+    .drill-drawer {
+      position: fixed; top: 0; right: 0; bottom: 0; width: var(--drawer-width); 
+      background: var(--glass-drawer);
+      backdrop-filter: blur(var(--blur-lg));
+      -webkit-backdrop-filter: blur(var(--blur-lg));
+      border-left: var(--bw-thin) solid rgba(255, 255, 255, 0.08); 
+      box-shadow: var(--shadow-drawer); 
+      z-index: 250; 
+      transform: translateX(100%); 
+      transition: transform 280ms cubic-bezier(0.16, 1, 0.3, 1); 
+      padding: var(--sp-5); 
+      display: flex; flex-direction: column; gap: var(--sp-4); 
+      overflow-y: auto;
+      border-top-left-radius: var(--radius-drawer);
+      border-bottom-left-radius: var(--radius-drawer);
+      user-select: text;
+    }
+    .drill-drawer.is-open { transform: translateX(0); }
+
+    .prose-block { 
+      font-family: var(--serif); 
+      font-size: var(--fs-serif-body); 
+      line-height: 1.68; 
+      color: var(--fg-soft); 
+      user-select: text;
+    }
+
+    /* PERFORMANCE BAR COMPARISON VISUALIZER */
+    .perf-bar-track {
+      background: var(--paper);
+      height: var(--bar-track-height);
+      border-radius: var(--radius-full);
+      overflow: hidden;
+      display: flex;
+      margin-top: var(--sp-2);
+    }
+    .perf-bar-fill {
+      height: 100%;
+      border-radius: var(--radius-full);
+      transition: width 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==========================================================================
+       LEFT SIDEBAR NAVIGATION (3-LAYER HARVEY / LEGORA MASTERWORK)
+       ========================================================================== -->
+  <aside class="app-sidebar">
+    <div>
+      <div class="sidebar-brand">
+        <div class="sidebar-logo"><span>EQUITY</span> OS</div>
+        <div style="display: flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-caption); color: var(--muted);">
+          <span class="k-dot k-dot-ok"></span> Harness Ready
+        </div>
+      </div>
+
+      <!-- Command Bar Trigger -->
+      <div class="sidebar-cmd" onclick="openDrillDrawer('ask-copilot')">
+        <span style="display: flex; align-items: center; gap: var(--sp-2);">
+          <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          ⌘K Search / Ask
+        </span>
+        <span style="font-family: var(--mono); font-size: var(--fs-mono-sm); color: var(--muted);">Copilot</span>
+      </div>
+
+      <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->
+      <div class="nav-layer-title">L1 · Portfolio Intelligence</div>
+      <a onclick="navigateTo('screen-cockpit')" class="nav-item is-active" id="nav-cockpit">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+        Portfolio Cockpit
+      </a>
+      <a onclick="navigateTo('screen-performance')" class="nav-item" id="nav-performance">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Performance vs Index
+      </a>
+      <a onclick="navigateTo('screen-allocation')" class="nav-item" id="nav-allocation">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Risk & Allocations
+      </a>
+      
+      <div style="padding-left: var(--sp-2); margin-top: var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-1);">
+        <a onclick="navigateTo('screen-workspace')" class="nav-item" style="padding: var(--sp-1) var(--sp-2);">
+          <span class="k-ticker-symbol t-mono k-ticker-width">NU</span>
+          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body);">Nu Holdings</span>
+        </a>
+        <a onclick="navigateTo('screen-workspace')" class="nav-item" style="padding: var(--sp-1) var(--sp-2);">
+          <span class="k-ticker-symbol t-mono k-ticker-width">BKNG</span>
+          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body);">Booking Holdings</span>
+        </a>
+        <a onclick="navigateTo('screen-workspace')" class="nav-item" style="padding: var(--sp-1) var(--sp-2);">
+          <span class="k-ticker-symbol t-mono k-ticker-width">TSM</span>
+          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body);">TSMC</span>
+        </a>
+      </div>
+
+      <!-- LAYER 2: RESEARCH ENGINE -->
+      <div class="nav-layer-title">L2 · Research Engine</div>
+      <a onclick="navigateTo('screen-workspace')" class="nav-item" id="nav-workspace">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        Company Desk (NU)
+      </a>
+      <a onclick="openDrillDrawer('falsifier')" class="nav-item">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Thesis Contracts
+      </a>
+      <a onclick="openDrillDrawer('updates')" class="nav-item">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+        Signals Stream
+      </a>
+      <a onclick="openDrillDrawer('financials')" class="nav-item">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        Financials & DCF
+      </a>
+
+      <!-- LAYER 3: OPERATIONS & GOVERNANCE -->
+      <div class="nav-layer-title">L3 · Operations & Governance</div>
+      <a onclick="showToast('Opened Decision Audit Log')" class="nav-item">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Decision Audit Log
+      </a>
+      <a onclick="showToast('Opened Execution Queue')" class="nav-item">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        Execution Queue
+      </a>
+      <a onclick="showToast('Opened Settings & Calibration')" class="nav-item">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings & Calibration
+      </a>
+    </div>
+
+    <div class="sidebar-footer">
+      <div style="font-size: var(--fs-caption); color: var(--muted); display: flex; justify-content: space-between;">
+        <span>Risk Budget</span>
+        <span style="color: var(--ok); font-weight: 600;">14% Free</span>
+      </div>
+      <div style="font-size: var(--fs-caption); color: var(--muted); display: flex; justify-content: space-between;">
+        <span>Active Holdings</span>
+        <span style="color: var(--fg); font-weight: 600;">10 Positions</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==========================================================================
+       MAIN WORKSPACE CANVAS
+       ========================================================================== -->
+  <main class="app-main">
+    <header class="app-header">
+      <div class="header-breadcrumb">
+        <span>Workspaces</span> / <span class="active" id="breadcrumb-title">Portfolio Cockpit & Review</span>
+      </div>
+      <div style="display: flex; gap: var(--sp-2);">
+        <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('ask-copilot')">
+          <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Ask Copilot
+        </button>
+        <button class="k-btn k-btn-primary k-btn-sm" onclick="showToast('View preferences saved')">Save View</button>
+      </div>
+    </header>
+
+    <div class="main-content">
+      
+      <!-- ==========================================================================
+           SURFACE 1: PORTFOLIO COCKPIT (LANDING VIEW)
+           ========================================================================== -->
+      <section id="screen-cockpit" class="screen-view is-active">
+        
+        <!-- COMPACT GOVERNED TARGET BAND -->
+        <div class="k-card" style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; align-items: center; gap: var(--sp-5);">
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Governed Target</div>
+              <div style="font-family: var(--mono); font-size: var(--fs-header-title); font-weight: 600; color: var(--fg); margin-top: var(--sp-1);">
+                NU — $1,500 Target Allocation
+              </div>
+            </div>
+            <div style="border-left: var(--bw-thin) solid var(--hairline); padding-left: var(--sp-5);">
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Conviction</div>
+              <div style="font-size: var(--fs-body); font-weight: 600; color: var(--fg);">88% (High)</div>
+            </div>
+            <div style="border-left: var(--bw-thin) solid var(--hairline); padding-left: var(--sp-5);">
+              <div style="font-size: var(--fs-caption); color: var(--muted);">1Y Return vs SPY</div>
+              <div class="k-num-pos t-mono" style="font-size: var(--fs-body); font-weight: 600;">+32.4% <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: normal;">(+8.3% Alpha)</span></div>
+            </div>
+          </div>
+          
+          <button class="k-btn k-btn-primary k-btn-sm" onclick="dismissCard(this, 'Execute Target', 'Target Order Executed & Persisted to DB!')">Execute Target</button>
+        </div>
+
+        <!-- ACTION QUEUE FEED WITH DISMISSAL -->
+        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-weight: 600; font-size: var(--fs-title); display: flex; align-items: center; gap: var(--sp-2);">
+              <span class="k-dot k-dot-warn"></span>
+              Action Queue & Review Pack (3 Items)
+            </div>
+            <span style="font-size: var(--fs-caption); color: var(--muted);">Clicking action dismisses item & commits DB state</span>
+          </div>
+
+          <div class="card-grid-action">
+            <!-- Action Card 1 -->
+            <div class="k-card k-card-interactive">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
+                <div class="k-ticker"><a onclick="navigateTo('screen-workspace')" class="k-ticker-symbol t-mono">BKNG</a><span class="k-ticker-name">Booking Holdings</span></div>
+                <span style="font-size: var(--fs-caption); color: var(--muted); font-family: var(--mono);">Draft</span>
+              </div>
+              <div style="font-weight: 600; margin-bottom: var(--sp-1); font-size: var(--fs-body);">Confirm Add Execution (+0.5% weight)</div>
+              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: var(--sp-3);">Drafted post-Q2 call. Falsifier & conviction score sign-off needed.</p>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-family: var(--mono); font-size: var(--fs-mono-sm); color: var(--muted);">2d ago</span>
+                <div style="display: flex; gap: var(--sp-2);">
+                  <button class="k-btn k-btn-quiet k-btn-sm" onclick="dismissCard(this, 'Defer', 'Decision Deferred')">Defer</button>
+                  <button class="k-btn k-btn-primary k-btn-sm" onclick="dismissCard(this, 'Ratify', 'Ratified & Persisted to DB!')">Ratify</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Action Card 2 -->
+            <div class="k-card k-card-interactive">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
+                <div class="k-ticker"><a onclick="navigateTo('screen-workspace')" class="k-ticker-symbol t-mono">NU</a><span class="k-ticker-name">Nu Holdings</span></div>
+                <span style="font-size: var(--fs-caption); color: var(--warn); font-family: var(--mono);">Missing Limit</span>
+              </div>
+              <div style="font-weight: 600; margin-bottom: var(--sp-1); font-size: var(--fs-body);">Set NPL 90+ Disconfirmation Limit</div>
+              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: var(--sp-3);">Click to set disconfirming metric threshold on Company Desk.</p>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-family: var(--mono); font-size: var(--fs-mono-sm); color: var(--muted);">3d ago</span>
+                <button class="k-btn k-btn-primary k-btn-sm" onclick="navigateTo('screen-workspace'); setTimeout(()=>openDrillDrawer('falsifier'), 200);">Set Falsifier →</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- HOLDINGS DIRECTORY MATRIX -->
+        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Holdings & Watchlist</div>
+            <span style="font-size: var(--fs-caption); color: var(--muted);">Select row to open research workspace</span>
+          </div>
+
+          <table class="matrix-table t-mono">
+            <thead>
+              <tr>
+                <th>Ticker / Company</th>
+                <th>Status</th>
+                <th class="num">Price</th>
+                <th class="num">Target</th>
+                <th class="num">1Y Return</th>
+                <th class="num">Weight</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr onclick="navigateTo('screen-workspace')" style="cursor: pointer;">
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">NU</span><span class="k-ticker-name">Nu Holdings Ltd.</span></div></td>
+                <td><span style="display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-body); font-weight: 500;"><span class="k-dot k-dot-ok"></span> OVERWEIGHT (88%)</span></td>
+                <td class="num t-mono">$14.25</td>
+                <td class="num t-mono" style="color: var(--accent);">$18.50</td>
+                <td class="num k-num-pos t-mono">+42.8%</td>
+                <td class="num t-mono">12.5%</td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Workspace →</button></td>
+              </tr>
+              <tr onclick="navigateTo('screen-workspace')" style="cursor: pointer;">
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">BKNG</span><span class="k-ticker-name">Booking Holdings Inc.</span></div></td>
+                <td><span style="display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-body); font-weight: 500;"><span class="k-dot k-dot-ok"></span> HOLD (75%)</span></td>
+                <td class="num t-mono">$4,120.00</td>
+                <td class="num t-mono" style="color: var(--accent);">$4,850.00</td>
+                <td class="num k-num-pos t-mono">+18.4%</td>
+                <td class="num t-mono">8.0%</td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Workspace →</button></td>
+              </tr>
+              <tr onclick="navigateTo('screen-workspace')" style="cursor: pointer;">
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">TSM</span><span class="k-ticker-name">Taiwan Semiconductor</span></div></td>
+                <td><span style="display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-body); font-weight: 500;"><span class="k-dot k-dot-warn"></span> REVIEW (62%)</span></td>
+                <td class="num t-mono">$168.50</td>
+                <td class="num t-mono" style="color: var(--accent);">$195.00</td>
+                <td class="num k-num-pos t-mono">+35.1%</td>
+                <td class="num t-mono">5.5%</td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Workspace →</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <!-- ==========================================================================
+           SURFACE: PORTFOLIO PERFORMANCE VS INDEX BENCHMARK (#screen-performance)
+           ========================================================================== -->
+      <section id="screen-performance" class="screen-view">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Performance vs Index Benchmark</div>
+            <div style="font-size: var(--fs-caption); color: var(--muted);">Risk-adjusted return attribution, benchmark alpha, and tracking error</div>
+          </div>
+          <!-- Time Horizon Picker -->
+          <div class="picker-container">
+            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">1M</button>
+            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">3M</button>
+            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">6M</button>
+            <button class="k-btn k-btn-primary k-btn-sm picker-btn">1Y</button>
+            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">YTD</button>
+            <button class="k-btn k-btn-quiet k-btn-sm picker-btn">ALL</button>
+          </div>
+        </div>
+
+        <!-- PERFORMANCE STATS SUMMARY CARDS -->
+        <div class="card-grid-stat">
+          <div class="k-card">
+            <div class="stat-heading">Portfolio Return (1Y)</div>
+            <div class="stat-number" style="color: var(--ok);">+32.4%</div>
+            <div class="stat-subtext">vs S&P 500 (+18.2%) · <strong style="color: var(--accent);">+8.3% Alpha</strong></div>
+          </div>
+          <div class="k-card">
+            <div class="stat-heading">Sharpe Ratio</div>
+            <div class="stat-number" style="color: var(--fg);">2.15</div>
+            <div class="stat-subtext">Risk-Free: 4.2% · Sortino Ratio: 2.85</div>
+          </div>
+          <div class="k-card">
+            <div class="stat-heading">Max Drawdown (1Y)</div>
+            <div class="stat-number" style="color: var(--fg);">-6.4%</div>
+            <div class="stat-subtext">vs SPY Max DD: -11.2% · Recovery: 14 days</div>
+          </div>
+          <div class="k-card">
+            <div class="stat-heading">Portfolio Beta</div>
+            <div class="stat-number" style="color: var(--accent);">0.85</div>
+            <div class="stat-subtext">Correlation vs SPY: 0.72</div>
+          </div>
+        </div>
+
+        <!-- VISUAL BENCHMARK BAR COMPARATOR -->
+        <div class="k-card">
+          <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3);">1-Year Relative Return Comparison</div>
+          
+          <div style="display: flex; flex-direction: column; gap: var(--sp-3);">
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: var(--fs-body); margin-bottom: var(--sp-1);">
+                <span style="font-weight: 600; color: var(--accent);">Portfolio (Active Strategy)</span>
+                <span class="t-mono" style="color: var(--ok); font-weight: 600;">+32.4%</span>
+              </div>
+              <div class="perf-bar-track"><div class="perf-bar-fill" style="width: 100%; background: var(--accent);"></div></div>
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: var(--fs-body); margin-bottom: var(--sp-1);">
+                <span>NASDAQ-100 (QQQ Benchmark)</span>
+                <span class="t-mono" style="color: var(--fg-soft);">+24.1%</span>
+              </div>
+              <div class="perf-bar-track"><div class="perf-bar-fill" style="width: 74%; background: var(--series-qqq);"></div></div>
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: var(--fs-body); margin-bottom: var(--sp-1);">
+                <span>S&P 500 Index (SPY Benchmark)</span>
+                <span class="t-mono" style="color: var(--fg-soft);">+18.2%</span>
+              </div>
+              <div class="perf-bar-track"><div class="perf-bar-fill" style="width: 56%; background: var(--muted);"></div></div>
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: var(--fs-body); margin-bottom: var(--sp-1);">
+                <span>MSCI LatAm ETF (ILF Peer Benchmark)</span>
+                <span class="t-mono" style="color: var(--fg-soft);">+12.6%</span>
+              </div>
+              <div class="perf-bar-track"><div class="perf-bar-fill" style="width: 38%; background: var(--warn);"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- BENCHMARK MATRIX TABLE -->
+        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
+          <div style="font-weight: 600; font-size: var(--fs-title);">Index Benchmark Matrix</div>
+          <table class="matrix-table t-mono">
+            <thead>
+              <tr>
+                <th>Benchmark / Asset Class</th>
+                <th class="num">1M %</th>
+                <th class="num">3M %</th>
+                <th class="num">YTD %</th>
+                <th class="num">1Y %</th>
+                <th class="num">Alpha %</th>
+                <th class="num">Beta</th>
+                <th class="num">Tracking Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Portfolio (Active Strategy)</strong></td>
+                <td class="num k-num-pos t-mono">+3.2%</td>
+                <td class="num k-num-pos t-mono">+9.4%</td>
+                <td class="num k-num-pos t-mono">+22.1%</td>
+                <td class="num k-num-pos t-mono">+32.4%</td>
+                <td class="num t-mono" style="color: var(--accent);">BASE</td>
+                <td class="num t-mono">0.85</td>
+                <td class="num t-mono">0.0%</td>
+              </tr>
+              <tr>
+                <td>S&P 500 Index (SPY)</td>
+                <td class="num k-num-pos t-mono">+1.4%</td>
+                <td class="num k-num-pos t-mono">+4.8%</td>
+                <td class="num k-num-pos t-mono">+14.2%</td>
+                <td class="num k-num-pos t-mono">+18.2%</td>
+                <td class="num k-num-pos t-mono">+8.3%</td>
+                <td class="num t-mono">1.00</td>
+                <td class="num t-mono">6.4%</td>
+              </tr>
+              <tr>
+                <td>NASDAQ-100 (QQQ)</td>
+                <td class="num k-num-pos t-mono">+2.1%</td>
+                <td class="num k-num-pos t-mono">+6.5%</td>
+                <td class="num k-num-pos t-mono">+18.0%</td>
+                <td class="num k-num-pos t-mono">+24.1%</td>
+                <td class="num k-num-pos t-mono">+14.2%</td>
+                <td class="num t-mono">1.15</td>
+                <td class="num t-mono">8.2%</td>
+              </tr>
+              <tr>
+                <td>MSCI LatAm ETF (ILF)</td>
+                <td class="num k-num-pos t-mono">+0.8%</td>
+                <td class="num k-num-pos t-mono">+2.5%</td>
+                <td class="num k-num-pos t-mono">+8.4%</td>
+                <td class="num k-num-pos t-mono">+12.6%</td>
+                <td class="num k-num-pos t-mono">+19.8%</td>
+                <td class="num t-mono">0.92</td>
+                <td class="num t-mono">11.5%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ==========================================================================
+           SURFACE: PORTFOLIO ALLOCATION & RISK MODULE (#screen-allocation)
+           ========================================================================== -->
+      <section id="screen-allocation" class="screen-view">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Allocation & Risk Engine</div>
+            <div style="font-size: var(--fs-caption); color: var(--muted);">Governed risk budget, position drift limits, and sector concentration</div>
+          </div>
+          <button class="k-btn k-btn-primary k-btn-sm" onclick="showToast('Rebalance execution draft generated!')">Draft Rebalance</button>
+        </div>
+
+        <!-- RISK BUDGET SUMMARY CARDS -->
+        <div class="card-grid-risk">
+          <div class="k-card">
+            <div class="stat-heading">Risk Budget Capacity</div>
+            <div class="stat-number" style="color: var(--ok);">14.0% Free</div>
+            <div class="stat-subtext">$1,680 Cash Reserve · Max Drawdown Limit: -12.0%</div>
+          </div>
+          <div class="k-card">
+            <div class="stat-heading">Top Holding Weight</div>
+            <div class="stat-number" style="color: var(--fg);">12.5% (NU)</div>
+            <div class="stat-subtext">Single Position Cap: 15.0% · Margin: +2.5%</div>
+          </div>
+          <div class="k-card">
+            <div class="stat-heading">Concentration Score</div>
+            <div class="stat-number" style="color: var(--warn);">Moderate (64/100)</div>
+            <div class="stat-subtext">Fintech & LatAm overweight detected</div>
+          </div>
+        </div>
+
+        <!-- TARGET VS ACTUAL WEIGHTING MATRIX -->
+        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
+          <div style="font-weight: 600; font-size: var(--fs-title);">Position Allocation & Drift Matrix</div>
+          <table class="matrix-table t-mono">
+            <thead>
+              <tr>
+                <th>Ticker / Asset</th>
+                <th>Category</th>
+                <th class="num">Target %</th>
+                <th class="num">Actual %</th>
+                <th class="num">Drift %</th>
+                <th>Status</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">NU</span><span class="k-ticker-name">Nu Holdings</span></div></td>
+                <td>LatAm Fintech</td>
+                <td class="num t-mono">12.5%</td>
+                <td class="num t-mono">12.5%</td>
+                <td class="num t-mono" style="color: var(--ok);">0.0%</td>
+                <td><span class="k-pill k-pill-ok">On Target</span></td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Position aligned')">Hold</button></td>
+              </tr>
+              <tr>
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">BKNG</span><span class="k-ticker-name">Booking Holdings</span></div></td>
+                <td>Global Travel</td>
+                <td class="num t-mono">8.5%</td>
+                <td class="num t-mono">8.0%</td>
+                <td class="num t-mono" style="color: var(--warn);">-0.5%</td>
+                <td><span class="k-pill k-pill-warn">Underweight</span></td>
+                <td style="text-align: right;"><button class="k-btn k-btn-primary k-btn-sm" onclick="showToast('Rebalance buy queued')">Add +0.5%</button></td>
+              </tr>
+              <tr>
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">TSM</span><span class="k-ticker-name">Taiwan Semi</span></div></td>
+                <td>Semiconductor</td>
+                <td class="num t-mono">5.5%</td>
+                <td class="num t-mono">5.5%</td>
+                <td class="num t-mono" style="color: var(--ok);">0.0%</td>
+                <td><span class="k-pill k-pill-ok">On Target</span></td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Position aligned')">Hold</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ==========================================================================
+           SURFACE 2: COMPANY RESEARCH WORKSPACE (EDITORIAL CANVAS)
+           ========================================================================== -->
+      <section id="screen-workspace" class="screen-view">
+        <!-- MASTHEAD -->
+        <div class="k-card" style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <span class="t-mono" style="font-size: var(--fs-stat); font-weight: 600; letter-spacing: -0.02em;">NU</span>
+            <span style="font-size: var(--fs-title); color: var(--fg-soft); margin-left: var(--sp-3);">Nu Holdings Ltd. · LatAm Retail Banking</span>
+          </div>
+          <div style="display: flex; gap: var(--sp-4); align-items: center;">
+            <div style="text-align: right;">
+              <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600;">
+                <span class="drill-handle" onclick="openDrillDrawer('financials')">$14.25</span> 
+                <span class="k-num-pos t-mono" style="font-size: var(--fs-body);">+3.2%</span>
+              </div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Target $18.50 (+29.8%)</div>
+            </div>
+            <span class="k-pill k-pill-ok">OVERWEIGHT · 88%</span>
+          </div>
+        </div>
+
+        <!-- CONTEXTUAL DRAWER LAUNCHERS -->
+        <div style="display: flex; gap: var(--sp-2); align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius);">
+          <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Drawers:</span>
+          <button class="k-chip" onclick="openDrillDrawer('financials')">Financials & DCF</button>
+          <button class="k-chip" onclick="openDrillDrawer('saydo')">Say/Do Transcripts</button>
+          <button class="k-chip" onclick="openDrillDrawer('peers')">Peer Comparison</button>
+          <button class="k-chip" onclick="openDrillDrawer('falsifier')">Falsifier Contract</button>
+          <button class="k-chip" onclick="openDrillDrawer('updates')">Signals Stream</button>
+        </div>
+
+        <!-- EDITORIAL DESK 2-COL GRID -->
+        <div class="dashboard-2col">
+          <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
+            <!-- THESIS BLOCK -->
+            <div class="k-card">
+              <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline); padding-bottom: var(--sp-2);">
+                Investment Thesis & Value Drivers
+              </div>
+              <div class="prose-block">
+                <p style="margin-bottom: var(--sp-3);">
+                  <strong style="color: var(--fg);">Nu Holdings (NU)</strong> is a market-share compounder in Latin American retail banking. Nubank achieves a cost-to-serve per active customer of 
+                  <span class="drill-handle" onclick="openDrillDrawer('financials')">$0.90/month</span> vs incumbent Brazilian banks at $7.00+.
+                </p>
+                <p>
+                  Mexico deposits recently exceeded 
+                  <span class="drill-handle" onclick="openDrillDrawer('saydo')">$3.0 billion in Q2 2026</span> 
+                  <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a>, validating international scaling outside Brazil.
+                </p>
+              </div>
+            </div>
+
+            <!-- CORE FINANCIAL METRICS TABLE -->
+            <div class="k-card" style="padding: 0; overflow: hidden;">
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: var(--sp-3) var(--sp-4); border-bottom: var(--bw-thin) solid var(--border); background-color: var(--paper);">
+                <div style="font-weight: 600; font-size: var(--fs-title);">Core Financial Metrics</div>
+                <span style="font-size: var(--fs-caption); color: var(--accent); cursor: pointer;" onclick="openDrillDrawer('financials')">Click figure to drill down →</span>
+              </div>
+              <table class="matrix-table t-mono" style="border: none; border-radius: 0; box-shadow: none;">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th class="num">Q3 25</th>
+                    <th class="num">Q4 25</th>
+                    <th class="num">Q1 26</th>
+                    <th class="num">Q2 26</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Revenue ($M)</td>
+                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,140.5</span></td>
+                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,400.0</span></td>
+                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,715.2</span></td>
+                    <td class="num k-num-pos t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">3,020.8</span></td>
+                  </tr>
+                  <tr>
+                    <td>Net Income ($M)</td>
+                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">355.6</span></td>
+                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">395.0</span></td>
+                    <td class="num t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">480.2</span></td>
+                    <td class="num k-num-pos t-mono"><span class="drill-handle" onclick="openDrillDrawer('financials')">560.4</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- RIGHT SIDEBAR -->
+          <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
+            <div class="k-card" style="border-left: var(--bw-thick) solid var(--warn);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
+                <div style="font-weight: 600; font-size: var(--fs-title);">Disconfirming Falsifiers</div>
+                <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('falsifier')">Drill →</button>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-caption);">
+                <div class="k-well-compact">
+                  1. NPL 90+ > 5.6% · <span style="color: var(--ok); font-weight: 600;">PASS (5.2%)</span>
+                </div>
+                <div class="k-well-compact">
+                  2. Cost-to-Serve > $1.20 · <span style="color: var(--ok); font-weight: 600;">PASS ($0.90)</span>
+                </div>
+                <div class="k-well-compact">
+                  3. Mexico Active Users &lt; 8M · <span style="color: var(--warn); font-weight: 600;">MONITOR (7.8M)</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="k-card">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
+                <div style="font-weight: 600; font-size: var(--fs-title);">Peer Group Comparisons</div>
+                <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('peers')">Drill →</button>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
+                <div style="display: flex; justify-content: space-between;" class="k-well-compact">
+                  <span class="drill-handle" onclick="openDrillDrawer('peers')">SE (Sea Ltd)</span>
+                  <span class="t-mono" style="color: var(--muted); font-size: var(--fs-caption);">ASEAN E-Com</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;" class="k-well-compact">
+                  <span class="drill-handle" onclick="openDrillDrawer('peers')">MELI (MercadoLibre)</span>
+                  <span class="t-mono" style="color: var(--muted); font-size: var(--fs-caption);">LatAm Fintech</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- DRAWER SCRIM LAYER -->
+  <div class="drawer-scrim" id="drawerScrim" onclick="closeDrillDrawer(); closePeekDrawer();"></div>
+
+  <!-- CONTEXTUAL DRILL-THROUGH SLIDE-OVER DRAWER -->
+  <aside class="drill-drawer" id="drillDrawer">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3);">
+      <div>
+        <div style="font-weight: 600; font-size: var(--fs-title);" id="drawerTitle">Financials & DCF Sensitivity</div>
+        <div style="font-size: var(--fs-caption); color: var(--muted);" id="drawerSubtitle">Contextual drill-through drawer</div>
+      </div>
+      <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">× Close</button>
+    </div>
+
+    <div id="drawerBody" style="display: flex; flex-direction: column; gap: var(--sp-4);">
+    </div>
+  </aside>
+
+  <!-- TOAST NOTICE -->
+  <div class="toast-notice" id="toastNotice">
+    <span style="color: var(--ok); font-weight: 700;">✓</span>
+    <span id="toastMessage">Notification</span>
+  </div>
+
+  <!-- PROVENANCE PEEK DRAWER -->
+  <aside class="drill-drawer" id="peekDrawer" style="z-index: 280;">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3);">
+      <div style="font-weight: 600; font-size: var(--fs-title);">Raw SEC Filing Citation</div>
+      <button class="k-btn k-btn-quiet k-btn-sm" onclick="closePeekDrawer()">×</button>
+    </div>
+    <div class="t-mono" style="font-size: var(--fs-caption); color: var(--accent);" id="peekRefKey">doc:ref</div>
+    <div style="font-family: var(--serif); font-size: var(--fs-serif-body); color: var(--fg-soft); line-height: 1.68;" id="peekProse">
+      Source filing extract loading...
+    </div>
+  </aside>
+
+  <script>
+    function navigateTo(screenId) {
+      document.querySelectorAll('.screen-view').forEach(s => s.classList.remove('is-active'));
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('is-active'));
+      
+      const target = document.getElementById(screenId);
+      if (target) target.classList.add('is-active');
+      
+      const navName = screenId.replace('screen-', '');
+      const activeNav = document.getElementById('nav-' + navName);
+      if (activeNav) activeNav.classList.add('is-active');
+
+      const breadcrumb = document.getElementById('breadcrumb-title');
+      if (breadcrumb) {
+        if (navName === 'cockpit') breadcrumb.innerText = 'Portfolio Cockpit & Review';
+        else if (navName === 'performance') breadcrumb.innerText = 'Portfolio Performance vs Index Benchmark';
+        else if (navName === 'allocation') breadcrumb.innerText = 'Portfolio Allocation & Risk Engine';
+        else if (navName === 'workspace') breadcrumb.innerText = 'Company Desk (NU)';
+      }
+    }
+
+    function dismissCard(buttonEl, actionName, toastMsg) {
+      const card = buttonEl.closest('.k-card');
+      if (card) {
+        card.style.maxHeight = `${card.offsetHeight}px`;
+        card.offsetHeight; // Force reflow
+        card.classList.add('card-dismissing');
+        showToast(toastMsg || (actionName + ' executed and persisted to DB'));
+        setTimeout(() => {
+          card.remove();
+        }, 450);
+      }
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toastNotice');
+      document.getElementById('toastMessage').innerText = msg;
+      toast.classList.add('is-show');
+      setTimeout(() => toast.classList.remove('is-show'), 2600);
+    }
+
+    function populateCopilotPrompt(promptText) {
+      const input = document.getElementById('copilotInput');
+      if (input) {
+        input.value = promptText;
+        executeCopilotQuery();
+      }
+    }
+
+    function executeCopilotQuery() {
+      const input = document.getElementById('copilotInput');
+      const responseDiv = document.getElementById('copilotResponse');
+      if (!input || !responseDiv) return;
+      const q = input.value.trim();
+      if (!q) return;
+
+      responseDiv.innerHTML = `
+        <div class="k-well" style="border-color: var(--accent-soft);">
+          <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; margin-bottom: var(--sp-1);">AI COPILOT ANALYSIS</div>
+          <div style="font-size: var(--fs-body); color: var(--fg); font-family: var(--sans); line-height: 1.6;">
+            Evaluating "${q}" across SEC 10-Q disclosures, transcripts, and financial facts...
+          </div>
+          <div style="margin-top: var(--sp-2); font-size: var(--fs-caption); color: var(--ok); font-weight: 600; display: flex; align-items: center; gap: var(--sp-2);">
+            <span class="k-dot k-dot-ok"></span> Grounded Citations: doc:bcb_jun26_p4, kpi:nu:net_margin, fin:nu:rev:q2_26
+          </div>
+        </div>
+      `;
+    }
+
+    function openDrillDrawer(type) {
+      const drawer = document.getElementById('drillDrawer');
+      const scrim = document.getElementById('drawerScrim');
+      const title = document.getElementById('drawerTitle');
+      const subtitle = document.getElementById('drawerSubtitle');
+      const body = document.getElementById('drawerBody');
+
+      if (type === 'financials') {
+        title.innerText = "Financial Statements & DCF Model";
+        subtitle.innerText = "Historical quarters & terminal growth fade levers for NU";
+        body.innerHTML = `
+          <div class="k-well">
+            <div style="font-weight: 600; margin-bottom: var(--sp-1);">DCF Sensitivity Levers</div>
+            <div style="font-size: var(--fs-caption); color: var(--muted);" class="t-mono">WACC: 10.5% · Terminal Fade: 3.5% · Target Price: <strong style="color: var(--accent);">$18.50</strong></div>
+          </div>
+          <table class="matrix-table t-mono">
+            <thead><tr><th>Line Item</th><th class="num">Q1 26</th><th class="num">Q2 26</th></tr></thead>
+            <tbody>
+              <tr><td>Total Revenue</td><td class="num t-mono">$2,715.2M</td><td class="num k-num-pos t-mono">$3,020.8M</td></tr>
+              <tr><td>Net Income</td><td class="num t-mono">$480.2M</td><td class="num k-num-pos t-mono">$560.4M</td></tr>
+              <tr><td>ARPAC ($)</td><td class="num t-mono">$11.10</td><td class="num t-mono">$11.40</td></tr>
+            </tbody>
+          </table>
+        `;
+      } else if (type === 'saydo') {
+        title.innerText = "Management Say/Do & Transcripts";
+        subtitle.innerText = "Extracted Q&A commitments verified against SEC disclosures";
+        body.innerHTML = `
+          <div class="k-well">
+            <div style="font-weight: 600; color: var(--accent); margin-bottom: var(--sp-1);">David Vélez (CEO) — Q2 Earnings Call</div>
+            <p style="font-family: var(--serif); font-size: var(--fs-body); line-height: 1.6;">"Mexico deposit growth crossed $3B in Q2."</p>
+            <div style="margin-top: var(--sp-2); font-size: var(--fs-caption); color: var(--ok); font-weight: 600;">✓ VERIFIED BY SEC 10-Q (Actual: $3.12B)</div>
+          </div>
+        `;
+      } else if (type === 'peers') {
+        title.innerText = "Peer Comparison Matrix";
+        subtitle.innerText = "Comparative fintech & e-commerce metrics";
+        body.innerHTML = `
+          <table class="matrix-table t-mono">
+            <thead><tr><th>Ticker</th><th>Region</th><th class="num">1Y Return</th><th class="num">P/E Ratio</th></tr></thead>
+            <tbody>
+              <tr><td><strong>NU</strong></td><td>LatAm</td><td class="num k-num-pos t-mono">+42.8%</td><td class="num t-mono">24.2x</td></tr>
+              <tr><td><strong>SE</strong></td><td>ASEAN</td><td class="num k-num-pos t-mono">+31.0%</td><td class="num t-mono">32.0x</td></tr>
+              <tr><td><strong>MELI</strong></td><td>LatAm</td><td class="num k-num-pos t-mono">+28.5%</td><td class="num t-mono">41.5x</td></tr>
+            </tbody>
+          </table>
+        `;
+      } else if (type === 'falsifier') {
+        title.innerText = "Disconfirming Falsifiers Contract";
+        subtitle.innerText = "Thesis invalidation thresholds";
+        body.innerHTML = `
+          <div class="k-well">
+            <div style="font-weight: 600;">1. NPL 90+ Exceeds 5.6%</div>
+            <div style="font-size: var(--fs-caption); color: var(--ok); margin-top: var(--sp-1); font-weight: 600;">Current: 5.2% · PASS</div>
+          </div>
+          <div class="k-well">
+            <div style="font-weight: 600;">2. Cost-to-Serve > $1.20/mo</div>
+            <div style="font-size: var(--fs-caption); color: var(--ok); margin-top: var(--sp-1); font-weight: 600;">Current: $0.90/mo · PASS</div>
+          </div>
+        `;
+      } else if (type === 'ask-copilot') {
+        title.innerText = "Ask Copilot Assistant";
+        subtitle.innerText = "Side-by-side natural language research copilot";
+        body.innerHTML = `
+          <div style="font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1);">Suggested Prompts:</div>
+          <div style="display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-bottom: var(--sp-3);">
+            <button class="k-chip" onclick="populateCopilotPrompt('Analyze NU Q2 earnings beat')">Analyze NU Q2 beat</button>
+            <button class="k-chip" onclick="populateCopilotPrompt('Compare NU vs MELI net margins')">Compare NU vs MELI</button>
+            <button class="k-chip" onclick="populateCopilotPrompt('Check NPL 90+ falsifier status')">Check NPL 90+ status</button>
+            <button class="k-chip" onclick="populateCopilotPrompt('Run 10-year DCF sensitivity')">Run DCF sensitivity</button>
+          </div>
+
+          <div style="display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3);">
+            <input type="text" id="copilotInput" placeholder="Ask copilot about NU, thesis, or DCF..." style="width: 100%; background: var(--paper); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); outline: none; font-size: var(--fs-body); font-family: var(--sans);">
+            <button class="k-btn k-btn-primary k-btn-sm" onclick="executeCopilotQuery()">Ask</button>
+          </div>
+
+          <div id="copilotResponse"></div>
+        `;
+      }
+      scrim.classList.add('is-open');
+      drawer.classList.add('is-open');
+    }
+
+    function closeDrillDrawer() {
+      document.getElementById('drillDrawer').classList.remove('is-open');
+      if (!document.getElementById('peekDrawer').classList.contains('is-open')) {
+        document.getElementById('drawerScrim').classList.remove('is-open');
+      }
+    }
+
+    function openPeekDrawer(refKey) {
+      const peek = document.getElementById('peekDrawer');
+      const scrim = document.getElementById('drawerScrim');
+      document.getElementById('peekRefKey').innerText = refKey;
+      document.getElementById('peekProse').innerText = "Verified source quote for " + refKey + ": Official document extract confirms Nubank credit card delinquency at 5.2% vs industry 6.8%.";
+      scrim.classList.add('is-open');
+      peek.classList.add('is-open');
+    }
+
+    function closePeekDrawer() {
+      document.getElementById('peekDrawer').classList.remove('is-open');
+      if (!document.getElementById('drillDrawer').classList.contains('is-open')) {
+        document.getElementById('drawerScrim').classList.remove('is-open');
+      }
+    }
+  </script>
+</body>
+</html>

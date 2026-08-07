@@ -26,6 +26,7 @@ SRC = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from ui.controls import (  # noqa: E402
+    copilot_prompt_chip,
     controls_css,
     k_empty,
     panel_section_title,
@@ -41,6 +42,14 @@ from ui.tokens import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # controls_css — modes
 # ---------------------------------------------------------------------------
+
+
+def test_copilot_prompt_chip_renders_interactive_chip() -> None:
+    html = copilot_prompt_chip("Analyze NU Q2 beat", citation="doc:bcb_jun26_p4")
+    assert 'k-chip-copilot' in html
+    assert 'k-chip-btn' in html
+    assert 'data-citation="doc:bcb_jun26_p4"' in html
+    assert "Analyze NU Q2 beat" in html
 
 
 def test_dark_mode_pins_dark_scheme_and_chevron() -> None:
