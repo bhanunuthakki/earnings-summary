@@ -11,20 +11,15 @@
 
   <style>
     :root {
-      /* Typography Tokens */
-      --fs-stat: 24px;
-      --fs-header-title: 17px;
-      --fs-display: 22px;
-      --fs-title: 16px;
-      --fs-serif-body: 14.5px;
-      --fs-body: 13px;
-      --fs-caption: 11px;
-      --fs-mono-sm: 10px;
-      --fs-micro: 9.5px;
-      --fs-nano: 9px;
+      /* Streamlined Harmonized 4-Tier Typography Tokens */
+      --fs-display: 20px;  /* Hero stat numbers, primary display values */
+      --fs-title: 15px;    /* Section titles, card headings */
+      --fs-body: 13px;     /* Standard body, prose, table rows, button labels */
+      --fs-caption: 11px;  /* Subtext, metadata, table headers, chips, badges */
 
       /* Layout & Dimension Tokens */
       --sidebar-width: 240px;
+      --sidebar-collapsed-width: 56px;
       --main-max-width: 1240px;
       --drawer-width: 540px;
       --header-height: 48px;
@@ -277,7 +272,7 @@
 
     .src-chip {
       font-family: var(--mono);
-      font-size: var(--fs-nano);
+      font-size: var(--fs-caption);
       padding: var(--sp-1) var(--sp-1);
       border-radius: var(--radius-md);
       background-color: var(--paper);
@@ -353,14 +348,26 @@
       margin-top: var(--sp-1);
     }
 
-    /* Grid Layout Classes */
-    .card-grid-action { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap: var(--sp-4); }
+    /* Grid Layout Classes: Single Horizontal 4-Column Row for Hero Stats */
+    .card-grid-stat-4col { 
+      display: grid; 
+      grid-template-columns: repeat(4, 1fr); 
+      gap: var(--sp-4); 
+    }
+    @media (max-width: 1024px) {
+      .card-grid-stat-4col { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      .card-grid-stat-4col { grid-template-columns: 1fr; }
+    }
+
+    .card-grid-action { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap: var(--sp-3); }
     .card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-4); }
     .card-grid-risk { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-4); }
     
-    .stat-number { font-family: var(--mono); font-size: var(--fs-stat); font-weight: 600; margin-top: var(--sp-1); }
+    .stat-number { font-family: var(--mono); font-size: var(--fs-display); font-weight: 600; margin-top: var(--sp-1); }
 
-    /* LAYOUT SHELL WITH CLEAN 3-LAYER SIDEBAR */
+    /* LAYOUT SHELL WITH COLLAPSIBLE SIDEBAR */
     .app-sidebar {
       width: var(--sidebar-width);
       min-width: var(--sidebar-width);
@@ -371,6 +378,27 @@
       justify-content: space-between;
       padding: var(--sp-4) var(--sp-3);
       user-select: none;
+      transition: width 250ms cubic-bezier(0.16, 1, 0.3, 1), min-width 250ms cubic-bezier(0.16, 1, 0.3, 1), padding 250ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .app-sidebar.is-collapsed {
+      width: var(--sidebar-collapsed-width);
+      min-width: var(--sidebar-collapsed-width);
+      padding: var(--sp-4) var(--sp-2);
+    }
+    .app-sidebar.is-collapsed .sidebar-logo span,
+    .app-sidebar.is-collapsed .nav-layer-title,
+    .app-sidebar.is-collapsed .sidebar-cmd-text,
+    .app-sidebar.is-collapsed .nav-text,
+    .app-sidebar.is-collapsed .sidebar-footer-content {
+      display: none;
+    }
+    .app-sidebar.is-collapsed .nav-item {
+      justify-content: center;
+      padding: var(--sp-2);
+    }
+    .app-sidebar.is-collapsed .sidebar-cmd {
+      justify-content: center;
+      padding: var(--sp-2);
     }
 
     .sidebar-brand {
@@ -407,7 +435,7 @@
     .sidebar-cmd:hover { border-color: var(--border-2); color: var(--fg-soft); }
 
     .nav-layer-title {
-      font-size: var(--fs-micro);
+      font-size: var(--fs-caption);
       font-weight: 700;
       color: var(--muted);
       text-transform: uppercase;
@@ -486,12 +514,12 @@
     .dashboard-2col { display: grid; grid-template-columns: 2.2fr 1fr; gap: var(--sp-5); }
     @media (max-width: 1024px) { .dashboard-2col { grid-template-columns: 1fr; } }
 
-    /* CARD ANIMATIONS & FLUID DISMISSAL (ZERO LAYOUT POP) */
+    /* UNIFORM CLEAN CARD STYLING (ZERO ASYMMETRIC LEFT BORDER ESCAPES) */
     .k-card {
       background: var(--surface);
       border: var(--bw-thin) solid var(--border);
       border-radius: var(--radius-card);
-      padding: var(--sp-4);
+      padding: var(--sp-3) var(--sp-4);
       box-shadow: var(--shadow-card);
       transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms ease, opacity 220ms cubic-bezier(0.16, 1, 0.3, 1), max-height 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms, margin 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms, padding 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms;
       overflow: hidden;
@@ -511,6 +539,14 @@
       margin-top: 0 !important;
       margin-bottom: 0 !important;
       border-color: transparent !important;
+    }
+
+    /* Dense Compressed Action Item Card */
+    .k-action-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--sp-3);
     }
 
     /* Tabular Alignment & Strict Grid Padding */
@@ -635,7 +671,7 @@
 
     .prose-block { 
       font-family: var(--serif); 
-      font-size: var(--fs-serif-body); 
+      font-size: var(--fs-body); 
       line-height: 1.68; 
       color: var(--fg-soft); 
       user-select: text;
@@ -702,74 +738,74 @@
 <body>
 
   <!-- ==========================================================================
-       LEFT SIDEBAR NAVIGATION (STREAMLINED HARVEY / LEGORA 3-LAYER WORK OS)
+       LEFT SIDEBAR NAVIGATION (COLLAPSIBLE HARVEY / LEGORA 3-LAYER WORK OS)
        ========================================================================== -->
-  <aside class="app-sidebar">
+  <aside class="app-sidebar" id="appSidebar">
     <div>
       <div class="sidebar-brand">
         <div class="sidebar-logo"><span>EQUITY</span> OS</div>
-        <div style="display: flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-caption); color: var(--muted);">
-          <span class="k-dot k-dot-ok"></span> Harness Ready
-        </div>
+        <button class="k-btn k-btn-quiet k-btn-sm" onclick="toggleSidebar()" title="Toggle Sidebar Collapse" style="padding: var(--sp-1);">
+          <svg id="sidebarToggleIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
       </div>
 
       <!-- Command Bar Trigger -->
       <div class="sidebar-cmd" onclick="openDrillDrawer('ask-copilot')">
         <span style="display: flex; align-items: center; gap: var(--sp-2);">
           <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          ⌘K Search / Ask
+          <span class="sidebar-cmd-text">⌘K Search / Ask</span>
         </span>
-        <span style="font-family: var(--mono); font-size: var(--fs-mono-sm); color: var(--muted);">Copilot</span>
+        <span class="sidebar-cmd-text" style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">Copilot</span>
       </div>
 
       <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->
       <div class="nav-layer-title">L1 · Portfolio Intelligence</div>
       <a onclick="navigateTo('screen-cockpit')" class="nav-item is-active" id="nav-cockpit">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
-        Portfolio Cockpit
+        <span class="nav-text">Portfolio Cockpit</span>
       </a>
       <a onclick="navigateTo('screen-performance')" class="nav-item" id="nav-performance">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Performance vs Index
+        <span class="nav-text">Performance vs Index</span>
       </a>
       <a onclick="navigateTo('screen-allocation')" class="nav-item" id="nav-allocation">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        Risk & Allocations
+        <span class="nav-text">Risk & Allocations</span>
       </a>
 
       <!-- LAYER 2: RESEARCH ENGINE -->
       <div class="nav-layer-title">L2 · Research Engine</div>
       <a onclick="navigateTo('screen-workspace')" class="nav-item" id="nav-workspace">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        Company Desk
+        <span class="nav-text">Company Desk</span>
       </a>
       <a onclick="openDrillDrawer('updates')" class="nav-item">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
-        Signals Stream
+        <span class="nav-text">Signals Stream</span>
       </a>
 
       <!-- LAYER 3: OPERATIONS & GOVERNANCE -->
       <div class="nav-layer-title">L3 · Operations & Governance</div>
       <a onclick="navigateTo('screen-audit-log')" class="nav-item" id="nav-audit-log">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        Decision Audit Log
+        <span class="nav-text">Decision Audit Log</span>
       </a>
       <a onclick="navigateTo('screen-execution-queue')" class="nav-item" id="nav-execution-queue">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        Execution Queue
+        <span class="nav-text">Execution Queue</span>
       </a>
       <a onclick="showToast('Settings & calibration loaded')" class="nav-item">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        Settings & Calibration
+        <span class="nav-text">Settings & Calibration</span>
       </a>
     </div>
 
     <div class="sidebar-footer">
-      <div style="font-size: var(--fs-caption); color: var(--muted); display: flex; justify-content: space-between;">
+      <div class="sidebar-footer-content" style="font-size: var(--fs-caption); color: var(--muted); display: flex; justify-content: space-between;">
         <span>Risk Budget</span>
         <span style="color: var(--ok); font-weight: 600;">14% Free</span>
       </div>
-      <div style="font-size: var(--fs-caption); color: var(--muted); display: flex; justify-content: space-between;">
+      <div class="sidebar-footer-content" style="font-size: var(--fs-caption); color: var(--muted); display: flex; justify-content: space-between;">
         <span>Active Coverage</span>
         <span style="color: var(--fg); font-weight: 600;">30+ Coverage</span>
       </div>
@@ -784,12 +820,15 @@
       <div class="header-breadcrumb">
         <span>Workspaces</span> / <span class="active" id="breadcrumb-title">Portfolio Cockpit & Review</span>
       </div>
-      <div style="display: flex; gap: var(--sp-2);">
+      <div style="display: flex; gap: var(--sp-2); align-items: center;">
         <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('ask-copilot')">
           <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           Ask Copilot
         </button>
-        <button class="k-btn k-btn-primary k-btn-sm" onclick="showToast('View preferences saved')">Save View</button>
+        <!-- Dynamic Save View Button: Only visible when state parameter/filter/slider is modified -->
+        <button class="k-btn k-btn-primary k-btn-sm" id="saveViewBtn" style="display: none;" onclick="saveCurrentView()">
+          Save View <span class="k-dot k-dot-ok" style="margin-left: var(--sp-half);"></span>
+        </button>
       </div>
     </header>
 
@@ -800,50 +839,53 @@
            ========================================================================== -->
       <section id="screen-cockpit" class="screen-view is-active">
         
-        <!-- COMPACT GOVERNED TARGET BAND -->
-        <div class="k-card" style="display: flex; justify-content: space-between; align-items: center;">
-          <div style="display: flex; align-items: center; gap: var(--sp-5);">
-            <div>
-              <div style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Governed Target</div>
-              <div style="font-family: var(--mono); font-size: var(--fs-header-title); font-weight: 600; color: var(--fg); margin-top: var(--sp-1);">
-                NU — $1,500 Target Allocation
-              </div>
-            </div>
-            <div style="border-left: var(--bw-thin) solid var(--hairline); padding-left: var(--sp-5);">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Conviction</div>
-              <div style="font-size: var(--fs-body); font-weight: 600; color: var(--fg);">88% (High)</div>
-            </div>
-            <div style="border-left: var(--bw-thin) solid var(--hairline); padding-left: var(--sp-5);">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">1Y Return vs SPY</div>
-              <div class="k-num-pos t-mono" style="font-size: var(--fs-body); font-weight: 600;">+32.4% <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: normal;">(+8.3% Alpha)</span></div>
-            </div>
+        <!-- CONSOLIDATED 4-CARD SINGLE HORIZONTAL ROW FOR PORTFOLIO RISK & PERFORMANCE -->
+        <div class="card-grid-stat-4col">
+          <div class="k-card">
+            <div class="stat-heading">Portfolio NAV & Reserve</div>
+            <div class="stat-number t-mono" style="color: var(--fg);">$12.45M</div>
+            <div class="stat-subtext">14.0% Free Cash Reserve ($1.68M)</div>
           </div>
-          
-          <button class="k-btn k-btn-primary k-btn-sm" onclick="openTradeModal('NU', 'BUY', '12.5%', 14.25)">Execute Target</button>
+          <div class="k-card">
+            <div class="stat-heading">Sharpe & Risk Profile</div>
+            <div class="stat-number t-mono" style="color: var(--accent);">2.15</div>
+            <div class="stat-subtext">Beta: 0.85 vs SPY · Sortino: 2.85</div>
+          </div>
+          <div class="k-card">
+            <div class="stat-heading">1Y Max Drawdown</div>
+            <div class="stat-number t-mono" style="color: var(--fg);">-6.4%</div>
+            <div class="stat-subtext">vs SPY (-11.2%) · Recovery: 14d</div>
+          </div>
+          <div class="k-card">
+            <div class="stat-heading">1Y Return & Alpha</div>
+            <div class="stat-number t-mono" style="color: var(--ok);">+32.4%</div>
+            <div class="stat-subtext">vs SPY (+18.2%) · <strong style="color: var(--accent);">+8.3% Alpha</strong></div>
+          </div>
         </div>
 
-        <!-- ACTION QUEUE FEED WITH DISMISSAL -->
+        <!-- COMPRESSED DENSE ACTION QUEUE FEED -->
         <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div style="font-weight: 600; font-size: var(--fs-title); display: flex; align-items: center; gap: var(--sp-2);">
               <span class="k-dot k-dot-warn"></span>
               Action Queue & Review Pack (3 Items)
             </div>
-            <span style="font-size: var(--fs-caption); color: var(--muted);">Clicking action dismisses item & commits DB state</span>
+            <span style="font-size: var(--fs-caption); color: var(--muted);">Executing item persists state & clears queue</span>
           </div>
 
-          <div class="card-grid-action">
+          <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
             <!-- Action Card 1 -->
-            <div class="k-card k-card-interactive">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
-                <div class="k-ticker"><a onclick="switchCompanyWorkspace('BKNG')" class="k-ticker-symbol t-mono">BKNG</a><span class="k-ticker-name">Booking Holdings</span></div>
-                <span style="font-size: var(--fs-caption); color: var(--muted); font-family: var(--mono);">Draft</span>
-              </div>
-              <div style="font-weight: 600; margin-bottom: var(--sp-1); font-size: var(--fs-body);">Confirm Add Execution (+0.5% weight)</div>
-              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: var(--sp-3);">Drafted post-Q2 call. Falsifier & conviction score sign-off needed.</p>
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-family: var(--mono); font-size: var(--fs-mono-sm); color: var(--muted);">2d ago</span>
-                <div style="display: flex; gap: var(--sp-2);">
+            <div class="k-card k-card-interactive" style="padding: var(--sp-2) var(--sp-3);">
+              <div class="k-action-row">
+                <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
+                  <div class="k-ticker"><a onclick="switchCompanyWorkspace('BKNG')" class="k-ticker-symbol t-mono">BKNG</a></div>
+                  <div>
+                    <div style="font-weight: 600; font-size: var(--fs-body);">Confirm Add Execution (+0.5% weight)</div>
+                    <div style="font-size: var(--fs-caption); color: var(--fg-soft);">Drafted post-Q2 call. Falsifier & conviction score sign-off needed.</div>
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: var(--sp-3);">
+                  <span style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">2d ago</span>
                   <button class="k-btn k-btn-quiet k-btn-sm" onclick="dismissCard(this, 'Defer', 'Decision Deferred')">Defer</button>
                   <button class="k-btn k-btn-primary k-btn-sm" onclick="openTradeModal('BKNG', 'BUY', '8.5%', 4120.00)">Ratify & Trade</button>
                 </div>
@@ -851,81 +893,87 @@
             </div>
 
             <!-- Action Card 2 -->
-            <div class="k-card k-card-interactive">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
-                <div class="k-ticker"><a onclick="switchCompanyWorkspace('NU')" class="k-ticker-symbol t-mono">NU</a><span class="k-ticker-name">Nu Holdings</span></div>
-                <span style="font-size: var(--fs-caption); color: var(--warn); font-family: var(--mono);">Missing Limit</span>
-              </div>
-              <div style="font-weight: 600; margin-bottom: var(--sp-1); font-size: var(--fs-body);">Set NPL 90+ Disconfirmation Limit</div>
-              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: var(--sp-3);">Click to set disconfirming metric threshold on Company Desk.</p>
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-family: var(--mono); font-size: var(--fs-mono-sm); color: var(--muted);">3d ago</span>
-                <button class="k-btn k-btn-primary k-btn-sm" onclick="switchCompanyWorkspace('NU');">Set Falsifier →</button>
+            <div class="k-card k-card-interactive" style="padding: var(--sp-2) var(--sp-3);">
+              <div class="k-action-row">
+                <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
+                  <div class="k-ticker"><a onclick="switchCompanyWorkspace('NU')" class="k-ticker-symbol t-mono">NU</a></div>
+                  <div>
+                    <div style="font-weight: 600; font-size: var(--fs-body); display: flex; align-items: center; gap: var(--sp-2);">
+                      Set NPL 90+ Disconfirmation Limit <span class="k-pill k-pill-warn">Missing Limit</span>
+                    </div>
+                    <div style="font-size: var(--fs-caption); color: var(--fg-soft);">Click to set disconfirming metric threshold on Company Desk.</div>
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: var(--sp-3);">
+                  <span style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">3d ago</span>
+                  <button class="k-btn k-btn-primary k-btn-sm" onclick="switchCompanyWorkspace('NU');">Set Falsifier →</button>
+                </div>
               </div>
             </div>
 
             <!-- Action Card 3 -->
-            <div class="k-card k-card-interactive">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
-                <div class="k-ticker"><a onclick="switchCompanyWorkspace('TSM')" class="k-ticker-symbol t-mono">TSM</a><span class="k-ticker-name">TSMC</span></div>
-                <span style="font-size: var(--fs-caption); color: var(--warn); font-family: var(--mono);">Macro Alert</span>
-              </div>
-              <div style="font-weight: 600; margin-bottom: var(--sp-1); font-size: var(--fs-body);">Evaluate Geopolitical Risk Exposure</div>
-              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: var(--sp-3);">Semiconductor export restrictions update requires review.</p>
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-family: var(--mono); font-size: var(--fs-mono-sm); color: var(--muted);">1d ago</span>
-                <button class="k-btn k-btn-primary k-btn-sm" onclick="navigateTo('screen-allocation'); setTimeout(()=>openDrillDrawer('factor-heatmap'), 200);">Risk Heatmap →</button>
+            <div class="k-card k-card-interactive" style="padding: var(--sp-2) var(--sp-3);">
+              <div class="k-action-row">
+                <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
+                  <div class="k-ticker"><a onclick="switchCompanyWorkspace('TSM')" class="k-ticker-symbol t-mono">TSM</a></div>
+                  <div>
+                    <div style="font-weight: 600; font-size: var(--fs-body); display: flex; align-items: center; gap: var(--sp-2);">
+                      Evaluate Geopolitical Risk Exposure <span class="k-pill k-pill-warn">Macro Risk</span>
+                    </div>
+                    <div style="font-size: var(--fs-caption); color: var(--fg-soft);">Semiconductor export restrictions update requires review.</div>
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: var(--sp-3);">
+                  <span style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">1d ago</span>
+                  <button class="k-btn k-btn-primary k-btn-sm" onclick="navigateTo('screen-allocation'); setTimeout(()=>openDrillDrawer('factor-heatmap'), 200);">Risk Heatmap →</button>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- HOLDINGS DIRECTORY MATRIX -->
+        <!-- ENHANCED PORTFOLIO HOLDINGS & ACTIVE COVERAGE MATRIX -->
         <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Holdings & Active Coverage</div>
-            <span style="font-size: var(--fs-caption); color: var(--muted);">Select row to drill into company research desk</span>
+            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Holdings & Active Coverage Matrix</div>
+            <span style="font-size: var(--fs-caption); color: var(--muted);">Click ticker to drill into company research desk</span>
           </div>
 
           <table class="matrix-table t-mono">
             <thead>
               <tr>
                 <th>Ticker / Company</th>
-                <th>Status</th>
-                <th class="num">Price</th>
-                <th class="num">Target</th>
-                <th class="num">1Y Return</th>
-                <th class="num">Weight</th>
-                <th style="text-align: right;">Action</th>
+                <th>Position & Weight</th>
+                <th class="num">Price / Target</th>
+                <th>Thesis / Falsifier Status</th>
+                <th>Earnings Brief & Memo</th>
+                <th style="text-align: right;">Action / Threshold</th>
               </tr>
             </thead>
             <tbody>
               <tr onclick="switchCompanyWorkspace('NU')" style="cursor: pointer;">
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">NU</span><span class="k-ticker-name">Nu Holdings Ltd.</span></div></td>
-                <td><span style="display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-body); font-weight: 500;"><span class="k-dot k-dot-ok"></span> OVERWEIGHT (88%)</span></td>
-                <td class="num t-mono">$14.25</td>
-                <td class="num t-mono" style="color: var(--accent);">$18.50</td>
-                <td class="num k-num-pos t-mono">+42.8%</td>
-                <td class="num t-mono">12.5%</td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Research Desk →</button></td>
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">NU</span><span class="k-ticker-name">Nu Holdings</span></div></td>
+                <td><span class="k-pill k-pill-ok">OVERWEIGHT · 12.5%</span></td>
+                <td class="num t-mono">$14.25 / <strong style="color: var(--accent);">$18.50</strong></td>
+                <td><span style="color: var(--ok); font-size: var(--fs-caption); font-weight: 600;">✓ PASS (Cost $0.90)</span></td>
+                <td><button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:bcb_jun26_p4');">Q2 Beat Brief →</button></td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Desk →</button></td>
               </tr>
               <tr onclick="switchCompanyWorkspace('BKNG')" style="cursor: pointer;">
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">BKNG</span><span class="k-ticker-name">Booking Holdings Inc.</span></div></td>
-                <td><span style="display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-body); font-weight: 500;"><span class="k-dot k-dot-ok"></span> HOLD (75%)</span></td>
-                <td class="num t-mono">$4,120.00</td>
-                <td class="num t-mono" style="color: var(--accent);">$4,850.00</td>
-                <td class="num k-num-pos t-mono">+18.4%</td>
-                <td class="num t-mono">8.0%</td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Research Desk →</button></td>
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">BKNG</span><span class="k-ticker-name">Booking Holdings</span></div></td>
+                <td><span class="k-pill k-pill-warn">UNDERWEIGHT · 8.0%</span></td>
+                <td class="num t-mono">$4,120 / <strong style="color: var(--accent);">$4,850</strong></td>
+                <td><span style="color: var(--warn); font-size: var(--fs-caption); font-weight: 600;">⚠ MONITOR (EU Reg)</span></td>
+                <td><button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:bkng_q2_p12');">Post-Call Memo →</button></td>
+                <td style="text-align: right;"><button class="k-btn k-btn-primary k-btn-sm" onclick="event.stopPropagation(); openTradeModal('BKNG', 'BUY', '8.5%', 4120.00);">Add +0.5%</button></td>
               </tr>
               <tr onclick="switchCompanyWorkspace('TSM')" style="cursor: pointer;">
-                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">TSM</span><span class="k-ticker-name">Taiwan Semiconductor</span></div></td>
-                <td><span style="display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-body); font-weight: 500;"><span class="k-dot k-dot-warn"></span> REVIEW (62%)</span></td>
-                <td class="num t-mono">$168.50</td>
-                <td class="num t-mono" style="color: var(--accent);">$195.00</td>
-                <td class="num k-num-pos t-mono">+35.1%</td>
-                <td class="num t-mono">5.5%</td>
-                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Research Desk →</button></td>
+                <td><div class="k-ticker"><span class="k-ticker-symbol t-mono">TSM</span><span class="k-ticker-name">Taiwan Semi</span></div></td>
+                <td><span class="k-pill k-pill-ok">ON TARGET · 5.5%</span></td>
+                <td class="num t-mono">$168.50 / <strong style="color: var(--accent);">$195.00</strong></td>
+                <td><span style="color: var(--bad); font-size: var(--fs-caption); font-weight: 600;">⚡ REVIEW (Wafer Limit)</span></td>
+                <td><button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:tsm_2nm_p8');">N2 Node Brief →</button></td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="event.stopPropagation(); openTradeModal('TSM', 'SELL', '5.0%', 168.50);">Trim Limit</button></td>
               </tr>
             </tbody>
           </table>
@@ -1088,27 +1136,73 @@
             <div style="font-size: var(--fs-caption); color: var(--muted);">Governed risk budget, position drift limits, and factor concentration</div>
           </div>
           <div style="display: flex; gap: var(--sp-2);">
-            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('factor-heatmap')">Factor Risk Heatmap →</button>
+            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('factor-heatmap')">Factor Drawer →</button>
             <button class="k-btn k-btn-primary k-btn-sm" onclick="showToast('Rebalance execution plan generated & queued')">Draft Rebalance</button>
           </div>
         </div>
 
-        <!-- RISK BUDGET SUMMARY CARDS -->
-        <div class="card-grid-risk">
+        <!-- HERO USE CASE PANEL: FACTOR RISK & EXPOSURE DEEP DIVE (UNIFORM BORDER STYLING) -->
+        <div class="k-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3);">
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Hero Use Case</div>
+              <div style="font-weight: 600; font-size: var(--fs-title);">Factor Risk & Exposure Deep Dive</div>
+            </div>
+            <span class="k-pill k-pill-warn">MODERATE CONCENTRATION (64/100)</span>
+          </div>
+
+          <div class="heatmap-grid" style="margin-bottom: var(--sp-4);">
+            <div class="heatmap-cell heatmap-cell-ok">
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Quality Factor</div>
+              <div class="t-mono" style="font-weight: 600; color: var(--ok);">+1.42 (High)</div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">ROIC > 22% portfolio avg</div>
+            </div>
+            <div class="heatmap-cell heatmap-cell-ok">
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Momentum</div>
+              <div class="t-mono" style="font-weight: 600; color: var(--ok);">+0.85 (Mod)</div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">1Y price return persistence</div>
+            </div>
+            <div class="heatmap-cell heatmap-cell-warn">
+              <div style="font-size: var(--fs-caption); color: var(--muted);">LatAm Macro</div>
+              <div class="t-mono" style="font-weight: 600; color: var(--warn);">+1.18 (Elevated)</div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Overweight BRL/MXN FX risk</div>
+            </div>
+            <div class="heatmap-cell heatmap-cell-bad">
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Semicon Volatility</div>
+              <div class="t-mono" style="font-weight: 600; color: var(--bad);">+1.65 (High)</div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Wafer export policy exposure</div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; border-top: var(--bw-thin) solid var(--hairline); padding-top: var(--sp-3);">
+            <div style="font-size: var(--fs-caption); color: var(--muted);">
+              Macro Stress Test: <strong style="color: var(--warn);">BRL -10% (-2.4%)</strong> · <strong style="color: var(--warn);">US Rates +50bps (-3.1%)</strong> · <strong style="color: var(--bad);">Fab Freeze (-5.8%)</strong>
+            </div>
+            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('factor-heatmap')">Detailed Factor Matrix →</button>
+          </div>
+        </div>
+
+        <!-- RISK BUDGET SUMMARY CARDS (CONSOLIDATED) -->
+        <div class="card-grid-stat-4col">
           <div class="k-card">
             <div class="stat-heading">Risk Budget Capacity</div>
             <div class="stat-number" style="color: var(--ok);">14.0% Free</div>
-            <div class="stat-subtext">$1,680 Cash Reserve · Max Drawdown Limit: -12.0%</div>
+            <div class="stat-subtext">$1.68M Cash Reserve</div>
           </div>
           <div class="k-card">
             <div class="stat-heading">Top Holding Weight</div>
             <div class="stat-number" style="color: var(--fg);">12.5% (NU)</div>
-            <div class="stat-subtext">Single Position Cap: 15.0% · Margin: +2.5%</div>
+            <div class="stat-subtext">Position Cap: 15.0%</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">Factor Concentration</div>
-            <div class="stat-number" style="color: var(--warn);">Moderate (64/100)</div>
-            <div class="stat-subtext">Fintech & LatAm overweight detected</div>
+            <div class="stat-heading">Sharpe Ratio</div>
+            <div class="stat-number" style="color: var(--accent);">2.15</div>
+            <div class="stat-subtext">Sortino: 2.85</div>
+          </div>
+          <div class="k-card">
+            <div class="stat-heading">Portfolio Beta</div>
+            <div class="stat-number" style="color: var(--fg);">0.85</div>
+            <div class="stat-subtext">vs SPY (1.00)</div>
           </div>
         </div>
 
@@ -1162,45 +1256,6 @@
           </table>
         </div>
 
-        <!-- POSITION CARDS & REBALANCING DETAILS FOR BKNG & TSM -->
-        <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
-          <div style="font-weight: 600; font-size: var(--fs-title);">Position Detail & Risk Contribution Cards</div>
-          
-          <div class="card-grid-action">
-            <!-- BKNG Position Card -->
-            <div class="k-card">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
-                <div class="k-ticker"><span class="k-ticker-symbol t-mono" onclick="switchCompanyWorkspace('BKNG')">BKNG</span><span class="k-ticker-name">Booking Holdings</span></div>
-                <span class="k-pill k-pill-warn">Underweight</span>
-              </div>
-              <div style="font-size: var(--fs-body); font-weight: 600; margin-bottom: var(--sp-1);">Target Allocation: 8.5% ($1,020M)</div>
-              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: var(--sp-3);">
-                Current weight is 8.0% ($960M). Post-Q2 call earnings momentum supports expanding position by +0.5% ($60M).
-              </p>
-              <div style="display: flex; justify-content: space-between; align-items: center; border-top: var(--bw-thin) solid var(--hairline); padding-top: var(--sp-2);">
-                <span style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">Beta: 0.92 · Vol: 18%</span>
-                <button class="k-btn k-btn-primary k-btn-sm" onclick="openTradeModal('BKNG', 'BUY', '8.5%', 4120.00)">Execute Order →</button>
-              </div>
-            </div>
-
-            <!-- TSM Position Card -->
-            <div class="k-card">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
-                <div class="k-ticker"><span class="k-ticker-symbol t-mono" onclick="switchCompanyWorkspace('TSM')">TSM</span><span class="k-ticker-name">Taiwan Semiconductor</span></div>
-                <span class="k-pill k-pill-ok">On Target</span>
-              </div>
-              <div style="font-size: var(--fs-body); font-weight: 600; margin-bottom: var(--sp-1);">Target Allocation: 5.5% ($660M)</div>
-              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: var(--sp-3);">
-                Foundry monopoly intact. Geopolitical risk factor score requires monitoring against semiconductor export limits.
-              </p>
-              <div style="display: flex; justify-content: space-between; align-items: center; border-top: var(--bw-thin) solid var(--hairline); padding-top: var(--sp-2);">
-                <span style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);">Beta: 1.15 · Vol: 26%</span>
-                <button class="k-btn k-btn-quiet k-btn-sm" onclick="openTradeModal('TSM', 'SELL', '5.0%', 168.50)">Adjust Size →</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
       </section>
 
       <!-- ==========================================================================
@@ -1230,7 +1285,7 @@
         <!-- MASTHEAD -->
         <div class="k-card" style="display: flex; justify-content: space-between; align-items: center;">
           <div>
-            <span class="t-mono" style="font-size: var(--fs-stat); font-weight: 600; letter-spacing: -0.02em;" id="wsHeaderSymbol">NU</span>
+            <span class="t-mono" style="font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em;" id="wsHeaderSymbol">NU</span>
             <span style="font-size: var(--fs-title); color: var(--fg-soft); margin-left: var(--sp-3);" id="wsHeaderName">Nu Holdings Ltd. · LatAm Retail Banking</span>
           </div>
           <div style="display: flex; gap: var(--sp-4); align-items: center;">
@@ -1330,14 +1385,14 @@
                       <span>WACC (Discount Rate)</span>
                       <strong style="color: var(--accent);" id="embeddedWaccLabel">10.50%</strong>
                     </div>
-                    <input type="range" id="embeddedWaccSlider" min="8.0" max="14.0" step="0.25" value="10.5" style="width: 100%; accent-color: var(--accent);" oninput="updateEmbeddedDCF()">
+                    <input type="range" id="embeddedWaccSlider" min="8.0" max="14.0" step="0.25" value="10.5" style="width: 100%; accent-color: var(--accent);" oninput="updateEmbeddedDCF(); markViewModified();">
                   </div>
                   <div>
                     <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); margin-bottom: var(--sp-1);">
                       <span>Terminal Growth Rate (g)</span>
                       <strong style="color: var(--accent);" id="embeddedGLabel">3.50%</strong>
                     </div>
-                    <input type="range" id="embeddedGSlider" min="1.0" max="5.0" step="0.25" value="3.5" style="width: 100%; accent-color: var(--accent);" oninput="updateEmbeddedDCF()">
+                    <input type="range" id="embeddedGSlider" min="1.0" max="5.0" step="0.25" value="3.5" style="width: 100%; accent-color: var(--accent);" oninput="updateEmbeddedDCF(); markViewModified();">
                   </div>
                 </div>
               </div>
@@ -1346,14 +1401,14 @@
 
           <!-- RIGHT SIDEBAR -->
           <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
-            <!-- EMBEDDED THESIS CONTRACTS (DISCONFIRMING FALSIFIERS) -->
-            <div class="k-card" style="border-left: var(--bw-thick) solid var(--warn);">
+            <!-- EMBEDDED THESIS CONTRACTS (UNIFORM BORDER STYLING) -->
+            <div class="k-card">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
                 <div>
                   <div style="font-weight: 600; font-size: var(--fs-title);">Thesis Contracts & Falsifiers</div>
                   <div style="font-size: var(--fs-caption); color: var(--muted);">Disconfirming metric thresholds</div>
                 </div>
-                <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Disconfirming limit settings saved')">Set Limit</button>
+                <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Disconfirming limit settings saved'); markViewModified();">Set Limit</button>
               </div>
               <div style="display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-caption);" id="wsFalsifiersList">
                 <div class="k-well-compact">
@@ -1615,7 +1670,7 @@
       <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
         <div>
           <div style="font-size: var(--fs-caption); color: var(--muted);">Target Symbol</div>
-          <div class="t-mono" style="font-size: var(--fs-stat); font-weight: 600;" id="modalTradeTicker">NU</div>
+          <div class="t-mono" style="font-size: var(--fs-display); font-weight: 600;" id="modalTradeTicker">NU</div>
         </div>
         <span class="k-pill k-pill-ok" id="modalTradeActionPill">BUY ORDER</span>
       </div>
@@ -1656,7 +1711,7 @@
       <button class="k-btn k-btn-quiet k-btn-sm" onclick="closePeekDrawer()">×</button>
     </div>
     <div class="t-mono" style="font-size: var(--fs-caption); color: var(--accent);" id="peekRefKey">doc:ref</div>
-    <div style="font-family: var(--serif); font-size: var(--fs-serif-body); color: var(--fg-soft); line-height: 1.68;" id="peekProse">
+    <div style="font-family: var(--serif); font-size: var(--fs-body); color: var(--fg-soft); line-height: 1.68;" id="peekProse">
       Source filing extract loading...
     </div>
   </aside>
@@ -1791,6 +1846,37 @@
     };
 
     let activeCompanyTicker = 'NU';
+    let isViewModified = false;
+    let isSidebarCollapsed = false;
+
+    function toggleSidebar() {
+      isSidebarCollapsed = !isSidebarCollapsed;
+      const sidebar = document.getElementById('appSidebar');
+      const icon = document.getElementById('sidebarToggleIcon');
+
+      if (isSidebarCollapsed) {
+        sidebar.classList.add('is-collapsed');
+        icon.innerHTML = `<polyline points="9 18 15 12 9 6"/>`;
+        showToast('Sidebar collapsed');
+      } else {
+        sidebar.classList.remove('is-collapsed');
+        icon.innerHTML = `<polyline points="15 18 9 12 15 6"/>`;
+        showToast('Sidebar expanded');
+      }
+    }
+
+    function markViewModified() {
+      isViewModified = true;
+      const saveBtn = document.getElementById('saveViewBtn');
+      if (saveBtn) saveBtn.style.display = 'inline-flex';
+    }
+
+    function saveCurrentView() {
+      isViewModified = false;
+      const saveBtn = document.getElementById('saveViewBtn');
+      if (saveBtn) saveBtn.style.display = 'none';
+      showToast('View parameters & slider state saved to DB');
+    }
 
     function switchCompanyWorkspace(ticker) {
       if (!COMPANY_DATA[ticker]) return;
@@ -1986,6 +2072,7 @@
         }
       });
       showToast(`Filtered audit log by ${type}: ${val}`);
+      markViewModified();
     }
 
     function populateCopilotPrompt(promptText) {
@@ -2047,7 +2134,7 @@
           <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
             <div>
               <div style="font-size: var(--fs-caption); color: var(--muted);">Implied Intrinsic Fair Value</div>
-              <div class="t-mono" style="font-size: var(--fs-stat); font-weight: 600; color: var(--accent);" id="dcfFairValueOutput">$18.50</div>
+              <div class="t-mono" style="font-size: var(--fs-display); font-weight: 600; color: var(--accent);" id="dcfFairValueOutput">$18.50</div>
             </div>
             <div style="text-align: right;">
               <div style="font-size: var(--fs-caption); color: var(--muted);">Expected Upside</div>
@@ -2062,7 +2149,7 @@
                 <span>Discount Rate (WACC)</span>
                 <strong style="color: var(--accent);" id="waccValueLabel">10.50%</strong>
               </div>
-              <input type="range" id="waccSlider" min="8.0" max="14.0" step="0.25" value="10.5" style="width: 100%; accent-color: var(--accent);" oninput="updateDCFSensitivity()">
+              <input type="range" id="waccSlider" min="8.0" max="14.0" step="0.25" value="10.5" style="width: 100%; accent-color: var(--accent);" oninput="updateDCFSensitivity(); markViewModified();">
             </div>
 
             <div>
@@ -2070,7 +2157,7 @@
                 <span>Terminal Growth Rate (g)</span>
                 <strong style="color: var(--accent);" id="gValueLabel">3.50%</strong>
               </div>
-              <input type="range" id="gSlider" min="1.0" max="5.0" step="0.25" value="3.5" style="width: 100%; accent-color: var(--accent);" oninput="updateDCFSensitivity()">
+              <input type="range" id="gSlider" min="1.0" max="5.0" step="0.25" value="3.5" style="width: 100%; accent-color: var(--accent);" oninput="updateDCFSensitivity(); markViewModified();">
             </div>
           </div>
 
