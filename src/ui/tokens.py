@@ -164,16 +164,10 @@ FONT_TOKENS: dict[str, str] = {
 #
 # Queued UI sessions build on these names — treat them as a public contract.
 TYPE_SCALE: dict[str, str] = {
-    "fs-stat": "24px",
-    "fs-header-title": "17px",
     "fs-display": "22px",
     "fs-title": "16px",
-    "fs-serif-body": "14.5px",
     "fs-body": "13px",
     "fs-caption": "11px",
-    "fs-mono-sm": "10px",
-    "fs-micro": "9.5px",
-    "fs-nano": "9px",
 }
 
 # Spacing scale — gaps, paddings, and margins snap to these steps so density
@@ -189,8 +183,15 @@ SPACING_SCALE: dict[str, str] = {
     "sp-6": "32px",
 }
 
-# Chrome: corner radii, layout dimensions, blur filters, and motion timing.
+# Chrome & Work OS tokens: corner radii, layout dimensions, blur filters,
+# specialized typography extensions, and motion timing.
 CHROME_TOKENS: dict[str, str] = {
+    "fs-stat": "24px",
+    "fs-header-title": "17px",
+    "fs-serif-body": "14.5px",
+    "fs-mono-sm": "10px",
+    "fs-micro": "9.5px",
+    "fs-nano": "9px",
     "sidebar-width": "240px",
     "main-max-width": "1240px",
     "drawer-width": "540px",
