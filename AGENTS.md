@@ -134,4 +134,14 @@ The app's in-app LLM transport (`src/llm/cli.py` → subscription `claude` CLI) 
 
 The full backend/code standards (typing, the NEVER/ALWAYS lists, classification, testing discipline, the pre-push checklist, PR conventions, Deep Modules) live in the global `AGENTS.md` and apply here unchanged — do not duplicate them in this file. The one repo nuance: a single `cast(...)` at a validated JSON / external-data boundary (right after an `isinstance`/schema check) is the accepted pattern here; never `# type: ignore` (this matches the global NEVER list's JSON-boundary exception). See `src/log_redact.py` for the canonical credential-redaction helper the global secret-handling rules reference.
 
+## Architectural & Execution Traps (Operational Learnings)
+
+- **Alembic Baseline Migration & Idempotent DDL:** Consolidated baseline migrations (`0001_initial_schema.py`) MUST wrap all DDL (`CREATE TABLE`, `CREATE VIRTUAL TABLE`, `CREATE INDEX`, `CREATE TRIGGER`) in `IF NOT EXISTS` syntax. `command.stamp()` on a blank database file only populates `alembic_version` without executing table creation; test fixtures building clean databases must invoke `command.upgrade(cfg, "head")` directly. Any seed inserts (e.g. `INSERT OR IGNORE INTO tenants (id, created_at)`) MUST be placed AFTER table creation in `upgrade()`.
+- **Transitive Reachability & Code Excision Safety:** Never excise files from `src/provenance/` without running a full transitive dependency graph scan from non-provenance product entrypoints (`src/timeseries/`, `src/pipeline/`, `execution/`). `src/provenance/financial_fact_resolution.py` is actively imported by `timeseries/loaders.py` and `restatement_detector.py`.
+- **Request-Scoped Connection Pooling:** Surface renderers and server routes (`comments_server.py`) thread a single request-scoped `sqlite3.Connection` via `open_repo_db(repo_root, conn=conn)` and Flask `g.request_read_db` (closed automatically via `@app.teardown_request`), avoiding per-section connection churn (51+ connection calls reduced to 1 per request).
+- **Pre-Persist Fact Plausibility Gate:** Bulk writing to `financial_facts` must route through `insert_with_restatement_detection`, which executes `_validate_financial_fact_plausibility` (rejecting revenue/asset magnitude outliers > $100T or negative share counts) before committing.
+- **Resumable Pipeline Checkpointing:** Scheduled multi-stage orchestrators (`execution/run_morning_pipeline.py`) track completed stage keys in `.tmp/morning_pipeline/state.json` (18h TTL). Interrupted runs resume from the last successful stage rather than repeating completed legs.
+- **Pre-Push Ratchets & CI Delegation:** Standard `git push` runs local ruff check ratchets against `origin/main`. Use `FAST_PUSH=1 git push` (or `git push --no-verify`) to delegate full matrix testing to CI during large refactors or migration file reorganizations.
+
+
 
