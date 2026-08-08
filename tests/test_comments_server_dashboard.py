@@ -18,6 +18,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 import comments_server  # noqa: E402
 
+from integrations.portfolio_tracker_client import LivePortfolio, LivePosition  # noqa: E402
+
 
 def _create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
@@ -128,7 +130,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # + socratic_questions_result (GET /api/socratic/questions/<ticker>) — Step 1 became
     # a background job; +1 peek_weekly_packet (GET /api/peek/weekly-packet, the Sunday-
     # packet band's read-only doorway). +1 post-earnings readout generation action.
-    assert len(rules) == 153
+    assert len(rules) == 154
     assert {
         endpoint: rules[endpoint]
         for endpoint in (
@@ -238,6 +240,44 @@ def test_dashboard_page_returns_shell(client):
     assert "MELI" in overview_body
     # The seeded thesis verdict renders as a kit status pill (.k-pill).
     assert "k-pill" in overview_body
+
+
+def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
+    app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        comments_server,
+        "fetch_live_portfolio",
+        lambda: LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            total_market_value=250_000.0,
+            as_of="2026-08-08",
+            positions=[
+                LivePosition(
+                    "NU",
+                    "Nubank",
+                    100.0,
+                    125_000.0,
+                    90_000.0,
+                    35_000.0,
+                    50.0,
+                )
+            ],
+        ),
+    )
+    local_client = comments_server.create_app(app_repo).test_client()
+
+    response = local_client.get("/api/work-os/portfolio")
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/json"
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["total_market_value"] == 250_000.0
+    assert [row["ticker"] for row in payload["companies"]] == ["NU"]
+    assert payload["companies"][0]["current_weight_pct"] == 50.0
+    assert "MELI" not in response.get_data(as_text=True)
 
 
 def test_dashboard_overview_excludes_action_blocks(client):

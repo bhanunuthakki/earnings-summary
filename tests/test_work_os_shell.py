@@ -156,6 +156,17 @@ def test_company_drawers_and_full_brief_use_live_report_artifacts() -> None:
     assert "onclick=\"navigateTo(\\'screen-workspace\\')\"" in html
 
 
+def test_cockpit_and_company_desk_hydrate_the_portfolio_only_contract() -> None:
+    html = render_work_os_shell()
+    assert "fetch('/api/work-os/portfolio'" in html
+    assert 'id="workOsPortfolioStats"' in html
+    assert 'id="workOsActionQueue"' in html
+    assert 'id="workOsPortfolioRows"' in html
+    assert "workOsHydratePortfolio" in html
+    assert "workOsRenderCompanyDesk" in html
+    assert "originalSwitchCompanyWorkspace" not in html
+
+
 def test_mobile_inbox_is_the_same_responsive_cockpit() -> None:
     html = render_work_os_shell()
     assert "100dvh" in html

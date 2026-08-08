@@ -148,6 +148,10 @@ def _production_runtime(generated_at: datetime) -> str:
   .work-os-live-status {{ position: absolute; inline-size: var(--bw-thin); block-size: var(--bw-thin); overflow: hidden; clip: rect(0 0 0 0); }}
   .work-os-report-frame, .work-os-brief-frame {{ width: 100%; min-height: calc(100dvh - var(--header-height) - var(--sp-6)); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); }}
   .work-os-brief-canvas {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
+  .work-os-company-desk {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
+  .work-os-company-toolbar {{ display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }}
+  .work-os-company-picker {{ display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }}
+  .work-os-action-copy {{ display: flex; align-items: center; gap: var(--sp-3); flex: 1; }}
   @media (max-width: 47.5rem) {{
     body {{ display: block; min-width: 0; }}
     .app-sidebar,
@@ -189,8 +193,8 @@ def _production_runtime(generated_at: datetime) -> str:
   const WORK_OS_LEGACY_HASHES = {legacy_hash_json};
   const workOsRequests = new Map();
   const originalNavigateTo = window.navigateTo;
-  const originalSwitchCompanyWorkspace = window.switchCompanyWorkspace;
   window.workOsActiveTicker = 'NU';
+  let workOsPortfolioHydration = null;
   const originalOpenDrillDrawer = window.openDrillDrawer;
   const originalCloseDrillDrawer = window.closeDrillDrawer;
   const originalOpenPeekDrawer = window.openPeekDrawer;
@@ -239,11 +243,6 @@ def _production_runtime(generated_at: datetime) -> str:
     return '<iframe class="' + className + '" src="/reports/' + safeTicker + '#tab=' + safeTab + '" title="' + safeTicker + ' live research brief" loading="lazy"></iframe>';
   }}
 
-  window.switchCompanyWorkspace = function (ticker) {{
-    window.workOsActiveTicker = String(ticker || 'NU').toUpperCase();
-    originalSwitchCompanyWorkspace(window.workOsActiveTicker);
-  }};
-
   window.openFullBriefCanvas = function (ticker) {{
     window.workOsActiveTicker = String(ticker || window.workOsActiveTicker || 'NU').toUpperCase();
     const screen = document.getElementById('screen-full-brief');
@@ -256,12 +255,144 @@ def _production_runtime(generated_at: datetime) -> str:
         '</div>';
     }}
     window.navigateTo('screen-full-brief');
+    const breadcrumb = document.getElementById('breadcrumb-title');
+    if (breadcrumb) breadcrumb.textContent = 'Full Equity Research Brief (' + window.workOsActiveTicker + ')';
   }};
 
   function escapeWorkOsHtml(value) {{
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }}
+
+  function workOsMoney(value) {{
+    if (!Number.isFinite(value)) return '-';
+    return new Intl.NumberFormat('en-US', {{ style: 'currency', currency: 'USD', maximumFractionDigits: value >= 1000 ? 0 : 2 }}).format(value);
+  }}
+
+  function workOsPercent(value) {{
+    if (!Number.isFinite(value)) return '-';
+    return new Intl.NumberFormat('en-US', {{ maximumFractionDigits: 1, signDisplay: 'exceptZero' }}).format(value) + '%';
+  }}
+
+  function workOsPillClass(status) {{
+    const normalized = String(status || '').toLowerCase();
+    if (normalized.includes('breach') || normalized.includes('fail')) return 'k-pill k-pill-bad';
+    if (normalized && !['intact', 'pass', 'passing', 'ok'].includes(normalized)) return 'k-pill k-pill-warn';
+    return 'k-pill k-pill-ok';
+  }}
+
+  function workOsCompanyByTicker(ticker) {{
+    const companies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
+      ? workOsPortfolioHydration.companies : [];
+    return companies.find(function (company) {{ return company.ticker === ticker; }}) || null;
+  }}
+
+  function workOsRenderCompanyDesk(ticker) {{
+    const company = workOsCompanyByTicker(String(ticker || '').toUpperCase());
+    const screen = document.getElementById('screen-workspace');
+    if (!company || !screen) return;
+    window.workOsActiveTicker = company.ticker;
+    const status = company.thesis_status || 'status pending';
+    const brief = company.report_url
+      ? workOsReportFrame(company.ticker, 'overview', 'work-os-report-frame')
+      : '<div class="k-well" role="status">Research brief pending. The scheduled portfolio pipeline will populate it when governed artifacts are ready.</div>';
+    screen.innerHTML = '<div class="work-os-company-desk">' +
+      '<div class="k-card work-os-company-toolbar">' +
+        '<div class="work-os-company-picker"><label for="companyPickerSelect" class="stat-heading">Portfolio Company</label><select class="k-select" id="companyPickerSelect"></select></div>' +
+        '<div class="k-action-row"><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span>' +
+        '<button class="k-btn k-btn-quiet k-btn-sm" id="workOsThresholdButton" type="button">Buy / Hold / Trim / Sell Thresholds</button>' +
+        (company.report_url ? '<button class="k-btn k-btn-primary k-btn-sm" id="workOsFullBriefButton" type="button">Open Full Brief Canvas &rarr;</button>' : '') + '</div>' +
+      '</div>' +
+      '<div class="k-card"><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div>' +
+        '<div class="stat-subtext">' + workOsMoney(company.price) + ' price &middot; ' + workOsMoney(company.fair_value) + ' fair value &middot; ' + workOsPercent(company.current_weight_pct) + ' portfolio weight</div></div>' + brief + '</div>';
+    const picker = document.getElementById('companyPickerSelect');
+    const companies = workOsPortfolioHydration.companies || [];
+    if (picker) {{
+      companies.forEach(function (item) {{ picker.add(new Option(item.ticker + ' - ' + item.name, item.ticker, false, item.ticker === company.ticker)); }});
+      picker.addEventListener('change', function () {{ workOsRenderCompanyDesk(picker.value); }});
+    }}
+    const thresholdButton = document.getElementById('workOsThresholdButton');
+    if (thresholdButton) thresholdButton.addEventListener('click', function () {{ openDrillDrawer('thresholds'); }});
+    const briefButton = document.getElementById('workOsFullBriefButton');
+    if (briefButton) briefButton.addEventListener('click', function () {{ openFullBriefCanvas(company.ticker); }});
+  }}
+
+  window.switchCompanyWorkspace = function (ticker) {{
+    const requested = String(ticker || window.workOsActiveTicker || '').toUpperCase();
+    if (!workOsCompanyByTicker(requested)) return;
+    workOsRenderCompanyDesk(requested);
+    window.navigateTo('screen-workspace');
+    const breadcrumb = document.getElementById('breadcrumb-title');
+    if (breadcrumb) breadcrumb.textContent = 'Company Desk (' + requested + ')';
+  }};
+
+  function workOsRenderPortfolio(payload) {{
+    workOsPortfolioHydration = payload;
+    const companies = payload.companies || [];
+    const stats = document.getElementById('workOsPortfolioStats');
+    if (stats) {{
+      const cards = stats.querySelectorAll('.k-card');
+      const labels = ['Portfolio NAV', 'Performance', 'Risk & Factors', 'Portfolio Companies'];
+      const values = [workOsMoney(payload.total_market_value), 'Open live view', 'Open live view', String(companies.length)];
+      const details = [payload.as_of ? 'As of ' + payload.as_of : 'Tracker offline - research data only', 'Performance vs Index', 'Risk & Allocations', 'Governed portfolio universe'];
+      cards.forEach(function (card, index) {{
+        const heading = card.querySelector('.stat-heading');
+        const number = card.querySelector('.stat-number');
+        const detail = card.querySelector('.stat-subtext');
+        if (heading) heading.textContent = labels[index];
+        if (number) number.textContent = values[index];
+        if (detail) detail.textContent = details[index];
+      }});
+    }}
+    const actionHeading = document.getElementById('workOsActionHeading');
+    if (actionHeading) actionHeading.textContent = 'Action Queue & Review Pack (' + payload.actions.length + ' Items)';
+    const actionQueue = document.getElementById('workOsActionQueue');
+    if (actionQueue) {{
+      actionQueue.innerHTML = payload.actions.length ? payload.actions.map(function (action) {{
+        return '<div class="k-card k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
+          '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><div class="stat-heading">' + escapeWorkOsHtml(action.headline) + '</div>' +
+          '<div class="stat-subtext">' + escapeWorkOsHtml(action.detail) + '</div></div></div>' +
+          '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company &rarr;</button></div></div>';
+      }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
+    }}
+    const rows = document.getElementById('workOsPortfolioRows');
+    if (rows) {{
+      rows.innerHTML = companies.map(function (company) {{
+        const weight = Number.isFinite(company.current_weight_pct) ? workOsPercent(company.current_weight_pct) : 'Weight unavailable';
+        const status = company.thesis_status || 'status pending';
+        const briefAction = company.report_url ? '<button class="k-chip is-active" type="button" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Full Brief Canvas &rarr;</button>' : '<span class="k-chip">Brief pending</span>';
+        return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
+          '<td><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono">' + workOsMoney(company.price) + ' / <strong>' + workOsMoney(company.fair_value) + '</strong></td>' +
+          '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span></td><td>' + briefAction + '</td>' +
+          '<td class="num"><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '">Review Thresholds</button></td></tr>';
+      }}).join('');
+    }}
+    document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function () {{ switchCompanyWorkspace(node.dataset.workOsTicker); }}); }});
+    document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
+    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); window.workOsActiveTicker = node.dataset.workOsThresholds; openDrillDrawer('thresholds'); }}); }});
+    const preferred = workOsCompanyByTicker(window.workOsActiveTicker) || companies[0];
+    if (preferred) workOsRenderCompanyDesk(preferred.ticker);
+  }}
+
+  async function workOsHydratePortfolio() {{
+    const status = document.getElementById('workOsLiveStatus');
+    try {{
+      const response = await fetch('/api/work-os/portfolio', {{ headers: {{ Accept: 'application/json' }} }});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if (!payload || !Array.isArray(payload.companies)) throw new Error('Invalid portfolio response');
+      workOsRenderPortfolio(payload);
+      if (status) status.textContent = payload.status === 'ok' ? 'Portfolio companies loaded' : 'Portfolio companies loaded with live weights unavailable';
+    }} catch (error) {{
+      const stats = document.getElementById('workOsPortfolioStats');
+      if (stats) stats.querySelectorAll('.stat-number').forEach(function (node) {{ node.textContent = '-'; }});
+      const queue = document.getElementById('workOsActionQueue');
+      if (queue) queue.innerHTML = '<div class="k-well" role="alert">Portfolio companies are temporarily unavailable. No prototype values are being shown.</div>';
+      const rows = document.getElementById('workOsPortfolioRows');
+      if (rows) rows.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
+      if (status) status.textContent = 'Portfolio companies could not be loaded';
+    }}
   }}
 
   window.executeCopilotQuery = async function () {{
@@ -331,6 +462,7 @@ def _production_runtime(generated_at: datetime) -> str:
 
   window.addEventListener('hashchange', function () {{ workOsApplyHash(false); }});
   workOsApplyHash(true);
+  workOsHydratePortfolio();
 
   function workOsEndpoint(screenId) {{
     const base = WORK_OS_ENDPOINTS[screenId];
@@ -462,6 +594,22 @@ def _make_allocation_language_honest(html: str) -> str:
 
 
 def _add_production_contract(html: str, generated_at: datetime) -> str:
+    html = html.replace(
+        '<div class="card-grid-stat-4col">',
+        '<div class="card-grid-stat-4col" id="workOsPortfolioStats">',
+        1,
+    )
+    html = html.replace(
+        "Action Queue & Review Pack (3 Items)",
+        '<span id="workOsActionHeading">Action Queue & Review Pack</span>',
+        1,
+    )
+    html = html.replace(
+        '<div style="display: flex; flex-direction: column; gap: var(--sp-2);">\n            <!-- Action Card 1 -->',
+        '<div id="workOsActionQueue" style="display: flex; flex-direction: column; gap: var(--sp-2);">\n            <!-- Action Card 1 -->',
+        1,
+    )
+    html = html.replace("<tbody>", '<tbody id="workOsPortfolioRows">', 1)
     html = html.replace(
         '<div class="sidebar-cmd" onclick="openDrillDrawer(\'ask-copilot\')">',
         '<button type="button" class="sidebar-cmd k-btn k-btn-quiet" aria-label="Search or ask" onclick="openDrillDrawer(\'ask-copilot\')">',

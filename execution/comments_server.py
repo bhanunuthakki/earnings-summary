@@ -120,6 +120,7 @@ from dcf import redesign as dcf_redesign  # noqa: E402
 from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from logging_config import (  # noqa: E402
     configure_logging,
@@ -138,6 +139,7 @@ from pipeline.ticker_command_center import (  # noqa: E402
     render_notes_drawer_fragment,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
+from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
 from runtime.job_runtime import portfolio_db_path  # noqa: E402
 from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
@@ -1393,6 +1395,19 @@ def create_app(
     def dashboard_page():
         """Eight-screen Work OS; legacy panel endpoints remain drill-throughs."""
         return Response(render_work_os_shell(), mimetype="text/html")
+
+    @app.route("/api/work-os/portfolio", methods=["GET"])
+    def work_os_portfolio_api():
+        """Portfolio-only research state for Cockpit and Company Desk."""
+        conn = _open_db()
+        try:
+            rows = build_cockpit_rows(conn, repo_root).get("portfolio", [])
+        finally:
+            conn.close()
+        payload = build_work_os_portfolio(rows, fetch_live_portfolio())
+        response = app.json.response(payload.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/api/dashboard", methods=["GET"])
     def dashboard_api():
