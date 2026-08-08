@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Equity Research OS — Quiet Agentic Workspace</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --fs-display: 22px;
+      --fs-title: 15px;
+      --fs-body: 13px;
+      --fs-caption: 11px;
+
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --serif: 'Source Serif 4', Georgia, serif;
+      --mono: 'JetBrains Mono', monospace;
+
+      /* Harvey / Legora Ultra-Deep Obsidian Palette */
+      --bg: #0b0c0e;
+      --surface: #121316;
+      --paper: #18191d;
+      --glass-nav: rgba(14, 15, 18, 0.82);
+      --glass-drawer: rgba(18, 19, 22, 0.92);
+      
+      --border: rgba(255, 255, 255, 0.06);
+      --border-2: rgba(255, 255, 255, 0.12);
+      --hairline: rgba(255, 255, 255, 0.04);
+
+      --fg: #f4f3ef;
+      --fg-soft: #c5c2b8;
+      --muted: #7c7e87;
+
+      --ok: #4ade80;
+      --warn: #f5c66a;
+      --bad: #f08a8a;
+      --accent: #8aa8ff;
+      --accent-contrast: #0b0c0e;
+      --accent-soft: rgba(138, 168, 255, 0.12);
+      --mark: #b08d5f;
+
+      --radius: 8px;
+      --radius-card: 12px;
+      --radius-drawer: 16px;
+      --radius-full: 9999px;
+
+      --transition: 150ms ease;
+      --transition-fluid: 250ms cubic-bezier(0.16, 1, 0.3, 1);
+      
+      --shadow-pop: 0 16px 48px -8px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06);
+      --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      background-color: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      line-height: 1.5;
+      letter-spacing: -0.015em;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* CONTROL KIT */
+    .k-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      font-weight: 500;
+      letter-spacing: -0.015em;
+      padding: 6px 14px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease, color 150ms ease;
+      text-decoration: none;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .k-btn:hover { transform: translateY(-1px); }
+    .k-btn:active { transform: translateY(0) scale(0.98); }
+    
+    .k-btn-primary { 
+      background-color: var(--accent); 
+      color: var(--accent-contrast); 
+      border-color: var(--accent);
+      box-shadow: 0 2px 10px rgba(138, 168, 255, 0.22);
+    }
+    .k-btn-primary:hover { 
+      box-shadow: 0 4px 16px rgba(138, 168, 255, 0.38);
+      filter: brightness(1.08); 
+    }
+    
+    .k-btn-quiet { 
+      background-color: transparent; 
+      color: var(--fg-soft); 
+      border-color: var(--border); 
+    }
+    .k-btn-quiet:hover { 
+      color: var(--fg); 
+      border-color: var(--border-2); 
+      background-color: var(--paper); 
+    }
+    
+    .k-btn-sm { font-size: var(--fs-caption); padding: 4px 10px; }
+
+    .k-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: var(--radius-full);
+      display: inline-block;
+    }
+    .k-dot-ok { background-color: var(--ok); box-shadow: 0 0 8px rgba(74, 222, 128, 0.4); }
+    .k-dot-warn { background-color: var(--warn); box-shadow: 0 0 8px rgba(245, 198, 106, 0.4); }
+
+    .k-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--sans);
+      font-size: var(--fs-caption);
+      font-weight: 600;
+      padding: 2px 9px;
+      border-radius: var(--radius-full);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .k-pill-ok { 
+      background-color: color-mix(in srgb, var(--ok) 12%, transparent); 
+      color: var(--ok); 
+      border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent); 
+    }
+    .k-pill-warn { 
+      background-color: color-mix(in srgb, var(--warn) 12%, transparent); 
+      color: var(--warn); 
+      border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); 
+    }
+
+    .k-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-family: var(--sans);
+      font-size: var(--fs-caption);
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      padding: 4px 10px;
+      border-radius: var(--radius-full);
+      background-color: var(--paper);
+      color: var(--fg-soft);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+    }
+    .k-chip:hover { 
+      transform: translateY(-1px);
+      border-color: var(--border-2); 
+      color: var(--fg); 
+    }
+    .k-chip-mono { font-family: var(--mono); }
+
+    .drill-handle {
+      border-bottom: 1px dotted var(--accent);
+      color: var(--fg);
+      cursor: pointer;
+      padding: 0 2px;
+      border-radius: 2px;
+      transition: color var(--transition), background-color var(--transition);
+    }
+    .drill-handle:hover { 
+      color: var(--accent); 
+      border-bottom-style: solid; 
+      background-color: rgba(138, 168, 255, 0.08);
+    }
+
+    .src-chip {
+      font-family: var(--mono);
+      font-size: 9px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background-color: var(--paper);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      text-decoration: none;
+      cursor: pointer;
+      transition: color var(--transition), border-color var(--transition);
+    }
+    .src-chip:hover { color: var(--accent); border-color: var(--accent); }
+
+    .k-ticker { display: inline-flex; align-items: baseline; gap: 8px; }
+    .k-ticker-symbol { 
+      font-family: var(--mono); 
+      font-weight: 600; 
+      color: var(--fg); 
+      text-decoration: none; 
+      cursor: pointer; 
+      transition: color var(--transition);
+    }
+    .k-ticker-symbol:hover { color: var(--accent); }
+    .k-ticker-name { 
+      font-family: var(--sans); 
+      font-size: var(--fs-caption); 
+      color: var(--muted); 
+    }
+
+    .k-num-pos { color: var(--ok); font-family: var(--mono); font-feature-settings: 'tnum', 'zero'; }
+
+    /* CARD & TABLE ELEVATION */
+    .k-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: var(--sp-4);
+      box-shadow: var(--shadow-card);
+      transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 250ms cubic-bezier(0.16, 1, 0.3, 1), border-color 200ms ease;
+    }
+    .k-card-interactive:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px -6px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    /* SHELL & HEADER HARNESS */
+    .cc-shell { min-height: 100vh; display: flex; flex-direction: column; }
+
+    .cc-nav {
+      height: 52px;
+      background: var(--glass-nav);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--sp-5);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .cc-nav-brand { display: flex; align-items: center; gap: 12px; }
+    .cc-nav-logo { 
+      font-family: var(--mono); 
+      font-weight: 600; 
+      font-size: 13px; 
+      color: var(--fg); 
+      text-decoration: none; 
+      letter-spacing: 0.05em;
+    }
+    .cc-nav-logo span { color: var(--accent); }
+
+    .cmd-bar-trigger {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-full);
+      padding: 5px 14px;
+      color: var(--muted);
+      font-size: var(--fs-caption);
+      cursor: pointer;
+      width: 320px;
+      transition: border-color var(--transition), color var(--transition);
+    }
+    .cmd-bar-trigger:hover {
+      border-color: var(--border-2);
+      color: var(--fg-soft);
+    }
+
+    .cc-nav-tabs { display: flex; align-items: center; gap: 4px; background: var(--paper); padding: 3px; border-radius: var(--radius); border: 1px solid var(--border); }
+    .cc-tab {
+      padding: 5px 14px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+      text-decoration: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: color var(--transition), background-color var(--transition);
+      user-select: none;
+    }
+    .cc-tab:hover { color: var(--fg); }
+    .cc-tab.is-active { 
+      color: var(--fg); 
+      background-color: var(--surface); 
+      font-weight: 600; 
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
+    
+    .cc-main { max-width: 1320px; width: 100%; margin: 0 auto; padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-5); }
+
+    .screen-view { display: none; flex-direction: column; gap: var(--sp-5); }
+    .screen-view.is-active { display: flex; }
+
+    .dashboard-2col { display: grid; grid-template-columns: 2.2fr 1fr; gap: var(--sp-5); }
+    @media (max-width: 1024px) { .dashboard-2col { grid-template-columns: 1fr; } }
+
+    .matrix-table { 
+      width: 100%; 
+      border-collapse: separate; 
+      border-spacing: 0;
+      background-color: var(--surface); 
+      border: 1px solid var(--border); 
+      border-radius: var(--radius-card); 
+      overflow: hidden; 
+      box-shadow: var(--shadow-card);
+    }
+    .matrix-table th { 
+      font-family: var(--sans); 
+      font-size: var(--fs-caption); 
+      font-weight: 600; 
+      letter-spacing: 0.05em;
+      color: var(--muted); 
+      text-transform: uppercase; 
+      padding: 10px 16px; 
+      text-align: left; 
+      border-bottom: 1px solid var(--border); 
+      background-color: var(--paper); 
+    }
+    .matrix-table td { 
+      padding: 12px 16px; 
+      border-bottom: 1px solid var(--hairline); 
+      font-size: var(--fs-body); 
+    }
+    .matrix-table td.num { 
+      font-family: var(--mono); 
+      font-feature-settings: 'tnum', 'zero'; 
+      text-align: right; 
+    }
+    .matrix-table tr:last-child td { border-bottom: none; }
+    .matrix-table tr:hover td { background-color: color-mix(in srgb, var(--paper) 50%, transparent); }
+
+    .toast-notice {
+      position: fixed; bottom: 28px; right: 28px; 
+      background: var(--glass-drawer);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--accent); 
+      color: var(--fg); 
+      padding: 10px 20px; 
+      border-radius: var(--radius-card); 
+      box-shadow: var(--shadow-pop); 
+      display: flex; align-items: center; gap: 10px; z-index: 300; 
+      transform: translateY(100px); opacity: 0; 
+      transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1), opacity 250ms ease;
+    }
+    .toast-notice.is-show { transform: translateY(0); opacity: 1; }
+
+    /* CONTEXTUAL DRILL-THROUGH SLIDE-OVER DRAWER */
+    .drawer-scrim {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 240;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 280ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .drawer-scrim.is-open { opacity: 1; pointer-events: auto; }
+
+    .drill-drawer {
+      position: fixed; top: 0; right: 0; bottom: 0; width: 540px; 
+      background: var(--glass-drawer);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-left: 1px solid rgba(255, 255, 255, 0.08); 
+      box-shadow: -16px 0 48px rgba(0, 0, 0, 0.75); 
+      z-index: 250; 
+      transform: translateX(100%); 
+      transition: transform 280ms cubic-bezier(0.16, 1, 0.3, 1); 
+      padding: var(--sp-5); 
+      display: flex; flex-direction: column; gap: var(--sp-4); 
+      overflow-y: auto;
+      border-top-left-radius: var(--radius-drawer);
+      border-bottom-left-radius: var(--radius-drawer);
+    }
+    .drill-drawer.is-open { transform: translateX(0); }
+
+    .prose-block { 
+      font-family: var(--serif); 
+      font-size: 15px; 
+      line-height: 1.68; 
+      color: var(--fg-soft); 
+    }
+  </style>
+</head>
+<body>
+
+  <div class="cc-shell">
+    <!-- ==========================================================================
+         TOP HARNESS NAVIGATION BAR (LEGORA / HARVEY MINIMALIST STYLE)
+         ========================================================================== -->
+    <header class="cc-nav">
+      <div class="cc-nav-brand">
+        <a onclick="navigateTo('screen-cockpit')" class="cc-nav-logo"><span>EQUITY</span> OS</a>
+        <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted);">
+          <span class="k-dot k-dot-ok"></span> Harness Ready
+        </div>
+      </div>
+
+      <!-- Integrated Command & Copilot Bar -->
+      <div class="cmd-bar-trigger" onclick="openDrillDrawer('ask-copilot')">
+        <span style="color: var(--accent);">⌘K</span>
+        <span>Search ticker, thesis falsifier, or ask copilot...</span>
+      </div>
+
+      <!-- 2 Core Navigation Handles -->
+      <nav class="cc-nav-tabs">
+        <a onclick="navigateTo('screen-cockpit')" class="cc-tab is-active" id="tab-cockpit">Portfolio Cockpit</a>
+        <a onclick="navigateTo('screen-workspace')" class="cc-tab" id="tab-workspace">Company Desk (NU)</a>
+      </nav>
+
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('View state saved')">Save State</button>
+      </div>
+    </header>
+
+    <main class="cc-main">
+
+      <!-- ==========================================================================
+           SURFACE 1: UNIFIED PORTFOLIO COCKPIT (QUIET WORKSPACE)
+           ========================================================================== -->
+      <section id="screen-cockpit" class="screen-view is-active">
+        
+        <!-- QUIET GOVERNED ALLOCATION BAND -->
+        <div class="k-card" style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); border-color: var(--border);">
+          <div style="display: flex; align-items: center; gap: 20px;">
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Governed Target</div>
+              <div style="font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--fg); margin-top: 2px;">
+                NU — $1,500 Target Allocation
+              </div>
+            </div>
+            <div style="border-left: 1px solid var(--hairline); padding-left: 20px;">
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Conviction</div>
+              <div style="font-size: 13px; font-weight: 600; color: var(--fg);">88% (High)</div>
+            </div>
+            <div style="border-left: 1px solid var(--hairline); padding-left: 20px;">
+              <div style="font-size: var(--fs-caption); color: var(--muted);">1Y Return</div>
+              <div class="k-num-pos" style="font-size: 13px; font-weight: 600;">+32.4%</div>
+            </div>
+          </div>
+          
+          <button class="k-btn k-btn-primary k-btn-sm" onclick="showToast('Allocation Order Executed & Logged!')">Execute Target</button>
+        </div>
+
+        <!-- STREAMLINED ACTION FEED -->
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-weight: 600; font-size: var(--fs-title); display: flex; align-items: center; gap: 8px;">
+              <span class="k-dot k-dot-warn"></span>
+              Action Queue & Decisions (3 Items)
+            </div>
+            <span style="font-size: var(--fs-caption); color: var(--muted);">Synced with Telegram Sunday Packet</span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--sp-4);">
+            <!-- Card 1 -->
+            <div class="k-card k-card-interactive">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div class="k-ticker"><a onclick="navigateTo('screen-workspace')" class="k-ticker-symbol">BKNG</a><span class="k-ticker-name">Booking Holdings</span></div>
+                <span style="font-size: 11px; color: var(--muted); font-family: var(--mono);">Draft</span>
+              </div>
+              <div style="font-weight: 600; margin-bottom: 4px; font-size: 13.5px;">Confirm Add Execution (+0.5% weight)</div>
+              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: 12px;">Drafted post-Q2 call. Falsifier & conviction score sign-off needed.</p>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-family: var(--mono); font-size: 10px; color: var(--muted);">2d ago</span>
+                <div style="display: flex; gap: 6px;">
+                  <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Deferred')">Defer</button>
+                  <button class="k-btn k-btn-primary k-btn-sm" onclick="showToast('Ratified & Logged!')">Ratify</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 2 -->
+            <div class="k-card k-card-interactive">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div class="k-ticker"><a onclick="navigateTo('screen-workspace')" class="k-ticker-symbol">NU</a><span class="k-ticker-name">Nu Holdings</span></div>
+                <span style="font-size: 11px; color: var(--warn); font-family: var(--mono);">Missing Threshold</span>
+              </div>
+              <div style="font-weight: 600; margin-bottom: 4px; font-size: 13.5px;">Set NPL 90+ Disconfirmation Limit</div>
+              <p style="font-size: var(--fs-caption); color: var(--fg-soft); margin-bottom: 12px;">Click to set disconfirming metric threshold on Company Desk.</p>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-family: var(--mono); font-size: 10px; color: var(--muted);">3d ago</span>
+                <button class="k-btn k-btn-primary k-btn-sm" onclick="navigateTo('screen-workspace'); setTimeout(()=>openDrillDrawer('falsifier'), 200);">Set Falsifier →</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- HOLDINGS DIRECTORY MATRIX -->
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Holdings & Watchlist</div>
+            <span style="font-size: var(--fs-caption); color: var(--muted);">Select row to open research workspace</span>
+          </div>
+
+          <table class="matrix-table">
+            <thead>
+              <tr>
+                <th>Ticker / Company</th>
+                <th>Status</th>
+                <th class="num">Price</th>
+                <th class="num">Target</th>
+                <th class="num">1Y Return</th>
+                <th class="num">Weight</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr onclick="navigateTo('screen-workspace')" style="cursor: pointer;">
+                <td><div class="k-ticker"><span class="k-ticker-symbol">NU</span><span class="k-ticker-name">Nu Holdings Ltd.</span></div></td>
+                <td><span style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500;"><span class="k-dot k-dot-ok"></span> OVERWEIGHT (88%)</span></td>
+                <td class="num">$14.25</td>
+                <td class="num" style="color: var(--accent);">$18.50</td>
+                <td class="num k-num-pos">+42.8%</td>
+                <td class="num">12.5%</td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Workspace →</button></td>
+              </tr>
+              <tr onclick="navigateTo('screen-workspace')" style="cursor: pointer;">
+                <td><div class="k-ticker"><span class="k-ticker-symbol">BKNG</span><span class="k-ticker-name">Booking Holdings Inc.</span></div></td>
+                <td><span style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500;"><span class="k-dot k-dot-ok"></span> HOLD (75%)</span></td>
+                <td class="num">$4,120.00</td>
+                <td class="num" style="color: var(--accent);">$4,850.00</td>
+                <td class="num k-num-pos">+18.4%</td>
+                <td class="num">8.0%</td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Workspace →</button></td>
+              </tr>
+              <tr onclick="navigateTo('screen-workspace')" style="cursor: pointer;">
+                <td><div class="k-ticker"><span class="k-ticker-symbol">TSM</span><span class="k-ticker-name">Taiwan Semiconductor</span></div></td>
+                <td><span style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500;"><span class="k-dot k-dot-warn"></span> REVIEW (62%)</span></td>
+                <td class="num">$168.50</td>
+                <td class="num" style="color: var(--accent);">$195.00</td>
+                <td class="num k-num-pos">+35.1%</td>
+                <td class="num">5.5%</td>
+                <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Workspace →</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <!-- ==========================================================================
+           SURFACE 2: COMPANY RESEARCH WORKSPACE (EDITORIAL CANVAS)
+           ========================================================================== -->
+      <section id="screen-workspace" class="screen-view">
+        <!-- MASTHEAD -->
+        <div class="k-card" style="display: flex; justify-content: space-between; align-items: center; background: var(--surface);">
+          <div>
+            <span style="font-family: var(--mono); font-size: 24px; font-weight: 600; letter-spacing: -0.02em;">NU</span>
+            <span style="font-size: 14px; color: var(--fg-soft); margin-left: 12px;">Nu Holdings Ltd. · LatAm Retail Banking</span>
+          </div>
+          <div style="display: flex; gap: 16px; align-items: center;">
+            <div style="text-align: right;">
+              <div style="font-family: var(--mono); font-size: 16px; font-weight: 600; font-feature-settings: 'tnum', 'zero';">
+                <span class="drill-handle" onclick="openDrillDrawer('financials')">$14.25</span> 
+                <span class="k-num-pos" style="font-size: 12px;">+3.2%</span>
+              </div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Target $18.50 (+29.8%)</div>
+            </div>
+            <span class="k-pill k-pill-ok">OVERWEIGHT · 88%</span>
+          </div>
+        </div>
+
+        <!-- CONTEXTUAL DRILL-THROUGH DRAWER LAUNCHERS -->
+        <div style="display: flex; gap: 8px; align-items: center; background: var(--paper); border: 1px solid var(--border); padding: 8px 14px; border-radius: var(--radius);">
+          <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Drawers:</span>
+          <button class="k-chip" onclick="openDrillDrawer('financials')">Financials & DCF</button>
+          <button class="k-chip" onclick="openDrillDrawer('saydo')">Say/Do Transcripts</button>
+          <button class="k-chip" onclick="openDrillDrawer('peers')">Peer Comparison</button>
+          <button class="k-chip" onclick="openDrillDrawer('falsifier')">Falsifier Contract</button>
+          <button class="k-chip" onclick="openDrillDrawer('updates')">Signals Stream</button>
+        </div>
+
+        <!-- MAIN EDITORIAL RESEARCH DESK -->
+        <div class="dashboard-2col">
+          <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
+            <!-- THESIS BLOCK -->
+            <div class="k-card">
+              <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: 12px; border-bottom: 1px solid var(--hairline); padding-bottom: 8px;">
+                Investment Thesis & Value Drivers
+              </div>
+              <div class="prose-block">
+                <p style="margin-bottom: 12px;">
+                  <strong style="color: var(--fg);">Nu Holdings (NU)</strong> is a market-share compounder in Latin American retail banking. Nubank achieves a cost-to-serve per active customer of 
+                  <span class="drill-handle" onclick="openDrillDrawer('financials')">$0.90/month</span> vs incumbent Brazilian banks at $7.00+.
+                </p>
+                <p>
+                  Mexico deposits recently exceeded 
+                  <span class="drill-handle" onclick="openDrillDrawer('saydo')">$3.0 billion in Q2 2026</span> 
+                  <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a>, validating international scaling outside Brazil.
+                </p>
+              </div>
+            </div>
+
+            <!-- KEY NUMBERS TABLE WITH DRILL-THROUGH HANDLES -->
+            <div class="k-card" style="padding: 0; overflow: hidden;">
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); background-color: var(--paper);">
+                <div style="font-weight: 600; font-size: var(--fs-title);">Core Financial Metrics</div>
+                <span style="font-size: var(--fs-caption); color: var(--accent); cursor: pointer;" onclick="openDrillDrawer('financials')">Click figure to drill down →</span>
+              </div>
+              <table class="matrix-table" style="border: none; border-radius: 0; box-shadow: none;">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th class="num">Q3 25</th>
+                    <th class="num">Q4 25</th>
+                    <th class="num">Q1 26</th>
+                    <th class="num">Q2 26</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Revenue ($M)</td>
+                    <td class="num"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,140.5</span></td>
+                    <td class="num"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,400.0</span></td>
+                    <td class="num"><span class="drill-handle" onclick="openDrillDrawer('financials')">2,715.2</span></td>
+                    <td class="num k-num-pos"><span class="drill-handle" onclick="openDrillDrawer('financials')">3,020.8</span></td>
+                  </tr>
+                  <tr>
+                    <td>Net Income ($M)</td>
+                    <td class="num"><span class="drill-handle" onclick="openDrillDrawer('financials')">355.6</span></td>
+                    <td class="num"><span class="drill-handle" onclick="openDrillDrawer('financials')">395.0</span></td>
+                    <td class="num"><span class="drill-handle" onclick="openDrillDrawer('financials')">480.2</span></td>
+                    <td class="num k-num-pos"><span class="drill-handle" onclick="openDrillDrawer('financials')">560.4</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- RIGHT SIDEBAR (FALSIFIERS & PEERS SUMMARY) -->
+          <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
+            <div class="k-card" style="border-left: 2px solid var(--warn);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="font-weight: 600; font-size: var(--fs-title);">Disconfirming Falsifiers</div>
+                <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('falsifier')">Drill →</button>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-caption);">
+                <div style="padding: 6px 10px; background: var(--paper); border-radius: var(--radius);">
+                  1. NPL 90+ > 5.6% · <span style="color: var(--ok); font-weight: 600;">PASS (5.2%)</span>
+                </div>
+                <div style="padding: 6px 10px; background: var(--paper); border-radius: var(--radius);">
+                  2. Cost-to-Serve > $1.20 · <span style="color: var(--ok); font-weight: 600;">PASS ($0.90)</span>
+                </div>
+                <div style="padding: 6px 10px; background: var(--paper); border-radius: var(--radius);">
+                  3. Mexico Active Users &lt; 8M · <span style="color: var(--warn); font-weight: 600;">MONITOR (7.8M)</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="k-card">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="font-weight: 600; font-size: var(--fs-title);">Peer Group Comparisons</div>
+                <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('peers')">Drill →</button>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                <div style="display: flex; justify-content: space-between; padding: 6px 10px; background: var(--paper); border-radius: var(--radius);">
+                  <span class="drill-handle" onclick="openDrillDrawer('peers')">SE (Sea Ltd)</span>
+                  <span style="font-family: var(--mono); color: var(--muted); font-size: 11px;">ASEAN E-Com</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 6px 10px; background: var(--paper); border-radius: var(--radius);">
+                  <span class="drill-handle" onclick="openDrillDrawer('peers')">MELI (MercadoLibre)</span>
+                  <span style="font-family: var(--mono); color: var(--muted); font-size: 11px;">LatAm Fintech</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- DRAWER SCRIM LAYER -->
+  <div class="drawer-scrim" id="drawerScrim" onclick="closeDrillDrawer(); closePeekDrawer();"></div>
+
+  <!-- CONTEXTUAL DRILL-THROUGH SLIDE-OVER DRAWER -->
+  <aside class="drill-drawer" id="drillDrawer">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
+      <div>
+        <div style="font-weight: 600; font-size: var(--fs-title);" id="drawerTitle">Financials & DCF Sensitivity</div>
+        <div style="font-size: var(--fs-caption); color: var(--muted);" id="drawerSubtitle">Contextual drill-through drawer</div>
+      </div>
+      <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">× Close</button>
+    </div>
+
+    <div id="drawerBody" style="display: flex; flex-direction: column; gap: var(--sp-4);">
+    </div>
+  </aside>
+
+  <!-- TOAST NOTICE -->
+  <div class="toast-notice" id="toastNotice">
+    <span style="color: var(--ok); font-weight: 700;">✓</span>
+    <span id="toastMessage">Notification</span>
+  </div>
+
+  <!-- PROVENANCE PEEK DRAWER -->
+  <aside class="drill-drawer" id="peekDrawer" style="z-index: 280;">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
+      <div style="font-weight: 600; font-size: var(--fs-title);">Raw SEC Filing Citation</div>
+      <button class="k-btn k-btn-quiet k-btn-sm" onclick="closePeekDrawer()">×</button>
+    </div>
+    <div style="font-family: var(--mono); font-size: var(--fs-caption); color: var(--accent);" id="peekRefKey">doc:ref</div>
+    <div style="font-family: var(--serif); font-size: 14.5px; color: var(--fg-soft); line-height: 1.68;" id="peekProse">
+      Source filing extract loading...
+    </div>
+  </aside>
+
+  <script>
+    function navigateTo(screenId) {
+      document.querySelectorAll('.screen-view').forEach(s => s.classList.remove('is-active'));
+      document.querySelectorAll('.cc-tab').forEach(t => t.classList.remove('is-active'));
+      
+      const target = document.getElementById(screenId);
+      if (target) target.classList.add('is-active');
+      const tabName = screenId.replace('screen-', '');
+      const activeTab = document.getElementById('tab-' + tabName);
+      if (activeTab) activeTab.classList.add('is-active');
+      
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toastNotice');
+      document.getElementById('toastMessage').innerText = msg;
+      toast.classList.add('is-show');
+      setTimeout(() => toast.classList.remove('is-show'), 2600);
+    }
+
+    function openDrillDrawer(type) {
+      const drawer = document.getElementById('drillDrawer');
+      const scrim = document.getElementById('drawerScrim');
+      const title = document.getElementById('drawerTitle');
+      const subtitle = document.getElementById('drawerSubtitle');
+      const body = document.getElementById('drawerBody');
+
+      if (type === 'financials') {
+        title.innerText = "Financial Statements & DCF Model";
+        subtitle.innerText = "Historical quarters & terminal growth fade levers for NU";
+        body.innerHTML = `
+          <div style="background: var(--paper); padding: 12px; border-radius: var(--radius); border: 1px solid var(--border);">
+            <div style="font-weight: 600; margin-bottom: 4px;">DCF Sensitivity Levers</div>
+            <div style="font-size: 11px; color: var(--muted); font-family: var(--mono);">WACC: 10.5% · Terminal Fade: 3.5% · Target Price: <strong style="color: var(--accent);">$18.50</strong></div>
+          </div>
+          <table class="matrix-table">
+            <thead><tr><th>Line Item</th><th class="num">Q1 26</th><th class="num">Q2 26</th></tr></thead>
+            <tbody>
+              <tr><td>Total Revenue</td><td class="num">$2,715.2M</td><td class="num k-num-pos">$3,020.8M</td></tr>
+              <tr><td>Net Income</td><td class="num">$480.2M</td><td class="num k-num-pos">$560.4M</td></tr>
+              <tr><td>ARPAC ($)</td><td class="num">$11.10</td><td class="num">$11.40</td></tr>
+            </tbody>
+          </table>
+        `;
+      } else if (type === 'saydo') {
+        title.innerText = "Management Say/Do & Transcripts";
+        subtitle.innerText = "Extracted Q&A commitments verified against SEC disclosures";
+        body.innerHTML = `
+          <div style="padding: 12px; background: var(--paper); border-radius: var(--radius); border: 1px solid var(--border);">
+            <div style="font-weight: 600; color: var(--accent); margin-bottom: 4px;">David Vélez (CEO) — Q2 Earnings Call</div>
+            <p style="font-family: var(--serif); font-size: 14px; line-height: 1.6;">"Mexico deposit growth crossed $3B in Q2."</p>
+            <div style="margin-top: 8px; font-size: 11px; color: var(--ok); font-weight: 600;">✓ VERIFIED BY SEC 10-Q (Actual: $3.12B)</div>
+          </div>
+        `;
+      } else if (type === 'peers') {
+        title.innerText = "Peer Comparison Matrix";
+        subtitle.innerText = "Comparative fintech & e-commerce metrics";
+        body.innerHTML = `
+          <table class="matrix-table">
+            <thead><tr><th>Ticker</th><th>Region</th><th class="num">1Y Return</th><th class="num">P/E Ratio</th></tr></thead>
+            <tbody>
+              <tr><td><strong>NU</strong></td><td>LatAm</td><td class="num k-num-pos">+42.8%</td><td class="num">24.2x</td></tr>
+              <tr><td><strong>SE</strong></td><td>ASEAN</td><td class="num k-num-pos">+31.0%</td><td class="num">32.0x</td></tr>
+              <tr><td><strong>MELI</strong></td><td>LatAm</td><td class="num k-num-pos">+28.5%</td><td class="num">41.5x</td></tr>
+            </tbody>
+          </table>
+        `;
+      } else if (type === 'falsifier') {
+        title.innerText = "Disconfirming Falsifiers Contract";
+        subtitle.innerText = "Thesis invalidation thresholds";
+        body.innerHTML = `
+          <div style="padding: 12px; background: var(--paper); border-radius: var(--radius); border: 1px solid var(--border);">
+            <div style="font-weight: 600;">1. NPL 90+ Exceeds 5.6%</div>
+            <div style="font-size: 11px; color: var(--ok); margin-top: 2px; font-weight: 600;">Current: 5.2% · PASS</div>
+          </div>
+          <div style="padding: 12px; background: var(--paper); border-radius: var(--radius); border: 1px solid var(--border);">
+            <div style="font-weight: 600;">2. Cost-to-Serve > $1.20/mo</div>
+            <div style="font-size: 11px; color: var(--ok); margin-top: 2px; font-weight: 600;">Current: $0.90/mo · PASS</div>
+          </div>
+        `;
+      } else if (type === 'ask-copilot') {
+        title.innerText = "Ask Copilot Side Dock";
+        subtitle.innerText = "Side-by-side natural language research assistant";
+        body.innerHTML = `
+          <div style="background: var(--paper); padding: 12px; border-radius: var(--radius); font-size: 12px; color: var(--fg-soft); border: 1px solid var(--border);">
+            Ready to analyze financial series or thesis falsifiers for NU.
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 12px;">
+            <input type="text" placeholder="Ask copilot..." style="width: 100%; background: var(--paper); border: 1px solid var(--border); color: var(--fg); padding: 8px 12px; border-radius: var(--radius); outline: none; font-size: 12px; font-family: var(--sans);">
+            <button class="k-btn k-btn-primary k-btn-sm">Ask</button>
+          </div>
+        `;
+      }
+      scrim.classList.add('is-open');
+      drawer.classList.add('is-open');
+    }
+
+    function closeDrillDrawer() {
+      document.getElementById('drillDrawer').classList.remove('is-open');
+      if (!document.getElementById('peekDrawer').classList.contains('is-open')) {
+        document.getElementById('drawerScrim').classList.remove('is-open');
+      }
+    }
+
+    function openPeekDrawer(refKey) {
+      const peek = document.getElementById('peekDrawer');
+      const scrim = document.getElementById('drawerScrim');
+      document.getElementById('peekRefKey').innerText = refKey;
+      document.getElementById('peekProse').innerText = "Verified source quote for " + refKey + ": Official document extract confirms Nubank credit card delinquency at 5.2% vs industry 6.8%.";
+      scrim.classList.add('is-open');
+      peek.classList.add('is-open');
+    }
+
+    function closePeekDrawer() {
+      document.getElementById('peekDrawer').classList.remove('is-open');
+      if (!document.getElementById('drillDrawer').classList.contains('is-open')) {
+        document.getElementById('drawerScrim').classList.remove('is-open');
+      }
+    }
+  </script>
+</body>
+</html>

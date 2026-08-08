@@ -12,6 +12,7 @@
   <style>
     :root {
       /* Streamlined Harmonized 4-Tier Typography Tokens */
+      --fs-hero: 26px;     /* Report cover title */
       --fs-display: 20px;  /* Hero stat numbers, primary display values */
       --fs-title: 15px;    /* Section titles, card headings */
       --fs-body: 13px;     /* Standard body, prose, table rows, button labels */
@@ -779,6 +780,10 @@
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span class="nav-text">Company Desk</span>
       </a>
+      <a onclick="openFullBriefCanvas(activeCompanyTicker)" class="nav-item" id="nav-full-brief">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        <span class="nav-text">Full Research Brief</span>
+      </a>
       <a onclick="openDrillDrawer('updates')" class="nav-item">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
         <span class="nav-text">Signals Stream</span>
@@ -946,7 +951,7 @@
                 <th>Position & Weight</th>
                 <th class="num">Price / Target</th>
                 <th>Thesis / Falsifier Status</th>
-                <th>Earnings Brief & Memo</th>
+                <th>Earnings Brief & Full Canvas</th>
                 <th style="text-align: right;">Action / Threshold</th>
               </tr>
             </thead>
@@ -956,7 +961,12 @@
                 <td><span class="k-pill k-pill-ok">OVERWEIGHT · 12.5%</span></td>
                 <td class="num t-mono">$14.25 / <strong style="color: var(--accent);">$18.50</strong></td>
                 <td><span style="color: var(--ok); font-size: var(--fs-caption); font-weight: 600;">✓ PASS (Cost $0.90)</span></td>
-                <td><button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:bcb_jun26_p4');">Q2 Beat Brief →</button></td>
+                <td>
+                  <div style="display: flex; gap: var(--sp-1);">
+                    <button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:bcb_jun26_p4');">Q2 Brief →</button>
+                    <button class="k-chip is-active" onclick="event.stopPropagation(); openFullBriefCanvas('NU');">Full Brief Canvas →</button>
+                  </div>
+                </td>
                 <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm">Desk →</button></td>
               </tr>
               <tr onclick="switchCompanyWorkspace('BKNG')" style="cursor: pointer;">
@@ -964,7 +974,12 @@
                 <td><span class="k-pill k-pill-warn">UNDERWEIGHT · 8.0%</span></td>
                 <td class="num t-mono">$4,120 / <strong style="color: var(--accent);">$4,850</strong></td>
                 <td><span style="color: var(--warn); font-size: var(--fs-caption); font-weight: 600;">⚠ MONITOR (EU Reg)</span></td>
-                <td><button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:bkng_q2_p12');">Post-Call Memo →</button></td>
+                <td>
+                  <div style="display: flex; gap: var(--sp-1);">
+                    <button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:bkng_q2_p12');">Post-Call Memo →</button>
+                    <button class="k-chip is-active" onclick="event.stopPropagation(); openFullBriefCanvas('BKNG');">Full Brief Canvas →</button>
+                  </div>
+                </td>
                 <td style="text-align: right;"><button class="k-btn k-btn-primary k-btn-sm" onclick="event.stopPropagation(); openTradeModal('BKNG', 'BUY', '8.5%', 4120.00);">Add +0.5%</button></td>
               </tr>
               <tr onclick="switchCompanyWorkspace('TSM')" style="cursor: pointer;">
@@ -972,7 +987,12 @@
                 <td><span class="k-pill k-pill-ok">ON TARGET · 5.5%</span></td>
                 <td class="num t-mono">$168.50 / <strong style="color: var(--accent);">$195.00</strong></td>
                 <td><span style="color: var(--bad); font-size: var(--fs-caption); font-weight: 600;">⚡ REVIEW (Wafer Limit)</span></td>
-                <td><button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:tsm_2nm_p8');">N2 Node Brief →</button></td>
+                <td>
+                  <div style="display: flex; gap: var(--sp-1);">
+                    <button class="k-chip" onclick="event.stopPropagation(); openPeekDrawer('doc:tsm_2nm_p8');">N2 Node Brief →</button>
+                    <button class="k-chip is-active" onclick="event.stopPropagation(); openFullBriefCanvas('TSM');">Full Brief Canvas →</button>
+                  </div>
+                </td>
                 <td style="text-align: right;"><button class="k-btn k-btn-quiet k-btn-sm" onclick="event.stopPropagation(); openTradeModal('TSM', 'SELL', '5.0%', 168.50);">Trim Limit</button></td>
               </tr>
             </tbody>
@@ -1262,7 +1282,7 @@
            SURFACE 2: COMPANY RESEARCH WORKSPACE (EDITORIAL CANVAS)
            ========================================================================== -->
       <section id="screen-workspace" class="screen-view">
-        <!-- SCALABLE DROPDOWN SELECTOR FOR 30+ COVERAGE TICKERS -->
+        <!-- SCALABLE DROPDOWN SELECTOR & FULL BRIEF LAUNCHER TOOLBAR -->
         <div style="display: flex; justify-content: space-between; align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-2) var(--sp-4); border-radius: var(--radius);">
           <div style="display: flex; align-items: center; gap: var(--sp-3);">
             <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Select Company Desk:</span>
@@ -1279,7 +1299,12 @@
               </optgroup>
             </select>
           </div>
-          <span style="font-size: var(--fs-caption); color: var(--muted);">Active Ticker: <strong id="activeCompanyLabel" style="color: var(--accent);">NU</strong></span>
+          <div style="display: flex; gap: var(--sp-2); align-items: center;">
+            <button class="k-btn k-btn-primary k-btn-sm" onclick="openFullBriefCanvas(activeCompanyTicker)">
+              <svg class="nav-svg-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              Open Full Brief Canvas →
+            </button>
+          </div>
         </div>
 
         <!-- MASTHEAD -->
@@ -1303,6 +1328,7 @@
         <!-- CONTEXTUAL DRAWER LAUNCHERS -->
         <div style="display: flex; gap: var(--sp-2); align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); flex-wrap: wrap;">
           <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Deep Drawers:</span>
+          <button class="k-chip is-active" onclick="openFullBriefCanvas(activeCompanyTicker)">Full Research Brief Canvas</button>
           <button class="k-chip" onclick="openDrillDrawer('dcf-sensitivity')">DCF Sensitivity Levers</button>
           <button class="k-chip" onclick="openDrillDrawer('financials')">Financial Statements</button>
           <button class="k-chip" onclick="openDrillDrawer('saydo')">Say/Do Commitments</button>
@@ -1316,8 +1342,9 @@
           <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
             <!-- THESIS BLOCK -->
             <div class="k-card">
-              <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline); padding-bottom: var(--sp-2);">
-                Investment Thesis & Value Drivers
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline); padding-bottom: var(--sp-2);">
+                <div style="font-weight: 600; font-size: var(--fs-title);">Investment Thesis & Moat Analysis</div>
+                <button class="k-chip is-active" onclick="openFullBriefCanvas(activeCompanyTicker)">Read Full Institutional Report →</button>
               </div>
               <div class="prose-block" id="wsThesisBody">
                 <p style="margin-bottom: var(--sp-3);">
@@ -1330,6 +1357,44 @@
                   <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a>, validating international scaling outside Brazil.
                 </p>
               </div>
+            </div>
+
+            <!-- MANAGEMENT SAY/DO COMMITMENT TABLE -->
+            <div class="k-card">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2);">
+                <div style="font-weight: 600; font-size: var(--fs-title);">Management Say/Do Commitment Track Record</div>
+                <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('saydo')">Full Say/Do Ledger →</button>
+              </div>
+              <table class="matrix-table t-mono">
+                <thead>
+                  <tr>
+                    <th>Target / Commitment</th>
+                    <th>Call Date</th>
+                    <th>Reported Actual</th>
+                    <th style="text-align: right;">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="wsSayDoRows">
+                  <tr>
+                    <td>Mexico deposits > $3.0B</td>
+                    <td>Q4 2025 Call</td>
+                    <td>$3.12B <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a></td>
+                    <td style="text-align: right;"><span class="k-pill k-pill-ok">VERIFIED</span></td>
+                  </tr>
+                  <tr>
+                    <td>Cost-to-serve < $0.95/mo</td>
+                    <td>Q1 2026 Call</td>
+                    <td>$0.90/mo</td>
+                    <td style="text-align: right;"><span class="k-pill k-pill-ok">BEAT</span></td>
+                  </tr>
+                  <tr>
+                    <td>Colombia active users > 2M</td>
+                    <td>Q1 2026 Call</td>
+                    <td>1.85M</td>
+                    <td style="text-align: right;"><span class="k-pill k-pill-warn">ON TRACK</span></td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
 
             <!-- CORE FINANCIAL METRICS & EMBEDDED DCF MODEL CARD -->
@@ -1441,6 +1506,73 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <!-- ==========================================================================
+           FULL RESEARCH BRIEF MAIN CANVAS SURFACE (#screen-full-brief)
+           FULL-WIDTH INSTITUTIONAL EQUITY RESEARCH REPORT (EXHAUSTIVE CONTENT)
+           ========================================================================== -->
+      <section id="screen-full-brief" class="screen-view">
+        <!-- TOP NAVIGATION ACTION BAR -->
+        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-card);">
+          <div style="display: flex; align-items: center; gap: var(--sp-3);">
+            <button class="k-btn k-btn-quiet k-btn-sm" onclick="navigateTo('screen-workspace')">← Back to Company Desk</button>
+            <span style="font-size: var(--fs-caption); color: var(--muted);">Coverage Document: <strong id="fbSymbolLabel" style="color: var(--accent);">NU — Institutional Research Brief</strong></span>
+          </div>
+          <div style="display: flex; gap: var(--sp-2);">
+            <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Exporting Brief to PDF...')">Export PDF</button>
+            <button class="k-btn k-btn-primary k-btn-sm" onclick="openTradeModal(activeCompanyTicker, 'BUY', '12.5%', 14.25)">Execute Trade Order</button>
+          </div>
+        </div>
+
+        <!-- REPORT COVER MASTHEAD & INSTITUTIONAL HEADER -->
+        <div class="k-card" style="display: flex; flex-direction: column; gap: var(--sp-3); background: var(--paper);">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--sp-1);">
+                INSTITUTIONAL EQUITY RESEARCH REPORT · FULL BRIEF
+              </div>
+              <div class="t-mono" style="font-size: var(--fs-hero); font-weight: 700; letter-spacing: -0.02em;" id="fbReportTitle">
+                NU HOLDINGS LTD. (NYSE: NU)
+              </div>
+              <div style="font-size: var(--fs-title); color: var(--fg-soft); margin-top: var(--sp-half);" id="fbReportSub">
+                Structural Compounder in Latin American Digital Banking & Credit Expansion
+              </div>
+            </div>
+            <span class="k-pill k-pill-ok" style="font-size: var(--fs-body); padding: var(--sp-2) var(--sp-3);" id="fbReportPill">
+              OVERWEIGHT · 88% CONVICTION
+            </span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--sp-3); border-top: var(--bw-thin) solid var(--border); padding-top: var(--sp-3);" class="t-mono">
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Target Price</div>
+              <div style="font-size: var(--fs-title); font-weight: 600; color: var(--accent);" id="fbReportTarget">$18.50 (+29.8%)</div>
+            </div>
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Current Price</div>
+              <div style="font-size: var(--fs-title); font-weight: 600;" id="fbReportPrice">$14.25</div>
+            </div>
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">1Y Performance</div>
+              <div style="font-size: var(--fs-title); font-weight: 600;" class="k-num-pos" id="fbReportReturn">+42.8%</div>
+            </div>
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Position Weight</div>
+              <div style="font-size: var(--fs-title); font-weight: 600;">12.5% (Overweight)</div>
+            </div>
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">Idempotency Key</div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);">sec_nu_2026q2_v01</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- EXHAUSTIVE REPORT CONTENT SECTIONS -->
+        <div style="display: flex; flex-direction: column; gap: var(--sp-5);" id="fbFullReportBody">
+          <!-- Populated dynamically via JS openFullBriefCanvas() -->
+        </div>
+
       </section>
 
       <!-- ==========================================================================
@@ -1717,7 +1849,7 @@
   </aside>
 
   <script>
-    // EXPANDED COMPANY DATASET FOR SCALABLE 30+ COVERAGE TICKER SWITCHING
+    // EXPANDED RICH EQUITY RESEARCH DATASETS FOR COMPANY DESKS & FULL BRIEFS
     const COMPANY_DATA = {
       NU: {
         symbol: 'NU',
@@ -1729,12 +1861,18 @@
         conviction: '88%',
         statusClass: 'k-pill-ok',
         statusText: 'OVERWEIGHT · 88%',
-        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Nu Holdings (NU)</strong> is a market-share compounder in Latin American retail banking. Nubank achieves a cost-to-serve per active customer of <span class="drill-handle" onclick="openDrillDrawer('financials')">$0.90/month</span> vs incumbent Brazilian banks at $7.00+.</p><p>Mexico deposits recently exceeded <span class="drill-handle" onclick="openDrillDrawer('saydo')">$3.0 billion in Q2 2026</span> <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a>, validating international scaling outside Brazil.</p>`,
+        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Nu Holdings (NU)</strong> is a market-share compounder in Latin American retail banking. Nubank achieves a cost-to-serve per active customer of <span class="drill-handle" onclick="openDrillDrawer('financials')">$0.90/month</span> vs incumbent Brazilian banks at $7.00+.</p><p style="margin-bottom: var(--sp-3);">Mexico deposits recently exceeded <span class="drill-handle" onclick="openDrillDrawer('saydo')">$3.0 billion in Q2 2026</span> <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a>, validating international scaling outside Brazil.</p><p>With active customers crossing 100M and credit card NPL 90+ stable at 5.2%, Nubank is compounding net interest margin (NIM) at 19.8% while maintaining a 40%+ return on equity (ROE).</p>`,
+        saydo: [
+          { target: 'Mexico deposits > $3.0B', call: 'Q4 2025 Call', actual: '$3.12B', cite: 'doc:bcb_jun26_p4', status: 'VERIFIED', class: 'k-pill-ok' },
+          { target: 'Cost-to-serve < $0.95/mo', call: 'Q1 2026 Call', actual: '$0.90/mo', cite: 'doc:nu_q2_p8', status: 'BEAT', class: 'k-pill-ok' },
+          { target: 'Colombia active users > 2M', call: 'Q1 2026 Call', actual: '1.85M', cite: 'doc:nu_co_p3', status: 'ON TRACK', class: 'k-pill-warn' }
+        ],
         financials: [
           { metric: 'Revenue ($M)', q3: '2,140.5', q4: '2,400.0', q1: '2,715.2', q2: '3,020.8' },
           { metric: 'Net Income ($M)', q3: '355.6', q4: '395.0', q1: '480.2', q2: '560.4' },
           { metric: 'Net Interest Margin', q3: '18.4%', q4: '18.8%', q1: '19.2%', q2: '19.8%' },
-          { metric: 'ARPAC ($/mo)', q3: '10.20', q4: '10.60', q1: '11.10', q2: '11.40' }
+          { metric: 'ARPAC ($/mo)', q3: '10.20', q4: '10.60', q1: '11.10', q2: '11.40' },
+          { metric: 'NPL 90+ Ratio', q3: '5.4%', q4: '5.3%', q1: '5.2%', q2: '5.2%' }
         ],
         falsifiers: [
           { title: '1. NPL 90+ > 5.6%', status: 'PASS (5.2%)', statusColor: 'var(--ok)' },
@@ -1756,7 +1894,11 @@
         conviction: '75%',
         statusClass: 'k-pill-ok',
         statusText: 'HOLD · 75%',
-        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Booking Holdings (BKNG)</strong> commands dominant market share in global online travel agency (OTA) booking volumes. Alternative accommodation room nights expanded 14% YoY in Q2 2026.</p><p>Connected Trip AI integration is driving <span class="drill-handle" onclick="openDrillDrawer('financials')">direct booking share to 56%</span> <a onclick="openPeekDrawer('doc:bkng_q2_p12')" class="src-chip">doc:bkng_q2_p12</a>, expanding ROIC to 34%.</p>`,
+        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Booking Holdings (BKNG)</strong> commands dominant market share in global online travel agency (OTA) booking volumes. Alternative accommodation room nights expanded 14% YoY in Q2 2026.</p><p style="margin-bottom: var(--sp-3);">Connected Trip AI integration is driving <span class="drill-handle" onclick="openDrillDrawer('financials')">direct booking share to 56%</span> <a onclick="openPeekDrawer('doc:bkng_q2_p12')" class="src-chip">doc:bkng_q2_p12</a>, expanding ROIC to 34%.</p><p>Free cash flow conversion remains exceptionally high at 88% of net income, supporting $10B+ annual share buyback programs.</p>`,
+        saydo: [
+          { target: 'Direct booking share > 50%', call: 'Q4 2025 Call', actual: '56.0%', cite: 'doc:bkng_q2_p12', status: 'VERIFIED', class: 'k-pill-ok' },
+          { target: 'Alternative stays growth > 12%', call: 'Q1 2026 Call', actual: '14.2%', cite: 'doc:bkng_q2_p15', status: 'BEAT', class: 'k-pill-ok' }
+        ],
         financials: [
           { metric: 'Gross Bookings ($B)', q3: '39.8', q4: '31.7', q1: '43.5', q2: '41.4' },
           { metric: 'Revenue ($M)', q3: '7,340.0', q4: '4,780.0', q1: '4,410.0', q2: '5,860.0' },
@@ -1783,7 +1925,11 @@
         conviction: '62%',
         statusClass: 'k-pill-warn',
         statusText: 'REVIEW · 62%',
-        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Taiwan Semiconductor (TSM)</strong> maintains an effective monopoly over leading-edge chip manufacturing (3nm/2nm process nodes). High-performance computing (HPC) & AI demand accounts for 52% of total wafer revenue.</p><p>N2 (2nm) yield ramp remains on schedule for H2 2026 volume production <a onclick="openPeekDrawer('doc:tsm_2nm_p8')" class="src-chip">doc:tsm_2nm_p8</a>, providing pricing power of +8% per wafer.</p>`,
+        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">Taiwan Semiconductor (TSM)</strong> maintains an effective monopoly over leading-edge chip manufacturing (3nm/2nm process nodes). High-performance computing (HPC) & AI demand accounts for 52% of total wafer revenue.</p><p style="margin-bottom: var(--sp-3);">N2 (2nm) yield ramp remains on schedule for H2 2026 volume production <a onclick="openPeekDrawer('doc:tsm_2nm_p8')" class="src-chip">doc:tsm_2nm_p8</a>, providing pricing power of +8% per wafer.</p><p>Geopolitical wafer exposure is partially offset by Arizona Fab 1 & Fab 2 expansion, though trailing node capacity remains concentrated in Hsinchu & Tainan.</p>`,
+        saydo: [
+          { target: 'N2 node volume prod H2 26', call: 'Q4 2025 Call', actual: 'On Track (Q3 Test Run)', cite: 'doc:tsm_2nm_p8', status: 'VERIFIED', class: 'k-pill-ok' },
+          { target: 'Gross margin > 53.0%', call: 'Q1 2026 Call', actual: '60.1%', cite: 'doc:tsm_q2_p4', status: 'BEAT', class: 'k-pill-ok' }
+        ],
         financials: [
           { metric: 'Net Revenue ($B)', q3: '23.5', q4: '26.8', q1: '25.6', q2: '28.2' },
           { metric: 'Gross Margin %', q3: '57.8%', q4: '59.0%', q1: '58.4%', q2: '60.1%' },
@@ -1810,7 +1956,10 @@
         conviction: '80%',
         statusClass: 'k-pill-ok',
         statusText: 'WATCHLIST · 80%',
-        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">MercadoLibre (MELI)</strong> is the dominant e-commerce ecosystem in Latin America. Mercado Pago credit portfolio expanded 34% YoY with net interest margin after losses (NIMAL) at 28.4%.</p>`,
+        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">MercadoLibre (MELI)</strong> is the dominant e-commerce ecosystem in Latin America. Mercado Pago credit portfolio expanded 34% YoY with net interest margin after losses (NIMAL) at 28.4%.</p><p>Logistics fulfillment network (Mercado Envíos) reaches 78% same-day or next-day delivery across Brazil and Mexico, creating an insurmountable competitive moat against local entrants.</p>`,
+        saydo: [
+          { target: 'Credit portfolio NIMAL > 26%', call: 'Q4 2025 Call', actual: '28.4%', cite: 'doc:meli_q2_p6', status: 'BEAT', class: 'k-pill-ok' }
+        ],
         financials: [
           { metric: 'GMV ($B)', q3: '11.4', q4: '13.5', q1: '12.1', q2: '13.8' },
           { metric: 'Net Revenue ($M)', q3: '3,760.0', q4: '4,250.0', q1: '4,330.0', q2: '5,100.0' }
@@ -1832,7 +1981,10 @@
         conviction: '72%',
         statusClass: 'k-pill-ok',
         statusText: 'WATCHLIST · 72%',
-        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">NVIDIA (NVDA)</strong> controls >90% market share in AI training and inference GPUs. Blackwell architecture demand exceeds supply through CY2026.</p>`,
+        thesis: `<p style="margin-bottom: var(--sp-3);"><strong style="color: var(--fg);">NVIDIA (NVDA)</strong> controls >90% market share in AI training and inference GPUs. Blackwell architecture demand exceeds supply through CY2026.</p><p>CUDA software stack ecosystem creates strong developer lock-in across hyperscalers (MSFT, AMZN, GOOGL, META) and enterprise sovereign AI projects.</p>`,
+        saydo: [
+          { target: 'Blackwell volume shipping Q4 25', call: 'Q3 2025 Call', actual: 'Shipped $13B Blackwell', cite: 'doc:nvda_q4_p2', status: 'VERIFIED', class: 'k-pill-ok' }
+        ],
         financials: [
           { metric: 'Data Center Rev ($B)', q3: '14.5', q4: '18.4', q1: '22.6', q2: '26.3' }
         ],
@@ -1878,6 +2030,169 @@
       showToast('View parameters & slider state saved to DB');
     }
 
+    // OPEN FULL RESEARCH BRIEF CANVAS SURFACE (#screen-full-brief)
+    function openFullBriefCanvas(ticker) {
+      if (ticker) activeCompanyTicker = ticker;
+      const data = COMPANY_DATA[activeCompanyTicker] || COMPANY_DATA.NU;
+
+      document.getElementById('fbSymbolLabel').innerText = `${data.symbol} — Institutional Research Brief`;
+      document.getElementById('fbReportTitle').innerText = `${data.symbol} (${data.name})`;
+      document.getElementById('fbReportSub').innerText = `Full Equity Research Brief & Fundamental Valuation Memorandum`;
+      
+      const pill = document.getElementById('fbReportPill');
+      pill.className = 'k-pill ' + data.statusClass;
+      pill.innerText = data.statusText;
+
+      document.getElementById('fbReportTarget').innerText = data.target;
+      document.getElementById('fbReportPrice').innerText = data.price;
+      document.getElementById('fbReportReturn').innerText = data.return1y;
+
+      const container = document.getElementById('fbFullReportBody');
+      container.innerHTML = `
+        <!-- Section 1: Executive Summary & Moat -->
+        <div class="k-card">
+          <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-2);">
+            1. Executive Summary & Structural Competitive Moat
+          </div>
+          <div class="prose-block" style="display: flex; flex-direction: column; gap: var(--sp-3);">
+            <p>
+              <strong style="color: var(--fg);">${data.name}</strong> represents a core high-conviction position within the equity strategy. The company operates a high-return, technology-driven platform that has expanded operating leverage across Latin American consumer finance and digital banking.
+            </p>
+            <p>
+              <strong>Unit Cost Advantage:</strong> Nubank achieves a structural cost-to-serve per active customer of 
+              <span class="drill-handle" onclick="openDrillDrawer('financials')">$0.90 per month</span>, representing an 87% discount against traditional incumbent banks ($7.00+ / month). This cost advantage enables ultra-competitive customer acquisition costs (CAC &lt; $7) and rapid deposit scaling.
+            </p>
+            <p>
+              <strong>International Expansion Runway:</strong> Deposit accumulation in Mexico recently surpassed 
+              <span class="drill-handle" onclick="openDrillDrawer('saydo')">$3.12 billion</span> <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a>, demonstrating that Nubank's digital playbook translates directly outside its core Brazilian market.
+            </p>
+          </div>
+        </div>
+
+        <!-- Section 2: Management Say/Do Commitment Ledger -->
+        <div class="k-card">
+          <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-2);">
+            2. Management Say/Do Commitment Verification Ledger
+          </div>
+          <p style="font-size: var(--fs-caption); color: var(--muted); margin-bottom: var(--sp-3);">
+            Every management guidance claim on earnings calls is tracked and audited against subsequent SEC Edgar 10-Q disclosures:
+          </p>
+          <table class="matrix-table t-mono">
+            <thead>
+              <tr>
+                <th>Target / Guidance Commitment</th>
+                <th>Call Date</th>
+                <th>Reported Actual</th>
+                <th>Source Filing Citation</th>
+                <th style="text-align: right;">Verification Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(data.saydo || []).map(s => `
+                <tr>
+                  <td><strong>${s.target}</strong></td>
+                  <td>${s.call}</td>
+                  <td class="t-mono" style="color: var(--ok); font-weight: 600;">${s.actual}</td>
+                  <td><a onclick="openPeekDrawer('${s.cite}')" class="src-chip">${s.cite}</a></td>
+                  <td style="text-align: right;"><span class="k-pill ${s.class}">${s.status}</span></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Section 3: Multi-Quarter Financial Fact Statements -->
+        <div class="k-card">
+          <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-2);">
+            3. Multi-Quarter Financial Statements & Key Operating Metrics
+          </div>
+          <table class="matrix-table t-mono">
+            <thead>
+              <tr>
+                <th>Financial Statement Line Item</th>
+                <th class="num">Q3 2025</th>
+                <th class="num">Q4 2025</th>
+                <th class="num">Q1 2026</th>
+                <th class="num">Q2 2026</th>
+                <th class="num">YoY Growth</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.financials.map(f => `
+                <tr>
+                  <td><strong>${f.metric}</strong></td>
+                  <td class="num t-mono">${f.q3}</td>
+                  <td class="num t-mono">${f.q4 || '-'}</td>
+                  <td class="num t-mono">${f.q1 || '-'}</td>
+                  <td class="num k-num-pos t-mono" style="font-weight: 600;">${f.q2 || '-'}</td>
+                  <td class="num k-num-pos t-mono">+41.2%</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Section 4: Disconfirming Thesis Contracts & Risk Limits -->
+        <div class="k-card">
+          <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-2);">
+            4. Disconfirming Thesis Contracts & Falsifier Monitoring
+          </div>
+          <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
+            ${data.falsifiers.map(f => `
+              <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="font-weight: 600; font-size: var(--fs-body);">${f.title}</div>
+                  <div style="font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-half);">Operational disconfirmation threshold triggering mandatory position review</div>
+                </div>
+                <span style="font-family: var(--mono); font-size: var(--fs-body); font-weight: 600; color: ${f.statusColor};">${f.status}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <!-- Section 5: Peer Comparison & Industry Positioning -->
+        <div class="k-card">
+          <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-2);">
+            5. Peer Group Valuation & Operating Benchmark
+          </div>
+          <table class="matrix-table t-mono">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Company Name</th>
+                <th>Sub-Segment</th>
+                <th class="num">1Y Return</th>
+                <th class="num">P/E Ratio</th>
+                <th class="num">ROIC %</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>${data.symbol}</strong></td>
+                <td>${data.name}</td>
+                <td><span class="k-pill k-pill-ok">TARGET ASSET</span></td>
+                <td class="num k-num-pos t-mono">${data.return1y}</td>
+                <td class="num t-mono">24.2x</td>
+                <td class="num k-num-pos t-mono">42.5%</td>
+              </tr>
+              ${data.peers.map(p => `
+                <tr>
+                  <td><strong>${p.symbol}</strong></td>
+                  <td>${p.name}</td>
+                  <td>${p.desc}</td>
+                  <td class="num k-num-pos t-mono">+28.5%</td>
+                  <td class="num t-mono">32.0x</td>
+                  <td class="num t-mono">21.0%</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      navigateTo('screen-full-brief');
+    }
+
     function switchCompanyWorkspace(ticker) {
       if (!COMPANY_DATA[ticker]) return;
       activeCompanyTicker = ticker;
@@ -1899,6 +2214,19 @@
       pill.innerText = data.statusText;
 
       document.getElementById('wsThesisBody').innerHTML = data.thesis;
+
+      // Say/Do Rows
+      const sayDoBody = document.getElementById('wsSayDoRows');
+      if (sayDoBody && data.saydo) {
+        sayDoBody.innerHTML = data.saydo.map(s => `
+          <tr>
+            <td>${s.target}</td>
+            <td>${s.call}</td>
+            <td>${s.actual} ${s.cite ? `<a onclick="openPeekDrawer('${s.cite}')" class="src-chip">${s.cite}</a>` : ''}</td>
+            <td style="text-align: right;"><span class="k-pill ${s.class}">${s.status}</span></td>
+          </tr>
+        `).join('');
+      }
 
       // Financials
       const finBody = document.getElementById('wsFinancialsRows');
@@ -1950,6 +2278,7 @@
         else if (navName === 'performance') breadcrumb.innerText = 'Portfolio Performance vs Index Benchmark';
         else if (navName === 'allocation') breadcrumb.innerText = 'Portfolio Allocation & Risk Engine';
         else if (navName === 'workspace') breadcrumb.innerText = `Company Desk (${activeCompanyTicker})`;
+        else if (navName === 'full-brief') breadcrumb.innerText = `Full Equity Research Brief (${activeCompanyTicker})`;
         else if (navName === 'audit-log') breadcrumb.innerText = 'Decision Audit Log & Governance Ledger';
         else if (navName === 'execution-queue') breadcrumb.innerText = 'Execution Queue & Data Pipeline Monitor';
       }
@@ -2103,6 +2432,7 @@
       `;
     }
 
+    // CONTEXTUAL SLIDE-OVER DRAWER (FOR QUICK CONTEXTUAL DRILL-DOWNS ONLY)
     function openDrillDrawer(type) {
       const drawer = document.getElementById('drillDrawer');
       const scrim = document.getElementById('drawerScrim');
@@ -2110,20 +2440,28 @@
       const subtitle = document.getElementById('drawerSubtitle');
       const body = document.getElementById('drawerBody');
 
+      const data = COMPANY_DATA[activeCompanyTicker] || COMPANY_DATA.NU;
+
       if (type === 'financials') {
-        title.innerText = "Financial Statements & Valuation Levers";
-        subtitle.innerText = "Historical quarters & terminal growth fade levers for " + activeCompanyTicker;
+        title.innerText = `Full Financial Statements — ${data.symbol}`;
+        subtitle.innerText = `4-Quarter Income Statement & Key Operating Ratios (${data.name})`;
         body.innerHTML = `
           <div class="k-well">
-            <div style="font-weight: 600; margin-bottom: var(--sp-1);">DCF Model Parameters</div>
-            <div style="font-size: var(--fs-caption); color: var(--muted);" class="t-mono">WACC: 10.5% · Terminal Fade: 3.5% · Intrinsic Target: <strong style="color: var(--accent);">$18.50</strong></div>
+            <div style="font-weight: 600; margin-bottom: var(--sp-1);">Valuation & DCF Baseline Parameters</div>
+            <div style="font-size: var(--fs-caption); color: var(--muted);" class="t-mono">WACC: 10.5% · Terminal Growth: 3.5% · Intrinsic Fair Value Target: <strong style="color: var(--accent);">${data.target}</strong></div>
           </div>
           <table class="matrix-table t-mono">
-            <thead><tr><th>Line Item</th><th class="num">Q1 26</th><th class="num">Q2 26</th></tr></thead>
+            <thead><tr><th>Financial Statement Line Item</th><th class="num">Q3 25</th><th class="num">Q4 25</th><th class="num">Q1 26</th><th class="num">Q2 26</th></tr></thead>
             <tbody>
-              <tr><td>Total Revenue</td><td class="num t-mono">$2,715.2M</td><td class="num k-num-pos t-mono">$3,020.8M</td></tr>
-              <tr><td>Net Income</td><td class="num t-mono">$480.2M</td><td class="num k-num-pos t-mono">$560.4M</td></tr>
-              <tr><td>Operating Margin</td><td class="num t-mono">19.2%</td><td class="num t-mono">19.8%</td></tr>
+              ${data.financials.map(f => `
+                <tr>
+                  <td><strong>${f.metric}</strong></td>
+                  <td class="num t-mono">${f.q3}</td>
+                  <td class="num t-mono">${f.q4 || '-'}</td>
+                  <td class="num t-mono">${f.q1 || '-'}</td>
+                  <td class="num k-num-pos t-mono">${f.q2 || '-'}</td>
+                </tr>
+              `).join('')}
             </tbody>
           </table>
         `;
@@ -2240,25 +2578,34 @@
           </table>
         `;
       } else if (type === 'saydo') {
-        title.innerText = "Management Say/Do & Transcripts";
-        subtitle.innerText = "Extracted Q&A commitments verified against SEC disclosures";
-        body.innerHTML = `
-          <div class="k-well">
-            <div style="font-weight: 600; color: var(--accent); margin-bottom: var(--sp-1);">Management Commitment Tracker</div>
-            <p style="font-family: var(--serif); font-size: var(--fs-body); line-height: 1.6;">"Mexico deposit growth crossed $3B in Q2."</p>
-            <div style="margin-top: var(--sp-2); font-size: var(--fs-caption); color: var(--ok); font-weight: 600;">✓ VERIFIED BY SEC 10-Q (Actual: $3.12B)</div>
-          </div>
-        `;
-      } else if (type === 'peers') {
-        title.innerText = "Peer Comparison Matrix";
-        subtitle.innerText = "Comparative valuation and operating metrics for " + activeCompanyTicker;
+        title.innerText = `Management Say/Do Track Record — ${data.symbol}`;
+        subtitle.innerText = `Full verification ledger of CEO/CFO guidance vs SEC Edgar reported facts`;
         body.innerHTML = `
           <table class="matrix-table t-mono">
-            <thead><tr><th>Ticker</th><th>Region</th><th class="num">1Y Return</th><th class="num">P/E Ratio</th></tr></thead>
+            <thead><tr><th>Target Metric / Guidance</th><th>Earnings Call Date</th><th>Reported Actual</th><th style="text-align: right;">Status</th></tr></thead>
             <tbody>
-              <tr><td><strong>NU</strong></td><td>LatAm</td><td class="num k-num-pos t-mono">+42.8%</td><td class="num t-mono">24.2x</td></tr>
-              <tr><td><strong>SE</strong></td><td>ASEAN</td><td class="num k-num-pos t-mono">+31.0%</td><td class="num t-mono">32.0x</td></tr>
-              <tr><td><strong>MELI</strong></td><td>LatAm</td><td class="num k-num-pos t-mono">+28.5%</td><td class="num t-mono">41.5x</td></tr>
+              ${(data.saydo || []).map(s => `
+                <tr>
+                  <td><strong>${s.target}</strong></td>
+                  <td>${s.call}</td>
+                  <td>${s.actual} ${s.cite ? `<a onclick="openPeekDrawer('${s.cite}')" class="src-chip">${s.cite}</a>` : ''}</td>
+                  <td style="text-align: right;"><span class="k-pill ${s.class}">${s.status}</span></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      } else if (type === 'peers') {
+        title.innerText = `Peer Comparison Matrix — ${data.symbol}`;
+        subtitle.innerText = `Valuation multiples and operating performance relative to primary peers`;
+        body.innerHTML = `
+          <table class="matrix-table t-mono">
+            <thead><tr><th>Ticker</th><th>Company Name</th><th>Sub-Segment</th><th class="num">1Y Return</th><th class="num">P/E Multiple</th></tr></thead>
+            <tbody>
+              <tr><td><strong>${data.symbol}</strong></td><td>${data.name}</td><td>Target Asset</td><td class="num k-num-pos t-mono">${data.return1y}</td><td class="num t-mono">24.2x</td></tr>
+              ${data.peers.map(p => `
+                <tr><td><strong>${p.symbol}</strong></td><td>${p.name}</td><td>${p.desc}</td><td class="num k-num-pos t-mono">+28.5%</td><td class="num t-mono">32.0x</td></tr>
+              `).join('')}
             </tbody>
           </table>
         `;
