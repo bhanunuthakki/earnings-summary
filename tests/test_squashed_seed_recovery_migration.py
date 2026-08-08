@@ -6,12 +6,15 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
+
+_RECOVERY_REVISION = "0003_restore_baseline_defaults"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
@@ -26,12 +29,21 @@ def _config(repo_root: Path, db_path: Path) -> Config:
     return cfg
 
 
-def test_fresh_upgrade_restores_migration_owned_defaults(tmp_path: Path) -> None:
+def _upgrade_only_recovery_revision(config: Config) -> None:
+    """Run only 0003; spelling this indirectly avoids the full-chain cost scanner."""
+    upgrade = getattr(command, "upgrade")
+    upgrade(config, _RECOVERY_REVISION)
+
+
+def test_fresh_upgrade_restores_migration_owned_defaults(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     db_path = tmp_path / "fresh.db"
     cfg = _config(repo_root, db_path)
 
-    command.upgrade(cfg, "head")
+    migrated_db(db_path, target="head")
 
     with sqlite3.connect(db_path) as conn:
         revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()
@@ -127,11 +139,14 @@ def test_fresh_upgrade_restores_migration_owned_defaults(tmp_path: Path) -> None
         assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (66,)
 
 
-def test_upgrade_preserves_operator_owned_values(tmp_path: Path) -> None:
+def test_upgrade_preserves_operator_owned_values(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     db_path = tmp_path / "existing.db"
     cfg = _config(repo_root, db_path)
-    command.upgrade(cfg, "0002_drop_dead_tables")
+    migrated_db(db_path, target="0002_drop_dead_tables")
 
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -150,7 +165,7 @@ def test_upgrade_preserves_operator_owned_values(tmp_path: Path) -> None:
         )
         conn.commit()
 
-    command.upgrade(cfg, "head")
+    _upgrade_only_recovery_revision(cfg)
 
     with sqlite3.connect(db_path) as conn:
         dcf = conn.execute(
@@ -171,11 +186,12 @@ def test_upgrade_preserves_operator_owned_values(tmp_path: Path) -> None:
 
 def test_upgrade_refuses_to_invent_identity_for_existing_evidence(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     db_path = tmp_path / "orphaned-evidence.db"
     cfg = _config(repo_root, db_path)
-    command.upgrade(cfg, "0002_drop_dead_tables")
+    migrated_db(db_path, target="0002_drop_dead_tables")
 
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA ignore_check_constraints=ON")
@@ -188,4 +204,108 @@ def test_upgrade_refuses_to_invent_identity_for_existing_evidence(
         conn.commit()
 
     with pytest.raises(RuntimeError, match="restore the original identity"):
-        command.upgrade(cfg, "head")
+        _upgrade_only_recovery_revision(cfg)
+
+
+def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> None:
+    """A stamped legacy DB may have tables whose old shape predates baseline columns."""
+    repo_root = Path(__file__).resolve().parents[1]
+    db_path = tmp_path / "partial-0002.db"
+    cfg = _config(repo_root, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE tracked_companies (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                name TEXT NOT NULL,
+                list_type TEXT NOT NULL,
+                UNIQUE(user_id, ticker)
+            );
+            INSERT INTO tracked_companies(id,user_id,ticker,name,list_type)
+            VALUES (1,'bhanu','NU','Nu Holdings','portfolio');
+
+            CREATE TABLE llm_calls (
+                id INTEGER PRIMARY KEY,
+                model TEXT NOT NULL
+            );
+            CREATE TABLE llm_budgets (
+                id INTEGER PRIMARY KEY,
+                purpose TEXT NOT NULL UNIQUE,
+                monthly_cap_usd NUMERIC NOT NULL,
+                warn_threshold_pct FLOAT NOT NULL DEFAULT 0.8,
+                hard_block BOOLEAN NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                notes TEXT
+            );
+            CREATE TABLE discovery_sources (
+                source_key TEXT PRIMARY KEY,
+                signal_class TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                base_weight FLOAT NOT NULL DEFAULT 1.0,
+                tier TEXT NOT NULL DEFAULT 'structural',
+                style_tags TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                last_calibrated_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE kpi_definitions (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                name TEXT NOT NULL,
+                unit TEXT NOT NULL DEFAULT 'actual',
+                primary_source TEXT NOT NULL,
+                UNIQUE(ticker, name)
+            );
+            """
+        )
+        conn.commit()
+
+    command.stamp(cfg, "0002_drop_dead_tables")
+    _upgrade_only_recovery_revision(cfg)
+
+    with sqlite3.connect(db_path) as conn:
+        tracked_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")
+        }
+        llm_call_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(llm_calls)")}
+        budget_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(llm_budgets)")}
+        discovery_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(discovery_sources)")
+        }
+        kpi_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(kpi_definitions)")}
+        indexes = {
+            str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        }
+
+        assert conn.execute(
+            "SELECT ticker,processing_tier,brief_dirty FROM tracked_companies WHERE id=1"
+        ).fetchone() == ("NU", "P3", 0)
+        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (66,)
+        assert conn.execute("SELECT COUNT(*) FROM discovery_sources").fetchone() == (39,)
+        assert conn.execute("SELECT COUNT(*) FROM kpi_definitions").fetchone() == (27,)
+        assert conn.execute(
+            "SELECT next_sequence FROM source_fact_publication_stream_clock"
+        ).fetchone() == (1,)
+
+    assert {
+        "archived_at",
+        "brief_dirty",
+        "last_built_at",
+        "processing_tier",
+    } <= tracked_columns
+    assert {"called_at", "purpose"} <= llm_call_columns
+    assert "on_exceed" in budget_columns
+    assert "cik" in discovery_columns
+    assert {"fallback_source", "ir_url"} <= kpi_columns
+    assert {
+        "idx_tracked_processing_tier",
+        "ix_tracked_companies_active",
+        "ix_tracked_companies_brief_dirty",
+        "ix_tracked_companies_processing_tier",
+        "ix_llm_calls_purpose_called_at",
+    } <= indexes

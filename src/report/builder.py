@@ -139,13 +139,17 @@ def build_report(
     )
     filing_intelligence_section = filing_intelligence.build(ticker, repo_root)
     exec_compensation_section = exec_compensation.build(
-        ticker, repo_root, enable_llm=enable_llm, force_budget_bypass=force_budget_bypass
+        ticker,
+        repo_root,
+        enable_llm=enable_llm,
+        force_budget_bypass=force_budget_bypass,
+        conn=conn,
     )
-    synthesis_section = synthesis.build(ticker, repo_root)
+    synthesis_section = synthesis.build(ticker, repo_root, conn=conn)
     # Read-only for BOTH flavors (P1.1, PRD §8.1) — generation happens at the
     # end of a build (execution/build_investment_decision_card.py), never
     # here; this only surfaces whatever's already cached.
-    investment_decision_card_section = investment_decision_card.build(ticker, repo_root)
+    investment_decision_card_section = investment_decision_card.build(ticker, repo_root, conn=conn)
     # Roll up every section's budget-forgone marker so renderers can show a
     # brief-level "forgone due to budget" banner (and the dashboard an indicator).
     forgone_due_to_budget: list[BudgetSkip] = [

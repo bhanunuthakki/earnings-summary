@@ -6,7 +6,8 @@ import atexit
 import os
 import shutil
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -46,8 +47,42 @@ os.environ.setdefault(
 # crash directory.
 _worker_id = os.environ.get("PYTEST_XDIST_WORKER", "controller")
 _test_db_dir = Path(tempfile.mkdtemp(prefix=f"earnings-summary-pytest-{_worker_id}-"))
-os.environ["EARNINGS_SUMMARY_DB_PATH"] = os.fspath(_test_db_dir / f"portfolio-{os.getpid()}.db")
+_test_db_path = _test_db_dir / f"portfolio-{os.getpid()}.db"
+_db_original_marker = "_EARNINGS_SUMMARY_PYTEST_ORIGINAL_DB_PATH"
+_db_path_absent = "__pytest_db_path_was_absent__"
+if _db_original_marker not in os.environ:
+    os.environ[_db_original_marker] = os.environ.get(
+        "EARNINGS_SUMMARY_DB_PATH",
+        _db_path_absent,
+    )
+_encoded_original_db_path = os.environ[_db_original_marker]
+_db_path_was_set = _encoded_original_db_path != _db_path_absent
+_original_db_path = _encoded_original_db_path if _db_path_was_set else None
+os.environ["EARNINGS_SUMMARY_DB_PATH"] = os.fspath(_test_db_path)
+
+
+def _restore_collection_db_override() -> None:
+    if os.environ.get("EARNINGS_SUMMARY_DB_PATH") != os.fspath(_test_db_path):
+        return
+    if _db_path_was_set and _original_db_path is not None:
+        os.environ["EARNINGS_SUMMARY_DB_PATH"] = _original_db_path
+    else:
+        os.environ.pop("EARNINGS_SUMMARY_DB_PATH", None)
+    os.environ.pop(_db_original_marker, None)
+
+
+def pytest_collection_modifyitems(
+    session: pytest.Session,
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Restore runtime env semantics after each process collects its tests."""
+    del session, config, items
+    _restore_collection_db_override()
+
+
 atexit.register(shutil.rmtree, _test_db_dir, ignore_errors=True)
+atexit.register(_restore_collection_db_override)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -63,23 +98,42 @@ def archived_migration_harness() -> Iterator[None]:
     from alembic import command
 
     archive = Path(__file__).resolve().parents[1] / "alembic" / "versions_archived"
+    active = archive.parent / "versions"
     original_stamp = command.stamp
     original_upgrade = command.upgrade
     original_downgrade = command.downgrade
 
     def uses_archive(config: Config, revision: str | list[str] | tuple[str, ...]) -> bool:
-        if config.attributes.get("pytest_archived_migration_graph") is True:
-            return True
+        configured_locations = config.get_main_option("version_locations", "").strip()
+        if configured_locations:
+            return Path(configured_locations).resolve() == archive.resolve()
         revisions = (revision,) if isinstance(revision, str) else tuple(revision)
         for requested in revisions:
             for token in requested.split(":"):
                 if token in {"base", "head", "heads"}:
                     continue
                 if any(archive.glob(f"{token}*.py")):
-                    config.attributes["pytest_archived_migration_graph"] = True
-                    config.set_main_option("version_locations", str(archive))
                     return True
+                if token.startswith(("+", "-")):
+                    return config.attributes.get("pytest_last_migration_graph") == "archive"
         return False
+
+    @contextmanager
+    def selected_graph(config: Config, directory: Path) -> Generator[None, None, None]:
+        section = config.config_ini_section
+        had_locations = config.file_config.has_option(section, "version_locations")
+        previous = config.get_main_option("version_locations")
+        config.set_main_option("version_locations", str(directory))
+        try:
+            yield
+        finally:
+            if had_locations and previous is not None:
+                config.set_main_option("version_locations", previous)
+            else:
+                config.file_config.remove_option(section, "version_locations")
+
+    def record_graph(config: Config, *, archived: bool) -> None:
+        config.attributes["pytest_last_migration_graph"] = "archive" if archived else "active"
 
     def stamp(
         config: Config,
@@ -88,8 +142,10 @@ def archived_migration_harness() -> Iterator[None]:
         tag: str | None = None,
         purge: bool = False,
     ) -> None:
-        uses_archive(config, revision)
-        original_stamp(config, revision, sql=sql, tag=tag, purge=purge)
+        archived = uses_archive(config, revision)
+        with selected_graph(config, archive if archived else active):
+            original_stamp(config, revision, sql=sql, tag=tag, purge=purge)
+        record_graph(config, archived=archived)
 
     def upgrade(
         config: Config,
@@ -97,8 +153,17 @@ def archived_migration_harness() -> Iterator[None]:
         sql: bool = False,
         tag: str | None = None,
     ) -> None:
-        uses_archive(config, revision)
-        original_upgrade(config, revision, sql=sql, tag=tag)
+        archived = uses_archive(config, revision)
+        with selected_graph(config, archive if archived else active):
+            if (
+                not sql
+                and not archived
+                and revision in {"head", "heads"}
+                and config.attributes.get("pytest_last_migration_graph") == "archive"
+            ):
+                original_stamp(config, "base", purge=True)
+            original_upgrade(config, revision, sql=sql, tag=tag)
+        record_graph(config, archived=archived)
 
     def downgrade(
         config: Config,
@@ -106,8 +171,10 @@ def archived_migration_harness() -> Iterator[None]:
         sql: bool = False,
         tag: str | None = None,
     ) -> None:
-        uses_archive(config, revision)
-        original_downgrade(config, revision, sql=sql, tag=tag)
+        archived = uses_archive(config, revision)
+        with selected_graph(config, archive if archived else active):
+            original_downgrade(config, revision, sql=sql, tag=tag)
+        record_graph(config, archived=archived)
 
     patcher = pytest.MonkeyPatch()
     patcher.setattr(command, "stamp", stamp)
@@ -153,6 +220,20 @@ def _restore_os_environ() -> Iterator[None]:
     for key, value in saved.items():
         if os.environ.get(key) != value:
             os.environ[key] = value
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bind ``db`` defaults per test without changing runtime environment."""
+    import db
+
+    database = tmp_path / "default-db" / "portfolio.db"
+    monkeypatch.setattr(db, "DB_PATH", os.fspath(database))
+    monkeypatch.setattr(db, "DATA_DIR", os.fspath(database.parent))
+    monkeypatch.setattr(db, "FMP_DIR", os.fspath(database.parent / "historical" / "fmp"))
 
 
 @pytest.fixture(autouse=True)

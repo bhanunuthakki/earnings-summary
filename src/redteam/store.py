@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from redteam.models import Kind, RedTeamItemRow, RedTeamLLMItem, Severity, Status
-from user_state._db import now_iso, open_conn, parse_dt
+from user_state._db import now_iso, open_conn, open_read_conn, parse_dt
 
 _TABLE = "red_team_items"
 
@@ -207,7 +207,10 @@ def get_item(*, db_path: Path | str | None, item_id: int) -> RedTeamItemRow | No
 
 
 def list_items_by_status(
-    *, db_path: Path | str | None, statuses: tuple[str, ...]
+    *,
+    db_path: Path | str | None,
+    statuses: tuple[str, ...],
+    conn: sqlite3.Connection | None = None,
 ) -> list[RedTeamItemRow]:
     """Every item across ALL run_keys currently in one of ``statuses``,
     oldest first. Powers ``redteam.gate.escalated_items`` — the persistent
@@ -216,21 +219,22 @@ def list_items_by_status(
     if not statuses:
         return []
     try:
-        conn = open_conn(db_path)
+        db_conn = conn or open_read_conn(db_path)
     except (FileNotFoundError, RuntimeError):
         return []
     try:
-        if not _has_table(conn):
+        if not _has_table(db_conn):
             return []
         placeholders = ", ".join("?" * len(statuses))
-        rows = conn.execute(
+        rows = db_conn.execute(
             f"SELECT {', '.join(_ROW_COLUMNS)} FROM {_TABLE} "
             f"WHERE status IN ({placeholders}) ORDER BY created_at ASC, id ASC",
             statuses,
         ).fetchall()
         return [_row_to_dc(r) for r in rows]
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def set_response(

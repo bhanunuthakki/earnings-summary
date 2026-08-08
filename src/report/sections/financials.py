@@ -949,7 +949,12 @@ _LINE_ITEM_TO_FACT_KEY: dict[str, str] = {
 }
 
 
-def build_per_metric(ticker: str, repo_root: Path) -> dict[str, dict[str, object]]:
+def build_per_metric(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, dict[str, object]]:
     """Per-line-item provenance for the §3 quarterly facts.
 
     For each line item the financials table renders, look up the tier-
@@ -963,7 +968,9 @@ def build_per_metric(ticker: str, repo_root: Path) -> dict[str, dict[str, object
     """
     out: dict[str, dict[str, object]] = {}
     for view_col, fact_key in _LINE_ITEM_TO_FACT_KEY.items():
-        prov = load_financial_fact_provenance(ticker.upper(), fact_key, repo_root=repo_root)
+        prov = load_financial_fact_provenance(
+            ticker.upper(), fact_key, repo_root=repo_root, conn=conn
+        )
         if prov is None:
             continue
         out[f"{view_col}_q_latest"] = prov

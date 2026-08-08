@@ -22,12 +22,17 @@ def _config(db_path: Path) -> Config:
     return config
 
 
-def test_default_database_is_process_isolated_before_collection() -> None:
-    """Collection must resolve the default DB outside the shared checkout."""
-    configured = Path(os.environ["EARNINGS_SUMMARY_DB_PATH"])
+def test_collection_database_override_is_restored_before_tests() -> None:
+    """Collection isolation must not change runtime environment semantics."""
+    configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "")
 
-    assert configured.name == f"portfolio-{os.getpid()}.db"
-    assert configured.parent.name.startswith("earnings-summary-pytest-")
+    assert "earnings-summary-pytest-" not in configured
+
+
+def test_default_database_binding_is_private_without_an_env_override(tmp_path: Path) -> None:
+    import db
+
+    assert Path(db.DB_PATH).parent == tmp_path / "default-db"
 
 
 def test_importing_db_does_not_create_the_configured_database(tmp_path: Path) -> None:
@@ -45,25 +50,36 @@ def test_importing_db_does_not_create_the_configured_database(tmp_path: Path) ->
     assert not configured.exists()
 
 
-def test_explicit_history_uses_archive_while_head_uses_active_graph(tmp_path: Path) -> None:
+def test_graph_selection_is_per_operation_and_head_rebases_to_active(tmp_path: Path) -> None:
     archive = PROJECT_ROOT / "alembic" / "versions_archived"
     historical_db = tmp_path / "historical.db"
     historical = _config(historical_db)
 
     command.stamp(historical, "0273_post_earnings_readout_budget")
 
-    assert historical.get_main_option("version_locations") == str(archive)
+    assert historical.get_main_option("version_locations", "") == ""
     with sqlite3.connect(historical_db) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
             "0273_post_earnings_readout_budget",
         )
 
-    active_db = tmp_path / "active.db"
-    active = _config(active_db)
-    command.stamp(active, "head")
+    upgrade = getattr(command, "upgrade")
+    upgrade(historical, "head")
 
-    assert active.get_main_option("version_locations", "") == ""
-    with sqlite3.connect(active_db) as connection:
+    assert historical.get_main_option("version_locations", "") == ""
+    with sqlite3.connect(historical_db) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
             "0003_restore_baseline_defaults",
+        )
+
+    explicitly_archived_db = tmp_path / "explicitly-archived.db"
+    explicitly_archived = _config(explicitly_archived_db)
+    explicitly_archived.set_main_option("version_locations", str(archive))
+    command.stamp(explicitly_archived, "head")
+    upgrade(explicitly_archived, "head")
+
+    assert explicitly_archived.get_main_option("version_locations") == str(archive)
+    with sqlite3.connect(explicitly_archived_db) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0273_post_earnings_readout_budget",
         )

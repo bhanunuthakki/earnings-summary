@@ -477,6 +477,7 @@ def _build_one(
             force_refresh=force_refresh,
             conn=report_conn,
         )
+        per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root, conn=report_conn)
     finally:
         if report_conn is not None:
             report_conn.close()
@@ -509,7 +510,6 @@ def _build_one(
     # Provenance rows always point at the workspace HTML — the only rendered
     # report — so audit consumers can deep-link.
     canonical_artifact = workspace_html_path
-    per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root)
     _log_brief_provenance(
         repo_root=repo_root,
         ticker=ticker,
@@ -530,7 +530,12 @@ def _build_one(
     }
 
 
-def _collect_per_metric_provenance(ticker: str, repo_root: Path) -> dict[str, dict[str, object]]:
+def _collect_per_metric_provenance(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, dict[str, object]]:
     """Collate per-line-item provenance across the sections wired for it.
 
     Today: snapshot (DCF valuation) + financials (8 quarterly line items).
@@ -540,8 +545,8 @@ def _collect_per_metric_provenance(ticker: str, repo_root: Path) -> dict[str, di
     or synthetic test environments.
     """
     merged: dict[str, dict[str, object]] = {}
-    merged.update(snapshot_section_mod.build_per_metric(ticker, repo_root))
-    merged.update(financials_section_mod.build_per_metric(ticker, repo_root))
+    merged.update(snapshot_section_mod.build_per_metric(ticker, repo_root, conn=conn))
+    merged.update(financials_section_mod.build_per_metric(ticker, repo_root, conn=conn))
     return merged
 
 

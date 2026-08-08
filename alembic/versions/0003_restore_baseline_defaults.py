@@ -468,9 +468,236 @@ _DISCOVERY_SOURCES: tuple[tuple[str, str, str, float, str, str, str | None], ...
 )
 
 
+def _table_exists(bind: sa.engine.Connection, table: str) -> bool:
+    return (
+        bind.execute(
+            sa.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:table LIMIT 1"),
+            {"table": table},
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
+def _column_names(bind: sa.engine.Connection, table: str) -> set[str]:
+    if not _table_exists(bind, table):
+        return set()
+    return {str(row[1]) for row in bind.exec_driver_sql(f'PRAGMA table_info("{table}")')}
+
+
+def _add_columns(
+    bind: sa.engine.Connection,
+    table: str,
+    columns: tuple[tuple[str, str], ...],
+) -> None:
+    present = _column_names(bind, table)
+    for name, ddl in columns:
+        if name not in present:
+            bind.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {ddl}')
+            present.add(name)
+
+
+def _ensure_compatibility_schema(bind: sa.engine.Connection) -> None:
+    """Restore the prerequisites used directly by this recovery migration."""
+    bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS database_runtime_identity (
+            singleton INTEGER NOT NULL PRIMARY KEY,
+            database_instance_id VARCHAR(64) NOT NULL UNIQUE,
+            CONSTRAINT ck_database_runtime_identity_singleton CHECK (singleton=1)
+        )"""
+    )
+    _add_columns(
+        bind,
+        "database_runtime_identity",
+        (("singleton", "INTEGER"), ("database_instance_id", "VARCHAR(64)")),
+    )
+
+    bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS source_fact_publication_stream_clock (
+            singleton_key INTEGER NOT NULL PRIMARY KEY,
+            next_sequence INTEGER NOT NULL,
+            CONSTRAINT ck_source_fact_publication_stream_clock
+                CHECK (singleton_key = 1 AND next_sequence > 0)
+        )"""
+    )
+    _add_columns(
+        bind,
+        "source_fact_publication_stream_clock",
+        (("singleton_key", "INTEGER"), ("next_sequence", "INTEGER")),
+    )
+
+    bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS global_dcf_assumptions (
+            field TEXT NOT NULL PRIMARY KEY,
+            value FLOAT NOT NULL,
+            updated_at TEXT NOT NULL
+        )"""
+    )
+    _add_columns(
+        bind,
+        "global_dcf_assumptions",
+        (("field", "TEXT"), ("value", "FLOAT"), ("updated_at", "TEXT")),
+    )
+
+    bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS llm_budgets (
+            id INTEGER NOT NULL PRIMARY KEY,
+            purpose VARCHAR(64) NOT NULL UNIQUE,
+            monthly_cap_usd NUMERIC(10, 2) NOT NULL,
+            warn_threshold_pct FLOAT DEFAULT 0.80 NOT NULL,
+            hard_block BOOLEAN DEFAULT 0 NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            notes TEXT,
+            on_exceed TEXT NOT NULL DEFAULT 'warn'
+                CHECK (on_exceed IN ('skip', 'block', 'warn'))
+        )"""
+    )
+    _add_columns(
+        bind,
+        "llm_budgets",
+        (
+            ("purpose", "VARCHAR(64)"),
+            ("monthly_cap_usd", "NUMERIC(10, 2)"),
+            ("warn_threshold_pct", "FLOAT DEFAULT 0.80"),
+            ("hard_block", "BOOLEAN DEFAULT 0"),
+            ("created_at", "DATETIME"),
+            ("updated_at", "DATETIME"),
+            ("notes", "TEXT"),
+            ("on_exceed", "TEXT NOT NULL DEFAULT 'warn'"),
+        ),
+    )
+
+    bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS discovery_sources (
+            source_key TEXT NOT NULL PRIMARY KEY,
+            signal_class TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            base_weight FLOAT DEFAULT 1.0 NOT NULL,
+            tier TEXT DEFAULT 'structural' NOT NULL,
+            style_tags TEXT,
+            cik TEXT,
+            active INTEGER DEFAULT 1 NOT NULL,
+            last_calibrated_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )"""
+    )
+    _add_columns(
+        bind,
+        "discovery_sources",
+        (
+            ("source_key", "TEXT"),
+            ("signal_class", "TEXT"),
+            ("display_name", "TEXT"),
+            ("base_weight", "FLOAT DEFAULT 1.0"),
+            ("tier", "TEXT DEFAULT 'structural'"),
+            ("style_tags", "TEXT"),
+            ("cik", "TEXT"),
+            ("active", "INTEGER DEFAULT 1"),
+            ("last_calibrated_at", "TEXT"),
+            ("created_at", "TEXT"),
+            ("updated_at", "TEXT"),
+        ),
+    )
+
+    bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS kpi_definitions (
+            id INTEGER NOT NULL PRIMARY KEY,
+            ticker VARCHAR NOT NULL,
+            name TEXT NOT NULL,
+            unit VARCHAR DEFAULT 'actual' NOT NULL,
+            primary_source VARCHAR NOT NULL,
+            fallback_source VARCHAR,
+            ir_url VARCHAR,
+            threshold_tier VARCHAR,
+            threshold_low FLOAT,
+            threshold_high FLOAT,
+            notes TEXT,
+            reporting_cadence TEXT NOT NULL DEFAULT 'quarterly',
+            definition_origin TEXT NOT NULL DEFAULT 'analyst',
+            UNIQUE (ticker, name)
+        )"""
+    )
+    _add_columns(
+        bind,
+        "kpi_definitions",
+        (
+            ("ticker", "VARCHAR"),
+            ("name", "TEXT"),
+            ("unit", "VARCHAR DEFAULT 'actual'"),
+            ("primary_source", "VARCHAR"),
+            ("fallback_source", "VARCHAR"),
+            ("ir_url", "VARCHAR"),
+        ),
+    )
+
+    bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS llm_calls (
+            id INTEGER NOT NULL PRIMARY KEY,
+            called_at DATETIME NOT NULL,
+            purpose VARCHAR(64),
+            model VARCHAR(64) NOT NULL
+        )"""
+    )
+    _add_columns(
+        bind,
+        "llm_calls",
+        (("called_at", "DATETIME"), ("purpose", "VARCHAR(64)")),
+    )
+
+    bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS tracked_companies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'bhanu',
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            list_type TEXT NOT NULL,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            sec_validated BOOLEAN DEFAULT 0,
+            ir_url TEXT DEFAULT NULL,
+            model_url TEXT DEFAULT NULL,
+            publishes_release BOOLEAN DEFAULT 0,
+            publishes_slides BOOLEAN DEFAULT 0,
+            publishes_transcript BOOLEAN DEFAULT 0,
+            fmp_data_upto TEXT DEFAULT NULL,
+            manual_data_quarters TEXT DEFAULT '[]',
+            fmp_data_saved BOOLEAN DEFAULT 0,
+            instrument_type VARCHAR,
+            filing_regime VARCHAR,
+            fiscal_year_end VARCHAR(5),
+            archived_at TIMESTAMP,
+            brief_dirty BOOLEAN DEFAULT 0 NOT NULL,
+            last_built_at DATETIME,
+            last_brief_hash VARCHAR(64),
+            processing_tier VARCHAR(8) DEFAULT 'P3' NOT NULL,
+            business_model_class TEXT NOT NULL DEFAULT 'operating_company',
+            accounting_standard TEXT NOT NULL DEFAULT 'us_gaap',
+            UNIQUE(user_id, ticker)
+        )"""
+    )
+    _add_columns(
+        bind,
+        "tracked_companies",
+        (
+            ("archived_at", "TIMESTAMP"),
+            ("brief_dirty", "BOOLEAN DEFAULT 0 NOT NULL"),
+            ("last_built_at", "DATETIME"),
+            ("last_brief_hash", "VARCHAR(64)"),
+            ("processing_tier", "VARCHAR(8) DEFAULT 'P3' NOT NULL"),
+            (
+                "business_model_class",
+                "TEXT NOT NULL DEFAULT 'operating_company'",
+            ),
+            ("accounting_standard", "TEXT NOT NULL DEFAULT 'us_gaap'"),
+        ),
+    )
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     now = datetime.now(UTC).isoformat()
+
+    _ensure_compatibility_schema(bind)
 
     # Budget checks filter by both columns before every LLM call. The squashed
     # baseline retained separate/partial indexes, which still scans all calls
@@ -478,18 +705,41 @@ def upgrade() -> None:
     op.execute(
         "CREATE INDEX IF NOT EXISTS ix_llm_calls_purpose_called_at ON llm_calls(purpose,called_at)"
     )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tracked_processing_tier "
+        "ON tracked_companies(processing_tier,last_built_at)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_tracked_companies_active "
+        "ON tracked_companies(user_id,list_type) WHERE archived_at IS NULL"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_tracked_companies_brief_dirty "
+        "ON tracked_companies(brief_dirty) WHERE brief_dirty=1"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_tracked_companies_processing_tier "
+        "ON tracked_companies(processing_tier) WHERE archived_at IS NULL"
+    )
 
     identity = bind.execute(
         sa.text("SELECT database_instance_id FROM database_runtime_identity WHERE singleton=1")
     ).scalar_one_or_none()
     if identity is None:
         evidence_rows = sum(
-            int(bind.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one())
+            int(
+                bind.execute(
+                    sa.select(sa.func.count()).select_from(
+                        sa.Table(table, sa.MetaData(), autoload_with=bind)
+                    )
+                ).scalar_one()
+            )
             for table in (
                 "document_processing_operation_ledger",
                 "metric_ontology_operation_ledger",
                 "canonical_resolution_operation_ledger",
             )
+            if _table_exists(bind, table)
         )
         if evidence_rows:
             raise RuntimeError(
@@ -503,14 +753,26 @@ def upgrade() -> None:
             ),
             {"identity": f"database-instance:{uuid4().hex}"},
         )
+    next_sequence = 1
+    if _table_exists(
+        bind, "source_fact_publication_stream"
+    ) and "publication_sequence" in _column_names(bind, "source_fact_publication_stream"):
+        next_sequence = int(
+            bind.execute(
+                sa.text(
+                    "SELECT COALESCE(MAX(publication_sequence), 0) + 1 "
+                    "FROM source_fact_publication_stream"
+                )
+            ).scalar_one()
+        )
     bind.execute(
         sa.text(
             "INSERT INTO source_fact_publication_stream_clock"
-            "(singleton_key,next_sequence) VALUES "
-            "(1,(SELECT COALESCE(MAX(publication_sequence), 0) + 1 "
-            "FROM source_fact_publication_stream)) "
-            "ON CONFLICT(singleton_key) DO NOTHING"
-        )
+            "(singleton_key,next_sequence) "
+            "SELECT 1,:next_sequence WHERE NOT EXISTS ("
+            "SELECT 1 FROM source_fact_publication_stream_clock WHERE singleton_key=1)"
+        ),
+        {"next_sequence": next_sequence},
     )
 
     for field, value in (
@@ -521,8 +783,8 @@ def upgrade() -> None:
         bind.execute(
             sa.text(
                 "INSERT INTO global_dcf_assumptions"
-                "(field,value,updated_at) VALUES (:field,:value,:now) "
-                "ON CONFLICT(field) DO NOTHING"
+                "(field,value,updated_at) SELECT :field,:value,:now "
+                "WHERE NOT EXISTS (SELECT 1 FROM global_dcf_assumptions WHERE field=:field)"
             ),
             {"field": field, "value": value, "now": now},
         )
@@ -531,8 +793,8 @@ def upgrade() -> None:
         "INSERT INTO llm_budgets"
         "(purpose,monthly_cap_usd,warn_threshold_pct,hard_block,created_at,"
         "updated_at,notes,on_exceed) "
-        "VALUES (:purpose,:cap,0.80,:hard_block,:now,:now,:notes,:mode) "
-        "ON CONFLICT(purpose) DO NOTHING"
+        "SELECT :purpose,:cap,0.80,:hard_block,:now,:now,:notes,:mode "
+        "WHERE NOT EXISTS (SELECT 1 FROM llm_budgets WHERE purpose=:purpose)"
     )
     for purpose, cap, mode in _LLM_BUDGETS:
         bind.execute(
@@ -551,8 +813,8 @@ def upgrade() -> None:
         "INSERT INTO discovery_sources"
         "(source_key,signal_class,display_name,base_weight,tier,style_tags,cik,"
         "active,last_calibrated_at,created_at,updated_at) "
-        "VALUES (:key,:class,:name,:weight,:tier,:tags,:cik,1,NULL,:now,:now) "
-        "ON CONFLICT(source_key) DO NOTHING"
+        "SELECT :key,:class,:name,:weight,:tier,:tags,:cik,1,NULL,:now,:now "
+        "WHERE NOT EXISTS (SELECT 1 FROM discovery_sources WHERE source_key=:key)"
     )
     for key, signal_class, name, weight, tier, tags, cik in _DISCOVERY_SOURCES:
         bind.execute(
@@ -572,8 +834,9 @@ def upgrade() -> None:
     kpi_sql = sa.text(
         "INSERT INTO kpi_definitions"
         "(ticker,name,unit,primary_source,fallback_source,ir_url) "
-        "VALUES (:ticker,:name,'actual',:primary,:fallback,:ir_url) "
-        "ON CONFLICT(ticker,name) DO NOTHING"
+        "SELECT :ticker,:name,'actual',:primary,:fallback,:ir_url "
+        "WHERE NOT EXISTS (SELECT 1 FROM kpi_definitions "
+        "WHERE ticker=:ticker AND name=:name)"
     )
     for ticker, name, primary, fallback, ir_url in _KPI_ROUTES:
         bind.execute(

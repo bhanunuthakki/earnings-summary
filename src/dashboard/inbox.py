@@ -221,6 +221,7 @@ def collect_inbox(
     limit: int = 80,
     now: datetime | None = None,
     position_weights: dict[str, float] | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[InboxItem]:
     """The capped stream — see :func:`collect_inbox_counted` for the semantics.
 
@@ -241,6 +242,7 @@ def collect_inbox(
         limit=limit,
         now=now,
         position_weights=position_weights,
+        conn=conn,
     )[0]
 
 
@@ -257,6 +259,7 @@ def collect_inbox_counted(
     limit: int = 80,
     now: datetime | None = None,
     position_weights: dict[str, float] | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[list[InboxItem], int]:
     """Build the stream — deduped, categorized, ranked.
 
@@ -311,6 +314,7 @@ def collect_inbox_counted(
                     since=since,
                     limit=limit,
                     db_path=db_path,
+                    conn=conn,
                 )
             else:
                 # Default stream. PENDING is the owner's queue — fetched WHOLE,
@@ -327,6 +331,7 @@ def collect_inbox_counted(
                     status=ALERT_STATUS_PENDING,
                     limit=None,
                     db_path=db_path,
+                    conn=conn,
                 ) + list_alerts(
                     user_id=user_id,
                     ticker=ticker,
@@ -334,6 +339,7 @@ def collect_inbox_counted(
                     since=since,
                     limit=limit,
                     db_path=db_path,
+                    conn=conn,
                 )
         except SchemaRevisionMismatch:
             raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
@@ -356,7 +362,7 @@ def collect_inbox_counted(
         # connection-open + query PER alert (the GET / boot N+1).
         try:
             actions_by_alert = list_queued_actions_for_alerts(
-                [a.id for a in alerts], db_path=db_path
+                [a.id for a in alerts], db_path=db_path, conn=conn
             )
         except SchemaRevisionMismatch:
             raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
@@ -382,7 +388,7 @@ def collect_inbox_counted(
         # (older than the window, or filtered out) — the replacement for the
         # digest's separate "Outstanding actions" section.
         try:
-            pending = list_pending_actions(user_id=user_id, db_path=db_path)
+            pending = list_pending_actions(user_id=user_id, db_path=db_path, conn=conn)
         except SchemaRevisionMismatch:
             raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
         except sqlite3.Error:
@@ -391,7 +397,7 @@ def collect_inbox_counted(
         status_by_alert: dict[int, str] = {}
         if pending:
             try:
-                for a in list_alerts(user_id=user_id, limit=500, db_path=db_path):
+                for a in list_alerts(user_id=user_id, limit=500, db_path=db_path, conn=conn):
                     ticker_by_alert[a.id] = a.ticker
                     status_by_alert[a.id] = a.status
             except SchemaRevisionMismatch:
@@ -430,7 +436,7 @@ def collect_inbox_counted(
 
     if "ledger" in kinds:
         try:
-            entries = list_recent_entries(user_id=user_id, limit=60, db_path=db_path)
+            entries = list_recent_entries(user_id=user_id, limit=60, db_path=db_path, conn=conn)
         except SchemaRevisionMismatch:
             raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
         except (sqlite3.Error, FileNotFoundError, RuntimeError):
@@ -456,7 +462,13 @@ def collect_inbox_counted(
 
     if "note" in kinds:
         try:
-            notes = list_notes(user_id=user_id, ticker=ticker, status="open", db_path=db_path)
+            notes = list_notes(
+                user_id=user_id,
+                ticker=ticker,
+                status="open",
+                db_path=db_path,
+                conn=conn,
+            )
         except SchemaRevisionMismatch:
             raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
         except sqlite3.Error:
@@ -470,7 +482,9 @@ def collect_inbox_counted(
             try:
                 from journal_links import pending_reconciliation_note_ids
 
-                reconcile_why = pending_reconciliation_note_ids(db_path=db_path, user_id=user_id)
+                reconcile_why = pending_reconciliation_note_ids(
+                    db_path=db_path, user_id=user_id, conn=conn
+                )
             except SchemaRevisionMismatch:
                 raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
             except Exception:  # pre-0093 schema — plain notes
@@ -505,7 +519,7 @@ def collect_inbox_counted(
     if "synthesis" in kinds and ticker is None:
         # Portfolio-scope insight: the cross-portfolio synthesis memo's
         # structured sections, only while the lens output is fresh.
-        for s in _synthesis_items(db_path, now=now_dt):
+        for s in _synthesis_items(db_path, now=now_dt, conn=conn):
             if _in_window(s.when, windowed=True):
                 items.append(s)
 
@@ -587,26 +601,31 @@ def _parse_synthesis_sections(content_md: str) -> list[tuple[str, str]]:
     return out
 
 
-def _synthesis_items(db_path: Path, *, now: datetime) -> list[InboxItem]:
+def _synthesis_items(
+    db_path: Path,
+    *,
+    now: datetime,
+    conn: sqlite3.Connection | None = None,
+) -> list[InboxItem]:
     """Stream items from the latest cached cross-portfolio synthesis memo,
     only while it is fresh (≤ ``_SYNTHESIS_FRESH_DAYS`` old). Best-effort:
     a missing table / artifact / unparsable timestamp yields []."""
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except SchemaRevisionMismatch:
         raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
     except sqlite3.Error:
         return []
     try:
         has_artifacts = (
-            conn.execute(
+            db_conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"
             ).fetchone()
             is not None
         )
         if not has_artifacts:
             return []
-        row = conn.execute(
+        row = db_conn.execute(
             """
             SELECT content_md, generated_at FROM llm_artifacts
             WHERE purpose = 'lens:cross_portfolio_synthesis'
@@ -620,7 +639,8 @@ def _synthesis_items(db_path: Path, *, now: datetime) -> list[InboxItem]:
     except sqlite3.Error:
         return []
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
     if row is None or not row[0]:
         return []
     when = _parse_artifact_dt(str(row[1] or ""))

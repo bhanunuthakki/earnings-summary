@@ -18,7 +18,9 @@ def test_legacy_stamps_share_one_current_head_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    original = command.upgrade
+    # The production fixture owns the one cached chain build. This test only
+    # spies on that call; it is not another direct migration-chain builder.
+    original = getattr(command, "upgrade")
 
     def counted_upgrade(config: Config, target: str) -> None:
         calls.append(target)

@@ -23,13 +23,15 @@ class Candidate(_ClosedModel):
     rollback_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     code_targets: list[str]
     test_targets: list[str]
-    schema_targets: list[str] = Field(min_length=1)
+    schema_targets: list[str]
     code_restore_verified: bool
     data_restore_verified: bool
     data_restore_note: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_targets(self) -> Candidate:
+        if not (self.code_targets or self.test_targets or self.schema_targets):
+            raise ValueError("a deletion candidate must name at least one target")
         for targets in (self.code_targets, self.test_targets, self.schema_targets):
             if targets != sorted(targets) or len(targets) != len(set(targets)):
                 raise ValueError("target lists must be sorted and unique")

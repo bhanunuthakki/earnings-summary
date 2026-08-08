@@ -102,6 +102,11 @@ jobs:
           - { label: "8", source_shard: 8, split_count: 1, split_part: 0 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Deletion governance verifies a recent audited commit is an
+          # ancestor. Keep this bounded for merge latency while retaining
+          # enough history for the governed cleanup window.
+          fetch-depth: 32
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"

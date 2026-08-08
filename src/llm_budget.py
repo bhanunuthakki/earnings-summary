@@ -527,23 +527,33 @@ def list_budgets(
                 is not None
             )
             start_iso, _ = _month_start_iso(now)
-            spend_column = (
-                "COALESCE((SELECT SUM(c.cost_estimate_usd) FROM llm_calls c "
-                "WHERE c.purpose=b.purpose AND c.called_at>=?),0.0) AS spend"
-                if has_calls
-                else "0.0 AS spend"
-            )
-            if has_mode:
+            if has_mode and has_calls:
                 sql = (
                     "SELECT b.purpose,b.monthly_cap_usd,b.warn_threshold_pct,"
                     "b.hard_block,b.on_exceed,b.created_at,b.updated_at,b.notes,"
-                    f"{spend_column} FROM llm_budgets b ORDER BY b.purpose"
+                    "COALESCE((SELECT SUM(c.cost_estimate_usd) FROM llm_calls c "
+                    "WHERE c.purpose=b.purpose AND c.called_at>=?),0.0) AS spend "
+                    "FROM llm_budgets b ORDER BY b.purpose"
+                )
+            elif has_mode:
+                sql = (
+                    "SELECT b.purpose,b.monthly_cap_usd,b.warn_threshold_pct,"
+                    "b.hard_block,b.on_exceed,b.created_at,b.updated_at,b.notes,"
+                    "0.0 AS spend FROM llm_budgets b ORDER BY b.purpose"
+                )
+            elif has_calls:
+                sql = (
+                    "SELECT b.purpose,b.monthly_cap_usd,b.warn_threshold_pct,"
+                    "b.hard_block,b.created_at,b.updated_at,b.notes,"
+                    "COALESCE((SELECT SUM(c.cost_estimate_usd) FROM llm_calls c "
+                    "WHERE c.purpose=b.purpose AND c.called_at>=?),0.0) AS spend "
+                    "FROM llm_budgets b ORDER BY b.purpose"
                 )
             else:
                 sql = (
                     "SELECT b.purpose,b.monthly_cap_usd,b.warn_threshold_pct,"
                     "b.hard_block,b.created_at,b.updated_at,b.notes,"
-                    f"{spend_column} FROM llm_budgets b ORDER BY b.purpose"
+                    "0.0 AS spend FROM llm_budgets b ORDER BY b.purpose"
                 )
             rows = conn.execute(sql, (start_iso,) if has_calls else ()).fetchall()
         finally:

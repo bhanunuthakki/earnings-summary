@@ -93,8 +93,7 @@ def estimate_api_equivalent_cost_usd(
     input_multiplier = 2.0 if input_tokens > _LONG_CONTEXT_INPUT_TOKENS else 1.0
     output_multiplier = 1.5 if input_tokens > _LONG_CONTEXT_INPUT_TOKENS else 1.0
     return (
-        input_multiplier
-        * (uncached_input_tokens * input_rate + cached_input_tokens * cached_rate)
+        input_multiplier * (uncached_input_tokens * input_rate + cached_input_tokens * cached_rate)
         + output_multiplier * output_tokens * output_rate
     ) / 1_000_000
 

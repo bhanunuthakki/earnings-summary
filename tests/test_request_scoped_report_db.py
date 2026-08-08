@@ -67,6 +67,55 @@ def test_dashboard_read_connection_is_read_only_and_closed_at_teardown(
         opened[0].execute("SELECT 1")
 
 
+def test_overview_composition_uses_one_request_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    db_path = data_dir / "portfolio.db"
+    sqlite3.connect(db_path).close()
+
+    opened: list[_TrackingConnection] = []
+    roles: list[SQLiteConnectionRole] = []
+
+    def connect(
+        path: Path,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool = False,
+    ) -> sqlite3.Connection:
+        assert Path(path) == db_path
+        assert schema_preflight is False
+        roles.append(role)
+        conn = sqlite3.connect(db_path, factory=_TrackingConnection)
+        opened.append(conn)
+        return conn
+
+    def empty_cockpit(*_args: object) -> dict[str, list[object]]:
+        return {}
+
+    def overview_stub(*_args: object, **_kwargs: object) -> str:
+        return "ok"
+
+    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
+    monkeypatch.setattr(comments_server, "build_cockpit_rows", empty_cockpit)
+    monkeypatch.setattr(comments_server, "render_overview_panel", overview_stub)
+
+    response = comments_server.create_app(tmp_path).test_client().get("/api/panel/overview")
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == "ok"
+    assert roles == [SQLiteConnectionRole.READ_ONLY]
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        opened[0].execute("SELECT 1")
+
+
+def test_panel_activation_metrics_never_create_schema_from_request_path() -> None:
+    source = (PROJECT_ROOT / "execution" / "comments_server.py").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS panel_activation_counts" not in source
+
+
 def test_build_report_threads_one_borrowed_connection_to_db_sections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -85,8 +134,12 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
         builder.earnings,
         builder.saydo,
         builder.ir_docs,
+        builder.bear_case,
         builder.provenance,
         builder.valuation,
+        builder.exec_compensation,
+        builder.synthesis,
+        builder.investment_decision_card,
     )
     for module in db_sections:
         name = module.__name__
@@ -102,13 +155,9 @@ def test_build_report_threads_one_borrowed_connection_to_db_sections(
     for module in (
         builder.portfolio_position,
         builder.recent_developments,
-        builder.bear_case,
         builder.appendix,
         builder.qa_roster,
         builder.filing_intelligence,
-        builder.exec_compensation,
-        builder.synthesis,
-        builder.investment_decision_card,
     ):
 
         def return_stub(*_args: object, **_kwargs: object) -> object:

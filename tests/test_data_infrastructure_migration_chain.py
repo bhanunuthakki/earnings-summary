@@ -26,15 +26,9 @@ RETAINED_TABLES = {
 
 def _cataloged_deleted_tables() -> set[str]:
     catalog = Catalog.model_validate_json(
-        (ROOT / "docs" / "design" / "deletion_catalog_2026_08.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "docs" / "design" / "deletion_catalog_2026_08.json").read_text(encoding="utf-8")
     )
-    return {
-        target
-        for candidate in catalog.candidates
-        for target in candidate.schema_targets
-    }
+    return {target for candidate in catalog.candidates for target in candidate.schema_targets}
 
 
 def _config(path: Path) -> Config:

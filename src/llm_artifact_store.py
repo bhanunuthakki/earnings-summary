@@ -163,16 +163,17 @@ def read_current(
     fiscal_period: str | None = None,
     scope: str = "ticker",
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> Artifact | None:
     """Read the most recent non-superseded artifact for the scope tuple.
     Returns None when no artifact exists (e.g. first-run for this ticker)
     or when DB / table is unavailable."""
-    conn = _open(db_path)
-    if conn is None:
+    db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    if db_conn is None:
         return None
     try:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
+        db_conn.row_factory = sqlite3.Row
+        row = db_conn.execute(
             """
             SELECT * FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
@@ -194,7 +195,8 @@ def read_current(
         log.warning({"event": "artifact_read_current_failed", "error": str(exc)})
         return None
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def read_artifact(
@@ -203,7 +205,7 @@ def read_artifact(
     db_path: Path | str | None = None,
 ) -> Artifact | None:
     """Read one historical artifact by stable id, including superseded rows."""
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return None
     try:
@@ -537,7 +539,7 @@ def drain_dirty(
     generator + upsert; dirty=0 + a fresh expires_at are written on the new
     row.
     """
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return []
     now_iso = (now if now is not None else datetime.now(UTC)).isoformat()
@@ -577,7 +579,7 @@ def history(
 ) -> list[Artifact]:
     """Return all artifacts for the scope tuple (current + superseded), newest
     first. Powers "show me the evolution of META's bear case" queries."""
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return []
     try:
@@ -617,7 +619,7 @@ def quarter_index(
     chain. This reader is the orthogonal ticker x quarter index: it omits
     superseded rows and spans every non-null fiscal period for the purpose.
     """
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return []
     try:
@@ -642,7 +644,11 @@ def quarter_index(
         conn.close()
 
 
-def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
+def _open(
+    db_path: Path | str | None,
+    *,
+    role: SQLiteConnectionRole = SQLiteConnectionRole.WRITER,
+) -> sqlite3.Connection | None:
     """Open a connection or return None when the DB or table is unavailable.
     Best-effort pattern matches llm_call_ledger so the LLM pipeline never
     fails on telemetry."""
@@ -652,8 +658,8 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
             return None
         conn = connect_sqlite(
             path,
-            role=SQLiteConnectionRole.WRITER,
-            schema_preflight=True,
+            role=role,
+            schema_preflight=role is SQLiteConnectionRole.WRITER,
         )
         conn.execute("PRAGMA busy_timeout = 5000")
         # Verify table exists — graceful return otherwise
