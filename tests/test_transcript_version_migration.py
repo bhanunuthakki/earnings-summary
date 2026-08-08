@@ -62,7 +62,7 @@ def _upgrade(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     migration_path = (
         Path(__file__).resolve().parents[1]
         / "alembic"
-        / "versions"
+        / "versions_archived"
         / "0250_immutable_transcript_versions.py"
     )
     spec = importlib.util.spec_from_file_location("migration_0250", migration_path)

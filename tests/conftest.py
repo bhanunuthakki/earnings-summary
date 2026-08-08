@@ -36,6 +36,77 @@ os.environ.setdefault(
     "EARNINGS_SUMMARY_ENV_FILE",
     os.path.join(os.path.dirname(__file__), ".pytest-no-external-env"),
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def archived_migration_harness() -> Iterator[None]:
+    """Route explicit historical revision tests to the archived Alembic graph.
+
+    Production keeps one simple active graph (0001→0003). Historical migration
+    unit tests still exercise their exact old revisions, but only when they ask
+    for one explicitly; ordinary ``upgrade head`` remains on the active graph.
+    """
+    from alembic.config import Config
+
+    from alembic import command
+
+    archive = Path(__file__).resolve().parents[1] / "alembic" / "versions_archived"
+    original_stamp = command.stamp
+    original_upgrade = command.upgrade
+    original_downgrade = command.downgrade
+
+    def uses_archive(config: Config, revision: str | list[str] | tuple[str, ...]) -> bool:
+        if config.attributes.get("pytest_archived_migration_graph") is True:
+            return True
+        revisions = (revision,) if isinstance(revision, str) else tuple(revision)
+        for requested in revisions:
+            for token in requested.split(":"):
+                if token in {"base", "head", "heads"}:
+                    continue
+                if any(archive.glob(f"{token}*.py")):
+                    config.attributes["pytest_archived_migration_graph"] = True
+                    config.set_main_option("version_locations", str(archive))
+                    return True
+        return False
+
+    def stamp(
+        config: Config,
+        revision: str | list[str] | tuple[str, ...],
+        sql: bool = False,
+        tag: str | None = None,
+        purge: bool = False,
+    ) -> None:
+        uses_archive(config, revision)
+        original_stamp(config, revision, sql=sql, tag=tag, purge=purge)
+
+    def upgrade(
+        config: Config,
+        revision: str,
+        sql: bool = False,
+        tag: str | None = None,
+    ) -> None:
+        uses_archive(config, revision)
+        original_upgrade(config, revision, sql=sql, tag=tag)
+
+    def downgrade(
+        config: Config,
+        revision: str,
+        sql: bool = False,
+        tag: str | None = None,
+    ) -> None:
+        uses_archive(config, revision)
+        original_downgrade(config, revision, sql=sql, tag=tag)
+
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(command, "stamp", stamp)
+    patcher.setattr(command, "upgrade", upgrade)
+    patcher.setattr(command, "downgrade", downgrade)
+    try:
+        yield
+    finally:
+        patcher.undo()
+
+
 _worker_suffix = (
     f"-{os.environ['PYTEST_XDIST_WORKER']}" if "PYTEST_XDIST_WORKER" in os.environ else ""
 )
@@ -168,7 +239,7 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 # point, against 13.5ms to copy the resulting file. That is the difference
 # between a 24-minute CI run behind 8-way sharding and a few minutes.
 #
-# ``migrated_db`` builds each distinct (stamp, target) recipe once per session
+# ``migrated_db`` builds each distinct active target once per session
 # and hands every test a fresh copy. Correctness is unchanged — each test still
 # gets its own private, writable database file; only the construction is
 # amortised.
@@ -179,7 +250,7 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 # their own. The helper is for the pure stamp→upgrade case, which is most of
 # them.
 
-_DB_TEMPLATES: dict[tuple[str, str], Path] = {}
+_DB_TEMPLATES: dict[str, Path] = {}
 
 
 @pytest.fixture(scope="session")
@@ -189,8 +260,10 @@ def migrated_db(
     """Return ``build(dest, stamp=..., target="head") -> dest``.
 
     Copies a session-cached migrated database instead of replaying migrations.
-    The cache key is the exact ``(stamp, target)`` recipe, so files that build
-    different schemas do not collide and each distinct recipe is paid for once.
+    ``stamp`` remains accepted as compatibility metadata for older tests, but
+    the squashed graph always builds directly to ``target``. The cache therefore
+    keys only on the effective target and never rebuilds one head per legacy
+    stamp label.
     """
     from alembic.config import Config
 
@@ -206,10 +279,11 @@ def migrated_db(
         return cfg
 
     def build(dest: Path, *, stamp: str = "head", target: str = "head") -> Path:
-        key = (stamp, target)
+        del stamp
+        key = target
         template = _DB_TEMPLATES.get(key)
         if template is None or not template.exists():
-            safe = f"{stamp}__{target}".replace("/", "_").replace("\\", "_")
+            safe = target.replace("/", "_").replace("\\", "_")
             template = cache_dir / f"{safe}.db"
             command.upgrade(_config(template), target)
             _DB_TEMPLATES[key] = template

@@ -13,10 +13,10 @@ willing to spend. This module is the glue:
     write to llm_budget_alerts so the same threshold crossing in the same
     month writes one row, not one per LLM call.
 
-Every helper degrades gracefully when the DB or tables are missing — the
-LLM call must NEVER fail because the budget enforcer couldn't read its
-own bookkeeping. A budget check on a fresh repo (no migrations run yet)
-returns "allowed" and logs at DEBUG.
+A budget check on a fresh repo (no database or budget tables yet) remains
+permissive for bootstrap compatibility. Once the budget store exists, read
+failures are fail-closed: bookkeeping outages must not silently authorize
+unbounded LLM spend.
 
 The enforcer is wired into `src/llm_client._call_claude` so every LLM
 call passes through it pre-flight. CLI tools that need to bypass (one-off
@@ -76,6 +76,35 @@ class BudgetCheck:
     reason: str | None = None
 
 
+class _BudgetStoreUnavailableError(RuntimeError):
+    """Existing budget storage could not be read safely."""
+
+
+def _log_read_failure(event: str, purpose: str, exc: sqlite3.Error) -> None:
+    """Emit an actionable diagnostic without leaking exception contents."""
+    log.error(
+        {
+            "event": event,
+            "purpose": purpose,
+            "error_type": type(exc).__name__,
+        }
+    )
+
+
+def _unavailable_check(purpose: str) -> BudgetCheck:
+    """Return the hard-blocking result for an unreadable existing ledger."""
+    return BudgetCheck(
+        allowed=False,
+        warn=False,
+        current_spend=Decimal("0"),
+        cap=Decimal("0"),
+        headroom_pct=0.0,
+        hard_block=True,
+        on_exceed="block",
+        reason=f"{purpose}: budget data unavailable; blocking LLM call",
+    )
+
+
 def _month_start_iso(now: datetime | None = None) -> tuple[str, str]:
     """Return (start_of_current_month_iso, 'YYYY-MM') for the given clock
     or now (UTC). Helper for the spend window and the alert key."""
@@ -101,14 +130,7 @@ def current_month_spend(
     try:
         conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
-            row = conn.execute(
-                """
-                SELECT COALESCE(SUM(cost_estimate_usd), 0.0) AS total
-                FROM llm_calls
-                WHERE purpose = ? AND called_at >= ?
-                """,
-                (purpose, start_iso),
-            ).fetchone()
+            return _current_month_spend_from_connection(conn, purpose, start_iso)
         finally:
             conn.close()
     except sqlite3.Error as exc:
@@ -121,6 +143,20 @@ def current_month_spend(
             }
         )
         return Decimal("0")
+
+
+def _current_month_spend_from_connection(
+    conn: sqlite3.Connection, purpose: str, start_iso: str
+) -> Decimal:
+    """Read one purpose's spend using a caller-owned connection."""
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(cost_estimate_usd), 0.0) AS total
+        FROM llm_calls
+        WHERE purpose = ? AND called_at >= ?
+        """,
+        (purpose, start_iso),
+    ).fetchone()
     if row is None or row[0] is None:
         return Decimal("0")
     return Decimal(str(row[0])).quantize(_DECIMAL_QUANT)
@@ -151,6 +187,17 @@ def _has_on_exceed(conn: sqlite3.Connection) -> bool:
     return "on_exceed" in cols
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    """Return whether a table exists, propagating unreadable-store errors."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        is not None
+    )
+
+
 def _row_on_exceed(row: sqlite3.Row, *, has_mode: bool, hard_block: bool) -> str:
     """Read `on_exceed` from a budget row, deriving from `hard_block` when the
     column is absent (pre-0066) or carries an unexpected value."""
@@ -161,16 +208,48 @@ def _row_on_exceed(row: sqlite3.Row, *, has_mode: bool, hard_block: bool) -> str
     return "block" if hard_block else "warn"
 
 
+def _load_budget_from_connection(conn: sqlite3.Connection, purpose: str) -> _BudgetRow | None:
+    """Look up a budget row using a caller-owned connection."""
+    conn.row_factory = sqlite3.Row
+    has_mode = _has_on_exceed(conn)
+    if has_mode:
+        sql = (
+            "SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block, on_exceed "
+            "FROM llm_budgets WHERE purpose = ?"
+        )
+    else:
+        sql = (
+            "SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block "
+            "FROM llm_budgets WHERE purpose = ?"
+        )
+    row = conn.execute(sql, (purpose,)).fetchone()
+    if row is None:
+        row = conn.execute(sql, (DEFAULT_BUDGET_KEY,)).fetchone()
+    if row is None:
+        return None
+    hard_block = bool(row["hard_block"])
+    return _BudgetRow(
+        purpose=str(row["purpose"]),
+        cap=Decimal(str(row["monthly_cap_usd"])).quantize(_DECIMAL_QUANT),
+        warn_threshold_pct=float(row["warn_threshold_pct"]),
+        hard_block=hard_block,
+        on_exceed=_row_on_exceed(row, has_mode=has_mode, hard_block=hard_block),
+    )
+
+
 def _load_budget(purpose: str, *, db_path: Path | str | None = None) -> _BudgetRow | None:
     """Look up the budget row for `purpose`, falling back to '__default__'.
-    Returns None when neither row exists (no migrations run, or seed
-    missing). Read failures return None — the enforcer fails open."""
+    Returns None when neither row exists or budget migrations have not run.
+    Existing-store read failures raise an internal availability error so callers
+    cannot mistake them for the non-enforcing default."""
     path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return None
     try:
         conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
+            if not _table_exists(conn, "llm_budgets"):
+                return None
             conn.row_factory = sqlite3.Row
             has_mode = _has_on_exceed(conn)
             if has_mode:
@@ -189,14 +268,8 @@ def _load_budget(purpose: str, *, db_path: Path | str | None = None) -> _BudgetR
         finally:
             conn.close()
     except sqlite3.Error as exc:
-        log.debug(
-            {
-                "event": "load_budget_read_failed",
-                "purpose": purpose,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-        )
-        return None
+        _log_read_failure("load_budget_read_failed", purpose, exc)
+        raise _BudgetStoreUnavailableError from None
     if row is None:
         return None
     hard_block = bool(row["hard_block"])
@@ -226,13 +299,13 @@ def check_budget(
     """Pre-call budget enforcement.
 
     Returns BudgetCheck — caller decides what to do based on the flags.
-    The enforcer is permissive on failure:
+    The enforcer is permissive only before budget storage is initialized:
 
       * `purpose=None` → allowed, no warn (legacy callers not yet wired
         through purpose-aware call_llm).
       * No budget row found → allowed, no warn (fresh repo, migration
         not run yet, or seed missing).
-      * DB read error → allowed, no warn (logged at DEBUG).
+      * Existing DB read error → hard block with an explicit unavailable reason.
 
     Only an actual cap crossing returns `allowed=False`.
     """
@@ -247,7 +320,23 @@ def check_budget(
             on_exceed="warn",
             reason=None,
         )
-    budget = _load_budget(purpose, db_path=db_path)
+    path = resolve_db_path(db_path)
+    budget: _BudgetRow | None = None
+    spend = Decimal("0")
+    if path is not None and Path(path).exists():
+        try:
+            conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
+            try:
+                if _table_exists(conn, "llm_budgets"):
+                    budget = _load_budget_from_connection(conn, purpose)
+                if budget is not None:
+                    start_iso, _ = _month_start_iso(now)
+                    spend = _current_month_spend_from_connection(conn, purpose, start_iso)
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            _log_read_failure("check_budget_read_failed", purpose, exc)
+            return _unavailable_check(purpose)
     if budget is None:
         return BudgetCheck(
             allowed=True,
@@ -259,7 +348,6 @@ def check_budget(
             on_exceed="warn",
             reason=None,
         )
-    spend = current_month_spend(purpose, db_path=db_path, now=now)
     headroom = _headroom_pct(spend, budget.cap)
     # `on_exceed` is authoritative (migration 0066); `hard_block` is derived so
     # the pre-call gate (which raises on it) propagates iff the mode is 'block'.
@@ -316,7 +404,10 @@ def budget_mode(purpose: str, *, db_path: Path | str | None = None) -> str:
     exists. Authoritative source is the `on_exceed` column (migration 0066),
     derived from the legacy `hard_block` bool on pre-0066 DBs.
     """
-    budget = _load_budget(purpose, db_path=db_path)
+    try:
+        budget = _load_budget(purpose, db_path=db_path)
+    except _BudgetStoreUnavailableError:
+        return "block"
     return budget.on_exceed if budget is not None else "warn"
 
 
@@ -429,24 +520,32 @@ def list_budgets(
         try:
             conn.row_factory = sqlite3.Row
             has_mode = _has_on_exceed(conn)
+            has_calls = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='llm_calls'"
+                ).fetchone()
+                is not None
+            )
+            start_iso, _ = _month_start_iso(now)
+            spend_column = (
+                "COALESCE((SELECT SUM(c.cost_estimate_usd) FROM llm_calls c "
+                "WHERE c.purpose=b.purpose AND c.called_at>=?),0.0) AS spend"
+                if has_calls
+                else "0.0 AS spend"
+            )
             if has_mode:
-                rows = conn.execute(
-                    """
-                    SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block,
-                           on_exceed, created_at, updated_at, notes
-                    FROM llm_budgets
-                    ORDER BY purpose
-                    """
-                ).fetchall()
+                sql = (
+                    "SELECT b.purpose,b.monthly_cap_usd,b.warn_threshold_pct,"
+                    "b.hard_block,b.on_exceed,b.created_at,b.updated_at,b.notes,"
+                    f"{spend_column} FROM llm_budgets b ORDER BY b.purpose"
+                )
             else:
-                rows = conn.execute(
-                    """
-                    SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block,
-                           created_at, updated_at, notes
-                    FROM llm_budgets
-                    ORDER BY purpose
-                    """
-                ).fetchall()
+                sql = (
+                    "SELECT b.purpose,b.monthly_cap_usd,b.warn_threshold_pct,"
+                    "b.hard_block,b.created_at,b.updated_at,b.notes,"
+                    f"{spend_column} FROM llm_budgets b ORDER BY b.purpose"
+                )
+            rows = conn.execute(sql, (start_iso,) if has_calls else ()).fetchall()
         finally:
             conn.close()
     except sqlite3.Error as exc:
@@ -461,7 +560,7 @@ def list_budgets(
     for r in rows:
         purpose = str(r["purpose"])
         cap = Decimal(str(r["monthly_cap_usd"])).quantize(_DECIMAL_QUANT)
-        spend = current_month_spend(purpose, db_path=db_path, now=now)
+        spend = Decimal(str(r["spend"])).quantize(_DECIMAL_QUANT)
         hard_block = bool(r["hard_block"])
         out.append(
             {

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_migration() -> ModuleType:
-    path = ROOT / "alembic" / "versions" / "0265_metric_ontology_operation_ledger.py"
+    path = ROOT / "alembic" / "versions_archived" / "0265_metric_ontology_operation_ledger.py"
     spec = importlib.util.spec_from_file_location("migration_0265_for_test", path)
     if spec is None or spec.loader is None:
         raise AssertionError("could not load migration 0265")

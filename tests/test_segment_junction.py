@@ -614,7 +614,7 @@ def test_migration_module_metadata() -> None:
     here = Path(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location(
         "mig_0055",
-        here / "alembic" / "versions" / "0055_segment_junction.py",
+        here / "alembic" / "versions_archived" / "0055_segment_junction.py",
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -633,7 +633,7 @@ def test_drop_segment_facts_migration_metadata() -> None:
     here = Path(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location(
         "mig_0057",
-        here / "alembic" / "versions" / "0057_drop_segment_facts.py",
+        here / "alembic" / "versions_archived" / "0057_drop_segment_facts.py",
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -660,11 +660,11 @@ def test_drop_segment_facts_migration_removes_table_and_adds_entity_column(
     here = Path(__file__).resolve().parent.parent
     spec_055 = importlib.util.spec_from_file_location(
         "mig_0055_for_test",
-        here / "alembic" / "versions" / "0055_segment_junction.py",
+        here / "alembic" / "versions_archived" / "0055_segment_junction.py",
     )
     spec_057 = importlib.util.spec_from_file_location(
         "mig_0057_for_test",
-        here / "alembic" / "versions" / "0057_drop_segment_facts.py",
+        here / "alembic" / "versions_archived" / "0057_drop_segment_facts.py",
     )
     assert spec_055 is not None and spec_055.loader is not None
     assert spec_057 is not None and spec_057.loader is not None

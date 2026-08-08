@@ -33,6 +33,7 @@ T2 = "2026-07-28 13:00:00"
 def _config(path: Path) -> Config:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic" / "versions_archived"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
     return config
 

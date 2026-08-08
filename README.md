@@ -127,6 +127,7 @@ Requires Python ≥3.11.
 pip install -r requirements.txt
 pip install -e ".[dev]"      # adds pytest, alembic, ruff, pyright, basedpyright
 alembic upgrade head         # initialize data/portfolio.db (run `alembic heads` for the current revision)
+python execution/sync_thesis_state.py --apply  # bootstrap the mutable thesis mirror from holdings JSON
 ```
 
 Create `.env` with whichever providers you need:

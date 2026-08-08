@@ -323,17 +323,46 @@ def test_warn_threshold_alert_dedupes_across_calls(
     assert len(rows) == 1
 
 
-def test_purpose_none_skips_budget_entirely(
+def test_purpose_none_uses_default_budget_and_blocks(
     stub_claude_cli: dict[str, Any], db_patch: Path
 ) -> None:
-    """Legacy caller without purpose → no budget check at all, subprocess runs."""
+    """Legacy unclassified calls are charged to the enforceable default."""
+    _seed_db(
+        db_patch,
+        purpose="__default__",
+        cap_usd=50.00,
+        spent_usd=999.00,
+        hard_block=True,
+    )
+    with pytest.raises(LLMBudgetExceeded):
+        call_llm("hello", purpose=None)
+    assert stub_claude_cli["calls"] == 0
+
+
+def test_unexpected_budget_error_fails_closed_and_redacts(
+    stub_claude_cli: dict[str, Any],
+    db_patch: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     _seed_db(
         db_patch,
         purpose="bear_case",
         cap_usd=50.00,
-        spent_usd=999.00,  # would be hard-blocked if purpose matched
+        spent_usd=0,
         hard_block=True,
     )
-    result = call_llm("hello", purpose=None)
-    assert result == "stubbed-response"
-    assert stub_claude_cli["calls"] == 1
+
+    def broken_check(_purpose: str) -> object:
+        raise RuntimeError("credential=top-secret")
+
+    monkeypatch.setattr(llm_budget, "check_budget", broken_check)
+    with (
+        caplog.at_level(logging.ERROR, logger="llm_client"),
+        pytest.raises(LLMBudgetExceeded, match="budget enforcement unavailable"),
+    ):
+        call_llm("hello", purpose="bear_case")
+
+    assert stub_claude_cli["calls"] == 0
+    assert "RuntimeError" in caplog.text
+    assert "top-secret" not in caplog.text
