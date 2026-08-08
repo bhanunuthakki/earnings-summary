@@ -138,6 +138,7 @@ def test_gather_memo_returns_isolated_copy() -> None:
     )
     turn_cache.put_gather(key, ["a", "b"])
     first = turn_cache.get_gather(key)
+    assert first is not None
     assert first == ["a", "b"]
     first.append("mutated")  # mutating the returned list must not poison the cache
     assert turn_cache.get_gather(key) == ["a", "b"]

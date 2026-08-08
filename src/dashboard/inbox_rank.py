@@ -47,7 +47,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeGuard, cast
 
 from signals.store import SIGNAL_CONSENSUS_RATING
 from sqlite_freshness import SQLiteFileToken, sqlite_file_token
@@ -584,7 +584,7 @@ def _clampf(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
-def _is_num(v: object) -> bool:
+def _is_num(v: object) -> TypeGuard[int | float]:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
@@ -634,6 +634,7 @@ def _strength_factor(it: InboxItem) -> tuple[float, str]:
         return 1.0, "n/a"
     if not isinstance(ev, dict):
         return 1.0, "n/a"
+    evidence = cast("Mapping[str, object]", ev)
 
     # A tier-1/decisive signal — an OWNER-authored falsifier breach or a
     # registered threshold crossing — is the highest-quality signal there is
@@ -647,18 +648,18 @@ def _strength_factor(it: InboxItem) -> tuple[float, str]:
     if (alert.trigger_kind or "").lower() == "decision_condition":
         return _ADVISOR_CONDITION_STRENGTH, "advisor condition breach"
     # KPI inflection: scale by statistical surprise (|z|); z=2 → ~0.85, z=6 → 1.5.
-    z = ev.get("zscore")
+    z = evidence.get("zscore")
     if _is_num(z):
         az = abs(float(z))
         return _clampf(0.85 + 0.16 * (az - 2.0), _STRENGTH_MIN, _STRENGTH_MAX), f"|z| {az:.1f}"
     # Material news: LLM relevance 0..1 → 0.7..1.5.
-    rel = ev.get("relevance_score")
+    rel = evidence.get("relevance_score")
     if _is_num(rel):
         return _clampf(
             0.7 + 0.8 * float(rel), _STRENGTH_MIN, _STRENGTH_MAX
         ), f"relevance {float(rel):.2f}"
     # Restatement: bigger revision, stronger signal.
-    d = ev.get("delta_pct")
+    d = evidence.get("delta_pct")
     if _is_num(d):
         ad = abs(float(d))
         return _clampf(0.9 + 0.06 * ad, _STRENGTH_MIN, _STRENGTH_MAX), f"Δ {ad:.1f}%"
