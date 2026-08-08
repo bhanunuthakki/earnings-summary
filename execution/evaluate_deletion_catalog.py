@@ -75,7 +75,17 @@ def _module_names(targets: Iterable[str]) -> set[str]:
     return names
 
 
-def _imports(path: Path) -> tuple[set[str], str | None]:
+def _normalized_module_names(parts: list[str]) -> set[str]:
+    if not parts:
+        return set()
+    name = ".".join(parts)
+    names = {name}
+    if parts[0] == "src" and len(parts) > 1:
+        names.add(".".join(parts[1:]))
+    return names
+
+
+def _imports(path: Path, repo_root: Path) -> tuple[set[str], str | None]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (OSError, SyntaxError, UnicodeDecodeError) as exc:
@@ -84,8 +94,26 @@ def _imports(path: Path) -> tuple[set[str], str | None]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imported.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                if node.module:
+                    imported.add(node.module)
+                continue
+
+            try:
+                package_parts = list(path.relative_to(repo_root).with_suffix("").parts[:-1])
+            except ValueError:
+                continue
+            parent_hops = node.level - 1
+            if parent_hops > len(package_parts):
+                continue
+            base_parts = package_parts[: len(package_parts) - parent_hops]
+            if node.module:
+                module_parts = [*base_parts, *node.module.split(".")]
+                imported.update(_normalized_module_names(module_parts))
+            else:
+                for alias in node.names:
+                    imported.update(_normalized_module_names([*base_parts, *alias.name.split(".")]))
     return imported, None
 
 
@@ -98,7 +126,7 @@ def _active_imports(repo_root: Path, modules: set[str]) -> list[str]:
         if not root.exists():
             continue
         for path in root.rglob("*.py"):
-            imports, error = _imports(path)
+            imports, error = _imports(path, repo_root)
             if error is not None:
                 findings.append(f"scan_error:{path.relative_to(repo_root).as_posix()}:{error}")
                 continue

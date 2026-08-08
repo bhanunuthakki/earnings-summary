@@ -65,6 +65,25 @@ def test_stale_test_import_of_deleted_module_fails_closed(tmp_path: Path) -> Non
     assert any(issue.startswith("active_imports:") for issue in report.candidates[0].issues)
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "from .latest_governed_state import LatestGovernedState\n",
+        "from . import latest_governed_state\n",
+    ],
+)
+def test_relative_import_of_deleted_module_fails_closed(tmp_path: Path, statement: str) -> None:
+    catalog = _catalog()
+    consumer = tmp_path / "src" / "provenance" / "consumer.py"
+    consumer.parent.mkdir(parents=True)
+    consumer.write_text(statement, encoding="utf-8")
+
+    report = evaluate(tmp_path, catalog)
+
+    assert report.valid is False
+    assert any(issue.startswith("active_imports:") for issue in report.candidates[0].issues)
+
+
 def test_catalog_rejects_unsorted_or_unverified_targets() -> None:
     payload = json.loads(
         (ROOT / "docs" / "design" / "deletion_catalog_2026_08.json").read_text(encoding="utf-8")

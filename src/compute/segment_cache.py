@@ -42,8 +42,7 @@ def dim_type_for_suffix(suffix: str) -> str | None:
 
 
 def _default_db_path() -> str:
-    """``<repo_root>/data/portfolio.db`` — mirrors ``db.DB_PATH`` without importing
-    ``db`` (whose module import runs ``init_db()`` as a side effect)."""
+    """``<repo_root>/data/portfolio.db`` without importing the broad legacy DB API."""
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return os.path.join(repo_root, "data", "portfolio.db")
 

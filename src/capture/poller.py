@@ -510,30 +510,43 @@ def poll_once(
     def bump(key: str) -> None:
         counts[key] = counts.get(key, 0) + 1
 
-    allowed_chat_id = None
+    allowed_chat_id: int | None = None
     try:
         from capture.token_store import load_chat_id
+
         allowed_chat_id = load_chat_id()
-    except Exception:
+    except Exception as exc:
+        log.error(
+            {
+                "event": "telegram_allowed_chat_id_load_failed",
+                "error_type": type(exc).__name__,
+            }
+        )
         allowed_chat_id = None
 
     env_allowed = os.environ.get("TELEGRAM_ALLOWED_CHAT_ID")
-    if env_allowed:
-        with contextlib.suppress(ValueError):
+    if env_allowed is not None:
+        try:
             allowed_chat_id = int(env_allowed.strip())
+        except ValueError:
+            # An explicitly configured but invalid value is a hard
+            # authorization misconfiguration. Never fall back to a stored ID
+            # (or trust the first inbound chat) behind the operator's back.
+            allowed_chat_id = None
+            log.error({"event": "telegram_allowed_chat_id_invalid"})
+
+    if allowed_chat_id is None:
+        log.error({"event": "telegram_allowed_chat_id_unconfigured"})
 
     for update in updates:
         bump(f"kind_{update.kind}")
-        if update.chat_id is not None:
-            if allowed_chat_id is not None and update.chat_id != allowed_chat_id:
-                log.warning({"event": "telegram_unauthorized_chat_id", "chat_id": update.chat_id})
-                bump("unauthorized_chat_id")
-                continue
-            from capture.token_store import save_chat_id
+        if allowed_chat_id is None or update.chat_id != allowed_chat_id:
+            log.warning({"event": "telegram_unauthorized_chat_id", "chat_id": update.chat_id})
+            bump("unauthorized_chat_id")
+            continue
+        from capture.token_store import save_chat_id
 
-            save_chat_id(update.chat_id)
-            if allowed_chat_id is None:
-                allowed_chat_id = update.chat_id
+        save_chat_id(allowed_chat_id)
         if update.kind == "text" and update.text:
             if update.text.lstrip().startswith("/"):
                 # Telegram bot commands (/start, /review, ...) are chrome, not
@@ -608,7 +621,7 @@ def poll_once(
                 log.warning({"event": "coach_reply_dispatch_error"}, exc_info=True)
             # A bare URL → land as an On My Mind reading (a link the analyst
             # found), not a musing.  Anything else is stream-of-consciousness.
-            url = ingest._extract_url(update.text)
+            url = ingest.extract_url(update.text)
             if url:
                 rd = ingest.ingest_reading(
                     channel="telegram",

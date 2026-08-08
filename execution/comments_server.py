@@ -555,10 +555,14 @@ def create_app(
     @app.before_request
     def start_request_timer() -> None:
         g.request_started_ns = time.perf_counter_ns()
-        if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if request.method not in ("GET", "HEAD", "OPTIONS") and request.path != (
+            "/api/metrics/panel"
+        ):
             # A successful mutation can affect several panels. Clear before it
             # runs so the next read cannot reuse a pre-mutation fragment; a
-            # rejected mutation merely causes a harmless extra rebuild.
+            # rejected mutation merely causes a harmless extra rebuild. Panel
+            # timing telemetry is observational and must not evict the fragment
+            # whose latency it just measured.
             with panel_cache_lock:
                 panel_cache.clear()
 

@@ -104,8 +104,8 @@ def test_codex_ledger_includes_public_api_equivalent_cost(
     )
     meta = recorded[0]["meta"]
     assert isinstance(meta, dict)
-    assert meta["total_cost_usd"] == pytest.approx(0.00355)
-    assert usage_from_json_meta(meta)["cost_estimate_usd"] == pytest.approx(0.00355)
+    assert meta["total_cost_usd"] == pytest.approx(0.00284)
+    assert usage_from_json_meta(meta)["cost_estimate_usd"] == pytest.approx(0.00284)
     assert recorded[0]["fallback_used"] == "codex"
     assert recorded[0]["fallback_from_provider"] == "anthropic"
 
@@ -116,7 +116,27 @@ def test_codex_cost_estimate_applies_long_context_rates() -> None:
         input_tokens=273_000,
         cached_input_tokens=0,
         output_tokens=1_000,
-    ) == pytest.approx(1.3875)
+    ) == pytest.approx(1.11)
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("gpt-5.6-luna", 0.000284),
+        ("gpt-5.6-terra", 0.00284),
+        ("gpt-5.6-sol", 0.0071),
+    ],
+)
+def test_codex_cost_estimate_matches_current_public_rates(
+    model: str,
+    expected_cost: float,
+) -> None:
+    assert codex_backend.estimate_api_equivalent_cost_usd(
+        model=model,
+        input_tokens=1_000,
+        cached_input_tokens=200,
+        output_tokens=100,
+    ) == pytest.approx(expected_cost)
 
 
 def test_codex_unknown_model_blocks_before_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:

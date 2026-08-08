@@ -1611,10 +1611,12 @@ def call_llm(
 
         prompt = apply_prompt_override(purpose, scope, prompt)
     except Exception as hook_exc:
+        from log_redact import redact
+
         log.debug(
             {
                 "event": "prompt_override_hook_failed",
-                "error": f"{type(hook_exc).__name__}: {hook_exc}"[:120],
+                "error": redact(f"{type(hook_exc).__name__}: {hook_exc}")[:120],
             }
         )
 
@@ -2272,7 +2274,14 @@ def call_llm_with_web(
 
         prompt = apply_prompt_override(purpose, scope, prompt)
     except Exception as hook_exc:
-        log.debug({"event": "prompt_override_hook_failed", "error": str(hook_exc)[:120]})
+        from log_redact import redact
+
+        log.debug(
+            {
+                "event": "prompt_override_hook_failed",
+                "error": redact(f"{type(hook_exc).__name__}: {hook_exc}")[:120],
+            }
+        )
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
 
     codex_fell_back = False

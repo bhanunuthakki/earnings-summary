@@ -65,13 +65,13 @@ CODEX_JUDGE_MODEL = "gpt-5.6-terra"
 # Cold-start tolerant: the wrapper's login check alone can take ~30s.
 DEFAULT_TIMEOUT_SECONDS = 420
 
-# Public API-equivalent prices ($/MTok), verified 2026-08-07 against OpenAI's
+# Public API-equivalent prices ($/MTok), verified 2026-08-08 against OpenAI's
 # official model pages. These are a token-consumption control signal, not a
 # claim that ChatGPT membership calls incur per-call API charges.
 _CODEX_API_PRICES: dict[str, tuple[float, float, float]] = {
     # model: (uncached input, cached input, output)
-    "gpt-5.6-luna": (1.00, 0.10, 6.00),
-    "gpt-5.6-terra": (2.50, 0.25, 15.00),
+    "gpt-5.6-luna": (0.20, 0.02, 1.20),
+    "gpt-5.6-terra": (2.00, 0.20, 12.00),
     "gpt-5.6-sol": (5.00, 0.50, 30.00),
 }
 _LONG_CONTEXT_INPUT_TOKENS = 272_000

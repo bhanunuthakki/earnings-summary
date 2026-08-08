@@ -29,6 +29,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from db_paths import resolve_db_path
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -56,8 +57,8 @@ class Artifact:
     superseded_by_id: int | None
     dirty: bool
     dirty_reason: str | None
-    source_doc_ids: list[int] = field(default_factory=list)
-    parent_artifact_ids: list[int] = field(default_factory=list)
+    source_doc_ids: list[int] = field(default_factory=list[int])
+    parent_artifact_ids: list[int] = field(default_factory=list[int])
     llm_call_id: int | None = None
 
 
@@ -77,10 +78,10 @@ class UpsertRequest:
     model: str | None = None
     prompt_version: str = "v1"
     # Inputs that determine the cache key, hashed in order:
-    cache_inputs: list[bytes | str] = field(default_factory=list)
+    cache_inputs: list[bytes | str] = field(default_factory=list[bytes | str])
     # Provenance — NOT hashed; these are descriptive metadata for the brief.
-    source_doc_ids: list[int] = field(default_factory=list)
-    parent_artifact_ids: list[int] = field(default_factory=list)
+    source_doc_ids: list[int] = field(default_factory=list[int])
+    parent_artifact_ids: list[int] = field(default_factory=list[int])
     expires_at: datetime | None = None
     llm_call_id: int | None = None
 
@@ -108,14 +109,16 @@ def _row_to_artifact(row: sqlite3.Row) -> Artifact:
         try:
             decoded = json.loads(raw_src)
             if isinstance(decoded, list):
-                src_ids = [int(v) for v in decoded if isinstance(v, (int, float))]
+                decoded_values = cast("list[object]", decoded)
+                src_ids = [int(v) for v in decoded_values if isinstance(v, (int, float))]
         except (json.JSONDecodeError, TypeError):
             pass
     if raw_par:
         try:
             decoded = json.loads(raw_par)
             if isinstance(decoded, list):
-                par_ids = [int(v) for v in decoded if isinstance(v, (int, float))]
+                decoded_values = cast("list[object]", decoded)
+                par_ids = [int(v) for v in decoded_values if isinstance(v, (int, float))]
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -154,6 +157,26 @@ def _parse_dt(v: object) -> datetime:
     if isinstance(v, datetime):
         return v
     return datetime.fromisoformat(str(v))
+
+
+def artifact_is_fresh(artifact: Artifact, *, now: datetime | None = None) -> bool:
+    """Return whether an artifact is safe to reuse as current LLM context.
+
+    ``read_current`` intentionally exposes dirty and expired rows so UI callers
+    can label those states. Context-building callers use this predicate to keep
+    stale recommendations out of a new model prompt.
+    """
+    if artifact.dirty:
+        return False
+    if artifact.expires_at is None:
+        return True
+    reference = now if now is not None else datetime.now(UTC)
+    expires_at = artifact.expires_at
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at >= reference
 
 
 def read_current(
