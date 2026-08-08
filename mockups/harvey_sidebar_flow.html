@@ -882,13 +882,9 @@
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <span class="nav-text">Decision Audit Log</span>
       </a>
-      <a onclick="navigateTo('screen-execution-queue')" class="nav-item" id="nav-execution-queue" data-tooltip="Execution Queue & Pipeline Monitor" title="Execution Queue & Pipeline Monitor">
+      <a onclick="navigateTo('screen-execution-queue')" class="nav-item" id="nav-execution-queue" data-tooltip="Execution Queue & Operations Hub" title="Execution Queue & Operations Hub">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        <span class="nav-text">Execution Queue</span>
-      </a>
-      <a onclick="showToast('Settings & calibration loaded')" class="nav-item" data-tooltip="Settings & Model Calibration" title="Settings & Model Calibration">
-        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        <span class="nav-text">Settings & Calibration</span>
+        <span class="nav-text">Execution Queue & Operations</span>
       </a>
     </div>
   </aside>
@@ -2090,15 +2086,21 @@
       </section>
 
       <!-- ==========================================================================
-           SURFACE 4: EXECUTION QUEUE & PIPELINE MONITOR (#screen-execution-queue)
+           SURFACE 4: EXECUTION QUEUE & OPERATIONS HUB (#screen-execution-queue)
+           HIGH-DENSITY DATA PIPELINE MONITOR, LOG CONSOLE & SYSTEM CALIBRATION
            ========================================================================== -->
       <section id="screen-execution-queue" class="screen-view">
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <div>
-            <div style="font-weight: 600; font-size: var(--fs-title);">Execution Queue & Data Pipeline Monitor</div>
-            <div style="font-size: var(--fs-caption); color: var(--muted);">Real-time status of data ingestion jobs, transcript fetchers, and database freshness</div>
+            <div style="font-weight: 600; font-size: var(--fs-title);">Operations & Execution Governance Hub</div>
+            <div style="font-size: var(--fs-caption); color: var(--muted);">Data pipeline jobs, real-time log console, model calibration & governance rules</div>
           </div>
-          <button class="k-btn k-btn-primary k-btn-sm" onclick="runPipelineJob('All Ingestion Pipelines')">Run All Pipelines</button>
+          <div style="display: flex; gap: var(--sp-2);">
+            <button class="k-btn k-btn-quiet k-btn-sm" onclick="runPipelineJob('Full Pipeline Sweep')">Trigger Pipeline Sweep</button>
+            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('dcf-priors')">DCF Calibration →</button>
+            <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('llm-routing')">LLM Transport →</button>
+            <button class="k-btn k-btn-primary k-btn-sm" onclick="openDrillDrawer('governance-limits')">Governance Limits →</button>
+          </div>
         </div>
 
         <!-- PIPELINE STATUS STAT CARDS -->
@@ -2121,7 +2123,7 @@
           <div class="k-card">
             <div class="stat-heading">DB Idempotency</div>
             <div class="stat-number" style="color: var(--ok);">VERIFIED</div>
-            <div class="stat-subtext">portfolio.db · Alembic Migration Head</div>
+            <div class="stat-subtext">portfolio.db · Migration Head</div>
           </div>
         </div>
 
@@ -3066,8 +3068,26 @@
         else if (navName === 'full-brief') breadcrumb.innerText = `Full Equity Research Brief (${activeCompanyTicker})`;
         else if (navName === 'analytics-playground') breadcrumb.innerText = `Fact & Metric Playground (${activeCompanyTicker})`;
         else if (navName === 'audit-log') breadcrumb.innerText = 'Decision Audit Log & Governance Ledger';
-        else if (navName === 'execution-queue') breadcrumb.innerText = 'Execution Queue & Data Pipeline Monitor';
+        else if (navName === 'execution-queue' || navName === 'settings') breadcrumb.innerText = 'Operations & Execution Governance Hub';
       }
+    }
+
+    // OPERATIONS HUB TAB SWITCHER
+    function switchOpsTab(tabId) {
+      const isQueue = (tabId === 'queue');
+      const btnQueue = document.getElementById('opsTabQueue');
+      const btnSettings = document.getElementById('opsTabSettings');
+
+      if (btnQueue) btnQueue.className = isQueue ? 'k-chip is-active' : 'k-chip';
+      if (btnSettings) btnSettings.className = isQueue ? 'k-chip' : 'k-chip is-active';
+
+      const paneQueue = document.getElementById('opsPaneQueue');
+      const paneSettings = document.getElementById('opsPaneSettings');
+
+      if (paneQueue) paneQueue.style.display = isQueue ? 'flex' : 'none';
+      if (paneSettings) paneSettings.style.display = isQueue ? 'none' : 'flex';
+
+      showToast(`Operations Hub switched to ${isQueue ? 'Pipeline Queue' : 'Model Calibration Settings'}`);
     }
 
     function dismissCard(buttonEl, actionName, toastMsg) {
@@ -3540,7 +3560,137 @@
             </tbody>
           </table>
         `;
-      } else if (type === 'saydo') {
+      } else if (type === 'dcf-priors') {
+        title.innerText = "DCF Valuation Baseline Priors & Model Calibration";
+        subtitle.innerText = "Discount rate (WACC), terminal perpetual growth rate (g), high growth fade horizon & refresh cadence";
+        body.innerHTML = `
+          <div class="k-card">
+            <div style="display: flex; flex-direction: column; gap: var(--sp-3);">
+              <div>
+                <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); margin-bottom: var(--sp-1);">
+                  <span>Default Portfolio WACC Baseline</span>
+                  <strong style="color: var(--accent);" id="drawerWaccLabel">10.50%</strong>
+                </div>
+                <input type="range" id="drawerWaccSlider" min="8.0" max="14.0" step="0.25" value="10.5" style="width: 100%; accent-color: var(--accent);" oninput="document.getElementById('drawerWaccLabel').innerText = parseFloat(this.value).toFixed(2) + '%'; markViewModified();">
+              </div>
+
+              <div>
+                <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); margin-bottom: var(--sp-1);">
+                  <span>Terminal Perpetual Growth Rate ($g$)</span>
+                  <strong style="color: var(--accent);" id="drawerGLabel">3.50%</strong>
+                </div>
+                <input type="range" id="drawerGSlider" min="1.0" max="5.0" step="0.25" value="3.5" style="width: 100%; accent-color: var(--accent);" oninput="document.getElementById('drawerGLabel').innerText = parseFloat(this.value).toFixed(2) + '%'; markViewModified();">
+              </div>
+
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3);">
+                <div>
+                  <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Growth Fade Horizon</label>
+                  <select class="k-select t-mono" style="width: 100%;">
+                    <option value="10" selected>10-Year High Growth Fade</option>
+                    <option value="5">5-Year High Growth Fade</option>
+                    <option value="15">15-Year High Growth Fade</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Data Refresh Cadence</label>
+                  <select class="k-select t-mono" style="width: 100%;">
+                    <option value="0400" selected>Daily @ 04:00 AM PST (Default)</option>
+                    <option value="HOURLY">Hourly Intraday Pull</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-2);">
+                <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">Cancel</button>
+                <button class="k-btn k-btn-primary k-btn-sm" onclick="closeDrillDrawer(); showToast('DCF Calibration Priors updated & saved to DB');">Save DCF Calibration</button>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (type === 'llm-routing') {
+        title.innerText = "LLM Synthesis & Transport Routing Configuration";
+        subtitle.innerText = "Model tier routing, provider selection, temperature & cost optimization";
+        body.innerHTML = `
+          <div class="k-card">
+            <div style="display: flex; flex-direction: column; gap: var(--sp-3);">
+              <div>
+                <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Primary Synthesis Model (Research Briefs & Thesis Disconfirmation)</label>
+                <select class="k-select t-mono" style="width: 100%;">
+                  <option value="CLAUDE_SONNET" selected>Claude 3.5 Sonnet / Opus (Cheapest-at-Parity Routing)</option>
+                  <option value="GEMINI_PRO">Gemini 1.5 Pro Transport</option>
+                </select>
+              </div>
+
+              <div>
+                <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Lightweight Triage Engine (News Classification & SEC Tagging)</label>
+                <select class="k-select t-mono" style="width: 100%;">
+                  <option value="CLAUDE_HAIKU" selected>Claude 3.5 Haiku (Fast Ingest Pipeline)</option>
+                  <option value="GEMINI_FLASH">Gemini 1.5 Flash Transport</option>
+                </select>
+              </div>
+
+              <div class="k-well-compact" style="display: flex; justify-content: space-between; font-size: var(--fs-caption);">
+                <span>Confidence Threshold: <strong style="color: var(--ok);">95% Verification Gate</strong></span>
+                <span>Quota Strategy: <strong style="color: var(--fg);">Protected 04:00 AM Window</strong></span>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-2);">
+                <button class="k-btn k-btn-quiet k-btn-sm" onclick="closeDrillDrawer()">Cancel</button>
+                <button class="k-btn k-btn-primary k-btn-sm" onclick="closeDrillDrawer(); showToast('LLM Transport Routing updated');">Save Transport Config</button>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (type === 'governance-limits') {
+        title.innerText = "Portfolio Risk Governance & Integration Status";
+        subtitle.innerText = "Position weight limits, regional FX caps, VaR thresholds & API connector status";
+        body.innerHTML = `
+          <div style="display: flex; flex-direction: column; gap: var(--sp-4);">
+            <div class="k-card">
+              <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-2);">Portfolio Limits & Risk Budget Rules</div>
+              <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
+                <div class="k-well-compact" style="display: flex; justify-content: space-between;">
+                  <span>Max Position Weight Cap:</span>
+                  <strong class="t-mono" style="color: var(--accent);">15.0% NAV</strong>
+                </div>
+                <div class="k-well-compact" style="display: flex; justify-content: space-between;">
+                  <span>LatAm Regional FX Limit:</span>
+                  <strong class="t-mono" style="color: var(--warn);">20.0% NAV</strong>
+                </div>
+                <div class="k-well-compact" style="display: flex; justify-content: space-between;">
+                  <span>Max Value-at-Risk (95% 1D):</span>
+                  <strong class="t-mono" style="color: var(--ok);">-5.0% NAV ($600K)</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="k-card">
+              <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-2);">Data Ingest Provider Status</div>
+              <div style="display: flex; flex-direction: column; gap: var(--sp-2);">
+                <div style="display: flex; justify-content: space-between; align-items: center;" class="k-well-compact">
+                  <span>Financial Modeling Prep (FMP)</span>
+                  <span class="k-pill k-pill-ok">CONNECTED</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;" class="k-well-compact">
+                  <span>SEC Edgar Edgar-Tools</span>
+                  <span class="k-pill k-pill-ok">CONNECTED</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;" class="k-well-compact">
+                  <span>Central Bank of Brazil API</span>
+                  <span class="k-pill k-pill-ok">CONNECTED</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;" class="k-well-compact">
+                  <span>Local SQLite (data/portfolio.db)</span>
+                  <span class="k-pill k-pill-ok">HEAD (v0271)</span>
+                </div>
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: var(--sp-2);">
+              <button class="k-btn k-btn-primary k-btn-sm" onclick="closeDrillDrawer()">Close Governance Drawer</button>
+            </div>
+          </div>
+        `;
         title.innerText = `Earnings & Guidance Intelligence — ${data.symbol}`;
         subtitle.innerText = `Management Say/Do verification, earnings transcript summary, analyst Q&A & tone analysis`;
         body.innerHTML = `
