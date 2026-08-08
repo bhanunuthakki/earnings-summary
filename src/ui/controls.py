@@ -1075,4 +1075,3 @@ def copilot_prompt_chip(prompt: str, *, citation: str | None = None) -> str:
         f'<button type="button" class="k-chip k-chip-btn k-chip-copilot"{cite_attr} '
         f'onclick="populateCopilotPrompt(this)">{escape(prompt)}</button>'
     )
-
