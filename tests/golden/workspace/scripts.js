@@ -1496,7 +1496,7 @@ ${r?'Expression: "'+r+`"
       if (!c) return m;
       var href = c.href || c.source_url || '';
       if (href && /^javascript:/i.test(href.trim())) href = '';
-      else if (href && !/^https?:/i.test(href) && !/^\//.test(href)) href = base + href;
+      else if (href && !/^https?:/i.test(href) && base) href = base.replace(/\/$/, '') + (href.charAt(0) === '/' ? href : '/' + href);
       var pop = popHtml(c);
       if (value) {
         var badge = href

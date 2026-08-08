@@ -39,6 +39,9 @@ def test_importing_db_does_not_create_the_configured_database(tmp_path: Path) ->
     configured = tmp_path / "import-only.db"
     environment = dict(os.environ)
     environment["EARNINGS_SUMMARY_DB_PATH"] = os.fspath(configured)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (os.fspath(PROJECT_ROOT / "src"), environment.get("PYTHONPATH", "")))
+    )
 
     subprocess.run(
         [sys.executable, "-c", "import db"],

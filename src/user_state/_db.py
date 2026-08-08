@@ -64,7 +64,11 @@ def open_read_conn(db_path: Path | str | None) -> sqlite3.Connection:
     conn = connect_sqlite(
         path,
         role=SQLiteConnectionRole.READ_ONLY,
-        schema_preflight=True,
+        # User-state readers intentionally support historical databases that
+        # predate an optional table and degrade on the resulting query error.
+        # Current request/report paths already lend them a connection whose
+        # schema was preflighted once at the request boundary.
+        schema_preflight=False,
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")

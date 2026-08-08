@@ -14,9 +14,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -106,16 +103,11 @@ def _bootstrap_base_tables(db_path: Path) -> None:
 
 
 @pytest.fixture()
-def db_path(tmp_path: Path) -> Path:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db_dir = tmp_path / "data"
     db_dir.mkdir(parents=True, exist_ok=True)
     path = db_dir / "portfolio.db"
-    _bootstrap_base_tables(path)
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.upgrade(cfg, "head")
-    return path
+    return migrated_db(path)
 
 
 def _conn(db: Path) -> sqlite3.Connection:

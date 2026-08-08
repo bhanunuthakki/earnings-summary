@@ -14,22 +14,18 @@ Seams under test:
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from integrations.wealth_context import (
     WealthContextSnapshot,
     build_wealth_context_snapshot,
     load_wealthplan_starting,
 )
 from wealth_context_store import append_snapshot, read_history, read_latest
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _WP = (
     {"cash": 40_000.0, "taxable": 90_000.0, "roth": 30_000.0, "illiquid": 15_000.0},
@@ -39,33 +35,10 @@ _WP = (
 _TRACKER_BUCKETS = {"taxable": 95_000.0, "tax_free": 33_000.0, "unknown": 2_000.0}
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
-@pytest.fixture(scope="module")
-def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    db = tmp_path_factory.mktemp("wealth_ctx_tmpl") / "at_head.db"
-    import db as dbmod
-
-    saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
-    dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
-    return db
-
-
 @pytest.fixture
-def head_db(head_template: Path, tmp_path: Path) -> Path:
+def head_db(migrated_db: Callable[[Path], Path], tmp_path: Path) -> Path:
     db = tmp_path / "wealth_ctx.db"
-    shutil.copy(head_template, db)
-    return db
+    return migrated_db(db)
 
 
 def _snap(tmp_path: Path, **overrides: object) -> WealthContextSnapshot:

@@ -42,7 +42,7 @@ def test_dashboard_read_connection_is_read_only_and_closed_at_teardown(
         schema_preflight: bool = False,
     ) -> sqlite3.Connection:
         assert Path(path) == db_path
-        assert schema_preflight is False
+        assert schema_preflight is True
         roles.append(role)
         conn = sqlite3.connect(db_path, factory=_TrackingConnection)
         opened.append(conn)
@@ -85,7 +85,7 @@ def test_overview_composition_uses_one_request_reader(
         schema_preflight: bool = False,
     ) -> sqlite3.Connection:
         assert Path(path) == db_path
-        assert schema_preflight is False
+        assert schema_preflight is True
         roles.append(role)
         conn = sqlite3.connect(db_path, factory=_TrackingConnection)
         opened.append(conn)
