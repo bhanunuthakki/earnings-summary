@@ -470,12 +470,44 @@
     .nav-item.is-active { background-color: var(--paper); color: var(--fg); font-weight: 600; box-shadow: inset 0 0 0 var(--bw-thin) var(--border); }
     .nav-svg-icon { opacity: 0.85; flex-shrink: 0; }
 
-    .sidebar-footer {
-      border-top: var(--bw-thin) solid var(--hairline);
-      padding-top: var(--sp-3);
-      display: flex;
-      flex-direction: column;
-      gap: var(--sp-2);
+    /* COLLAPSED SIDEBAR HOVER TOOLTIP FLOATING LABELS */
+    .app-sidebar.is-collapsed .nav-item {
+      position: relative;
+      justify-content: center;
+      padding: var(--sp-2);
+    }
+    .app-sidebar.is-collapsed .nav-item .nav-text {
+      display: none;
+    }
+    .app-sidebar.is-collapsed .nav-layer-title {
+      display: none;
+    }
+    .app-sidebar.is-collapsed .nav-item::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      left: calc(100% + var(--sp-3));
+      top: 50%;
+      transform: translateY(-50%);
+      background: var(--surface);
+      color: var(--fg);
+      padding: var(--sp-1) var(--sp-3);
+      border-radius: var(--radius);
+      font-size: var(--fs-caption);
+      font-family: var(--sans);
+      font-weight: 500;
+      white-space: nowrap;
+      border: var(--bw-thin) solid var(--border-2);
+      box-shadow: var(--shadow-card);
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 150ms ease, transform 150ms ease;
+      z-index: 1000;
+    }
+    .app-sidebar.is-collapsed .nav-item:hover::after {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(-50%) translateX(var(--sp-1));
     }
 
     .app-main {
@@ -816,55 +848,48 @@
 
       <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->
       <div class="nav-layer-title">L1 · Portfolio Intelligence</div>
-      <a onclick="navigateTo('screen-cockpit')" class="nav-item is-active" id="nav-cockpit">
+      <a onclick="navigateTo('screen-cockpit')" class="nav-item is-active" id="nav-cockpit" data-tooltip="Portfolio Cockpit & Review" title="Portfolio Cockpit & Review">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
         <span class="nav-text">Portfolio Cockpit</span>
       </a>
-      <a onclick="navigateTo('screen-performance')" class="nav-item" id="nav-performance">
+      <a onclick="navigateTo('screen-performance')" class="nav-item" id="nav-performance" data-tooltip="Performance Benchmark" title="Performance Benchmark">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         <span class="nav-text">Performance vs Index</span>
       </a>
-      <a onclick="navigateTo('screen-allocation')" class="nav-item" id="nav-allocation">
+      <a onclick="navigateTo('screen-allocation')" class="nav-item" id="nav-allocation" data-tooltip="Portfolio Allocation & Risk Engine" title="Portfolio Allocation & Risk Engine">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         <span class="nav-text">Risk & Allocations</span>
       </a>
 
       <!-- LAYER 2: RESEARCH ENGINE -->
       <div class="nav-layer-title">L2 · Research Engine</div>
-      <a onclick="navigateTo('screen-workspace')" class="nav-item" id="nav-workspace">
+      <a onclick="navigateTo('screen-workspace')" class="nav-item" id="nav-workspace" data-tooltip="Company Desk (Nu Holdings)" title="Company Desk (Nu Holdings)">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span class="nav-text">Company Desk</span>
       </a>
-      <a onclick="openFullBriefCanvas(activeCompanyTicker)" class="nav-item" id="nav-full-brief">
+      <a onclick="openFullBriefCanvas(activeCompanyTicker)" class="nav-item" id="nav-full-brief" data-tooltip="Full Research Brief Canvas" title="Full Research Brief Canvas">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <span class="nav-text">Full Research Brief</span>
+      </a>
+      <a onclick="navigateTo('screen-analytics-playground')" class="nav-item" id="nav-analytics-playground" data-tooltip="Fact & Metric Analytics Playground" title="Fact & Metric Analytics Playground">
+        <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        <span class="nav-text">Fact & Metric Playground</span>
       </a>
 
       <!-- LAYER 3: OPERATIONS & GOVERNANCE -->
       <div class="nav-layer-title">L3 · Operations & Governance</div>
-      <a onclick="navigateTo('screen-audit-log')" class="nav-item" id="nav-audit-log">
+      <a onclick="navigateTo('screen-audit-log')" class="nav-item" id="nav-audit-log" data-tooltip="Decision Audit Log & Governance" title="Decision Audit Log & Governance">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <span class="nav-text">Decision Audit Log</span>
       </a>
-      <a onclick="navigateTo('screen-execution-queue')" class="nav-item" id="nav-execution-queue">
+      <a onclick="navigateTo('screen-execution-queue')" class="nav-item" id="nav-execution-queue" data-tooltip="Execution Queue & Pipeline Monitor" title="Execution Queue & Pipeline Monitor">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span class="nav-text">Execution Queue</span>
       </a>
-      <a onclick="showToast('Settings & calibration loaded')" class="nav-item">
+      <a onclick="showToast('Settings & calibration loaded')" class="nav-item" data-tooltip="Settings & Model Calibration" title="Settings & Model Calibration">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span class="nav-text">Settings & Calibration</span>
       </a>
-    </div>
-
-    <div class="sidebar-footer">
-      <div class="sidebar-footer-content" style="font-size: var(--fs-caption); color: var(--muted); display: flex; justify-content: space-between;">
-        <span>Risk Budget</span>
-        <span style="color: var(--ok); font-weight: 600;">14% Free</span>
-      </div>
-      <div class="sidebar-footer-content" style="font-size: var(--fs-caption); color: var(--muted); display: flex; justify-content: space-between;">
-        <span>Active Coverage</span>
-        <span style="color: var(--fg); font-weight: 600;">30+ Coverage</span>
-      </div>
     </div>
   </aside>
 
@@ -1093,6 +1118,125 @@
             <div class="stat-heading">Portfolio Beta</div>
             <div class="stat-number" style="color: var(--accent);">0.85</div>
             <div class="stat-subtext">Correlation vs SPY: 0.72</div>
+          </div>
+        </div>
+
+        <!-- EXPLORATORY ANALYTICS PLAYGROUND CARD -->
+        <div class="k-card" style="display: flex; flex-direction: column; gap: var(--sp-4);">
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3);">
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Exploratory Analytics Playground</div>
+              <div style="font-weight: 600; font-size: var(--fs-title);">Custom Metric & Time Horizon Analysis Engine</div>
+            </div>
+            <div style="display: flex; gap: var(--sp-1);" class="picker-container">
+              <button class="k-chip is-active" id="playModeChart" onclick="setPlaygroundMode('chart')">Chart Time-Series</button>
+              <button class="k-chip" id="playModeScatter" onclick="setPlaygroundMode('scatter')">Factor Scatter</button>
+              <button class="k-chip" id="playModeMatrix" onclick="setPlaygroundMode('matrix')">Custom Metric Grid</button>
+            </div>
+          </div>
+
+          <!-- PLAYGROUND CONTROLS: METRICS & DATE RANGE -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: var(--sp-3); background: var(--paper); padding: var(--sp-3); border-radius: var(--radius); border: var(--bw-thin) solid var(--border);">
+            <div>
+              <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Primary Asset / Strategy (Y-Axis 1)</label>
+              <select class="k-select" id="playPrimaryMetric" style="width: 100%;" onchange="updatePlaygroundAnalytics()">
+                <option value="PORTFOLIO" selected>Portfolio Active Strategy</option>
+                <option value="NU">NU — Nu Holdings</option>
+                <option value="BKNG">BKNG — Booking Holdings</option>
+                <option value="TSM">TSM — Taiwan Semi</option>
+                <option value="MELI">MELI — MercadoLibre</option>
+                <option value="NVDA">NVDA — NVIDIA Corp</option>
+              </select>
+            </div>
+
+            <div>
+              <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Benchmark / Overlay Metric (Y-Axis 2)</label>
+              <select class="k-select" id="playBenchmarkMetric" style="width: 100%;" onchange="updatePlaygroundAnalytics()">
+                <option value="SPY" selected>S&P 500 Index (SPY)</option>
+                <option value="QQQ">NASDAQ-100 (QQQ)</option>
+                <option value="QUALITY_BENCH">Quality Factor Index (+ROIC)</option>
+                <option value="MOMENTUM_BENCH">Momentum Factor Index</option>
+                <option value="US10Y">10-Year US Treasury Yield</option>
+              </select>
+            </div>
+
+            <div>
+              <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Metric Dimension</label>
+              <select class="k-select" id="playMetricDimension" style="width: 100%;" onchange="updatePlaygroundAnalytics()">
+                <option value="RETURNS" selected>Cumulative Total Return %</option>
+                <option value="ROLLING_BETA">Rolling 60-Day Beta</option>
+                <option value="DRAWDOWN">Rolling Drawdown %</option>
+                <option value="ROIC">ROIC / Capital Efficiency %</option>
+                <option value="NIM">Net Interest Margin (NIM %)</option>
+                <option value="SHARPE">Rolling Sharpe Ratio</option>
+              </select>
+            </div>
+
+            <div>
+              <label style="font-size: var(--fs-caption); color: var(--muted); display: block; margin-bottom: var(--sp-1);">Custom Date Window</label>
+              <div style="display: flex; gap: var(--sp-1); align-items: center;">
+                <input type="date" value="2025-01-01" id="playStartDate" class="t-mono" style="background: var(--bg); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-1); border-radius: var(--radius); font-size: var(--fs-caption); width: 100%;" onchange="updatePlaygroundAnalytics()">
+                <span style="font-size: var(--fs-caption); color: var(--muted);">to</span>
+                <input type="date" value="2026-06-30" id="playEndDate" class="t-mono" style="background: var(--bg); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-1); border-radius: var(--radius); font-size: var(--fs-caption); width: 100%;" onchange="updatePlaygroundAnalytics()">
+              </div>
+            </div>
+          </div>
+
+          <!-- PLAYGROUND DYNAMIC CANVAS / DISPLAY AREA -->
+          <div id="playgroundDisplayArea" style="background: var(--bg); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); padding: var(--sp-4);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3);">
+              <div class="t-mono" style="font-size: var(--fs-body); font-weight: 600;" id="playCanvasTitle">
+                Portfolio Active Strategy vs S&P 500 (SPY) · Cumulative Total Return %
+              </div>
+              <div class="t-mono" style="font-size: var(--fs-caption); color: var(--ok);" id="playCanvasStat">
+                Period Return: +32.4% (Alpha +14.2%)
+              </div>
+            </div>
+
+            <div id="playChartContent" style="display: flex; flex-direction: column; gap: var(--sp-3);">
+              <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="font-size: var(--fs-caption); color: var(--muted);">Selected Custom Window</div>
+                  <div class="t-mono" style="font-size: var(--fs-body); font-weight: 600;" id="playWindowLabel">Jan 1, 2025 – Jun 30, 2026 (18 Months)</div>
+                </div>
+                <div style="text-align: right;">
+                  <div style="font-size: var(--fs-caption); color: var(--muted);">Correlation in Window</div>
+                  <div class="t-mono" style="font-size: var(--fs-body); font-weight: 600; color: var(--accent);" id="playCorrLabel">r = 0.72</div>
+                </div>
+              </div>
+
+              <!-- DYNAMIC COMPARISON MATRIX -->
+              <table class="matrix-table t-mono">
+                <thead>
+                  <tr>
+                    <th>Selected Asset / Metric</th>
+                    <th class="num">Period Return</th>
+                    <th class="num">Annualized Vol</th>
+                    <th class="num">Max Drawdown</th>
+                    <th class="num">Sharpe Ratio</th>
+                    <th class="num">Alpha vs SPY</th>
+                  </tr>
+                </thead>
+                <tbody id="playMatrixRows">
+                  <tr>
+                    <td><strong style="color: var(--accent);" id="playAssetName">Portfolio Active Strategy</strong></td>
+                    <td class="num k-num-pos t-mono" id="playAssetReturn">+32.4%</td>
+                    <td class="num t-mono" id="playAssetVol">14.2%</td>
+                    <td class="num t-mono" id="playAssetDD">-6.4%</td>
+                    <td class="num t-mono" id="playAssetSharpe">2.15</td>
+                    <td class="num t-mono" style="color: var(--accent);" id="playAssetAlpha">+14.2%</td>
+                  </tr>
+                  <tr>
+                    <td><span style="color: var(--fg-soft);" id="playBenchName">S&P 500 Index (SPY Benchmark)</span></td>
+                    <td class="num k-num-pos t-mono" id="playBenchReturn">+18.2%</td>
+                    <td class="num t-mono" id="playBenchVol">16.8%</td>
+                    <td class="num t-mono" id="playBenchDD">-11.2%</td>
+                    <td class="num t-mono" id="playBenchSharpe">1.08</td>
+                    <td class="num t-mono" id="playBenchAlpha">0.0% (Base)</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -1783,6 +1927,80 @@
       </section>
 
       <!-- ==========================================================================
+           SURFACE: EXTRACTED FACT & METRIC ANALYTICS PLAYGROUND (#screen-analytics-playground)
+           DEDICATED FULL-CANVAS EMERGENT RESEARCH & DEEP DIVE ENGINE
+           ========================================================================== -->
+      <section id="screen-analytics-playground" class="screen-view">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-weight: 600; font-size: var(--fs-title);">Extracted Fact & Metric Analytics Playground</div>
+            <div style="font-size: var(--fs-caption); color: var(--muted);">Full-canvas emergent research engine across all 3 statements, SEC filings & operational KPIs</div>
+          </div>
+          <div style="display: flex; gap: var(--sp-2);">
+            <button class="k-btn k-btn-quiet k-btn-sm" onclick="showToast('Exporting metric dataset to CSV...')">Export CSV</button>
+            <button class="k-btn k-btn-primary k-btn-sm" onclick="openSheetDCFModel(activeCompanyTicker)">Open Model in Sheets ↗</button>
+          </div>
+        </div>
+
+        <!-- CONTROLS & FILTER BAR -->
+        <div class="k-card" style="display: flex; flex-direction: column; gap: var(--sp-3);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap;">
+              <span style="font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase;">Category Filter:</span>
+              <button class="k-chip is-active" id="factCatAll" onclick="filterFactCategory('ALL')">All Extracted Facts (42)</button>
+              <button class="k-chip" id="factCatINCOME" onclick="filterFactCategory('INCOME')">Income Statement</button>
+              <button class="k-chip" id="factCatBALANCE" onclick="filterFactCategory('BALANCE')">Balance Sheet</button>
+              <button class="k-chip" id="factCatCASH" onclick="filterFactCategory('CASH')">Cash Flow</button>
+              <button class="k-chip" id="factCatKPI" onclick="filterFactCategory('KPI')">Operational & Unit KPIs</button>
+            </div>
+            <div style="display: flex; gap: var(--sp-2); align-items: center;">
+              <select class="k-select t-mono" id="factPeriodFreq" onchange="updateFactPlaygroundTable()">
+                <option value="QUARTERLY" selected>Quarterly (Q1 25 – Q2 26)</option>
+                <option value="TTM">Trailing Twelve Months (TTM)</option>
+                <option value="ANNUAL">Annual (FY22 – FY26E)</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: var(--sp-3); align-items: center;">
+            <input type="text" id="factSearchInput" placeholder="Search 40+ parsed metrics (e.g. Revenue, ARPAC, NPL 90+, Cost-to-Serve)..." class="t-mono" style="flex: 1; background: var(--bg); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); font-size: var(--fs-body);" oninput="updateFactPlaygroundTable()">
+            <span style="font-size: var(--fs-caption); color: var(--ok);" class="t-mono" id="factCountMatch">42 Facts Active</span>
+          </div>
+        </div>
+
+        <!-- FULL-WIDTH EXTRACTED FACTS MATRIX CANVAS -->
+        <div class="k-card" style="padding: 0; overflow: hidden;">
+          <div style="padding: var(--sp-3) var(--sp-4); background: var(--paper); border-bottom: var(--bw-thin) solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-weight: 600; font-size: var(--fs-body);" id="factCanvasHeaderTitle">
+              Parsed Fact Database Matrix — NU Holdings (NYSE: NU)
+            </div>
+            <span class="k-pill k-pill-ok">100% PROVENANCE VERIFIED</span>
+          </div>
+
+          <div style="overflow-x: auto;">
+            <table class="matrix-table t-mono" id="factPlaygroundTable" style="margin: 0; width: 100%;">
+              <thead>
+                <tr>
+                  <th style="min-width: 240px;">Metric / Fact Handle</th>
+                  <th>Statement / Source</th>
+                  <th class="num">Q1 25</th>
+                  <th class="num">Q2 25</th>
+                  <th class="num">Q3 25</th>
+                  <th class="num">Q4 25</th>
+                  <th class="num">Q1 26</th>
+                  <th class="num">Q2 26</th>
+                  <th style="text-align: right;">Provenance</th>
+                </tr>
+              </thead>
+              <tbody id="factPlaygroundTbody">
+                <!-- Populated dynamically via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==========================================================================
            SURFACE 3: DECISION AUDIT LOG (#screen-audit-log)
            ========================================================================== -->
       <section id="screen-audit-log" class="screen-view">
@@ -2285,6 +2503,21 @@
       const tableWrap = document.getElementById('briefFinancialsTableWrap');
       if (tableWrap) {
         tableWrap.innerHTML = renderBriefFinancialsTableMarkup(data, isBriefFinancialsExpanded);
+      }
+    }
+
+    function setDrawerFinancialsView(quartersMode) {
+      const isExpanded = (quartersMode === 8);
+      const btn4Q = document.getElementById('drawerBtn4Q');
+      const btn8Q = document.getElementById('drawerBtn8Q');
+
+      if (btn4Q) btn4Q.className = isExpanded ? 'k-chip' : 'k-chip is-active';
+      if (btn8Q) btn8Q.className = isExpanded ? 'k-chip is-active' : 'k-chip';
+
+      const data = COMPANY_DATA[activeCompanyTicker] || COMPANY_DATA.NU;
+      const wrap = document.getElementById('drawerFinancialsTableWrap');
+      if (wrap) {
+        wrap.innerHTML = renderBriefFinancialsTableMarkup(data, isExpanded);
       }
     }
 
@@ -2831,6 +3064,7 @@
         else if (navName === 'allocation') breadcrumb.innerText = 'Portfolio Allocation & Risk Engine';
         else if (navName === 'workspace') breadcrumb.innerText = `Company Desk (${activeCompanyTicker})`;
         else if (navName === 'full-brief') breadcrumb.innerText = `Full Equity Research Brief (${activeCompanyTicker})`;
+        else if (navName === 'analytics-playground') breadcrumb.innerText = `Fact & Metric Playground (${activeCompanyTicker})`;
         else if (navName === 'audit-log') breadcrumb.innerText = 'Decision Audit Log & Governance Ledger';
         else if (navName === 'execution-queue') breadcrumb.innerText = 'Execution Queue & Data Pipeline Monitor';
       }
@@ -2892,6 +3126,91 @@
       const sym = ticker || activeCompanyTicker || 'NU';
       showToast(`Opening canonical 9-sheet Google Sheets DCF Model for ${sym}...`);
       window.open(`https://docs.google.com/spreadsheets/d/dcf_${sym.toLowerCase()}_2026_model`, '_blank');
+    }
+
+    // EXPLORATORY ANALYTICS PLAYGROUND FUNCTIONS
+    function updatePlaygroundAnalytics() {
+      const primary = document.getElementById('playPrimaryMetric').value;
+      const bench = document.getElementById('playBenchmarkMetric').value;
+      const dim = document.getElementById('playMetricDimension').value;
+      const start = document.getElementById('playStartDate').value;
+      const end = document.getElementById('playEndDate').value;
+
+      document.getElementById('playCanvasTitle').innerText = `${primary} vs ${bench} · ${dim}`;
+      document.getElementById('playWindowLabel').innerText = `${start} – ${end}`;
+
+      showToast(`Playground analytics recalculated for ${primary} vs ${bench} (${dim})`);
+      markViewModified();
+    }
+
+    function setPlaygroundMode(mode) {
+      document.getElementById('playModeChart').className = mode === 'chart' ? 'k-chip is-active' : 'k-chip';
+      document.getElementById('playModeScatter').className = mode === 'scatter' ? 'k-chip is-active' : 'k-chip';
+      document.getElementById('playModeMatrix').className = mode === 'matrix' ? 'k-chip is-active' : 'k-chip';
+      showToast(`Playground view mode switched to ${mode.toUpperCase()}`);
+    }
+
+    // EXTRACTED FACT & METRIC ANALYTICS PLAYGROUND DATABASE & LOGIC
+    const EXTRACTED_FACTS_DB = [
+      { name: "Total Revenue ($M)", cat: "INCOME", q1_25: "$2,710", q2_25: "$2,850", q3_25: "$2,940", q4_25: "$3,100", q1_26: "$3,280", q2_26: "$3,450", src: "doc:bcb_jun26_p4" },
+      { name: "Net Interest Margin (NIM %)", cat: "INCOME", q1_25: "18.2%", q2_25: "18.5%", q3_25: "18.8%", q4_25: "19.1%", q1_26: "19.4%", q2_26: "19.8%", src: "doc:nu_q2_p8" },
+      { name: "Gross Profit ($M)", cat: "INCOME", q1_25: "$1,210", q2_25: "$1,310", q3_25: "$1,410", q4_25: "$1,520", q1_26: "$1,640", q2_26: "$1,780", src: "doc:bcb_jun26_p4" },
+      { name: "Net Income ($M)", cat: "INCOME", q1_25: "$378", q2_25: "$450", q3_25: "$510", q4_25: "$580", q1_26: "$640", q2_26: "$720", src: "doc:nu_q2_p8" },
+      { name: "Total Customer Deposits ($B)", cat: "BALANCE", q1_25: "$24.2", q2_25: "$25.8", q3_25: "$27.1", q4_25: "$28.9", q1_26: "$30.4", q2_26: "$32.1", src: "doc:bcb_jun26_p4" },
+      { name: "Mexico Deposits ($B)", cat: "BALANCE", q1_25: "$1.20", q2_25: "$1.65", q3_25: "$2.10", q4_25: "$2.55", q1_26: "$2.85", q2_26: "$3.12", src: "doc:bcb_jun26_p4" },
+      { name: "Total Loan Portfolio ($B)", cat: "BALANCE", q1_25: "$18.5", q2_25: "$19.8", q3_25: "$21.2", q4_25: "$22.8", q1_26: "$24.1", q2_26: "$25.6", src: "doc:nu_q2_p8" },
+      { name: "Operating Cash Flow ($M)", cat: "CASH", q1_25: "$420", q2_25: "$480", q3_25: "$540", q4_25: "$610", q1_26: "$690", q2_26: "$780", src: "doc:nu_q2_p8" },
+      { name: "CapEx & Software ($M)", cat: "CASH", q1_25: "-$42", q2_25: "-$45", q3_25: "-$48", q4_25: "-$52", q1_26: "-$55", q2_26: "-$60", src: "doc:nu_q2_p8" },
+      { name: "Free Cash Flow ($M)", cat: "CASH", q1_25: "$378", q2_25: "$435", q3_25: "$492", q4_25: "$558", q1_26: "$635", q2_26: "$720", src: "doc:nu_q2_p8" },
+      { name: "Active Customers (Millions)", cat: "KPI", q1_25: "95.2M", q2_25: "98.5M", q3_25: "101.8M", q4_25: "105.2M", q1_26: "108.6M", q2_26: "112.4M", src: "doc:nu_q2_p8" },
+      { name: "Monthly ARPAC ($)", cat: "KPI", q1_25: "$9.80", q2_25: "$10.20", q3_25: "$10.60", q4_25: "$11.10", q1_26: "$11.50", q2_26: "$11.90", src: "doc:nu_q2_p8" },
+      { name: "Cost-to-Serve per Customer ($/mo)", cat: "KPI", q1_25: "$0.90", q2_25: "$0.90", q3_25: "$0.89", q4_25: "$0.88", q1_26: "$0.88", q2_26: "$0.87", src: "doc:nu_q2_p8" },
+      { name: "NPL 90+ Ratio (%)", cat: "KPI", q1_25: "5.4%", q2_25: "5.3%", q3_25: "5.2%", q4_25: "5.2%", q1_26: "5.2%", q2_26: "5.2%", src: "doc:nu_q2_p8" },
+      { name: "Efficiency Ratio (%)", cat: "KPI", q1_25: "32.1%", q2_25: "31.5%", q3_25: "30.8%", q4_25: "30.2%", q1_26: "29.5%", q2_26: "28.8%", src: "doc:nu_q2_p8" }
+    ];
+
+    let activeFactCategory = 'ALL';
+
+    function filterFactCategory(cat) {
+      activeFactCategory = cat;
+      ['factCatAll', 'factCatINCOME', 'factCatBALANCE', 'factCatCASH', 'factCatKPI'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.className = 'k-chip';
+      });
+      const activeBtn = document.getElementById(cat === 'ALL' ? 'factCatAll' : 'factCat' + cat);
+      if (activeBtn) activeBtn.className = 'k-chip is-active';
+
+      updateFactPlaygroundTable();
+    }
+
+    function updateFactPlaygroundTable() {
+      const tbody = document.getElementById('factPlaygroundTbody');
+      if (!tbody) return;
+
+      const q = (document.getElementById('factSearchInput')?.value || '').toLowerCase().trim();
+
+      const filtered = EXTRACTED_FACTS_DB.filter(f => {
+        const matchesCat = (activeFactCategory === 'ALL' || f.cat === activeFactCategory);
+        const matchesSearch = !q || f.name.toLowerCase().includes(q) || f.src.toLowerCase().includes(q);
+        return matchesCat && matchesSearch;
+      });
+
+      const countEl = document.getElementById('factCountMatch');
+      if (countEl) countEl.innerText = `${filtered.length} Facts Active`;
+
+      tbody.innerHTML = filtered.map(f => `
+        <tr>
+          <td><strong>${f.name}</strong></td>
+          <td><span class="k-chip">${f.cat}</span></td>
+          <td class="num t-mono">${f.q1_25}</td>
+          <td class="num t-mono">${f.q2_25}</td>
+          <td class="num t-mono">${f.q3_25}</td>
+          <td class="num t-mono">${f.q4_25}</td>
+          <td class="num t-mono">${f.q1_26}</td>
+          <td class="num k-num-pos t-mono">${f.q2_26}</td>
+          <td style="text-align: right;"><a onclick="openPeekDrawer('${f.src}')" class="src-chip">${f.src}</a></td>
+        </tr>
+      `).join('');
     }
 
     // EMBEDDED DCF SLIDERS INSIDE REPORT
@@ -3007,27 +3326,53 @@
       const data = COMPANY_DATA[activeCompanyTicker] || COMPANY_DATA.NU;
 
       if (type === 'financials') {
-        title.innerText = `Full Financial Statements — ${data.symbol}`;
-        subtitle.innerText = `4-Quarter Income Statement & Key Operating Ratios (${data.name})`;
+        title.innerText = `Exhaustive Financial Statements & Metric Explorer — ${data.symbol}`;
+        subtitle.innerText = `Multi-quarter SEC 10-Q financial fact matrix, segment mix & unit cost economics`;
         body.innerHTML = `
-          <div class="k-well">
-            <div style="font-weight: 600; margin-bottom: var(--sp-1);">Valuation & DCF Baseline Parameters</div>
-            <div style="font-size: var(--fs-caption); color: var(--muted);" class="t-mono">WACC: 10.5% · Terminal Growth: 3.5% · Intrinsic Fair Value Target: <strong style="color: var(--accent);">${data.target}</strong></div>
+          <div class="k-well" style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-weight: 600; margin-bottom: var(--sp-1);">Valuation & DCF Baseline Parameters</div>
+              <div style="font-size: var(--fs-caption); color: var(--muted);" class="t-mono">WACC: 10.5% · Terminal Growth: 3.5% · Intrinsic Fair Value Target: <strong style="color: var(--accent);">${data.target}</strong></div>
+            </div>
+            <div style="display: flex; gap: var(--sp-1);" class="picker-container">
+              <button class="k-chip is-active" id="drawerBtn4Q" onclick="setDrawerFinancialsView(4)">4Q View</button>
+              <button class="k-chip" id="drawerBtn8Q" onclick="setDrawerFinancialsView(8)">8Q + FY View</button>
+            </div>
           </div>
-          <table class="matrix-table t-mono">
-            <thead><tr><th>Financial Statement Line Item</th><th class="num">Q3 25</th><th class="num">Q4 25</th><th class="num">Q1 26</th><th class="num">Q2 26</th></tr></thead>
-            <tbody>
-              ${data.financials.map(f => `
-                <tr>
-                  <td><strong>${f.metric}</strong></td>
-                  <td class="num t-mono">${f.q3}</td>
-                  <td class="num t-mono">${f.q4 || '-'}</td>
-                  <td class="num t-mono">${f.q1 || '-'}</td>
-                  <td class="num k-num-pos t-mono">${f.q2 || '-'}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+
+          <div id="drawerFinancialsTableWrap">
+            <table class="matrix-table t-mono">
+              <thead><tr><th>Financial Statement Line Item</th><th class="num">Q3 25</th><th class="num">Q4 25</th><th class="num">Q1 26</th><th class="num">Q2 26</th></tr></thead>
+              <tbody>
+                ${data.financials.map(f => `
+                  <tr>
+                    <td><strong>${f.metric}</strong></td>
+                    <td class="num t-mono">${f.q3}</td>
+                    <td class="num t-mono">${f.q4 || '-'}</td>
+                    <td class="num t-mono">${f.q1 || '-'}</td>
+                    <td class="num k-num-pos t-mono">${f.q2 || '-'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+
+          ${data.segments ? `
+            <div style="font-weight: 600; font-size: var(--fs-body); margin-top: var(--sp-3);">Geographic Segment Revenue & Mix</div>
+            <table class="matrix-table t-mono">
+              <thead><tr><th>Segment / Region</th><th class="num">Mix %</th><th class="num">Revenue</th><th class="num" style="text-align: right;">YoY Growth</th></tr></thead>
+              <tbody>
+                ${data.segments.map(s => `
+                  <tr>
+                    <td><strong>${s.geo}</strong></td>
+                    <td class="num t-mono">${s.mix}</td>
+                    <td class="num t-mono">${s.rev}</td>
+                    <td class="num k-num-pos t-mono" style="text-align: right;">${s.yoy}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : ''}
         `;
       } else if (type === 'rebalance-plan') {
         title.innerText = "Automated Portfolio Rebalance Execution Plan";
@@ -3196,9 +3541,21 @@
           </table>
         `;
       } else if (type === 'saydo') {
-        title.innerText = `Management Say/Do Track Record — ${data.symbol}`;
-        subtitle.innerText = `Full verification ledger of CEO/CFO guidance vs SEC Edgar reported facts`;
+        title.innerText = `Earnings & Guidance Intelligence — ${data.symbol}`;
+        subtitle.innerText = `Management Say/Do verification, earnings transcript summary, analyst Q&A & tone analysis`;
         body.innerHTML = `
+          <!-- MANAGEMENT TONE & CONFIDENCE CARD -->
+          <div class="k-well" style="border-color: var(--accent-soft); display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600;">EXECUTIVE MANAGEMENT TONE CHECK</div>
+              <div style="font-size: var(--fs-body); font-weight: 600;" class="t-mono">CONFIDENT / EXPANSIVE · 88% Score</div>
+              <div style="font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-half);">No defensive language detected on credit quality or international expansion.</div>
+            </div>
+            <span class="k-pill k-pill-ok">TONE: OPTIMAL</span>
+          </div>
+
+          <!-- GUIDANCE VERIFICATION LEDGER -->
+          <div style="font-weight: 600; font-size: var(--fs-body); margin-top: var(--sp-2);">Guidance Target vs SEC 10-Q Audit Ledger</div>
           <table class="matrix-table t-mono">
             <thead><tr><th>Target Metric / Guidance</th><th>Earnings Call Date</th><th>Reported Actual</th><th style="text-align: right;">Status</th></tr></thead>
             <tbody>
@@ -3212,6 +3569,32 @@
               `).join('')}
             </tbody>
           </table>
+
+          <!-- KEY TRANSCRIPT SUMMARY & ANALYST Q&A ROSTER -->
+          <div style="font-weight: 600; font-size: var(--fs-body); margin-top: var(--sp-3);">Transcript Summary & Key Analyst Q&A</div>
+          <div style="display: flex; flex-direction: column; gap: var(--sp-3);">
+            <div class="k-well">
+              <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); color: var(--muted); margin-bottom: var(--sp-1);">
+                <span>Q: Credit Card NPL Trend & Origination Quality</span>
+                <span class="t-mono" style="color: var(--accent);">Goldman Sachs · Jorge Kuri</span>
+              </div>
+              <p style="font-family: var(--serif); font-size: var(--fs-body); color: var(--fg-soft); line-height: 1.6;">
+                "Our 90+ day NPLs remained flat at 5.2% during Q2 despite accelerating credit card issuance in Mexico. We feel comfortable expanding credit limits given cohort loss rates."
+              </p>
+              <div style="margin-top: var(--sp-2); font-size: var(--fs-caption); color: var(--muted);">— Guilherme Lago, CFO <a onclick="openPeekDrawer('doc:nu_q2_p8')" class="src-chip">doc:nu_q2_p8</a></div>
+            </div>
+
+            <div class="k-well">
+              <div style="display: flex; justify-content: space-between; font-size: var(--fs-caption); color: var(--muted); margin-bottom: var(--sp-1);">
+                <span>Q: Deposit Intake Pace in Mexico</span>
+                <span class="t-mono" style="color: var(--accent);">Morgan Stanley · Jorge Kuri</span>
+              </div>
+              <p style="font-family: var(--serif); font-size: var(--fs-body); color: var(--fg-soft); line-height: 1.6;">
+                "Deposit accumulation in Mexico passed $3.12B ahead of our internal timeline. High-yield savings accounts are creating a sticky low-cost funding moat."
+              </p>
+              <div style="margin-top: var(--sp-2); font-size: var(--fs-caption); color: var(--muted);">— David Vélez, CEO <a onclick="openPeekDrawer('doc:bcb_jun26_p4')" class="src-chip">doc:bcb_jun26_p4</a></div>
+            </div>
+          </div>
         `;
       } else if (type === 'peers') {
         title.innerText = `Peer Comparison Matrix — ${data.symbol}`;
@@ -3283,6 +3666,10 @@
         document.getElementById('drawerScrim').classList.remove('is-open');
       }
     }
+    // INITIALIZATION
+    document.addEventListener('DOMContentLoaded', () => {
+      updateFactPlaygroundTable();
+    });
   </script>
 </body>
 </html>
