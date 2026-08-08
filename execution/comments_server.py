@@ -1342,11 +1342,7 @@ def create_app(
                 render_shell(overview_html=overview, repo_root=repo_root),
                 mimetype="text/html",
             )
-        conn = _open_db()
-        try:
-            rows = build_cockpit_rows(conn, repo_root)
-        finally:
-            conn.close()
+        rows = build_cockpit_rows(get_read_db(), repo_root)
         coverage = tier_coverage_summary(repo_root)
         # Schema drift must not 500 the whole Home page, and must not render as
         # an empty rail either — the rail says it cannot be read, and the rest
@@ -1401,11 +1397,7 @@ def create_app(
 
     @app.route("/api/dashboard", methods=["GET"])
     def dashboard_api():
-        conn = _open_db()
-        try:
-            rows = build_dashboard_rows(conn, repo_root)
-        finally:
-            conn.close()
+        rows = build_dashboard_rows(get_read_db(), repo_root)
         return {k: [r.to_dict() for r in v] for k, v in rows.items()}
 
     @app.route("/api/cockpit", methods=["GET"])
@@ -1416,11 +1408,7 @@ def create_app(
         countdown · staleness) refresh in place without a full page reload."""
         from pipeline.research_cockpit import render_research_cockpit
 
-        conn = _open_db()
-        try:
-            rows = build_cockpit_rows(conn, repo_root)
-        finally:
-            conn.close()
+        rows = build_cockpit_rows(get_read_db(), repo_root)
         return Response(render_research_cockpit(rows), mimetype="text/html")
 
     @app.route("/api/cron-health", methods=["GET"])

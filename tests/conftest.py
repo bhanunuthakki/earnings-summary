@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
 import tempfile
@@ -36,6 +37,17 @@ os.environ.setdefault(
     "EARNINGS_SUMMARY_ENV_FILE",
     os.path.join(os.path.dirname(__file__), ".pytest-no-external-env"),
 )
+
+# Test modules may resolve the default database during collection, before any
+# fixture can redirect it. Point every pytest process at its own disposable DB
+# so collection and tests cannot touch the checkout's data/portfolio.db or
+# contend with another xdist worker. The PID is unique even across simultaneous
+# local sessions; the worker id keeps paths useful when diagnosing a retained
+# crash directory.
+_worker_id = os.environ.get("PYTEST_XDIST_WORKER", "controller")
+_test_db_dir = Path(tempfile.mkdtemp(prefix=f"earnings-summary-pytest-{_worker_id}-"))
+os.environ["EARNINGS_SUMMARY_DB_PATH"] = os.fspath(_test_db_dir / f"portfolio-{os.getpid()}.db")
+atexit.register(shutil.rmtree, _test_db_dir, ignore_errors=True)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -107,9 +119,7 @@ def archived_migration_harness() -> Iterator[None]:
         patcher.undo()
 
 
-_worker_suffix = (
-    f"-{os.environ['PYTEST_XDIST_WORKER']}" if "PYTEST_XDIST_WORKER" in os.environ else ""
-)
+_worker_suffix = f"-{_worker_id}" if _worker_id != "controller" else ""
 os.environ.setdefault(
     "EARNINGS_SUMMARY_SECRETS_DIR",
     os.path.join(

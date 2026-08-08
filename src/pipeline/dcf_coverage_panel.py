@@ -43,8 +43,8 @@ FRESH_DAYS = 7  # refreshed within a week = fresh
 STALE_DAYS = 30  # older than a month = loudly stale
 
 # Mirror of db.ACTIVE_LIST_TYPES / BRIEFED_LIST_TYPES, duplicated like
-# dcf.universe does on purpose: importing ``db`` runs init_db() at import
-# time, a side effect a read-only panel must not have.
+# dcf.universe does on purpose: a read-only panel should not load the broader
+# legacy DB facade merely to resolve list semantics.
 _ACTIVE_LIST_TYPES: tuple[str, ...] = ("portfolio", "watchlist", "evaluation")
 _BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
 

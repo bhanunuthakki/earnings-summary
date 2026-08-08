@@ -55,7 +55,6 @@ from report.sections._common import (
     open_repo_db,
     quarter_label,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.loaders import (
     load_financial_cell_provenance,
     load_financial_fact_provenance,
@@ -109,15 +108,21 @@ _DEFAULT_CHART_PRIORITIES: tuple[str, ...] = (
 )
 
 
-def build(ticker: str, repo_root: Path) -> FinancialsSection:
-    conn = open_repo_db(repo_root)
-    if conn is None:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> FinancialsSection:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return _missing(
             "no DB at data/portfolio.db",
             "alembic upgrade head && python execution/extract_facts.py --ticker " + ticker.upper(),
         )
-    if not has_table(conn, "financial_facts"):
-        conn.close()
+    if not has_table(db_conn, "financial_facts"):
+        if conn is None:
+            db_conn.close()
         return _missing(
             "financial_facts table absent",
             "alembic upgrade head && python execution/extract_facts.py --ticker " + ticker.upper(),
@@ -125,14 +130,15 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
             "fiscal quarters for off-calendar reporters.",
         )
 
-    quarterly_rows = _load_quarterly(conn, ticker)
-    annual_rows = _load_annual(conn, ticker)
+    quarterly_rows = _load_quarterly(db_conn, ticker)
+    annual_rows = _load_annual(db_conn, ticker)
     # Unresolved validation_issues for the ticker, parsed once — formatted
     # into per-cell popover strings below (S2 PR3: disagreement at the cell).
-    issue_signals = load_unresolved_issues(conn)
-    conn.close()
+    issue_signals = load_unresolved_issues(db_conn)
 
     if not quarterly_rows and not annual_rows:
+        if conn is None:
+            db_conn.close()
         return _missing(
             "no facts in metrics view",
             f"python execution/extract_facts.py --ticker {ticker.upper()}",
@@ -204,8 +210,16 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
 
     requested_priorities = _read_chart_priorities_request(ticker, repo_root)
     resolved_priorities, kpi_series, annual_kpi_series, annual_kpi_years = _resolve_priorities(
-        requested_priorities, line_items, ticker, repo_root, display_labels, quarter_labels_full
+        requested_priorities,
+        line_items,
+        ticker,
+        repo_root,
+        display_labels,
+        quarter_labels_full,
+        conn=db_conn,
     )
+    if conn is None:
+        db_conn.close()
 
     currency = "USD"
     if deduped_quarterly:
@@ -291,6 +305,8 @@ def _resolve_priorities(
     repo_root: Path,
     quarter_labels: list[str],
     quarter_labels_full: list[str],
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[list[str], list[KpiSeries], list[AnnualKpiSeries], list[int]]:
     """Resolve each requested name against line_items → kpi_facts → drop.
 
@@ -310,11 +326,7 @@ def _resolve_priorities(
     kpi_series: list[KpiSeries] = []
     annual_raw: list[tuple[str, str, dict[int, float], dict[int, CellSource]]] = []
 
-    db_path = repo_root / "data" / "portfolio.db"
-    conn: sqlite3.Connection | None = None
-    if db_path.exists():
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-        conn.row_factory = sqlite3.Row
+    db_conn = open_repo_db(repo_root, conn)
 
     try:
         for name in requested:
@@ -322,21 +334,21 @@ def _resolve_priorities(
             if lower in li_map:
                 resolved.append(li_map[lower])
                 continue
-            if conn is None:
+            if db_conn is None:
                 continue
-            if reporting_cadence_for(conn, ticker, name) == "annual":
-                annual = _annual_kpi_raw_for(conn, ticker, name)
+            if reporting_cadence_for(db_conn, ticker, name) == "annual":
+                annual = _annual_kpi_raw_for(db_conn, ticker, name)
                 if annual is not None:
                     annual_raw.append(annual)
                     resolved.append(annual[0])
                 continue
-            series = _kpi_series_for(conn, ticker, name, quarter_labels, quarter_labels_full)
+            series = _kpi_series_for(db_conn, ticker, name, quarter_labels, quarter_labels_full)
             if series is not None:
                 kpi_series.append(series)
                 resolved.append(series.name)
     finally:
-        if conn is not None:
-            conn.close()
+        if db_conn is not None and conn is None:
+            db_conn.close()
 
     annual_series, annual_years = _align_annual_kpis(annual_raw)
     return resolved, kpi_series, annual_series, annual_years

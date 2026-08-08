@@ -455,18 +455,31 @@ def _build_one(
     effective_bypass = force_budget_bypass or ticker_settings.get_bypass_budget(
         ticker, db_path=repo_root / "data" / "portfolio.db"
     )
-    spec = build_report(
-        ticker=ticker,
-        repo_root=repo_root,
-        model_link=f"dcf/{ticker}.xlsx",
-        enable_llm=enable_llm,
-        news_days=news_days,
-        news_cache_ttl_days=news_cache_ttl_days,
-        refresh_news=refresh_news,
-        flavor=flavor,
-        force_budget_bypass=effective_bypass,
-        force_refresh=force_refresh,
+    report_db_path = repo_root / "data" / "portfolio.db"
+    report_conn = (
+        connect_sqlite(report_db_path, role=SQLiteConnectionRole.READ_ONLY)
+        if report_db_path.exists()
+        else None
     )
+    if report_conn is not None:
+        report_conn.row_factory = sqlite3.Row
+    try:
+        spec = build_report(
+            ticker=ticker,
+            repo_root=repo_root,
+            model_link=f"dcf/{ticker}.xlsx",
+            enable_llm=enable_llm,
+            news_days=news_days,
+            news_cache_ttl_days=news_cache_ttl_days,
+            refresh_news=refresh_news,
+            flavor=flavor,
+            force_budget_bypass=effective_bypass,
+            force_refresh=force_refresh,
+            conn=report_conn,
+        )
+    finally:
+        if report_conn is not None:
+            report_conn.close()
 
     workspace_html_path.write_text(render_workspace_html(spec), encoding="utf-8")
     _emit(

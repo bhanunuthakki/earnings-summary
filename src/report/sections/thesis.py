@@ -37,7 +37,12 @@ from report.sections._ts_signals import (
 )
 
 
-def build(ticker: str, repo_root: Path) -> ThesisSection:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> ThesisSection:
     holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
     if not holdings_path.exists():
         return ThesisSection(
@@ -50,8 +55,10 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
     with open(holdings_path, encoding="utf-8") as f:
         holdings = json.load(f)
 
-    overall, evaluations, soft_evaluations, evaluated_at = _load_break_rule_state(ticker, repo_root)
-    ledger = _build_ledger(ticker, repo_root, holdings, evaluations)
+    overall, evaluations, soft_evaluations, evaluated_at = _load_break_rule_state(
+        ticker, repo_root, conn=conn
+    )
+    ledger = _build_ledger(ticker, repo_root, holdings, evaluations, conn=conn)
     thesis_text, stub_warning = _split_stub_warning(holdings)
 
     return ThesisSection(
@@ -67,11 +74,17 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
         break_rule_evaluations=evaluations,
         soft_rule_evaluations=soft_evaluations,
         last_evaluated_at=evaluated_at,
-        ts_context_md=_ts_context_md(ticker, repo_root, holdings),
+        ts_context_md=_ts_context_md(ticker, repo_root, holdings, conn=conn),
     )
 
 
-def _ts_context_md(ticker: str, repo_root: Path, holdings: dict[str, object]) -> str:
+def _ts_context_md(
+    ticker: str,
+    repo_root: Path,
+    holdings: dict[str, object],
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Render persisted signals for tier-1 KPIs + headline P&L lines.
 
     The block is the high-leverage TS surface for §2: the thesis
@@ -90,7 +103,7 @@ def _ts_context_md(ticker: str, repo_root: Path, holdings: dict[str, object]) ->
             if isinstance(name, str) and name.strip() and name not in seen:
                 names.append(name.strip())
                 seen.add(name)
-    grouped = load_signals_for_metrics(ticker, names, repo_root=repo_root)
+    grouped = load_signals_for_metrics(ticker, names, repo_root=repo_root, conn=conn)
     flat = [s for metric in grouped.values() for s in metric]
     return format_signals_as_prompt_block(flat, heading="Time-Series Context (last computed)")
 
@@ -168,6 +181,8 @@ def _build_ledger(
     repo_root: Path,
     holdings: dict[str, object],
     evaluations: list[BreakRuleEvaluation],
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> list[KpiLedgerRow]:
     """Tier order preserved (1 → 2 → 3); within each tier sorted alphabetically.
 
@@ -191,7 +206,7 @@ def _build_ledger(
     # history and its definition metadata (notes / unit), which resolve through
     # the same connection. None when the DB is absent — the ledger still renders
     # from the holdings JSON with empty history and a name-derived definition.
-    conn = open_repo_db(repo_root)
+    db_conn = open_repo_db(repo_root, conn)
     try:
         rows: list[KpiLedgerRow] = []
         for tier_key, tier_label in (
@@ -208,9 +223,9 @@ def _build_ledger(
                     continue
                 kd = cast("dict[str, object]", k)
                 name = str(kd.get("name", ""))
-                if conn is not None:
-                    history, latest_excerpt = _kpi_history_conn(conn, ticker, name)
-                    def_id, notes, db_unit = _kpi_definition_meta(conn, ticker, name)
+                if db_conn is not None:
+                    history, latest_excerpt = _kpi_history_conn(db_conn, ticker, name)
+                    def_id, notes, db_unit = _kpi_definition_meta(db_conn, ticker, name)
                 else:
                     history, latest_excerpt, def_id, notes, db_unit = [], None, None, None, None
                 holdings_unit = str(kd.get("unit")) if kd.get("unit") else None
@@ -239,8 +254,8 @@ def _build_ledger(
             rows.extend(tier_rows)
         return rows
     finally:
-        if conn is not None:
-            conn.close()
+        if db_conn is not None and conn is None:
+            db_conn.close()
 
 
 def _status_for(
@@ -378,7 +393,10 @@ _BreachStatusLiteral = Literal["ok", "warn", "breach", "unresolved", "unknown"]
 
 
 def _load_break_rule_state(
-    ticker: str, repo_root: Path
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[
     _BreachStatusLiteral,
     list[BreakRuleEvaluation],
@@ -395,12 +413,12 @@ def _load_break_rule_state(
     the migration the column is absent; we detect that and treat soft results
     as empty so the §2 renderer continues to work.
     """
-    conn = open_repo_db(repo_root)
-    if conn is None or not has_table(conn, "thesis_evaluations"):
-        if conn is not None:
-            conn.close()
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None or not has_table(db_conn, "thesis_evaluations"):
+        if db_conn is not None and conn is None:
+            db_conn.close()
         return ("unknown", [], [], None)
-    cursor = conn.cursor()
+    cursor = db_conn.cursor()
     has_soft_col = any(
         c["name"] == "soft_rule_results_json"
         for c in cursor.execute("PRAGMA table_info(thesis_evaluations)").fetchall()
@@ -417,7 +435,8 @@ def _load_break_rule_state(
         (ticker.upper(),),
     )
     row = cursor.fetchone()
-    conn.close()
+    if conn is None:
+        db_conn.close()
     if row is None:
         return ("unknown", [], [], None)
     overall = _coerce_status(str(row["overall_status"]))

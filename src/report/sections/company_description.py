@@ -33,7 +33,12 @@ from report.sections._common import (
 )
 
 
-def build(ticker: str, repo_root: Path) -> CompanyDescriptionSection:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> CompanyDescriptionSection:
     ticker = ticker.upper()
     cached = load_description(repo_root, ticker)
     if cached is None:
@@ -77,6 +82,7 @@ def build(ticker: str, repo_root: Path) -> CompanyDescriptionSection:
         descriptions=cached.segments,
         rules=rules,
         include_operating_income=True,
+        conn=conn,
     )
     geo_rows = _build_weighting_rows(
         ticker=ticker,
@@ -85,6 +91,7 @@ def build(ticker: str, repo_root: Path) -> CompanyDescriptionSection:
         descriptions=cached.geographies,
         rules=rules,
         include_operating_income=True,
+        conn=conn,
     )
 
     # Optional: platform diagram is a separate extraction pipeline so the
@@ -141,6 +148,7 @@ def _build_weighting_rows(
     descriptions: list[dict[str, str | None]],
     rules: TickerRules,
     include_operating_income: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> list[SegmentWeighting]:
     """Merge latest-period segment_facts revenue with LLM-written descriptions.
 
@@ -158,7 +166,7 @@ def _build_weighting_rows(
     description_by_name = {
         str(d["name"]): d.get("description") for d in descriptions if d.get("name")
     }
-    latest = _latest_period_totals(ticker, repo_root, metric, rules)
+    latest = _latest_period_totals(ticker, repo_root, metric, rules, conn=conn)
     if not latest:
         return [
             SegmentWeighting(name=name, description=desc)
@@ -182,7 +190,7 @@ def _build_weighting_rows(
     # the column when no row in the table has OI.
     oi_by_name: dict[str, float] = {}
     if include_operating_income:
-        oi_by_name = _latest_period_totals(ticker, repo_root, "operating_income", rules)
+        oi_by_name = _latest_period_totals(ticker, repo_root, "operating_income", rules, conn=conn)
     oi_total = sum(abs(v) for v in oi_by_name.values()) if oi_by_name else 0.0
     oi_lookup_normalized = {_normalize_oi_key(k): v for k, v in oi_by_name.items()}
 
@@ -237,20 +245,26 @@ def _build_weighting_rows(
 
 
 def _latest_period_totals(
-    ticker: str, repo_root: Path, metric: str, rules: TickerRules
+    ticker: str,
+    repo_root: Path,
+    metric: str,
+    rules: TickerRules,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, float]:
     """Sum the LATEST available quarter's segment values by canonical segment name.
 
     Mirrors the §5 segments canonicalization (rules.canonicalize_segment) so
     weighting matches the table elsewhere in the report.
     """
-    conn = open_repo_db(repo_root)
-    if conn is None or not has_table(conn, "segment_dimensions"):
-        if conn is not None:
-            conn.close()
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None or not has_table(db_conn, "segment_dimensions"):
+        if db_conn is not None and conn is None:
+            db_conn.close()
         return {}
-    rows = _load_rows(conn, ticker, metric)
-    conn.close()
+    rows = _load_rows(db_conn, ticker, metric)
+    if conn is None:
+        db_conn.close()
     if not rows:
         return {}
     canonical_by_quarter: dict[tuple[int, int], dict[str, float]] = defaultdict(
