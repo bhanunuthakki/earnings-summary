@@ -26,8 +26,8 @@ SRC = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from ui.controls import (  # noqa: E402
-    copilot_prompt_chip,
     controls_css,
+    copilot_prompt_chip,
     k_empty,
     panel_section_title,
     panel_toolbar,
