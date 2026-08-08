@@ -13,7 +13,6 @@ INVESTOR_GRADE_CORE_ROOTS = (
     PROJECT_ROOT / "src" / "search",
 )
 INVESTOR_GRADE_EXECUTION_FILES = (
-    "audit_data_cutover_readiness.py",
     "audit_evidence_integrity.py",
     "backfill_evidence_ledger.py",
     "backfill_financial_fact_resolutions.py",
@@ -31,7 +30,6 @@ INVESTOR_GRADE_EXECUTION_FILES = (
     "initialize_semantic_review.py",
     "match_legacy_companyfacts_evidence.py",
     "promote_embedding_model.py",
-    "prepare_data_cutover.py",
     "reconcile_source_coverage.py",
     "refresh_source_coverage_from_evidence.py",
     "resolve_foreign_identity_blockers.py",
@@ -132,6 +130,15 @@ def test_investor_grade_data_core_has_no_raw_sqlite_connections() -> None:
     )
     assert core_calls == 0
     assert execution_calls == 0
+
+
+def test_investor_grade_execution_inventory_names_live_files() -> None:
+    missing = [
+        filename
+        for filename in INVESTOR_GRADE_EXECUTION_FILES
+        if not (PROJECT_ROOT / "execution" / filename).is_file()
+    ]
+    assert missing == []
 
 
 def test_central_connection_calls_declare_an_explicit_capability_role() -> None:
