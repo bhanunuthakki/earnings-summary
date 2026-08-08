@@ -357,7 +357,7 @@ def test_prompt_override_failure_log_redacts_credentials(
     import llm.cli as cli
     import llm.prompt_ab as pab
 
-    secret = "top-secret-token"
+    secret = "top-secret-token"  # pragma: allowlist secret - synthetic redaction fixture
 
     def fail_override(*_args: object, **_kwargs: object) -> str:
         raise RuntimeError(f"https://example.test?apikey={secret}")

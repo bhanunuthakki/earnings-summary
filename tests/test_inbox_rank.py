@@ -541,6 +541,39 @@ def test_thesis_tones_memo_invalidates_on_db_write(tmp_path: Path) -> None:
     assert "thesis 1.50 (bad)" in second[0].score_why
 
 
+def test_thesis_tones_memo_invalidates_on_uncheckpointed_wal_write(tmp_path: Path) -> None:
+    db = tmp_path / "thesis-wal.db"
+    anchor = sqlite3.connect(db)
+    try:
+        assert anchor.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        anchor.execute(
+            "CREATE TABLE thesis_evaluations (ticker TEXT, overall_status TEXT, evaluated_at TEXT)"
+        )
+        anchor.execute("INSERT INTO thesis_evaluations VALUES ('NU','ok','2026-06-09')")
+        anchor.commit()
+        when = NOW - timedelta(hours=2)
+        first = annotate_and_rank(
+            [_alert_item(ticker="NU", when=when)], db_path=db, now=NOW, position_weights={}
+        )
+        assert "thesis 1.00 (ok)" in first[0].score_why
+        main_mtime = db.stat().st_mtime_ns
+
+        writer = sqlite3.connect(db)
+        try:
+            writer.execute("INSERT INTO thesis_evaluations VALUES ('NU','breach','2026-06-11')")
+            writer.commit()
+        finally:
+            writer.close()
+
+        assert db.stat().st_mtime_ns == main_mtime
+        second = annotate_and_rank(
+            [_alert_item(ticker="NU", when=when)], db_path=db, now=NOW, position_weights={}
+        )
+        assert "thesis 1.50 (bad)" in second[0].score_why
+    finally:
+        anchor.close()
+
+
 def test_why_string_names_every_factor() -> None:
     why = _rank([_alert_item()])[0].score_why
     for token in ("severity", "x recency", "x position", "x thesis", "x strength", "="):

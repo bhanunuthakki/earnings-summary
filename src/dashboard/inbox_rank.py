@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -49,6 +50,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from signals.store import SIGNAL_CONSENSUS_RATING
+from sqlite_freshness import SQLiteFileToken, sqlite_file_token
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import thesis_status_tone
 
@@ -317,17 +319,17 @@ _THESIS_TONE_FACTORS: dict[str, float] = {"ok": 1.0, "warn": 1.25, "bad": 1.5}
 #     write busts the memo by bumping the mtime — no time-based staleness window,
 #     no schema. A scoped two-read cache, NOT a universal spine.
 
-_TONES_MEMO: dict[str, tuple[int, dict[str, str]]] = {}
-_NEWS_META_MEMO: dict[tuple[str, tuple[int, ...]], tuple[int, dict[int, tuple[str, str]]]] = {}
+_DB_MEMO_TTL_SECONDS = 30.0
+_TONES_MEMO: dict[str, tuple[SQLiteFileToken, float, dict[str, str]]] = {}
+_NEWS_META_MEMO: dict[
+    tuple[str, tuple[int, ...]],
+    tuple[SQLiteFileToken, float, dict[int, tuple[str, str]]],
+] = {}
 
 
-def _db_mtime_ns(db_path: Path) -> int | None:
-    """File mtime in ns — the memo invalidation key. ``None`` when the file is
-    gone (a vanished DB busts the memo, which is the safe default)."""
-    try:
-        return db_path.stat().st_mtime_ns
-    except OSError:
-        return None
+def _db_file_token(db_path: Path) -> SQLiteFileToken | None:
+    """Main-file plus WAL generation; ``None`` makes callers bypass cache."""
+    return sqlite_file_token(db_path)
 
 
 def _materialized_weights(db_path: Path | None) -> dict[str, float]:
@@ -356,13 +358,19 @@ def _thesis_tones(db_path: Path | None) -> dict[str, str]:
     if not path.exists():
         return {}
     key = str(path.resolve())
-    mtime = _db_mtime_ns(path)
+    token = _db_file_token(path)
+    now = time.monotonic()
     cached = _TONES_MEMO.get(key)
-    if cached is not None and mtime is not None and cached[0] == mtime:
-        return cached[1]
+    if (
+        cached is not None
+        and token is not None
+        and cached[0] == token
+        and now - cached[1] <= _DB_MEMO_TTL_SECONDS
+    ):
+        return cached[2]
     tones = _compute_thesis_tones(path)
-    if mtime is not None:
-        _TONES_MEMO[key] = (mtime, tones)
+    if token is not None:
+        _TONES_MEMO[key] = (token, now, tones)
     return tones
 
 
@@ -402,13 +410,19 @@ def _news_meta(db_path: Path | None, news_ids: list[int]) -> dict[int, tuple[str
     if not path.exists():
         return {}
     key = (str(path.resolve()), tuple(sorted(set(int(i) for i in news_ids))))
-    mtime = _db_mtime_ns(path)
+    token = _db_file_token(path)
+    now = time.monotonic()
     cached = _NEWS_META_MEMO.get(key)
-    if cached is not None and mtime is not None and cached[0] == mtime:
-        return cached[1]
+    if (
+        cached is not None
+        and token is not None
+        and cached[0] == token
+        and now - cached[1] <= _DB_MEMO_TTL_SECONDS
+    ):
+        return cached[2]
     meta = _compute_news_meta(path, list(key[1]))
-    if mtime is not None:
-        _NEWS_META_MEMO[key] = (mtime, meta)
+    if token is not None:
+        _NEWS_META_MEMO[key] = (token, now, meta)
     return meta
 
 

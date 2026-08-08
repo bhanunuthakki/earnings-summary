@@ -278,6 +278,29 @@ def test_gather_memo_busts_on_db_write(repo: Path) -> None:
     assert turn_cache.stats()["gather"]["misses"] == 2
 
 
+def test_db_token_changes_for_uncheckpointed_wal_commit(tmp_path: Path) -> None:
+    db = tmp_path / "wal.db"
+    anchor = sqlite3.connect(db)
+    try:
+        assert anchor.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        anchor.execute("CREATE TABLE sample (value TEXT)")
+        anchor.commit()
+        before_main = db.stat().st_mtime_ns
+        before = turn_cache.db_mtime_token(db)
+
+        writer = sqlite3.connect(db)
+        try:
+            writer.execute("INSERT INTO sample VALUES ('fresh')")
+            writer.commit()
+        finally:
+            writer.close()
+
+        assert db.stat().st_mtime_ns == before_main
+        assert turn_cache.db_mtime_token(db) != before
+    finally:
+        anchor.close()
+
+
 def test_gather_memo_isolated_per_thread(repo: Path) -> None:
     _gather(repo, cache_key="sid:1")
     # A different thread key is a different memo — no cross-conversation leak.
