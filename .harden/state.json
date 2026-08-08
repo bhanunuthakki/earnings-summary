@@ -6,23 +6,23 @@
     "L1": {
       "architecture-reviewer": {
         "verdict": "PASS",
-        "open_findings": 1,
-        "last_run": "2026-08-07"
+        "open_findings": 0,
+        "last_run": "2026-08-08"
       },
       "data-engineer": {
         "verdict": "PASS",
-        "open_findings": 3,
-        "last_run": "2026-08-07"
+        "open_findings": 0,
+        "last_run": "2026-08-08"
       },
       "llm-evals-orchestrator": {
         "verdict": "PASS",
         "open_findings": 1,
-        "last_run": "2026-08-07"
+        "last_run": "2026-08-08"
       },
       "qa-test-strategy": {
         "verdict": "PASS",
-        "open_findings": 3,
-        "last_run": "2026-08-07"
+        "open_findings": 0,
+        "last_run": "2026-08-08"
       }
     }
   }
