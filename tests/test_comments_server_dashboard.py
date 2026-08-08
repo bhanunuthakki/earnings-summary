@@ -208,27 +208,28 @@ def test_extracted_routes_preserve_endpoint_contract(client):
 
 
 def test_dashboard_page_returns_shell(client):
-    """GET / now serves the unified tabbed command-center shell, with the
-    Overview tab server-inlined (the Research cockpit, P1.2) for first paint
-    and the other tabs as lazy placeholders."""
+    """GET / serves the eight-screen Work OS while panel APIs stay live."""
     resp = client.get("/")
     assert resp.status_code == 200
     assert resp.mimetype == "text/html"
     body = resp.get_data(as_text=True)
-    assert "<title>Portfolio · command center</title>" in body
-    # Top-bar section nav + sub-tab rows (five-section IA, UX PR2) + inlined Overview.
-    assert 'class="cc-topnav"' in body
-    assert 'data-theme-target="home"' in body
-    assert 'data-panel="overview"' in body
-    # Other tabs lazy-load from /api/panel/<name> (Phase-5 IA: Portfolio's
-    # Record composite replaced the standalone Triggers/holdings sub-tab).
-    assert 'data-endpoint="/api/panel/portfolio_record"' in body
-    assert 'data-endpoint="/api/panel/budget"' in body
-    # Overview is inlined → the seeded tickers appear on first paint, as
-    # cockpit rows (this minimal schema lacks the enrichment tables — the
-    # cockpit degrades to base fields rather than 500-ing).
-    assert 'hx-get="/api/panel/overview"' in body
-    assert 'hx-trigger="load"' in body
+    assert "<title>Equity Research OS — Harvey/Legora Masterwork Edition</title>" in body
+    assert 'class="app-sidebar"' in body
+    for screen_id in (
+        "screen-cockpit",
+        "screen-performance",
+        "screen-allocation",
+        "screen-workspace",
+        "screen-full-brief",
+        "screen-analytics-playground",
+        "screen-audit-log",
+        "screen-execution-queue",
+    ):
+        assert f'id="{screen_id}"' in body
+    assert 'id="cc-palette"' not in body
+    assert 'id="cc-notes-drawer"' not in body
+    assert "workOsLoadScreen" in body
+    # The old Overview builder remains a live drill-through endpoint.
     overview = client.get("/api/panel/overview")
     assert overview.status_code == 200
     overview_body = overview.get_data(as_text=True)
@@ -240,11 +241,16 @@ def test_dashboard_page_returns_shell(client):
 
 
 def test_dashboard_overview_excludes_action_blocks(client):
-    """P1.2 moved the IR-KPI + maintenance blocks out of Overview; they serve
-    from the Governance → Actions fragment instead."""
+    """Maintenance is absent from Cockpit chrome and remains endpoint-only."""
     body = client.get("/").get_data(as_text=True)
     assert 'id="refresh-ir-form"' not in body
-    assert 'data-endpoint="/api/panel/actions"' in body
+    assert 'data-endpoint="/api/panel/actions"' not in body
+
+
+def test_mobile_inbox_redirects_to_the_responsive_cockpit(client):
+    resp = client.get("/mobile/inbox")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/#screen-cockpit")
 
 
 def test_actions_panel_fragment_serves_ir_form(client):

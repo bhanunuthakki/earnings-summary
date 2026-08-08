@@ -46,8 +46,8 @@ from ui.tokens import (  # noqa: E402
 
 def test_copilot_prompt_chip_renders_interactive_chip() -> None:
     html = copilot_prompt_chip("Analyze NU Q2 beat", citation="doc:bcb_jun26_p4")
-    assert 'k-chip-copilot' in html
-    assert 'k-chip-btn' in html
+    assert "k-chip-copilot" in html
+    assert "k-chip-btn" in html
     assert 'data-citation="doc:bcb_jun26_p4"' in html
     assert "Analyze NU Q2 beat" in html
 
@@ -543,6 +543,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/ticker_settings_panel.py",
         "pipeline/triage_panel.py",
         "pipeline/validation_issues_panel.py",
+        "pipeline/work_os_shell.py",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",
         "report/renderers/charts_v2.py",

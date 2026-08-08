@@ -1515,6 +1515,7 @@ def _evaluation_spec(repo_root: str) -> ReportSpec:
 PORTFOLIO_PANES = [
     "thesis",
     "valuation",
+    "comps",
     "earnings",
     "saydo",
     "news",
@@ -1742,6 +1743,24 @@ def test_evaluation_part_inventory(evaluation_parts: dict[str, str]) -> None:
     assert sorted(evaluation_parts) == sorted(_part_names(EVALUATION_PANES))
 
 
+@pytest.mark.parametrize("parts_name", ["portfolio_parts", "evaluation_parts"])
+def test_workspace_uses_the_six_prototype_brief_groups(
+    parts_name: str, request: pytest.FixtureRequest
+) -> None:
+    shell = request.getfixturevalue(parts_name)["shell"]
+    labels = [
+        "Overview &amp; Moat",
+        "Quarter &amp; Guidance",
+        "Financials &amp; DCF",
+        "Thesis &amp; Risk",
+        "Valuation &amp; Comps",
+        "Sources &amp; Citations",
+    ]
+    positions = [shell.index(f'<span class="tab-label">{label}</span>') for label in labels]
+    assert positions == sorted(positions)
+    assert shell.count('class="tab active"') == 1
+
+
 @pytest.mark.parametrize("part", _part_names(PORTFOLIO_PANES))
 def test_portfolio_golden(part: str, portfolio_parts: dict[str, str]) -> None:
     _check_golden("portfolio", part, portfolio_parts[part])
@@ -1777,9 +1796,9 @@ def test_portfolio_flavor_shows_peer_comp_panel(portfolio_parts: dict[str, str])
     """Owner decision 2026-07-02 (directives/peer_selection_llm.md): the peer
     comparison panel is no longer gated to `--flavor evaluation`. Portfolio
     builds (the owner's actual holdings) must render it, populated with
-    computed multiples, in the Company tab — same fixture peer rows
+    computed multiples, in the dedicated Valuation & Comps pane — same fixture peer rows
     (`_p3_rich`) that `test_p3_seam_reaches_document` anchors on."""
-    html = portfolio_parts["pane_company"]
+    html = portfolio_parts["pane_comps"]
     assert 'class="panel peer-comp-panel"' in html
     assert "Peer comparison" in html
     assert "RIVL" in html

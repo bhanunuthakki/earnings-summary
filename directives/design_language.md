@@ -75,8 +75,8 @@ by the executable guard `tests/test_ui_controls.py`. Status pills/wells use the
 
 ## 3. Chrome & 3-Layer Work OS Architecture
 
-- **Harvey/Legora 3-Layer Sidebar Navigation**: Dashboard surfaces adopt the 3-Layer Work OS sidebar structure (`.app-sidebar`, `--sidebar-width: 240px`, collapsed rail width: 56px):
-  - **L1 · Portfolio Intelligence**: `Portfolio Cockpit`, `Performance Benchmark`, `Portfolio Allocation`.
+- **Harvey/Legora 3-Layer Sidebar Navigation**: Dashboard surfaces adopt the 3-Layer Work OS sidebar structure (`.app-sidebar`, `--sidebar-width: 240px`, collapsed rail width: 56px). These eight destinations are the complete primary IA; adding a ninth requires owner approval:
+  - **L1 · Portfolio Intelligence**: `Portfolio Cockpit`, `Performance vs Index`, `Risk & Allocations`.
   - **L2 · Research Engine**: `Company Desk`, `Full Research Brief Canvas` (`#screen-full-brief`), `Fact & Metric Analytics Playground` (`#screen-analytics-playground`).
   - **L3 · Operations & Governance**: `Decision Audit Log`, `Execution Queue & Operations Hub` (`#screen-execution-queue`).
 - **Collapsed Sidebar Rail Hover Tooltips**: When `.app-sidebar.is-collapsed` is active, hovering over any `.nav-item` displays a floating label tooltip (`data-tooltip="..."`) positioned to the right of the icon rail. Standalone settings and footer stubs are excised from the LHS rail.
@@ -84,16 +84,28 @@ by the executable guard `tests/test_ui_controls.py`. Status pills/wells use the
   - Dense exploratory matrices and report briefs belong on **dedicated full-canvas screens** (`#screen-full-brief` with 6 tabbed panes, `#screen-analytics-playground` with 42+ extracted 3-statement facts). Never force multi-metric statement matrices into narrow slide drawers.
   - Slide-over drawers (`openDrillDrawer()`) are reserved for **rich multi-panel contextual drill-downs**:
     - `saydo`: Guidance audit ledger, CFO tone check (`CONFIDENT / EXPANSIVE 88%`), transcript summary, and analyst Q&A roster (Goldman Sachs, Morgan Stanley).
+    - `thresholds`: Buy / Hold / Trim / Sell conditions for existing positions plus governed Next-Dollar Allocation. This is decision guidance, never broker routing.
     - `dcf-priors`: WACC baseline, perpetual growth rate $g$, high growth fade horizon, refresh cadence.
     - `llm-routing`: Model tier routing (Claude 3.5 Sonnet / Opus cheapest-at-parity vs Gemini 1.5 Pro).
     - `governance-limits`: Position cap, LatAm FX limit, VaR thresholds, API provider integration statuses.
 - **Direct Google Sheets DCF Model Link**: Replace narrow slider drawer stubs on Company Desk with direct **`Google Sheets DCF Model ↗`** links (`openSheetDCFModel()`), pointing directly to canonical 9-sheet workbooks (`dcf/<TICKER>.xlsx`).
-- **Zero-Layout-Pop Card Dismissal Contract**: Action cards implement the `.card-dismissing` collapse contract (`dismissCard()`, height-locked transition with `border-color: transparent !important`, `max-height: 0`, `opacity: 0`, `transform: scale(0.97) translateY(-2px)`). Dismissing an item prevents vertical layout jumping and persists state to `data/portfolio.db` with a `.toast-notice` toast.
+- **No trade-execution surface**: the localhost research product does not claim to submit, route, or fill orders. Allocation decisions are expressed as thresholds and next-dollar guidance; execution happens outside this application.
+- **Zero-Layout-Pop Card Dismissal Contract**: Action cards implement the `.card-dismissing` collapse contract (`dismissCard()`, height-locked transition with `border-color: transparent !important`, `max-height: 0`, `opacity: 0`, `transform: scale(0.97) translateY(-2px)`). Dismissing an item prevents vertical layout jumping and clears it for the current session. Only an explicit decision or threshold change may create durable state.
 - **One radius hierarchy**: `--radius` (8px) for inputs/buttons; `--radius-card` (10px) for surface cards; `--radius-drawer` (14px) for slide drawers; `--radius-full` (999px) for pills, dots, and chips.
 - **One motion**: `var(--transition)` (150ms ease) or `var(--transition-fluid)` (250ms cubic-bezier) with explicit properties — never `transition: all`.
 - **Elevation shadows**: `--shadow-card` for cards, `--shadow-card-hover` for interactive cards, `--shadow-pop` for popovers, and `--shadow-drawer` for slide drawers.
 
-### 3.1 Surface dismissal — the `CCOverlay` contract (Law 3)
+### 3.1 Product simplification contract
+
+- **Cockpit is the only inbox.** It shows at most three ranked items and omits empty categories. An item qualifies only when it requires a decision, reports material new information, or records a breached risk/falsifier condition.
+- **Company context owns company work.** Information-diet signals, position coaching, say/do review, decision discipline, and company-specific learnings live in Company Desk drawers or the Full Research Brief. They do not get standalone navigation.
+- **Decision Audit owns durable learning.** Cross-company decisions, changed assumptions, outcomes, and lessons form one lifecycle timeline. Ledger, Journal, Triage, Review, Worldview, and advisor-memo pages are retired frontend concepts.
+- **Risk is conclusion-first.** The primary screen shows risk budget, factor exposure, concentration/correlation, allocation drift, freshness, and material warnings. Expensive stress analytics are cached backend evidence and appear only when decision-relevant.
+- **Operations is exception-first.** Data quality, pipeline health, model health/cost, and DCF health are the four diagnostic groups. Routine events remain in logs rather than the primary screen.
+- **One responsive product.** `/mobile/inbox` resolves to the responsive Cockpit. Telegram is a transport adapter for capture, bounded digests, and deep links; it never owns a separate inbox or workflow state.
+- **One interaction spine.** The shell owns screen routing, one Search/Ask entry, contextual drill drawer, source peek, action receipts, and data loading. Notes live with companies and configuration lives in Operations; no parallel palette/dock/drawer frameworks.
+
+### 3.2 Surface dismissal — the `CCOverlay` contract (Law 3)
 
 Every transient surface — drawer, peek, palette, dock, sidebar, popover — is an
 instance of ONE primitive, `window.CCOverlay` (`src/pipeline/cc_overlay.py`),
@@ -605,7 +617,12 @@ backlog + journal until then.
 
 ---
 
-## Diet-vs-alert (the information-diet substrate)
+## Diet-vs-alert (backend substrate; no standalone frontend)
+
+The Diet destination and general-purpose feed are retired. These rules continue
+to govern ingestion and ranking, but retained signals render only in a relevant
+Company Desk drawer or the portfolio-level Risk & Allocations drawer. A signal
+with no decision context stays out of the primary UI.
 
 A thesis-breach ALERTER and an information-diet CURATOR are **inverse products**
 and must not share one pipe. The repo's original `news` → decaying inbox scorer
@@ -654,7 +671,12 @@ diet rows is independent of the wall clock.
 
 ---
 
-## 12. The Discovery rule (weighted candidate ranking)
+## 12. The Discovery rule (backend-only weighted candidate ranking)
+
+Discovery has no primary navigation or dedicated dashboard. Its deterministic
+ranking service remains available to research tooling; a candidate becomes a
+Company Desk concern only after the owner explicitly adds it to tracked
+coverage. Discovery output never enters the Cockpit merely to fill space.
 
 The discovery queue is a **ranked surface**, so by the Instrument Paradigm it
 scores **by a weighted sum of typed, dated signals through a source-weight

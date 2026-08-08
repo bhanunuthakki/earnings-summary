@@ -1,0 +1,68 @@
+<div class="tab-pane subtab-pane" data-tab="comps">
+<div class="tab-body">
+<div class="panel peer-comp-panel" data-commentable="true" data-anchor-type="peer_comp" data-anchor-key="peer_comp" data-anchor-tab="company">
+<div class="panel-head">
+<span class="panel-title">Peer comparison</span>
+<span class="panel-meta">
+<span class="panel-sub">2 comparables · TTM key metrics</span>
+</span>
+</div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter peers…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter peers…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> peers</span>
+</div>
+<table class="tbl tbl-nowrap">
+<thead>
+<tr>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('ticker','text')" @keydown.enter.prevent="sortBy('ticker','text')" :aria-sort="ariaSort('ticker')">Ticker<span class="lg-ind" x-text="arrow('ticker')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('name','text')" @keydown.enter.prevent="sortBy('name','text')" :aria-sort="ariaSort('name')">Name<span class="lg-ind" x-text="arrow('name')">
+</span>
+</th>
+<th>Why</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('mcap','num')" @keydown.enter.prevent="sortBy('mcap','num')" :aria-sort="ariaSort('mcap')">Market cap<span class="lg-ind" x-text="arrow('mcap')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('rev','num')" @keydown.enter.prevent="sortBy('rev','num')" :aria-sort="ariaSort('rev')">Revenue TTM<span class="lg-ind" x-text="arrow('rev')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('margin','num')" @keydown.enter.prevent="sortBy('margin','num')" :aria-sort="ariaSort('margin')">Net margin TTM<span class="lg-ind" x-text="arrow('margin')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('roic','num')" @keydown.enter.prevent="sortBy('roic','num')" :aria-sort="ariaSort('roic')">ROIC TTM<span class="lg-ind" x-text="arrow('roic')">
+</span>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr data-text="rivl rival systems named rival · same industry" data-ticker="rivl" data-name="rival systems" data-mcap="48000000000.000000" data-rev="5900000000.000000" data-margin="0.180000" data-roic="0.210000">
+<td>
+<strong class="mono">RIVL</strong>
+</td>
+<td>Rival Systems</td>
+<td class="muted xsmall">named rival · same industry</td>
+<td class="num">$48.0B</td>
+<td class="num">$5.9B</td>
+<td class="num">18.0%</td>
+<td class="num">21.0%</td>
+</tr>
+<tr data-text="mega mega suite corp adjacent platform · similar buyer" data-ticker="mega" data-name="mega suite corp" data-mcap="310000000000.000000" data-rev="41000000000.000000" data-margin="0.270000" data-roic="0.190000">
+<td>
+<strong class="mono">MEGA</strong>
+</td>
+<td>Mega Suite Corp</td>
+<td class="muted xsmall">adjacent platform · similar buyer</td>
+<td class="num">$310.0B</td>
+<td class="num">$41.0B</td>
+<td class="num">27.0%</td>
+<td class="num">19.0%</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
