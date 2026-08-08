@@ -1602,6 +1602,22 @@ def call_llm(
         purpose = "__default__"
         log.warning({"event": "llm_purpose_defaulted", "purpose": purpose})
 
+    # Apply production prompt experiments before any provider is selected so
+    # Codex, Claude, Gemini, and OpenRouter all receive the same governed
+    # prompt. Eval scopes deliberately bypass the override in
+    # apply_prompt_override so captured replays remain byte-identical.
+    try:
+        from llm.prompt_ab import apply_prompt_override
+
+        prompt = apply_prompt_override(purpose, scope, prompt)
+    except Exception as hook_exc:
+        log.debug(
+            {
+                "event": "prompt_override_hook_failed",
+                "error": f"{type(hook_exc).__name__}: {hook_exc}"[:120],
+            }
+        )
+
     from llm.model_ladder import (
         GEMINI as _GEMINI_FAMILY,
     )
@@ -1753,8 +1769,7 @@ def call_llm(
                     "event": "openrouter_backend_failed_falling_back_to_claude",
                     "purpose": purpose,
                     "error": (
-                        f"{type(openrouter_error).__name__}: "
-                        f"{redact(str(openrouter_error)[:200])}"
+                        f"{type(openrouter_error).__name__}: {redact(str(openrouter_error)[:200])}"
                     ),
                 }
             )

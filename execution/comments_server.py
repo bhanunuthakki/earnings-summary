@@ -581,7 +581,11 @@ def create_app(
     def get_read_db() -> sqlite3.Connection:
         if "request_read_db" not in g:
             db_path = repo_root / "data" / "portfolio.db"
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+            conn = connect_sqlite(
+                db_path,
+                role=SQLiteConnectionRole.READ_ONLY,
+                schema_preflight=True,
+            )
             conn.row_factory = sqlite3.Row
             g.request_read_db = conn
         return g.request_read_db

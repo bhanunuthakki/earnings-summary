@@ -89,6 +89,15 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
             "SELECT 1 FROM sqlite_master WHERE type='index' "
             "AND name='ix_llm_calls_purpose_called_at'"
         ).fetchone()
+        conn.execute(
+            "INSERT INTO alerts(user_id,ticker,trigger_kind,fired_at,status,evidence_json,"
+            "signature_sha) VALUES "
+            "('bhanu','__model__qa_topics','model_pin_switch','2026-08-08T00:00:00',"
+            "'pending','{}','model-pin-switch-regression')"
+        )
+        model_pin_alert = conn.execute(
+            "SELECT trigger_kind FROM alerts WHERE signature_sha='model-pin-switch-regression'"
+        ).fetchone()
 
     assert revision == ("0003_restore_baseline_defaults",)
     assert identity is not None
@@ -106,11 +115,14 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
         "discovery": _digest_rows(discovery),
         "kpi_routes": _digest_rows(kpi_routes),
     }
-    assert digests == {
-        "budgets": "e7d9d3699bcf7fdef916f9838f979ee35cc5c5f6529d4ef068b67ff253ac6f9f",
-        "discovery": "1055bb386366234b8485dde8a6ca08163b1680889f1beee3c1a5b430dc3980d2",
-        "kpi_routes": "f10c7aa845b032970758a7051a933d2ab27a497d81b353dc44dfca8e9adf8999",
-    }
+    assert (
+        digests
+        == {
+            "budgets": "e7d9d3699bcf7fdef916f9838f979ee35cc5c5f6529d4ef068b67ff253ac6f9f",  # pragma: allowlist secret
+            "discovery": "1055bb386366234b8485dde8a6ca08163b1680889f1beee3c1a5b430dc3980d2",  # pragma: allowlist secret
+            "kpi_routes": "f10c7aa845b032970758a7051a933d2ab27a497d81b353dc44dfca8e9adf8999",  # pragma: allowlist secret
+        }
+    )
     assert default_budget == (25, "warn")
     assert post_earnings == (5, "skip")
     assert discovery_count == (39,)
@@ -126,6 +138,7 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
     }
     assert kpi_count == (27,)
     assert llm_index == (1,)
+    assert model_pin_alert == ("model_pin_switch",)
 
     command.downgrade(cfg, "0002_drop_dead_tables")
     with sqlite3.connect(db_path) as conn:
@@ -231,6 +244,10 @@ def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> N
                 id INTEGER PRIMARY KEY,
                 model TEXT NOT NULL
             );
+            CREATE TABLE financial_facts (
+                id INTEGER PRIMARY KEY
+            );
+            INSERT INTO financial_facts(id) VALUES (1);
             CREATE TABLE llm_budgets (
                 id INTEGER PRIMARY KEY,
                 purpose TEXT NOT NULL UNIQUE,
@@ -273,6 +290,9 @@ def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> N
             str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")
         }
         llm_call_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(llm_calls)")}
+        financial_fact_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(financial_facts)")
+        }
         budget_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(llm_budgets)")}
         discovery_columns = {
             str(row[1]) for row in conn.execute("PRAGMA table_info(discovery_sources)")
@@ -291,6 +311,7 @@ def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> N
         assert conn.execute(
             "SELECT next_sequence FROM source_fact_publication_stream_clock"
         ).fetchone() == (1,)
+        assert conn.execute("SELECT id,line_item FROM financial_facts").fetchone() == (1, None)
 
     assert {
         "archived_at",
@@ -299,6 +320,7 @@ def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> N
         "processing_tier",
     } <= tracked_columns
     assert {"called_at", "purpose"} <= llm_call_columns
+    assert "line_item" in financial_fact_columns
     assert "on_exceed" in budget_columns
     assert "cik" in discovery_columns
     assert {"fallback_source", "ir_url"} <= kpi_columns

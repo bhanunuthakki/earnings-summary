@@ -61,7 +61,11 @@ def open_conn(db_path: Path | str | None, *, schema_preflight: bool = True) -> s
 def open_read_conn(db_path: Path | str | None) -> sqlite3.Connection:
     """Open a read-only connection without demanding current writer schema."""
     path = _resolved_path(db_path)
-    conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=True,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")

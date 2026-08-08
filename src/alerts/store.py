@@ -92,6 +92,7 @@ TRIGGER_KINDS: frozenset[str] = frozenset(
         "owner_capacity_breach",
         "data_feed_stale",
         "risk_drift",
+        "model_pin_switch",
     }
 )
 # Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).
@@ -696,7 +697,7 @@ def _open(
     conn = connect_sqlite(
         path,
         role=role,
-        schema_preflight=role is SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")

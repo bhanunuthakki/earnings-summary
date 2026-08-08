@@ -50,8 +50,9 @@ def test_importing_db_does_not_create_the_configured_database(tmp_path: Path) ->
     assert not configured.exists()
 
 
-def test_graph_selection_is_per_operation_and_head_rebases_to_active(tmp_path: Path) -> None:
+def test_graph_selection_follows_stamped_database_and_explicit_locations(tmp_path: Path) -> None:
     archive = PROJECT_ROOT / "alembic" / "versions_archived"
+    active = PROJECT_ROOT / "alembic" / "versions"
     historical_db = tmp_path / "historical.db"
     historical = _config(historical_db)
 
@@ -63,11 +64,24 @@ def test_graph_selection_is_per_operation_and_head_rebases_to_active(tmp_path: P
             "0273_post_earnings_readout_budget",
         )
 
+    # Historical test fixtures commonly rebuild Config between the stamp and
+    # upgrade. ``head`` must follow the revision already stored in the DB,
+    # otherwise the active squashed baseline runs against handcrafted legacy
+    # tables and either duplicates them or fails on missing old columns.
     upgrade = getattr(command, "upgrade")
-    upgrade(historical, "head")
+    upgrade(_config(historical_db), "head")
 
     assert historical.get_main_option("version_locations", "") == ""
     with sqlite3.connect(historical_db) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0003_restore_baseline_defaults",
+        )
+
+    active_db = tmp_path / "active.db"
+    explicitly_active = _config(active_db)
+    explicitly_active.set_main_option("version_locations", str(active))
+    upgrade(explicitly_active, "head")
+    with sqlite3.connect(active_db) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
             "0003_restore_baseline_defaults",
         )

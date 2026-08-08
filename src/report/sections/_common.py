@@ -117,7 +117,11 @@ def open_repo_db(
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return None
-    c = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    c = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=True,
+    )
     c.row_factory = sqlite3.Row
     return c
 

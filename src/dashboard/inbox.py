@@ -148,6 +148,10 @@ _TRIGGER_LABELS: dict[str, str] = {
     "saydo_due": "Say/do due",
     "decision_condition": "Condition met",
     "restatement": "Restatement",
+    "owner_capacity_breach": "Capacity breach",
+    "data_feed_stale": "Data feed stale",
+    "risk_drift": "Risk drift",
+    "model_pin_switch": "Model routing",
 }
 
 
@@ -1236,9 +1240,9 @@ def _article_url(it: InboxItem) -> str | None:
 def _alert_memo(it: InboxItem) -> str:
     if it.alert is None:
         return ""
-    from dashboard._card import _memo_text_from_evidence
+    from dashboard._card import memo_text_from_evidence
 
-    return _memo_text_from_evidence(it.alert.evidence_json) or ""
+    return memo_text_from_evidence(it.alert.evidence_json) or ""
 
 
 def _esc(text: str) -> str:

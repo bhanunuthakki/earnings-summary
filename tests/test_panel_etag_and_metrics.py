@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,10 +31,10 @@ import comments_server  # noqa: E402
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> FlaskClient:
+def client(tmp_path: Path, migrated_db: Callable[..., Path]) -> FlaskClient:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    sqlite3.connect(str(data_dir / "portfolio.db")).close()
+    migrated_db(data_dir / "portfolio.db")
     app = comments_server.create_app(tmp_path)
     return app.test_client()
 

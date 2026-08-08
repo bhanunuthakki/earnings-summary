@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-16"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>Daily backfill of aggregator Q&amp;A transcripts + commitment extraction for the active universe (portfolio + watchlist + evaluation). Fires at 04:30 — before the FMP earnings-calendar fetch (05:45), the earnings_calendar_watcher (06:00), and daily_fetch_and_brief (06:30) so §5/§6 of the daily briefs reflect the freshest aggregator data.</Description>

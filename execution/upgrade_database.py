@@ -19,7 +19,6 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -27,7 +26,14 @@ from alembic.util.exc import CommandError
 from pydantic import BaseModel, ConfigDict
 
 from alembic import command
-from run_lock import hold_run_lock
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from run_lock import hold_run_lock  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 ACTIVE_BASE = "0001_initial_schema"
 ACTIVE_HEAD = "0003_restore_baseline_defaults"
@@ -69,8 +75,7 @@ def _config(repo_root: Path, db_path: Path, *, archived: bool) -> Config:
 def _read_revisions(db_path: Path) -> tuple[str, ...]:
     if not db_path.exists():
         return ()
-    uri = f"file:{quote(str(db_path.resolve()).replace(os.sep, '/'), safe='/:')}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         has_version = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='alembic_version'"
@@ -87,7 +92,7 @@ def _read_revisions(db_path: Path) -> tuple[str, ...]:
 def _user_tables(db_path: Path) -> set[str]:
     if not db_path.exists():
         return set()
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         return {
             str(row[0])
@@ -101,13 +106,18 @@ def _user_tables(db_path: Path) -> set[str]:
 
 
 def _integrity_check(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         result = conn.execute("PRAGMA integrity_check").fetchone()
+        foreign_key_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     finally:
         conn.close()
     if result is None or str(result[0]).lower() != "ok":
         raise UpgradeDatabaseError(f"SQLite integrity_check failed for {db_path}: {result!r}")
+    if foreign_key_violations:
+        raise UpgradeDatabaseError(
+            f"SQLite foreign_key_check failed for {db_path}: {foreign_key_violations[:10]!r}"
+        )
 
 
 def _backup_database(db_path: Path, backup_path: Path) -> None:
@@ -115,8 +125,12 @@ def _backup_database(db_path: Path, backup_path: Path) -> None:
         raise UpgradeDatabaseError(f"refusing to overwrite backup: {backup_path}")
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = backup_path.with_name(f".{backup_path.name}.{os.getpid()}.tmp")
-    source = sqlite3.connect(str(db_path))
-    destination = sqlite3.connect(str(temp_path))
+    source = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    destination = connect_sqlite(
+        temp_path,
+        role=SQLiteConnectionRole.SNAPSHOT_DESTINATION,
+        schema_preflight=False,
+    )
     try:
         source.backup(destination)
     finally:
@@ -136,7 +150,7 @@ def _default_backup_path(db_path: Path) -> Path:
 
 
 def _validate_legacy_schema(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         tables = {
             str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -169,7 +183,11 @@ def _reanchor_at_active_baseline(db_path: Path, expected_archived_head: str) -> 
             f"archived upgrade did not reach its single head: expected={expected_archived_head!r} "
             f"actual={list(revisions)!r}"
         )
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=False,
+    )
     try:
         with conn:
             updated = conn.execute(

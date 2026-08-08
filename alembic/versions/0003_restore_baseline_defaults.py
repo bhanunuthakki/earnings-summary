@@ -231,6 +231,13 @@ _KPI_ROUTES: tuple[tuple[str, str, str, str | None, str | None], ...] = (
     ("CNQ", "Production by basin; AECO/WCS realized prices; FCF", "sec_xbrl", "ir_doc", None),
 )
 
+_ALERT_TRIGGER_KINDS = (
+    "'kpi_inflection', 'earnings_tone', 'saydo_due', 'thesis_drift', "
+    "'material_news', 'decision_condition', 'restatement', "
+    "'owner_capacity_breach', 'data_feed_stale', 'risk_drift', "
+    "'model_pin_switch'"
+)
+
 
 # source key, class, name, weight, tier, tags, CIK.
 _DISCOVERY_SOURCES: tuple[tuple[str, str, str, float, str, str, str | None], ...] = (
@@ -646,6 +653,29 @@ def _ensure_compatibility_schema(bind: sa.engine.Connection) -> None:
     )
 
     bind.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS financial_facts (
+            id INTEGER NOT NULL PRIMARY KEY,
+            ticker VARCHAR NOT NULL,
+            period_end DATETIME NOT NULL,
+            fiscal_period_type VARCHAR NOT NULL,
+            line_item VARCHAR NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            currency VARCHAR(3),
+            unit VARCHAR NOT NULL,
+            source_doc_id INTEGER NOT NULL,
+            confidence FLOAT DEFAULT 1.0 NOT NULL,
+            line_item_concept_id INTEGER,
+            extracted_by VARCHAR(64),
+            supersedes_id INTEGER,
+            locator TEXT
+        )"""
+    )
+    # A malformed stamped-0002 database can contain fact rows without this
+    # baseline column. Preserve those rows without fabricating a semantic line
+    # item; later validation can surface NULLs for operator repair.
+    _add_columns(bind, "financial_facts", (("line_item", "VARCHAR"),))
+
+    bind.exec_driver_sql(
         """CREATE TABLE IF NOT EXISTS tracked_companies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT DEFAULT 'bhanu',
@@ -693,11 +723,33 @@ def _ensure_compatibility_schema(bind: sa.engine.Connection) -> None:
     )
 
 
+def _ensure_alert_trigger_kinds(bind: sa.engine.Connection) -> None:
+    """Admit the model-evaluation alert emitted by apply_model_switches."""
+    if not _table_exists(bind, "alerts"):
+        return
+    table_sql = bind.execute(
+        sa.text("SELECT sql FROM sqlite_master WHERE type='table' AND name='alerts'")
+    ).scalar_one_or_none()
+    if (
+        not isinstance(table_sql, str)
+        or "ck_alerts_trigger_kind" not in table_sql
+        or "model_pin_switch" in table_sql
+    ):
+        return
+    with op.batch_alter_table("alerts") as batch:
+        batch.drop_constraint("ck_alerts_trigger_kind", type_="check")
+        batch.create_check_constraint(
+            "ck_alerts_trigger_kind",
+            f"trigger_kind IN ({_ALERT_TRIGGER_KINDS})",
+        )
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     now = datetime.now(UTC).isoformat()
 
     _ensure_compatibility_schema(bind)
+    _ensure_alert_trigger_kinds(bind)
 
     # Budget checks filter by both columns before every LLM call. The squashed
     # baseline retained separate/partial indexes, which still scans all calls

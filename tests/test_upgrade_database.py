@@ -84,6 +84,28 @@ def test_upgrade_database_rejects_nonempty_unversioned_db(tmp_path: Path) -> Non
         upgrade_database(db_path, repo_root=ROOT)
 
 
+def test_upgrade_database_rejects_foreign_key_corruption(tmp_path: Path) -> None:
+    db_path = tmp_path / "foreign-key-corrupt.db"
+    upgrade_database(db_path, repo_root=ROOT)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            """
+            INSERT INTO alerts
+                (user_id, ticker, trigger_kind, fired_at, evidence_json, signature_sha)
+            VALUES ('missing-tenant', 'TEST', 'material_news',
+                    '2026-08-08T00:00:00', '{}', 'fk-corruption-test')
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(UpgradeDatabaseError, match="foreign_key_check failed"):
+        upgrade_database(db_path, repo_root=ROOT)
+
+
 def test_upgrade_database_cli_emits_valid_json_receipt(tmp_path: Path) -> None:
     db_path = tmp_path / "cli.db"
     result = subprocess.run(
