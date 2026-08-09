@@ -96,6 +96,11 @@ def gemini_api_error_type() -> type[Exception]:
     return cast("type[Exception]", genai_errors.APIError)
 
 
+def gemini_http_error_type() -> type[Exception]:
+    """Return the HTTP transport-error base used by the official SDK path."""
+    return httpx.HTTPError
+
+
 # Gemini API tiers for analytical writing (Pro) vs the short structured calls
 # that run on Haiku under the Claude backend (Flash). The tier derivation in
 # gemini_model_for keeps these two aligned with LLM_MODELS so retuning a

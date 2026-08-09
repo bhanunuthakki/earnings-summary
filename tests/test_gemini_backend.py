@@ -29,6 +29,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar, cast
 
+import httpx
 import pytest
 from google.genai import errors as genai_errors
 
@@ -367,6 +368,35 @@ def test_gemini_api_error_falls_back_through_full_router(
     assert claude_seen["model"] == llm_cli.DEFAULT_MODEL
 
 
+def test_gemini_http_timeout_falls_back_through_full_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unforced SDK transport timeout remains inside the governed fallback path."""
+    timeout = httpx.ReadTimeout(
+        "timed out",
+        request=httpx.Request("POST", "https://generativelanguage.googleapis.com"),
+    )
+
+    def _timeout(prompt: str, **kw: object) -> str:
+        raise timeout
+
+    monkeypatch.setattr(gemini_backend, "call_gemini", _timeout)
+
+    def _fake_claude(prompt: str, **kw: object) -> str:
+        return "C"
+
+    monkeypatch.setattr(llm_cli, "_call_claude", _fake_claude)
+
+    assert (
+        llm_cli.call_llm(
+            "p",
+            purpose="bear_case",
+            model="gemini-3.1-pro-preview",
+        )
+        == "C"
+    )
+
+
 def test_forced_gemini_operational_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """backend='gemini' means the caller wants GEMINI's answer (the compare
     harness): a failure must surface, never silently switch backends."""
@@ -408,6 +438,33 @@ def test_forced_gemini_api_error_still_raises(monkeypatch: pytest.MonkeyPatch) -
             backend="gemini",
         )
     assert exc_info.value is error
+
+
+def test_forced_gemini_http_timeout_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicitly forced provider keeps its HTTP transport failure semantics."""
+    timeout = httpx.ConnectTimeout(
+        "timed out",
+        request=httpx.Request("POST", "https://generativelanguage.googleapis.com"),
+    )
+
+    def _timeout(prompt: str, **kw: object) -> str:
+        raise timeout
+
+    monkeypatch.setattr(gemini_backend, "call_gemini", _timeout)
+
+    def _fail(prompt: str, **kw: object) -> str:
+        raise AssertionError("claude must not run on a forced-gemini timeout")
+
+    monkeypatch.setattr(llm_cli, "_call_claude", _fail)
+
+    with pytest.raises(httpx.ConnectTimeout) as exc_info:
+        llm_cli.call_llm(
+            "p",
+            purpose="bear_case",
+            model="gemini-3.1-pro-preview",
+            backend="gemini",
+        )
+    assert exc_info.value is timeout
 
 
 @pytest.mark.parametrize(

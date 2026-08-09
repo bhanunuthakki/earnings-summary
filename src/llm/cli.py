@@ -1701,9 +1701,17 @@ def call_llm(
         from llm.gemini_backend import (  # late — avoids import cycle
             call_gemini,
             gemini_api_error_type,
+            gemini_http_error_type,
         )
 
-        gemini_api_error = gemini_api_error_type()
+        gemini_operational_errors: tuple[type[Exception], ...] = (
+            subprocess.SubprocessError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            gemini_api_error_type(),
+            gemini_http_error_type(),
+        )
 
         try:
             text = call_gemini(
@@ -1729,13 +1737,7 @@ def call_llm(
             return text
         except (LLMBudgetExceeded, LLMSetupError):
             raise  # hard stops — never paper over with a backend switch
-        except (
-            subprocess.SubprocessError,
-            OSError,
-            RuntimeError,
-            ValueError,
-            gemini_api_error,
-        ) as gemini_error:
+        except gemini_operational_errors as gemini_error:
             if backend == "gemini":
                 raise  # explicitly forced: the caller wants Gemini's answer or its error
             from log_redact import redact

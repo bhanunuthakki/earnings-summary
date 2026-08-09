@@ -1,6 +1,6 @@
 # Backend and database flows
 
-This map describes the localhost application after the August 2026 debt-hardening pass. It groups the 153 Flask routes by responsibility while preserving the distinct ingress, managed-runtime, orchestration, persistence, cache, and external-provider boundaries.
+This map describes the localhost application after the August 2026 debt-hardening pass. It groups the 154 Flask routes by responsibility while preserving the distinct ingress, managed-runtime, orchestration, persistence, cache, and external-provider boundaries.
 
 ## Runtime and backend flow
 
@@ -21,7 +21,7 @@ flowchart TB
         sqlite_boot["Verified SQLite 3.53.4 bootstrap\none hash/load per process"]
     end
     subgraph flask["Flask cockpit :7421"]
-        routes["153 routes\ncore 110, DCF 7, content 24, alerts 6, settings 4, journal 2"]
+        routes["154 routes\ncore 111, DCF 7, content 24, alerts 6, settings 4, journal 2"]
         panels["Panel fragment renderer\n30-second, 256-entry cache plus ETag/304\nper-key single-flight"]
         telemetry["Panel latency telemetry\nobservational POST does not evict cache"]
         ask["Ask orchestration\n4-worker pool, bounded pack and artifact reads"]

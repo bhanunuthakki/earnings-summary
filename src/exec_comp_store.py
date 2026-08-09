@@ -1,8 +1,8 @@
-"""Read/write API for exec_comp_packages + exec_holdings.
+"""Read/write API for ``exec_comp_packages``.
 
 Persists annual DEF 14A Named-Executive-Officer compensation packages and
-beneficial ownership snapshots. The schema captures the analytical questions
-that matter for thesis-vs-incentive alignment:
+their incentive-design disclosures. The schema captures the analytical
+questions that matter for thesis-vs-incentive alignment:
 
   performance_metrics_json â€” JSON list of {metric, weight, threshold, target,
                               max, actual}. Powers the alignment lens: do
@@ -15,9 +15,10 @@ that matter for thesis-vs-incentive alignment:
                               they banked. Big gaps are alignment signals.
   ceo_pay_ratio            â€” required CEO/median-employee disclosure.
 
-Companion fetcher (Phase 5b LLM extractor) reads the proxy and emits an
-exec_comp_packages row + 1+ exec_holdings rows per NEO. See
-execution/extract_exec_comp.py.
+The companion extractor reads the proxy and emits one ``exec_comp_packages``
+row per NEO. The former ``exec_holdings`` table was retired by migration 0002;
+insider ownership signals now come from their canonical store. See
+``execution/extract_exec_comp.py``.
 """
 
 from __future__ import annotations
