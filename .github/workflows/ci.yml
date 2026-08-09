@@ -249,12 +249,9 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.python == 'true' }}
     # Diff-aware pyright (strict) ratchet. The repo carries a large pre-existing
-    # strict baseline (~3070 — tooling drift), so a whole-repo "must be clean"
-    # gate is impossible. Instead we compare the whole-repo strict error count in
-    # this PR against the base branch and fail only when the PR RAISES it — new
-    # code stays strict-clean while the baseline is paid down incrementally.
-    # Whole-repo (not per-file) so cross-module regressions are caught and the
-    # count is computed in identical import context for base and head.
+    # strict baseline, so a whole-repo "must be clean" gate is impossible. Compare
+    # normalized diagnostics in identical import context and block genuinely new
+    # errors while the legacy baseline is paid down incrementally.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -274,7 +271,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
-          pip install "pyright>=1.1.380"
+          pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
       - name: Resolve base ref
         id: base
         run: |

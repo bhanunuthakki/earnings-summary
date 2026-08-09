@@ -165,12 +165,15 @@ def test_pyright_diff_ignores_worktree_root_and_source_location(helper: ModuleTy
         ],
     }
 
-    assert helper.pyright_new_errors(
-        base,
-        head,
-        base_root=Path("/tmp/base"),
-        head_root=Path("/home/runner/head"),
-    ) == []
+    assert (
+        helper.pyright_new_errors(
+            base,
+            head,
+            base_root=Path("/tmp/base"),
+            head_root=Path("/home/runner/head"),
+        )
+        == []
+    )
 
 
 def test_pyright_diff_is_a_multiset_and_catches_new_errors(helper: ModuleType) -> None:
@@ -243,6 +246,9 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert 'git diff --name-only --no-renames -z "$PUSH_BEFORE_SHA" "$CURRENT_SHA"' in workflow
     assert 'pyright --outputjson > "$head_json" 2>/dev/null || true' in workflow
     assert "ci_gate.py pyright-diff" in workflow
+    assert (
+        'pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"' in workflow
+    )
     assert "ci_gate.py select-tests" in workflow
     assert "errcount || echo 0" not in workflow
     assert "python .github/scripts/ci_gate.py classify" in workflow

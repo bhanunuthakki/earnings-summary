@@ -230,6 +230,9 @@ def _pyright_diff_command(args: argparse.Namespace) -> int:
         return 1
 
     print(f"pyright strict errors - base={base_count} head={head_count}")
+    errors_by_file = Counter(path for path, _rule, _message in new_errors)
+    for path, count in errors_by_file.most_common():
+        print(f"new pyright errors - {path}: {count}")
     for path, rule, message in new_errors[:100]:
         rule_prefix = f"{rule}: " if rule else ""
         print(f"::error file={path}::{rule_prefix}{message}")
