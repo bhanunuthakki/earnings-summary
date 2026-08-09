@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from flask.testing import FlaskClient
 
 # `execution/` isn't on sys.path by default; only `src/` (via pyproject pythonpath).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -287,7 +288,7 @@ def test_dashboard_overview_excludes_action_blocks(client):
     assert 'data-endpoint="/api/panel/actions"' not in body
 
 
-def test_mobile_inbox_redirects_to_the_responsive_cockpit(client):
+def test_mobile_inbox_redirects_to_the_responsive_cockpit(client: FlaskClient) -> None:
     resp = client.get("/mobile/inbox")
     assert resp.status_code == 302
     assert resp.headers["Location"].endswith("/#screen-cockpit")

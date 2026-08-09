@@ -84,6 +84,7 @@ _LEGACY_HASHES: dict[str, str] = {
     "portfolio_risk": "screen-allocation",
     "ask": "screen-analytics-playground",
     "explore": "screen-analytics-playground",
+    "red_team": "screen-analytics-playground",
     "review": "screen-audit-log",
     "musings": "screen-audit-log",
     "journal": "screen-audit-log",

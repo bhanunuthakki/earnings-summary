@@ -127,29 +127,28 @@ def _group_map(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[tuple[str, str, 
 
 
 def test_portfolio_group_map_held() -> None:
-    """Portfolio flavor: Overview leads; Position group (with Decisions)
-    appears when held; every legacy section has a home."""
+    """Portfolio flavor follows the prototype's exact six-group brief."""
     got = _group_map(_make_spec(held=True), WorkspaceP3Panels.empty())
     assert got == [
-        ("overview", "Overview", ["thesis", "valuation"]),
-        ("quarter", "Quarter", ["earnings", "saydo", "news"]),
-        ("financials", "Financials", ["financials"]),
-        ("research", "Research", ["bear", "company", "exec_comp", "synthesis"]),
-        ("position", "Position", ["position", "decisions"]),
-        ("sources", "Sources", ["sources"]),
+        ("overview", "Overview & Moat", ["company", "synthesis", "exec_comp"]),
+        ("quarter", "Quarter & Guidance", ["earnings", "saydo", "news"]),
+        ("financials", "Financials & DCF", ["financials"]),
+        ("thesis-risk", "Thesis & Risk", ["thesis", "bear", "position"]),
+        ("valuation-comps", "Valuation & Comps", ["valuation", "comps"]),
+        ("sources", "Sources & Citations", ["sources"]),
     ]
 
 
-def test_evaluation_group_map_leads_with_research_company_first() -> None:
-    """Evaluation flavor: Research is the default group and Company its
-    default section — the reader hasn't internalized the business yet."""
+def test_evaluation_group_map_uses_the_same_brief_canvas() -> None:
+    """Both flavors share the prototype's stable six-group reading order."""
     got = _group_map(_make_spec(flavor=ReportFlavor.EVALUATION), WorkspaceP3Panels.empty())
     assert got == [
-        ("research", "Research", ["company", "bear", "exec_comp", "synthesis"]),
-        ("overview", "Overview", ["thesis", "valuation"]),
-        ("quarter", "Quarter", ["earnings", "saydo", "news"]),
-        ("financials", "Financials", ["financials"]),
-        ("sources", "Sources", ["sources"]),
+        ("overview", "Overview & Moat", ["company", "synthesis", "exec_comp"]),
+        ("quarter", "Quarter & Guidance", ["earnings", "saydo", "news"]),
+        ("financials", "Financials & DCF", ["financials"]),
+        ("thesis-risk", "Thesis & Risk", ["thesis", "bear"]),
+        ("valuation-comps", "Valuation & Comps", ["valuation", "comps"]),
+        ("sources", "Sources & Citations", ["sources"]),
     ]
 
 
@@ -159,29 +158,26 @@ def test_not_held_no_decisions_hides_position_group() -> None:
         "overview",
         "quarter",
         "financials",
-        "research",
+        "thesis-risk",
+        "valuation-comps",
         "sources",
     ]
 
 
-def test_exited_name_keeps_decisions_as_standalone_tab() -> None:
-    """Not held but with decision history (an exited name): the audit trail
-    stays reachable as a single-section Decisions group."""
+def test_exited_name_keeps_decisions_in_thesis_risk() -> None:
+    """An exited name's decision audit stays beside its thesis and risk."""
     got = _group_map(_make_spec(held=False), _p3_with_decisions(3))
-    assert ("decisions", "Decisions", ["decisions"]) in got
-    assert [gid for gid, _lbl, _sids in got] == [
-        "overview",
-        "quarter",
-        "financials",
-        "research",
-        "decisions",
-        "sources",
-    ]
+    assert ("thesis-risk", "Thesis & Risk", ["thesis", "bear", "decisions"]) in got
+    assert all(gid != "decisions" for gid, _lbl, _sids in got)
 
 
-def test_held_decisions_fold_into_position_group() -> None:
+def test_held_decisions_fold_into_thesis_risk_group() -> None:
     got = _group_map(_make_spec(held=True), _p3_with_decisions(3))
-    assert ("position", "Position", ["position", "decisions"]) in got
+    assert (
+        "thesis-risk",
+        "Thesis & Risk",
+        ["thesis", "bear", "position", "decisions"],
+    ) in got
     assert all(gid != "decisions" for gid, _lbl, _sids in got)
 
 
@@ -191,15 +187,15 @@ def test_held_decisions_fold_into_position_group() -> None:
 
 
 def test_tab_badge_aggregates_counts_across_group() -> None:
-    """Overview badge = thesis KPI rows (valuation carries no count);
-    Position badge = accounts + decisions."""
+    """Thesis & Risk aggregates KPI, failure-mode, position, and decision counts."""
     spec = _make_spec(held=True, kpi_rows=2)
     out = StringIO()
     _tabs(out, _tab_groups(spec, _p3_with_decisions(3)))
     html = out.getvalue()
-    assert '<span class="tab-label">Overview</span><span class="tab-count">2</span>' in html
-    # Position group: 0 accounts + 3 decisions.
-    assert '<span class="tab-label">Position</span><span class="tab-count">3</span>' in html
+    assert '<span class="tab-label">Overview &amp; Moat</span>' in html
+    assert (
+        '<span class="tab-label">Thesis &amp; Risk</span><span class="tab-count">5</span>' in html
+    )
 
 
 def test_tab_badge_omitted_when_no_section_counts() -> None:
@@ -228,7 +224,7 @@ def test_render_grouped_markup_portfolio(tmp_path: Path) -> None:
     assert (
         '<div class="tab-group-pane active" data-tab-group="overview">'
         '<div class="subtabs">'
-        '<button class="subtab active" data-subtab="thesis">' in html
+        '<button class="subtab active" data-subtab="company">' in html
     )
     # Section panes keep the legacy per-section data-tab ids on .tab-pane —
     # the contract saved comment anchors and data-xtab links resolve against.
@@ -244,7 +240,7 @@ def test_render_grouped_markup_portfolio(tmp_path: Path) -> None:
         "exec_comp",
         "synthesis",
         "position",
-        "decisions",
+        "comps",
         "sources",
     ):
         assert f'<div class="tab-pane subtab-pane active" data-tab="{sid}">' in html or (
@@ -259,10 +255,10 @@ def test_render_grouped_markup_portfolio(tmp_path: Path) -> None:
     assert 'data-subtab="sources"' not in html
 
 
-def test_render_evaluation_defaults_to_company(tmp_path: Path) -> None:
+def test_render_evaluation_defaults_to_overview_company(tmp_path: Path) -> None:
     html = render(_make_spec(flavor=ReportFlavor.EVALUATION, repo_root=str(tmp_path)))
     assert (
-        '<div class="tab-group-pane active" data-tab-group="research">'
+        '<div class="tab-group-pane active" data-tab-group="overview">'
         '<div class="subtabs">'
         '<button class="subtab active" data-subtab="company">' in html
     )
