@@ -1799,6 +1799,7 @@ def _require_runtime_head_unchanged(receipt: GcRecoveryAdmissionReceipt) -> None
 
 
 def _collect_live_process_census() -> LiveProcessCensus:
+    observations: list[ProcessCensusObservation]
     if os.name == "nt":
         powershell = (
             Path(
@@ -1833,7 +1834,7 @@ def _collect_live_process_census() -> LiveProcessCensus:
         except json.JSONDecodeError as exc:
             raise GcRecoveryError("live all-process census output is invalid") from exc
         rows: list[object] = cast(list[object], raw) if isinstance(raw, list) else [raw]
-        observations: list[ProcessCensusObservation] = []
+        observations = []
         for row_raw in rows:
             if not isinstance(row_raw, dict):
                 raise GcRecoveryError("live process census row is not an object")

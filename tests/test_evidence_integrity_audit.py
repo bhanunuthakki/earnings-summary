@@ -9,7 +9,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import pytest
 from alembic.config import Config
@@ -38,6 +38,17 @@ from provenance.source_inventory_seal import (
     SourceInventorySealStore,
     component_digest,
 )
+
+
+class _ResolutionCutoverVerifier(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        resolution_snapshot_id: str,
+        cutoff_at: datetime,
+        observed_through: datetime,
+    ) -> None: ...
 
 
 def test_resolution_cutover_verifier_propagates_observed_through(
@@ -80,7 +91,11 @@ def test_resolution_cutover_verifier_propagates_observed_through(
         _verify_watermark,
     )
 
-    integrity_audit._verify_resolution_cutover(
+    verify_resolution_cutover = cast(
+        "_ResolutionCutoverVerifier",
+        getattr(integrity_audit, "_verify_resolution_cutover"),
+    )
+    verify_resolution_cutover(
         sqlite3.connect(":memory:"),
         resolution_snapshot_id="resolution",
         cutoff_at=cutoff,

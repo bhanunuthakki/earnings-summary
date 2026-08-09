@@ -4,15 +4,48 @@ import hashlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
+import provenance.sec_filing_xbrl_ingest as sec_filing_xbrl_ingest
 from filings.inline_xbrl_processor import ProcessorPackageMember
 from provenance.sec_filing_xbrl_ingest import (
-    _append_offline_artifacts,
-    _original_recorded_at,
     file_uri_path,
     persist_exact,
+)
+
+
+class _AppendOfflineArtifacts(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        captured: tuple[ProcessorPackageMember, ...],
+        additional: tuple[ProcessorPackageMember, ...],
+        issuer_id: str,
+        accession_number: str,
+        knowledge_cutoff: datetime,
+    ) -> tuple[ProcessorPackageMember, ...]: ...
+
+
+class _OriginalRecordedAt(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        proposed: datetime,
+    ) -> datetime: ...
+
+
+append_offline_artifacts = cast(
+    "_AppendOfflineArtifacts",
+    getattr(sec_filing_xbrl_ingest, "_append_offline_artifacts"),
+)
+original_recorded_at = cast(
+    "_OriginalRecordedAt",
+    getattr(sec_filing_xbrl_ingest, "_original_recorded_at"),
 )
 
 
@@ -94,7 +127,7 @@ def test_offline_artifact_requires_source_evidence_available_at_cutoff(
         media_type="application/xml",
     )
     with pytest.raises(ValueError, match="source observation"):
-        _append_offline_artifacts(
+        append_offline_artifacts(
             conn,
             captured=(),
             additional=(member,),
@@ -107,7 +140,7 @@ def test_offline_artifact_requires_source_evidence_available_at_cutoff(
         ("observation-1", source_url, digest, cutoff + timedelta(days=1)),
     )
     with pytest.raises(ValueError, match="source observation"):
-        _append_offline_artifacts(
+        append_offline_artifacts(
             conn,
             captured=(),
             additional=(member,),
@@ -119,7 +152,7 @@ def test_offline_artifact_requires_source_evidence_available_at_cutoff(
         "INSERT INTO evidence_source_observations VALUES (?,?,?,?)",
         ("observation-2", source_url, digest, cutoff - timedelta(days=1)),
     )
-    admitted = _append_offline_artifacts(
+    admitted = append_offline_artifacts(
         conn,
         captured=(),
         additional=(member,),
@@ -157,7 +190,7 @@ def test_replay_refuses_incomplete_or_non_atomic_durable_closure() -> None:
     ):
         conn.execute(ddl)
     with pytest.raises(ValueError, match="incomplete historical"):
-        _original_recorded_at(conn, run_id="run-1", proposed=stamp + timedelta(days=1))
+        original_recorded_at(conn, run_id="run-1", proposed=stamp + timedelta(days=1))
     conn.execute(
         "INSERT INTO filing_xbrl_extraction_input_seals VALUES (?,?,?,?,?)",
         ("run-1", 0, 0, 0, stamp),
@@ -167,4 +200,4 @@ def test_replay_refuses_incomplete_or_non_atomic_durable_closure() -> None:
         ("run-1", 0, stamp, stamp + timedelta(seconds=1)),
     )
     with pytest.raises(ValueError, match="non-atomic durable clocks"):
-        _original_recorded_at(conn, run_id="run-1", proposed=stamp + timedelta(days=1))
+        original_recorded_at(conn, run_id="run-1", proposed=stamp + timedelta(days=1))
