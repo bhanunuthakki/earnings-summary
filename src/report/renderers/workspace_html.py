@@ -187,6 +187,7 @@ from report.renderers.workspace_sections.thesis_risk import (
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
 from report.renderers.workspace_styles import CSS
 from report.sections.p3_data import PeerCompRow
+from ui.controls import icon_svg
 from ui.living_grid import head_assets as _living_grid_head_assets
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.tokens import FAVICON_LINK
@@ -326,6 +327,12 @@ def render(spec: ReportSpec) -> str:
     # pins without a server fetch. Server is needed for posting NEW
     # comments + chat, but read-only display works file://.
     _comment_boot_data(body, spec)
+
+    # Resolve navigation before the shell so the persistent Work OS sidebar
+    # can own the report's top-level destinations without changing pane ids.
+    p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
+    groups = _tab_groups(spec, p3)
+    _tabs(body, groups, ticker=spec.ticker)
     body.write('<div class="l1-root">')
     _identity(body, spec)
     _forgone_strip(body, spec.forgone_due_to_budget)
@@ -337,15 +344,11 @@ def render(spec: ReportSpec) -> str:
     # peer comp, open notes) — pre-loaded once; the open-notes strip leads
     # the page (P4.4: builds lead with the owner's standing watch-items)
     # and the rest threads into the tab definitions.
-    p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
-
     _open_items_strip(body, p3.open_notes)
     _kpi_strip(body, spec.thesis.kpi_ledger, spec.ticker)
     _decision_card_strip(body, spec.investment_decision_card, ticker=spec.ticker)
 
     body.write('<div class="l1-tabs-wrap">')
-    groups = _tab_groups(spec, p3)
-    _tabs(body, groups)
     for gi, (gid, _glabel, sections) in enumerate(groups):
         # First group is active on load so its pane renders immediately. The
         # tab BUTTON already gets `active` at gi==0 (see _tabs); without the
@@ -391,7 +394,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 {FAVICON_LINK}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>{CSS}</style>
 <style>{CHARTS_V2_CSS}</style>
 <style>{COMMENTS_CSS}</style>
@@ -609,20 +612,72 @@ def _tab_groups(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabGroup]:
     return [(gid, label, [by_id[sid] for sid in sids]) for gid, label, sids in plan]
 
 
-def _tabs(body: StringIO, groups: list[TabGroup]) -> None:
-    body.write('<div class="tabs">')
-    for i, (gid, label, sections) in enumerate(groups):
-        # The badge aggregates across the group's sections (None when no
-        # section carries a count).
-        counts = [c for _sid, _slabel, c, _fn in sections if c is not None]
-        count = sum(counts) if counts else None
-        cls = "tab active" if i == 0 else "tab"
-        body.write(f'<button class="{cls}" data-tab="{_esc(gid)}">')
-        body.write(f'<span class="tab-label">{_esc(label)}</span>')
-        if count is not None:
-            body.write(f'<span class="tab-count">{count}</span>')
-        body.write("</button>")
-    body.write('<div class="tabs-spacer"></div></div>')
+_REPORT_NAV_LAYERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("L1 · Portfolio Intelligence", ("overview",)),
+    (
+        "L2 · Research Engine",
+        ("quarter", "financials", "thesis-risk", "valuation-comps"),
+    ),
+    ("L3 · Operations & Governance", ("sources",)),
+)
+
+_REPORT_NAV_ICONS: dict[str, str] = {
+    "overview": "cockpit",
+    "position": "portfolio",
+    "quarter": "feed",
+    "financials": "portfolio",
+    "thesis-risk": "review",
+    "valuation-comps": "company",
+    "sources": "system",
+}
+
+
+def _tabs(body: StringIO, groups: list[TabGroup], *, ticker: str = "Research") -> None:
+    """Render report destinations in the canonical three-layer sidebar."""
+    by_id = {gid: (label, sections) for gid, label, sections in groups}
+    active_id = groups[0][0]
+    body.write('<nav class="tabs k-sidebar report-sidebar" aria-label="Research workspace">')
+    body.write(
+        '<div class="report-sidebar-brand">'
+        f'<span class="report-sidebar-ticker">{_esc(ticker)}</span>'
+        '<span class="report-sidebar-product">Research Workspace</span>'
+        "</div>"
+        '<div class="report-nav-scroll">'
+    )
+    emitted: set[str] = set()
+    for layer_label, layer_ids in _REPORT_NAV_LAYERS:
+        visible_ids = [gid for gid in layer_ids if gid in by_id]
+        if not visible_ids:
+            continue
+        body.write('<div class="report-nav-layer">')
+        body.write(f'<div class="report-nav-label">{_esc(layer_label)}</div>')
+        for gid in visible_ids:
+            label, sections = by_id[gid]
+            emitted.add(gid)
+            counts = [count for _sid, _slabel, count, _fn in sections if count is not None]
+            count = sum(counts) if counts else None
+            active = gid == active_id
+            cls = "tab k-btn k-nav-item active" if active else "tab k-btn k-nav-item"
+            current = ' aria-current="page"' if active else ""
+            icon = icon_svg(_REPORT_NAV_ICONS.get(gid, "company"))
+            body.write(
+                f'<button type="button" class="{cls}" data-tab="{_esc(gid)}"{current} '
+                f'aria-label="{_esc(label)}">{icon}'
+            )
+            body.write(f'<span class="tab-label">{_esc(label)}</span>')
+            if count is not None:
+                body.write(f'<span class="tab-count">{count}</span>')
+            body.write("</button>")
+        body.write("</div>")
+
+    for gid, label, _sections in groups:
+        if gid not in emitted:
+            body.write(
+                f'<button type="button" class="tab k-btn k-nav-item" data-tab="{_esc(gid)}" '
+                f'aria-label="{_esc(label)}">{icon_svg("company")}'
+                f'<span class="tab-label">{_esc(label)}</span></button>'
+            )
+    body.write("</div></nav>")
 
 
 def _subtabs(body: StringIO, sections: list[TabDef]) -> None:

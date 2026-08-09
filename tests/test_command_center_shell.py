@@ -1,8 +1,8 @@
 """Unit tests for the unified command-center shell renderer.
 
 The shell is a pure function over a pre-built Overview HTML string + the
-five-section table (UX redesign PR2); these lock the structural contract
-the lazy-loader JS relies on (top-bar section nav + per-section sub-tab
+six-section table; these lock the structural contract
+the lazy-loader JS relies on (three-layer sidebar nav + per-section sub-tab
 rows, per-panel endpoints, cc-picker on the dropdown-driven Holding tab,
 legacy-hash + section-alias redirects, the Ctrl+K palette chrome).
 """
@@ -155,7 +155,7 @@ def test_overview_main_column_has_today_bands_placeholder() -> None:
     assert '<div id="cc-today-bands"></div>' in html
 
 
-def test_render_shell_five_section_structure() -> None:
+def test_render_shell_three_layer_sidebar_structure() -> None:
     html = render_shell(
         overview_html="<div id='ov-marker'>OVERVIEW</div>",
         generated_at=datetime(2026, 6, 1, tzinfo=UTC),
@@ -163,16 +163,20 @@ def test_render_shell_five_section_structure() -> None:
     assert html.startswith("<!doctype html>")
     assert html.rstrip().endswith("</body></html>")
     assert "<title>Portfolio · command center</title>" in html
-    # Every section keeps its activation contract — four in the primary nav
-    # (Today/Companies/Portfolio/Review), System as the utility icon (UX9b) —
-    # and every one keeps a sub-tab row. Ask is fully hidden (navigation_ia):
-    # no button anywhere (so no data-theme-target), but its sub-row + panel
-    # survive, which is what keeps #explore / goAsk / the dock ⇗ working.
-    for section in ("home", "companies", "portfolio", "review", "system"):
+    assert 'class="cc-app-shell"' in html
+    assert 'class="cc-sidebar k-sidebar"' in html
+    assert 'class="cc-primary-nav"' in html
+    for layer in (
+        "Portfolio Intelligence",
+        "Research Engine",
+        "Operations &amp; Governance",
+    ):
+        assert layer in html
+    # Every section is a visible sidebar destination and preserves the old
+    # activation/data contract used by deep links and lazy loading.
+    for section in ("home", "companies", "ask", "portfolio", "review", "system"):
         assert f'data-theme-target="{section}"' in html
         assert f'data-cc-theme="{section}"' in html  # its sub-tab row exists
-    assert 'data-theme-target="ask"' not in html
-    assert 'data-cc-theme="ask"' in html
     # The old three-theme ids are gone from the nav.
     for dead in ("research", "governance"):
         assert f'data-theme-target="{dead}"' not in html
@@ -222,33 +226,23 @@ def test_render_shell_five_section_structure() -> None:
     assert "/digest" not in html
 
 
-def test_system_demoted_to_utility_icon() -> None:
-    """navigation_ia over UX9b: the primary nav carries Today · Companies ·
-    Portfolio · Review only; System rides as a top-right icon button that
-    keeps the cc-theme-tab / data-theme-target activation contract (its
-    sub-tabs render as before once opened) plus a data-pal-label so its
-    palette row stays readable; Ask has NO top-bar button at all."""
+def test_sidebar_exposes_research_and_operations_destinations() -> None:
+    """Ask and System are first-class destinations in the accepted Work OS
+    sidebar instead of hidden/modal utility routes."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    topnav = html.split('class="cc-topnav"', 1)[1].split("</nav>", 1)[0]
-    for primary in ("home", "companies", "portfolio", "review"):
-        assert f'data-theme-target="{primary}"' in topnav
-    assert 'data-theme-target="system"' not in topnav
-    # Ask: hidden from the top bar (_HIDDEN_NAV_SECTIONS) but the section
-    # machinery survives — the explore panel + sub-row render, so #explore /
-    # goAsk / the dock ⇗ pop-out all still land on the full page.
-    assert 'data-theme-target="ask"' not in topnav
+    sidebar = html.split('class="cc-sidebar k-sidebar"', 1)[1].split("</aside>", 1)[0]
+    for destination in ("home", "companies", "ask", "portfolio", "review", "system"):
+        assert f'data-theme-target="{destination}"' in sidebar
     assert 'data-tab-target="explore"' in html
     assert 'data-panel="explore"' in html
-    # Labels: Home reads "Today"; the Review section is present.
-    assert ">Today</button>" in topnav
-    assert ">Review</button>" in topnav
-    # The icon button: theme contract intact (cc-theme-tab + cc-system-btn
-    # activation hooks preserved), now composing the kit quiet button.
-    assert 'class="cc-theme-tab cc-system-btn k-btn k-btn-quiet"' in html
-    assert 'data-theme-target="system" data-pal-label="System"' in html
-    # The palette JS prefers the readable label over the glyph text.
+    assert "Portfolio Cockpit" in sidebar
+    assert "Performance &amp; Allocation" in sidebar
+    assert "Research Copilot" in sidebar
+    assert "Decision Audit Log" in sidebar
+    assert "Execution Queue" in sidebar
+    assert "Operations &amp; Governance" in sidebar
+    assert sidebar.count('class="k-icon') >= 6
     assert "data-pal-label" in SHELL_JS
-    # System's sub-tab row still exists for when the icon activates it.
     assert 'data-cc-theme="system"' in html
 
 
@@ -482,7 +476,7 @@ def test_single_tab_sections_suppress_their_sub_row() -> None:
     # The CSS that suppresses single-tab rows + the [hidden] restatement that
     # keeps inactive rows from stacking (display:flex used to beat [hidden]).
     assert '.cc-subtabs[data-single="1"] { display: none; }' in SHELL_CSS
-    assert ".cc-tabs[hidden] { display: none; }" in SHELL_CSS
+    assert '.cc-tabs[hidden], .cc-subtabs[data-single="1"] { display: none; }' in SHELL_CSS
 
 
 def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
@@ -664,7 +658,8 @@ def test_settings_drawer_sections_collapsed_with_remembered_state() -> None:
 def test_type_scale_tokens_reach_the_shell() -> None:
     """The semantic scale is the shell's only type vocabulary: the headline
     tiers reference tokens and the old hardcoded h1/h2 sizes are gone."""
-    assert "--fs-display: 22px" in SHELL_CSS
+    assert "--fs-display: 20px" in SHELL_CSS
+    assert "--fs-title: 15px" in SHELL_CSS
     assert "h1 { font-size: var(--fs-display)" in SHELL_CSS
     assert "h2 { font-size: var(--fs-title)" in SHELL_CSS
     assert "font-size: 24px" not in SHELL_CSS
@@ -836,11 +831,10 @@ def test_portfolio_collapses_to_three_composites_in_order() -> None:
     assert allocation < health < record
 
 
-def test_content_width_is_wide() -> None:
-    """PR2: the 1280px cap left ~300px dead gutters per side at 1920 — the
-    shell now flows to 1600."""
-    assert "max-width: 1600px" in SHELL_CSS
-    assert "max-width: 1280px" not in SHELL_CSS
+def test_content_width_uses_the_shared_work_os_token() -> None:
+    """Content width follows the canonical token instead of a shell-local cap."""
+    assert "max-width: var(--main-max-width)" in SHELL_CSS
+    assert "--main-max-width: 1240px" in SHELL_CSS
 
 
 def test_lazy_panels_ship_structured_skeletons() -> None:
@@ -894,30 +888,38 @@ def test_state_store_loads_before_every_other_script() -> None:
     assert store_at < html.index(SHELL_JS[:40])
 
 
-def test_tablist_roving_tabindex_contract(
+def test_navigation_and_tablist_keyboard_contract(
     generated_at: datetime | None = None,
 ) -> None:
-    """L13: every role="tab" button ships with tabindex="-1" so JS can manage
-    the roving tabindex (one tab focusable at a time); activate() sets the
-    active button to 0 + arrow-key handlers drive focus. The JS helper names
-    and their wiring must be present."""
+    """Primary destinations are native navigation buttons; only subordinate
+    panel switchers implement the WAI-ARIA tab pattern and roving tabindex."""
     from datetime import UTC, datetime
 
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    # All tab buttons in the tablist navs must start with tabindex="-1".
-    # (The active one is flipped to 0 by activate() on first paint.)
     import re
 
+    primary_buttons = re.findall(r'<button class="cc-tab cc-theme-tab[^>]+>', html)
+    assert primary_buttons
+    for btn in primary_buttons:
+        assert 'role="tab"' not in btn
+        assert 'tabindex="-1"' not in btn
+        assert "aria-selected=" not in btn
+
+    # Subordinate panel tabs keep the complete tablist contract.
     tab_buttons = re.findall(r'<button[^>]+role="tab"[^>]*>', html)
     assert tab_buttons, "no role=tab buttons found"
     for btn in tab_buttons:
         assert 'tabindex="-1"' in btn, f"missing tabindex=-1 on: {btn!r}"
-    # JS wiring: helper defined, called for both nav containers.
+        assert 'aria-controls="cc-panel-' in btn
+    assert 'role="tablist"' in html
+    # JS wiring: helper is called only for the real subordinate tablists.
     assert "setupTablistNav" in SHELL_JS
+    assert "document.querySelector('.cc-primary-nav')" not in SHELL_JS
+    assert "subnavs.forEach(function (n) { setupTablistNav(n); });" in SHELL_JS
     assert "ArrowRight" in SHELL_JS and "ArrowLeft" in SHELL_JS
     assert "Home" in SHELL_JS and "End" in SHELL_JS
-    # activate() updates tabindex as well as aria-selected.
-    assert "tabindex" in SHELL_JS
+    assert "t.setAttribute('aria-current', 'page')" in SHELL_JS
+    assert "t.removeAttribute('aria-current')" in SHELL_JS
 
 
 def test_offline_banner_and_retry_button_contract() -> None:
@@ -950,7 +952,8 @@ def test_theme_toggle_contract() -> None:
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     # Toggle button present in the topbar chrome.
     assert 'id="cc-theme-toggle"' in html
-    assert ".cc-theme-toggle" in SHELL_CSS
+    assert 'class="cc-theme-toggle k-btn k-icon-btn"' in html
+    assert ".k-icon-btn" in SHELL_CSS
     # CSS ships light :root + dark override (enables actual theme switching).
     assert ':root[data-theme="dark"]' in SHELL_CSS
     # The light tokens are also present (not just dark-only :root).

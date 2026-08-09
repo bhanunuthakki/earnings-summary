@@ -136,36 +136,22 @@ FONT_TOKENS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Semantic type scale (UI polish foundation, v4 Masterwork Work OS Edition,
-# 2026-08-07).
+# Semantic type scale (compact Work OS hierarchy, v6, 2026-08-09).
 #
-# Size encodes IMPORTANCE, not surface. Evolved to the 10-step Work OS scale
-# to support information-dense financial copilot workspaces (Harvey/Legora level)
-# with ultra-deep obsidian ground (#090a0c) and clear visual hierarchy:
-#
-#   --fs-stat          metric stat numbers, hero ticker symbols (24px)
-#   --fs-display       the page's one dominant element: page title, hero stat (22px)
-#   --fs-header-title  governed target card titles, panel hero headers (17px)
-#   --fs-title         panel / drawer / card titles + real sub-section headings (16px)
-#   --fs-serif-body    editorial thesis prose, reading memo paragraphs (14.5px)
-#   --fs-body          default UI text: tables, inputs, buttons, tabs (13px)
-#   --fs-caption       everything smaller: table headers, stamps, sublabels, chips, badges (11px)
-#   --fs-mono-sm       timestamp badges, locator tags, mono annotations (10px)
-#   --fs-micro         nav layer section headers, micro uppercase labels (9.5px)
-#   --fs-nano          provenance source chips (.src-chip) (9px)
-#
-# Queued UI sessions build on these names — treat them as a public contract.
+# There are exactly four VISIBLE sizes: display 20, title 15, body 13, and
+# caption 11. Older semantic names remain aliases because they are a public
+# renderer contract, but aliases may not introduce another visible step.
 TYPE_SCALE: dict[str, str] = {
-    "fs-stat": "24px",
-    "fs-display": "22px",
-    "fs-header-title": "17px",
-    "fs-title": "16px",
-    "fs-serif-body": "14.5px",
+    "fs-display": "20px",
+    "fs-title": "15px",
     "fs-body": "13px",
     "fs-caption": "11px",
-    "fs-mono-sm": "10px",
-    "fs-micro": "9.5px",
-    "fs-nano": "9px",
+    "fs-stat": "var(--fs-display)",
+    "fs-header-title": "var(--fs-title)",
+    "fs-serif-body": "var(--fs-body)",
+    "fs-mono-sm": "var(--fs-caption)",
+    "fs-micro": "var(--fs-caption)",
+    "fs-nano": "var(--fs-caption)",
 }
 
 # Spacing scale — gaps, paddings, and margins snap to these steps so density
@@ -184,9 +170,17 @@ SPACING_SCALE: dict[str, str] = {
 # Chrome & Work OS tokens: corner radii, layout dimensions, blur filters, and motion timing.
 CHROME_TOKENS: dict[str, str] = {
     "sidebar-width": "240px",
+    "sidebar-collapsed-width": "72px",
     "main-max-width": "1240px",
     "drawer-width": "540px",
     "header-height": "48px",
+    "nav-item-height": "32px",
+    "icon-size": "16px",
+    "icon-button-size": "32px",
+    # Platform accessibility floors are not content-type or spacing steps.
+    # They may intentionally sit outside the four-step visible type hierarchy.
+    "mobile-control-font-size": "16px",
+    "touch-target-size": "44px",
     "toast-offset-bottom": "28px",
     "toast-offset-right": "28px",
     "dot-size": "6px",
@@ -246,7 +240,9 @@ _TOKEN_KINDS: dict[str, str] = {
 #: outside this set is "off-scale" and denied (the workspace reading/display
 #: ramp and the ``.src-chip`` micro-mark are the only sanctioned escapes — see
 #: design_language §1).
-TYPE_SCALE_PX: frozenset[str] = frozenset(TYPE_SCALE.values())
+TYPE_SCALE_PX: frozenset[str] = frozenset(
+    value for value in TYPE_SCALE.values() if value.endswith("px")
+)
 
 #: The only px ``border-radius`` literals the system allows: ``--radius`` (8px,
 #: every rectangular box) and ``--radius-full`` (999px, pills/dots). 3/4/5/6px

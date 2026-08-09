@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Company Research Experience v4 — governed contextual actions</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090a0c;
+      --surface: #121316;
+      --paper: #18191d;
+      --paper-2: #1d1e22;
+      --fg: #f2f0ea;
+      --fg-soft: #c8c5bd;
+      --muted: #88877f;
+      --border: rgba(255, 255, 255, 0.10);
+      --hairline: rgba(255, 255, 255, 0.06);
+      --accent: #8aa8ff;
+      --accent-soft: rgba(138, 168, 255, 0.12);
+      --accent-contrast: #0d1324;
+      --ok: #4ade80;
+      --warn: #f5c66a;
+      --bad: #f08a8a;
+      --sans: "Inter", sans-serif;
+      --mono: "JetBrains Mono", monospace;
+      --fs-display: 20px;
+      --fs-header-title: var(--fs-title);
+      --fs-title: 15px;
+      --fs-body: 13px;
+      --fs-caption: 11px;
+      --fs-mono-sm: var(--fs-caption);
+      --fs-micro: var(--fs-caption);
+      --sp-half: 2px;
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 24px;
+      --sp-6: 32px;
+      --radius: 8px;
+      --radius-card: 10px;
+      --radius-drawer: 14px;
+      --radius-full: 999px;
+      --bw-thin: 1px;
+      --sidebar-width: 240px;
+      --sidebar-collapsed: 72px;
+      --topbar-height: 52px;
+      --drawer-width: 480px;
+      --ask-width: 420px;
+      --reader-measure: 760px;
+      --reader-wide: 1050px;
+      --ticker-button-width: 64px;
+      --timeline-label-width: 64px;
+      --brief-card-min-height: 256px;
+      --ask-thread-min-height: 128px;
+      --ask-thread-max-height: 256px;
+      --tap: 44px;
+      --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.22);
+      --shadow-drawer: -18px 0 56px rgba(0, 0, 0, 0.66);
+      --transition: 150ms ease;
+      --transition-fluid: 250ms cubic-bezier(.2, .8, .2, 1);
+      --z-sidebar: 20;
+      --z-topbar: 25;
+      --z-scrim: 40;
+      --z-drawer: 50;
+      --z-ask: 60;
+      --line-body: 1.55;
+      --line-reader: 1.62;
+      --lift: -2px;
+    }
+
+    * { box-sizing: border-box; }
+    html { color-scheme: dark; scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      line-height: var(--line-body);
+    }
+    button, input, select, textarea { font: inherit; }
+    button, select { min-height: var(--tap); }
+    button { cursor: pointer; }
+    button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible {
+      outline: calc(var(--bw-thin) * 2) solid var(--accent);
+      outline-offset: var(--sp-half);
+    }
+    [hidden] { display: none !important; }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); }
+    .positive { color: var(--ok); }
+    .warning { color: var(--warn); }
+    .negative { color: var(--bad); }
+
+    .app-sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: var(--z-sidebar);
+      width: var(--sidebar-width);
+      padding: var(--sp-3);
+      border-right: var(--bw-thin) solid var(--border);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      backdrop-filter: blur(var(--sp-4));
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+      transition: width var(--transition-fluid), transform var(--transition-fluid);
+    }
+    .brand {
+      min-height: var(--topbar-height);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+      padding-inline: var(--sp-2);
+      border-bottom: var(--bw-thin) solid var(--hairline);
+    }
+    .brand-mark {
+      width: var(--sp-6);
+      height: var(--sp-6);
+      border: var(--bw-thin) solid var(--border);
+      border-radius: var(--radius);
+      display: grid;
+      place-items: center;
+      color: var(--accent);
+      background: var(--paper);
+      font-family: var(--sans);
+      font-weight: 600;
+    }
+    .brand-name { font-weight: 600; letter-spacing: -0.01em; }
+    .brand-kicker { color: var(--muted); font-size: var(--fs-caption); }
+    .nav-layer { display: flex; flex-direction: column; gap: var(--sp-1); }
+    .nav-layer-label {
+      padding: var(--sp-3) var(--sp-2) var(--sp-1);
+      color: var(--muted);
+      font-size: var(--fs-micro);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .nav-item {
+      width: 100%;
+      border: 0;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--fg-soft);
+      text-align: left;
+      padding: var(--sp-2) var(--sp-3);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+      transition: background var(--transition), color var(--transition);
+    }
+    .nav-item:hover { background: var(--paper); color: var(--fg); }
+    .nav-item.is-active { background: var(--accent-soft); color: var(--fg); }
+    .nav-icon { width: var(--sp-5); text-align: center; color: var(--muted); }
+    .nav-item.is-active .nav-icon { color: var(--accent); }
+    .sidebar-foot { margin-top: auto; padding: var(--sp-3) var(--sp-2); border-top: var(--bw-thin) solid var(--hairline); }
+    .prototype-note { color: var(--muted); font-size: var(--fs-caption); }
+
+    .app-main { margin-left: var(--sidebar-width); min-height: 100dvh; }
+    .app-topbar {
+      position: sticky;
+      top: 0;
+      z-index: var(--z-topbar);
+      height: var(--topbar-height);
+      padding: 0 var(--sp-4);
+      border-bottom: var(--bw-thin) solid var(--border);
+      background: color-mix(in srgb, var(--bg) 88%, transparent);
+      backdrop-filter: blur(var(--sp-4));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+    }
+    .breadcrumbs { color: var(--muted); font-size: var(--fs-caption); }
+    .breadcrumbs strong { color: var(--fg); font-weight: 500; }
+    .top-actions { display: flex; gap: var(--sp-2); align-items: center; }
+    .screen { display: none; min-height: calc(100dvh - var(--topbar-height)); }
+    .screen.is-active { display: block; }
+    .screen-pad { padding: var(--sp-4); }
+
+    .k-btn, .k-chip {
+      border: var(--bw-thin) solid var(--border);
+      color: var(--fg-soft);
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: var(--sp-2) var(--sp-3);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--sp-2);
+      text-decoration: none;
+      transition: border-color var(--transition), color var(--transition), background var(--transition), transform var(--transition);
+    }
+    .k-btn:hover, .k-chip:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--fg); }
+    .k-btn:active, .k-chip:active { transform: translateY(var(--lift)); }
+    .k-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); font-weight: 600; }
+    .k-btn-quiet { background: transparent; }
+    .k-btn-small { min-height: calc(var(--tap) - var(--sp-3)); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-caption); }
+    .k-chip { min-height: calc(var(--tap) - var(--sp-3)); border-radius: var(--radius-full); font-size: var(--fs-caption); }
+    .k-chip.is-on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 65%, transparent); color: var(--accent); }
+    .k-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--sp-5);
+      padding-inline: var(--sp-2);
+      border-radius: var(--radius-full);
+      font-size: var(--fs-caption);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .k-pill-ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+    .k-pill-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+    .k-pill-neutral { color: var(--fg-soft); background: var(--paper-2); }
+    .k-card {
+      position: relative;
+      border: var(--bw-thin) solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface);
+      box-shadow: var(--shadow-card);
+    }
+    .k-well { padding: var(--sp-3); border: var(--bw-thin) solid var(--hairline); border-radius: var(--radius); background: var(--paper); }
+    .k-label { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; }
+    .doorway {
+      border: 0;
+      border-bottom: var(--bw-thin) dotted var(--accent);
+      padding: 0;
+      min-height: auto;
+      background: transparent;
+      color: inherit;
+    }
+    .source-mark {
+      min-height: auto;
+      border: 0;
+      border-radius: var(--radius);
+      padding: var(--sp-half) var(--sp-1);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: var(--fs-micro);
+      vertical-align: super;
+    }
+
+    .desk-toolbar {
+      padding: var(--sp-3);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+      border-bottom: var(--bw-thin) solid var(--border);
+      background: var(--surface);
+    }
+    .company-identity { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+    .ticker-block { font-size: var(--fs-display); font-weight: 600; }
+    .company-name { font-size: var(--fs-title); color: var(--fg-soft); }
+    .company-sector { color: var(--muted); font-size: var(--fs-caption); }
+    .company-switcher { display: flex; align-items: center; gap: var(--sp-1); }
+    .company-switcher button { min-width: var(--ticker-button-width); }
+    .company-switcher button.is-on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+    .desk-actions { display: flex; align-items: center; gap: var(--sp-2); }
+    .desk-tabbar {
+      display: flex;
+      gap: var(--sp-1);
+      padding: var(--sp-1) var(--sp-4) 0;
+      border-bottom: var(--bw-thin) solid var(--border);
+      background: var(--bg);
+      overflow-x: auto;
+    }
+    .desk-tab {
+      border: 0;
+      border-bottom: calc(var(--bw-thin) * 2) solid transparent;
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: var(--sp-2) var(--sp-3);
+      min-height: var(--tap);
+      white-space: nowrap;
+    }
+    .desk-tab.is-active { color: var(--fg); border-bottom-color: var(--accent); }
+    .desk-tab-pane { display: none; padding: var(--sp-4); }
+    .desk-tab-pane.is-active { display: block; }
+    .decision-band {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, .75fr));
+      border: var(--bw-thin) solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface);
+      overflow: hidden;
+      margin-bottom: var(--sp-3);
+    }
+    .decision-cell { padding: var(--sp-3); border-right: var(--bw-thin) solid var(--hairline); }
+    .decision-cell:last-child { border-right: 0; }
+    .decision-headline { font-size: var(--fs-header-title); font-weight: 600; margin-top: var(--sp-2); }
+    .decision-copy { color: var(--fg-soft); margin-top: var(--sp-1); }
+    .stat { font-family: var(--mono); font-size: var(--fs-display); font-weight: 500; margin-top: var(--sp-1); }
+    .desk-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(18rem, .8fr); gap: var(--sp-3); }
+    .desk-stack { display: flex; flex-direction: column; gap: var(--sp-3); }
+    .panel-head { padding: var(--sp-2) var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline); display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+    .panel-head-main { min-width: 0; }
+    .panel-head-tools { display: flex; align-items: center; gap: var(--sp-2); }
+    .card-actions, .row-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(calc(var(--lift) * -1));
+      transition: opacity var(--transition), transform var(--transition);
+    }
+    .k-card:hover .card-actions,
+    .k-card:focus-within .card-actions,
+    .question:hover .row-actions,
+    .question:focus-within .row-actions {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+    .panel-title { font-size: var(--fs-title); font-weight: 600; }
+    .panel-subtitle { color: var(--muted); font-size: var(--fs-caption); }
+    .panel-body { padding: var(--sp-3); }
+    .change-list { display: flex; flex-direction: column; }
+    .change-row { display: grid; grid-template-columns: var(--timeline-label-width) minmax(0, 1fr) auto; gap: var(--sp-3); align-items: start; padding: var(--sp-2) 0; border-bottom: var(--bw-thin) solid var(--hairline); }
+    .change-row:last-child { border-bottom: 0; }
+    .change-time { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); }
+    .change-title { font-weight: 500; }
+    .change-detail { color: var(--muted); font-size: var(--fs-caption); margin-top: var(--sp-1); }
+    .contract-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--bw-thin) solid var(--hairline); }
+    .contract-row:last-child { border-bottom: 0; }
+    .contract-state { text-align: right; font-family: var(--mono); }
+    .contract-threshold { color: var(--muted); font-size: var(--fs-caption); }
+    .metric-table { width: 100%; border-collapse: collapse; }
+    .metric-table th, .metric-table td { padding: var(--sp-2) var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline); text-align: right; }
+    .metric-table th { color: var(--muted); font-size: var(--fs-caption); font-weight: 500; text-transform: uppercase; }
+    .metric-table th:first-child, .metric-table td:first-child { text-align: left; }
+    .metric-table td:not(:first-child) { font-family: var(--mono); }
+    .question-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+    .question { padding: var(--sp-3); border: var(--bw-thin) solid var(--border); background: var(--paper); border-radius: var(--radius); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-2); align-items: start; }
+    .question-copy { min-width: 0; }
+    .question small { color: var(--muted); }
+    .catalyst-line { display: grid; grid-template-columns: var(--timeline-label-width) minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--bw-thin) solid var(--hairline); }
+    .catalyst-date { font-family: var(--mono); color: var(--accent); }
+    .capability-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); margin-bottom: var(--sp-3); }
+    .capability-count { padding: var(--sp-3); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); background: var(--paper); }
+    .capability-count strong { display: block; margin-top: var(--sp-1); font-family: var(--mono); font-size: var(--fs-display); }
+    .capability-review { display: flex; flex-direction: column; }
+    .capability-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); align-items: center; padding: var(--sp-2) 0; border-bottom: var(--bw-thin) solid var(--hairline); }
+    .capability-review-row:last-child { border-bottom: 0; }
+
+    .library-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+    .page-title { margin: 0; font-size: var(--fs-display); }
+    .page-subtitle { margin: var(--sp-1) 0 0; color: var(--muted); }
+    .library-filters { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+    .brief-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
+    .brief-card { padding: var(--sp-3); display: flex; flex-direction: column; min-height: var(--brief-card-min-height); transition: transform var(--transition), border-color var(--transition); }
+    .brief-card:hover { transform: translateY(var(--lift)); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+    .brief-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3); }
+    .brief-kind { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; }
+    .brief-title { margin: var(--sp-3) 0 var(--sp-2); font-family: var(--sans); font-size: var(--fs-header-title); line-height: 1.35; }
+    .brief-summary { color: var(--fg-soft); }
+    .brief-meta { margin-top: auto; padding-top: var(--sp-3); border-top: var(--bw-thin) solid var(--hairline); display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2); color: var(--muted); font-size: var(--fs-caption); }
+
+    .reader-shell { min-height: calc(100dvh - var(--topbar-height)); background: var(--bg); }
+    .reader-toolbar {
+      position: sticky;
+      top: var(--topbar-height);
+      z-index: calc(var(--z-topbar) - 1);
+      min-height: var(--topbar-height);
+      padding: var(--sp-2) var(--sp-4);
+      border-bottom: var(--bw-thin) solid var(--border);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      backdrop-filter: blur(var(--sp-4));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+    }
+    .reader-progress { color: var(--muted); font-size: var(--fs-caption); }
+    .reader-layout { max-width: var(--reader-wide); margin: 0 auto; padding: var(--sp-4); display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+    .reader-toc { position: sticky; top: calc(var(--topbar-height) * 2 + var(--sp-4)); display: flex; flex-direction: column; gap: var(--sp-1); }
+    .reader-toc-label { color: var(--muted); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.08em; padding: var(--sp-2); }
+    .reader-toc a { color: var(--muted); text-decoration: none; padding: var(--sp-2); border-left: var(--bw-thin) solid var(--border); font-size: var(--fs-caption); }
+    .reader-toc a:hover, .reader-toc a.is-active { color: var(--fg); background: var(--paper); }
+    .k-doc { max-width: var(--reader-measure); background: var(--surface); color: var(--fg); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); overflow: hidden; }
+    .k-doc-mast { padding: var(--sp-4) var(--sp-5); border-bottom: var(--bw-thin) solid var(--border); }
+    .doc-kicker { color: var(--muted); font-family: var(--sans); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+    .doc-title { max-width: 28ch; margin: var(--sp-2) 0; font-family: var(--sans); font-size: var(--fs-display); line-height: 1.25; letter-spacing: -0.02em; }
+    .doc-deck { max-width: 66ch; margin: 0; color: var(--fg-soft); font-family: var(--sans); font-size: var(--fs-body); line-height: var(--line-reader); }
+    .doc-meta { margin-top: var(--sp-3); padding-top: var(--sp-2); border-top: var(--bw-thin) solid var(--hairline); display: flex; justify-content: space-between; gap: var(--sp-3); color: var(--muted); font-size: var(--fs-caption); }
+    .k-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: var(--bw-thin) solid var(--border); background: var(--paper); }
+    .k-band-v { padding: var(--sp-2) var(--sp-3); border-right: var(--bw-thin) solid var(--border); }
+    .k-band-v:last-child { border-right: 0; }
+    .k-band-v .value { margin-top: var(--sp-1); font-family: var(--mono); font-size: var(--fs-title); color: var(--fg); }
+    .k-band-v .label { color: var(--muted); font-family: var(--sans); font-size: var(--fs-caption); }
+    .doc-section { padding: var(--sp-4) var(--sp-5); border-bottom: var(--bw-thin) solid var(--border); scroll-margin-top: calc(var(--topbar-height) * 2 + var(--sp-4)); }
+    .doc-section:last-child { border-bottom: 0; }
+    .doc-section-label { color: var(--muted); font-family: var(--sans); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+    .doc-section h2 { margin: var(--sp-2) 0 var(--sp-3); font-family: var(--sans); font-size: var(--fs-header-title); line-height: 1.35; }
+    .doc-section h3 { margin: var(--sp-4) 0 var(--sp-2); font-family: var(--sans); font-size: var(--fs-title); }
+    .doc-section p, .doc-section li { font-family: var(--sans); font-size: var(--fs-body); line-height: var(--line-reader); }
+    .doc-section p { margin: 0 0 var(--sp-2); }
+    .doc-section ul { padding-left: var(--sp-4); }
+    .doc-lede { color: var(--fg-soft); font-size: var(--fs-body) !important; font-weight: 500; }
+    .doc-rule-list { list-style: none; padding: 0 !important; margin: var(--sp-3) 0 0; }
+    .doc-rule-list li { padding: var(--sp-2) 0; border-top: var(--bw-thin) solid var(--hairline); display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: var(--sp-3); }
+    .doc-rule-list strong { font-family: var(--sans); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.05em; }
+    .doc-section .source-mark { background: var(--accent-soft); color: var(--accent); }
+    .k-doc-row { display: grid; grid-template-columns: minmax(0, 1fr) 11rem; gap: var(--sp-4); }
+    .k-note { border-top: var(--bw-thin) solid var(--border); padding-top: var(--sp-3); color: var(--muted); font-family: var(--sans); font-size: var(--fs-caption); line-height: var(--line-body); }
+    .k-note-title { color: var(--fg-soft); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--sp-1); }
+    .doc-table { width: 100%; margin-top: var(--sp-3); border-collapse: collapse; font-family: var(--sans); }
+    .doc-table th, .doc-table td { padding: var(--sp-2); border-bottom: var(--bw-thin) solid var(--hairline); text-align: right; }
+    .doc-table th { color: var(--muted); font-size: var(--fs-caption); font-weight: 500; }
+    .doc-table th:first-child, .doc-table td:first-child { text-align: left; }
+    .doc-table td:not(:first-child) { font-family: var(--mono); font-size: var(--fs-caption); }
+
+    .scrim { position: fixed; inset: 0; z-index: var(--z-scrim); background: rgba(0, 0, 0, 0.62); opacity: 0; pointer-events: none; transition: opacity var(--transition); }
+    .scrim.is-open { opacity: 1; pointer-events: auto; }
+    .drawer {
+      position: fixed;
+      inset: 0 0 0 auto;
+      z-index: var(--z-drawer);
+      width: min(var(--drawer-width), 94vw);
+      border-left: var(--bw-thin) solid var(--border);
+      background: var(--surface);
+      box-shadow: var(--shadow-drawer);
+      transform: translateX(100%);
+      transition: transform var(--transition-fluid);
+      display: flex;
+      flex-direction: column;
+    }
+    .drawer.is-open { transform: translateX(0); }
+    .drawer-head { min-height: var(--topbar-height); padding: var(--sp-3) var(--sp-4); border-bottom: var(--bw-thin) solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+    .drawer-title { font-size: var(--fs-title); font-weight: 600; }
+    .drawer-body { padding: var(--sp-4); overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-4); }
+    .drawer-close { min-width: var(--tap); }
+    .source-quote { padding: var(--sp-4); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); background: var(--paper); font-family: var(--sans); line-height: var(--line-reader); }
+    .ask-dock {
+      position: fixed;
+      right: var(--sp-4);
+      bottom: var(--sp-4);
+      z-index: var(--z-ask);
+      width: min(var(--ask-width), calc(100vw - var(--sp-6)));
+      border: var(--bw-thin) solid var(--border);
+      border-radius: var(--radius-drawer);
+      background: var(--surface);
+      box-shadow: var(--shadow-drawer);
+      overflow: hidden;
+      transform: translateY(calc(100% + var(--sp-5)));
+      opacity: 0;
+      transition: transform var(--transition-fluid), opacity var(--transition);
+    }
+    .ask-dock.is-open { transform: translateY(0); opacity: 1; }
+    .ask-head { padding: var(--sp-3) var(--sp-4); border-bottom: var(--bw-thin) solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .ask-thread { min-height: var(--ask-thread-min-height); max-height: var(--ask-thread-max-height); overflow-y: auto; padding: var(--sp-3); }
+    .ask-answer { padding: var(--sp-3); border-radius: var(--radius); background: var(--paper); color: var(--fg-soft); }
+    .ask-suggestions { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-3); }
+    .ask-form { padding: var(--sp-3); border-top: var(--bw-thin) solid var(--border); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-2); }
+    .ask-input { width: 100%; min-height: var(--tap); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); background: var(--paper); color: var(--fg); padding: var(--sp-2) var(--sp-3); }
+    .toast { position: fixed; left: 50%; bottom: var(--sp-4); z-index: calc(var(--z-ask) + 1); transform: translate(-50%, calc(100% + var(--sp-6))); padding: var(--sp-2) var(--sp-3); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); background: var(--paper-2); box-shadow: var(--shadow-card); transition: transform var(--transition-fluid); }
+    .toast.is-open { transform: translate(-50%, 0); }
+
+    @media (max-width: 68rem) {
+      .decision-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .decision-cell:nth-child(2) { border-right: 0; }
+      .decision-cell:nth-child(-n+2) { border-bottom: var(--bw-thin) solid var(--hairline); }
+      .desk-grid { grid-template-columns: 1fr; }
+      .brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .reader-layout { grid-template-columns: 1fr; }
+      .reader-toc { position: static; flex-direction: row; overflow-x: auto; }
+      .reader-toc-label { display: none; }
+      .reader-toc a { border-left: 0; border-bottom: var(--bw-thin) solid var(--border); white-space: nowrap; }
+    }
+    @media (max-width: 54rem) {
+      .app-sidebar { transform: translateX(-100%); }
+      .app-sidebar.is-open { transform: translateX(0); }
+      .app-main { margin-left: 0; }
+      .desk-toolbar, .library-head { align-items: flex-start; flex-direction: column; }
+      .brief-grid { grid-template-columns: 1fr; }
+      .reader-layout { padding-inline: var(--sp-2); }
+      .k-doc-mast, .doc-section { padding-inline: var(--sp-4); }
+      .k-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .k-band-v:nth-child(2) { border-right: 0; }
+      .k-band-v:nth-child(-n+2) { border-bottom: var(--bw-thin) solid var(--border); }
+      .k-doc-row { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 38rem) {
+      .screen-pad, .desk-tab-pane { padding: var(--sp-3); }
+      .app-topbar { padding-inline: var(--sp-3); }
+      .top-actions .desktop-only, .company-name, .company-sector { display: none; }
+      .decision-band { grid-template-columns: 1fr; }
+      .decision-cell { border-right: 0; border-bottom: var(--bw-thin) solid var(--hairline); }
+      .decision-cell:last-child { border-bottom: 0; }
+      .desk-actions { width: 100%; }
+      .desk-actions .k-btn { flex: 1; }
+      .doc-rule-list li { grid-template-columns: 1fr; gap: var(--sp-1); }
+      .reader-toolbar { align-items: flex-start; flex-direction: column; }
+      .capability-summary { grid-template-columns: 1fr; }
+    }
+    @media (hover: none) {
+      .card-actions, .row-actions { opacity: 1; pointer-events: auto; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <aside class="app-sidebar" id="app-sidebar" aria-label="Primary navigation">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">K</div>
+      <div><div class="brand-name">Kestrel</div><div class="brand-kicker">Investment Work OS</div></div>
+    </div>
+    <nav>
+      <div class="nav-layer">
+        <div class="nav-layer-label">L1 · Portfolio Intelligence</div>
+        <button type="button" class="nav-item" data-action="navigate" data-target="screen-company-desk"><span class="nav-icon">⌁</span><span>Portfolio Cockpit</span></button>
+        <button type="button" class="nav-item" data-action="navigate" data-target="screen-company-desk"><span class="nav-icon">↗</span><span>Performance vs Index</span></button>
+      </div>
+      <div class="nav-layer">
+        <div class="nav-layer-label">L2 · Research Engine</div>
+        <button type="button" class="nav-item is-active" data-action="navigate" data-target="screen-company-desk"><span class="nav-icon">◫</span><span>Company Desk</span></button>
+        <button type="button" class="nav-item" data-action="navigate" data-target="screen-brief-library"><span class="nav-icon">≡</span><span>Brief Library</span></button>
+        <button type="button" class="nav-item" data-action="open-drawer" data-drawer="signals"><span class="nav-icon">◎</span><span>Signals Stream</span></button>
+      </div>
+      <div class="nav-layer">
+        <div class="nav-layer-label">L3 · Operations & Governance</div>
+        <button type="button" class="nav-item" data-action="open-drawer" data-drawer="audit"><span class="nav-icon">✓</span><span>Decision Audit Log</span></button>
+        <button type="button" class="nav-item" data-action="open-drawer" data-drawer="pipeline"><span class="nav-icon">⋯</span><span>Execution Queue</span></button>
+        <button type="button" class="nav-item" data-action="review-capabilities" data-capability="research.capability_catalog.review"><span class="nav-icon">⌘</span><span>Interaction Review</span></button>
+      </div>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="prototype-note">Front-end prototype · Static research data · No backend writes</div>
+    </div>
+  </aside>
+
+  <main class="app-main">
+    <header class="app-topbar">
+      <div class="breadcrumbs"><span>Research Engine</span> / <strong id="breadcrumb-current">Company Desk · NU</strong></div>
+      <div class="top-actions">
+        <button type="button" class="k-btn k-btn-quiet k-btn-small desktop-only" data-action="open-drawer" data-drawer="command">⌘ Command</button>
+        <button type="button" class="k-btn k-btn-primary k-btn-small" data-action="toggle-ask">Ask · <span class="mono" id="ask-scope">NU</span></button>
+      </div>
+    </header>
+
+    <section id="screen-company-desk" class="screen is-active" data-layout="decision-workbench" aria-labelledby="desk-title">
+      <div class="desk-toolbar">
+        <div class="company-identity">
+          <div><div class="ticker-block mono" id="desk-ticker">NU</div></div>
+          <div><div class="company-name" id="desk-title">Nu Holdings Ltd.</div><div class="company-sector" id="desk-sector">LatAm digital banking · Held · 12.5% weight</div></div>
+          <span class="k-pill k-pill-ok" id="desk-rating">OVERWEIGHT</span>
+        </div>
+        <div class="company-switcher" aria-label="Switch company">
+          <button type="button" class="k-btn k-btn-small is-on" data-action="switch-company" data-company="NU">NU</button>
+          <button type="button" class="k-btn k-btn-small" data-action="switch-company" data-company="BKNG">BKNG</button>
+          <button type="button" class="k-btn k-btn-small" data-action="switch-company" data-company="TSM">TSM</button>
+        </div>
+        <div class="desk-actions">
+          <button type="button" class="k-btn k-btn-quiet" data-action="open-drawer" data-drawer="notes">Notes</button>
+          <button type="button" class="k-btn k-btn-primary" data-action="open-brief" data-company="NU" id="open-current-brief">Read full brief →</button>
+        </div>
+      </div>
+
+      <div class="desk-tabbar" role="tablist" aria-label="Company desk sections">
+        <button type="button" class="desk-tab is-active" role="tab" aria-selected="true" data-action="switch-desk-tab" data-tab="now">Now</button>
+        <button type="button" class="desk-tab" role="tab" aria-selected="false" data-action="switch-desk-tab" data-tab="quarter">Quarter</button>
+        <button type="button" class="desk-tab" role="tab" aria-selected="false" data-action="switch-desk-tab" data-tab="valuation">Valuation</button>
+        <button type="button" class="desk-tab" role="tab" aria-selected="false" data-action="switch-desk-tab" data-tab="evidence">Evidence</button>
+        <button type="button" class="desk-tab" role="tab" aria-selected="false" data-action="switch-desk-tab" data-tab="decisions">Decisions</button>
+      </div>
+
+      <div class="desk-tab-pane is-active" data-tab-pane="now">
+        <div class="decision-band">
+          <div class="decision-cell"><div class="k-label">Decision posture</div><div class="decision-headline" id="decision-posture">Hold at 12–13%; add only on proof</div><div class="decision-copy" id="decision-reason">Growth is intact. Mexico credit normalization is the gating evidence.</div></div>
+          <div class="decision-cell"><div class="k-label">Thesis health</div><div class="stat positive" id="thesis-health">4 / 5</div><div class="decision-copy">One contract near threshold</div></div>
+          <div class="decision-cell"><div class="k-label">Price / fair value</div><button type="button" class="doorway stat" data-action="open-drawer" data-drawer="valuation" id="price-fv">$14.25 / $18.50</button><div class="decision-copy positive" id="upside">+29.8% upside</div></div>
+          <div class="decision-cell"><div class="k-label">Next catalyst</div><div class="stat" id="next-catalyst-date">Aug 12</div><div class="decision-copy" id="next-catalyst">Mexico operating update</div></div>
+        </div>
+
+        <div class="desk-grid">
+          <div class="desk-stack">
+            <article class="k-card">
+              <div class="panel-head"><div class="panel-head-main"><div class="panel-title">What changed since your last read</div><div class="panel-subtitle">Evidence deltas, ranked by decision relevance</div></div><div class="panel-head-tools"><div class="card-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.change_feed.chat" data-card="What changed" data-prompt="Deep-dive the material evidence changes since my last read. Separate thesis implications from noise.">Chat</button></div><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="open-brief" data-company="NU">Read argument</button></div></div>
+              <div class="panel-body change-list" id="change-list">
+                <div class="change-row"><div class="change-time">TODAY</div><div><div class="change-title">Mexico deposits crossed $3.0B</div><div class="change-detail">A positive proof point for low-cost funding outside Brazil; not yet an economic-profit proof.</div></div><span class="k-pill k-pill-ok">SUPPORTS</span></div>
+                <div class="change-row"><div class="change-time">2D</div><div><div class="change-title">90+ NPL held at 5.2%</div><div class="change-detail">Still inside the 5.6% warning threshold, but the distance narrowed.</div></div><span class="k-pill k-pill-warn">NEAR</span></div>
+                <div class="change-row"><div class="change-time">6D</div><div><div class="change-title">Direct cost-to-serve improved to $0.90</div><div class="change-detail">Operating leverage continues to translate scale into unit economics.</div></div><span class="k-pill k-pill-ok">SUPPORTS</span></div>
+              </div>
+            </article>
+
+            <article class="k-card">
+              <div class="panel-head"><div class="panel-head-main"><div class="panel-title">Thesis contracts</div><div class="panel-subtitle">The few conditions that determine whether the position stays, grows, or shrinks</div></div><div class="card-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.thesis_contracts.chat" data-card="Thesis contracts" data-prompt="Which thesis contract is closest to breaking, what evidence would falsify it, and what counterargument should I investigate?">Chat</button><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="edit-card" data-capability="research.thesis_contracts.edit" data-edit-target="thesis-contracts">Edit</button></div></div>
+              <div class="panel-body" id="contract-list">
+                <div class="contract-row"><div><strong>Credit quality remains controlled</strong><div class="contract-threshold">Warning if 90+ NPL exceeds 5.6% for two quarters</div></div><div class="contract-state warning">5.2% · NEAR</div></div>
+                <div class="contract-row"><div><strong>Cost advantage persists</strong><div class="contract-threshold">Break if monthly cost-to-serve exceeds $1.20</div></div><div class="contract-state positive">$0.90 · HOLDS</div></div>
+                <div class="contract-row"><div><strong>Mexico reaches useful scale</strong><div class="contract-threshold">Support if active customers exceed 8M</div></div><div class="contract-state warning">7.8M · NEAR</div></div>
+              </div>
+            </article>
+
+            <article class="k-card">
+              <div class="panel-head"><div class="panel-head-main"><div class="panel-title">Decision KPIs</div><div class="panel-subtitle">Compact monitoring set; every value opens its evidence series</div></div><div class="panel-head-tools"><div class="card-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.decision_kpis.chat" data-card="Decision KPIs" data-prompt="Explain the KPI movements that matter to the decision and compare them with the active thesis thresholds.">Chat</button></div><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="open-drawer" data-drawer="financials">All financials</button></div></div>
+              <div class="panel-body">
+                <table class="metric-table">
+                  <thead><tr><th>Metric</th><th>Q3 ’25</th><th>Q4 ’25</th><th>Q1 ’26</th><th>Q2 ’26</th></tr></thead>
+                  <tbody id="metric-rows">
+                    <tr><td>Revenue ($M)</td><td>2,141</td><td>2,400</td><td>2,715</td><td><button type="button" class="doorway mono positive" data-action="open-drawer" data-drawer="financials">3,021</button></td></tr>
+                    <tr><td>Net income ($M)</td><td>356</td><td>395</td><td>480</td><td><button type="button" class="doorway mono positive" data-action="open-drawer" data-drawer="financials">560</button></td></tr>
+                    <tr><td>90+ NPL</td><td>4.7%</td><td>4.9%</td><td>5.0%</td><td><button type="button" class="doorway mono warning" data-action="open-source" data-source="npl-series">5.2%</button></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </div>
+
+          <aside class="desk-stack">
+            <section class="k-card">
+              <div class="panel-head"><div class="panel-head-main"><div class="panel-title">Open questions</div><div class="panel-subtitle">Research work, not report prose</div></div><div class="panel-head-tools"><div class="card-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.open_questions.chat" data-card="Open questions" data-prompt="Help me prioritize the open research questions by decision relevance and identify the fastest disconfirming evidence for each.">Chat</button><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="edit-card" data-capability="research.open_questions.edit" data-edit-target="open-question" data-item="Open-question queue">Edit</button></div><span class="k-pill k-pill-warn">3 OPEN</span></div></div>
+              <div class="panel-body question-list">
+                <div class="question"><div class="question-copy"><strong>How much of Mexico deposit growth is rate-led?</strong><br><small>Owner · Next filing</small></div><div class="row-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.open_questions.chat" data-card="Open question" data-item="Mexico deposit pricing" data-prompt="Investigate how much of Mexico deposit growth is rate-led. Show evidence, uncertainty, and the fastest disconfirming check.">Chat</button><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="edit-card" data-capability="research.open_questions.edit" data-edit-target="open-question" data-item="How much of Mexico deposit growth is rate-led?">Edit</button></div></div>
+                <div class="question"><div class="question-copy"><strong>When does Colombia stop diluting segment margin?</strong><br><small>Model update · 9 days</small></div><div class="row-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.open_questions.chat" data-card="Open question" data-item="Colombia margin" data-prompt="Deep-dive when Colombia could stop diluting segment margin and which assumptions are doing the most work.">Chat</button><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="edit-card" data-capability="research.open_questions.edit" data-edit-target="open-question" data-item="When does Colombia stop diluting segment margin?">Edit</button></div></div>
+                <div class="question"><div class="question-copy"><strong>Does higher-income mix change loss curves?</strong><br><small>Ask on next call</small></div><div class="row-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.open_questions.chat" data-card="Open question" data-item="Higher-income loss curves" data-prompt="Analyze whether higher-income customer mix should change expected loss curves and what evidence would distinguish mix from seasoning.">Chat</button><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="edit-card" data-capability="research.open_questions.edit" data-edit-target="open-question" data-item="Does higher-income mix change loss curves?">Edit</button></div></div>
+              </div>
+            </section>
+            <section class="k-card">
+              <div class="panel-head"><div class="panel-head-main"><div class="panel-title">Catalyst calendar</div><div class="panel-subtitle">Only events tied to an action rule</div></div><div class="card-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.catalysts.chat" data-card="Catalyst calendar" data-prompt="Prepare me for the next catalyst: expected evidence, disconfirmers, and the action rule it could change.">Chat</button></div></div>
+              <div class="panel-body">
+                <div class="catalyst-line"><div class="catalyst-date">AUG 12</div><div><strong>Mexico operating update</strong><div class="muted">Watch customers and deposit cost</div></div></div>
+                <div class="catalyst-line"><div class="catalyst-date">SEP 05</div><div><strong>Central bank release</strong><div class="muted">Credit cohort read-through</div></div></div>
+                <div class="catalyst-line"><div class="catalyst-date">NOV 14</div><div><strong>Q3 earnings</strong><div class="muted">Full contract reset</div></div></div>
+              </div>
+            </section>
+            <section class="k-card">
+              <div class="panel-head"><div class="panel-head-main"><div class="panel-title">Latest research artifact</div><div class="panel-subtitle">Built Aug 7 · 18 sources · 3 comments</div></div><div class="card-actions"><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="chat-card" data-capability="research.latest_brief.chat" data-card="Latest research artifact" data-prompt="Discuss the latest full research brief. Start with its most decision-relevant claim, uncertainty, and strongest disconfirming evidence.">Chat</button></div></div>
+              <div class="panel-body"><div class="k-well"><div class="brief-kind">Full research brief</div><div class="brief-title" id="latest-brief-title">NU: The Mexico proof is getting closer</div><button type="button" class="k-btn k-btn-primary" data-action="open-brief" data-company="NU">Open reader →</button></div></div>
+            </section>
+          </aside>
+        </div>
+      </div>
+
+      <div class="desk-tab-pane" data-tab-pane="quarter">
+        <div class="desk-grid"><article class="k-card"><div class="panel-head"><div><div class="panel-title">Quarter bridge</div><div class="panel-subtitle">What moved versus the prior quarter and versus the model</div></div></div><div class="panel-body"><table class="metric-table"><thead><tr><th>Driver</th><th>Prior</th><th>Actual</th><th>Variance</th></tr></thead><tbody><tr><td>Active customers</td><td>109M</td><td>114M</td><td class="positive">+2M vs plan</td></tr><tr><td>Revenue / active customer</td><td>$11.20</td><td>$11.80</td><td class="positive">+5.4%</td></tr><tr><td>Credit losses</td><td>$812M</td><td>$846M</td><td class="warning">+$18M vs plan</td></tr></tbody></table></div></article><aside class="k-card"><div class="panel-head"><div><div class="panel-title">Management say / do</div><div class="panel-subtitle">Commitments tested against reported outcomes</div></div></div><div class="panel-body"><div class="contract-row"><div><strong>Mexico deposits > $3B</strong><div class="contract-threshold">Said Q2 · Delivered Q2</div></div><div class="positive">MET</div></div><div class="contract-row"><div><strong>Keep efficiency ratio below 35%</strong><div class="contract-threshold">Said FY25 · 33.8% now</div></div><div class="positive">MET</div></div></div></aside></div>
+      </div>
+      <div class="desk-tab-pane" data-tab-pane="valuation">
+        <div class="desk-grid"><article class="k-card"><div class="panel-head"><div><div class="panel-title">Scenario workbench</div><div class="panel-subtitle">Interactive mock; no model is persisted</div></div><span class="k-pill k-pill-neutral" id="scenario-label">BASE</span></div><div class="panel-body"><div class="decision-band"><div class="decision-cell"><div class="k-label">WACC</div><div class="stat" id="wacc-output">10.5%</div><input aria-label="WACC" type="range" min="8" max="14" step="0.25" value="10.5" id="wacc-slider"></div><div class="decision-cell"><div class="k-label">Terminal growth</div><div class="stat" id="growth-output">3.5%</div><input aria-label="Terminal growth" type="range" min="1" max="5" step="0.25" value="3.5" id="growth-slider"></div><div class="decision-cell"><div class="k-label">Fair value</div><div class="stat positive" id="fair-value-output">$18.50</div></div><div class="decision-cell"><div class="k-label">Upside</div><div class="stat positive" id="scenario-upside">+29.8%</div></div></div></div></article><aside class="k-card"><div class="panel-head"><div><div class="panel-title">What the price implies</div><div class="panel-subtitle">Reverse-DCF interpretation</div></div></div><div class="panel-body"><p>The current price implies roughly 23% revenue growth through 2029 and a 31% mature efficiency ratio.</p><button type="button" class="k-btn k-btn-quiet" data-action="open-source" data-source="valuation-method">Inspect assumptions</button></div></aside></div>
+      </div>
+      <div class="desk-tab-pane" data-tab-pane="evidence">
+        <div class="desk-grid"><article class="k-card"><div class="panel-head"><div><div class="panel-title">Evidence ledger</div><div class="panel-subtitle">Claims connected to exact source locations</div></div></div><div class="panel-body change-list"><div class="change-row"><div class="change-time">10-Q</div><div><div class="change-title">Mexico deposits above $3B</div><div class="change-detail">Banco Central do Brasil / company release</div></div><button type="button" class="source-mark" data-action="open-source" data-source="mexico-deposits">p.4</button></div><div class="change-row"><div class="change-time">CALL</div><div><div class="change-title">Cost-to-serve remained below $1</div><div class="change-detail">Q2 prepared remarks</div></div><button type="button" class="source-mark" data-action="open-source" data-source="cost-serve">12:41</button></div></div></article><aside class="k-card"><div class="panel-head"><div><div class="panel-title">Coverage</div><div class="panel-subtitle">Freshness and known gaps</div></div></div><div class="panel-body"><div class="contract-row"><div>Financial facts</div><div class="positive">FRESH</div></div><div class="contract-row"><div>Transcript</div><div class="positive">FRESH</div></div><div class="contract-row"><div>Mexico regulatory data</div><div class="warning">6D OLD</div></div></div></aside></div>
+      </div>
+      <div class="desk-tab-pane" data-tab-pane="decisions">
+        <article class="k-card"><div class="panel-head"><div><div class="panel-title">Decision journal</div><div class="panel-subtitle">Append-only record of changes to the investment posture</div></div></div><div class="panel-body"><table class="metric-table"><thead><tr><th>Date</th><th>Decision</th><th>Weight</th><th>Why</th></tr></thead><tbody><tr><td>Aug 7</td><td>Hold</td><td>12.5%</td><td>Wait for a Mexico economic-profit proof</td></tr><tr><td>May 15</td><td>Add</td><td>10.0 → 12.5%</td><td>Credit normalized while cost advantage held</td></tr><tr><td>Feb 18</td><td>Hold</td><td>10.0%</td><td>Valuation attractive; Mexico scale unproven</td></tr></tbody></table></div></article>
+      </div>
+    </section>
+
+    <section id="screen-brief-library" class="screen screen-pad" data-layout="report-library" aria-labelledby="library-title">
+      <div class="library-head"><div><h1 class="page-title" id="library-title">Brief Library</h1><p class="page-subtitle">Research documents are outputs to read and compare, not the operating surface itself.</p></div><div class="library-filters"><button type="button" class="k-chip is-on" data-filter="all">All</button><button type="button" class="k-chip" data-filter="holding">Holdings</button><button type="button" class="k-chip" data-filter="evaluation">Evaluations</button><button type="button" class="k-chip" data-filter="earnings">Earnings</button></div></div>
+      <div class="brief-grid">
+        <article class="k-card brief-card" data-kind="holding"><div class="brief-card-head"><div><div class="brief-kind">Full research brief · Holding</div><div class="ticker-block mono">NU</div></div><span class="k-pill k-pill-ok">CURRENT</span></div><h2 class="brief-title">The Mexico proof is getting closer</h2><p class="brief-summary">The core cost advantage remains intact. The next underwriting question is whether Mexico scale can translate into durable local economics.</p><div class="brief-meta"><span>Aug 7 · 18 sources</span><button type="button" class="k-btn k-btn-small k-btn-primary" data-action="open-brief" data-company="NU">Read →</button></div></article>
+        <article class="k-card brief-card" data-kind="holding"><div class="brief-card-head"><div><div class="brief-kind">Full research brief · Holding</div><div class="ticker-block mono">BKNG</div></div><span class="k-pill k-pill-ok">CURRENT</span></div><h2 class="brief-title">Direct booking is the quiet margin lever</h2><p class="brief-summary">Connected Trip is becoming a distribution advantage rather than a feature story, while alternative accommodation adds supply breadth.</p><div class="brief-meta"><span>Aug 6 · 16 sources</span><button type="button" class="k-btn k-btn-small k-btn-primary" data-action="open-brief" data-company="BKNG">Read →</button></div></article>
+        <article class="k-card brief-card" data-kind="holding"><div class="brief-card-head"><div><div class="brief-kind">Full research brief · Holding</div><div class="ticker-block mono">TSM</div></div><span class="k-pill k-pill-warn">UPDATE DUE</span></div><h2 class="brief-title">N2 execution matters more than the AI label</h2><p class="brief-summary">The durable edge is process execution and customer trust. AI demand matters because it tightens leading-edge capacity, not because it changes the moat.</p><div class="brief-meta"><span>Jul 29 · 21 sources</span><button type="button" class="k-btn k-btn-small k-btn-primary" data-action="open-brief" data-company="TSM">Read →</button></div></article>
+        <article class="k-card brief-card" data-kind="earnings"><div class="brief-card-head"><div><div class="brief-kind">Post-earnings readout</div><div class="ticker-block mono">NU</div></div><span class="k-pill k-pill-neutral">ARCHIVED</span></div><h2 class="brief-title">Q2: Better growth, narrower credit cushion</h2><p class="brief-summary">A one-page event readout capturing the beat, the thesis delta, and what changes in the monitoring plan.</p><div class="brief-meta"><span>May 15 · 9 sources</span><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="open-brief" data-company="NU">Read →</button></div></article>
+        <article class="k-card brief-card" data-kind="evaluation"><div class="brief-card-head"><div><div class="brief-kind">Evaluation brief</div><div class="ticker-block mono">MELI</div></div><span class="k-pill k-pill-neutral">WATCHLIST</span></div><h2 class="brief-title">A great business waiting for a cleaner entry</h2><p class="brief-summary">Commerce and payments reinforce each other, but the current security price already pays for a large share of the execution.</p><div class="brief-meta"><span>Aug 2 · 14 sources</span><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="open-brief" data-company="NU">Preview →</button></div></article>
+        <article class="k-card brief-card" data-kind="evaluation"><div class="brief-card-head"><div><div class="brief-kind">Evaluation brief</div><div class="ticker-block mono">SE</div></div><span class="k-pill k-pill-neutral">WATCHLIST</span></div><h2 class="brief-title">Profit discipline is real; moat durability is not settled</h2><p class="brief-summary">The valuation looks less demanding, but the research burden remains proving that growth can reaccelerate without reopening the subsidy loop.</p><div class="brief-meta"><span>Jul 31 · 12 sources</span><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="open-brief" data-company="BKNG">Preview →</button></div></article>
+      </div>
+    </section>
+
+    <section id="screen-full-brief" class="screen" data-layout="editorial-document" aria-labelledby="brief-document-title">
+      <div class="reader-shell">
+        <div class="reader-toolbar">
+          <div><button type="button" class="k-btn k-btn-quiet k-btn-small" data-action="navigate" data-target="screen-company-desk">← Back to desk</button> <span class="reader-progress">Full research brief · <span class="mono" id="reader-ticker">NU</span> · Updated Aug 7</span></div>
+          <div class="top-actions"><button type="button" class="k-btn k-btn-quiet k-btn-small" data-action="open-drawer" data-drawer="comments">3 comments</button><button type="button" class="k-btn k-btn-primary k-btn-small" data-action="toggle-ask">Ask about this brief</button></div>
+        </div>
+        <div class="reader-layout">
+          <nav class="reader-toc" aria-label="Brief sections">
+            <div class="reader-toc-label">In this brief</div>
+            <a href="#brief-decision" class="is-active">Decision</a>
+            <a href="#brief-thesis">Thesis</a>
+            <a href="#brief-quarter">What changed</a>
+            <a href="#brief-valuation">Valuation</a>
+            <a href="#brief-risks">Risks & falsifiers</a>
+            <a href="#brief-sources">Sources</a>
+          </nav>
+
+          <article class="k-doc">
+            <header class="k-doc-mast">
+              <div class="doc-kicker">Full research brief · Holding</div>
+              <h1 class="doc-title" id="brief-document-title">NU: The Mexico proof is getting closer</h1>
+              <p class="doc-deck" id="brief-deck">The cost advantage remains intact. The next underwriting question is whether Mexico can convert rapid customer and deposit growth into durable local economics without consuming the credit cushion.</p>
+              <div class="doc-meta"><span>Prepared for Bhanu Nuthakki</span><span>August 7, 2026 · 18 sources · v14</span></div>
+            </header>
+            <div class="k-band" aria-label="Key figures">
+              <div class="k-band-v"><div class="label">Decision</div><div class="value">HOLD</div></div>
+              <div class="k-band-v"><div class="label">Position</div><div class="value">12.5%</div></div>
+              <div class="k-band-v"><div class="label">Fair value</div><div class="value">$18.50</div></div>
+              <div class="k-band-v"><div class="label">Thesis health</div><div class="value">4 / 5</div></div>
+            </div>
+
+            <section class="doc-section" id="brief-decision">
+              <div class="doc-section-label">01 · Decision</div>
+              <h2>Hold the position. Require an economic proof before adding.</h2>
+              <p class="doc-lede">The evidence is improving, but it has not crossed the line that should change portfolio weight. Mexico now has enough funding scale to matter; it does not yet have enough seasoned credit and contribution evidence to underwrite as a second Brazil.</p>
+              <ul class="doc-rule-list">
+                <li><strong>Stay at 12–13%</strong><span>while 90+ NPL remains below 5.6% and cost-to-serve remains below $1.20.</span></li>
+                <li><strong>Add toward 15%</strong><span>only after Mexico reports a second quarter of improving contribution economics alongside controlled losses.</span></li>
+                <li><strong>Trim toward 9%</strong><span>if loss normalization stalls for two quarters or funding growth requires materially higher deposit pricing.</span></li>
+              </ul>
+            </section>
+
+            <section class="doc-section" id="brief-thesis">
+              <div class="doc-section-label">02 · Thesis</div>
+              <h2>A structural cost advantage is becoming a regional distribution advantage.</h2>
+              <div class="k-doc-row">
+                <div><p>Nu began as a low-cost wedge against fee-heavy Brazilian incumbents. The stronger thesis is no longer merely that a digital bank has lower branches and servicing cost. It is that a lower cost base lets Nu offer simpler products, acquire customers organically, price fairly, and compound engagement across a broadening product set.</p><p>That loop remains visible in Brazil. Monthly cost-to-serve is approximately $0.90, while active-customer growth and revenue per customer both remain positive. <button type="button" class="source-mark" data-action="open-source" data-source="cost-serve">S4</button></p></div>
+                <aside class="k-note"><div class="k-note-title">What is new</div>Mexico deposits above $3B move the question from demand to economics. The next proof is not another customer count; it is contribution after credit cost.</aside>
+              </div>
+              <h3>Why Mexico is different</h3>
+              <p>Brazil’s playbook cannot be copied mechanically. Mexico has lower card penetration, a different bureau environment, and stronger incumbent deposit franchises. Nu’s early customer momentum is encouraging, but loss curves will season after growth has already looked impressive. That makes deposit cost, cohort behavior, and contribution profit more important than top-line account growth.</p>
+            </section>
+
+            <section class="doc-section" id="brief-quarter">
+              <div class="doc-section-label">03 · What changed</div>
+              <h2>The quarter strengthened the scale case and narrowed the credit cushion.</h2>
+              <p>Revenue and net income exceeded the prior-quarter model, led by active-customer growth and monetization. At the same time, 90+ NPL rose to 5.2%. The level still passes the thesis contract, but the distance to the 5.6% warning threshold is smaller.</p>
+              <table class="doc-table">
+                <thead><tr><th>Decision KPI</th><th>Q4 ’25</th><th>Q1 ’26</th><th>Q2 ’26</th><th>Read</th></tr></thead>
+                <tbody><tr><td>Revenue ($M)</td><td>2,400</td><td>2,715</td><td>3,021</td><td>supports</td></tr><tr><td>Net income ($M)</td><td>395</td><td>480</td><td>560</td><td>supports</td></tr><tr><td>90+ NPL</td><td>4.9%</td><td>5.0%</td><td>5.2%</td><td>near</td></tr><tr><td>Cost / active customer</td><td>$0.93</td><td>$0.91</td><td>$0.90</td><td>holds</td></tr></tbody>
+              </table>
+            </section>
+
+            <section class="doc-section" id="brief-valuation">
+              <div class="doc-section-label">04 · Valuation</div>
+              <h2>The price offers room for execution, but not for a broken cost advantage.</h2>
+              <p>Base-case fair value is $18.50, about 30% above the current price. The estimate assumes strong but fading customer growth, modest expansion in revenue per active customer, and a gradual normalization of credit losses. The case does not require Mexico to become a second Brazil within the explicit forecast period.</p>
+              <ul class="doc-rule-list"><li><strong>Bear · $10.80</strong><span>Losses stay elevated, Mexico contribution remains negative, and mature-market efficiency stalls.</span></li><li><strong>Base · $18.50</strong><span>Brazil compounds while Mexico reaches useful scale with controlled funding and credit costs.</span></li><li><strong>Bull · $24.20</strong><span>Mexico demonstrates Brazil-like engagement and contribution sooner than expected.</span></li></ul>
+            </section>
+
+            <section class="doc-section" id="brief-risks">
+              <div class="doc-section-label">05 · Risks & falsifiers</div>
+              <h2>The thesis should break on economics, not on a narrative change.</h2>
+              <p>The primary risk is that Nu’s low-cost distribution attracts growth faster than its underwriting system can price risk outside Brazil. A second risk is that deposit growth proves rate-sensitive, weakening the funding advantage at precisely the moment credit costs rise.</p>
+              <ul class="doc-rule-list"><li><strong>Credit quality</strong><span>Warning if 90+ NPL exceeds 5.6% for two consecutive quarters.</span></li><li><strong>Cost advantage</strong><span>Break if monthly cost-to-serve exceeds $1.20 without a deliberate service investment.</span></li><li><strong>Mexico scale</strong><span>Support requires customer scale and improving contribution; customer count alone is insufficient.</span></li></ul>
+            </section>
+
+            <section class="doc-section" id="brief-sources">
+              <div class="doc-section-label">06 · Sources</div>
+              <h2>Evidence used in this brief</h2>
+              <p>Primary sources include Nu’s Q2 shareholder letter, prepared remarks and Q&amp;A transcript, regulatory deposit and credit data, and the governed financial-facts ledger. Each claim marker opens its exact source location in the shared source drawer.</p>
+              <table class="doc-table"><thead><tr><th>Source</th><th>Published</th><th>Used</th></tr></thead><tbody><tr><td>Q2 shareholder letter</td><td>Aug 5</td><td>8 claims</td></tr><tr><td>Q2 earnings transcript</td><td>Aug 5</td><td>6 claims</td></tr><tr><td>Mexico regulatory release</td><td>Aug 1</td><td>3 claims</td></tr><tr><td>Governed financial facts</td><td>Aug 5</td><td>12 series</td></tr></tbody></table>
+            </section>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="scrim" id="overlay-scrim" data-action="close-overlay"></div>
+  <aside class="drawer" id="context-drawer" aria-label="Context drawer" aria-hidden="true">
+    <div class="drawer-head"><div><div class="drawer-title" id="drawer-title">Context</div><div class="panel-subtitle" id="drawer-subtitle">Company-scoped detail</div></div><button type="button" class="k-btn k-btn-quiet drawer-close" data-action="close-overlay" aria-label="Close drawer">×</button></div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <aside class="ask-dock" id="ask-dock" aria-label="Ask this company" aria-hidden="true">
+    <div class="ask-head"><div><strong>Ask · <span class="mono" id="ask-dock-scope">NU</span></strong><div class="panel-subtitle">Grounded in this company’s evidence</div></div><button type="button" class="k-btn k-btn-small k-btn-quiet" data-action="toggle-ask" aria-label="Close Ask">×</button></div>
+    <div class="ask-thread" id="ask-thread"><div class="ask-answer">Ask a decision-shaped question. I’ll answer from the governed evidence and show exact source locations.</div><div class="ask-suggestions"><button type="button" class="k-chip" data-suggestion="What evidence would justify adding?">What would justify adding?</button><button type="button" class="k-chip" data-suggestion="Which thesis contract is closest to breaking?">Closest falsifier</button><button type="button" class="k-chip" data-suggestion="Compare base and bear valuation assumptions.">Base vs bear</button></div></div>
+    <form class="ask-form" id="ask-form"><input class="ask-input" id="ask-input" aria-label="Question" placeholder="Ask about the thesis, quarter, or valuation"><button type="submit" class="k-btn k-btn-primary">Send</button></form>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite">Prototype action completed</div>
+
+  <script>
+    const companies = {
+      NU: { name: "Nu Holdings Ltd.", sector: "LatAm digital banking · Held · 12.5% weight", rating: "OVERWEIGHT", posture: "Hold at 12–13%; add only on proof", reason: "Growth is intact. Mexico credit normalization is the gating evidence.", health: "4 / 5", price: "$14.25 / $18.50", upside: "+29.8% upside", catalystDate: "Aug 12", catalyst: "Mexico operating update", brief: "NU: The Mexico proof is getting closer", deck: "The cost advantage remains intact. The next underwriting question is whether Mexico can convert rapid customer and deposit growth into durable local economics without consuming the credit cushion." },
+      BKNG: { name: "Booking Holdings Inc.", sector: "Global online travel · Held · 8.5% weight", rating: "HOLD", posture: "Hold; add below $4,400 on direct-booking proof", reason: "Execution is strong. The remaining question is how much AI-assisted direct mix reaches margin.", health: "5 / 5", price: "$4,620 / $4,850", upside: "+5.0% upside", catalystDate: "Aug 20", catalyst: "European travel data", brief: "BKNG: Direct booking is the quiet margin lever", deck: "Connected Trip is becoming a distribution advantage rather than a feature story, while alternative accommodation adds supply breadth and direct mix protects economics." },
+      TSM: { name: "Taiwan Semiconductor", sector: "Leading-edge foundry · Held · 7.8% weight", rating: "OVERWEIGHT", posture: "Hold; add on N2 yield and capacity proof", reason: "AI demand is visible. The underwriting hinge is execution through the N2 ramp.", health: "4 / 5", price: "$244 / $285", upside: "+16.8% upside", catalystDate: "Sep 09", catalyst: "Monthly revenue release", brief: "TSM: N2 execution matters more than the AI label", deck: "The durable edge is process execution and customer trust. AI demand matters because it tightens leading-edge capacity, not because it changes the moat." }
+    };
+    const drawerContent = {
+      signals: ["Signals Stream", "Recent evidence ranked by materiality", '<div class="k-well"><strong>NU · Mexico deposits crossed $3B</strong><p class="muted">Supports funding scale; contribution proof remains open.</p></div><div class="k-well"><strong>BKNG · Direct share reached 56%</strong><p class="muted">Supports the margin thesis.</p></div>'],
+      audit: ["Decision Audit Log", "Governed owner decisions", '<div class="contract-row"><div><strong>NU · Hold</strong><div class="contract-threshold">Aug 7 · Mexico proof not complete</div></div><div class="positive">RATIFIED</div></div><div class="contract-row"><div><strong>BKNG · Fair value update</strong><div class="contract-threshold">Aug 6 · $4,500 → $4,850</div></div><div class="positive">RATIFIED</div></div>'],
+      pipeline: ["Execution Queue", "Front-end preview only", '<div class="k-well"><strong>No jobs will run from this prototype.</strong><p class="muted">Hydration and pipeline actions stay out of scope until the experience is approved.</p></div>'],
+      command: ["Command palette", "Go directly to a company or research action", '<button class="k-btn k-btn-quiet" data-action="navigate" data-target="screen-brief-library">Open Brief Library</button><button class="k-btn k-btn-quiet" data-action="toggle-ask">Ask current company</button>'],
+      notes: ["Analyst notes", "Private working memory · NU", '<div class="k-well"><strong>Open · Mexico deposit pricing</strong><p class="muted">Check whether growth is promotional or structural.</p></div><div class="k-well"><strong>Open · Higher-income cohorts</strong><p class="muted">Compare early loss curves with Brazil vintage.</p></div>'],
+      valuation: ["Valuation bridge", "Price, base value, and action thresholds", '<div class="decision-band"><div class="decision-cell"><div class="k-label">Price</div><div class="stat">$14.25</div></div><div class="decision-cell"><div class="k-label">Base</div><div class="stat positive">$18.50</div></div><div class="decision-cell"><div class="k-label">Add below</div><div class="stat">$13.20</div></div><div class="decision-cell"><div class="k-label">Trim above</div><div class="stat">$21.00</div></div></div>'],
+      contracts: ["Edit thesis thresholds", "New governed backend capability required", '<div class="k-well"><strong>This mockup will not write a thesis threshold directly.</strong><p class="muted">The production flow needs a validated preview, an owner-approved diff, and an audited apply through the decision-conditions module.</p></div>'],
+      financials: ["Financial statements", "Quarterly series with exact source doorways", '<table class="metric-table"><thead><tr><th>Metric</th><th>Q1</th><th>Q2</th></tr></thead><tbody><tr><td>Revenue</td><td>$2,715M</td><td>$3,021M</td></tr><tr><td>Net income</td><td>$480M</td><td>$560M</td></tr><tr><td>90+ NPL</td><td>5.0%</td><td>5.2%</td></tr></tbody></table>'],
+      comments: ["Brief comments", "Anchored to the argument, not a standing gutter", '<div class="k-well"><strong>Decision · Add condition</strong><p class="muted">“Should the proof require contribution profit or just improving loss-adjusted revenue?”</p></div><div class="k-well"><strong>Valuation · Bear case</strong><p class="muted">“Revisit the deposit-cost assumption.”</p></div>']
+    };
+    const sourceContent = {
+      "npl-series": ["90+ NPL series", "Governed financial facts", "90+ NPL increased from 5.0% to 5.2% in Q2. The warning threshold remains 5.6% for two consecutive quarters."],
+      "valuation-method": ["Valuation methodology", "DCF model · Base scenario", "Fair value uses a 10.5% WACC, 3.5% terminal growth, and fading revenue growth through 2029."],
+      "mexico-deposits": ["Mexico deposits", "Q2 shareholder letter · page 4", "Mexico deposits exceeded $3.0 billion, with continued growth in primary banking relationships."],
+      "cost-serve": ["Cost to serve", "Q2 prepared remarks · 12:41", "Monthly servicing cost per active customer remained below one dollar during the quarter."]
+    };
+    const editTargets = {
+      "open-question": {
+        title: "Edit open question",
+        subtitle: "Adapter needed · existing note supersede path",
+        capability: "research.open_questions.edit",
+        status: "ADAPTER"
+      },
+      "thesis-contracts": {
+        title: "Propose thesis contract change",
+        subtitle: "New governed capability · preview and approval required",
+        capability: "research.thesis_contracts.edit",
+        status: "NEW BACKEND"
+      }
+    };
+    let activeCompany = "NU";
+    let lastFocused = null;
+
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("is-open");
+      window.setTimeout(() => toast.classList.remove("is-open"), 1800);
+    }
+
+    function escapeHTML(value) {
+      const node = document.createElement("div");
+      node.textContent = value || "";
+      return node.innerHTML;
+    }
+
+    function navigate(target) {
+      document.querySelectorAll(".screen").forEach(screen => screen.classList.toggle("is-active", screen.id === target));
+      document.querySelectorAll(".nav-item").forEach(item => item.classList.toggle("is-active", item.dataset.target === target));
+      const labels = { "screen-company-desk": `Company Desk · ${activeCompany}`, "screen-brief-library": "Brief Library", "screen-full-brief": `Full Research Brief · ${activeCompany}` };
+      document.getElementById("breadcrumb-current").textContent = labels[target] || "Research Engine";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      document.getElementById("app-sidebar").classList.remove("is-open");
+    }
+
+    function switchCompany(ticker) {
+      activeCompany = ticker;
+      const company = companies[ticker];
+      document.getElementById("desk-ticker").textContent = ticker;
+      document.getElementById("desk-title").textContent = company.name;
+      document.getElementById("desk-sector").textContent = company.sector;
+      document.getElementById("desk-rating").textContent = company.rating;
+      document.getElementById("decision-posture").textContent = company.posture;
+      document.getElementById("decision-reason").textContent = company.reason;
+      document.getElementById("thesis-health").textContent = company.health;
+      document.getElementById("price-fv").textContent = company.price;
+      document.getElementById("upside").textContent = company.upside;
+      document.getElementById("next-catalyst-date").textContent = company.catalystDate;
+      document.getElementById("next-catalyst").textContent = company.catalyst;
+      document.getElementById("latest-brief-title").textContent = company.brief;
+      document.getElementById("open-current-brief").dataset.company = ticker;
+      document.querySelectorAll('[data-action="switch-company"]').forEach(button => button.classList.toggle("is-on", button.dataset.company === ticker));
+      document.querySelectorAll("#ask-scope, #ask-dock-scope").forEach(node => node.textContent = ticker);
+      document.getElementById("breadcrumb-current").textContent = `Company Desk · ${ticker}`;
+      showToast(`Company Desk switched to ${ticker}`);
+    }
+
+    function switchDeskTab(tab) {
+      document.querySelectorAll(".desk-tab").forEach(button => { const selected = button.dataset.tab === tab; button.classList.toggle("is-active", selected); button.setAttribute("aria-selected", String(selected)); });
+      document.querySelectorAll(".desk-tab-pane").forEach(pane => pane.classList.toggle("is-active", pane.dataset.tabPane === tab));
+    }
+
+    function openBrief(ticker) {
+      switchCompany(ticker);
+      const company = companies[ticker];
+      document.getElementById("reader-ticker").textContent = ticker;
+      document.getElementById("brief-document-title").textContent = company.brief;
+      document.getElementById("brief-deck").textContent = company.deck;
+      navigate("screen-full-brief");
+    }
+
+    function openDrawer(type) {
+      const payload = drawerContent[type] || ["Context", "Company-scoped detail", '<div class="k-well">This drawer is ready for hydrated content after approval.</div>'];
+      lastFocused = document.activeElement;
+      document.getElementById("drawer-title").textContent = payload[0];
+      document.getElementById("drawer-subtitle").textContent = payload[1];
+      document.getElementById("drawer-body").innerHTML = payload[2];
+      document.getElementById("context-drawer").classList.add("is-open");
+      document.getElementById("context-drawer").setAttribute("aria-hidden", "false");
+      document.getElementById("overlay-scrim").classList.add("is-open");
+      document.querySelector(".drawer-close").focus();
+    }
+
+    function openSource(source) {
+      const payload = sourceContent[source] || ["Source evidence", "Exact source location", "Source content will be hydrated from the governed evidence ledger after the front-end is approved."];
+      openDrawer("source");
+      document.getElementById("drawer-title").textContent = payload[0];
+      document.getElementById("drawer-subtitle").textContent = payload[1];
+      document.getElementById("drawer-body").innerHTML = `<div class="source-quote">${payload[2]}</div><div class="k-well"><div class="k-label">Provenance</div><p>Fetched Aug 7 · Primary source · Exact locator preserved</p></div>`;
+    }
+
+    function closeOverlay() {
+      document.getElementById("context-drawer").classList.remove("is-open");
+      document.getElementById("context-drawer").setAttribute("aria-hidden", "true");
+      document.getElementById("overlay-scrim").classList.remove("is-open");
+      if (lastFocused) lastFocused.focus();
+    }
+
+    function toggleAsk() {
+      const dock = document.getElementById("ask-dock");
+      const opening = !dock.classList.contains("is-open");
+      dock.classList.toggle("is-open", opening);
+      dock.setAttribute("aria-hidden", String(!opening));
+      if (opening) document.getElementById("ask-input").focus();
+    }
+
+    function openCardChat(trigger) {
+      const card = trigger.dataset.card || "Research card";
+      const prompt = trigger.dataset.prompt || `Deep-dive the ${card} for ${activeCompany}.`;
+      document.getElementById("ask-dock-scope").textContent = activeCompany;
+      document.getElementById("ask-thread").innerHTML = `<div class="ask-answer"><strong>${escapeHTML(activeCompany)} · ${escapeHTML(card)}</strong><p>This starts a read-only, card-scoped conversation through the existing Ask seam. Sources and approvals remain visible.</p></div>`;
+      document.getElementById("ask-input").value = prompt;
+      const dock = document.getElementById("ask-dock");
+      if (!dock.classList.contains("is-open")) toggleAsk();
+      else document.getElementById("ask-input").focus();
+    }
+
+    function openCardEdit(trigger) {
+      const target = trigger.dataset.editTarget;
+      const config = editTargets[target];
+      if (!config) return;
+      const item = escapeHTML(trigger.dataset.item || "Current thesis contracts");
+      openDrawer("edit");
+      document.getElementById("drawer-title").textContent = config.title;
+      document.getElementById("drawer-subtitle").textContent = config.subtitle;
+      if (target === "open-question") {
+        document.getElementById("drawer-body").innerHTML = `<div class="k-well"><span class="k-pill k-pill-warn">${config.status}</span><p class="muted">The backend already supports superseding an analyst note. The rendered question still needs a durable note ID and revision before this can be connected safely.</p></div><label class="k-label" for="question-edit">Proposed wording</label><textarea class="ask-input" id="question-edit" rows="5">${item}</textarea><div class="k-well"><strong>Write boundary</strong><p class="muted">Preview the diff, then require Owner approval. Save creates a new revision; it never overwrites the note in place.</p></div><button type="button" class="k-btn k-btn-primary" data-action="preview-edit" data-capability="${config.capability}">Preview change</button>`;
+      } else {
+        document.getElementById("drawer-body").innerHTML = `<div class="k-well"><span class="k-pill k-pill-warn">${config.status}</span><p class="muted">No safe direct-edit endpoint exists. The future flow must reuse decision-condition validation and stamping.</p></div><div class="contract-row"><div><strong>Credit quality remains controlled</strong><div class="contract-threshold">Current warning · 90+ NPL above 5.6% for two quarters</div></div><div class="warning">PROPOSE</div></div><label class="k-label" for="contract-edit">Proposed contract or threshold</label><textarea class="ask-input" id="contract-edit" rows="5">Warning if 90+ NPL exceeds 5.6% for two consecutive quarters.</textarea><div class="k-well"><strong>Write boundary</strong><p class="muted">Generate a validated diff, show downstream decision impact, require Owner approval, then apply through the owning module with an audit event.</p></div><button type="button" class="k-btn k-btn-primary" data-action="preview-edit" data-capability="${config.capability}">Preview proposed change</button>`;
+      }
+    }
+
+    function reviewCapabilities() {
+      openDrawer("capabilities");
+      document.getElementById("drawer-title").textContent = "Interaction readiness";
+      document.getElementById("drawer-subtitle").textContent = "Front-end actions mapped to backend ownership";
+      document.getElementById("drawer-body").innerHTML = '<div class="capability-summary"><div class="capability-count"><span class="k-label">Ready now</span><strong class="positive">6</strong></div><div class="capability-count"><span class="k-label">Adapter needed</span><strong class="warning">1</strong></div><div class="capability-count"><span class="k-label">New governed</span><strong class="warning">1</strong></div></div><div class="capability-review"><div class="capability-review-row"><div><strong>Card-scoped Chat</strong><div class="panel-subtitle">Change feed, contracts, KPIs, questions, catalysts, latest brief</div></div><span class="k-pill k-pill-ok">READY</span></div><div class="capability-review-row"><div><strong>Edit open question</strong><div class="panel-subtitle">Needs note ID + revision; reuse supersede route</div></div><span class="k-pill k-pill-warn">ADAPTER</span></div><div class="capability-review-row"><div><strong>Edit thesis contract</strong><div class="panel-subtitle">Needs preview/approve API owned by decision conditions</div></div><span class="k-pill k-pill-warn">NEW</span></div></div><div class="k-well"><strong>Owner approval remains the write boundary.</strong><p class="muted">Full implementation contract: docs/design/company_research_interaction_catalog.md</p></div>';
+    }
+
+    document.addEventListener("click", event => {
+      const trigger = event.target.closest("[data-action]");
+      if (!trigger) return;
+      const action = trigger.dataset.action;
+      if (action === "navigate") navigate(trigger.dataset.target);
+      if (action === "switch-company") switchCompany(trigger.dataset.company);
+      if (action === "switch-desk-tab") switchDeskTab(trigger.dataset.tab);
+      if (action === "open-brief") openBrief(trigger.dataset.company || activeCompany);
+      if (action === "open-drawer") openDrawer(trigger.dataset.drawer);
+      if (action === "open-source") openSource(trigger.dataset.source);
+      if (action === "close-overlay") closeOverlay();
+      if (action === "toggle-ask") toggleAsk();
+      if (action === "chat-card") openCardChat(trigger);
+      if (action === "edit-card") openCardEdit(trigger);
+      if (action === "review-capabilities") reviewCapabilities();
+      if (action === "preview-edit") showToast("Prototype only · backend adapter and owner approval still required");
+    });
+
+    document.querySelectorAll("[data-filter]").forEach(filter => filter.addEventListener("click", () => {
+      document.querySelectorAll("[data-filter]").forEach(button => button.classList.toggle("is-on", button === filter));
+      document.querySelectorAll(".brief-card").forEach(card => card.hidden = filter.dataset.filter !== "all" && card.dataset.kind !== filter.dataset.filter);
+    }));
+
+    document.querySelectorAll("[data-suggestion]").forEach(button => button.addEventListener("click", () => {
+      document.getElementById("ask-input").value = button.dataset.suggestion;
+      document.getElementById("ask-input").focus();
+    }));
+
+    document.getElementById("ask-form").addEventListener("submit", event => {
+      event.preventDefault();
+      const input = document.getElementById("ask-input");
+      if (!input.value.trim()) return;
+      document.getElementById("ask-thread").innerHTML = `<div class="ask-answer"><strong>${activeCompany} · Prototype answer</strong><p>Your question is captured as an interaction example. Backend grounding will be connected after this front-end direction is approved.</p><button type="button" class="source-mark" data-action="open-source" data-source="cost-serve">S4</button></div>`;
+      input.value = "";
+    });
+
+    function updateScenario() {
+      const wacc = Number(document.getElementById("wacc-slider").value);
+      const growth = Number(document.getElementById("growth-slider").value);
+      const fairValue = 18.5 + (10.5 - wacc) * 1.15 + (growth - 3.5) * 1.35;
+      const upside = (fairValue / 14.25 - 1) * 100;
+      document.getElementById("wacc-output").textContent = `${wacc.toFixed(2)}%`;
+      document.getElementById("growth-output").textContent = `${growth.toFixed(2)}%`;
+      document.getElementById("fair-value-output").textContent = `$${fairValue.toFixed(2)}`;
+      document.getElementById("scenario-upside").textContent = `${upside >= 0 ? "+" : ""}${upside.toFixed(1)}%`;
+      document.getElementById("scenario-label").textContent = wacc > 11.5 ? "BEAR" : growth > 4 ? "BULL" : "BASE";
+    }
+    document.getElementById("wacc-slider").addEventListener("input", updateScenario);
+    document.getElementById("growth-slider").addEventListener("input", updateScenario);
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") {
+        if (document.getElementById("context-drawer").classList.contains("is-open")) closeOverlay();
+        else if (document.getElementById("ask-dock").classList.contains("is-open")) toggleAsk();
+      }
+    });
+  </script>
+</body>
+</html>

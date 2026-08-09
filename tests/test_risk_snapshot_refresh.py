@@ -15,14 +15,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from integrations.portfolio_tracker_client import (
     BetaStats,
     Concentration,
@@ -45,33 +44,16 @@ from portfolio_risk_snapshot_store import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
+class _RefreshModule(Protocol):
+    fetch_portfolio_analytics: Callable[..., PortfolioAnalytics]
 
-
-@pytest.fixture(scope="module")
-def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    db = tmp_path_factory.mktemp("risk_refresh_tmpl") / "at_head.db"
-    import db as dbmod
-
-    saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
-    dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
-    return db
+    def main(self, argv: list[str] | None = None) -> int: ...
 
 
 @pytest.fixture
-def head_db(head_template: Path, tmp_path: Path) -> Path:
-    db = tmp_path / "risk_refresh.db"
-    shutil.copy(head_template, db)
-    return db
+def head_db(migrated_db: Callable[..., Path], tmp_path: Path) -> Path:
+    """Use the shared active-head template so writer preflight is hermetic."""
+    return migrated_db(tmp_path / "risk_refresh.db")
 
 
 # --------------------------------------------------------------------------- #
@@ -175,7 +157,7 @@ def test_zero_positions_rejected_by_schema() -> None:
 # --------------------------------------------------------------------------- #
 # End-to-end: the execution script
 # --------------------------------------------------------------------------- #
-def _load_refresh_module() -> object:
+def _load_refresh_module() -> _RefreshModule:
     spec = importlib.util.spec_from_file_location(
         "refresh_portfolio_risk_snapshot",
         PROJECT_ROOT / "execution" / "refresh_portfolio_risk_snapshot.py",
@@ -183,7 +165,14 @@ def _load_refresh_module() -> object:
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    return cast(_RefreshModule, mod)
+
+
+def _returning(result: PortfolioAnalytics) -> Callable[..., PortfolioAnalytics]:
+    def fetch(**_kwargs: object) -> PortfolioAnalytics:
+        return result
+
+    return fetch
 
 
 def _canned_analytics() -> PortfolioAnalytics:
@@ -289,7 +278,7 @@ def test_refresh_script_writes_validates_and_dedupes(
     head_db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     mod = _load_refresh_module()
-    monkeypatch.setattr(mod, "fetch_portfolio_analytics", lambda **_: _canned_analytics())
+    monkeypatch.setattr(mod, "fetch_portfolio_analytics", _returning(_canned_analytics()))
     assert mod.main(["--db-path", str(head_db)]) == 0
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert out["status"] == "ok"
@@ -309,7 +298,7 @@ def test_refresh_script_invalid_capture_writes_nothing(
     degenerate = PortfolioAnalytics(
         available=True, api_url="http://x", performance=None, positioning=None
     )
-    monkeypatch.setattr(mod, "fetch_portfolio_analytics", lambda **_: degenerate)
+    monkeypatch.setattr(mod, "fetch_portfolio_analytics", _returning(degenerate))
     assert mod.main(["--db-path", str(head_db)]) == 1
     latest = read_latest_snapshot(db_path=head_db)
     assert latest is not None and latest.beta == pytest.approx(0.8)  # untouched
@@ -333,6 +322,6 @@ def test_refresh_script_tracker_down_exits_nonzero(
 ) -> None:
     mod = _load_refresh_module()
     down = PortfolioAnalytics(available=False, api_url="http://x", errors={"beta": "refused"})
-    monkeypatch.setattr(mod, "fetch_portfolio_analytics", lambda **_: down)
+    monkeypatch.setattr(mod, "fetch_portfolio_analytics", _returning(down))
     assert mod.main(["--db-path", str(head_db)]) == 1
     assert read_latest_snapshot(db_path=head_db) is None  # nothing invented

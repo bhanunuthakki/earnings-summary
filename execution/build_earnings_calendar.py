@@ -22,17 +22,39 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass
 from datetime import date, datetime
+from html import escape
 from pathlib import Path
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from ui.controls import controls_css, icon_svg, ticker_label  # noqa: E402
+from ui.tokens import FAVICON_LINK, palette_css  # noqa: E402
 
 UPCOMING_WINDOW_DAYS = 90
 RECENT_WINDOW_DAYS = 45
+
+
+@dataclass(frozen=True)
+class CalendarEvent:
+    date: date
+    time: str
+    eps_est: object | None
+    rev_est: object | None
+
+
+@dataclass(frozen=True)
+class CalendarRow:
+    ticker: str
+    name: str
+    list_type: str
+    latest_report: tuple[str, str] | None
+    event: CalendarEvent | None = None
 
 
 def main() -> int:
@@ -42,19 +64,14 @@ def main() -> int:
     rows = _load_tracked(repo_root)
     today = date.today()
 
-    upcoming: list[dict] = []
-    recent: list[dict] = []
-    no_data: list[dict] = []
+    upcoming: list[CalendarRow] = []
+    recent: list[CalendarRow] = []
+    no_data: list[CalendarRow] = []
 
     for ticker, name, list_type in rows:
         events = _read_calendar(repo_root, ticker)
         latest_report = _latest_report(repo_root, ticker)
-        base = {
-            "ticker": ticker,
-            "name": name,
-            "list_type": list_type,
-            "latest_report": latest_report,
-        }
+        base = CalendarRow(ticker, name, list_type, latest_report)
         if not events:
             no_data.append(base)
             continue
@@ -62,16 +79,16 @@ def main() -> int:
         next_event = _next_upcoming(events, today)
         last_event = _most_recent_past(events, today)
 
-        if next_event and (next_event["date"] - today).days <= UPCOMING_WINDOW_DAYS:
-            upcoming.append({**base, **next_event})
-        elif last_event and (today - last_event["date"]).days <= RECENT_WINDOW_DAYS:
-            recent.append({**base, **last_event})
+        if next_event and (next_event.date - today).days <= UPCOMING_WINDOW_DAYS:
+            upcoming.append(CalendarRow(ticker, name, list_type, latest_report, next_event))
+        elif last_event and (today - last_event.date).days <= RECENT_WINDOW_DAYS:
+            recent.append(CalendarRow(ticker, name, list_type, latest_report, last_event))
         else:
             no_data.append(base)
 
-    upcoming.sort(key=lambda r: (r["date"], _list_rank(r["list_type"]), r["ticker"]))
-    recent.sort(key=lambda r: (r["date"], _list_rank(r["list_type"]), r["ticker"]), reverse=True)
-    no_data.sort(key=lambda r: (_list_rank(r["list_type"]), r["ticker"]))
+    upcoming.sort(key=lambda r: (_event_date(r), _list_rank(r.list_type), r.ticker))
+    recent.sort(key=lambda r: (_event_date(r), _list_rank(r.list_type), r.ticker), reverse=True)
+    no_data.sort(key=lambda r: (_list_rank(r.list_type), r.ticker))
 
     html = _render_html(today, upcoming, recent, no_data)
     out_path = repo_root / "output" / "earnings_calendar.html"
@@ -118,52 +135,55 @@ def _load_tracked(repo_root: Path) -> list[tuple[str, str, str]]:
     return rows
 
 
-def _read_calendar(repo_root: Path, ticker: str) -> list[dict]:
+def _read_calendar(repo_root: Path, ticker: str) -> list[CalendarEvent]:
     path = repo_root / "data" / "historical" / "fmp" / f"{ticker}_earnings_calendar.json"
     if not path.exists():
         return []
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return []
     if isinstance(payload, dict):
-        payload = payload.get("data", payload)
+        mapping = cast("dict[str, object]", payload)
+        payload = mapping.get("data", mapping)
     if not isinstance(payload, list):
         return []
-    out: list[dict] = []
-    for row in payload:
-        if not isinstance(row, dict):
+    out: list[CalendarEvent] = []
+    for raw_row in cast("list[object]", payload):
+        if not isinstance(raw_row, dict):
             continue
+        row = cast("dict[str, object]", raw_row)
         raw_date = row.get("date") or row.get("reportDate") or row.get("earnings_date")
-        if not raw_date:
+        if not isinstance(raw_date, str) or not raw_date:
             continue
         try:
             d = datetime.strptime(raw_date[:10], "%Y-%m-%d").date()
         except ValueError:
             continue
+        raw_time = row.get("time") or row.get("hour") or ""
         out.append(
-            {
-                "date": d,
-                "time": (row.get("time") or row.get("hour") or "").strip().lower(),
-                "eps_est": row.get("epsEstimated") or row.get("eps_estimated"),
-                "rev_est": row.get("revenueEstimated") or row.get("revenue_estimated"),
-            }
+            CalendarEvent(
+                date=d,
+                time=raw_time.strip().lower() if isinstance(raw_time, str) else "",
+                eps_est=row.get("epsEstimated") or row.get("eps_estimated"),
+                rev_est=row.get("revenueEstimated") or row.get("revenue_estimated"),
+            )
         )
     return out
 
 
-def _next_upcoming(events: list[dict], today: date) -> dict | None:
-    future = [e for e in events if e["date"] >= today]
+def _next_upcoming(events: list[CalendarEvent], today: date) -> CalendarEvent | None:
+    future = [event for event in events if event.date >= today]
     if not future:
         return None
-    return min(future, key=lambda e: e["date"])
+    return min(future, key=lambda event: event.date)
 
 
-def _most_recent_past(events: list[dict], today: date) -> dict | None:
-    past = [e for e in events if e["date"] < today]
+def _most_recent_past(events: list[CalendarEvent], today: date) -> CalendarEvent | None:
+    past = [event for event in events if event.date < today]
     if not past:
         return None
-    return max(past, key=lambda e: e["date"])
+    return max(past, key=lambda event: event.date)
 
 
 def _latest_report(repo_root: Path, ticker: str) -> tuple[str, str] | None:
@@ -219,139 +239,200 @@ def _format_time(time_str: str) -> str:
     return ""
 
 
-def _render_row(row: dict, today: date, *, kind: str) -> str:
-    delta = (row["date"] - today).days if kind == "upcoming" else (today - row["date"]).days
+def _event_date(row: CalendarRow) -> date:
+    if row.event is None:
+        raise ValueError(f"calendar row for {row.ticker} has no event")
+    return row.event.date
+
+
+def _render_row(row: CalendarRow, today: date, *, kind: str) -> str:
+    event = row.event
+    if event is None:
+        raise ValueError(f"calendar row for {row.ticker} has no event")
+    delta = (event.date - today).days if kind == "upcoming" else (today - event.date).days
     delta_label = f"in {delta}d" if kind == "upcoming" else f"{delta}d ago"
     if kind == "upcoming" and delta == 0:
         delta_label = "today"
     if kind == "upcoming" and delta == 1:
         delta_label = "tomorrow"
 
-    when = _format_time(row.get("time", ""))
-    list_class, list_label = _list_class_and_label(row["list_type"])
+    when = _format_time(event.time)
+    list_class, list_label = _list_class_and_label(row.list_type)
 
-    if row.get("latest_report"):
-        rep_date, rep_rel = row["latest_report"]
-        report_cell = f'<a href="{rep_rel}">{rep_date}</a>'
+    if row.latest_report:
+        rep_date, rep_rel = row.latest_report
+        report_cell = f'<a href="{escape(rep_rel, quote=True)}">{escape(rep_date)}</a>'
     else:
         report_cell = '<span class="muted">—</span>'
 
+    company = ticker_label(row.ticker, row.name)
+
     return (
-        f'<tr class="{list_class}">'
-        f'<td class="date"><strong>{row["date"].isoformat()}</strong> '
+        f'<tr class="calendar-row {escape(list_class)}">'
+        f'<td class="date"><strong>{event.date.isoformat()}</strong> '
         f'<span class="delta">{delta_label}</span></td>'
-        f'<td class="ticker">{row["ticker"]}</td>'
-        f'<td class="name">{row["name"]}</td>'
-        f'<td><span class="badge {list_class}">{list_label}</span></td>'
-        f'<td class="when">{when}</td>'
+        f'<td class="company">{company}</td>'
+        f'<td><span class="k-chip k-chip-mono calendar-kind {escape(list_class)}">'
+        f"{escape(list_label)}</span></td>"
+        f'<td class="when">{escape(when)}</td>'
         f"<td>{report_cell}</td>"
         f"</tr>"
     )
 
 
-def _render_no_data_row(row: dict) -> str:
-    list_class, list_label = _list_class_and_label(row["list_type"])
-    if row.get("latest_report"):
-        rep_date, rep_rel = row["latest_report"]
-        report_cell = f'<a href="{rep_rel}">{rep_date}</a>'
+def _render_no_data_row(row: CalendarRow) -> str:
+    list_class, list_label = _list_class_and_label(row.list_type)
+    if row.latest_report:
+        rep_date, rep_rel = row.latest_report
+        report_cell = f'<a href="{escape(rep_rel, quote=True)}">{escape(rep_date)}</a>'
     else:
         report_cell = '<span class="muted">—</span>'
+    company = ticker_label(row.ticker, row.name)
     return (
-        f'<tr class="{list_class}">'
-        f'<td class="ticker">{row["ticker"]}</td>'
-        f'<td class="name">{row["name"]}</td>'
-        f'<td><span class="badge {list_class}">{list_label}</span></td>'
+        f'<tr class="calendar-row {escape(list_class)}">'
+        f'<td class="company">{company}</td>'
+        f'<td><span class="k-chip k-chip-mono calendar-kind {escape(list_class)}">'
+        f"{escape(list_label)}</span></td>"
         f"<td>{report_cell}</td>"
         f"</tr>"
     )
 
 
-def _render_html(today: date, upcoming: list[dict], recent: list[dict], no_data: list[dict]) -> str:
+def _render_html(
+    today: date,
+    upcoming: list[CalendarRow],
+    recent: list[CalendarRow],
+    no_data: list[CalendarRow],
+) -> str:
     upcoming_rows = (
         "\n".join(_render_row(r, today, kind="upcoming") for r in upcoming)
-        or '<tr><td colspan="6" class="muted">No upcoming earnings in the next 90 days.</td></tr>'
+        or '<tr><td colspan="5" class="muted">No upcoming earnings in the next 90 days.</td></tr>'
     )
     recent_rows = (
         "\n".join(_render_row(r, today, kind="recent") for r in recent)
-        or '<tr><td colspan="6" class="muted">No earnings in the last 45 days.</td></tr>'
+        or '<tr><td colspan="5" class="muted">No earnings in the last 45 days.</td></tr>'
     )
     no_data_rows = (
         "\n".join(_render_no_data_row(r) for r in no_data)
-        or '<tr><td colspan="4" class="muted">All tracked tickers have calendar data.</td></tr>'
+        or '<tr><td colspan="3" class="muted">All tracked tickers have calendar data.</td></tr>'
     )
 
-    portfolio_upcoming = sum(1 for r in upcoming if r["list_type"] == "portfolio")
-    watchlist_upcoming = sum(1 for r in upcoming if r["list_type"] == "watchlist")
-    evaluation_upcoming = sum(1 for r in upcoming if r["list_type"] == "evaluation")
+    portfolio_upcoming = sum(1 for row in upcoming if row.list_type == "portfolio")
+    watchlist_upcoming = sum(1 for row in upcoming if row.list_type == "watchlist")
+    evaluation_upcoming = sum(1 for row in upcoming if row.list_type == "evaluation")
 
     return f"""<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-<meta charset="utf-8">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Earnings Calendar — {today.isoformat()}</title>
+{FAVICON_LINK}
 <style>
-  * {{ box-sizing: border-box; }}
-  body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    margin: 0; padding: 24px 32px; background: #fafafa; color: #1a1a1a;
-    max-width: 1200px;
-  }}
-  h1 {{ margin: 0 0 4px; font-size: 22px; }}
-  .meta {{ color: #666; font-size: 13px; margin-bottom: 24px; }}
-  .meta strong {{ color: #1a1a1a; }}
-  h2 {{ font-size: 16px; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #ddd; }}
-  table {{ width: 100%; border-collapse: collapse; background: white; font-size: 13px; }}
-  th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; }}
-  th {{ background: #f5f5f5; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; color: #555; }}
-  tr.portfolio td {{ background: #fffbe6; }}
-  tr.portfolio td.ticker {{ font-weight: 700; }}
-  tr.evaluation td {{ background: #eff6ff; }}
-  tr.evaluation td.ticker {{ font-weight: 600; color: #1e40af; }}
-  tr.watchlist td.ticker {{ font-weight: 500; color: #555; }}
-  td.date {{ white-space: nowrap; font-variant-numeric: tabular-nums; }}
-  td.date strong {{ display: inline-block; min-width: 92px; }}
-  span.delta {{ color: #666; font-size: 12px; margin-left: 4px; }}
-  td.when {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #888; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
-  .badge.portfolio {{ background: #fde68a; color: #92400e; }}
-  .badge.evaluation {{ background: #bfdbfe; color: #1e3a8a; }}
-  .badge.watchlist {{ background: #e5e7eb; color: #4b5563; }}
-  a {{ color: #0366d6; text-decoration: none; }}
-  a:hover {{ text-decoration: underline; }}
-  .muted {{ color: #999; font-style: italic; }}
-  details {{ margin-top: 12px; }}
-  details summary {{ cursor: pointer; color: #666; font-size: 13px; }}
+{palette_css("dark")}
+{controls_css("dark")}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); }}
+.calendar-shell {{ min-height: 100dvh; display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }}
+.calendar-sidebar {{ position: sticky; top: 0; height: 100dvh; padding: var(--sp-4) var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-4); }}
+.calendar-brand {{ min-height: var(--header-height); display: flex; align-items: center;
+  padding: 0 var(--sp-2); font-size: var(--fs-title); font-weight: 600; }}
+.calendar-layer {{ display: flex; flex-direction: column; gap: var(--sp-half); }}
+.calendar-layer-title {{ padding: 0 var(--sp-2); color: var(--muted);
+  font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; }}
+.calendar-content {{ min-width: 0; max-width: var(--main-max-width); width: 100%;
+  margin: 0 auto; padding: var(--sp-5) var(--sp-4); }}
+.calendar-head {{ margin-bottom: var(--sp-5); }}
+h1 {{ margin: 0 0 var(--sp-1); font-size: var(--fs-display); }}
+.meta {{ color: var(--muted); font-size: var(--fs-body); margin: 0; }}
+.meta strong {{ color: var(--fg); }}
+h2 {{ font-size: var(--fs-title); margin: var(--sp-5) 0 var(--sp-2);
+  padding-bottom: var(--sp-2); border-bottom: var(--bw-thin) solid var(--border); }}
+.calendar-table {{ background: var(--surface); }}
+.calendar-table th {{ background: var(--paper); }}
+.calendar-row.portfolio td {{ background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }}
+.calendar-row.evaluation td {{ background: color-mix(in srgb, var(--mark) 5%, var(--surface)); }}
+.calendar-kind.portfolio {{ color: var(--accent); border-color: var(--accent); }}
+.calendar-kind.evaluation {{ color: var(--mark); border-color: var(--mark); }}
+td.date {{ white-space: nowrap; font-variant-numeric: tabular-nums; }}
+td.date strong {{ display: inline-block; min-width: var(--ticker-width); font-family: var(--mono); }}
+.delta {{ color: var(--muted); font-size: var(--fs-caption); margin-left: var(--sp-1); }}
+td.when {{ font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }}
+a {{ color: var(--accent); text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+.muted {{ color: var(--muted); font-style: italic; }}
+details {{ margin-top: var(--sp-4); }}
+details summary {{ cursor: pointer; color: var(--muted); font-size: var(--fs-body); }}
+details .calendar-table {{ margin-top: var(--sp-2); }}
+.calendar-table-wrap {{ width: 100%; max-width: 100%; overflow-x: auto; }}
+@media (max-width: 900px) {{
+  .calendar-shell {{ grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr); }}
+  .calendar-sidebar {{ width: var(--sidebar-collapsed-width); padding: var(--sp-3) var(--sp-2); }}
+  .calendar-brand, .calendar-layer-title, .calendar-sidebar .k-nav-item span {{ display: none; }}
+  .calendar-sidebar .k-nav-item {{ width: var(--touch-target-size);
+    min-height: var(--touch-target-size); padding: 0;
+    justify-content: center; align-self: center; }}
+}}
 </style>
 </head>
 <body>
-<h1>Earnings Calendar</h1>
-<p class="meta">Generated <strong>{today.isoformat()}</strong> · Upcoming next 90d: <strong>{len(upcoming)}</strong> ({portfolio_upcoming} portfolio, {evaluation_upcoming} evaluation, {watchlist_upcoming} watchlist) · Recently reported last 45d: <strong>{len(recent)}</strong> · No calendar data: <strong>{len(no_data)}</strong></p>
+<div class="calendar-shell">
+<aside class="calendar-sidebar k-sidebar">
+  <div class="calendar-brand">Earnings OS</div>
+  <section class="calendar-layer">
+    <div class="calendar-layer-title">L1 · Portfolio Intelligence</div>
+    <a class="k-btn k-nav-item active" href="earnings_calendar.html"
+      aria-current="page" aria-label="Earnings calendar">
+      {icon_svg("cockpit")}<span>Earnings calendar</span></a>
+    <a class="k-btn k-nav-item" href="http://127.0.0.1:7421/" aria-label="Open command center">
+      {icon_svg("portfolio")}<span>Command center</span></a>
+  </section>
+  <section class="calendar-layer">
+    <div class="calendar-layer-title">L2 · Research Engine</div>
+    <a class="k-btn k-nav-item" href="research/" aria-label="Research briefs">
+      {icon_svg("company")}<span>Research briefs</span></a>
+  </section>
+</aside>
+<main class="calendar-content">
+<header class="calendar-head">
+  <h1>Earnings Calendar</h1>
+  <p class="meta">Generated <strong>{today.isoformat()}</strong> · Upcoming next 90d: <strong>{len(upcoming)}</strong> ({portfolio_upcoming} portfolio, {evaluation_upcoming} evaluation, {watchlist_upcoming} watchlist) · Recently reported last 45d: <strong>{len(recent)}</strong> · No calendar data: <strong>{len(no_data)}</strong></p>
+</header>
 
 <h2>Upcoming (next 90 days)</h2>
-<table>
-  <thead><tr><th>Date</th><th>Ticker</th><th>Company</th><th>List</th><th>When</th><th>Latest report</th></tr></thead>
+<div class="calendar-table-wrap" role="region" aria-label="Upcoming earnings" tabindex="0">
+<table class="p-table calendar-table">
+  <thead><tr><th>Date</th><th>Company</th><th>List</th><th>When</th><th>Latest report</th></tr></thead>
   <tbody>
 {upcoming_rows}
   </tbody>
 </table>
+</div>
 
 <h2>Recently reported (last 45 days)</h2>
-<table>
-  <thead><tr><th>Date</th><th>Ticker</th><th>Company</th><th>List</th><th>When</th><th>Latest report</th></tr></thead>
+<div class="calendar-table-wrap" role="region" aria-label="Recently reported earnings" tabindex="0">
+<table class="p-table calendar-table">
+  <thead><tr><th>Date</th><th>Company</th><th>List</th><th>When</th><th>Latest report</th></tr></thead>
   <tbody>
 {recent_rows}
   </tbody>
 </table>
+</div>
 
 <details>
 <summary>No calendar data ({len(no_data)} tickers)</summary>
-<table style="margin-top: 10px;">
-  <thead><tr><th>Ticker</th><th>Company</th><th>List</th><th>Latest report</th></tr></thead>
+<div class="calendar-table-wrap" role="region" aria-label="Tickers without calendar data" tabindex="0">
+<table class="p-table calendar-table">
+  <thead><tr><th>Company</th><th>List</th><th>Latest report</th></tr></thead>
   <tbody>
 {no_data_rows}
   </tbody>
 </table>
+</div>
 </details>
+</main>
+</div>
 </body>
 </html>
 """

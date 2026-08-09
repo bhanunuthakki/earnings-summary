@@ -10,13 +10,14 @@ tokens, hand-ported controls), not the other way. Full plan:
 ## What's in it
 
 - **Tokens** (`src/tokens/`) — generated from `src/ui/tokens.py` by `scripts/gen_design_tokens.py`.
-  A four-step type scale (`--fs-display` 22 · `--fs-title` 16 · `--fs-body` 13 · `--fs-caption` 11),
+  A four-step type scale (`--fs-display` 20 · `--fs-title` 15 · `--fs-body` 13 · `--fs-caption` 11),
   one de-emphasis gray (`--muted`), one status family (`--ok`/`--warn`/`--bad`), and `@kind`
   annotations on the font + motion tokens. **Do not hand-edit** the two files under `src/tokens/`.
 - **Controls** (`src/styles/controls.css`) — a port of `src/ui/controls.py`'s `controls_css("paper")`:
   the form-control baseline, a native-chrome kill list (themed scrollbars, kit-drawn checkbox/radio,
   hidden spinners/date-indicator, the one `--k-chevron` on `<select>` and `<summary>`), and the
-  `.k-*` component classes. One deliberate divergence from canonical: the native `select[multiple]`
+  `.k-*` component classes, including the Work OS `.k-sidebar`, `.k-nav-item`, `.k-icon`, and
+  `.k-icon-btn` application chrome. One deliberate divergence from canonical: the native `select[multiple]`
   rules are dropped in favor of the `<MultiSelect>` composite.
 - **Components** (`src/components/`) — `Button`, `Pill`, `Chip`, `Well`, `Dot`, `NumText`,
   `TickerLabel`, `Label`, `Menu`, `Toolbar`, `Input`, `Textarea`, `Select`, `MultiSelect`,

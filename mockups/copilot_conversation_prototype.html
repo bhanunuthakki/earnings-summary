@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Research Copilot · interactive prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090a0c;
+      --surface: #121316;
+      --paper: #18191d;
+      --paper-2: #1d1e22;
+      --fg: #f4f3ef;
+      --fg-soft: #c5c2b8;
+      --muted: #7c7e87;
+      --border: #22242a;
+      --border-2: #31343e;
+      --hairline: #18191d;
+      --accent: #8aa8ff;
+      --accent-soft: #181f38;
+      --accent-contrast: #090a0c;
+      --ok: #4ade80;
+      --warn: #f5c66a;
+      --bad: #f08a8a;
+      --scrim: rgba(0, 0, 0, 0.65);
+      --sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --fs-display: 20px;
+      --fs-title: 15px;
+      --fs-body: 13px;
+      --fs-caption: 11px;
+      --sp-half: 2px;
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 24px;
+      --sp-6: 32px;
+      --radius: 8px;
+      --radius-card: 10px;
+      --radius-drawer: 14px;
+      --radius-full: 999px;
+      --bw: 1px;
+      --sidebar-width: 240px;
+      --sidebar-collapsed: 56px;
+      --topbar-height: 48px;
+      --thread-measure: 980px;
+      --message-measure: 780px;
+      --drawer-width: 420px;
+      --dialog-width: 640px;
+      --composer-min: 68px;
+      --control-height: 32px;
+      --tap: 40px;
+      --glyph: 16px;
+      --transition: 150ms ease;
+      --transition-fluid: 250ms cubic-bezier(0.16, 1, 0.3, 1);
+      --shadow-drawer: -16px 0 48px rgba(0, 0, 0, 0.75);
+      --shadow-dialog: 0 24px 80px rgba(0, 0, 0, 0.78);
+      --z-sidebar: 10;
+      --z-topbar: 20;
+      --z-drawer: 40;
+      --z-dialog: 60;
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      line-height: 1.5;
+    }
+    button, input, textarea, select { font: inherit; }
+    button { color: inherit; cursor: pointer; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+      outline: calc(var(--bw) * 2) solid var(--accent);
+      outline-offset: var(--sp-half);
+    }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); }
+    .positive { color: var(--ok); }
+    .warning { color: var(--warn); }
+    .sr-only {
+      position: absolute;
+      width: var(--bw);
+      height: var(--bw);
+      margin: calc(var(--bw) * -1);
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+      height: 100dvh;
+      transition: grid-template-columns var(--transition-fluid);
+    }
+    .app-shell.sidebar-collapsed { grid-template-columns: var(--sidebar-collapsed) minmax(0, 1fr); }
+    .app-shell.focus-mode { grid-template-columns: 0 minmax(0, 1fr); }
+
+    .app-sidebar {
+      position: relative;
+      z-index: var(--z-sidebar);
+      display: flex;
+      min-width: 0;
+      height: 100dvh;
+      flex-direction: column;
+      overflow: hidden;
+      border-right: var(--bw) solid var(--border);
+      background: var(--surface);
+      transition: opacity var(--transition), transform var(--transition-fluid);
+    }
+    .focus-mode .app-sidebar { opacity: 0; transform: translateX(-100%); pointer-events: none; }
+    .sidebar-brand {
+      display: flex;
+      min-height: var(--topbar-height);
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-2);
+      padding: 0 var(--sp-3);
+      border-bottom: var(--bw) solid var(--border);
+    }
+    .brand-lockup { display: flex; min-width: 0; align-items: center; gap: var(--sp-2); }
+    .brand-mark { color: var(--accent); font-family: var(--mono); font-weight: 600; letter-spacing: .08em; white-space: nowrap; }
+    .brand-mark span { color: var(--fg); }
+    .icon-button {
+      display: inline-grid;
+      width: var(--control-height);
+      height: var(--control-height);
+      flex: 0 0 auto;
+      place-items: center;
+      padding: 0;
+      border: var(--bw) solid var(--border);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--muted);
+    }
+    .icon-button:hover { border-color: var(--border-2); color: var(--fg); }
+    .sidebar-command {
+      display: flex;
+      min-height: var(--control-height);
+      margin: var(--sp-3);
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-2);
+      padding: 0 var(--sp-3);
+      border: var(--bw) solid var(--border-2);
+      border-radius: var(--radius);
+      background: var(--paper);
+      color: var(--fg-soft);
+      font-size: var(--fs-caption);
+    }
+    .nav-group { padding: 0 var(--sp-3) var(--sp-2); }
+    .nav-label {
+      padding: var(--sp-3) var(--sp-2) var(--sp-1);
+      color: var(--muted);
+      font-size: var(--fs-caption);
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .nav-item {
+      display: flex;
+      width: 100%;
+      min-height: var(--control-height);
+      align-items: center;
+      gap: var(--sp-3);
+      padding: 0 var(--sp-2);
+      border: 0;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--fg-soft);
+      text-align: left;
+      white-space: nowrap;
+    }
+    .nav-item:hover { background: var(--paper); color: var(--fg); }
+    .nav-item.is-active { background: var(--accent-soft); color: var(--fg); }
+    .nav-glyph { width: var(--glyph); flex: 0 0 auto; color: var(--muted); text-align: center; }
+    .nav-item.is-active .nav-glyph { color: var(--accent); }
+    .sidebar-foot {
+      margin-top: auto;
+      padding: var(--sp-3) var(--sp-4);
+      border-top: var(--bw) solid var(--border);
+      color: var(--muted);
+      font-size: var(--fs-caption);
+    }
+    .sidebar-collapsed .brand-mark, .sidebar-collapsed .nav-label, .sidebar-collapsed .nav-copy,
+    .sidebar-collapsed .sidebar-command span, .sidebar-collapsed .sidebar-foot { display: none; }
+    .sidebar-collapsed .sidebar-brand { justify-content: center; padding: 0; }
+    .sidebar-collapsed .sidebar-command { justify-content: center; margin-inline: var(--sp-3); padding: 0; }
+    .sidebar-collapsed .nav-group { padding-inline: var(--sp-3); }
+    .sidebar-collapsed .nav-item { justify-content: center; padding: 0; }
+
+    .copilot-workspace {
+      display: grid;
+      min-width: 0;
+      height: 100dvh;
+      grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+      background: var(--bg);
+    }
+    .copilot-topbar {
+      position: relative;
+      z-index: var(--z-topbar);
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+      padding: 0 var(--sp-4);
+      border-bottom: var(--bw) solid var(--border);
+      background: var(--bg);
+    }
+    .breadcrumb { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+    .breadcrumb strong { color: var(--fg); font-weight: 600; }
+    .topbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--sp-2); }
+    .k-btn, .k-chip {
+      display: inline-flex;
+      min-height: var(--control-height);
+      align-items: center;
+      justify-content: center;
+      gap: var(--sp-2);
+      padding: 0 var(--sp-3);
+      border: var(--bw) solid transparent;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--muted);
+      font-size: var(--fs-body);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .k-btn:hover { color: var(--fg); }
+    .k-btn-primary { background: var(--accent); color: var(--accent-contrast); font-weight: 600; }
+    .k-btn-primary:hover { color: var(--accent-contrast); }
+    .k-btn-quiet { border-color: var(--border); }
+    .k-btn-quiet:hover { border-color: var(--border-2); }
+    .k-btn-sm { min-height: var(--control-height); font-size: var(--fs-caption); }
+    .k-chip {
+      min-height: var(--control-height);
+      border-color: var(--border);
+      border-radius: var(--radius-full);
+      font-size: var(--fs-caption);
+    }
+    .k-chip:hover, .k-chip.is-on { border-color: var(--accent); color: var(--accent); }
+
+    .thread-shell {
+      display: grid;
+      min-width: 0;
+      min-height: 0;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    .thread-header-band { border-bottom: var(--bw) solid var(--border); }
+    .thread-header {
+      display: flex;
+      width: min(100%, var(--thread-measure));
+      min-height: var(--topbar-height);
+      margin: 0 auto;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+      padding: var(--sp-2) var(--sp-4);
+    }
+    .security-identity { display: flex; min-width: 0; align-items: center; gap: var(--sp-3); }
+    .ticker { color: var(--fg); font-family: var(--mono); font-size: var(--fs-display); font-weight: 600; }
+    .security-copy { min-width: 0; }
+    .security-name { color: var(--fg); font-size: var(--fs-title); font-weight: 600; }
+    .security-meta { overflow: hidden; color: var(--muted); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+    .security-state { color: var(--ok); font-size: var(--fs-caption); font-weight: 600; }
+    .security-switcher { display: flex; flex: 0 0 auto; gap: var(--sp-1); }
+    .security-switcher .k-btn.is-on { border-color: var(--accent); color: var(--accent); }
+
+    .conversation-thread { min-width: 0; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
+    .thread-measure {
+      width: min(100%, var(--thread-measure));
+      margin: 0 auto;
+      padding: var(--sp-4);
+    }
+    .thread-date { margin-bottom: var(--sp-4); color: var(--muted); font-size: var(--fs-caption); text-align: center; }
+    .message { width: min(100%, var(--message-measure)); margin-bottom: var(--sp-4); }
+    .message.user { margin-left: auto; }
+    .message.assistant { margin-right: auto; }
+    .message-meta { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-1); color: var(--muted); font-size: var(--fs-caption); }
+    .message.user .message-meta { justify-content: flex-end; }
+    .turn-kind { color: var(--accent); font-weight: 500; }
+    .attachment-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .user-prompt {
+      margin-left: auto;
+      padding: var(--sp-3) var(--sp-4);
+      border: var(--bw) solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--paper);
+      line-height: 1.55;
+    }
+    .assistant-copy { color: var(--fg-soft); line-height: 1.6; }
+    .assistant-copy p { margin: 0 0 var(--sp-2); }
+    .assistant-copy strong { color: var(--fg); font-weight: 600; }
+    .source-line { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-2); }
+    .source-button {
+      min-height: auto;
+      padding: 0;
+      border: 0;
+      border-bottom: var(--bw) dotted var(--accent);
+      background: transparent;
+      color: var(--accent);
+      font-size: var(--fs-caption);
+    }
+    .answer-module {
+      margin-top: var(--sp-3);
+      padding: var(--sp-3) 0;
+      border-top: var(--bw) solid var(--border);
+      border-bottom: var(--bw) solid var(--border);
+    }
+    .module-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-2); }
+    .module-title { color: var(--fg); font-size: var(--fs-title); font-weight: 600; }
+    .module-state { color: var(--muted); font-size: var(--fs-caption); }
+    .metric-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .metric-cell { padding: var(--sp-2) var(--sp-3); border-right: var(--bw) solid var(--border); }
+    .metric-cell:first-child { padding-left: 0; }
+    .metric-cell:last-child { border-right: 0; }
+    .metric-label { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; }
+    .metric-value { margin-top: var(--sp-1); font-family: var(--mono); font-size: var(--fs-title); }
+    .proposal-table { width: 100%; border-collapse: collapse; }
+    .proposal-table th, .proposal-table td { padding: var(--sp-2) 0; border-bottom: var(--bw) solid var(--hairline); vertical-align: top; text-align: left; }
+    .proposal-table tr:last-child th, .proposal-table tr:last-child td { border-bottom: 0; }
+    .proposal-table th { width: var(--sp-8, 96px); padding-right: var(--sp-3); color: var(--muted); font-size: var(--fs-caption); font-weight: 500; text-transform: uppercase; }
+    .proposal-rule { margin-top: var(--sp-2); color: var(--warn); font-size: var(--fs-caption); }
+    .proposal-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
+    .receipt { margin-top: var(--sp-2); color: var(--ok); font-size: var(--fs-caption); }
+    .system-message { margin: var(--sp-3) 0; padding: var(--sp-2) 0; border-top: var(--bw) solid var(--border); border-bottom: var(--bw) solid var(--border); color: var(--muted); font-size: var(--fs-caption); text-align: center; }
+
+    .composer-band { border-top: var(--bw) solid var(--border); background: var(--bg); }
+    .composer-inner { width: min(100%, var(--thread-measure)); margin: 0 auto; padding: var(--sp-2) var(--sp-4) var(--sp-3); }
+    .walkthrough-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-3);
+      padding: var(--sp-2) 0;
+      color: var(--muted);
+      font-size: var(--fs-caption);
+    }
+    .walkthrough-bar strong { color: var(--fg-soft); font-weight: 600; }
+    .composer-context { display: flex; min-height: var(--control-height); align-items: center; gap: var(--sp-2); overflow-x: auto; }
+    .context-token { flex: 0 0 auto; color: var(--muted); font-size: var(--fs-caption); }
+    .context-token strong { color: var(--fg-soft); font-weight: 500; }
+    .composer-frame { overflow: hidden; border: var(--bw) solid var(--border-2); border-radius: var(--radius-card); background: var(--surface); }
+    .composer {
+      display: block;
+      width: 100%;
+      min-height: var(--composer-min);
+      resize: none;
+      padding: var(--sp-3) var(--sp-4);
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--fg);
+      line-height: 1.5;
+    }
+    .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2); border-top: var(--bw) solid var(--border); }
+    .composer-tools { display: flex; min-width: 0; align-items: center; gap: var(--sp-2); }
+    .composer-tools label { color: var(--muted); font-size: var(--fs-caption); }
+    .composer-tools select {
+      min-height: var(--control-height);
+      padding: 0 var(--sp-3);
+      border: var(--bw) solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg);
+      color: var(--fg-soft);
+      font-size: var(--fs-caption);
+    }
+    .composer-hint { color: var(--muted); font-size: var(--fs-caption); }
+
+    .drawer {
+      position: fixed;
+      z-index: var(--z-drawer);
+      top: var(--topbar-height);
+      right: 0;
+      bottom: 0;
+      width: min(var(--drawer-width), 94vw);
+      border-left: var(--bw) solid var(--border);
+      border-top-left-radius: var(--radius-drawer);
+      background: var(--surface);
+      box-shadow: var(--shadow-drawer);
+      transform: translateX(100%);
+      transition: transform var(--transition-fluid);
+      overflow: hidden;
+    }
+    .drawer.is-open { transform: translateX(0); }
+    .drawer-shell { display: grid; height: 100%; grid-template-rows: var(--topbar-height) minmax(0, 1fr); }
+    .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: 0 var(--sp-4); border-bottom: var(--bw) solid var(--border); }
+    .drawer-title { font-size: var(--fs-title); font-weight: 600; }
+    .drawer-subtitle { color: var(--muted); font-size: var(--fs-caption); }
+    .drawer-body { overflow-y: auto; padding: var(--sp-3) var(--sp-4); }
+    .drawer-search { width: 100%; min-height: var(--control-height); padding: 0 var(--sp-3); border: var(--bw) solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--fg); }
+    .drawer-toolbar { display: flex; gap: var(--sp-2); margin: var(--sp-3) 0; }
+    .history-row { width: 100%; padding: var(--sp-3) 0; border: 0; border-bottom: var(--bw) solid var(--border); background: transparent; text-align: left; }
+    .history-row:hover { color: var(--fg); }
+    .history-row.is-active { padding-inline: var(--sp-2); background: var(--accent-soft); }
+    .history-row-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+    .history-row-title { margin-top: var(--sp-1); font-weight: 600; }
+    .history-row-meta { margin-top: var(--sp-1); color: var(--muted); font-size: var(--fs-caption); }
+    .lifecycle { color: var(--ok); font-size: var(--fs-caption); }
+    .lifecycle.evaluation { color: var(--warn); }
+    .drawer-section { padding: var(--sp-3) 0; border-bottom: var(--bw) solid var(--border); }
+    .drawer-section:last-child { border-bottom: 0; }
+    .section-label { margin-bottom: var(--sp-2); color: var(--muted); font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; }
+    .section-title { margin: 0; font-size: var(--fs-title); font-weight: 600; }
+    .section-copy { margin: var(--sp-2) 0 0; color: var(--fg-soft); }
+    .evidence-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--bw) solid var(--hairline); }
+    .evidence-row:last-child { border-bottom: 0; }
+    .evidence-row strong { font-weight: 500; }
+    .evidence-meta { color: var(--muted); font-size: var(--fs-caption); }
+    .fact-table { width: 100%; border-collapse: collapse; }
+    .fact-table th, .fact-table td { padding: var(--sp-2); border-bottom: var(--bw) solid var(--border); text-align: left; }
+    .fact-table th { color: var(--muted); font-size: var(--fs-caption); font-weight: 500; text-transform: uppercase; }
+    .fact-table td:not(:first-child) { font-family: var(--mono); }
+
+    dialog {
+      z-index: var(--z-dialog);
+      width: min(var(--dialog-width), calc(100vw - var(--sp-6)));
+      padding: 0;
+      border: var(--bw) solid var(--border-2);
+      border-radius: var(--radius-drawer);
+      background: var(--surface);
+      color: var(--fg);
+      box-shadow: var(--shadow-dialog);
+    }
+    dialog::backdrop { background: var(--scrim); }
+    .dialog-head { padding: var(--sp-4); border-bottom: var(--bw) solid var(--border); }
+    .dialog-kicker { color: var(--warn); font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; }
+    .dialog-head h2 { margin: var(--sp-1) 0 0; font-size: var(--fs-display); }
+    .dialog-body { padding: var(--sp-4); }
+    .dialog-body > p { margin: 0 0 var(--sp-3); color: var(--fg-soft); }
+    .approval-row { display: grid; grid-template-columns: var(--sp-8, 96px) minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--bw) solid var(--border); }
+    .approval-key { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: var(--bw) solid var(--border); }
+
+    @media (max-width: 64rem) {
+      .app-shell { grid-template-columns: var(--sidebar-collapsed) minmax(0, 1fr); }
+      .brand-mark, .nav-label, .nav-copy, .sidebar-command span, .sidebar-foot { display: none; }
+      .sidebar-brand, .nav-item, .sidebar-command { justify-content: center; padding-inline: 0; }
+      .sidebar-command, .nav-group { margin-inline: var(--sp-3); padding-inline: 0; }
+      .composer-hint { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell" id="app-shell">
+    <aside class="app-sidebar" id="app-sidebar" aria-label="Primary navigation">
+      <div class="sidebar-brand">
+        <div class="brand-lockup"><div class="brand-mark">EQUITY <span>OS</span></div></div>
+        <button class="icon-button" type="button" data-action="collapse-sidebar" aria-label="Collapse sidebar">‹</button>
+      </div>
+      <button class="sidebar-command" type="button" data-action="toggle-focus"><span>⌘K Search / Ask</span><span>Copilot</span></button>
+      <nav aria-label="Workspaces">
+        <div class="nav-group">
+          <div class="nav-label">L1 · Portfolio Intelligence</div>
+          <button class="nav-item" type="button"><span class="nav-glyph">▦</span><span class="nav-copy">Portfolio Cockpit</span></button>
+          <button class="nav-item" type="button"><span class="nav-glyph">⌁</span><span class="nav-copy">Performance vs Index</span></button>
+          <button class="nav-item" type="button"><span class="nav-glyph">◇</span><span class="nav-copy">Risk &amp; Allocations</span></button>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">L2 · Research Engine</div>
+          <button class="nav-item" type="button"><span class="nav-glyph">ϟ</span><span class="nav-copy">Company Desk</span></button>
+          <button class="nav-item" type="button"><span class="nav-glyph">◉</span><span class="nav-copy">Facts &amp; Analytics</span></button>
+          <button class="nav-item is-active" type="button"><span class="nav-glyph">✦</span><span class="nav-copy">Research Copilot</span></button>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">L3 · Operations &amp; Governance</div>
+          <button class="nav-item" type="button"><span class="nav-glyph">✓</span><span class="nav-copy">Decision Audit Log</span></button>
+          <button class="nav-item" type="button"><span class="nav-glyph">⋯</span><span class="nav-copy">Execution Queue</span></button>
+        </div>
+      </nav>
+      <div class="sidebar-foot"><strong>Stable security history</strong><br>Evaluation and portfolio conversations share one company record.</div>
+    </aside>
+
+    <main class="copilot-workspace" id="copilot-workspace">
+      <header class="copilot-topbar" id="copilot-topbar">
+        <div class="breadcrumb">Research Engine / <strong>Research Copilot</strong></div>
+        <div class="topbar-actions">
+          <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-action="start-tour">Guided demo</button>
+          <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-action="toggle-history">History</button>
+          <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-action="toggle-evidence">Research context</button>
+          <button class="icon-button" id="focus-toggle" type="button" data-action="toggle-focus" aria-label="Toggle focus mode" aria-pressed="false">⛶</button>
+        </div>
+      </header>
+
+      <section class="thread-shell" aria-label="Research conversation">
+        <div class="thread-header-band">
+          <div class="thread-header" id="thread-header">
+            <div class="security-identity">
+              <span class="ticker" id="security-ticker">NU</span>
+              <div class="security-copy"><div class="security-name" id="security-name">Nu Holdings Ltd.</div><div class="security-meta"><span class="security-state" id="security-state">Portfolio</span> · Thesis <span id="security-version">v18</span> · Q2 research packet</div></div>
+            </div>
+            <div class="security-switcher" aria-label="Switch company">
+              <button class="k-btn k-btn-quiet k-btn-sm is-on" type="button" data-action="switch-security" data-security-id="nu">NU</button>
+              <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-action="switch-security" data-security-id="qcom">QCOM</button>
+              <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-action="switch-security" data-security-id="meli">MELI</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="conversation-thread" id="conversation-thread" aria-live="polite">
+          <div class="thread-measure" id="thread-messages"></div>
+        </div>
+
+        <div class="composer-band">
+          <div class="composer-inner">
+            <div class="walkthrough-bar" id="walkthrough-bar" hidden><span><strong id="walkthrough-title">Guided research sequence</strong> · <span id="walkthrough-progress">Question 1 of 5</span></span><button class="k-btn k-btn-primary k-btn-sm" type="button" data-action="next-question" id="walkthrough-next">Ask next</button></div>
+            <div class="composer-context" id="composer-context"><span class="context-token"><strong>NU</strong> · SEC-NU</span><span class="context-token">Thesis v18</span><span class="context-token">Latest governed research</span></div>
+            <div class="composer-frame">
+              <label class="sr-only" for="copilot-composer">Ask the research copilot</label>
+              <textarea class="composer" id="copilot-composer" placeholder="Ask about the company, test the thesis, or attach a governed fact…"></textarea>
+              <div class="composer-toolbar">
+                <div class="composer-tools"><label for="composer-category">Category</label><select id="composer-category"><option value="auto">Auto</option><option value="research">Research</option><option value="fact">Governed fact</option><option value="thesis">Thesis</option><option value="kpi">KPI</option></select><span class="composer-hint">Context and evidence attachments remain separate.</span></div>
+                <button class="k-btn k-btn-primary k-btn-sm" type="button" id="send-message">Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <aside class="drawer" id="history-drawer" aria-label="Conversation history" aria-hidden="true">
+    <div class="drawer-shell">
+      <div class="drawer-head"><div><div class="drawer-title">Conversation history</div><div class="drawer-subtitle">Company-linked, not lifecycle-linked</div></div><button class="icon-button" type="button" data-action="close-drawer" aria-label="Close history">×</button></div>
+      <div class="drawer-body">
+        <div class="topbar-actions"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-action="new-thread">New conversation</button></div>
+        <label class="sr-only" for="history-search">Search conversations</label><input class="drawer-search" id="history-search" type="search" placeholder="Search title, company, or category">
+        <div class="drawer-toolbar"><button class="k-chip is-on" type="button">All</button><button class="k-chip" type="button">This company</button><button class="k-chip" type="button">Proposals</button></div>
+        <div id="history-list">
+          <button class="history-row is-active" type="button" data-action="select-thread" data-thread-id="nu-quarter"><div class="history-row-top"><span class="lifecycle">NU · Portfolio</span><span class="muted mono">8m</span></div><div class="history-row-title">What changed since Q1?</div><div class="history-row-meta">Research · Thesis v18 · 3 sources</div></button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <aside class="drawer" id="evidence-drawer" aria-label="Research context" aria-hidden="true">
+    <div class="drawer-shell">
+      <div class="drawer-head"><div><div class="drawer-title">NU research context</div><div class="drawer-subtitle">Exact state attached to this conversation</div></div><button class="icon-button" type="button" data-action="close-drawer" aria-label="Close research context">×</button></div>
+      <div class="drawer-body">
+        <section class="drawer-section"><div class="section-label">Approved thesis · v18</div><h2 class="section-title">Engagement scales while Mexico seasons within the approved risk band.</h2><p class="section-copy">The thesis record and every proposed change remain distinct from chat synthesis.</p></section>
+        <section class="drawer-section"><div class="section-label">Tracked evidence</div><div id="drawer-kpis"><div class="evidence-row"><div><strong>Active customers</strong><div class="evidence-meta">Quarterly · growth above 18%</div></div><span class="positive mono">HOLDS</span></div><div class="evidence-row"><div><strong>Mexico credit losses</strong><div class="evidence-meta">Quarterly · approved ramp band</div></div><span class="warning mono">NEAR</span></div></div></section>
+        <section class="drawer-section"><div class="section-label">Governed fact view</div><table class="fact-table"><thead><tr><th>Period</th><th>Active customers</th><th>Change</th></tr></thead><tbody id="drawer-facts"><tr><td>FY24 Q1</td><td>99.3m</td><td>—</td></tr><tr><td>FY25 Q2</td><td>122.7m</td><td class="positive">+23.6%</td></tr></tbody></table><div class="proposal-actions"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-action="ask-fact" data-fact-index="2">Ask about this view</button></div></section>
+        <section class="drawer-section"><div class="section-label">Conversation provenance</div><div class="evidence-row"><div><strong>Q2 earnings release</strong><div class="evidence-meta">Primary · exact locator retained</div></div><span class="mono muted">doc:24</span></div><div class="evidence-row"><div><strong>Governed metric series</strong><div class="evidence-meta">Filed + reconciled</div></div><span class="mono muted">view:8</span></div></section>
+      </div>
+    </div>
+  </aside>
+
+  <dialog id="approval-dialog" aria-labelledby="approval-title">
+    <div class="dialog-head"><div class="dialog-kicker">Explicit approval required</div><h2 id="approval-title">Approve research change?</h2></div>
+    <div class="dialog-body"><p>Copilot can draft and explain a change. It cannot alter the thesis or KPI ledger until you approve this exact diff.</p><div id="approval-diff"></div></div>
+    <div class="dialog-actions"><button class="k-btn k-btn-quiet" type="button" data-action="cancel-approval">Cancel</button><button class="k-btn k-btn-primary" type="button" data-action="approve-proposal" id="approval-confirm">Approve exact change</button></div>
+  </dialog>
+
+  <template><button type="button" data-action="review-proposal">Review proposal</button></template>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const securities = {
+        nu: { id: "nu", record: "SEC-NU", ticker: "NU", name: "Nu Holdings Ltd.", lifecycle: "Portfolio", version: 18, thesis: "NU can sustain attractive growth while expanding contribution margin as engagement deepens and Mexico scales without recreating Brazil's early credit losses.", metric: "Active customers", facts: [{ period: "FY24 Q1", value: "99.3m", delta: "—" }, { period: "FY24 Q4", value: "114.2m", delta: "+15.0%" }, { period: "FY25 Q2", value: "122.7m", delta: "+23.6%" }] },
+        qcom: { id: "qcom", record: "SEC-QCOM", ticker: "QCOM", name: "Qualcomm Inc.", lifecycle: "Evaluation", version: 6, thesis: "The valuation can rerate if automotive and IoT become measurable growth and margin contributors before handset concentration reasserts itself.", metric: "Non-handset mix", facts: [{ period: "FY24 Q2", value: "22%", delta: "—" }, { period: "FY25 Q1", value: "25%", delta: "+3 pts" }, { period: "FY25 Q3", value: "27%", delta: "+5 pts" }] },
+        meli: { id: "meli", record: "SEC-MELI", ticker: "MELI", name: "MercadoLibre Inc.", lifecycle: "Portfolio", version: 12, thesis: "Commerce density and fintech engagement can compound together while credit growth remains subordinate to risk-adjusted returns.", metric: "Active buyers", facts: [{ period: "FY24 Q1", value: "54.3m", delta: "—" }, { period: "FY24 Q4", value: "67.1m", delta: "+23.6%" }, { period: "FY25 Q2", value: "72.8m", delta: "+34.1%" }] }
+      };
+
+      const threads = [
+        { id: "nu-quarter", securityId: "nu", title: "What changed since Q1?", updated: "8m", messages: [
+          { role: "user", category: "research", text: "What has changed since Q1, and does any of it weaken the thesis?" },
+          { role: "assistant", category: "research", text: "The quarter strengthened the engagement and operating-leverage legs. The unresolved issue is still Mexico credit seasoning; it has moved closer to the guardrail but has not crossed it.", sources: ["Q2 earnings release", "Q2 transcript", "Thesis v18"] }
+        ] },
+        { id: "nu-facts", securityId: "nu", title: "Active customer trend", updated: "Yesterday", messages: [
+          { role: "user", category: "fact", attachment: "Governed ViewSpec", text: "Show active customer growth using governed facts only." },
+          { role: "assistant", category: "fact", mode: "fact", attachment: "Governed ViewSpec", text: "Active customers increased from 99.3m to 122.7m across the selected window.", sources: ["Filed facts", "Normalized metric series"] }
+        ] },
+        { id: "qcom-proof", securityId: "qcom", title: "Diversification proof points", updated: "Mon", messages: [
+          { role: "user", category: "thesis", text: "What must be true before QCOM graduates from evaluation?" },
+          { role: "assistant", category: "thesis", text: "The gating evidence is sustained non-handset mix expansion, automotive backlog conversion, and handset margin resilience. Optionality alone is insufficient.", sources: ["Evaluation thesis v6", "FY25 Q3 filing"] }
+        ] },
+        { id: "meli-credit", securityId: "meli", title: "Credit guardrail review", updated: "Jul 30", messages: [
+          { role: "user", category: "kpi", text: "Are we monitoring the right early-warning signal for credit?" },
+          { role: "assistant", category: "kpi", text: "NPL formation is necessary but late. A vintage-level 30-day delinquency measure would be more diagnostic.", sources: ["KPI ledger", "Credit note"] }
+        ] }
+      ];
+
+      const state = { selectedSecurityId: "nu", selectedThreadId: "nu-quarter", openDrawer: null, sidebarCollapsed: false, focusMode: false, tourStep: -1, attachedView: null, pendingApproval: null };
+      const labels = { research: "Research", fact: "Governed fact", thesis: "Thesis", kpi: "KPI" };
+      const el = (id) => document.getElementById(id);
+      const security = () => securities[state.selectedSecurityId];
+      const thread = () => threads.find((item) => item.id === state.selectedThreadId);
+      const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+
+      function render() {
+        renderSecurity();
+        renderMessages();
+        renderHistory();
+        renderComposerContext();
+        renderWalkthrough();
+      }
+
+      function renderSecurity() {
+        const item = security();
+        el("security-ticker").textContent = item.ticker;
+        el("security-name").textContent = item.name;
+        el("security-state").textContent = item.lifecycle;
+        el("security-state").className = item.lifecycle === "Portfolio" ? "security-state" : "security-state warning";
+        el("security-version").textContent = `v${item.version}`;
+        document.querySelectorAll("[data-action='switch-security']").forEach((button) => button.classList.toggle("is-on", button.dataset.securityId === item.id));
+      }
+
+      function renderMessages() {
+        const active = thread();
+        if (!active || active.messages.length === 0) {
+          el("thread-messages").innerHTML = `<div class="thread-date">New conversation</div><article class="message assistant"><div class="message-meta"><span>Research Copilot</span></div><div class="assistant-copy"><p><strong>Start with a decision-shaped question.</strong></p><p>I will keep the company, approved thesis revision, and governed evidence visible without changing any of them.</p></div></article>`;
+          return;
+        }
+        el("thread-messages").innerHTML = `<div class="thread-date">${escapeHtml(active.title)} · ${escapeHtml(security().ticker)}</div>${active.messages.map(renderMessage).join("")}`;
+        requestAnimationFrame(() => { el("conversation-thread").scrollTop = el("conversation-thread").scrollHeight; });
+      }
+
+      function renderMessage(message) {
+        if (message.role === "system") return `<div class="system-message">${escapeHtml(message.text)}</div>`;
+        const meta = `<div class="message-meta"><span>${message.role === "user" ? "You" : "Research Copilot"}</span><span class="turn-kind">${labels[message.category] || "Research"}</span>${message.attachment ? `<span class="attachment-label">Attached · ${escapeHtml(message.attachment)}</span>` : ""}</div>`;
+        if (message.role === "user") return `<article class="message user">${meta}<div class="user-prompt">${escapeHtml(message.text)}</div></article>`;
+        const sources = message.sources?.length ? `<div class="source-line">${message.sources.map((source) => `<button class="source-button" type="button" data-action="toggle-evidence">${escapeHtml(source)}</button>`).join("")}</div>` : "";
+        return `<article class="message assistant">${meta}<div class="assistant-copy"><p>${escapeHtml(message.text)}</p>${renderArtifact(message)}${sources}</div></article>`;
+      }
+
+      function renderArtifact(message) {
+        const item = security();
+        if (message.mode === "fact") {
+          const first = item.facts[0];
+          const latest = item.facts[item.facts.length - 1];
+          return `<div class="answer-module"><div class="module-head"><div class="module-title">Governed series</div><div class="module-state">Filed + reconciled · exact ViewSpec</div></div><div class="metric-strip"><div class="metric-cell"><div class="metric-label">Start</div><div class="metric-value">${escapeHtml(first.value)}</div></div><div class="metric-cell"><div class="metric-label">Latest</div><div class="metric-value">${escapeHtml(latest.value)}</div></div><div class="metric-cell"><div class="metric-label">Change</div><div class="metric-value positive">${escapeHtml(latest.delta)}</div></div></div><div class="proposal-actions"><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-action="toggle-evidence">Inspect evidence</button></div></div>`;
+        }
+        if (message.proposal) {
+          const proposal = message.proposal;
+          return `<div class="answer-module"><div class="module-head"><div class="module-title">${escapeHtml(proposal.label)}</div><div class="module-state">${proposal.status === "approved" ? "Approved" : "Draft only"}</div></div><table class="proposal-table"><tr><th>Current</th><td>${escapeHtml(proposal.current)}</td></tr><tr><th>Proposed</th><td>${escapeHtml(proposal.proposed)}</td></tr></table>${proposal.status === "approved" ? `<div class="receipt">Approved · ${escapeHtml(proposal.receipt)}</div>` : `<div class="proposal-rule">Explicit approval required. Continued discussion does not apply this change.</div><div class="proposal-actions"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-action="review-proposal" data-message-id="${escapeHtml(message.id)}">Review exact change</button></div>`}</div>`;
+        }
+        return "";
+      }
+
+      function renderHistory() {
+        el("history-list").innerHTML = threads.map((item) => { const company = securities[item.securityId]; return `<button class="history-row ${item.id === state.selectedThreadId ? "is-active" : ""}" type="button" data-action="select-thread" data-thread-id="${item.id}"><div class="history-row-top"><span class="lifecycle ${company.lifecycle === "Evaluation" ? "evaluation" : ""}">${escapeHtml(company.ticker)} · ${escapeHtml(company.lifecycle)}</span><span class="muted mono">${escapeHtml(item.updated)}</span></div><div class="history-row-title">${escapeHtml(item.title)}</div><div class="history-row-meta">${labels[item.messages.find((message) => message.role === "user")?.category] || "Research"} · Thesis v${company.version}</div></button>`; }).join("");
+      }
+
+      function renderComposerContext() {
+        const item = security();
+        el("composer-context").innerHTML = `<span class="context-token"><strong>${escapeHtml(item.ticker)}</strong> · ${escapeHtml(item.record)}</span><span class="context-token">Thesis v${item.version}</span>${state.attachedView ? `<span class="context-token"><strong>Attached</strong> · ${escapeHtml(item.metric)} ViewSpec</span>` : '<span class="context-token">Latest governed research</span>'}`;
+      }
+
+      function renderWalkthrough() {
+        const bar = el("walkthrough-bar");
+        bar.hidden = state.tourStep < 0;
+        if (state.tourStep < 0) return;
+        el("walkthrough-progress").textContent = state.tourStep >= 4 ? "Complete · review either proposal" : `Question ${state.tourStep + 1} of 5 · ${labels[["research", "fact", "thesis", "kpi", "thesis"][state.tourStep]]}`;
+        el("walkthrough-next").hidden = state.tourStep >= 4;
+        el("walkthrough-next").textContent = state.tourStep === 3 ? "Ask final" : "Ask next";
+      }
+
+      function openDrawer(kind) {
+        state.openDrawer = kind;
+        for (const name of ["history", "evidence"]) {
+          const drawer = el(`${name}-drawer`);
+          const open = name === kind;
+          drawer.classList.toggle("is-open", open);
+          drawer.setAttribute("aria-hidden", String(!open));
+        }
+      }
+
+      function closeDrawers() { openDrawer(null); }
+
+      function selectSecurity(id) {
+        state.selectedSecurityId = id;
+        state.selectedThreadId = threads.find((item) => item.securityId === id)?.id ?? null;
+        state.attachedView = null;
+        state.tourStep = -1;
+        closeDrawers();
+        render();
+      }
+
+      function selectThread(id) {
+        const selected = threads.find((item) => item.id === id);
+        if (!selected) return;
+        state.selectedThreadId = selected.id;
+        state.selectedSecurityId = selected.securityId;
+        state.attachedView = null;
+        state.tourStep = -1;
+        closeDrawers();
+        render();
+      }
+
+      function newThread() {
+        const item = security();
+        const created = { id: `thread-${Date.now()}`, securityId: item.id, title: "New research question", updated: "Now", messages: [] };
+        threads.unshift(created);
+        state.selectedThreadId = created.id;
+        state.tourStep = -1;
+        closeDrawers();
+        render();
+        el("copilot-composer").focus();
+      }
+
+      function buildTourTurn(step, item) {
+        return [
+          [{ role: "user", category: "research", text: `What changed in the latest period for ${item.ticker}, and where should I focus?` }, { role: "assistant", category: "research", text: "Engagement is the clearest positive change. The monitored expansion risk remains the most important unresolved question.", sources: ["Latest filing", "Earnings transcript"] }],
+          [{ role: "user", category: "fact", attachment: `${item.metric} ViewSpec`, text: `Show the ${item.metric.toLowerCase()} trend using governed data only.` }, { role: "assistant", category: "fact", mode: "fact", attachment: "Governed ViewSpec", text: "The governed series increased across the selected window. The exact metric identity, period, source policy, and transformations remain attached.", sources: ["Filed facts", "Normalized series"] }],
+          [{ role: "user", category: "thesis", attachment: `Thesis v${item.version}`, text: "Does that fact materially change the thesis, or is it confirming evidence?" }, { role: "assistant", category: "thesis", text: "It confirms one thesis leg but does not resolve the principal risk. A revision should raise confidence narrowly and preserve the existing guardrail.", sources: [`Thesis v${item.version}`, "Attached ViewSpec"] }],
+          [{ role: "user", category: "kpi", attachment: "KPI ledger", text: "Do we have an early enough KPI for the remaining risk?" }, { role: "assistant", category: "kpi", id: `tour-kpi-${Date.now()}`, text: "The current KPI captures the outcome but not the earliest warning. I drafted a leading indicator.", proposal: { type: "kpi", label: "Proposed KPI addition", current: "Outcome KPI only; no leading cohort trigger.", proposed: "Add an early risk cohort signal with a two-cohort review trigger.", status: "draft" }, sources: ["KPI ledger", "Risk note"] }],
+          [{ role: "user", category: "thesis", attachment: `Thesis v${item.version} + governed view`, text: "Draft the narrow thesis revision this evidence supports." }, { role: "assistant", category: "thesis", id: `tour-thesis-${Date.now()}`, text: "Here is the narrowest evidence-supported revision. It has not been applied.", proposal: { type: "thesis", label: `Proposed thesis revision · v${item.version} → v${item.version + 1}`, current: item.thesis, proposed: `${item.thesis} The latest governed period raises confidence in engagement; the existing risk guardrail remains unchanged.`, status: "draft" }, sources: ["Current thesis", "Governed ViewSpec"] }]
+        ][step];
+      }
+
+      function startTour() {
+        const item = security();
+        const guided = { id: `guided-${Date.now()}`, securityId: item.id, title: "Guided research sequence", updated: "Now", messages: [] };
+        threads.unshift(guided);
+        state.selectedThreadId = guided.id;
+        state.tourStep = -1;
+        state.attachedView = null;
+        closeDrawers();
+        nextQuestion();
+      }
+
+      function nextQuestion() {
+        if (state.tourStep >= 4) return;
+        state.tourStep += 1;
+        thread().messages.push(...buildTourTurn(state.tourStep, security()));
+        render();
+      }
+
+      function askFact() {
+        const item = security();
+        const active = thread();
+        state.attachedView = { metric: item.metric };
+        active.messages.push({ role: "user", category: "fact", attachment: `${item.metric} ViewSpec`, text: `Explain the latest ${item.metric.toLowerCase()} value and connect it to the thesis.` });
+        active.messages.push({ role: "assistant", category: "fact", mode: "fact", attachment: "Governed ViewSpec", text: "The latest value is governed evidence for the answer. It does not independently authorize a thesis change.", sources: ["Exact metric series", `Thesis v${item.version}`] });
+        closeDrawers();
+        render();
+      }
+
+      function reviewProposal(messageId) {
+        const message = thread()?.messages.find((item) => item.id === messageId);
+        if (!message?.proposal) return;
+        state.pendingApproval = { messageId, proposal: message.proposal };
+        const proposal = message.proposal;
+        el("approval-title").textContent = proposal.type === "thesis" ? "Approve thesis revision?" : "Approve KPI addition?";
+        el("approval-confirm").textContent = proposal.type === "thesis" ? "Approve thesis update" : "Approve KPI update";
+        el("approval-diff").innerHTML = `<div class="approval-row"><div class="approval-key">Security</div><div>${escapeHtml(security().ticker)} · ${escapeHtml(security().record)}</div></div><div class="approval-row"><div class="approval-key">Current</div><div>${escapeHtml(proposal.current)}</div></div><div class="approval-row"><div class="approval-key">Proposed</div><div>${escapeHtml(proposal.proposed)}</div></div><div class="approval-row"><div class="approval-key">Effect</div><div>Creates an approved revision and retains this conversation as provenance.</div></div>`;
+        el("approval-dialog").showModal();
+      }
+
+      function closeApproval() { state.pendingApproval = null; el("approval-dialog").close(); }
+
+      function approveProposal() {
+        if (!state.pendingApproval) return;
+        const message = thread().messages.find((item) => item.id === state.pendingApproval.messageId);
+        const proposal = message.proposal;
+        const item = security();
+        if (proposal.type === "thesis") { item.thesis = proposal.proposed; item.version += 1; proposal.receipt = `Thesis v${item.version}`; }
+        else proposal.receipt = "KPI ledger revision recorded";
+        proposal.status = "approved";
+        thread().messages.push({ role: "system", text: `${proposal.receipt} approved. Exact diff and originating conversation retained.` });
+        closeApproval();
+        render();
+      }
+
+      function sendMessage() {
+        const input = el("copilot-composer");
+        const text = input.value.trim();
+        if (!text) return;
+        const selected = el("composer-category").value;
+        const category = selected === "auto" ? (state.attachedView ? "fact" : "research") : selected;
+        const active = thread();
+        active.title = active.messages.length ? active.title : (text.length > 44 ? `${text.slice(0, 41)}…` : text);
+        active.messages.push({ role: "user", category, attachment: state.attachedView ? `${security().metric} ViewSpec` : null, text });
+        active.messages.push({ role: "assistant", category, mode: state.attachedView ? "fact" : null, text: state.attachedView ? "I used the attached governed series. The evidence remains linked and does not mutate the approved thesis." : "The answer is scoped to the visible company and approved thesis revision. Use Research context to inspect the exact evidence boundary.", sources: state.attachedView ? ["Attached ViewSpec", `Thesis v${security().version}`] : ["Visible research context"] });
+        input.value = "";
+        el("composer-category").value = "auto";
+        state.attachedView = null;
+        state.tourStep = -1;
+        render();
+      }
+
+      document.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        const action = button.dataset.action;
+        if (action === "collapse-sidebar") { state.sidebarCollapsed = !state.sidebarCollapsed; el("app-shell").classList.toggle("sidebar-collapsed", state.sidebarCollapsed); }
+        if (action === "toggle-focus") { state.focusMode = !state.focusMode; el("app-shell").classList.toggle("focus-mode", state.focusMode); el("focus-toggle").setAttribute("aria-pressed", String(state.focusMode)); }
+        if (action === "toggle-history") openDrawer(state.openDrawer === "history" ? null : "history");
+        if (action === "toggle-evidence") openDrawer(state.openDrawer === "evidence" ? null : "evidence");
+        if (action === "close-drawer") closeDrawers();
+        if (action === "switch-security") selectSecurity(button.dataset.securityId);
+        if (action === "select-thread") selectThread(button.dataset.threadId);
+        if (action === "new-thread") newThread();
+        if (action === "start-tour") startTour();
+        if (action === "next-question") nextQuestion();
+        if (action === "ask-fact") askFact();
+        if (action === "review-proposal") reviewProposal(button.dataset.messageId);
+        if (action === "cancel-approval") closeApproval();
+        if (action === "approve-proposal") approveProposal();
+      });
+      el("send-message").addEventListener("click", sendMessage);
+      el("copilot-composer").addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); sendMessage(); } });
+      el("approval-dialog").addEventListener("cancel", (event) => { event.preventDefault(); closeApproval(); });
+      document.addEventListener("keydown", (event) => { if (event.key === "Escape" && state.openDrawer) closeDrawers(); });
+      render();
+    })();
+  </script>
+</body>
+</html>
