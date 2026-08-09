@@ -505,7 +505,8 @@ def migrated_db(
         if template is None or not template.exists():
             safe = target.replace("/", "_").replace("\\", "_")
             stamp_safe = effective_stamp.replace("/", "_").replace("\\", "_")
-            template = cache_dir / f"{graph}_{stamp_safe}_{safe}.db"
+            anchor_kind = "active_anchor" if reanchor_to_active_head else "graph_head"
+            template = cache_dir / f"{graph}_{stamp_safe}_{safe}_{anchor_kind}.db"
             config = _config(template, archived=archived)
             if archived and stamp not in {"base", "head", "heads"}:
                 command.stamp(config, stamp)
