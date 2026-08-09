@@ -133,7 +133,10 @@ def test_approve_get_confirms_then_post_applies_and_writes_ledger(
         headers={"Referer": "http://127.0.0.1:7421/feed?ticker=NU"},
     )
     assert resp.status_code == 200
-    assert 'method="post"' in resp.get_data(as_text=True).lower()
+    confirmation_html = resp.get_data(as_text=True)
+    assert 'method="post"' in confirmation_html.lower()
+    assert "--bg:" in confirmation_html
+    assert ".k-btn" in confirmation_html
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
 
     resp = client.post(

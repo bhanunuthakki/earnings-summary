@@ -10,6 +10,9 @@ from typing import cast
 
 from flask import Blueprint, Flask, Response, redirect, request
 
+from ui.controls import controls_css
+from ui.tokens import FAVICON_LINK, palette_css
+
 
 @dataclass(frozen=True)
 class AppContext:
@@ -97,9 +100,10 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
             id_name = "alert_id" if alert_id is not None else "action_id"
             dismiss_input = '<input type="hidden" name="dismiss" value="1">' if dismissed else ""
             body = (
-                '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+                '<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
-                f"<title>Confirm {verb.lower()}</title></head><body>"
+                f"<title>Confirm {verb.lower()}</title>{FAVICON_LINK}"
+                f"<style>{palette_css('dark')}{controls_css('dark')}</style></head><body>"
                 '<main class="k-well"><h1>Confirm action</h1>'
                 f"<p>{verb} {escape(target_name)} #{target_id}?</p>"
                 '<form method="post" action="/approve">'
