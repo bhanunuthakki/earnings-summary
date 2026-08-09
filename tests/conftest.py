@@ -454,14 +454,14 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 # their own. The helper is for the pure stamp→upgrade case, which is most of
 # them.
 
-_DB_TEMPLATES: dict[tuple[str, str, str], Path] = {}
+_DB_TEMPLATES: dict[tuple[str, str, str, bool], Path] = {}
 
 
 @pytest.fixture(scope="session")
 def migrated_db(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Callable[..., Path]:
-    """Return ``build(dest, stamp=..., target="head", archived=False)``.
+    """Return a cached migration-template builder.
 
     Copies a session-cached migrated database instead of replaying migrations.
     ``stamp`` remains accepted as compatibility metadata for older tests, but
@@ -494,10 +494,13 @@ def migrated_db(
         stamp: str = "head",
         target: str = "head",
         archived: bool = False,
+        reanchor_to_active_head: bool = False,
     ) -> Path:
+        if reanchor_to_active_head and not archived:
+            raise ValueError("only an archived migration graph can be re-anchored")
         graph = "archived" if archived else "active"
         effective_stamp = stamp if archived else "squashed"
-        key = (graph, effective_stamp, target)
+        key = (graph, effective_stamp, target, reanchor_to_active_head)
         template = _DB_TEMPLATES.get(key)
         if template is None or not template.exists():
             safe = target.replace("/", "_").replace("\\", "_")
@@ -507,6 +510,16 @@ def migrated_db(
             if archived and stamp not in {"base", "head", "heads"}:
                 command.stamp(config, stamp)
             command.upgrade(config, target)
+            if reanchor_to_active_head:
+                from alembic.script import ScriptDirectory
+
+                active_head = ScriptDirectory.from_config(
+                    _config(template, archived=False)
+                ).get_current_head()
+                if active_head is None:
+                    raise RuntimeError("active migration graph has no head")
+                with sqlite3.connect(template) as connection:
+                    connection.execute("UPDATE alembic_version SET version_num=?", (active_head,))
             _DB_TEMPLATES[key] = template
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(template, dest)

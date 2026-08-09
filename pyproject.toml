@@ -157,7 +157,7 @@ reportAny = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -n auto --dist=loadfile"
+addopts = "-ra --strict-markers"
 pythonpath = ["src", "scratch"]
 markers = [
     "unit: Fast unit tests with no DB or network dependency",

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import threading
 import time
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -361,16 +362,21 @@ def test_hung_ticker_does_not_block_the_others(tmp_path: Path) -> None:
     _seed(conn, "HUNG", npv_per_share=20.0, live_price=10.0)
     _seed(conn, "BBB", npv_per_share=20.0, live_price=10.0)
 
+    release_hung = threading.Event()
+
     def reader(_repo_root: Path, ticker: str) -> LivePrice | None:
         if ticker.upper() == "HUNG":
-            time.sleep(5.0)  # longer than the timeout budget below
+            release_hung.wait(timeout=5.0)  # longer than the timeout budget below
             return LivePrice(price=999.0, fetched_at=_FRESH_AT, source_name="fake")
         return LivePrice(price=24.0, fetched_at=_FRESH_AT, source_name="fake")
 
     t0 = time.monotonic()
-    results = reprice_runs(
-        conn, tmp_path, price_reader=reader, price_fetch_workers=3, per_ticker_timeout_s=0.2
-    )
+    try:
+        results = reprice_runs(
+            conn, tmp_path, price_reader=reader, price_fetch_workers=3, per_ticker_timeout_s=0.2
+        )
+    finally:
+        release_hung.set()
     elapsed = time.monotonic() - t0
 
     by_ticker = {r.ticker: r for r in results}
