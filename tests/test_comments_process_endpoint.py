@@ -7,8 +7,10 @@ import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import pytest
+from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -18,12 +20,28 @@ import comments_server  # noqa: E402
 import process_report_comments as prc  # noqa: E402
 
 import comments  # noqa: E402
-from dispatch_registry import Registry  # noqa: E402
+from dispatch_registry import Job, Registry  # noqa: E402
 
 
 class _NonSpawningRegistry(Registry):
-    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
-        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+        write_sets: list[str] | None = None,
+    ) -> Job:
+        return super().start(
+            ticker=ticker,
+            kind=kind,
+            argv=argv,
+            spawn=False,
+            cwd=cwd,
+            write_sets=write_sets,
+        )
 
 
 @pytest.fixture
@@ -49,15 +67,22 @@ def repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def client(repo: Path):
+def client(repo: Path) -> FlaskClient:
     return comments_server.create_app(repo, registry=_NonSpawningRegistry()).test_client()
 
 
-def test_process_dry_run_returns_inline_results(client, repo, monkeypatch) -> None:
+def test_process_dry_run_returns_inline_results(
+    client: FlaskClient,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_call_llm(*_args: object, **_kwargs: object) -> str:
+        return '{"revised_thesis": "x", "diff_summary": "y"}'
+
     monkeypatch.setattr(
         prc,
         "call_llm",
-        lambda *a, **k: '{"revised_thesis": "x", "diff_summary": "y"}',
+        _fake_call_llm,
     )
     resp = client.post(
         "/api/comments/process", json={"ticker": "NU", "report_date": "2026-05-18", "apply": False}
@@ -69,21 +94,21 @@ def test_process_dry_run_returns_inline_results(client, repo, monkeypatch) -> No
     assert _on_disk_thesis(repo) == "Original."  # dry-run never writes
 
 
-def test_process_apply_dispatches_job(client) -> None:
+def test_process_apply_dispatches_job(client: FlaskClient) -> None:
     resp = client.post(
         "/api/comments/process", json={"ticker": "NU", "report_date": "2026-05-18", "apply": True}
     )
     assert resp.status_code == 201
     body = resp.get_json()
     assert body["kind"] == "comments-process"
-    reg = client.application.config["DISPATCH_REGISTRY"]
+    reg = cast(Registry, client.application.config["DISPATCH_REGISTRY"])
     job = reg.get(body["job_id"])
     assert job is not None
     assert "--apply" in job.argv
     assert "--report-date" in job.argv
 
 
-def test_process_apply_threads_clear_and_no_rebuild(client) -> None:
+def test_process_apply_threads_clear_and_no_rebuild(client: FlaskClient) -> None:
     resp = client.post(
         "/api/comments/process",
         json={
@@ -94,19 +119,20 @@ def test_process_apply_threads_clear_and_no_rebuild(client) -> None:
             "no_rebuild": True,
         },
     )
-    reg = client.application.config["DISPATCH_REGISTRY"]
+    reg = cast(Registry, client.application.config["DISPATCH_REGISTRY"])
     job = reg.get(resp.get_json()["job_id"])
+    assert job is not None
     assert "--clear" in job.argv
     assert "--no-rebuild" in job.argv
 
 
-def test_process_missing_ticker_400(client) -> None:
+def test_process_missing_ticker_400(client: FlaskClient) -> None:
     resp = client.post("/api/comments/process", json={})
     assert resp.status_code == 400
 
 
 def test_process_preview_failure_is_generic_and_correlated(
-    client, monkeypatch: pytest.MonkeyPatch
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise RuntimeError("provider failed?api_key=secret-value")
@@ -129,4 +155,4 @@ def test_process_preview_failure_is_generic_and_correlated(
 
 def _on_disk_thesis(repo: Path) -> str:
     data = json.loads((repo / "micro_thesis" / "holdings" / "NU.json").read_text(encoding="utf-8"))
-    return data["thesis"]
+    return cast(str, data["thesis"])

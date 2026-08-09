@@ -36,6 +36,7 @@ def test_ci_builds_and_preloads_hash_verified_sqlite_3534() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "sqlite-amalgamation-3530400.zip" in workflow
     assert "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e" in workflow
+    assert "-DSQLITE_ENABLE_FTS5" in workflow
     assert 'echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"' in workflow
     assert 'assert sqlite3.sqlite_version == "3.53.4"' in workflow
 

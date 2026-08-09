@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -29,23 +30,23 @@ _POST_ROUTE = "/chat/NU/apply"
 
 
 @pytest.fixture
-def client(tmp_path: Path):
+def client(tmp_path: Path) -> FlaskClient:
     app = comments_server.create_app(tmp_path)
     return app.test_client()
 
 
-def test_cross_origin_post_is_refused(client) -> None:
+def test_cross_origin_post_is_refused(client: FlaskClient) -> None:
     r = client.post(_POST_ROUTE, json={}, headers={"Origin": "https://evil.example"})
     assert r.status_code == 403
     assert b"cross-origin" in r.data
 
 
-def test_loopback_origin_passes_guard(client) -> None:
+def test_loopback_origin_passes_guard(client: FlaskClient) -> None:
     r = client.post(_POST_ROUTE, json={}, headers={"Origin": "http://127.0.0.1:7421"})
     assert r.status_code != 403  # guard passes; handler 400s on the empty body
 
 
-def test_null_origin_requires_report_capability(client) -> None:
+def test_null_origin_requires_report_capability(client: FlaskClient) -> None:
     r = client.post(_POST_ROUTE, json={}, headers={"Origin": "null"})
     assert r.status_code == 403
 
@@ -97,13 +98,15 @@ def test_tailnet_client_and_origin_pass_in_tailscale_mode(
     assert r.status_code != 403
 
 
-def test_absent_origin_passes_guard(client) -> None:
+def test_absent_origin_passes_guard(client: FlaskClient) -> None:
     # Local CLI / curl / same-origin non-browser callers send no Origin.
     r = client.post(_POST_ROUTE, json={})
     assert r.status_code != 403
 
 
-def test_browser_without_origin_referer_or_fetch_metadata_is_refused(client) -> None:
+def test_browser_without_origin_referer_or_fetch_metadata_is_refused(
+    client: FlaskClient,
+) -> None:
     r = client.post(
         _POST_ROUTE,
         json={},
@@ -131,7 +134,7 @@ def test_browser_without_fetch_metadata_can_use_report_capability(
     assert r.status_code != 403
 
 
-def test_same_origin_referer_passes_when_origin_is_absent(client) -> None:
+def test_same_origin_referer_passes_when_origin_is_absent(client: FlaskClient) -> None:
     r = client.post(
         _POST_ROUTE,
         json={},
@@ -143,7 +146,7 @@ def test_same_origin_referer_passes_when_origin_is_absent(client) -> None:
     assert r.status_code != 403
 
 
-def test_cross_site_referer_is_refused_when_origin_is_absent(client) -> None:
+def test_cross_site_referer_is_refused_when_origin_is_absent(client: FlaskClient) -> None:
     r = client.post(
         _POST_ROUTE,
         json={},
@@ -155,7 +158,9 @@ def test_cross_site_referer_is_refused_when_origin_is_absent(client) -> None:
     assert r.status_code == 403
 
 
-def test_cross_site_fetch_metadata_is_refused_when_origin_is_absent(client) -> None:
+def test_cross_site_fetch_metadata_is_refused_when_origin_is_absent(
+    client: FlaskClient,
+) -> None:
     r = client.post(
         _POST_ROUTE,
         json={},
@@ -180,12 +185,12 @@ def test_remote_tailnet_mutation_requires_origin(
     assert b"Origin required" in r.data
 
 
-def test_options_preflight_is_exempt(client) -> None:
+def test_options_preflight_is_exempt(client: FlaskClient) -> None:
     r = client.options(_POST_ROUTE, headers={"Origin": "https://evil.example"})
     assert r.status_code != 403
 
 
-def test_safe_get_is_exempt(client) -> None:
+def test_safe_get_is_exempt(client: FlaskClient) -> None:
     r = client.get("/healthz", headers={"Origin": "https://evil.example"})
     assert r.status_code == 200
 

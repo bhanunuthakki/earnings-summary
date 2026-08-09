@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
+from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -127,7 +128,7 @@ def test_preview_propagates_budget_hard_stop(client, repo, monkeypatch) -> None:
 
 
 def test_preview_unexpected_failure_is_generic_and_correlated(
-    client, monkeypatch: pytest.MonkeyPatch
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise RuntimeError("provider failed?api_key=secret-value")

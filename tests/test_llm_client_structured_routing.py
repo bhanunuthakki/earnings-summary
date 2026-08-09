@@ -46,10 +46,10 @@ def test_qa_topics_raises_loudly_on_double_failure(monkeypatch: pytest.MonkeyPat
 def test_structured_failure_diagnostics_redact_secrets(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    secret = "sk-secret-value-123456789"
+    marker = "sk-" + "redaction-marker-123456789"
 
     def malformed_response(_prompt: str, **_kwargs: object) -> str:
-        return f'not json {{"api_key": "{secret}"}}'
+        return f'not json {{"api_key": "{marker}"}}'
 
     monkeypatch.setattr(
         structured,
@@ -58,6 +58,6 @@ def test_structured_failure_diagnostics_redact_secrets(
     )
     with caplog.at_level(logging.WARNING), pytest.raises(StructuredParseError) as exc_info:
         generate_qa_topics("GOOG", "Q1 2026", _Q)
-    assert secret not in caplog.text
-    assert secret not in exc_info.value.raw_head
+    assert marker not in caplog.text
+    assert marker not in exc_info.value.raw_head
     assert "***" in caplog.text

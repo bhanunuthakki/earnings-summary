@@ -240,7 +240,11 @@ def test_websearch_batch_drift_halts_before_cache_write(
     items.extend([{"renamed_headline": "drift"}] * 3)
     monkeypatch.setattr(websearch, "structure_recent_news_json", _StructStub([items]))
     writes: list[object] = []
-    monkeypatch.setattr(websearch, "_write_cache", lambda *_a, **_k: writes.append(object()))
+
+    def _record_cache_write(*_args: object, **_kwargs: object) -> None:
+        writes.append(object())
+
+    monkeypatch.setattr(websearch, "_write_cache", _record_cache_write)
 
     with pytest.raises(RowValidationDriftError, match="3/10"):
         websearch.fetch_websearch_news_for_ticker("AAPL", db_path=str(news_db))

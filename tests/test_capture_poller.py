@@ -230,42 +230,41 @@ def test_poll_once_voice_downloads_lands_and_purges_audio(
     assert not (audio / "tg_30.oga").exists()  # audio purged once landed
 
 
-@pytest.mark.parametrize(
-    "raw_name",
-    [
+def test_poll_once_document_download_uses_contained_authorized_path(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_names = [
         "../../outside.pdf",
         r"..\..\outside.pdf",
         r"C:\temp\secret.pdf",
         "D:drive-relative.pdf",
         "/absolute/path.pdf",
         "report\x00\n.pdf",
-    ],
-)
-def test_document_destination_sanitizes_cross_platform_paths(tmp_path: Path, raw_name: str) -> None:
-    docs_dir = tmp_path / "capture" / "docs"
-    docs_dir.mkdir(parents=True)
+    ]
+    updates = [
+        telegram.Update(
+            update_id=45 + index,
+            kind="document",
+            chat_id=1,
+            text="quarterly materials",
+            document_file_id=f"DOC{index}",
+            document_file_name=raw_name,
+            document_mime_type="application/pdf",
+        )
+        for index, raw_name in enumerate(raw_names)
+    ]
 
-    destination = poller._document_destination(docs_dir, 44, raw_name)
+    def _get_updates(
+        _token: str, offset: int | None = None, timeout: int = 50
+    ) -> list[telegram.Update]:
+        del offset, timeout
+        return updates
 
-    assert destination.parent == docs_dir.resolve()
-    assert destination.name.startswith("tg_44_")
-    assert not any(char in destination.name for char in ("/", "\\", ":", "\x00", "\n"))
+    def _get_file_path(_token: str, file_id: str) -> str:
+        return f"documents/{file_id.lower()}"
 
-
-def test_poll_once_document_download_uses_contained_authorized_path(
-    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    update = telegram.Update(
-        update_id=45,
-        kind="document",
-        chat_id=1,
-        text="quarterly materials",
-        document_file_id="DOC1",
-        document_file_name=r"..\C:\sensitive\quarterly deck.pdf",
-        document_mime_type="application/pdf",
-    )
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: [update])
-    monkeypatch.setattr(telegram, "get_file_path", lambda token, file_id: "documents/doc1")
+    monkeypatch.setattr(telegram, "get_updates", _get_updates)
+    monkeypatch.setattr(telegram, "get_file_path", _get_file_path)
     downloaded: list[Path] = []
 
     def _download(_token: str, _file_path: str, dest: Path | str) -> Path:
@@ -296,13 +295,16 @@ def test_poll_once_document_download_uses_contained_authorized_path(
     )
 
     authorized_root = (tmp_path / "capture" / "docs").resolve()
-    assert counts["reading_landed"] == 1
+    assert counts["reading_landed"] == len(raw_names)
     assert downloaded == landed_paths
-    assert downloaded[0].parent == authorized_root
-    assert downloaded[0].name.startswith("tg_45_")
-    assert downloaded[0].suffix == ".pdf"
-    assert not any(char in downloaded[0].name for char in ("/", "\\", ":"))
-    assert landed_names == [downloaded[0].name.removeprefix("tg_45_")]
+    assert len(downloaded) == len(raw_names)
+    for index, destination in enumerate(downloaded):
+        prefix = f"tg_{45 + index}_"
+        assert destination.parent == authorized_root
+        assert destination.name.startswith(prefix)
+        assert destination.suffix == ".pdf"
+        assert not any(char in destination.name for char in ("/", "\\", ":", "\x00", "\n"))
+        assert landed_names[index] == destination.name.removeprefix(prefix)
 
 
 def test_poll_once_needs_ticker_offers_inline_candidates(

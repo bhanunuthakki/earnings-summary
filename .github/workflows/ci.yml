@@ -133,7 +133,7 @@ jobs:
               raise SystemExit(f"SQLite archive SHA3-256 mismatch: {observed}")
           PY
           unzip -q "$archive" -d "$sqlite_dir"
-          gcc -O2 -fPIC -shared -pthread \
+          gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
             "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
             -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
           echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
