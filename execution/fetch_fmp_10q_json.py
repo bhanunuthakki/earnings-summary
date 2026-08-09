@@ -34,12 +34,16 @@ import time
 from datetime import date
 from pathlib import Path
 
-import requests
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from log_redact import redact as _redact  # noqa: E402
+from net.client import (  # noqa: E402
+    FMP_CLIENT,
+    HttpCallError,
+    JsonShape,
+    JsonValue,
+    RetryPolicy,
+)
 from pipeline.fmp_doc_index import index_fmp_files_for_ticker  # noqa: E402
 from runtime.secrets import load_project_env, project_env_file  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
@@ -58,45 +62,40 @@ API_KEY: str | None = None
 PROJECT_ROOT_DATA = PROJECT_ROOT
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
-ENDPOINT = "https://financialmodelingprep.com/stable/financial-reports-json"
 DELAY_S = 0.10
 TIMEOUT = (10, 60)
 QUARTERS: tuple[str, ...] = ("Q1", "Q2", "Q3")
 DEFAULT_START_YEAR = 2018
 
-SESSION = requests.Session()
-SESSION.headers["User-Agent"] = "earnings-summary/1.0"
+_FMP_RETRY = RetryPolicy(max_attempts=3, backoff_base_s=5.0)
 
 
-def _fetch_once(symbol: str, year: int, quarter: str) -> tuple[int, dict | list | None, str | None]:
+def _fetch_once(
+    symbol: str, year: int, quarter: str
+) -> tuple[int, dict[str, JsonValue] | list[JsonValue] | None, str | None]:
     """One FMP call with 429 backoff. Returns (http_code, body, error_msg)."""
-    for attempt in range(3):
-        try:
-            r = SESSION.get(
-                ENDPOINT,
-                params={
-                    "symbol": symbol,
-                    "year": year,
-                    "period": quarter,
-                    "apikey": API_KEY,
-                },
-                timeout=TIMEOUT,
-            )
-        except requests.RequestException as e:
-            return (0, None, f"network: {_redact(e)}")
-        if r.status_code == 429:
-            wait = 5 * (2**attempt)
-            sys.stderr.write(f"  429 rate limit; sleeping {wait}s\n")
-            time.sleep(wait)
-            continue
-        break
-    code = r.status_code
     try:
-        body = r.json()
-    except ValueError:
-        return (code, None, f"non-json: {r.text[:200]}")
+        response = FMP_CLIENT.get_json(
+            "financial-reports-json",
+            params={"symbol": symbol, "year": year, "period": quarter},
+            api_key=API_KEY,
+            expected=JsonShape.ANY,
+            timeout=TIMEOUT,
+            retry=_FMP_RETRY,
+        )
+        code = response.status_code
+        body = response.payload
+    except HttpCallError as exc:
+        code = exc.status_code or 0
+        body = exc.payload
+        if isinstance(body, dict) and "Error Message" in body:
+            return (code, None, f"fmp-err: {str(body['Error Message'])[:200]}")
+        prefix = "network" if code == 0 else "http"
+        return (code, None, f"{prefix}: {exc}")
     if isinstance(body, dict) and "Error Message" in body:
-        return (code, None, f"fmp-err: {body['Error Message'][:200]}")
+        return (code, None, f"fmp-err: {str(body['Error Message'])[:200]}")
+    if not isinstance(body, (dict, list)):
+        return (code, None, f"unexpected-json: {type(body).__name__}")
     return (code, body, None)
 
 
@@ -115,7 +114,7 @@ def _resolve_tickers(arg_tickers: str | None) -> list[str]:
     return tickers
 
 
-def _is_real_payload(body: dict | list | None) -> bool:
+def _is_real_payload(body: dict[str, JsonValue] | list[JsonValue] | None) -> bool:
     """Distinguish real 10-Q content from FMP's empty / metadata-only sentinels."""
     if not isinstance(body, dict):
         return False

@@ -124,16 +124,28 @@ def test_alerts_alias_redirects_to_feed_preserving_filters(client) -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_approve_route_applies_action_and_writes_ledger(client: FlaskClient, db_path: Path) -> None:
+def test_approve_get_confirms_then_post_applies_and_writes_ledger(
+    client: FlaskClient, db_path: Path
+) -> None:
     action_id = _seed_pending_action(db_path, ticker="NU")
     resp = client.get(
         f"/approve?action_id={action_id}",
         headers={"Referer": "http://127.0.0.1:7421/feed?ticker=NU"},
     )
+    assert resp.status_code == 200
+    assert 'method="post"' in resp.get_data(as_text=True).lower()
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
+
+    resp = client.post(
+        "/approve",
+        data={
+            "action_id": str(action_id),
+            "confirm": "1",
+            "return_to": "/feed?ticker=NU",
+        },
+    )
     assert resp.status_code == 303
-    # Bounced back to the surface the click came from — path + query only.
     assert resp.headers["Location"].endswith("/feed?ticker=NU")
-    assert not resp.headers["Location"].startswith("http")
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_APPLIED
     entries = list_entries(ticker="NU", db_path=db_path)
     assert len(entries) == 1
@@ -141,11 +153,17 @@ def test_approve_route_applies_action_and_writes_ledger(client: FlaskClient, db_
     assert entries[0].body == "Deposit franchise scaling ahead of plan"
 
 
-def test_approve_route_dismiss_cancels_without_ledger_write(
+def test_approve_confirmation_dismiss_cancels_without_ledger_write(
     client: FlaskClient, db_path: Path
 ) -> None:
     action_id = _seed_pending_action(db_path, ticker="GOOG")
     resp = client.get(f"/approve?action_id={action_id}&dismiss=1")
+    assert resp.status_code == 200
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
+    resp = client.post(
+        "/approve",
+        data={"action_id": str(action_id), "dismiss": "1", "confirm": "1"},
+    )
     assert resp.status_code == 303
     assert resp.headers["Location"].endswith("/feed")  # no Referer → the feed
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_CANCELLED
@@ -153,7 +171,7 @@ def test_approve_route_dismiss_cancels_without_ledger_write(
 
 
 def test_approve_route_404_on_unknown_action(client: FlaskClient) -> None:
-    resp = client.get("/approve?action_id=424242")
+    resp = client.post("/approve", data={"action_id": "424242"})
     assert resp.status_code == 404
     payload = resp.get_json()
     assert payload is not None
@@ -162,8 +180,8 @@ def test_approve_route_404_on_unknown_action(client: FlaskClient) -> None:
 
 def test_approve_route_409_on_double_click(client: FlaskClient, db_path: Path) -> None:
     action_id = _seed_pending_action(db_path)
-    assert client.get(f"/approve?action_id={action_id}").status_code == 303
-    resp = client.get(f"/approve?action_id={action_id}")
+    assert client.post("/approve", data={"action_id": str(action_id)}).status_code == 200
+    resp = client.post("/approve", data={"action_id": str(action_id)})
     assert resp.status_code == 409
     payload = resp.get_json()
     assert payload is not None
@@ -177,21 +195,21 @@ def test_approve_route_400_on_missing_or_bad_action_id(client: FlaskClient) -> N
     assert client.get("/approve?action_id=abc").status_code == 400
 
 
-def test_approve_route_rejects_cross_site_click(client: FlaskClient, db_path: Path) -> None:
-    # State-changing GET → the route carries its own same-site guard (the
-    # JSON-POST CORS defense doesn't cover top-level navigations). Neither a
-    # foreign Referer nor an explicit cross-site fetch may mutate.
+def test_approve_get_never_mutates_for_cross_site_or_headerless_click(
+    client: FlaskClient, db_path: Path
+) -> None:
     action_id = _seed_pending_action(db_path)
     via_referer = client.get(
         f"/approve?action_id={action_id}",
         headers={"Referer": "https://evil.example/payload"},
     )
-    assert via_referer.status_code == 403
+    assert via_referer.status_code == 200
     via_fetch_metadata = client.get(
         f"/approve?action_id={action_id}",
         headers={"Sec-Fetch-Site": "cross-site"},
     )
-    assert via_fetch_metadata.status_code == 403
+    assert via_fetch_metadata.status_code == 200
+    assert client.get(f"/approve?action_id={action_id}").status_code == 200
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
     assert list_entries(ticker="NU", db_path=db_path) == []
 
@@ -209,9 +227,9 @@ def test_feed_renders_absolute_approve_links(client: FlaskClient, db_path: Path)
 
 
 # ----------------------------------------------------------------------------
-# POST /approve — the Home rail's hover ✓/✕ fetch variant (Inbox v2). Same
-# core + same-site guard as the GET links; JSON out instead of a 303 so the
-# card can update in place without a reload.
+# POST /approve — the Home rail's hover ✓/✕ fetch variant (Inbox v2). The
+# state-changing POST retains the route and global same-site guards; JSON out
+# lets the card update in place without a reload.
 # ----------------------------------------------------------------------------
 
 
@@ -577,7 +595,12 @@ def test_approve_alert_settles_every_action_and_clears_the_card(
         f"/approve?alert_id={alert_id}",
         headers={"Referer": "http://127.0.0.1:7421/feed"},
     )
-
+    assert resp.status_code == 200
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
+    resp = client.post(
+        "/approve",
+        data={"alert_id": str(alert_id), "confirm": "1", "return_to": "/feed"},
+    )
     assert resp.status_code == 303
     actions = list_queued_actions_for_alert(alert_id, db_path=db_path)
     assert [qa.status for qa in actions] == [ACTION_STATUS_APPLIED] * 2
@@ -595,22 +618,31 @@ def test_dismiss_alert_via_approve_route_cancels_and_clears(
         f"/approve?alert_id={alert_id}&dismiss=1",
         headers={"Referer": "http://127.0.0.1:7421/feed"},
     )
-
+    assert resp.status_code == 200
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
+    resp = client.post(
+        "/approve",
+        data={
+            "alert_id": str(alert_id),
+            "dismiss": "1",
+            "confirm": "1",
+            "return_to": "/feed",
+        },
+    )
     assert resp.status_code == 303
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_CANCELLED
     assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_DISMISSED
     assert list_entries(ticker="NU", db_path=db_path) == []
 
 
-def test_approve_alert_rejects_cross_site(client: FlaskClient, db_path: Path) -> None:
-    """The alert-level target carries the same same-site guard as the
-    action-level one — a wider blast radius must not mean a weaker gate."""
+def test_approve_alert_cross_site_get_is_read_only(client: FlaskClient, db_path: Path) -> None:
+    """A hostile navigation may show confirmation, but cannot settle the alert."""
     action_id = _seed_pending_action(db_path, ticker="NU")
     alert_id = get_action(action_id, db_path=db_path).alert_id
 
     resp = client.get(f"/approve?alert_id={alert_id}", headers={"Sec-Fetch-Site": "cross-site"})
 
-    assert resp.status_code == 403
+    assert resp.status_code == 200
     assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
 

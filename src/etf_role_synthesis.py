@@ -21,11 +21,21 @@ import json
 import sqlite3
 from pathlib import Path
 
-from llm_artifact_store import UpsertRequest, compute_input_sha256, read_current, upsert
+from pydantic import TypeAdapter
+
+from llm_artifact_store import (
+    UpsertRequest,
+    artifact_is_reusable,
+    compute_input_sha256,
+    read_current,
+    upsert,
+)
 from report.etf_models import EtfRoleSynthesis
 
 PURPOSE = "etf_role_synthesis"
 PROMPT_VERSION = "v1"
+
+_ETF_ROLE_ADAPTER = TypeAdapter(EtfRoleSynthesis)
 
 _PROMPT = """You are the owner's portfolio analyst. Below is the complete
 DETERMINISTIC workup for an ETF the owner is evaluating for THEIR book —
@@ -162,7 +172,7 @@ def generate_role_synthesis(
     sha = compute_input_sha256(prompt_version=PROMPT_VERSION, cache_inputs=[canonical])
 
     current = read_current(ticker=t, purpose=PURPOSE, scope="etf", db_path=db_path)
-    if current is not None and current.input_sha256 == sha and not force:
+    if current is not None and artifact_is_reusable(current, input_sha256=sha) and not force:
         return current.id, "unchanged"  # inputs haven't moved — no LLM call at all
 
     try:
@@ -173,6 +183,7 @@ def generate_role_synthesis(
             scope="etf",
             expect="object",
             required_keys=("role_summary", "verdict"),
+            schema=_ETF_ROLE_ADAPTER,
             db_path=db_path,
         )
         synthesis = EtfRoleSynthesis.model_validate(raw)

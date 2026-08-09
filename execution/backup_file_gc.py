@@ -72,6 +72,10 @@ BACKUP_MARKER_RE = re.compile(
 # db_gc MOVES pruned rows so the prune stays reversible — deleting it silently
 # converts every past "reversible" prune into permanent data loss.
 PROTECTED_NAMES = frozenset({"portfolio_gc_archive.db"})
+# These are the only possible row-level recovery source for destructive schema
+# changes. Keep them until the deletion catalog records a successful data
+# restore drill; monthly/recent retention must never silently age them out.
+RECOVERY_ANCHOR_RE = re.compile(r"(?:pre[-_.]?\d{3,4}|bak[_-]?squash)", re.IGNORECASE)
 
 
 def log_event(event: str, **fields: object) -> None:
@@ -134,6 +138,8 @@ def _excluded(path: Path) -> bool:
     """The live DB, its sidecars, and the reversible-prune store — structurally,
     never by pattern, so a retention bug cannot reach them."""
     if path.name in PROTECTED_NAMES:
+        return True
+    if RECOVERY_ANCHOR_RE.search(path.name):
         return True
     return path in {LIVE_DB, Path(f"{LIVE_DB}-wal"), Path(f"{LIVE_DB}-shm")}
 

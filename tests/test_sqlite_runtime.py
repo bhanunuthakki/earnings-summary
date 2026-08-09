@@ -7,9 +7,65 @@ from pathlib import Path
 
 import pytest
 
+import sqlite_runtime
 from schema_compat import SchemaRevisionMismatch
 from scope_identity import derive_retrieval_scope_id
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from sqlite_runtime import (
+    SQLiteConnectionRole,
+    connect_sqlite,
+    sqlite_version_is_wal_reset_safe,
+)
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ((3, 50, 6), False),
+        ((3, 50, 7), True),
+        ((3, 51, 2), False),
+        ((3, 51, 3), True),
+        ((3, 53, 4), True),
+        ((4, 0, 0), True),
+    ],
+)
+def test_wal_reset_version_boundary(version: tuple[int, int, int], expected: bool) -> None:
+    assert sqlite_version_is_wal_reset_safe(version) is expected
+
+
+def test_writer_refuses_unsafe_sqlite_before_touching_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "must-not-exist.db"
+    monkeypatch.setattr(
+        sqlite_runtime,
+        "_WRITER_SQLITE_VERSION_ERROR",
+        "unsafe SQLite test sentinel",
+    )
+
+    with pytest.raises(RuntimeError, match="unsafe SQLite test sentinel"):
+        connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=False,
+        )
+
+    assert not path.exists()
+
+
+def test_reader_does_not_require_writer_capable_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "read-only.db"
+    raw = sqlite3.connect(path)
+    raw.close()
+    monkeypatch.setattr(
+        sqlite_runtime,
+        "_WRITER_SQLITE_VERSION_ERROR",
+        "unsafe SQLite test sentinel",
+    )
+
+    reader = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
+    reader.close()
 
 
 def test_connection_enforces_integrity_and_concurrency_policy(tmp_path: Path) -> None:

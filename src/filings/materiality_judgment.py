@@ -46,7 +46,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from filings.models import HardStopError
 from filings.specificity import looks_tabular
@@ -88,6 +88,15 @@ class MaterialityVerdict(BaseModel):
     materiality: ThesisMateriality
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = Field(max_length=300)
+
+
+class _MaterialityVerdictWire(BaseModel):
+    materiality: ThesisMateriality
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str = Field(max_length=300)
+
+
+_MATERIALITY_ADAPTER = TypeAdapter(dict[str, _MaterialityVerdictWire])
 
 
 class JudgmentOutcome(BaseModel):
@@ -245,16 +254,13 @@ def _parse_verdicts(payload: object) -> tuple[dict[int, MaterialityVerdict], int
         except (TypeError, ValueError):
             dropped += 1
             continue
-        if not isinstance(raw, dict):
-            dropped += 1
-            continue
-        row = cast("dict[str, object]", raw)
         try:
+            row = _MaterialityVerdictWire.model_validate(raw)
             parsed[event_id] = MaterialityVerdict(
                 event_id=event_id,
-                materiality=ThesisMateriality(str(row.get("materiality"))),
-                confidence=float(cast("float", row.get("confidence", 0.0))),
-                rationale=str(row.get("rationale") or "")[:300],
+                materiality=row.materiality,
+                confidence=row.confidence,
+                rationale=row.rationale,
             )
         except (ValueError, TypeError):
             dropped += 1
@@ -314,6 +320,7 @@ def judge_ticker_events(
                 purpose=JUDGMENT_PURPOSE,
                 ticker=ticker,
                 expect="object",
+                schema=_MATERIALITY_ADAPTER,
                 db_path=db_path,
             )
         except Exception as exc:
@@ -356,6 +363,7 @@ def judge_ticker_events(
                 purpose=JUDGMENT_PURPOSE,
                 ticker=ticker,
                 expect="object",
+                schema=_MATERIALITY_ADAPTER,
                 db_path=db_path,
             )
         except Exception as exc:

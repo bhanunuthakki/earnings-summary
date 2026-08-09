@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, TypeAdapter, field_validator
 
 from llm.cli import FAST_CLASSIFIER_MODEL, LLM_MODELS
 from llm.structured import StructuredParseError, call_llm_structured
@@ -61,6 +61,9 @@ class SectorBenchmarkSuggestion(BaseModel):
     @classmethod
     def _norm_why(cls, v: str) -> str:
         return v.strip()
+
+
+_SECTOR_BENCHMARK_ADAPTER = TypeAdapter(SectorBenchmarkSuggestion)
 
 
 @dataclass
@@ -129,10 +132,9 @@ def propose_benchmark(
         model=model,
         backend=backend,
         expect="object",
+        schema=_SECTOR_BENCHMARK_ADAPTER,
     )
-    if not isinstance(payload, dict):
-        raise StructuredParseError(f"expected a JSON object, got {type(payload).__name__}")
-    return SectorBenchmarkSuggestion.model_validate(cast("dict[str, object]", payload))
+    return SectorBenchmarkSuggestion.model_validate(payload)
 
 
 # ---------------------------------------------------------------------------

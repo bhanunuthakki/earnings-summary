@@ -529,15 +529,20 @@ def main() -> int:
         if not allowed:
             report = {
                 "run_id": stamp,
-                "blocked": True,
-                "block_reason": "fmp_budget_gate",
+                "deferred": True,
+                "defer_reason": "fmp_budget_gate",
                 "detail": reason,
                 "pending_count": len(pending),
                 "log": str(log_path),
             }
             print(json.dumps(report, indent=2))
-            log.warning("budget gate blocked run: %s", reason)
-            return 2
+            # Budget exhaustion is an expected capacity decision, not a failed
+            # run.  The pending rows remain durable and the hourly scheduler
+            # retries them after quota resets.  Returning non-zero made every
+            # healthy deferral look like an operational outage in Task
+            # Scheduler and cron health.
+            log.info("budget gate deferred run: %s", reason)
+            return 0
         log.info("budget gate passed: %s", reason)
 
     log.info("starting run %s — %d pending tickers — log: %s", stamp, len(pending), log_path)

@@ -37,7 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, TypeAdapter, ValidationError, field_validator
 
 from llm.cli import DEFAULT_MODEL, LLM_MODELS
 from llm.structured import StructuredParseError, call_llm_structured
@@ -75,6 +75,9 @@ class KeyMetricSuggestion(BaseModel):
     @classmethod
     def _norm_text(cls, v: str) -> str:
         return v.strip()
+
+
+_KEY_METRICS_ADAPTER = TypeAdapter(list[KeyMetricSuggestion])
 
 
 @dataclass
@@ -169,13 +172,17 @@ def suggest_key_metrics(
         max_metrics=max_metrics,
     )
     payload = call_llm_structured(
-        prompt, purpose=PURPOSE, ticker=ticker, model=model, backend=backend, expect="array"
+        prompt,
+        purpose=PURPOSE,
+        ticker=ticker,
+        model=model,
+        backend=backend,
+        expect="array",
+        schema=_KEY_METRICS_ADAPTER,
     )
     out: list[KeyMetricSuggestion] = []
     seen: set[str] = set()
     for entry in cast("list[object]", payload):
-        if not isinstance(entry, dict):
-            continue
         try:
             sug = KeyMetricSuggestion.model_validate(entry)
         except ValidationError:

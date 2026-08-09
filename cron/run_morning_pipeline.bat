@@ -31,7 +31,7 @@ REM Retain a bounded-purpose production corpus for the P0 material-news audit.
 REM Keep private full-text outside the mirrored repo with bounded retention.
 if not defined LLM_CAPTURE_DIR set "LLM_CAPTURE_DIR=%LOCALAPPDATA%\earnings-summary\llm_capture"
 if not defined EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS set EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS=90
-set LLM_CAPTURE_PURPOSES=material_news_classification
+set LLM_CAPTURE_PURPOSES=material_news_classification,earnings_tone_diff
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 REM wmic was removed from Windows 11 24H2+; use PowerShell for the UTC stamp.

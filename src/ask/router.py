@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
+
 from ask import turn_cache
 from ask.packs import PACK_KEYS, PACKS
 from llm.structured import call_llm_structured
@@ -39,6 +41,26 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 log = logging.getLogger(__name__)
 
 PURPOSE = "ask_pack_router"
+
+
+class _PackRouteWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    packs: list[str]
+
+    @field_validator("packs", mode="before")
+    @classmethod
+    def _closed_pack_keys(cls, value: object) -> list[str]:
+        if not isinstance(value, list):
+            raise ValueError("packs must be an array")
+        return [
+            item
+            for item in cast("list[object]", value)
+            if isinstance(item, str) and item in PACK_KEYS
+        ]
+
+
+_PACK_ROUTE_ADAPTER = TypeAdapter(_PackRouteWire)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,16 +104,14 @@ def route_packs(question: str, *, db_path: Path) -> PackRoute:
             scope="ask",
             expect="object",
             required_keys=("packs",),
+            schema=_PACK_ROUTE_ADAPTER,
         )
+        chosen = set(_PackRouteWire.model_validate(payload).packs)
     except Exception as exc:
         # Interactive surface: a transport failure, hard stop, or doubly-bad
         # JSON must degrade to document-only evidence, never break the turn.
         log.warning({"event": "ask_pack_router_failed", "error": f"{type(exc).__name__}: {exc}"})
         return PackRoute((), "error", type(exc).__name__)
-    raw = cast("dict[str, object]", payload).get("packs")
-    if not isinstance(raw, list):
-        return PackRoute((), "error", "packs field is not a list")
-    chosen = {str(x) for x in cast("list[object]", raw)}
     # Canonical PACKS order; unknown keys are dropped (an advisory selector
     # inventing a key shouldn't void its valid picks).
     packs = tuple(k for k in PACK_KEYS if k in chosen)

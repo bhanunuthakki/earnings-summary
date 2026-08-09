@@ -7,7 +7,6 @@ is real SQLite over an inline schema.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -140,9 +139,10 @@ def _mock_pdf_text(_pages_text: str):
 
 
 def _mock_llm(response_rows: list[dict[str, object]]):
-    def _fake(prompt: str, **kwargs: object) -> str:
-        del prompt, kwargs
-        return json.dumps(response_rows)
+    def _fake(prompt: str, **kwargs: object) -> object:
+        del prompt
+        schema = kwargs["schema"]
+        return schema.validate_python(response_rows)  # pyright: ignore[reportAttributeAccessIssue]
 
     return _fake
 
@@ -161,7 +161,7 @@ def test_extract_persists_strategic_targets_and_forward_statements(
     monkeypatch.setattr(deck_mod, "extract_text_from_pdf", _mock_pdf_text("dummy deck text body"))
     monkeypatch.setattr(
         deck_mod,
-        "call_llm",
+        "call_llm_structured",
         _mock_llm(
             [
                 {
@@ -271,7 +271,7 @@ def test_discovery_matches_multiple_filename_shapes(
     (ir_dir / "GOOG_2025_Investor_Day.pdf").write_bytes(b"%PDF")
 
     monkeypatch.setattr(deck_mod, "extract_text_from_pdf", _mock_pdf_text("dummy"))
-    monkeypatch.setattr(deck_mod, "call_llm", _mock_llm([]))
+    monkeypatch.setattr(deck_mod, "call_llm_structured", _mock_llm([]))
 
     counts = deck_mod.extract_for_ticker("GOOG", db_path, repo_root=repo)
     # 4 deck-shaped files (ir_presentation, ir_event, analyst_day/any_name,
@@ -297,7 +297,7 @@ def test_dedupe_via_unique_index_on_rerun(
     monkeypatch.setattr(deck_mod, "extract_text_from_pdf", _mock_pdf_text("dummy"))
     monkeypatch.setattr(
         deck_mod,
-        "call_llm",
+        "call_llm_structured",
         _mock_llm(
             [
                 {
@@ -364,7 +364,7 @@ def test_llm_failure_counted_not_raised(
         del prompt, kwargs
         raise RuntimeError("simulated provider outage")
 
-    monkeypatch.setattr(deck_mod, "call_llm", _boom)
+    monkeypatch.setattr(deck_mod, "call_llm_structured", _boom)
     counts = deck_mod.extract_for_ticker("ABNB", db_path, repo_root=tmp_path)
     assert counts["llm_failed"] == 1
     assert counts["rows_inserted"] == 0
@@ -378,11 +378,13 @@ def test_parse_failure_counted(
     db_path, _, _ = db_with_deck
     monkeypatch.setattr(deck_mod, "extract_text_from_pdf", _mock_pdf_text("text"))
 
-    def _bad(prompt: str, **kwargs: object) -> str:
+    def _bad(prompt: str, **kwargs: object) -> object:
         del prompt, kwargs
-        return "this is not JSON at all"
+        from llm.structured import StructuredParseError
 
-    monkeypatch.setattr(deck_mod, "call_llm", _bad)
+        raise StructuredParseError("invalid structured response")
+
+    monkeypatch.setattr(deck_mod, "call_llm_structured", _bad)
     counts = deck_mod.extract_for_ticker("ABNB", db_path, repo_root=tmp_path)
     assert counts["parse_failed"] == 1
     assert counts["rows_inserted"] == 0
@@ -397,7 +399,7 @@ def test_unknown_target_kind_skipped(
     monkeypatch.setattr(deck_mod, "extract_text_from_pdf", _mock_pdf_text("text"))
     monkeypatch.setattr(
         deck_mod,
-        "call_llm",
+        "call_llm_structured",
         _mock_llm(
             [
                 {

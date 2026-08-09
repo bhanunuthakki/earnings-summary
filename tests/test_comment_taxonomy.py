@@ -43,8 +43,13 @@ def _comment(text: str, *, anchor_type: str = "free_text", key: str = "x") -> co
 
 
 def _canned(answer: str):
-    def _f(*_a: object, **_k: object) -> str:
-        return answer
+    def _f(*_a: object, **_k: object) -> object:
+        from llm.structured import StructuredParseError
+
+        try:
+            return prc._IntentClassification(intent=answer)
+        except ValueError as exc:
+            raise StructuredParseError("invalid intent") from exc
 
     return _f
 
@@ -57,24 +62,24 @@ def _canned(answer: str):
 def test_garbage_answer_falls_back_to_needs_triage(monkeypatch: pytest.MonkeyPatch) -> None:
     # The old fallback was ask_question — an out-of-vocabulary answer now parks
     # the comment for triage instead of mis-routing it.
-    monkeypatch.setattr(prc, "call_llm", _canned("¯\\_(ツ)_/¯ not sure"))
+    monkeypatch.setattr(prc, "call_llm_structured", _canned("¯\\_(ツ)_/¯ not sure"))
     assert prc._classify_intent(_comment("remove this section unless better")) == "needs_triage"
 
 
 def test_model_may_explicitly_pick_needs_triage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(prc, "call_llm", _canned("needs_triage"))
+    monkeypatch.setattr(prc, "call_llm_structured", _canned("needs_triage"))
     assert prc._classify_intent(_comment("this is conditional and ambiguous")) == "needs_triage"
 
 
 def test_peer_comment_classifies_as_curate_peers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(prc, "call_llm", _canned("curate_peers"))
+    monkeypatch.setattr(prc, "call_llm_structured", _canned("curate_peers"))
     c = _comment("these are shit peers", anchor_type="peer_comp", key="peer_comp")
     assert prc._classify_intent(c) == "curate_peers"
 
 
 def test_known_intent_still_routes_normally(monkeypatch: pytest.MonkeyPatch) -> None:
     # The new terminal doesn't shadow a clean classification.
-    monkeypatch.setattr(prc, "call_llm", _canned("ask_question"))
+    monkeypatch.setattr(prc, "call_llm_structured", _canned("ask_question"))
     assert prc._classify_intent(_comment("what's the NPL trend?")) == "ask_question"
 
 

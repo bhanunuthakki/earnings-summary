@@ -40,7 +40,8 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
-from typing import cast
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from llm.prompt_registry import PromptTemplate, register
 
@@ -61,6 +62,18 @@ _RATIONALE_CAP = 400  # hard char cap on the persisted rationale
 # The documented global fallback — identical to dcf.scenario_reward's prior, kept
 # in sync by the guard test so the "no per-name prior" reward is exactly today's.
 GLOBAL_WEIGHTS: dict[str, float] = {"bull": 0.25, "base": 0.50, "bear": 0.25}
+
+
+class _ScenarioPriorWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bull: float = Field(ge=0.0, le=100.0)
+    base: float = Field(ge=0.0, le=100.0)
+    bear: float = Field(ge=0.0, le=100.0)
+    rationale: str = Field(min_length=1, max_length=_RATIONALE_CAP)
+
+
+_SCENARIO_PRIOR_ADAPTER = TypeAdapter(_ScenarioPriorWire)
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,8 +225,9 @@ def _default_call(ticker: str) -> ScenarioPriorCall:
             ticker=ticker,
             expect="object",
             required_keys=("bull", "base", "bear", "rationale"),
+            schema=_SCENARIO_PRIOR_ADAPTER,
         )
-        return cast("dict[str, object]", payload)
+        return _ScenarioPriorWire.model_validate(payload).model_dump()
 
     return call
 

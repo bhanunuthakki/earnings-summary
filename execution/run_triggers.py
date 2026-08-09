@@ -50,6 +50,7 @@ from alerts.store import (  # noqa: E402
     fire_alert,
     queue_action,
 )
+from db_paths import resolve_db_path as canonical_db_path  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from triggers.base import (  # noqa: E402
@@ -93,15 +94,11 @@ def resolve_db_path(override: Path | None) -> Path:
     """
     import db
 
+    path = canonical_db_path(override)
+    if path is None or not path.exists():
+        raise FileNotFoundError(f"SQLite DB does not exist: {path}")
     if override is not None:
-        path = override
-        if not path.exists():
-            raise FileNotFoundError(f"SQLite DB does not exist: {path}")
         db.set_db_path(path)
-    else:
-        path = Path(db.DB_PATH)
-        if not path.exists():
-            raise FileNotFoundError(f"SQLite DB does not exist: {path}")
     return path
 
 

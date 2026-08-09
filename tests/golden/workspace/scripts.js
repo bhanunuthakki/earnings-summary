@@ -1487,6 +1487,22 @@ ${r?'Expression: "'+r+`"
     if (meta.length) html += '<span class="cite-pop-meta">' + meta.join(' &middot; ') + '</span>';
     return '<span class="cite-pop" role="tooltip">' + html + '</span>';
   }
+  function safeHref(raw, base) {
+    var href = String(raw || '').trim();
+    if (!href || /[\u0000-\u001f\u007f]/.test(href)) return '';
+    if (/^https?:\/\//i.test(href)) {
+      try {
+        var absolute = new URL(href);
+        if ((absolute.protocol === 'http:' || absolute.protocol === 'https:')
+            && absolute.hostname && !absolute.username && !absolute.password) return href;
+      } catch (_err) {}
+      return '';
+    }
+    if (href.charAt(0) !== '/' || href.charAt(1) === '/' || href.indexOf('\\') !== -1) return '';
+    if (!base) return href;
+    var safeBase = safeHref(base, '');
+    return safeBase ? safeBase.replace(/\/$/, '') + href : '';
+  }
   function linkify(html, items, opts) {
     var base = (opts && opts.hrefBase) || '';
     var map = {};
@@ -1494,9 +1510,7 @@ ${r?'Expression: "'+r+`"
     return String(html).replace(CITE_RX, function (m, value, n) {
       var c = map[n];
       if (!c) return m;
-      var href = c.href || c.source_url || '';
-      if (href && /^javascript:/i.test(href.trim())) href = '';
-      else if (href && !/^https?:/i.test(href) && base) href = base.replace(/\/$/, '') + (href.charAt(0) === '/' ? href : '/' + href);
+      var href = safeHref(c.href || c.source_url || '', base);
       var pop = popHtml(c);
       if (value) {
         var badge = href

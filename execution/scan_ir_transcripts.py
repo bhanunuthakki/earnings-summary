@@ -32,9 +32,8 @@ register the ``transcripts`` rows.
 Idempotent + best-effort: an issuer that hasn't posted yet is a no-op that
 retries tomorrow, and one ticker's failure never aborts the batch.
 
-Cron: ``cron/scan_ir_transcripts.task.xml`` (daily 04:15, just before
-``backfill_transcripts`` at 04:30 — so the broad sweep finds the file already on
-disk and the brief worker at 06:30 sees the fresh transcript).
+Cron: ``cron/scan_ir_transcripts.task.xml`` (daily 02:15, before the protected
+03:00-05:00 LLM window and the brief worker at 06:30).
 
 Usage:
     python execution/scan_ir_transcripts.py

@@ -30,7 +30,6 @@ caps spend at $5/month for the 'investor_deck_extraction' purpose.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 import sqlite3
@@ -40,7 +39,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from llm_client import JSON_FENCE_RE, call_llm
+from pydantic import BaseModel, Field, TypeAdapter
+
+from llm.structured import StructuredParseError, call_llm_structured
+from llm.untrusted import spotlight
 from parser import extract_text_from_pdf
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -54,6 +56,19 @@ LLM_PURPOSE = "investor_deck_extraction"
 # long-context tier. 200KB ≈ 50 dense pages — enough for the strategic
 # sections; the boilerplate operating-metric backup is in supplements.
 _MAX_INPUT_CHARS = 200_000
+
+
+class _DeckTargetRow(BaseModel):
+    # `_persist` applies the canonical allowlist per-row so an invented kind
+    # is skipped without discarding valid rows from the same deck response.
+    target_kind: str
+    target_value: float | None = None
+    target_unit: str
+    target_period: str
+    target_currency: str | None = None
+    narrative_excerpt: str
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
 
 # Supported target_kind values. Mirrors the enum documented in migration
 # 0053_strategic_targets and used by the unique index. Used to validate
@@ -258,13 +273,33 @@ def extract_for_ticker(
             )
             continue
 
-        prompt = _PROMPT.format(ticker=ticker_u, deck_text=deck_text)
+        prompt = _PROMPT.format(
+            ticker=ticker_u,
+            deck_text=spotlight(deck_text, source="issuer investor-deck PDF text"),
+        )
         try:
-            raw = call_llm(
-                prompt,
-                purpose=LLM_PURPOSE,
-                ticker=ticker_u,
-            ).strip()
+            validated = cast(
+                "list[_DeckTargetRow]",
+                call_llm_structured(
+                    prompt,
+                    purpose=LLM_PURPOSE,
+                    ticker=ticker_u,
+                    scope="investor_deck",
+                    expect="array",
+                    schema=TypeAdapter(list[_DeckTargetRow]),
+                ),
+            )
+        except StructuredParseError as exc:
+            log.warning(
+                {
+                    "event": "deck_structured_failed",
+                    "ticker": ticker_u,
+                    "deck_path": str(deck.path),
+                    "error": str(exc),
+                }
+            )
+            counts["parse_failed"] += 1
+            continue
         except Exception as exc:
             log.warning(
                 {
@@ -277,18 +312,9 @@ def extract_for_ticker(
             counts["llm_failed"] += 1
             continue
 
-        rows = _parse_rows(raw)
-        if rows is None:
-            log.warning(
-                {
-                    "event": "deck_parse_failed",
-                    "ticker": ticker_u,
-                    "deck_path": str(deck.path),
-                    "raw_head": raw[:200],
-                }
-            )
-            counts["parse_failed"] += 1
-            continue
+        rows: list[dict[str, object]] = [
+            cast("dict[str, object]", row.model_dump()) for row in validated
+        ]
 
         counts["decks_processed"] += 1
         inserted, fwd_inserted = _persist(
@@ -477,25 +503,6 @@ def _read_deck_text(pdf: Path) -> str:
 # ---------------------------------------------------------------------------
 # Parsing + persistence
 # ---------------------------------------------------------------------------
-
-
-def _parse_rows(raw: str) -> list[dict[str, object]] | None:
-    """Parse the LLM's JSON output, stripping markdown fences. Returns None
-    when the output isn't a JSON array — caller treats as parse_failed."""
-    s = raw.strip()
-    if s.startswith("```"):
-        s = JSON_FENCE_RE.sub("", s).strip()
-    try:
-        parsed = json.loads(s)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, list):
-        return None
-    out: list[dict[str, object]] = []
-    for row in cast("list[object]", parsed):
-        if isinstance(row, dict):
-            out.append(cast("dict[str, object]", row))
-    return out
 
 
 def _has_existing_rows(*, db: Path, ticker: str, deck_doc_id: int) -> bool:

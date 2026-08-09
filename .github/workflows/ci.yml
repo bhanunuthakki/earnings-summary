@@ -347,7 +347,7 @@ jobs:
           git ls-files -z |
           xargs -0 detect-secrets-hook
           --exclude-files
-          '^(?:config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
+          '^(?:config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|docs[\\/]hardening[\\/]L1[\\/]deletion_recovery_receipt_2026_08_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
       - name: Generate CycloneDX SBOM
         run: cyclonedx-py requirements requirements.lock --output-file sbom.cdx.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

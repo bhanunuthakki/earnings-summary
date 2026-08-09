@@ -25,11 +25,11 @@ import os
 import sqlite3
 import sys
 import time
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-import requests
 from pydantic import BaseModel, ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,12 +39,20 @@ from compute.split_normalization import (  # noqa: E402
     NormalizationEvent,
     normalize_estimates,
 )
-from log_redact import redact as _redact  # noqa: E402
 from models.fmp_payloads import (  # noqa: E402
     FmpAnalystEstimateRecord,
     FmpBalanceSheetRecord,
     FmpCashFlowRecord,
     FmpIncomeStatementRecord,
+)
+from net.client import (  # noqa: E402
+    FMP_CLIENT,
+    FMP_ORIGIN,
+    HttpAttempt,
+    HttpCallError,
+    JsonShape,
+    QueryValue,
+    RetryPolicy,
 )
 from pipeline.deferred_fmp import (  # noqa: E402
     DeferredFmpTask,
@@ -187,9 +195,6 @@ def _should_snapshot(
     return (today - last_date).days >= cadence_days
 
 
-SESSION = requests.Session()
-SESSION.headers["User-Agent"] = "earnings-summary/1.0"
-
 # Live HTTP counters. The cacher reads the SERVED count after a run via the
 # budget file (`.tmp/cacher/budget_<YYYY-MM-DD>.json`) so the next invocation
 # knows how much daily quota is left.
@@ -207,37 +212,12 @@ _CALL_COUNTER = 0
 _SERVED_COUNTER = 0
 _BUDGET_DIR = PROJECT_ROOT / ".tmp" / "cacher"
 
-# FMP starter-tier limit is 750 requests/minute. We size the token bucket at
-# 12 tokens/sec (=720/min steady state) with a 12-token burst. That leaves
-# headroom for retry bursts after a 429 backoff without ever brushing the cap.
-# Override at runtime via FMP_RATE_LIMIT_PER_SEC env var.
-RATE_LIMIT_PER_SEC = float(os.environ.get("FMP_RATE_LIMIT_PER_SEC", "12"))
-RATE_LIMIT_BURST = max(1, int(RATE_LIMIT_PER_SEC))
+# The shared FMP client owns the configured per-host rate budget. This caller
+# keeps its longer historical timeout and 5s/10s retry cadence.
 TIMEOUT = (10, 60)
 
 
-class TokenBucket:
-    """Process-local token bucket; thread-safe enough for our single-thread fetcher."""
-
-    def __init__(self, rate_per_sec: float, burst: int) -> None:
-        self.rate = rate_per_sec
-        self.capacity = float(burst)
-        self.tokens = float(burst)
-        self.last = time.monotonic()
-
-    def acquire(self) -> None:
-        """Block until one token is available, then consume it."""
-        while True:
-            now = time.monotonic()
-            self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)
-            self.last = now
-            if self.tokens >= 1.0:
-                self.tokens -= 1.0
-                return
-            time.sleep(max(0.005, (1.0 - self.tokens) / self.rate))
-
-
-_BUCKET = TokenBucket(RATE_LIMIT_PER_SEC, RATE_LIMIT_BURST)
+_FMP_RETRY = RetryPolicy(max_attempts=3, backoff_base_s=5.0)
 
 TODAY = date.today()
 TEN_YEARS_AGO = (TODAY - timedelta(days=365 * 10 + 3)).isoformat()
@@ -249,34 +229,40 @@ TODAY_STR = TODAY.isoformat()
 # ---------------------------------------------------------------------------
 
 
-def _http_get(url: str, params: dict) -> tuple[int, object | None, str | None]:
-    full = {**params, "apikey": API_KEY}
-    # 429 backoff: up to 3 retries, exponential
+def _record_http_attempt(attempt: HttpAttempt) -> None:
     global _CALL_COUNTER, _SERVED_COUNTER
-    for attempt in range(3):
-        _BUCKET.acquire()
-        _CALL_COUNTER += 1
-        try:
-            r = SESSION.get(url, params=full, timeout=TIMEOUT)
-        except requests.RequestException as e:
-            # May or may not have reached FMP — count as served (overcounting
-            # the ledger is safe; undercounting re-breaches the provider cap).
-            _SERVED_COUNTER += 1
-            return (0, None, f"network: {_redact(e)}")
-        if r.status_code == 429:
-            wait = 5 * (2**attempt)
-            print(f"  [429 rate-limit, sleeping {wait}s]", flush=True)
-            time.sleep(wait)
-            continue
+    _CALL_COUNTER += 1
+    if attempt.network_error or attempt.status_code != 429:
         _SERVED_COUNTER += 1
-        break
-    code = r.status_code
+
+
+def _http_get(url: str, params: Mapping[str, object]) -> tuple[int, object | None, str | None]:
+    query: dict[str, QueryValue] = {}
+    for key, value in params.items():
+        if value is not None and not isinstance(value, (str, int, float, bool)):
+            return (0, None, f"invalid-query-value: {key}")
+        query[key] = value
     try:
-        body = r.json()
-    except ValueError:
-        return (code, None, f"non-json: {r.text[:200]}")
+        response = FMP_CLIENT.get_url_json(
+            url,
+            params=query,
+            api_key=API_KEY,
+            expected=JsonShape.ANY,
+            timeout=TIMEOUT,
+            retry=_FMP_RETRY,
+            attempt_hook=_record_http_attempt,
+        )
+        code = response.status_code
+        body = response.payload
+    except HttpCallError as exc:
+        code = exc.status_code or 0
+        body = exc.payload
+        if isinstance(body, dict) and "Error Message" in body:
+            return (code, None, f"fmp-err: {str(body['Error Message'])[:200]}")
+        prefix = "network" if code == 0 else "http"
+        return (code, None, f"{prefix}: {exc}")
     if isinstance(body, dict) and "Error Message" in body:
-        return (code, None, f"fmp-err: {body['Error Message'][:200]}")
+        return (code, None, f"fmp-err: {str(body['Error Message'])[:200]}")
     return (code, body, None)
 
 
@@ -345,7 +331,7 @@ def _candidates(
             out.append(
                 (
                     f"stable:{p}",
-                    f"https://financialmodelingprep.com/stable/{p}",
+                    f"{FMP_ORIGIN}/stable/{p}",
                     {"symbol": symbol, **extra},
                 )
             )
@@ -353,26 +339,22 @@ def _candidates(
                 out.append(
                     (
                         f"v3-path:{p}",
-                        f"https://financialmodelingprep.com/api/v3/{p}/{symbol}",
+                        f"{FMP_ORIGIN}/api/v3/{p}/{symbol}",
                         {**extra},
                     )
                 )
                 out.append(
                     (
                         f"v4-query:{p}",
-                        f"https://financialmodelingprep.com/api/v4/{p}",
+                        f"{FMP_ORIGIN}/api/v4/{p}",
                         {"symbol": symbol, **extra},
                     )
                 )
         else:
-            out.append((f"stable:{p}", f"https://financialmodelingprep.com/stable/{p}", {**extra}))
+            out.append((f"stable:{p}", f"{FMP_ORIGIN}/stable/{p}", {**extra}))
             if not _stable_only:
-                out.append(
-                    (f"v3-path:{p}", f"https://financialmodelingprep.com/api/v3/{p}", {**extra})
-                )
-                out.append(
-                    (f"v4-query:{p}", f"https://financialmodelingprep.com/api/v4/{p}", {**extra})
-                )
+                out.append((f"v3-path:{p}", f"{FMP_ORIGIN}/api/v3/{p}", {**extra}))
+                out.append((f"v4-query:{p}", f"{FMP_ORIGIN}/api/v4/{p}", {**extra}))
     return out
 
 

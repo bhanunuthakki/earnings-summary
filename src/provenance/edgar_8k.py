@@ -45,6 +45,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
 from models.facts import FactLocator, LegacyEscapeHatch
 from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
 from sec_identity import sec_user_agent
@@ -64,6 +66,16 @@ StructuredCall = Callable[..., object]
 # Max chars of the verified-quote snippet carried on the override's locator
 # (mirrors FactLocator.verbatim_snippet's own cap).
 _MAX_LOCATOR_SNIPPET = 2000
+
+
+class _SegmentExtractionWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: float
+    anchor_quote: str | None = Field(default=None, max_length=_MAX_LOCATOR_SNIPPET)
+
+
+_SEGMENT_EXTRACTIONS_ADAPTER = TypeAdapter(dict[str, _SegmentExtractionWire])
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,8 +320,16 @@ def extract_segment_map(
         from llm.structured import call_llm_structured
 
         raw = call_llm_structured(
-            prompt, purpose=EIGHT_K_PURPOSE, ticker=ticker.upper(), expect="object"
+            prompt,
+            purpose=EIGHT_K_PURPOSE,
+            ticker=ticker.upper(),
+            expect="object",
+            schema=_SEGMENT_EXTRACTIONS_ADAPTER,
         )
+        raw = {
+            name: row.model_dump()
+            for name, row in cast("dict[str, _SegmentExtractionWire]", raw).items()
+        }
     if not isinstance(raw, dict):
         return {}
     out: dict[str, SegmentExtraction] = {}

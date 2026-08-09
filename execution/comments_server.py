@@ -48,6 +48,7 @@ from collections import deque
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import cast
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -67,14 +68,21 @@ except ImportError:  # pragma: no cover - install hint
 
 import sqlite3  # noqa: E402
 
-from comments_server_alert_routes import AlertRouteContext, register_alert_routes  # noqa: E402
+from comments_server_alert_routes import AppContext, register_alert_routes  # noqa: E402
 from comments_server_content_routes import (  # noqa: E402
     ContentRouteContext,
     register_content_routes,
 )
+from comments_server_dcf_routes import DcfRouteContext, register_dcf_routes  # noqa: E402
 from comments_server_journal_routes import (  # noqa: E402
     JournalRouteContext,
     register_journal_routes,
+)
+from comments_server_panel_cache import (  # noqa: E402
+    PanelCacheEntry,
+    PanelCacheHit,
+    PanelCacheReservation,
+    PanelResponseCache,
 )
 from comments_server_settings_routes import (  # noqa: E402
     SettingsRouteContext,
@@ -121,6 +129,7 @@ from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
+from log_redact import redact  # noqa: E402
 from logging_config import (  # noqa: E402
     configure_logging,
     get_correlation_id,
@@ -402,6 +411,22 @@ def _record_dismiss_pass(
 # build routes share its buildable-status set via discovery.store.
 
 
+class _RedactingFlask(Flask):
+    """Flask boundary that never writes an exception traceback to logs."""
+
+    def log_exception(
+        self,
+        exc_info: tuple[type, BaseException, TracebackType] | tuple[None, None, None],
+    ) -> None:
+        exc = exc_info[1]
+        if exc is None:
+            return
+        self.logger.error(
+            "unhandled request exception: %s",
+            redact(f"{type(exc).__name__}: {exc}")[:500],
+        )
+
+
 def create_app(
     repo_root: Path,
     *,
@@ -409,9 +434,10 @@ def create_app(
     registry: Registry | None = None,
     chat_executor: concurrent.futures.Executor | None = None,
 ) -> Flask:
-    app = Flask(__name__)
+    app = _RedactingFlask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
-    db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
+    resolved_db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
+    db_path = resolved_db_path
     job_registry = registry or Registry(repo_root=repo_root)
     report_capability = ReportCapabilityStore(repo_root)
     report_capability.load_or_create()
@@ -420,10 +446,7 @@ def create_app(
     # as fresh by the shell for 30 seconds. Keep the exact rendered response for
     # that same window so HTTP revalidation can stop *before* the route builder,
     # rather than paying the full build merely to discover the ETag is unchanged.
-    panel_cache: dict[str, tuple[float, bytes, str, str]] = {}
-    panel_cache_lock = threading.Lock()
-    panel_cache_ttl_seconds = 30.0
-    panel_cache_max_entries = 256
+    panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
     # Dedicated pool so a long-running LLM subprocess doesn't pin a Flask
     # request thread for the full 10-60s of a chat turn. Pool size caps
     # the number of concurrent chats; chunks flow back via per-request
@@ -530,7 +553,11 @@ def create_app(
         )
 
     def _open_db() -> sqlite3.Connection:
-        return connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        return connect_sqlite(
+            resolved_db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
 
     @app.before_request
     def enforce_network_boundary():
@@ -563,8 +590,7 @@ def create_app(
             # rejected mutation merely causes a harmless extra rebuild. Panel
             # timing telemetry is observational and must not evict the fragment
             # whose latency it just measured.
-            with panel_cache_lock:
-                panel_cache.clear()
+            panel_cache.clear()
 
     @app.errorhandler(413)
     def request_too_large(_error: object):
@@ -572,7 +598,11 @@ def create_app(
 
     @app.errorhandler(500)
     def internal_server_error(error: object):
-        app.logger.error("unhandled request failure: %s", error, exc_info=True)
+        if getattr(error, "original_exception", None) is None:
+            app.logger.error(
+                "unhandled request failure: %s",
+                redact(f"{type(error).__name__}: {error}")[:500],
+            )
         return _client_error("request failed; retry the request", 500)
 
     @app.teardown_request
@@ -581,12 +611,14 @@ def create_app(
         if db_conn is not None:
             with contextlib.suppress(Exception):
                 db_conn.close()
+        reservation = g.pop("panel_cache_reservation", None)
+        if isinstance(reservation, PanelCacheReservation):
+            panel_cache.abandon(reservation)
 
     def get_read_db() -> sqlite3.Connection:
         if "request_read_db" not in g:
-            db_path = repo_root / "data" / "portfolio.db"
             conn = connect_sqlite(
-                db_path,
+                resolved_db_path,
                 role=SQLiteConnectionRole.READ_ONLY,
                 schema_preflight=True,
             )
@@ -635,15 +667,14 @@ def create_app(
         if request.method != "GET" or not request.path.startswith("/api/panel/"):
             return None
         cache_key = request.full_path.removesuffix("?")
-        now = time.monotonic()
-        with panel_cache_lock:
-            cached = panel_cache.get(cache_key)
-            if cached is not None and now - cached[0] > panel_cache_ttl_seconds:
-                panel_cache.pop(cache_key, None)
-                cached = None
-        if cached is None:
+        lookup = panel_cache.get_or_reserve(cache_key)
+        if isinstance(lookup, PanelCacheReservation):
+            g.panel_cache_reservation = lookup
             return None
-        _, body, content_type, etag = cached
+        assert isinstance(lookup, PanelCacheHit)
+        body = lookup.entry.body
+        content_type = lookup.entry.content_type
+        etag = lookup.entry.etag
         g.panel_cache_hit = True
         if request.if_none_match.contains(etag.strip('"')):
             response = Response(status=304)
@@ -704,16 +735,15 @@ def create_app(
             response.add_etag()
             response.headers["Cache-Control"] = "no-cache"
             if not getattr(g, "panel_cache_hit", False):
-                cache_key = request.full_path.removesuffix("?")
-                with panel_cache_lock:
-                    if len(panel_cache) >= panel_cache_max_entries:
-                        oldest_key = min(panel_cache, key=lambda key: panel_cache[key][0])
-                        panel_cache.pop(oldest_key, None)
-                    panel_cache[cache_key] = (
-                        time.monotonic(),
-                        response.get_data(),
-                        response.content_type,
-                        response.headers["ETag"],
+                reservation = g.pop("panel_cache_reservation", None)
+                if isinstance(reservation, PanelCacheReservation):
+                    panel_cache.store(
+                        reservation,
+                        PanelCacheEntry(
+                            body=response.get_data(),
+                            content_type=response.content_type or "application/octet-stream",
+                            etag=response.headers["ETag"],
+                        ),
                     )
             # make_conditional mutates + returns self; the cast restores the
             # Flask subclass the werkzeug stub erases.
@@ -2225,7 +2255,7 @@ def create_app(
 
     register_alert_routes(
         app,
-        AlertRouteContext(
+        AppContext(
             db_path=db_path,
             default_user_id=DEFAULT_USER_ID,
             referer_back_path=_referer_back_path,
@@ -3604,345 +3634,15 @@ def create_app(
         ),
     )
 
-    @app.route("/api/dcf-sheet/<ticker>", methods=["GET"])
-    def dcf_sheet_link(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """The Google Sheet linked to a ticker's DCF, if any:
-        ``{"ticker", "sheet_id", "url"}`` (sheet_id/url null when unlinked). Read
-        from holdings ``dcf_defaults.gsheet_id``, which an `export` populates."""
-        t = ticker.upper()
-        sheet_id, url = _linked_gsheet(repo_root, t)
-        return {"ticker": t, "sheet_id": sheet_id, "url": url}
-
-    @app.route("/api/dcf/inputs/<ticker>", methods=["GET"])
-    def dcf_inputs(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """The current redesigned-DCF assumption set for a ticker as a JSON dict
-        — what the in-app recompute card edits and POSTs back.
-
-        Read once from the live workbook ``dcf/<T>.xlsx`` to seed the editable
-        controls; the recompute LOOP itself never touches the xlsx. 404 when
-        there is no redesigned workbook for the ticker, 422 when the workbook is
-        present but structurally unreadable."""
-        t = ticker.upper()
-        live = repo_root / "dcf" / f"{t}.xlsx"
-        if not live.exists():
-            abort(404)
-        try:
-            inp = dcf_redesign.read_inputs(live)
-        except dcf_redesign.RedesignError as e:
-            return ({"error": str(e)}, 422)
-        if inp is None:
-            abort(404)  # present but not redesigned-format
-        return {"ticker": t, "inputs": inp.to_dict()}
-
-    @app.route("/api/dcf/recompute", methods=["POST", "OPTIONS"])
-    def dcf_recompute():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Recompute a DCF from edited assumptions — NO xlsx in the loop.
-
-        Body: ``{"inputs": {<RedesignInputs.to_dict() with edits applied>}}``.
-        Runs the existing pure ``value()/scenario_values()/sensitivity_grid()``
-        and returns base fair value + Bull/Base/Bear + the WACC × exit-multiple
-        grid + the live over/under (decimal). Stateless: the in-app card calls it
-        on every assumption edit; persistence is a separate explicit save /
-        Push-to-Sheets commit, never this route. 400 on a malformed/invalid
-        input set, 422 on a degenerate but well-formed one (perpetuity WACC ≤ g)."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return ({"error": "JSON body required"}, 400)
-        raw = cast("dict[str, object]", body).get("inputs")
-        if not isinstance(raw, dict):
-            return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
-        try:
-            inp = dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", raw))
-        except dcf_redesign.RedesignError as e:
-            return ({"error": f"invalid inputs: {e}"}, 400)
-        try:
-            return _dcf_recompute_payload(inp)
-        except dcf_redesign.RedesignError as e:
-            return ({"error": str(e)}, 422)
-
-    @app.route("/api/dcf/save", methods=["POST", "OPTIONS"])
-    def dcf_save():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Durably save edited DCF assumptions to the model — the explicit in-app
-        commit (Push-to-Sheets stays the publish-to-Google-Sheet commit).
-
-        Body: ``{"ticker": T, "inputs": {<edited RedesignInputs.to_dict()>}}``.
-        Writes the edited cell-backed levers onto ``dcf/<T>.xlsx``, reconciles the
-        S11 override ledger against the IMMUTABLE Opus baseline (the edit is
-        recorded; the baseline is never overwritten), mirrors the edits to the
-        from-scratch default, and re-persists ``dcf_runs``. Returns the recomputed
-        card payload (canonical saved inputs — WACC re-derived from the saved CAPM
-        drivers) plus the save outcome. 400 on a malformed input set, 409 when
-        there is no redesigned workbook to edit, 422 on a degenerate one."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return ({"error": "JSON body required"}, 400)
-        data = cast("dict[str, object]", body)
-        ticker = data.get("ticker")
-        if not isinstance(ticker, str) or not ticker.strip():
-            return ({"error": "body.ticker required"}, 400)
-        raw = data.get("inputs")
-        if not isinstance(raw, dict):
-            return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
-        try:
-            inp = dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", raw))
-        except dcf_redesign.RedesignError as e:
-            return ({"error": f"invalid inputs: {e}"}, 400)
-        # Reject a degenerate set up front (same 422 contract as recompute) so a
-        # save never writes an un-valuable model to the workbook.
-        try:
-            _dcf_recompute_payload(inp)
-        except dcf_redesign.RedesignError as e:
-            return ({"error": str(e)}, 422)
-
-        import refresh_dcf  # heavy CLI module — imported only on the save path
-
-        try:
-            t = ticker_validation.safe_ticker(ticker)
-        except ValueError:
-            return ({"error": "invalid ticker"}, 400)
-        result = refresh_dcf.apply_edits(t, repo_root, db_path, inp)
-        if result.get("status") != "ok":
-            reason = str(result.get("reason", "save failed"))
-            code = 409 if "no redesigned workbook" in reason else 500
-            return ({"error": reason, "result": result}, code)
-        # Reflect exactly what was persisted: recompute from the canonical saved
-        # inputs (re-read from the workbook, WACC re-derived from saved drivers).
-        saved_inp = dcf_redesign.read_inputs(repo_root / "dcf" / f"{t}.xlsx")
-        payload = _dcf_recompute_payload(saved_inp) if saved_inp is not None else {}
-        if saved_inp is not None:
-            payload["inputs"] = saved_inp.to_dict()
-        return {**payload, "saved": True, "result": result}
-
-    @app.route("/api/dcf/inject-fact", methods=["POST", "OPTIONS"])
-    def dcf_inject_fact():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Inject a picked DIY fact as a DCF driver (capture-every-number S6).
-
-        Body: ``{"ticker": T, "token": "<metric token>", "field": "<driver key>"}``.
-        Resolves the metric's LATEST value through the timeseries loaders (so
-        company-doc ``fact_overrides`` win — S2), converts it into the target
-        driver's units (the load-bearing units/scale step — percent→ratio, $→$M),
-        sanity-bounds it, then commits via ``refresh_dcf.apply_edits`` (the
-        clobber-safe cell + JSON-sync + provenance + dcf_runs path). Returns the
-        recomputed card payload plus the resolved-fact/conversion detail.
-
-        400 on a malformed body / unknown field / unparseable token; 404 when the
-        ticker has no FCFF redesign workbook (archetype models are not editable
-        this way); 422 on a fact that cannot be safely scaled, an out-of-bounds
-        converted value, or a degenerate resulting model."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from dcf import fact_drivers
-        from viewspec.spec import MetricRef, ViewSpecError
-
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return ({"error": "JSON body required"}, 400)
-        data = cast("dict[str, object]", body)
-        ticker_raw = data.get("ticker")
-        token = data.get("token")
-        field_key = data.get("field")
-        if not isinstance(ticker_raw, str) or not ticker_raw.strip():
-            return ({"error": "body.ticker required"}, 400)
-        if not isinstance(token, str) or not token.strip():
-            return ({"error": "body.token (a picked metric token) required"}, 400)
-        if not isinstance(field_key, str) or not field_key.strip():
-            return ({"error": "body.field (a driver field key) required"}, 400)
-        field = fact_drivers.DRIVER_FIELDS_BY_KEY.get(field_key)
-        if field is None:
-            return ({"error": f"unknown driver field {field_key!r}"}, 400)
-        try:
-            metric = MetricRef.parse_token(token)
-        except ViewSpecError as exc:
-            return ({"error": str(exc)}, 400)
-
-        try:
-            t = ticker_validation.safe_ticker(ticker_raw)
-        except ValueError:
-            return ({"error": "invalid ticker"}, 400)
-        # FCFF-only guard: archetype models (bank/holdco/fintech/platform) and
-        # un-built names have no redesigned workbook to seed from.
-        live = repo_root / "dcf" / f"{t}.xlsx"
-        try:
-            base_inp = dcf_redesign.read_inputs(live) if live.exists() else None
-        except dcf_redesign.RedesignError as exc:
-            return ({"error": str(exc)}, 422)
-        if base_inp is None:
-            return ({"error": f"{t} has no editable FCFF DCF model"}, 404)
-
-        # Resolve → convert → apply. A FactDriverError is a 422 (well-formed
-        # request, but the fact can't be safely turned into this driver).
-        try:
-            resolved = fact_drivers.resolve_fact_value(
-                metric, ticker=t, repo_root=repo_root, db_path=db_path
-            )
-            converted = fact_drivers.convert_to_driver(resolved.value, resolved.unit, field)
-            edited = fact_drivers.apply_to_inputs(base_inp, field, converted.value)
-        except fact_drivers.FactDriverError as exc:
-            return ({"error": str(exc)}, 422)
-        # Reject a degenerate resulting model up front (same 422 contract as save).
-        try:
-            _dcf_recompute_payload(edited)
-        except dcf_redesign.RedesignError as exc:
-            return ({"error": str(exc)}, 422)
-
-        import refresh_dcf  # heavy CLI module — imported only on the commit path
-
-        result = refresh_dcf.apply_edits(t, repo_root, db_path, edited)
-        if result.get("status") != "ok":
-            reason = str(result.get("reason", "injection failed"))
-            code = 404 if "no redesigned workbook" in reason else 500
-            return ({"error": reason, "result": result}, code)
-
-        injection: dict[str, object] = {
-            "ticker": t,
-            "field_key": field.key,
-            "field_label": field.label,
-            "metric_token": token,
-            "metric_label": metric.label,
-            "raw_value": resolved.value,
-            "raw_unit": resolved.unit,
-            "applied_value": converted.value,
-            "conversion": converted.note,
-            "source": resolved.source,
-            "fact_id": resolved.fact_id,
-            "period_end": resolved.period_end,
-        }
-        # Durable fact lineage on the assumptions JSON (best-effort, additive).
-        with contextlib.suppress(Exception):
-            fact_drivers.record_driver_provenance(
-                repo_root / "data" / "dcf_assumptions" / f"{t}.json",
-                field_key=field.key,
-                payload={
-                    "metric": token,
-                    "fact_id": resolved.fact_id,
-                    "raw_value": resolved.value,
-                    "raw_unit": resolved.unit,
-                    "applied_value": converted.value,
-                    "source": resolved.source,
-                    "period_end": resolved.period_end,
-                },
-            )
-
-        saved_inp = dcf_redesign.read_inputs(live)
-        payload = _dcf_recompute_payload(saved_inp) if saved_inp is not None else {}
-        if saved_inp is not None:
-            payload["inputs"] = saved_inp.to_dict()
-        return {**payload, "injected": True, "injection": injection, "result": result}
-
-    @app.route("/api/dcf/inject-fact-sheet", methods=["POST", "OPTIONS"])
-    def dcf_inject_fact_sheet():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Park a picked DIY fact on a ticker's DCF *reference sheet* (S7).
-
-        Body: ``{"ticker": T, "token": "<metric token>"}`` (no driver field — a
-        reference fact is not wired into the recompute). Resolves the metric's
-        LATEST value through the SAME loaders the driver path uses (so company-doc
-        ``fact_overrides`` win — S2), then writes it — value + unit + period +
-        source/provenance, in its native unit (NOT converted) — into the companion
-        workbook ``dcf/facts/<T>.xlsx`` that the refresh NEVER rebuilds, so it
-        survives every model refresh (the S7 deliverable; see
-        ``dcf.fact_sheet`` for the why).
-
-        400 on a malformed body / unparseable token; 404 when the ticker has no
-        DCF model workbook to attach a reference to; 422 when the fact cannot be
-        resolved (no observations)."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from datetime import date as _date
-
-        from dcf import fact_drivers, fact_sheet
-        from viewspec.spec import MetricRef, ViewSpecError
-
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return ({"error": "JSON body required"}, 400)
-        data = cast("dict[str, object]", body)
-        ticker_raw = data.get("ticker")
-        token = data.get("token")
-        if not isinstance(ticker_raw, str) or not ticker_raw.strip():
-            return ({"error": "body.ticker required"}, 400)
-        if not isinstance(token, str) or not token.strip():
-            return ({"error": "body.token (a picked metric token) required"}, 400)
-        try:
-            metric = MetricRef.parse_token(token)
-        except ViewSpecError as exc:
-            return ({"error": str(exc)}, 400)
-
-        try:
-            t = ticker_validation.safe_ticker(ticker_raw)
-        except ValueError:
-            return ({"error": "invalid ticker"}, 400)
-        # A reference attaches to a ticker's DCF — any model archetype qualifies
-        # (FCFF/bank/holdco/...), since the companion file is model-agnostic. A
-        # never-built name has nothing to reference.
-        if not (repo_root / "dcf" / f"{t}.xlsx").exists():
-            return ({"error": f"{t} has no DCF model to attach a reference to"}, 404)
-
-        try:
-            resolved = fact_drivers.resolve_fact_value(
-                metric, ticker=t, repo_root=repo_root, db_path=db_path
-            )
-        except fact_drivers.FactDriverError as exc:
-            return ({"error": str(exc)}, 422)
-
-        fact = fact_sheet.ReferenceFact(
-            token=token,
-            label=metric.label,
-            value=resolved.value,
-            unit=resolved.unit,
-            period_end=resolved.period_end,
-            source=resolved.source,
-            fact_id=resolved.fact_id,
-            captured_on=_date.today().isoformat(),
-        )
-        path = fact_sheet.facts_workbook_path(repo_root, t)
-        outcome = fact_sheet.upsert_fact(path, fact)
-        return {
-            "ticker": t,
-            "added": True,
-            "action": outcome["action"],
-            "count": outcome["count"],
-            "workbook": str(path),
-            "fact": {
-                "token": fact.token,
-                "label": fact.label,
-                "value": fact.value,
-                "unit": fact.unit,
-                "period_end": fact.period_end,
-                "source": fact.source,
-                "fact_id": fact.fact_id,
-                "captured_on": fact.captured_on,
-            },
-        }
-
-    @app.route("/api/dcf/reference-facts/<ticker>", methods=["GET"])
-    def dcf_reference_facts(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Every reference fact parked on a ticker's DCF (the companion
-        ``dcf/facts/<T>.xlsx``), as ``{"ticker", "facts": [...]}``. Empty list
-        when none have been injected."""
-        from dcf import fact_sheet
-
-        t = ticker.upper()
-        facts = fact_sheet.read_facts(fact_sheet.facts_workbook_path(repo_root, t))
-        return {
-            "ticker": t,
-            "facts": [
-                {
-                    "token": f.token,
-                    "label": f.label,
-                    "value": f.value,
-                    "unit": f.unit,
-                    "period_end": f.period_end,
-                    "source": f.source,
-                    "fact_id": f.fact_id,
-                    "captured_on": f.captured_on,
-                }
-                for f in facts
-            ],
-        }
+    register_dcf_routes(
+        app,
+        DcfRouteContext(
+            repo_root=repo_root,
+            db_path=db_path,
+            linked_gsheet=_linked_gsheet,
+            recompute_payload=_dcf_recompute_payload,
+        ),
+    )
 
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
 

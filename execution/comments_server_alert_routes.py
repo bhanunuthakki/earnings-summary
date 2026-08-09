@@ -4,22 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import cast
 
-from flask import Flask, Response, redirect, request
+from flask import Blueprint, Flask, Response, redirect, request
 
 
 @dataclass(frozen=True)
-class AlertRouteContext:
+class AppContext:
+    """Explicit dependencies available to the alert-route module."""
+
     db_path: Path
     default_user_id: str
     referer_back_path: Callable[[str], str | None]
     approve_consequence_href: Callable[[str], str | None]
 
 
-def register_alert_routes(app: Flask, context: AlertRouteContext) -> None:
-    """Register alert reads and actions directly on ``app``."""
+def create_alert_blueprint(context: AppContext) -> Blueprint:
+    """Build the alert route cluster without closing over the Flask app."""
     from approve_queued_action import (
         approve_alert_and_apply_all,
         approve_and_apply,
@@ -32,12 +35,13 @@ def register_alert_routes(app: Flask, context: AlertRouteContext) -> None:
     db_path = context.db_path
     referer_back_path = context.referer_back_path
     approve_consequence_href = context.approve_consequence_href
+    blueprint = Blueprint("alerts", __name__)
 
-    @app.route("/digest", methods=["GET"])
+    @blueprint.route("/digest", methods=["GET"])
     def digest_page():
         return redirect("/#home")
 
-    @app.route("/feed", methods=["GET"])
+    @blueprint.route("/feed", methods=["GET"])
     def feed_page():
         try:
             limit = int(request.args.get("limit", "200"))
@@ -53,12 +57,12 @@ def register_alert_routes(app: Flask, context: AlertRouteContext) -> None:
         )
         return Response(html_text, mimetype="text/html")
 
-    @app.route("/alerts", methods=["GET"])
+    @blueprint.route("/alerts", methods=["GET"])
     def alerts_page():
         query_string = request.query_string.decode()
         return redirect("/feed" + (f"?{query_string}" if query_string else ""))
 
-    @app.route("/approve", methods=["GET", "POST"])
+    @blueprint.route("/approve", methods=["GET", "POST"])
     def approve_or_dismiss_action():
         raw_alert_id = request.values.get("alert_id", "")
         raw_action_id = request.values.get("action_id", "")
@@ -80,11 +84,41 @@ def register_alert_routes(app: Flask, context: AlertRouteContext) -> None:
                     {"error": f"action_id must be an integer, got {raw_action_id!r}"},
                     400,
                 )
-        referer = request.headers.get("Referer", "")
-        back = referer_back_path(referer)
-        if request.headers.get("Sec-Fetch-Site", "") == "cross-site" or (referer and back is None):
-            return ({"error": "cross-site approve/dismiss rejected"}, 403)
         dismissed = request.values.get("dismiss") in ("1", "true", "True")
+        referer = request.headers.get("Referer", "")
+        referer_back = referer_back_path(referer)
+        supplied_back = referer_back_path(str(request.values.get("return_to") or ""))
+        back = supplied_back or referer_back or "/feed"
+
+        if request.method == "GET":
+            target_name = "alert" if alert_id is not None else "queued action"
+            target_id = alert_id if alert_id is not None else action_id
+            verb = "Dismiss" if dismissed else "Apply"
+            id_name = "alert_id" if alert_id is not None else "action_id"
+            dismiss_input = '<input type="hidden" name="dismiss" value="1">' if dismissed else ""
+            body = (
+                '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                f"<title>Confirm {verb.lower()}</title></head><body>"
+                '<main class="k-well"><h1>Confirm action</h1>'
+                f"<p>{verb} {escape(target_name)} #{target_id}?</p>"
+                '<form method="post" action="/approve">'
+                f'<input type="hidden" name="{id_name}" value="{target_id}">'
+                '<input type="hidden" name="confirm" value="1">'
+                f'<input type="hidden" name="return_to" value="{escape(back, quote=True)}">'
+                f"{dismiss_input}"
+                f'<button class="k-btn k-btn-primary" type="submit">{verb}</button> '
+                f'<a class="k-btn k-btn-quiet" href="{escape(back, quote=True)}">Cancel</a>'
+                "</form></main></body></html>"
+            )
+            response = Response(body, mimetype="text/html")
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site" or (
+            referer and referer_back is None
+        ):
+            return ({"error": "cross-site approve/dismiss rejected"}, 403)
         consequence = ""
         try:
             if alert_id is not None:
@@ -126,16 +160,16 @@ def register_alert_routes(app: Flask, context: AlertRouteContext) -> None:
                 ),
                 mimetype="text/html",
             )
-        if request.method == "POST":
-            from alerts import ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED
+        if request.values.get("confirm") == "1":
+            return redirect(back, code=303)
+        from alerts import ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED
 
-            status = ACTION_STATUS_CANCELLED if dismissed else ACTION_STATUS_APPLIED
-            if alert_id is not None:
-                return {"ok": True, "alert_id": alert_id, "status": status}
-            return {"ok": True, "action_id": action_id, "status": status}
-        return redirect(back or "/feed", code=303)
+        status = ACTION_STATUS_CANCELLED if dismissed else ACTION_STATUS_APPLIED
+        if alert_id is not None:
+            return {"ok": True, "alert_id": alert_id, "status": status}
+        return {"ok": True, "action_id": action_id, "status": status}
 
-    @app.route("/api/alerts/<int:alert_id>/dismiss", methods=["POST", "OPTIONS"])
+    @blueprint.route("/api/alerts/<int:alert_id>/dismiss", methods=["POST", "OPTIONS"])
     def dismiss_alert_api(alert_id: int):
         if request.method == "OPTIONS":
             return ("", 204)
@@ -223,7 +257,7 @@ def register_alert_routes(app: Flask, context: AlertRouteContext) -> None:
             "cancelled_actions": cancelled,
         }
 
-    @app.route("/api/actions/<int:action_id>/uncancel", methods=["POST", "OPTIONS"])
+    @blueprint.route("/api/actions/<int:action_id>/uncancel", methods=["POST", "OPTIONS"])
     def uncancel_action_api(action_id: int):
         if request.method == "OPTIONS":
             return ("", 204)
@@ -242,3 +276,10 @@ def register_alert_routes(app: Flask, context: AlertRouteContext) -> None:
             restored_action_buttons(action_id),
             mimetype="text/html",
         )
+
+    return blueprint
+
+
+def register_alert_routes(app: Flask, context: AppContext) -> None:
+    """Register the isolated alert Blueprint on ``app``."""
+    app.register_blueprint(create_alert_blueprint(context))

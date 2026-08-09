@@ -1,5 +1,5 @@
 @echo off
-REM Weekly (Sun @ 02:00) — model-eval loop: harvest -> sweep -> AUTO-SWITCH.
+REM Weekly (Sat @ 20:00) — model-eval loop: harvest -> sweep -> AUTO-SWITCH.
 REM
 REM The activated, closed-loop model-downgrade eval (directives/model_eval_loop.md):
 REM   1. Harvest a rotating 2-ticker sample (force-refresh build + company_desc
@@ -29,9 +29,9 @@ cd /d "%PROJECT_ROOT%"
 
 echo === %DATE% %TIME% weekly_model_eval starting === >> "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-model-eval" "portfolio-db" execution\run_weekly_model_eval.py ^
-set "RC=%ERRORLEVEL%"
     --repo-root "%PROJECT_ROOT%" >> "%LOG_FILE%" 2>&1
-echo === %DATE% %TIME% weekly_model_eval done (exit %ERRORLEVEL%) === >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
+echo === %DATE% %TIME% weekly_model_eval done (exit %RC%) === >> "%LOG_FILE%" 2>&1
 
 REM Propagate the job's exit code. Without this the script ended on
 REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded

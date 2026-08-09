@@ -24,6 +24,7 @@ class Candidate(_ClosedModel):
     code_targets: list[str]
     test_targets: list[str]
     schema_targets: list[str]
+    data_restore_exemptions: dict[str, str] = Field(default_factory=dict[str, str])
     code_restore_verified: bool
     data_restore_verified: bool
     data_restore_note: str = Field(min_length=1)
@@ -35,6 +36,13 @@ class Candidate(_ClosedModel):
         for targets in (self.code_targets, self.test_targets, self.schema_targets):
             if targets != sorted(targets) or len(targets) != len(set(targets)):
                 raise ValueError("target lists must be sorted and unique")
+        unknown_exemptions = sorted(set(self.data_restore_exemptions) - set(self.schema_targets))
+        if unknown_exemptions:
+            raise ValueError(
+                "data restore exemptions must be schema targets: " + ",".join(unknown_exemptions)
+            )
+        if any(not reason.strip() for reason in self.data_restore_exemptions.values()):
+            raise ValueError("data restore exemption reasons must be non-empty")
         for target in (*self.code_targets, *self.test_targets):
             parsed = PurePosixPath(target)
             if parsed.is_absolute() or ".." in parsed.parts or "\\" in target:

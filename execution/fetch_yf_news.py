@@ -40,7 +40,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -50,6 +50,7 @@ from news.store import (  # noqa: E402
     NewsRow,
     upsert_news_rows,
 )
+from pipeline.row_validation import RowValidationDriftError, validate_provider_rows  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # yfinance is HTTP-bound; the same worker count the grades feed uses.
@@ -101,7 +102,7 @@ def rows_for_ticker(ticker: str, items: list[object], *, days: int) -> list[News
     not cost the ticker its other nine.
     """
     cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    rows: list[NewsRow] = []
+    candidates: list[dict[str, object]] = []
     for raw in items:
         if not isinstance(raw, dict):
             continue
@@ -132,21 +133,23 @@ def rows_for_ticker(ticker: str, items: list[object], *, days: int) -> list[News
         summary = content.get("summary") or content.get("description")
         snippet = str(summary).strip()[:_MAX_SNIPPET] if isinstance(summary, str) else None
 
-        try:
-            rows.append(
-                NewsRow(
-                    ticker=ticker.upper(),
-                    headline=title.strip(),
-                    url=url,
-                    published_at=published,
-                    snippet=snippet or None,
-                    source=source or None,
-                    source_feed=SOURCE_FEED_YF_NEWS,
-                )
-            )
-        except ValidationError as exc:
-            _log("yf_news_row_rejected", ticker=ticker, error=str(exc)[:200])
-    return rows
+        candidates.append(
+            {
+                "ticker": ticker.upper(),
+                "headline": title.strip(),
+                "url": url,
+                "published_at": published,
+                "snippet": snippet or None,
+                "source": source or None,
+                "source_feed": SOURCE_FEED_YF_NEWS,
+            }
+        )
+    return validate_provider_rows(
+        candidates,
+        TypeAdapter(NewsRow),
+        source="yf_news",
+        context={"ticker": ticker.upper()},
+    )
 
 
 def fetch_news_for_ticker(ticker: str, *, days: int = DEFAULT_DAYS) -> list[NewsRow]:
@@ -176,6 +179,8 @@ def fetch_many(
         for fut in as_completed(futures):
             try:
                 out.extend(fut.result())
+            except RowValidationDriftError:
+                raise
             except Exception as exc:
                 _log("yf_news_worker_failed", ticker=futures[fut], error=str(exc)[:200])
     return out

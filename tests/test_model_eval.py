@@ -69,10 +69,10 @@ def test_is_cheaper_unknown_model() -> None:
 def test_cheaper_candidates_sonnet() -> None:
     cands = model_ladder.cheaper_candidates(SONNET)
     assert set(cands) == {GFLASH, GFLASH3, GPRO, HAIKU, HAIKU_ALIAS, SONNET5}
-    # Cheapest-first: both Flash ids tie at the bottom, then Haiku, then Pro,
-    # then the newly-registered claude-sonnet-5 (priciest of the cheaper options).
+    # Cheapest-first; current list pricing makes Gemini Pro the priciest
+    # candidate still below the incumbent Sonnet 4.6.
     assert set(cands[:2]) == {GFLASH, GFLASH3}
-    assert cands[-1] == SONNET5
+    assert cands[-1] == GPRO
     assert OPUS not in cands  # opus is dearer, not a downgrade
 
 
@@ -98,10 +98,47 @@ def test_cheaper_candidates_unknown_incumbent() -> None:
 def test_estimated_call_usd() -> None:
     # Sonnet: 25k in @ $3/M + 5k out @ $15/M = 0.075 + 0.075 = 0.15.
     assert model_ladder.estimated_call_usd(SONNET, 25_000, 5_000) == pytest.approx(0.15)
-    # Gemini Pro: 25k in @ $1.25/M + 5k out @ $10/M = 0.03125 + 0.05 = 0.08125.
-    assert model_ladder.estimated_call_usd(GPRO, 25_000, 5_000) == pytest.approx(0.08125)
+    # Gemini Pro current standard tier: $2/M input + $12/M output.
+    assert model_ladder.estimated_call_usd(GPRO, 25_000, 5_000) == pytest.approx(0.11)
+    # Cached input is billed at its lower rate and is not double-counted as
+    # ordinary prompt input.
+    assert model_ladder.estimated_call_usd(
+        GPRO, 25_000, 5_000, cached_input_tokens=5_000
+    ) == pytest.approx(0.101)
+    # Gemini Pro switches both uncached/cached input and output rates above
+    # Google's 200k prompt threshold.
+    assert model_ladder.estimated_call_usd(
+        GPRO, 250_000, 5_000, cached_input_tokens=50_000
+    ) == pytest.approx(0.91)
     assert model_ladder.estimated_call_usd("unknown", 1, 1) == 0.0
     assert model_ladder.estimated_call_usd(None, 1, 1) == 0.0
+
+
+def test_current_gemini_standard_price_constants() -> None:
+    flash25 = model_ladder.MODEL_LADDER[GFLASH]
+    flash3 = model_ladder.MODEL_LADDER[GFLASH3]
+    pro31 = model_ladder.MODEL_LADDER[GPRO]
+    assert (
+        flash25.input_usd_per_mtok,
+        flash25.cached_input_usd_per_mtok,
+        flash25.output_usd_per_mtok,
+    ) == (0.30, 0.03, 2.50)
+    assert (
+        flash3.input_usd_per_mtok,
+        flash3.cached_input_usd_per_mtok,
+        flash3.output_usd_per_mtok,
+    ) == (0.50, 0.05, 3.00)
+    assert (
+        pro31.input_usd_per_mtok,
+        pro31.cached_input_usd_per_mtok,
+        pro31.output_usd_per_mtok,
+    ) == (2.00, 0.20, 12.00)
+    assert (
+        pro31.long_context_threshold_tokens,
+        pro31.long_input_usd_per_mtok,
+        pro31.long_cached_input_usd_per_mtok,
+        pro31.long_output_usd_per_mtok,
+    ) == (200_000, 4.00, 0.40, 18.00)
 
 
 # ---------------------------------------------------------------------------

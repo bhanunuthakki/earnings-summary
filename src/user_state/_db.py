@@ -39,7 +39,7 @@ def _resolved_path(db_path: Path | str | None) -> Path:
     return path
 
 
-def open_conn(db_path: Path | str | None, *, schema_preflight: bool = True) -> sqlite3.Connection:
+def store_conn(db_path: Path | str | None, *, schema_preflight: bool = True) -> sqlite3.Connection:
     """Open a connection to the Personal CIO SQLite DB.
 
     Raises ``FileNotFoundError`` when the resolved path doesn't exist and
@@ -47,21 +47,22 @@ def open_conn(db_path: Path | str | None, *, schema_preflight: bool = True) -> s
     the connection (use try/finally).
     """
     path = _resolved_path(db_path)
-    conn = connect_sqlite(
+    return connect_sqlite(
         path,
         role=SQLiteConnectionRole.WRITER,
         schema_preflight=schema_preflight,
     )
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+
+
+# Compatibility alias while callers migrate mechanically. Policy remains
+# centralized in store_conn/connect_sqlite; this name must not acquire logic.
+open_conn = store_conn
 
 
 def open_read_conn(db_path: Path | str | None) -> sqlite3.Connection:
     """Open a read-only connection without demanding current writer schema."""
     path = _resolved_path(db_path)
-    conn = connect_sqlite(
+    return connect_sqlite(
         path,
         role=SQLiteConnectionRole.READ_ONLY,
         # User-state readers intentionally support historical databases that
@@ -70,10 +71,6 @@ def open_read_conn(db_path: Path | str | None) -> sqlite3.Connection:
         # schema was preflighted once at the request boundary.
         schema_preflight=False,
     )
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
 
 
 def now_iso() -> str:

@@ -19,6 +19,7 @@ from llm.style import compose_brief_prompt, style_block_cache_token
 from llm_artifact_store import (
     Artifact,
     UpsertRequest,
+    artifact_is_reusable,
     compute_input_sha256,
     read_current,
     upsert,
@@ -179,9 +180,9 @@ def run_macro_scenario_lens(
     effective_cache_inputs = [*ctx.cache_inputs, style_block_cache_token()]
     if not force:
         existing = read_current(ticker=ctx.ticker, purpose=purpose, scope="ticker", db_path=db_path)
-        if existing is not None and not existing.dirty:
+        if existing is not None:
             new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=effective_cache_inputs)
-            if new_sha == existing.input_sha256:
+            if artifact_is_reusable(existing, input_sha256=new_sha):
                 log.info(
                     {"event": "macro_scenario_cache_hit", "ticker": ticker, "scenario": scenario_id}
                 )

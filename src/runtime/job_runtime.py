@@ -368,12 +368,9 @@ class JobLock(AbstractContextManager["JobLock"]):
 
 
 def portfolio_db_path(repo_root: Path) -> Path:
-    configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
-    return (
-        Path(configured).expanduser().resolve()
-        if configured
-        else (repo_root / "data" / "portfolio.db").resolve()
-    )
+    from db_paths import configured_db_path
+
+    return configured_db_path(repo_root)
 
 
 def _write_set_lock_path(repo_root: Path, write_set: str) -> Path:
@@ -566,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--python-executable")
+    parser.add_argument("--python-bootstrap")
     parser.add_argument("--python-arg", action="append", default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -575,10 +573,18 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--scheduler-wrapper cannot be combined with --job/--write-set")
         if args.python_executable is None:
             parser.error("--scheduler-wrapper requires --python-executable")
+        if args.python_bootstrap is None:
+            parser.error("--scheduler-wrapper requires --python-bootstrap")
         if len(command) < 3:
             parser.error("--scheduler-wrapper requires JOB WRITE_SET SCRIPT [SCRIPT_ARGS ...]")
         job_name, write_set, *script_command = command
-        command = [args.python_executable, *args.python_arg, *script_command]
+        command = [
+            args.python_executable,
+            "-u",
+            *args.python_arg,
+            args.python_bootstrap,
+            *script_command,
+        ]
         write_sets = [write_set]
     else:
         if args.job is None:

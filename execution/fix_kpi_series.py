@@ -65,7 +65,11 @@ from pipeline.kpi_persistence import (  # noqa: E402
     _decimal_unit_jump,  # pyright: ignore[reportPrivateUsage]
     _is_cumulative_kpi,  # pyright: ignore[reportPrivateUsage]
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import (  # noqa: E402
+    SQLiteConnectionRole,
+    connect_sqlite,
+    require_safe_sqlite_writer_runtime,
+)
 
 _DEFAULT_UNIT_ERROR_FLOOR = Decimal("1e6")
 _DEFAULT_UNIT_SCALE = Decimal("1e6")
@@ -331,6 +335,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply and args.uri and "mode=ro" in db_target:
         print("ERROR: --apply cannot run against a mode=ro URI.", file=sys.stderr)
         return 2
+    if args.apply:
+        require_safe_sqlite_writer_runtime()
 
     if args.uri:
         # Intentional isolated-recovery seam: operators may supply a complete

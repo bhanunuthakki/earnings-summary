@@ -2,8 +2,6 @@
 
 Pure read-only — consumes the rows that `execution/ingest_earnings_surprises.py`
 upserts and returns aggregated beat-rate / average-surprise stats per ticker.
-Companion to `compute/holding_scorecard.py:_commitment_scorecard()` (Say-Do
-hit rate); both compose into `HoldingScorecard`.
 
 EPS and Revenue are tracked separately because revenue coverage degrades to
 "no data" after an FMP plan lapse (yfinance, the fallback source, doesn't

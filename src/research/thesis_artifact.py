@@ -225,11 +225,16 @@ def _default_thesis_struct(
 ) -> dict[str, object]:
     """Default web-less structured caller. A double-parse failure degrades to {}
     (the drafter then returns None); a budget/setup hard stop propagates as config."""
+    from llm.contracts import THESIS_ENTRY_SCHEMA
     from llm.structured import StructuredParseError, call_llm_structured
 
     try:
         obj = call_llm_structured(
-            prompt, purpose=purpose, expect="object", required_keys=required_keys
+            prompt,
+            purpose=purpose,
+            expect="object",
+            required_keys=required_keys,
+            schema=THESIS_ENTRY_SCHEMA,
         )
     except StructuredParseError:
         return {}

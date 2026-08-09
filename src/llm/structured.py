@@ -37,6 +37,7 @@ from typing import Generic, Literal, TypeVar, cast
 from pydantic import TypeAdapter, ValidationError
 
 from llm.cli import call_llm
+from log_redact import redact
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -48,6 +49,11 @@ _RETRY_PREAMBLE = (
     "Return ONLY the JSON specified at the end of this prompt — no markdown "
     "fences, no commentary, no prefatory prose.\n\n"
 )
+
+
+def _safe_raw_head(raw: str, limit: int) -> str:
+    """Bound and redact provider output before it reaches logs/exceptions."""
+    return redact(raw[:limit])
 
 
 class StructuredParseError(ValueError):
@@ -175,8 +181,8 @@ def call_llm_structured(
                 "event": "llm_structured_parse_failed_retrying",
                 "purpose": purpose,
                 "ticker": ticker,
-                "error": str(first_exc),
-                "raw_head": raw[:200],
+                "error": redact(first_exc),
+                "raw_head": _safe_raw_head(raw, 200),
             }
         )
 
@@ -251,13 +257,14 @@ def call_llm_structured(
                         "event": "llm_structured_parse_failed_after_cascade",
                         "purpose": purpose,
                         "ticker": ticker,
-                        "error": str(esc_exc),
-                        "raw_head": raw_escalated[:200],
+                        "error": redact(esc_exc),
+                        "raw_head": _safe_raw_head(raw_escalated, 200),
                     }
                 )
                 raise StructuredParseError(
-                    f"{purpose}: LLM returned unusable JSON on primary and escalated tiers: {esc_exc}",
-                    raw_head=raw_escalated[:500],
+                    f"{purpose}: LLM returned unusable JSON on primary and escalated tiers: "
+                    f"{redact(esc_exc)}",
+                    raw_head=_safe_raw_head(raw_escalated, 500),
                 ) from esc_exc
 
         log.error(
@@ -265,13 +272,13 @@ def call_llm_structured(
                 "event": "llm_structured_parse_failed_twice",
                 "purpose": purpose,
                 "ticker": ticker,
-                "error": str(retry_exc),
-                "raw_head": raw_retry[:200],
+                "error": redact(retry_exc),
+                "raw_head": _safe_raw_head(raw_retry, 200),
             }
         )
         raise StructuredParseError(
-            f"{purpose}: LLM returned unusable JSON on both attempts: {retry_exc}",
-            raw_head=raw_retry[:500],
+            f"{purpose}: LLM returned unusable JSON on both attempts: {redact(retry_exc)}",
+            raw_head=_safe_raw_head(raw_retry, 500),
         ) from retry_exc
 
 
@@ -315,8 +322,8 @@ def call_llm_structured_with_raw(
                 "event": "llm_structured_parse_failed_retrying",
                 "purpose": purpose,
                 "ticker": ticker,
-                "error": str(first_exc),
-                "raw_head": raw[:200],
+                "error": redact(first_exc),
+                "raw_head": _safe_raw_head(raw, 200),
             }
         )
         current_prompt = repair_prompt(str(first_exc))
@@ -341,11 +348,11 @@ def call_llm_structured_with_raw(
                 "event": "llm_structured_parse_failed_twice",
                 "purpose": purpose,
                 "ticker": ticker,
-                "error": str(retry_exc),
-                "raw_head": raw[:200],
+                "error": redact(retry_exc),
+                "raw_head": _safe_raw_head(raw, 200),
             }
         )
         raise StructuredParseError(
-            f"{purpose}: LLM returned unusable JSON on both attempts: {retry_exc}",
-            raw_head=raw[:500],
+            f"{purpose}: LLM returned unusable JSON on both attempts: {redact(retry_exc)}",
+            raw_head=_safe_raw_head(raw, 500),
         ) from retry_exc

@@ -30,7 +30,7 @@ The script is idempotent at every layer:
 
 Designed to run unattended:
   - Hooked into `execution/onboard_ticker.py` (final stage; fire-and-forget)
-  - Cron entry point at `cron/backfill_transcripts.task.xml` (daily 04:30,
+  - Cron entry point at `cron/backfill_transcripts.task.xml` (daily 02:00,
     before the earnings-calendar fetcher at 05:45).
   - `--repo-root` is honored by both subprocess phases (ingest + extract):
     they invoke the resolved root's copy of the script with `cwd=<repo_root>`

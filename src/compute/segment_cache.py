@@ -23,6 +23,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import cast
 
+from db_paths import resolve_db_path
 from provenance.overrides import apply_segment_overrides
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -41,10 +42,10 @@ def dim_type_for_suffix(suffix: str) -> str | None:
     return SUFFIX_TO_DIM_TYPE.get(suffix)
 
 
-def _default_db_path() -> str:
-    """``<repo_root>/data/portfolio.db`` without importing the broad legacy DB API."""
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(repo_root, "data", "portfolio.db")
+def _default_db_path() -> str | None:
+    """Resolve the configured portfolio DB through the canonical path authority."""
+    resolved = resolve_db_path(None)
+    return os.fspath(resolved) if resolved is not None else None
 
 
 def apply_overrides(
@@ -69,11 +70,10 @@ def apply_overrides(
     if conn is not None:
         return apply_segment_overrides(conn, ticker=ticker, dim_type=dim_type, records=recs)
     path = db_path or _default_db_path()
-    if not os.path.exists(path):
+    if path is None or not os.path.exists(path):
         return recs
     try:
         own = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
-        own.row_factory = sqlite3.Row
     except sqlite3.Error:
         return recs
     try:

@@ -32,6 +32,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from db_paths import configured_db_path  # noqa: E402
+from db_paths import resolve_db_path as canonical_db_path  # noqa: E402
 from synthesis.insights import InsightRow, get_insight  # noqa: E402
 from synthesis.tenets import TENET_KIND, record_tenet  # noqa: E402
 
@@ -42,10 +44,8 @@ class TenetMergeError(ValueError):
 
 
 def _resolve_db_path(repo_root: Path, override: Path | None) -> Path | None:
-    if override is not None:
-        return override
-    candidate = repo_root.resolve() / "data" / "portfolio.db"
-    return candidate if candidate.exists() else None
+    candidate = canonical_db_path(override) if override is not None else configured_db_path(repo_root)
+    return candidate if candidate is not None and candidate.exists() else None
 
 
 def _validated_tenet(tenet_id: int, *, label: str, db_path: Path | str | None) -> InsightRow:

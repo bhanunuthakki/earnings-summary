@@ -452,6 +452,15 @@ def test_cron_bat_exists() -> None:
     assert bat.exists(), f"missing cron bat: {bat}"
 
 
+def test_cron_bat_continues_arguments_before_capturing_exit_code() -> None:
+    bat = (PROJECT_ROOT / "cron" / "run_weekly_model_eval.bat").read_text(encoding="utf-8")
+    call_at = bat.index("execution\\run_weekly_model_eval.py ^")
+    repo_arg_at = bat.index('--repo-root "%PROJECT_ROOT%"', call_at)
+    rc_at = bat.index('set "RC=%ERRORLEVEL%"', call_at)
+    assert call_at < repo_arg_at < rc_at
+    assert "done (exit %RC%)" in bat
+
+
 def test_cron_task_xml_exists() -> None:
     xml = PROJECT_ROOT / "cron" / "model_eval_sweep.task.xml"
     assert xml.exists(), f"missing task XML: {xml}"

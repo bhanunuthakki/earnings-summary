@@ -60,7 +60,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import cast
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from capture import ingest, telegram
 from capture.matcher import RosterIndex
@@ -78,6 +80,18 @@ _OUTCOMES: tuple[str, ...] = ("acknowledge", "dismiss", "annotate_decision", "pr
 
 _WINDOW_HOURS = 6
 _SELECT_COLS = "id, class_, ticker, body, source_ref, status, created_at"
+
+
+class _ReplyWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal[
+        "acknowledge", "dismiss", "annotate_decision", "profile_fact", "note", "unrelated"
+    ]
+    reason: str = Field(default="", max_length=200)
+
+
+_REPLY_ADAPTER = TypeAdapter(_ReplyWire)
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,8 +228,14 @@ def _build_prompt(
 def _default_call(prompt: str) -> dict[str, object]:
     from llm.structured import call_llm_structured
 
-    obj = call_llm_structured(prompt, purpose=PURPOSE, expect="object", required_keys=("intent",))
-    return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
+    obj = call_llm_structured(
+        prompt,
+        purpose=PURPOSE,
+        expect="object",
+        required_keys=("intent",),
+        schema=_REPLY_ADAPTER,
+    )
+    return _ReplyWire.model_validate(obj).model_dump()
 
 
 def classify_reply(

@@ -49,7 +49,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 import llm_artifact_store
 from allocation.candidate_fit import CandidateFit
@@ -201,6 +201,18 @@ class InvestmentDecisionCard(BaseModel):
         return reasons
 
 
+class _InvestmentDecisionCardDraft(BaseModel):
+    """Only model-authored fields; deterministic identity/readiness fields are injected later."""
+
+    company_hypothesis: CompanyHypothesis
+    security_setup: SecuritySetup
+    portfolio_fit: PortfolioFit
+    disconfirming_case: DisconfirmingCase
+    suggested_disposition: Literal["pass", "watch", "research_further", "promote"]
+    uncertainty: Uncertainty
+    source_refs: list[str] = Field(default_factory=list[str])
+
+
 @dataclass(frozen=True, slots=True)
 class CardResult:
     """The generator's output. ``card`` is populated for every outcome except
@@ -329,6 +341,8 @@ def _gather_inputs(db_path: Path, repo_root: Path, ticker: str, *, list_type: st
     bear_artifact = llm_artifact_store.read_current(
         ticker=ticker, purpose="bear_case", scope="ticker", db_path=db_path
     )
+    if bear_artifact is not None and not llm_artifact_store.artifact_is_fresh(bear_artifact):
+        bear_artifact = None
 
     holdings_dir = repo_root / "micro_thesis" / "holdings"
     spec: HoldingsSpec | None
@@ -710,9 +724,17 @@ def _call_and_validate(
             "suggested_disposition",
             "uncertainty",
         ),
+        schema=TypeAdapter(_InvestmentDecisionCardDraft),
         db_path=db_path,
     )
-    raw = cast("dict[str, object]", payload)
+    # Test doubles and older internal injectors may still return the decoded
+    # dict; validate that compatibility seam through the same exact contract.
+    draft = (
+        payload
+        if isinstance(payload, _InvestmentDecisionCardDraft)
+        else _InvestmentDecisionCardDraft.model_validate(payload)
+    )
+    raw = cast("dict[str, object]", draft.model_dump())
     raw["ticker"] = ticker
     raw["as_of"] = as_of
     raw["input_sha"] = inputs.input_sha

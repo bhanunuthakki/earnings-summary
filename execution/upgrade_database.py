@@ -12,28 +12,25 @@ then run the active cleanup/recovery migrations.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sqlite3
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from _lib import log_event
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from alembic.util.exc import CommandError
 from pydantic import BaseModel, ConfigDict
 
 from alembic import command
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = PROJECT_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
-
-from run_lock import hold_run_lock  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from run_lock import hold_run_lock
+from sqlite_runtime import (
+    SQLiteConnectionRole,
+    connect_sqlite,
+    require_safe_sqlite_writer_runtime,
+)
 
 ACTIVE_BASE = "0001_initial_schema"
 ACTIVE_HEAD = "0003_restore_baseline_defaults"
@@ -208,38 +205,43 @@ def upgrade_database(
 ) -> UpgradeReceipt:
     """Upgrade ``db_path`` and return a validated receipt."""
 
+    require_safe_sqlite_writer_runtime()
+
     db_path = db_path.resolve()
     repo_root = repo_root.resolve()
-    existed = db_path.exists()
-    initial = _read_revisions(db_path)
-    if len(initial) > 1:
-        raise UpgradeDatabaseError(f"multiple Alembic heads in database: {list(initial)!r}")
-    from_revision = initial[0] if initial else None
-
-    active = _config(repo_root, db_path, archived=False)
-    active_script = ScriptDirectory.from_config(active)
-    active_revisions = {revision.revision for revision in active_script.walk_revisions()}
-    if from_revision == ACTIVE_HEAD:
-        _integrity_check(db_path)
-        return UpgradeReceipt(
-            status="already_current",
-            db_path=str(db_path),
-            from_revision=from_revision,
-            to_revision=ACTIVE_HEAD,
-            backup_path=None,
-            completed_at=datetime.now(UTC).isoformat(),
-        )
-
-    if from_revision is None and _user_tables(db_path):
-        raise UpgradeDatabaseError(
-            "non-empty unversioned database; refusing to guess a migration baseline"
-        )
-
-    chosen_backup: Path | None = None
-    if existed and from_revision is not None:
-        chosen_backup = (backup_path or _default_backup_path(db_path)).resolve()
-
     with hold_run_lock(db_path, owner="upgrade_database", timeout_s=30.0):
+        # Revision/schema classification and the mutation it authorizes must be
+        # one locked operation. Otherwise a concurrent writer can change the
+        # database between inspection and the first Alembic statement.
+        existed = db_path.exists()
+        initial = _read_revisions(db_path)
+        if len(initial) > 1:
+            raise UpgradeDatabaseError(f"multiple Alembic heads in database: {list(initial)!r}")
+        from_revision = initial[0] if initial else None
+
+        active = _config(repo_root, db_path, archived=False)
+        active_script = ScriptDirectory.from_config(active)
+        active_revisions = {revision.revision for revision in active_script.walk_revisions()}
+        if from_revision == ACTIVE_HEAD:
+            _integrity_check(db_path)
+            return UpgradeReceipt(
+                status="already_current",
+                db_path=str(db_path),
+                from_revision=from_revision,
+                to_revision=ACTIVE_HEAD,
+                backup_path=None,
+                completed_at=datetime.now(UTC).isoformat(),
+            )
+
+        if from_revision is None and _user_tables(db_path):
+            raise UpgradeDatabaseError(
+                "non-empty unversioned database; refusing to guess a migration baseline"
+            )
+
+        chosen_backup: Path | None = None
+        if existed and from_revision is not None:
+            chosen_backup = (backup_path or _default_backup_path(db_path)).resolve()
+
         if chosen_backup is not None:
             _backup_database(db_path, chosen_backup)
 
@@ -273,19 +275,14 @@ def upgrade_database(
                 f"upgrade did not reach active head: expected={ACTIVE_HEAD!r} actual={list(final)!r}"
             )
         _integrity_check(db_path)
-
-    return UpgradeReceipt(
-        status=status,
-        db_path=str(db_path),
-        from_revision=from_revision,
-        to_revision=ACTIVE_HEAD,
-        backup_path=str(chosen_backup) if chosen_backup is not None else None,
-        completed_at=datetime.now(UTC).isoformat(),
-    )
-
-
-def _log(event: str, **fields: object) -> None:
-    print(json.dumps({"event": event, **fields}, sort_keys=True), file=sys.stderr)
+        return UpgradeReceipt(
+            status=status,
+            db_path=str(db_path),
+            from_revision=from_revision,
+            to_revision=ACTIVE_HEAD,
+            backup_path=str(chosen_backup) if chosen_backup is not None else None,
+            completed_at=datetime.now(UTC).isoformat(),
+        )
 
 
 def main() -> int:
@@ -300,8 +297,8 @@ def main() -> int:
             repo_root=args.repo_root,
             backup_path=args.backup_path,
         )
-    except (OSError, sqlite3.Error, CommandError, UpgradeDatabaseError) as exc:
-        _log("database_upgrade_failed", error=f"{type(exc).__name__}: {exc}")
+    except (OSError, RuntimeError, sqlite3.Error, CommandError) as exc:
+        log_event("database_upgrade_failed", error=f"{type(exc).__name__}: {exc}")
         return 1
     print(receipt.model_dump_json())
     return 0

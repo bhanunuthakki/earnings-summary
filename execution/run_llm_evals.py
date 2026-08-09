@@ -65,6 +65,9 @@ GOLDEN_PURPOSES = (
     "injection_canaries",
     "provenance_caution",
     "key_metrics",
+    # Podcast takeaway summarization (S11): production generation remains live,
+    # so its checked-in mode-A golden must remain reachable from this CLI.
+    "podcast_takeaway_summary",
     # The Ledger Phase-1 research-loop gate (mode-A golden classifier).
     "wondering_detect",
     # Per-name DCF scenario prior (mode-A: directional skew + grounded-call over
@@ -317,6 +320,18 @@ def main() -> int:
 
             golden_path = (args.golden or (PROJECT_ROOT / KM_GOLDEN)).resolve()
             summary = run_key_metrics_eval(
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
+            )
+        elif args.purpose == "podcast_takeaway_summary":
+            from evals.podcast_takeaway import (
+                DEFAULT_GOLDEN_RELPATH as PODCAST_GOLDEN,
+            )
+            from evals.podcast_takeaway import run_podcast_takeaway_eval
+
+            golden_path = (args.golden or (PROJECT_ROOT / PODCAST_GOLDEN)).resolve()
+            summary = run_podcast_takeaway_eval(
                 golden_path=golden_path,
                 code_root=PROJECT_ROOT,
                 limit=args.limit,

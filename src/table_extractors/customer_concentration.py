@@ -27,7 +27,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from llm_client import JSON_FENCE_RE, call_llm
+from pydantic import BaseModel, TypeAdapter
+
+from llm.structured import StructuredParseError, call_llm_structured
+from llm.untrusted import spotlight
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from table_extractors.base import ExtractionOutcome
 
@@ -43,6 +46,18 @@ EXTRACTOR_VERSION = "1"
 TABLE_KIND = "customer_concentration"
 
 _MAX_INPUT_CHARS = 80_000
+
+
+class _CustomerConcentrationRow(BaseModel):
+    customer_label: str
+    # Filing parsers historically normalize 12 -> 0.12 and drop values >100
+    # per-row in _persist. Keep that partial-success behavior: one malformed
+    # disclosure must not discard the valid rows in the same response.
+    pct_of_revenue: float
+    revenue_amount: float | None = None
+    anonymized: bool
+    source_excerpt: str
+
 
 # Sections in the FMP JSON most likely to contain customer-concentration
 # disclosures. We concatenate any matching sections (substring, case-
@@ -143,14 +158,39 @@ def extract(
             notes="no filing text available",
         )
 
-    prompt = _PROMPT.format(ticker=ticker, fiscal_year=fiscal_year, filing_text=filing_text)
+    prompt = _PROMPT.format(
+        ticker=ticker,
+        fiscal_year=fiscal_year,
+        filing_text=spotlight(filing_text, source="SEC filing concentration disclosures"),
+    )
 
     try:
-        raw = call_llm(
-            prompt,
-            purpose="customer_concentration_extraction",
+        validated = cast(
+            "list[_CustomerConcentrationRow]",
+            call_llm_structured(
+                prompt,
+                purpose="customer_concentration_extraction",
+                ticker=ticker,
+                scope="filing_tables",
+                expect="array",
+                schema=TypeAdapter(list[_CustomerConcentrationRow]),
+            ),
+        )
+    except StructuredParseError as exc:
+        log.warning(
+            {
+                "event": "customer_concentration_structured_failed",
+                "ticker": ticker,
+                "error": str(exc),
+            }
+        )
+        return ExtractionOutcome(
+            table_kind=TABLE_KIND,
             ticker=ticker,
-        ).strip()
+            fiscal_year=fiscal_year,
+            status="structured_failed",
+            notes=str(exc)[:200],
+        )
     except Exception as exc:
         log.warning(
             {"event": "customer_concentration_llm_failed", "ticker": ticker, "error": str(exc)}
@@ -163,15 +203,9 @@ def extract(
             notes=str(exc)[:200],
         )
 
-    rows = _parse_rows(raw)
-    if rows is None:
-        return ExtractionOutcome(
-            table_kind=TABLE_KIND,
-            ticker=ticker,
-            fiscal_year=fiscal_year,
-            status="parse_failed",
-            notes=raw[:200],
-        )
+    rows: list[dict[str, object]] = [
+        cast("dict[str, object]", row.model_dump()) for row in validated
+    ]
 
     inserted, logged, proposals = _persist(
         rows,
@@ -199,8 +233,6 @@ def _filing_text_from_fmp(payload: dict[str, object] | None) -> str:
     chunks: list[str] = []
     total = 0
     for key, value in payload.items():
-        if not isinstance(key, str):
-            continue
         if not any(kw in key.lower() for kw in _RELEVANT_SECTION_KEYWORDS):
             continue
         chunk = f"## {key}\n{_serialize_section(value)}\n"
@@ -231,23 +263,6 @@ def _serialize_section(value: object) -> str:
                 lines.append(str(entry))
         return "\n".join(lines)
     return str(value)
-
-
-def _parse_rows(raw: str) -> list[dict[str, object]] | None:
-    s = raw.strip()
-    if s.startswith("```"):
-        s = JSON_FENCE_RE.sub("", s).strip()
-    try:
-        parsed = json.loads(s)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, list):
-        return None
-    out: list[dict[str, object]] = []
-    for row in cast("list[object]", parsed):
-        if isinstance(row, dict):
-            out.append(cast("dict[str, object]", row))
-    return out
 
 
 def _persist(

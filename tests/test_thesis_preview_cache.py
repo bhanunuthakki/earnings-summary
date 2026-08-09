@@ -30,9 +30,9 @@ class _CountingLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def __call__(self, *_a, **_k) -> str:
+    def __call__(self, *_a: object, **_k: object) -> object:
         self.calls += 1
-        return json.dumps({"revised_thesis": _REVISED, "diff_summary": "tightened"})
+        return prc._ThesisRevision(revised_thesis=_REVISED, diff_summary="tightened")
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def _set_thesis(repo: Path, text: str) -> None:
 
 def test_apply_reuses_preview_draft(repo: Path, monkeypatch) -> None:
     llm = _CountingLLM()
-    monkeypatch.setattr(prc, "call_llm", llm)
+    monkeypatch.setattr(prc, "call_llm_structured", llm)
 
     prev = prc.preview_thesis_edits(repo, "NU", _DATE)
     assert llm.calls == 1
@@ -85,7 +85,7 @@ def test_apply_reuses_preview_draft(repo: Path, monkeypatch) -> None:
 
 def test_cache_miss_when_thesis_changed(repo: Path, monkeypatch) -> None:
     llm = _CountingLLM()
-    monkeypatch.setattr(prc, "call_llm", llm)
+    monkeypatch.setattr(prc, "call_llm_structured", llm)
 
     prc.preview_thesis_edits(repo, "NU", _DATE)
     assert llm.calls == 1
@@ -99,7 +99,7 @@ def test_cache_miss_when_thesis_changed(repo: Path, monkeypatch) -> None:
 
 def test_preview_reuses_its_own_cache(repo: Path, monkeypatch) -> None:
     llm = _CountingLLM()
-    monkeypatch.setattr(prc, "call_llm", llm)
+    monkeypatch.setattr(prc, "call_llm_structured", llm)
     prc.preview_thesis_edits(repo, "NU", _DATE)
     prc.preview_thesis_edits(repo, "NU", _DATE)  # same state → cache hit
     assert llm.calls == 1

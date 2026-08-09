@@ -37,6 +37,7 @@ from llm.prompt_versions import prompt_version_for  # noqa: E402
 from llm.untrusted import spotlight  # noqa: E402
 from llm_artifact_store import (  # noqa: E402
     UpsertRequest,
+    artifact_is_reusable,
     compute_input_sha256,
     read_current,
     upsert,
@@ -179,10 +180,8 @@ def _read_cached(
     if existing is None:
         return None
     new_sha = compute_input_sha256(prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs)
-    if (
-        not existing.dirty
-        and existing.input_sha256 == new_sha
-        and isinstance(existing.content_json, list)
+    if artifact_is_reusable(existing, input_sha256=new_sha) and isinstance(
+        existing.content_json, list
     ):
         _log("news_websearch_cache_hit", ticker=ticker, artifact_id=existing.id)
         return cast("list[object]", existing.content_json)

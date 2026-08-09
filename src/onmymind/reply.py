@@ -19,11 +19,23 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 log = logging.getLogger(__name__)
 
 PURPOSE = "ledger_reply_intent"
+
+
+class _ReplyWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["research", "save", "worldview", "dismiss", "question", "note"]
+    reason: str = Field(default="", max_length=200)
+
+
+_REPLY_ADAPTER = TypeAdapter(_ReplyWire)
 
 # The closed reply-intent enum. 'question' = converse (an inline chat turn);
 # 'note' = an additive owner comment kept on the card, no routing.
@@ -92,8 +104,9 @@ def _default_call(card_text: str, reply_text: str) -> dict[str, object]:
         purpose=PURPOSE,
         expect="object",
         required_keys=("intent",),
+        schema=_REPLY_ADAPTER,
     )
-    return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
+    return _ReplyWire.model_validate(obj).model_dump()
 
 
 def classify_reply(

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import sys
 import threading
@@ -215,6 +216,26 @@ def test_healthz_does_not_leak_repo_root(client):
     absolute filesystem path."""
     resp = client.get("/healthz")
     assert resp.get_json() == {"status": "ok"}
+
+
+def test_global_500_handler_redacts_and_drops_unsafe_traceback(
+    client: FlaskClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    app = client.application
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    leak_marker = "fixture-credential-material"
+
+    def fail() -> None:
+        raise RuntimeError(f"https://example.test?apikey={leak_marker}")
+
+    app.add_url_rule("/_test/unhandled", "test_unhandled", fail)
+    with caplog.at_level(logging.ERROR, logger=app.logger.name):
+        response = client.get("/_test/unhandled")
+
+    assert response.status_code == 500
+    assert response.get_json()["error"] == "request failed; retry the request"
+    assert leak_marker not in caplog.text
+    assert "RuntimeError" in caplog.text
 
 
 def test_file_routes_reject_malformed_ticker(client):

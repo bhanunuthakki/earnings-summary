@@ -133,9 +133,16 @@ def _build_prompt(musing: str, *, ticker: str | None, cost_hint_usd: float) -> s
 
 
 def _default_call(prompt: str) -> dict[str, object]:
+    from llm.contracts import RESEARCH_TRIAGE_SCHEMA
     from llm.structured import call_llm_structured
 
-    obj = call_llm_structured(prompt, purpose=PURPOSE, expect="object", required_keys=("route",))
+    obj = call_llm_structured(
+        prompt,
+        purpose=PURPOSE,
+        expect="object",
+        required_keys=("route",),
+        schema=RESEARCH_TRIAGE_SCHEMA,
+    )
     return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
 
 

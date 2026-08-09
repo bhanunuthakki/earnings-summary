@@ -220,9 +220,16 @@ def _default_call(prompt: str) -> list[Candidate] | None:
     caller's transient/hard-stop classification decides whether to defer-and-
     retry or propagate, and a swallowed parse failure would otherwise mark a
     session permanently distilled without ever having actually distilled it."""
+    from llm.contracts import SESSION_CANDIDATE_BATCH_SCHEMA
     from llm.structured import call_llm_structured
 
-    obj = call_llm_structured(prompt, purpose=PURPOSE, scope="session_distill", expect="array")
+    obj = call_llm_structured(
+        prompt,
+        purpose=PURPOSE,
+        scope="session_distill",
+        expect="array",
+        schema=SESSION_CANDIDATE_BATCH_SCHEMA,
+    )
     if not isinstance(obj, list):
         return None
     return [cast("Candidate", x) for x in cast("list[object]", obj) if isinstance(x, dict)]

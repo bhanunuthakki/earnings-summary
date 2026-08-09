@@ -74,6 +74,7 @@ def _build_prompt(text: str, *, mode: str, ticker: str | None, holdings: Sequenc
 
 
 def _default_call(prompt: str, *, ticker: str | None) -> dict[str, object]:
+    from llm.contracts import ARTIFACT_BRIEF_SCHEMA
     from llm.structured import call_llm_structured
 
     obj = call_llm_structured(
@@ -83,6 +84,7 @@ def _default_call(prompt: str, *, ticker: str | None) -> dict[str, object]:
         scope="ledger",
         expect="object",
         required_keys=("takeaways",),
+        schema=ARTIFACT_BRIEF_SCHEMA,
     )
     return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
 

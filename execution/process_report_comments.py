@@ -90,7 +90,9 @@ import subprocess
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -101,8 +103,9 @@ import comments  # noqa: E402
 import db  # noqa: E402
 from comments import Comment, ThreadEntry  # noqa: E402
 from compute.holdings_sanitize import sanitize_holdings_scalars  # noqa: E402
+from llm.structured import StructuredParseError, call_llm_structured  # noqa: E402
+from llm.untrusted import spotlight  # noqa: E402
 from llm_client import (  # noqa: E402
-    JSON_FENCE_RE,
     call_llm,
     is_hard_stop,
     load_bear_anchor,
@@ -110,6 +113,86 @@ from llm_client import (  # noqa: E402
     load_thesis_anchor,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
+
+class _StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _ThesisRevision(_StrictModel):
+    revised_thesis: str
+    diff_summary: str
+
+
+class _EditSequence(_StrictModel):
+    order: list[int]
+    rationale: str
+
+
+class _KpiPatch(_StrictModel):
+    name: str
+    current: str | None = None
+    prior: str | None = None
+    yoy: str | None = None
+    status: str
+    break_condition: str
+    source: str
+
+
+class _BreakRulePatch(_StrictModel):
+    rule_id: str
+    kpi_name: str
+    comparator: Literal["lt", "gt", "le", "ge", "eq"]
+    threshold: float
+    unit: Literal["percent", "usd", "ratio", "count"]
+    consecutive_periods: int = Field(ge=1)
+    narrative: str = Field(max_length=500)
+
+
+class _StructuredHoldingsPatch(_StrictModel):
+    tier_1_kpis: list[_KpiPatch] | None = None
+    tier_2_kpis: list[_KpiPatch] | None = None
+    tier_3_kpis: list[_KpiPatch] | None = None
+    break_rules: list[_BreakRulePatch] | None = None
+    break_rules_soft: list[_BreakRulePatch] | None = None
+    chart_priorities: list[str] | None = None
+    competitive_watchlist: list[str] | None = None
+    thesis_breakers_qualitative: list[dict[str, object]] | None = None
+    diff_summary: str
+
+
+class _KpiExtraction(_StrictModel):
+    value: float | None
+    period_end: date | None = None
+    fiscal_period_type: Literal["quarter", "annual"] = "quarter"
+    source_excerpt: str = Field(max_length=500)
+
+
+class _PeerCuration(_StrictModel):
+    pin: list[str] = Field(default_factory=list[str])
+    exclude: list[str] = Field(default_factory=list[str])
+    hide_unless_quality: bool = False
+    min_quality_peers: int = Field(default=2, ge=1)
+    diff_summary: str
+
+
+_CommentIntent = Literal[
+    "platform_change",
+    "drop_kpi",
+    "edit_thesis",
+    "edit_structured",
+    "extract_kpi",
+    "curate_peers",
+    "ask_question",
+    "fix_data",
+    "rewrite_section",
+    "needs_triage",
+]
+
+
+class _IntentClassification(_StrictModel):
+    intent: _CommentIntent
+
 
 # ---------------------------------------------------------------------------
 # Routing
@@ -395,11 +478,11 @@ def _synthesize_holdings_coherence(repo_root: Path, ticker: str) -> dict[str, ob
 
 CURRENT THESIS PROSE:
 \"\"\"
-{current_thesis}
+{spotlight(current_thesis, source="analyst holdings thesis")}
 \"\"\"
 
 CURRENT STRUCTURED FIELDS (authoritative — do NOT change):
-{json.dumps(structured_view, indent=2)}
+{spotlight(json.dumps(structured_view, indent=2), source="analyst structured holdings fields")}
 
 TASK: Rewrite the thesis prose so it explicitly grounds in the structured fields above. The prose should:
   - Reference the actual KPI names from tier_1_kpis (e.g. \"ROE\", \"risk-adjusted NIM\", \"product penetration by country\") rather than vague proxies.
@@ -423,23 +506,23 @@ No markdown fence, no prose outside the JSON.
 """
 
     try:
-        raw = call_llm(prompt, purpose="company_description").strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        parsed = json.loads(raw)
+        parsed = cast(
+            "_ThesisRevision",
+            call_llm_structured(
+                prompt,
+                purpose="company_description",
+                ticker=ticker,
+                scope="comment_coherence",
+                schema=TypeAdapter(_ThesisRevision),
+            ),
+        )
     except Exception as e:
         if is_hard_stop(e):
             raise
         return {"ran": False, "reason": f"LLM/parse error: {type(e).__name__}: {e}"}
 
-    revised = parsed.get("revised_thesis") if isinstance(parsed, dict) else None
-    diff = (
-        (parsed.get("diff_summary") or "(no diff summary)")
-        if isinstance(parsed, dict)
-        else "(no diff summary)"
-    )
-    if not isinstance(revised, str) or not revised.strip():
-        return {"ran": False, "reason": "LLM did not return a usable revised_thesis"}
+    revised = parsed.revised_thesis
+    diff = parsed.diff_summary
 
     # Only write if the revised thesis is materially different — avoids needless churn.
     if revised.strip() == current_thesis:
@@ -753,19 +836,25 @@ Apply in this priority:
 Within each tier, prefer edits that are more sweeping over edits that are narrower.
 
 PROPOSED EDITS:
-{chr(10).join(lines)}
+{spotlight(chr(10).join(lines), source="analyst workspace comments and proposed edits")}
 
 Return ONLY a JSON object of the form: {{"order": [int, int, ...], "rationale": "one-sentence why this order"}}
 The order array must be a permutation of {list(range(len(edit_positions)))} (0-indexed positions of the EDITS above), giving the apply order.
 """
 
     try:
-        raw = call_llm(prompt, purpose="intake_classifier").strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        parsed = json.loads(raw)
-        new_order = parsed.get("order")
-        rationale = str(parsed.get("rationale", ""))
+        parsed = cast(
+            "_EditSequence",
+            call_llm_structured(
+                prompt,
+                purpose="intake_classifier",
+                ticker=ticker,
+                scope="comment_sequence",
+                schema=TypeAdapter(_EditSequence),
+            ),
+        )
+        new_order = parsed.order
+        rationale = parsed.rationale
     except Exception as e:
         if is_hard_stop(e):
             raise
@@ -774,7 +863,7 @@ The order array must be a permutation of {list(range(len(edit_positions)))} (0-i
             "rationale": f"sequencer fallback (error): {type(e).__name__}: {e}",
         }
 
-    if not isinstance(new_order, list) or sorted(new_order) != list(range(len(edit_positions))):
+    if sorted(new_order) != list(range(len(edit_positions))):
         return plan, {
             "reordered": False,
             "rationale": "sequencer fallback (invalid permutation from LLM)",
@@ -952,12 +1041,12 @@ def _route_edit_thesis(repo_root: Path, ticker: str, c: Comment, apply: bool) ->
 
 CURRENT THESIS:
 \"\"\"
-{current_thesis}
+{spotlight(str(current_thesis), source="current analyst thesis")}
 \"\"\"
 
 ANALYST COMMENT (the revision they want):
 \"\"\"
-{c.comment}
+{spotlight(c.comment, source="analyst workspace comment")}
 \"\"\"
 
 Return a JSON object with EXACTLY these fields:
@@ -973,14 +1062,18 @@ Return ONLY the JSON object. No markdown fence, no prose.
     if cached is not None:
         revised, diff = cached["revised"], cached["diff"]
     else:
-        raw = call_llm(prompt, purpose="company_description").strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        parsed = json.loads(raw)
-        revised = parsed.get("revised_thesis")
-        diff = parsed.get("diff_summary") or "(no diff summary)"
-        if not isinstance(revised, str):
-            return {"summary": "edit_thesis: LLM did not return a revised_thesis string"}
+        parsed = cast(
+            "_ThesisRevision",
+            call_llm_structured(
+                prompt,
+                purpose="company_description",
+                ticker=ticker,
+                scope="comment_edit_thesis",
+                schema=TypeAdapter(_ThesisRevision),
+            ),
+        )
+        revised = parsed.revised_thesis
+        diff = parsed.diff_summary
         _write_cached_thesis(repo_root, ticker, cache_key, revised, diff)
     if apply:
         payload["thesis"] = revised
@@ -1028,11 +1121,11 @@ def _route_edit_thesis_batch(
 
 CURRENT THESIS:
 \"\"\"
-{current_thesis}
+{spotlight(str(current_thesis), source="current analyst thesis")}
 \"\"\"
 
 ANALYST COMMENTS (incorporate ALL of these into ONE coherent revised thesis):
-{edits_text}
+{spotlight(edits_text, source="analyst workspace comments")}
 
 REQUIREMENTS:
 - Produce ONE coherent revised thesis — same density and analytical voice as the original. Aim for similar length, not longer.
@@ -1054,14 +1147,18 @@ Return ONLY the JSON object. No markdown fence, no prose.
     if cached is not None:
         revised, diff = cached["revised"], cached["diff"]
     else:
-        raw = call_llm(prompt, purpose="company_description").strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        parsed = json.loads(raw)
-        revised = parsed.get("revised_thesis")
-        diff = parsed.get("diff_summary") or "(no diff summary)"
-        if not isinstance(revised, str):
-            return {"summary": "edit_thesis_batch: LLM did not return a revised_thesis string"}
+        parsed = cast(
+            "_ThesisRevision",
+            call_llm_structured(
+                prompt,
+                purpose="company_description",
+                ticker=ticker,
+                scope="comment_edit_thesis_batch",
+                schema=TypeAdapter(_ThesisRevision),
+            ),
+        )
+        revised = parsed.revised_thesis
+        diff = parsed.diff_summary
         _write_cached_thesis(repo_root, ticker, cache_key, revised, diff)
 
     if apply:
@@ -1104,15 +1201,15 @@ def _route_edit_structured(
 
 The thesis NARRATIVE (already finalized — do not change) reads:
 \"\"\"
-{thesis_excerpt}{"..." if len(payload.get("thesis") or "") > 600 else ""}
+{spotlight(str(thesis_excerpt) + ("..." if len(payload.get("thesis") or "") > 600 else ""), source="current analyst thesis excerpt")}
 \"\"\"
 
 CURRENT STRUCTURED FIELDS (you may edit any subset):
-{json.dumps(editable_snapshot, indent=2)}
+{spotlight(json.dumps(editable_snapshot, indent=2), source="current analyst structured holdings fields")}
 
 ANALYST COMMENT (the change they want):
 \"\"\"
-{c.comment}
+{spotlight(c.comment, source="analyst workspace comment")}
 \"\"\"
 
 Anchor type: {c.anchor.type}
@@ -1139,12 +1236,20 @@ If the comment is ambiguous or doesn't map to structured changes, return {{"diff
 
 Return ONLY the JSON object. No markdown fence, no prose.
 """
-    raw = call_llm(prompt, purpose="company_description").strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict):
-        return {"summary": "edit_structured: LLM did not return a JSON object"}
+    validated = cast(
+        "_StructuredHoldingsPatch",
+        call_llm_structured(
+            prompt,
+            purpose="company_description",
+            ticker=ticker,
+            scope="comment_edit_structured",
+            schema=TypeAdapter(_StructuredHoldingsPatch),
+        ),
+    )
+    parsed = cast(
+        "dict[str, object]",
+        validated.model_dump(exclude_none=True),
+    )
 
     diff = str(parsed.get("diff_summary") or "(no diff summary)")
 
@@ -1157,7 +1262,7 @@ Return ONLY the JSON object. No markdown fence, no prose.
             # Pydantic model — truncate over-long LLM-generated entries so
             # the thesis_evaluator load doesn't crash. Same for break_rules_soft.
             if field in ("break_rules", "break_rules_soft") and isinstance(value, list):
-                for rule in value:
+                for rule in cast("list[object]", value):
                     if isinstance(rule, dict):
                         narr = rule.get("narrative")
                         if isinstance(narr, str) and len(narr) > 500:
@@ -1328,7 +1433,7 @@ KPI: {kpi_name} (unit: {kdef_row["unit"]})
 ANALYST COMMENT (this is the source — it may contain a verbatim quote from a
 transcript / IR doc / filing, OR a direct value statement, OR both):
 \"\"\"
-{c.comment}
+{spotlight(c.comment, source="analyst KPI value comment")}
 \"\"\"
 
 Extract:
@@ -1354,42 +1459,36 @@ If the comment doesn't contain enough information to extract a value, return
 {{"value": null, "source_excerpt": "<reason>"}} with no other fields. No
 markdown fence, no prose.
 """
-        raw = call_llm(prompt, purpose="company_description").strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            return {"summary": "extract_kpi: LLM did not return a JSON object"}
+        parsed = cast(
+            "_KpiExtraction",
+            call_llm_structured(
+                prompt,
+                purpose="company_description",
+                ticker=ticker,
+                scope="comment_extract_kpi",
+                schema=TypeAdapter(_KpiExtraction),
+            ),
+        )
 
-        value = parsed.get("value")
-        period_end_str = parsed.get("period_end")
-        excerpt = str(parsed.get("source_excerpt") or "")[:1024]
-        fiscal_period_type = str(parsed.get("fiscal_period_type") or "quarter").lower()
-        if fiscal_period_type not in ("quarter", "annual"):
-            fiscal_period_type = "quarter"
+        value = parsed.value
+        period_end_str = parsed.period_end.isoformat() if parsed.period_end else None
+        excerpt = parsed.source_excerpt
+        fiscal_period_type = parsed.fiscal_period_type
 
         if value is None:
             return {
                 "summary": f"extract_kpi: LLM couldn't extract a value: {excerpt or '(no reason given)'}",
                 "extracted_value": None,
             }
-        if not isinstance(value, (int, float)):
-            return {
-                "summary": f"extract_kpi: LLM returned non-numeric value: {value!r}",
-            }
-        if not period_end_str or not isinstance(period_end_str, str):
+        if not period_end_str:
             return {
                 "summary": (
                     "extract_kpi: LLM couldn't infer the fiscal period. "
                     "Re-comment with explicit quarter context (e.g. 'Q3 2025')."
                 ),
             }
-        try:
-            period_end_dt = datetime.strptime(period_end_str[:10], "%Y-%m-%d")
-        except ValueError:
-            return {
-                "summary": f"extract_kpi: LLM returned malformed period_end {period_end_str!r}",
-            }
+        assert parsed.period_end is not None
+        period_end_dt = datetime.combine(parsed.period_end, datetime.min.time())
 
         if not apply:
             return {
@@ -1526,12 +1625,12 @@ def _route_curate_peers(repo_root: Path, ticker: str, c: Comment, apply: bool) -
 The comment may ask to (a) PIN specific companies as comparables, (b) EXCLUDE / remove bad peers, and/or (c) conditionally HIDE the whole section unless the peer set improves.
 
 CURRENT competitive_watchlist (rival names already pinned):
-{json.dumps(current_watchlist)}
+{spotlight(json.dumps(current_watchlist), source="current analyst peer watchlist")}
 
 ANCHOR: {c.anchor.type} / {c.anchor.key}
 ANALYST COMMENT:
 \"\"\"
-{c.comment}
+{spotlight(c.comment, source="analyst peer-curation comment")}
 \"\"\"
 
 Return ONLY a JSON object:
@@ -1545,20 +1644,22 @@ Return ONLY a JSON object:
 
 No markdown fence, no prose outside the JSON.
 """
-    raw = call_llm(prompt, purpose="intake_classifier").strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    parsed_obj = json.loads(raw)
-    if not isinstance(parsed_obj, dict):
-        return {"summary": "curate_peers: LLM did not return a JSON object"}
-    parsed = cast("dict[str, object]", parsed_obj)
+    parsed = cast(
+        "_PeerCuration",
+        call_llm_structured(
+            prompt,
+            purpose="intake_classifier",
+            ticker=ticker,
+            scope="comment_curate_peers",
+            schema=TypeAdapter(_PeerCuration),
+        ),
+    )
 
-    pins = [str(p).strip() for p in _as_list(parsed.get("pin")) if str(p).strip()]
-    excludes = [str(e).strip() for e in _as_list(parsed.get("exclude")) if str(e).strip()]
-    hide = bool(parsed.get("hide_unless_quality"))
-    raw_min = parsed.get("min_quality_peers")
-    min_quality = max(1, int(raw_min)) if isinstance(raw_min, (int, float)) else 2
-    diff = str(parsed.get("diff_summary") or "(no diff summary)")
+    pins = [p.strip() for p in parsed.pin if p.strip()]
+    excludes = [e.strip() for e in parsed.exclude if e.strip()]
+    hide = parsed.hide_unless_quality
+    min_quality = parsed.min_quality_peers
+    diff = parsed.diff_summary
 
     # Pins APPEND to competitive_watchlist (case-insensitive dedupe, append-only
     # so a curation never silently drops a previously-pinned rival).
@@ -1642,14 +1743,14 @@ def _route_ask_question(
 specific question the analyst left as a comment on the workspace report.
 
 CONTEXT (analyst's own framing of this name):
-{context}
+{spotlight(context, source="analyst thesis, bear-case, and IR anchors")}
 
 The comment is attached to: **{c.anchor.type}** — `{c.anchor.key}`
 (report dated {report_date.isoformat()})
 
 ANALYST QUESTION:
 \"\"\"
-{c.comment}
+{spotlight(c.comment, source="analyst workspace question")}
 \"\"\"
 
 Answer the question in 2-5 sentences. Cite the specific KPI / failure
@@ -1858,29 +1959,28 @@ buckets:
 
 Anchor type: {c.anchor.type}
 Anchor key: {c.anchor.key}
-Comment: \"\"\"{c.comment}\"\"\"
+Comment:
+{spotlight(c.comment, source="analyst workspace comment")}
 
-Reply with just one of: platform_change, drop_kpi, edit_thesis, edit_structured, extract_kpi, curate_peers, ask_question, fix_data, rewrite_section, needs_triage
+Return ONLY a JSON object with one field, `intent`, whose value is one of:
+platform_change, drop_kpi, edit_thesis, edit_structured, extract_kpi,
+curate_peers, ask_question, fix_data, rewrite_section, needs_triage.
 """
-    raw = call_llm(prompt, purpose="intake_classifier").strip().lower()
-    valid = {
-        "platform_change",
-        "drop_kpi",
-        "edit_thesis",
-        "edit_structured",
-        "extract_kpi",
-        "curate_peers",
-        "ask_question",
-        "fix_data",
-        "rewrite_section",
-        "needs_triage",
-    }
-    for tok in raw.split():
-        if tok in valid:
-            return tok
-    # Closed under no-fit: an unparseable / out-of-vocabulary answer parks the
-    # comment for human disposition rather than mis-routing it to ask_question.
-    return "needs_triage"
+    try:
+        parsed = cast(
+            "_IntentClassification",
+            call_llm_structured(
+                prompt,
+                purpose="intake_classifier",
+                scope="comment_intent",
+                schema=TypeAdapter(_IntentClassification),
+            ),
+        )
+    except StructuredParseError:
+        # Closed under no-fit: an unparseable answer parks the comment for
+        # human disposition rather than mis-routing it.
+        return "needs_triage"
+    return parsed.intent
 
 
 # ---------------------------------------------------------------------------

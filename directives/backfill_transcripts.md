@@ -40,7 +40,7 @@ commitments existed in `management_commitments` to render.
 | Trigger | Cadence | Scope |
 |---|---|---|
 | `execution/onboard_ticker.py` | Per `db.track_company` add into `ACTIVE_LIST_TYPES` | Single ticker, fire-and-forget at the end of the onboard pipeline |
-| `cron/backfill_transcripts.task.xml` | Daily 04:30 | Full active universe |
+| `cron/backfill_transcripts.task.xml` | Daily 02:00 | Full active universe |
 | Manual ad-hoc | On-demand | `python execution/backfill_transcripts.py [--ticker X] [--lookback-quarters N]` |
 
 The daily cron + per-ticker onboard hook are belt-and-braces. The cron

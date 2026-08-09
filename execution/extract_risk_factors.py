@@ -143,11 +143,14 @@ Risks (JSON):
 
 Return ONLY a JSON object {{"<id>": "<category>", ...}}.
 Use "other" only when no category fits."""
+    from llm.contracts import RISK_FACTOR_CATEGORIES_SCHEMA
+
     decoded = call_llm_structured(
         prompt,
         purpose="risk_factor_classify",
         ticker=ticker,
         expect="object",
+        schema=RISK_FACTOR_CATEGORIES_SCHEMA,
     )
     out: dict[int, str] = {}
     for k, v in cast("dict[str, object]", decoded).items():

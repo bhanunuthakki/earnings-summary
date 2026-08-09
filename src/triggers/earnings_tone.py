@@ -41,12 +41,13 @@ import json
 import logging
 import re
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar, cast
 
 import jinja2
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from alerts.store import compute_signature_sha
 from decision_conditions import (
@@ -62,15 +63,16 @@ from llm.anchors import (
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
+from llm.structured import call_llm_structured, parse_json_payload
 from llm.style import NUMBER_FORMATTING_BLOCK
 from llm.untrusted import spotlight
 from llm_artifact_store import (
     UpsertRequest,
+    artifact_is_reusable,
     compute_input_sha256,
     read_current,
     upsert,
 )
-from llm_client import JSON_FENCE_RE, call_llm
 from provenance.selection import selected_transcripts_relation
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import (
@@ -155,6 +157,49 @@ class EarningsToneLLMError(RuntimeError):
     PR-N9 catches this per candidate so one stuck ticker doesn't break
     the fan-out across the watchlist.
     """
+
+
+class _ToneShiftWire(BaseModel):
+    """Typed envelope; deterministic action policy narrows each field fail-closed."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    topic: object = None
+    direction: object = None
+    confidence: object = None
+    citations: object = None
+    related_thesis_kpi: object = None
+
+
+_ToneShiftValue = _ToneShiftWire | str | int | float | bool | None | list[object]
+
+
+class _EarningsToneWire(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    summary: str
+    shifts: list[_ToneShiftValue]
+    no_material_shifts_detected: bool
+
+
+_EARNINGS_TONE_SCHEMA = TypeAdapter(_EarningsToneWire)
+
+
+def _governed_structured_call(prompt: str, *, purpose: str, ticker: str) -> object:
+    """Production transport; the alias below remains only as a test-injection seam."""
+    return call_llm_structured(
+        prompt,
+        purpose=purpose,
+        ticker=ticker,
+        expect="object",
+        schema=_EARNINGS_TONE_SCHEMA,
+        max_escalation_tier=0,
+    )
+
+
+# Existing tests inject raw provider responses here to exercise retry behavior.
+# In production this always resolves to the shared governed structured wrapper.
+call_llm: Callable[..., object] = _governed_structured_call
 
 
 def _has_table(conn: sqlite3.Connection, table: str) -> bool:
@@ -448,15 +493,7 @@ def _build_cache_inputs(
     ]
 
 
-def _strip_json_fence(raw: str) -> str:
-    """Strip optional ``​```json ... ``​``` fences the LLM occasionally adds."""
-    stripped = raw.strip()
-    if stripped.startswith("```"):
-        return JSON_FENCE_RE.sub("", stripped).strip()
-    return stripped
-
-
-def _parse_diff_response(raw: str) -> dict[str, object]:
+def _parse_diff_response(raw: object) -> dict[str, object]:
     """Parse + structurally validate the LLM JSON response.
 
     Returns a dict with keys ``summary`` (str), ``shifts`` (list), and
@@ -464,28 +501,12 @@ def _parse_diff_response(raw: str) -> dict[str, object]:
     parse / shape failure — the caller's retry policy decides whether to
     re-prompt or surface.
     """
-    payload = json.loads(_strip_json_fence(raw))
-    if not isinstance(payload, dict):
-        raise ValueError(
-            f"earnings_tone_diff response is not a JSON object: got {type(payload).__name__}"
-        )
-    obj = cast("dict[str, object]", payload)
-    summary = obj.get("summary")
-    shifts = obj.get("shifts")
-    flag = obj.get("no_material_shifts_detected")
-    if not isinstance(summary, str):
-        raise ValueError("earnings_tone_diff response missing 'summary' string")
-    if not isinstance(shifts, list):
-        raise ValueError("earnings_tone_diff response missing 'shifts' list")
-    if not isinstance(flag, bool):
-        raise ValueError(
-            "earnings_tone_diff response missing 'no_material_shifts_detected' boolean"
-        )
-    return {
-        "summary": summary,
-        "shifts": cast("list[object]", shifts),
-        "no_material_shifts_detected": flag,
-    }
+    payload = parse_json_payload(raw, expect="object") if isinstance(raw, str) else raw
+    validated = _EARNINGS_TONE_SCHEMA.validate_python(payload)
+    return cast(
+        "dict[str, object]",
+        _EARNINGS_TONE_SCHEMA.dump_python(validated, mode="python"),
+    )
 
 
 def _call_llm_with_retry(prompt: str, *, ticker: str) -> dict[str, object]:
@@ -496,7 +517,8 @@ def _call_llm_with_retry(prompt: str, *, ticker: str) -> dict[str, object]:
     catches the final ``EarningsToneLLMError`` if both attempts fail.
     """
     try:
-        raw_first = call_llm(prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
+        runner = call_llm
+        raw_first = runner(prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
     except Exception as exc:
         raise EarningsToneLLMError(
             f"earnings_tone_diff LLM call failed (initial attempt): {exc}"
@@ -514,7 +536,7 @@ def _call_llm_with_retry(prompt: str, *, ticker: str) -> dict[str, object]:
 
     retry_prompt = _JSON_RETRY_PREAMBLE + prompt
     try:
-        raw_retry = call_llm(retry_prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
+        raw_retry = runner(retry_prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
     except Exception as exc:
         raise EarningsToneLLMError(
             f"earnings_tone_diff LLM call failed (retry attempt): {exc}"
@@ -954,8 +976,7 @@ class EarningsToneTrigger:
         new_sha = compute_input_sha256(prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs)
         if (
             existing is not None
-            and not existing.dirty
-            and existing.input_sha256 == new_sha
+            and artifact_is_reusable(existing, input_sha256=new_sha)
             and isinstance(existing.content_json, dict)
         ):
             cached = cast("dict[str, object]", existing.content_json)

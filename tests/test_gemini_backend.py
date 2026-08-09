@@ -449,10 +449,15 @@ def test_call_gemini_records_usage_and_real_cost(monkeypatch: pytest.MonkeyPatch
     assert row["run_id"] == "r9"
     assert row["response_text"] == "answer text"
     meta = cast("dict[str, object]", row["meta"])
-    # Real API pricing: gemini-3.1-pro-preview $1.25/$10.00 per MTok.
+    # Current standard API pricing, including Gemini cache-read discount.
     from llm.model_ladder import estimated_call_usd
 
-    expected = estimated_call_usd(gemini_backend.GEMINI_BACKEND_DEFAULT_MODEL, 1010, 205)
+    expected = estimated_call_usd(
+        gemini_backend.GEMINI_BACKEND_DEFAULT_MODEL,
+        1010,
+        205,
+        cached_input_tokens=50,
+    )
     assert meta["total_cost_usd"] == pytest.approx(expected)
     assert expected > 0.0
     usage = cast("dict[str, object]", meta["usage"])

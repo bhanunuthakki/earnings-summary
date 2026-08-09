@@ -203,6 +203,28 @@ def test_apply_rejected_against_readonly_uri(tmp_path: Path, fix_mod: Any) -> No
     assert rc == 2
 
 
+def test_apply_uri_requires_safe_sqlite_before_connection(
+    fix_mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The arbitrary-URI repair seam cannot bypass the WAL-reset gate."""
+    opened = False
+
+    def unsafe_runtime() -> None:
+        raise RuntimeError("unsafe SQLite test sentinel")
+
+    def unexpected_connect(*_args: object, **_kwargs: object) -> sqlite3.Connection:
+        nonlocal opened
+        opened = True
+        raise AssertionError("connection opened before runtime gate")
+
+    monkeypatch.setattr(fix_mod, "require_safe_sqlite_writer_runtime", unsafe_runtime)
+    monkeypatch.setattr(fix_mod.sqlite3, "connect", unexpected_connect)
+
+    with pytest.raises(RuntimeError, match="unsafe SQLite test sentinel"):
+        fix_mod.main(["--db", "file:C:/isolated-copy.db", "--uri", "--apply"])
+    assert opened is False
+
+
 def test_readonly_uri_dry_run_reports_cleanly(
     tmp_path: Path, fix_mod: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:

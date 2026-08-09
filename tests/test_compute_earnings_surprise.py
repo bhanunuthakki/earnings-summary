@@ -1,8 +1,7 @@
 """Tests for src/compute/earnings_surprise.py — beat-rate aggregation, NULL
 handling, lookback windowing, and ordering semantics.
 
-These focus on the pure-compute layer; integration with HoldingScorecard is
-exercised in test_compute_holding_scorecard.py.
+These focus on the pure-compute layer and its persisted surprise rows.
 """
 
 from __future__ import annotations

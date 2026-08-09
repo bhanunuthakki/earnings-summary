@@ -17,7 +17,7 @@ stale-record drift.
 
 Designed to run unattended:
   - Daily cron hook (Phase D will wire this into the same scheduler that runs
-    `backfill_transcripts.py` at 04:30 — recommend 05:00 so the FMP earnings_
+    `backfill_transcripts.py` at 02:00 — recommend 05:00 so the FMP earnings_
     calendar fetch ahead of it has time to land).
 
 Usage:

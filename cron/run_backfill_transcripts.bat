@@ -1,8 +1,8 @@
 @echo off
-REM Daily 04:30 — backfill aggregator Q&A transcripts + commitments for the
+REM Daily 02:00 — backfill aggregator Q&A transcripts + commitments for the
 REM active universe (db.ACTIVE_LIST_TYPES: portfolio + watchlist + evaluation).
-REM Runs BEFORE fetch_fmp_earnings_calendar (05:45) and earnings_calendar_watcher
-REM (06:00) so daily_fetch_and_brief (06:30) sees the freshest §5/§6 inputs.
+REM Runs before the protected 03:00-05:00 LLM window and before
+REM daily_fetch_and_brief (06:30) sees the freshest §5/§6 inputs.
 
 setlocal
 set PYTHONUTF8=1

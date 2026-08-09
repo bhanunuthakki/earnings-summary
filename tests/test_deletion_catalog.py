@@ -24,14 +24,17 @@ def test_approved_latest_governed_code_deletion_is_complete_and_restorable() -> 
     assert report.valid is True
     assert {candidate.id for candidate in report.candidates} == {
         "latest-governed-plane",
+        "legacy-full-refresh-wrapper",
+        "restored-test-only-provenance",
         "segment-junction-backfill",
+        "unreachable-python-residue",
         "zero-ref-legacy-tables",
     }
     assert all(candidate.eligible for candidate in report.candidates)
     assert all(candidate.issues == [] for candidate in report.candidates)
     by_id = {candidate.id: candidate for candidate in report.candidates}
-    assert by_id["latest-governed-plane"].data_restore_verified is False
-    assert by_id["zero-ref-legacy-tables"].data_restore_verified is False
+    assert by_id["latest-governed-plane"].data_restore_verified is True
+    assert by_id["zero-ref-legacy-tables"].data_restore_verified is True
     assert by_id["segment-junction-backfill"].data_restore_verified is True
     assert sum(len(candidate.schema_targets) for candidate in catalog.candidates) == 25
 

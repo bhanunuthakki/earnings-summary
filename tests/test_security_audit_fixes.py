@@ -35,8 +35,26 @@ def test_m3_cors_null_origin():
     assert is_allowed_origin("http://evil.com", allow_tailscale=False, whitelist=()) is None
 
 
-def test_m4_javascript_scheme_xss():
-    # JS linkify test
-    items = [{"n": 1, "href": "javascript:alert(1)", "label": "evil"}]
-    rendered = linkify("Prose [1]", items)
-    assert "javascript:" not in rendered
+@pytest.mark.parametrize(
+    "unsafe_href",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "file:///etc/passwd",
+        "vbscript:msgbox(1)",
+        "//evil.example/steal",
+        r"/\\evil.example\steal",
+    ],
+)
+def test_m4_citation_links_allow_only_http_or_validated_relative(unsafe_href: str) -> None:
+    rendered = linkify("Prose [1]", [{"n": 1, "href": unsafe_href, "label": "evil"}])
+    assert 'href="' not in rendered
+
+
+@pytest.mark.parametrize(
+    "safe_href",
+    ["https://example.test/source", "http://example.test/source", "/source/42#L7"],
+)
+def test_m4_citation_links_preserve_safe_targets(safe_href: str) -> None:
+    rendered = linkify("Prose [1]", [{"n": 1, "href": safe_href, "label": "source"}])
+    assert 'href="' in rendered

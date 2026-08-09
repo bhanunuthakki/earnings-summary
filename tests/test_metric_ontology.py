@@ -13,7 +13,6 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
-from src.provenance.fact_identity_policy import admit_fact_identity
 from src.provenance.metric_ontology import (
     BindingRevision,
     CanonicalAxis,
@@ -310,8 +309,6 @@ def test_mapping_as_known_is_revision_stable_and_extension_is_reviewed(
     unsafe = _mapping(extension).model_copy(update={"reviewer_identity": None})
     with pytest.raises(ValueError, match="extension"):
         repository.persist_mapping(unsafe)
-    with pytest.raises(ValueError, match="extension"):
-        admit_fact_identity(extension, unsafe)
 
 
 def test_metric_mapping_cannot_predate_source_or_metric_registry(

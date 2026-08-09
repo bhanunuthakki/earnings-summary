@@ -52,7 +52,13 @@ from llm.anchors import (
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
-from llm_artifact_store import UpsertRequest, compute_input_sha256, read_current, upsert
+from llm_artifact_store import (
+    UpsertRequest,
+    artifact_is_reusable,
+    compute_input_sha256,
+    read_current,
+    upsert,
+)
 from llm_budget import should_skip_for_budget
 from llm_client import call_llm, is_hard_stop
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -364,7 +370,7 @@ def generate_brief(
 
     current = read_current(ticker=t, purpose=PURPOSE, fiscal_period=er_iso, db_path=db_path)
     if current is not None and not force:
-        if current.input_sha256 == input_sha and not current.dirty:
+        if artifact_is_reusable(current, input_sha256=input_sha):
             return CACHE_HIT
         if candidate.days_until > REFRESH_WINDOW_DAYS:
             # Inputs drifted but the call is still days out — hold the refresh

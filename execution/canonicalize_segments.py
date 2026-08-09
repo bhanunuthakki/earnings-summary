@@ -31,12 +31,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sqlite3
 import sys
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
+
+from pydantic import BaseModel, Field, TypeAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -47,10 +48,23 @@ from entity_store import (  # noqa: E402
     upsert_entity,
     upsert_relationship,
 )
-from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
+from llm.structured import StructuredParseError, call_llm_structured  # noqa: E402
+from llm.untrusted import spotlight  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("canonicalize_segments")
+
+
+class _CanonicalGroup(BaseModel):
+    canonical_name: str
+    kind: Literal["segment", "product_category", "geography"]
+    aliases: list[str] = Field(default_factory=list[str])
+
+
+class _Canonicalization(BaseModel):
+    groups: list[_CanonicalGroup] = Field(default_factory=list[_CanonicalGroup])
+    skip: list[str] = Field(default_factory=list[str])
+
 
 # Names that should NEVER be mapped — they're aggregation buckets or noise.
 SKIP_TERMS = {
@@ -184,26 +198,26 @@ def _canonicalize_one_ticker(
     prompt = _PROMPT.format(
         ticker=ticker,
         company_name=company_name or ticker,
-        segment_list=segment_list,
+        segment_list=spotlight(segment_list, source="observed SEC segment labels"),
     )
     try:
-        raw = call_llm(
-            prompt,
-            purpose="canonicalize_segments",
-            ticker=ticker,
-        ).strip()
+        validated = cast(
+            "_Canonicalization",
+            call_llm_structured(
+                prompt,
+                purpose="canonicalize_segments",
+                ticker=ticker,
+                scope="segment_canonicalization",
+                schema=TypeAdapter(_Canonicalization),
+            ),
+        )
+    except StructuredParseError as exc:
+        log.warning({"event": "canon_structured_failed", "ticker": ticker, "error": str(exc)})
+        return None
     except Exception as exc:
         log.warning({"event": "canon_llm_failed", "ticker": ticker, "error": str(exc)})
         return None
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    try:
-        decoded = json.loads(raw)
-        if isinstance(decoded, dict):
-            return cast("dict[str, object]", decoded)
-    except json.JSONDecodeError:
-        log.warning({"event": "canon_parse_failed", "ticker": ticker, "raw_head": raw[:200]})
-    return None
+    return cast("dict[str, object]", validated.model_dump())
 
 
 def _apply_groups(
@@ -222,7 +236,7 @@ def _apply_groups(
 
     db_path = repo_root / "data" / "portfolio.db"
     rows_mapped = 0
-    for g in groups_raw:
+    for g in cast("list[object]", groups_raw):
         if not isinstance(g, dict):
             continue
         gd = cast("dict[str, object]", g)

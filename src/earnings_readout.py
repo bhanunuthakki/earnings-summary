@@ -32,7 +32,13 @@ from llm.anchors import (
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
-from llm_artifact_store import UpsertRequest, compute_input_sha256, read_current, upsert
+from llm_artifact_store import (
+    UpsertRequest,
+    artifact_is_reusable,
+    compute_input_sha256,
+    read_current,
+    upsert,
+)
 from llm_budget import should_skip_for_budget
 from llm_client import call_llm, is_hard_stop
 from provenance.selection import selected_transcripts_relation
@@ -322,12 +328,7 @@ def _generate_quarter(
         fiscal_period=quarter.period_end,
         db_path=db_path,
     )
-    if (
-        current is not None
-        and not force
-        and current.input_sha256 == input_sha
-        and not current.dirty
-    ):
+    if current is not None and not force and artifact_is_reusable(current, input_sha256=input_sha):
         return GenerateOutcome(CACHE_HIT, quarter.ticker, quarter.period_end, current.id)
     if should_skip_for_budget(PURPOSE, db_path=db_path):
         return GenerateOutcome(BUDGET_SKIPPED, quarter.ticker, quarter.period_end)

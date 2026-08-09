@@ -38,6 +38,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
 log = logging.getLogger(__name__)
 
 PURPOSE = "thesis_collision"
@@ -51,6 +53,32 @@ MAX_TIER1_PER_TICKER = 4
 _RATIONALE_CAP = 300
 
 _HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
+
+
+class _SharedDriverWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tickers: list[str] = Field(min_length=2)
+    driver: str = Field(min_length=1, max_length=200)
+    rationale: str = Field(min_length=1, max_length=_RATIONALE_CAP)
+
+
+class _ContradictionWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tickers: list[str] = Field(min_length=2)
+    contradiction: str = Field(min_length=1, max_length=200)
+    rationale: str = Field(min_length=1, max_length=_RATIONALE_CAP)
+
+
+class _CollisionWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clusters: list[_SharedDriverWire]
+    contradictions: list[_ContradictionWire]
+
+
+_COLLISION_ADAPTER = TypeAdapter(_CollisionWire)
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,8 +309,9 @@ def _default_call() -> CollisionCall:
             scope=_SCOPE,
             expect="object",
             required_keys=("clusters", "contradictions"),
+            schema=_COLLISION_ADAPTER,
         )
-        return cast("dict[str, object]", payload)
+        return _CollisionWire.model_validate(payload).model_dump()
 
     return call
 
@@ -419,7 +448,7 @@ def refresh_thesis_collision(
     prompt_version = _prompt_version()
     fresh_sha = store.compute_input_sha256(prompt_version=prompt_version, cache_inputs=inputs)
     existing = store.read_current(ticker=None, purpose=PURPOSE, scope=_SCOPE, db_path=db_path)
-    if existing is not None and existing.input_sha256 == fresh_sha and not existing.dirty:
+    if existing is not None and store.artifact_is_reusable(existing, input_sha256=fresh_sha):
         cached = CollisionReport.from_json(existing.content_json)
         if cached is not None:
             return RefreshResult(report=cached, cache_hit=True)

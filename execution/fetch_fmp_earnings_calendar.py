@@ -32,8 +32,7 @@ import json
 import os
 import sys
 from pathlib import Path
-
-import requests
+from typing import cast
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -42,38 +41,36 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data", "historical", "fmp")
 sys.path.append(SRC_DIR)
 
 import db  # noqa: E402
-from log_redact import redact as _redact  # noqa: E402
+from net.client import FMP_CLIENT, HttpCallError, JsonShape, JsonValue  # noqa: E402
 from runtime.secrets import load_project_env  # noqa: E402
 
 load_project_env(Path(PROJECT_ROOT))
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
 
-FMP_BASE = "https://financialmodelingprep.com/stable"
 DATA_TYPE = "earnings_calendar"
 DEFAULT_LIMIT = 12
 
 
-def fetch_earnings(symbol: str, limit: int) -> list[dict] | None:
-    url = f"{FMP_BASE}/earnings"
-    params = {"symbol": symbol, "limit": limit, "apikey": FMP_API_KEY}
+def fetch_earnings(symbol: str, limit: int) -> list[dict[str, JsonValue]] | None:
     try:
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if not isinstance(data, list):
-            print(f"  [Schema] {symbol}: expected list, got {type(data).__name__}", file=sys.stderr)
-            return None
-        return data
-    except requests.HTTPError as e:
-        code = resp.status_code if "resp" in dir() else "?"
-        print(f"  [HTTP {code}] {symbol}: {_redact(e)}", file=sys.stderr)
+        response = FMP_CLIENT.get_json(
+            "earnings",
+            params={"symbol": symbol, "limit": limit},
+            api_key=FMP_API_KEY,
+            expected=JsonShape.ARRAY,
+        )
+    except HttpCallError as exc:
+        label = f"HTTP {exc.status_code}" if exc.status_code is not None else "Error"
+        print(f"  [{label}] {symbol}: {exc}", file=sys.stderr)
         return None
-    except Exception as e:
-        print(f"  [Error] {symbol}: {_redact(e)}", file=sys.stderr)
+    payload = response.payload
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        print(f"  [Schema] {symbol}: expected list of objects", file=sys.stderr)
         return None
+    return cast(list[dict[str, JsonValue]], payload)
 
 
-def save(symbol: str, events: list[dict]) -> str:
+def save(symbol: str, events: list[dict[str, JsonValue]]) -> str:
     os.makedirs(DATA_DIR, exist_ok=True)
     path = os.path.join(DATA_DIR, f"{symbol.upper()}_{DATA_TYPE}.json")
     with open(path, "w") as f:
@@ -97,13 +94,13 @@ def select_tickers(args: argparse.Namespace) -> list[str]:
         return [args.ticker.upper()]
     companies = db.get_tracked_companies()
     if args.portfolio:
-        return [c["ticker"] for c in companies if c["list_type"] == "portfolio"]
+        return [str(c["ticker"]) for c in companies if c["list_type"] == "portfolio"]
     if args.watchlist:
-        return [c["ticker"] for c in companies if c["list_type"] == "watchlist"]
+        return [str(c["ticker"]) for c in companies if c["list_type"] == "watchlist"]
     if args.evaluation:
-        return [c["ticker"] for c in companies if c["list_type"] == "evaluation"]
+        return [str(c["ticker"]) for c in companies if c["list_type"] == "evaluation"]
     # --all: active universe (db.ACTIVE_LIST_TYPES)
-    return [c["ticker"] for c in companies if c["list_type"] in db.ACTIVE_LIST_TYPES]
+    return [str(c["ticker"]) for c in companies if c["list_type"] in db.ACTIVE_LIST_TYPES]
 
 
 def main() -> None:

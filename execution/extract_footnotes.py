@@ -30,7 +30,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import sqlite3
@@ -39,12 +38,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel, TypeAdapter
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from filing_text_fetcher import fetch_latest_10k_text  # noqa: E402
-from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
+from llm.structured import StructuredParseError, call_llm_structured  # noqa: E402
+from llm.untrusted import spotlight  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_footnotes")
@@ -52,6 +54,19 @@ log = logging.getLogger("extract_footnotes")
 # Cap Item 8 input to keep prompts bounded. 120KB ~= 30K tokens; well under
 # Sonnet's 200K context but big enough to capture every footnote.
 _MAX_ITEM_8_CHARS = 120_000
+
+
+class FootnoteExtraction(BaseModel):
+    fact_type: str
+    footnote_number: str | None = None
+    description_md: str
+    amount: float | None = None
+    currency: str | None = None
+    unit: str | None = None
+    due_period: str | None = None
+    counterparty: str | None = None
+    status: str | None = None
+    source_excerpt: str
 
 
 _PROMPT = """You are extracting structured footnote disclosures from {ticker}'s
@@ -108,27 +123,31 @@ def extract_for_ticker(
         return {"ticker": ticker, "status": "no_item_8", "n": 0}
 
     item_8 = result.item_8_text[:_MAX_ITEM_8_CHARS]
-    prompt = _PROMPT.format(ticker=ticker, fiscal_year=result.fiscal_year, item_8_text=item_8)
+    prompt = _PROMPT.format(
+        ticker=ticker,
+        fiscal_year=result.fiscal_year,
+        item_8_text=spotlight(item_8, source="SEC 10-K Item 8 filing text"),
+    )
 
     try:
-        raw = call_llm(
-            prompt,
-            purpose="footnote_extraction",
-            ticker=ticker,
-        ).strip()
+        validated = cast(
+            "list[FootnoteExtraction]",
+            call_llm_structured(
+                prompt,
+                purpose="footnote_extraction",
+                ticker=ticker,
+                scope="filing_footnotes",
+                expect="array",
+                schema=TypeAdapter(list[FootnoteExtraction]),
+            ),
+        )
+    except StructuredParseError as exc:
+        log.warning({"event": "footnote_structured_failed", "ticker": ticker, "error": str(exc)})
+        return {"ticker": ticker, "status": "structured_failed", "n": 0}
     except Exception as exc:
         log.warning({"event": "footnote_llm_failed", "ticker": ticker, "error": str(exc)})
         return {"ticker": ticker, "status": "llm_failed", "n": 0}
-
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    try:
-        rows = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning({"event": "footnote_parse_failed", "ticker": ticker, "head": raw[:200]})
-        return {"ticker": ticker, "status": "parse_failed", "n": 0}
-    if not isinstance(rows, list):
-        return {"ticker": ticker, "status": "not_a_list", "n": 0}
+    rows: list[object] = [row.model_dump() for row in validated]
 
     # Persist
     db_path = repo_root / "data" / "portfolio.db"
@@ -248,7 +267,9 @@ def main() -> int:
             fiscal_year=args.fiscal_year,
         )
         log.info(outcome)
-        total += int(outcome.get("n_inserted", 0))
+        n_inserted = outcome.get("n_inserted", 0)
+        if isinstance(n_inserted, int) and not isinstance(n_inserted, bool):
+            total += n_inserted
     print(f"\nFootnote extraction done · {total} rows inserted across {len(tickers)} ticker(s).")
     return 0
 

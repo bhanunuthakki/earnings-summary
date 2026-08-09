@@ -15,6 +15,28 @@ from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
 
 
+def sqlite_version_is_wal_reset_safe(version: tuple[int, int, int]) -> bool:
+    """Whether ``version`` contains SQLite's 2026 WAL-reset race fix."""
+    return version == (3, 50, 7) or version >= (3, 51, 3)
+
+
+_WRITER_SQLITE_VERSION_ERROR = (
+    None
+    if sqlite_version_is_wal_reset_safe(sqlite3.sqlite_version_info)
+    else (
+        "SQLite writer runtime is vulnerable to the WAL-reset corruption race: "
+        f"loaded={sqlite3.sqlite_version}; require 3.50.7 or >=3.51.3. "
+        "Launch through execution/sqlite_bootstrap.py."
+    )
+)
+
+
+def require_safe_sqlite_writer_runtime() -> None:
+    """Fail before any WAL writer can touch a database under an unsafe build."""
+    if _WRITER_SQLITE_VERSION_ERROR is not None:
+        raise RuntimeError(_WRITER_SQLITE_VERSION_ERROR)
+
+
 class SQLiteConnectionRole(StrEnum):
     """Capabilities requested from a SQLite connection."""
 
@@ -40,6 +62,9 @@ def connect_sqlite(
     destinations are new, caller-owned local files used by backup or isolated
     synthetic tooling and intentionally retain the default journal mode.
     """
+    if role is SQLiteConnectionRole.WRITER:
+        require_safe_sqlite_writer_runtime()
+
     require_schema = (
         role is SQLiteConnectionRole.WRITER if schema_preflight is None else schema_preflight
     )
@@ -121,3 +146,11 @@ def _apply_writer_policy(conn: sqlite3.Connection) -> None:
     """Apply database-wide settings permitted only to a writer."""
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+
+
+__all__ = [
+    "SQLiteConnectionRole",
+    "connect_sqlite",
+    "require_safe_sqlite_writer_runtime",
+    "sqlite_version_is_wal_reset_safe",
+]

@@ -48,6 +48,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal, cast
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
 from compute.segments import RECONCILE_TOLERANCE_OVER
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import FactLocator, FiscalPeriodType, SegmentDimension, SegmentDimType, Unit
@@ -87,6 +89,24 @@ _SECTION_KEYWORD_RX = re.compile(r"segment", re.IGNORECASE)
 # design doc's own §7 risk #4, not yet calibrated against real data.
 _DERIVE_CONFIDENCE_DECAY = 0.97
 _SIGN_SANITY_FLOOR_CONFIDENCE = 0.3
+
+
+class _DisambiguatedColumnWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(ge=0)
+    duration_months: Literal[3, 6, 9, 12]
+    end_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    is_cumulative: bool
+
+
+class _DisambiguateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    columns: list[_DisambiguatedColumnWire]
+
+
+_DISAMBIGUATE_ADAPTER = TypeAdapter(_DisambiguateResponse)
 
 
 @dataclass(slots=True)
@@ -855,11 +875,12 @@ def _disambiguate_via_llm(
             ticker=ticker,
             expect="object",
             required_keys=("columns",),
+            schema=_DISAMBIGUATE_ADAPTER,
             db_path=db_path,
         )
     except StructuredParseError:
         return None
-    return _parse_disambiguate_response(payload)
+    return _parse_disambiguate_response(_DisambiguateResponse.model_validate(payload).model_dump())
 
 
 def _parse_disambiguate_response(payload: object) -> dict[int, tuple[int | None, bool]] | None:
@@ -912,8 +933,12 @@ def disambiguate_periods_for_eval(
         purpose=LLM_PURPOSE,
         expect="object",
         required_keys=("columns",),
+        schema=_DISAMBIGUATE_ADAPTER,
     )
-    parsed = _parse_disambiguate_response(payload) or {}
+    parsed = (
+        _parse_disambiguate_response(_DisambiguateResponse.model_validate(payload).model_dump())
+        or {}
+    )
     return {
         "columns": [
             {"index": i, "duration_months": d, "is_cumulative": c}

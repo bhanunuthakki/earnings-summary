@@ -36,7 +36,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from llm.cli import is_hard_stop
 from llm.structured import call_llm_structured
@@ -56,6 +56,15 @@ class ItemVerdict(BaseModel):
     verdict: BoilerplateVerdict
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = Field(max_length=300)
+
+
+class _ItemVerdictWire(BaseModel):
+    verdict: BoilerplateVerdict
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str = Field(max_length=300)
+
+
+_TRIAGE_ADAPTER = TypeAdapter(dict[str, _ItemVerdictWire])
 
 
 class TriageOutcome(BaseModel):
@@ -127,6 +136,7 @@ def triage_events(
             purpose=TRIAGE_PURPOSE,
             ticker=ticker,
             expect="object",
+            schema=_TRIAGE_ADAPTER,
             db_path=db_path,
         )
     except Exception as exc:
@@ -155,16 +165,13 @@ def triage_events(
             except (TypeError, ValueError):
                 dropped_rows += 1
                 continue
-            if not isinstance(raw, dict):
-                dropped_rows += 1
-                continue
-            row = cast("dict[str, object]", raw)
             try:
+                row = _ItemVerdictWire.model_validate(raw)
                 parsed[event_id] = ItemVerdict(
                     event_id=event_id,
-                    verdict=BoilerplateVerdict(str(row.get("verdict"))),
-                    confidence=float(cast("float", row.get("confidence", 0.0))),
-                    rationale=str(row.get("rationale") or "")[:300],
+                    verdict=row.verdict,
+                    confidence=row.confidence,
+                    rationale=row.rationale,
                 )
             except (ValueError, TypeError):
                 dropped_rows += 1
@@ -192,6 +199,7 @@ def triage_events(
                 purpose=TRIAGE_PURPOSE,
                 ticker=ticker,
                 expect="object",
+                schema=_TRIAGE_ADAPTER,
                 db_path=db_path,
             )
         except Exception as exc:

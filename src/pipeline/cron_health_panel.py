@@ -30,6 +30,12 @@ from datetime import UTC, date, datetime, timedelta
 from html import escape
 from pathlib import Path
 
+from pipeline.operational_health import (
+    archive_backup_covers_local_sidecar,
+    latest_backup,
+    latest_eval,
+    wal_size,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -144,6 +150,74 @@ def _dropped_ledger_banner(db_path: Path, since: datetime) -> str:
     )
 
 
+def _operational_alarms(db_path: Path, *, now: datetime | None = None) -> str:
+    """Backup, WAL, and eval tripwires; metadata-only except one indexed eval read."""
+    observed_now = now or datetime.now(UTC)
+    alarms: list[str] = []
+    try:
+        backup = latest_backup()
+        if backup.is_stale(now=observed_now):
+            detail = (
+                "no encrypted snapshot was found"
+                if backup.observed_at is None
+                else f"newest snapshot is {observed_now - backup.observed_at} old"
+            )
+            alarms.append(
+                '<div class="k-well k-well-bad ch-alarm">'
+                "<strong>Database backup is stale</strong>"
+                f"{escape(detail)}; the required maximum age is 48 hours."
+                "</div>"
+            )
+        repo_root = db_path.parent.parent
+        if not archive_backup_covers_local_sidecar(repo_root):
+            alarms.append(
+                '<div class="k-well k-well-bad ch-alarm">'
+                "<strong>GC archive is not backed up</strong>"
+                "The latest encrypted archive snapshot predates the local reversible-prune store."
+                "</div>"
+            )
+    except (OSError, ValueError) as exc:
+        log.warning({"event": "cron_health_backup_probe_failed", "error": str(exc)})
+
+    try:
+        wal_bytes, wal_threshold = wal_size(db_path)
+        if wal_bytes >= wal_threshold:
+            alarms.append(
+                '<div class="k-well k-well-warn ch-alarm">'
+                "<strong>SQLite WAL is oversized</strong>"
+                f"Current WAL size is {wal_bytes / (1024 * 1024):.1f} MiB; "
+                f"the alert threshold is {wal_threshold / (1024 * 1024):.1f} MiB. "
+                "Inspect long-lived readers; this probe never checkpoints the live database."
+                "</div>"
+            )
+    except (OSError, ValueError) as exc:
+        log.warning({"event": "cron_health_wal_probe_failed", "error": str(exc)})
+
+    try:
+        evaluation = latest_eval(db_path)
+        if evaluation.is_stale(now=observed_now):
+            detail = (
+                "no eval receipt was found"
+                if evaluation.observed_at is None
+                else f"newest eval receipt is {observed_now - evaluation.observed_at} old"
+            )
+            alarms.append(
+                '<div class="k-well k-well-warn ch-alarm">'
+                "<strong>LLM evaluations are stale</strong>"
+                f"{escape(detail)}; weekly cohorts must finish at least every 8 days."
+                "</div>"
+            )
+    except (sqlite3.Error, ValueError) as exc:
+        log.warning({"event": "cron_health_eval_probe_failed", "error": str(exc)})
+        alarms.append(
+            '<div class="k-well k-well-warn ch-alarm">'
+            "<strong>LLM evaluation freshness is unavailable</strong>"
+            "The eval ledger could not be read; this is not treated as fresh."
+            "</div>"
+        )
+    return "".join(alarms)
+
+
 def _dot(status: str | None) -> str:
     if status is None:
         return '<span class="ch-dot k-dot ch-dot-miss" title="no run"></span>'
@@ -252,8 +326,10 @@ def render_cron_health_live_body(db_path: Path) -> str:
     # Both alarms lead the body, and both survive the no-rows early return: a
     # drifted database with no run history is the WORST case, not a reason to
     # say nothing.
-    alarms = _schema_drift_banner(db_path) + _dropped_ledger_banner(
-        db_path, since.replace(tzinfo=UTC)
+    alarms = (
+        _schema_drift_banner(db_path)
+        + _dropped_ledger_banner(db_path, since.replace(tzinfo=UTC))
+        + _operational_alarms(db_path)
     )
 
     all_runs = _query_runs(db_path, since)

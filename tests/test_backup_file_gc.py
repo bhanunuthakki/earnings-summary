@@ -98,6 +98,22 @@ def test_gc_archive_is_protected(tmp_path: Path, monkeypatch) -> None:
     assert "pre_gc_20260731_portfolio.db" in found
 
 
+def test_pre_migration_recovery_anchors_are_never_discovered(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import execution.backup_file_gc as gc
+
+    monkeypatch.setattr(gc, "LIVE_DB", tmp_path / "data" / "portfolio.db")
+    for name in (
+        "portfolio_pre0263_20260802.db.gz",
+        "portfolio.db.pre0272.bak",
+        "portfolio.db.bak_squash",
+    ):
+        _touch(tmp_path / "data" / name, when=datetime(2026, 8, 1))
+
+    assert gc.discover(tmp_path) == []
+
+
 def test_keeps_newest_per_month_plus_n_most_recent(tree: Path, monkeypatch) -> None:
     import execution.backup_file_gc as gc
 

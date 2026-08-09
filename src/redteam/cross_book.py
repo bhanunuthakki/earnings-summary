@@ -16,7 +16,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from llm.structured import StructuredParseError, call_llm_structured
 from redteam.lenses import load_holdings_json
@@ -78,6 +78,7 @@ def _call(prompt: str, *, lens: str, run_key: str) -> RedTeamLLMItem:
             run_id=run_key,
             expect="object",
             required_keys=("attack_md", "question_md", "proposed_change_md", "severity"),
+            schema=TypeAdapter(RedTeamLLMItem),
         )
     except StructuredParseError as exc:
         raise RedTeamCrossBookError(f"{lens}: unusable JSON: {exc}") from exc

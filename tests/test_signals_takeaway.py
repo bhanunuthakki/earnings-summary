@@ -51,8 +51,6 @@ def _build_db(tmp_path: Path) -> Path:
     finally:
         conn.close()
     return db_path
-
-
 _URL_SEQ = 0
 
 

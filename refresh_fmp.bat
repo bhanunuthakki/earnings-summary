@@ -23,8 +23,8 @@ set LIMIT=%2
 if "%LIMIT%"=="" set LIMIT=8
 
 if "%~1"=="--all" (
-  "%REPO_ROOT%\cron\run_python.bat" "%REPO_ROOT%\execution\fetch_fmp_historical_data.py" --all --limit %LIMIT%
+  "%REPO_ROOT%\cron\run_python.bat" "refresh_fmp" "portfolio-db" "%REPO_ROOT%\execution\fetch_fmp_historical_data.py" --all --limit %LIMIT%
 ) else (
-  "%REPO_ROOT%\cron\run_python.bat" "%REPO_ROOT%\execution\fetch_fmp_historical_data.py" --ticker %1 --limit %LIMIT%
+  "%REPO_ROOT%\cron\run_python.bat" "refresh_fmp" "portfolio-db" "%REPO_ROOT%\execution\fetch_fmp_historical_data.py" --ticker %1 --limit %LIMIT%
 )
 exit /b %ERRORLEVEL%

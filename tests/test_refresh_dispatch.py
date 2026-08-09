@@ -210,7 +210,7 @@ def test_execute_emits_dispatch_markers(tmp_path):
 
 
 def test_execute_keeps_going_after_step_failure(tmp_path):
-    """A failed FMP step must not block subsequent steps — same semantics as full_refresh.bat."""
+    """A failed FMP step must not block independent subsequent steps."""
     runner = _MockRunner(exit_codes=[1, 0, 0, 0, 0, 0])  # FMP fails, rest succeed
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     out = io.StringIO()

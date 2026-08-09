@@ -40,7 +40,9 @@ import sqlite3
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from advisor.store import STANCES
 from allocation.concentration import (
@@ -1039,6 +1041,22 @@ _VERDICT_KEYS: tuple[str, ...] = (
     "suggested_expression",
 )
 
+
+class _VerdictWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: Literal["buy", "add", "hold", "trim", "sell"]
+    size: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=1200)
+    confidence: Literal["high", "medium", "low"]
+    behavioral_check: str = Field(min_length=1, max_length=600)
+    suggested_expression: Literal[
+        "trim-to-target", "LEAP-overlay", "do-nothing", "add-tranche", "encode-thesis-first"
+    ]
+
+
+_VERDICT_ADAPTER = TypeAdapter(_VerdictWire)
+
 # Fallback when no graded sells/trims exist yet (or the query fails) — the
 # guard/prompt must never fabricate a ticker list.
 _GENERIC_SELL_PATTERN_LINE = "your sell-winners-too-early pattern"
@@ -1727,8 +1745,10 @@ def review_position(
             purpose=POSITION_REVIEW_PURPOSE,
             ticker=pre.ticker,
             required_keys=_VERDICT_KEYS,
+            schema=_VERDICT_ADAPTER,
             db_path=db_path,
         )
+        payload = _VerdictWire.model_validate(payload).model_dump()
         out = apply_behavioral_guard(
             pre, parse_verdict_output(cast("dict[str, object]", payload)), graded_line=graded_line
         )

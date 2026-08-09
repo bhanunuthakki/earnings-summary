@@ -60,11 +60,13 @@ import hashlib
 import json
 import logging
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar, cast
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from alerts.store import compute_signature_sha
 from decision_conditions import render_qualitative_overlay
@@ -76,14 +78,15 @@ from llm.anchors import (
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
+from llm.structured import call_llm_structured, parse_json_payload
 from llm.untrusted import spotlight
 from llm_artifact_store import (
     UpsertRequest,
+    artifact_is_reusable,
     compute_input_sha256,
     read_current,
     upsert,
 )
-from llm_client import JSON_FENCE_RE, call_llm
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import (
     AlertDraft,
@@ -190,6 +193,39 @@ class MaterialNewsLLMError(RuntimeError):
     ``[]`` — material news has no deterministic fallback, so a failed
     classification is "no alerts today", never a fabricated one.
     """
+
+
+class _MaterialNewsEntryWire(BaseModel):
+    """Typed envelope; deterministic code deliberately rejects malformed fields per entry."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    news_index: object = None
+    event_type: object = None
+    event_key: object = None
+    relevance: object = None
+    why_material: object = None
+
+
+_MaterialNewsWireValue = _MaterialNewsEntryWire | str | int | float | bool | None | list[object]
+_MATERIAL_NEWS_SCHEMA = TypeAdapter(list[_MaterialNewsWireValue])
+
+
+def _governed_structured_call(prompt: str, *, purpose: str, ticker: str) -> object:
+    """Production transport; the alias below remains only as a test-injection seam."""
+    return call_llm_structured(
+        prompt,
+        purpose=purpose,
+        ticker=ticker,
+        expect="array",
+        schema=_MATERIAL_NEWS_SCHEMA,
+        max_escalation_tier=0,
+    )
+
+
+# Existing tests inject raw provider responses here to exercise retry behavior.
+# In production this always resolves to the shared governed structured wrapper.
+call_llm: Callable[..., object] = _governed_structured_call
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,16 +534,8 @@ def _build_classification_prompt(ticker: str, anchor_block: str, stories: list[_
     )
 
 
-def _strip_json_fence(raw: str) -> str:
-    """Strip optional ```json ... ``` fences the LLM occasionally adds."""
-    stripped = raw.strip()
-    if stripped.startswith("```"):
-        return JSON_FENCE_RE.sub("", stripped).strip()
-    return stripped
-
-
-def _parse_classification(raw: str) -> list[object]:
-    """Parse the LLM response into a JSON array.
+def _parse_classification(raw: object) -> list[object]:
+    """Validate the governed result or a raw injected test response.
 
     Raises ``ValueError`` when the response is not valid JSON or not a JSON
     array — the caller's retry policy decides whether to re-prompt or surface a
@@ -516,12 +544,9 @@ def _parse_classification(raw: str) -> list[object]:
     tolerated downstream in ``_scores_from_payload`` (degraded quality, not a
     hard failure).
     """
-    payload = json.loads(_strip_json_fence(raw))
-    if not isinstance(payload, list):
-        raise ValueError(
-            f"material_news classification is not a JSON array: got {type(payload).__name__}"
-        )
-    return cast("list[object]", payload)
+    payload = parse_json_payload(raw, expect="array") if isinstance(raw, str) else raw
+    validated = _MATERIAL_NEWS_SCHEMA.validate_python(payload)
+    return cast("list[object]", _MATERIAL_NEWS_SCHEMA.dump_python(validated, mode="python"))
 
 
 def _call_llm_with_retry(prompt: str, *, ticker: str) -> list[object]:
@@ -533,7 +558,8 @@ def _call_llm_with_retry(prompt: str, *, ticker: str) -> list[object]:
     parse also raises ``MaterialNewsLLMError``.
     """
     try:
-        raw_first = call_llm(prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
+        runner = call_llm
+        raw_first = runner(prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
     except Exception as exc:
         raise MaterialNewsLLMError(
             f"material_news classification LLM call failed (initial attempt): {exc}"
@@ -551,7 +577,7 @@ def _call_llm_with_retry(prompt: str, *, ticker: str) -> list[object]:
 
     retry_prompt = _JSON_RETRY_PREAMBLE + prompt
     try:
-        raw_retry = call_llm(retry_prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
+        raw_retry = runner(retry_prompt, purpose=_ARTIFACT_PURPOSE, ticker=ticker)
     except Exception as exc:
         raise MaterialNewsLLMError(
             f"material_news classification LLM call failed (retry attempt): {exc}"
@@ -982,8 +1008,7 @@ class MaterialNewsTrigger:
             )
             if (
                 existing is not None
-                and not existing.dirty
-                and existing.input_sha256 == new_sha
+                and artifact_is_reusable(existing, input_sha256=new_sha)
                 and isinstance(existing.content_json, list)
             ):
                 log.info(

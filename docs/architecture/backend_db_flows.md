@@ -1,6 +1,6 @@
 # Backend and database flows
 
-This map describes the localhost application after the August 2026 debt-hardening pass. It groups the 153 Flask routes by responsibility while preserving the distinct ingress, orchestration, persistence, cache, and external-provider boundaries.
+This map describes the localhost application after the August 2026 debt-hardening pass. It groups the 153 Flask routes by responsibility while preserving the distinct ingress, managed-runtime, orchestration, persistence, cache, and external-provider boundaries.
 
 ## Runtime and backend flow
 
@@ -17,23 +17,25 @@ flowchart TB
         origin["Origin and capability checks\nstate-changing HTTP requests"]
         tg_allow["Preconfigured Telegram chat allowlist\nmissing, invalid, or unreadable means reject"]
         runlock["Shared run and DB write-set locks"]
+        sqlite_boot["Verified SQLite 3.53.4 bootstrap\none hash/load per process"]
     end
     subgraph flask["Flask cockpit :7421"]
-        routes["153 routes\ncore 117, content 24, alerts 6, settings 4, journal 2"]
-        panels["Panel fragment renderer\n30-second, 256-entry cache plus ETag/304"]
+        routes["153 routes\ncore 110, DCF 7, content 24, alerts 6, settings 4, journal 2"]
+        panels["Panel fragment renderer\n30-second, 256-entry cache plus ETag/304\nper-key single-flight"]
         telemetry["Panel latency telemetry\nobservational POST does not evict cache"]
         ask["Ask orchestration\n4-worker pool, bounded pack and artifact reads"]
         jobs["Background job registry\nsingle-flight, at most 3 subprocesses, SSE status"]
         reports["Company brief builder\none borrowed read connection to HTML, Markdown, JSON"]
     end
     subgraph orchestration["Deterministic orchestration"]
-        morning["Morning pipeline at 04:00\n18-hour resumable checkpoint"]
+        morning["Typed 20-stage morning manifest at 04:00\nday + manifest-scoped atomic 18-hour checkpoint"]
         capture["Capture routing\ntext, transcription, documents, callbacks"]
         fetch["Market, filing, IR, transcript, and portfolio fetchers"]
         normalize["Typed validation, plausibility checks, normalization"]
         compute["Deterministic compute\nDCF, KPIs, risk, signals, decisions"]
         artifact_build["Brief and recommendation artifact builders"]
         notifications["Pull surfaces and Telegram response builders"]
+        http["Canonical pooled HTTP client\ntimeouts, idempotent retries, host budgets"]
     end
     subgraph llm["Governed LLM path"]
         purpose["Closed purpose plus prompt version"]
@@ -49,6 +51,7 @@ flowchart TB
         temp[".tmp checkpoints and intermediate payloads"]
         cache["Bounded process and response caches"]
         outputs["Rendered briefs and operator-visible artifacts"]
+        retry_receipts["Atomic retry receipts\nfor committed DCF changes awaiting lineage"]
     end
     subgraph external["External read providers"]
         fmp["FMP"]
@@ -63,8 +66,8 @@ flowchart TB
     browser --> network --> routes
     routes --> origin
     telegram --> tg_allow --> capture
-    scheduler --> runlock --> morning
-    cli --> runlock
+    scheduler --> sqlite_boot --> runlock --> morning
+    cli --> sqlite_boot --> runlock
     routes --> panels
     panels --> telemetry
     routes --> ask
@@ -72,6 +75,7 @@ flowchart TB
     routes --> reports
     jobs --> orchestration
     morning --> fetch --> normalize --> compute --> artifact_build
+    fetch --> http
     capture --> normalize
     ask --> purpose
     artifact_build --> purpose
@@ -79,10 +83,10 @@ flowchart TB
     schema --> artifact_cache
     artifact_cache --> reports
     artifact_cache --> notifications
-    fmp --> fetch
-    sec --> fetch
-    yahoo --> fetch
-    ir --> fetch
+    fmp --> http
+    sec --> http
+    yahoo --> http
+    ir --> http
     media --> capture
     portfolio --> fetch
     drive --> fetch
@@ -93,6 +97,7 @@ flowchart TB
     panels <--> cache
     reports --> outputs
     morning <--> temp
+    compute -. "lineage retry when post-write receipt fails" .-> retry_receipts
     reports --> browser
     notifications --> telegram
 ```
@@ -101,7 +106,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    path["Canonical DB path resolver"] --> runtime["connect_sqlite"]
+    path["Canonical DB path resolver\nCLI override, then environment, then repo default"] --> runtime["connect_sqlite\nwriter runtime version gate"]
     subgraph roles["Connection roles"]
         ro["READ_ONLY\nquery-only plus schema preflight"]
         writer["WRITER\nWAL, FK ON, busy timeout, synchronous NORMAL"]
@@ -111,7 +116,7 @@ flowchart LR
     runtime --> writer
     runtime --> snapshot
     subgraph request["Request and report ownership"]
-        flask_g["Flask g.request_read_db"]
+        flask_g["Flask g.request_read_db\nexact create_app-injected DB path"]
         teardown["teardown_request closes owner"]
         report_conn["One borrowed report connection"]
         sections["Description, financials, evaluation, compensation, synthesis, decision card, provenance"]
@@ -165,12 +170,13 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    start["Database presented for upgrade"] --> classify{"Revision and schema classification"}
+    start["Database presented for upgrade"] --> runtime_gate["Require WAL-reset-safe SQLite runtime"]
+    runtime_gate --> lock["Acquire shared write lock"]
+    lock --> classify{"Revision and schema classification under lock"}
     classify -->|"Fresh or active"| active["Active Alembic graph\n0001 initial schema → 0002 debt cleanup → 0003 baseline repair"]
     classify -->|"Recognized archived revision"| bridge["Archived upgrade bridge"]
     classify -->|"Unknown or incompatible"| refuse["Fail closed\nno mutation"]
-    bridge --> lock["Acquire shared write lock"]
-    lock --> backup["SQLite online backup\nrefuse overwrite"]
+    bridge --> backup["SQLite online backup\nrefuse overwrite"]
     backup --> precheck["Validate legacy schema and revision"]
     precheck --> archived["Replay archived graph to archived head"]
     archived --> validate["Validate expected schema"]
@@ -180,23 +186,24 @@ flowchart TB
     integrity --> ready["Runtime-ready database"]
     ready --> scheduled_backup["Scheduled online backup"]
     scheduled_backup --> encrypt["gzip plus AES-256-GCM"]
-    encrypt --> sibling["Sibling restore set and restore drill"]
-    ready --> gc["GC planner\ndry-run by default, allowlist-only"]
+    encrypt --> receipt["Verify this run's encrypted .gz.enc receipt and file"]
+    receipt --> sibling["Sibling restore set and restore drill"]
+    receipt --> gc["GC planner\nscheduled --apply only after verified backup\nallowlist-only"]
     gc --> archive_first["Archive-first eligible rows"]
     archive_first --> delete["Guarded deletion after verification"]
     gc --> blocked["facts-depth destructive cleanup blocked\nuntil immutable archive receipt exists"]
     ready --> deletion_eval["Deletion catalog evaluator"]
-    deletion_eval --> targets["3 candidates, 25 schema targets\ncode targets Git-restorable"]
+    deletion_eval --> targets["6 governed candidates, 25 schema targets\ncode targets Git-restorable"]
     targets --> import_scan["Absolute and relative import reachability scan\nparse/read errors fail closed"]
     import_scan --> eligibility{"Eligible?"}
     eligibility -->|"No"| refuse_delete["Keep code and schema"]
     eligibility -->|"Yes"| governed_delete["Apply cataloged deletion"]
-    backup -. "Only recovery source for rows dropped before 0002" .-> sibling
+    backup -. "Production-derived pre-0002 recovery source verified" .-> sibling
 ```
 
 ## Operational boundaries
 
 - The application is single-user and localhost/Tailscale-scoped; it is not a public multi-tenant service.
 - Live scheduler registration, optional provider credentials, and real production population are operational checks, not implied by source-level green tests.
-- Rows removed before migration `0002` are recoverable only from a pre-`0002` database backup. Git restores code, not deleted database rows.
+- The production-derived pre-`0002` backup has passed integrity, foreign-key, bridge, and deleted-plane recovery verification; Git still restores code rather than database rows.
 - The dormant legacy Gemini fallback compatibility exports are outside the canonical production route and remain one low-priority cleanup item pending an external-import compatibility scan.

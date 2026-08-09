@@ -389,9 +389,16 @@ def _build_prompt(entry: PositionEntry, evidence: Evidence) -> str:
 
 def _default_call(prompt: str) -> dict[str, object] | None:
     """The live call -- lazy-imported so unit tests never need the CLI."""
+    from llm.contracts import EXIT_POSTMORTEM_SCHEMA
     from llm.structured import call_llm_structured
 
-    obj = call_llm_structured(prompt, purpose=PURPOSE, scope="exit_postmortem", expect="object")
+    obj = call_llm_structured(
+        prompt,
+        purpose=PURPOSE,
+        scope="exit_postmortem",
+        expect="object",
+        schema=EXIT_POSTMORTEM_SCHEMA,
+    )
     if not isinstance(obj, dict):
         return None
     return cast("dict[str, object]", obj)

@@ -7,8 +7,9 @@ investor's CURRENT STANCE, grounded in (and citing) those musings. The citation
 set is then validated DETERMINISTICALLY against the input musing ids before any
 insight is recorded — an LLM cannot fabricate a "you said X" that points at a
 musing it wasn't given. Incremental + degrade-safe: a scope with no new musings
-is skipped with zero LLM cost, and any per-scope LLM failure leaves the prior
-cached stance standing.
+is skipped with zero LLM cost, and an invalid structured response leaves the
+prior cached stance standing. Transport, setup, and programming failures remain
+loud so the morning pipeline cannot silently mask a systemic outage.
 
 The LLM call is injected (``call=``) so the engine is unit-testable without the
 CLI; the default routes through ``call_llm_structured`` (purpose-pinned to Sonnet,
@@ -17,16 +18,19 @@ budget 0119, schema-validated).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from log_redact import redact
 from synthesis.insights import current_watermark, record_insight
 from user_state.notes import AnalystNoteRow, list_notes
 
 # A synthesis call: (ticker, musings) -> (stance_markdown, cited_note_ids) | None.
 SynthCall = Callable[[str, Sequence[AnalystNoteRow]], "tuple[str, list[int]] | None"]
+log = logging.getLogger(__name__)
 
 
 def _build_prompt(ticker: str, musings: Sequence[AnalystNoteRow]) -> str:
@@ -44,6 +48,7 @@ def _build_prompt(ticker: str, musings: Sequence[AnalystNoteRow]) -> str:
 
 
 def _default_call(ticker: str, musings: Sequence[AnalystNoteRow]) -> tuple[str, list[int]] | None:
+    from llm.contracts import THEME_SYNTHESIS_SCHEMA
     from llm.structured import call_llm_structured  # lazy: tests/CI need no CLI
 
     obj = call_llm_structured(
@@ -52,6 +57,7 @@ def _default_call(ticker: str, musings: Sequence[AnalystNoteRow]) -> tuple[str, 
         ticker=ticker,
         expect="object",
         required_keys=("stance", "citations"),
+        schema=THEME_SYNTHESIS_SCHEMA,
     )
     if not isinstance(obj, dict):
         return None
@@ -75,7 +81,9 @@ def run_synthesis(
     call: SynthCall | None = None,
 ) -> dict[str, int]:
     """Synthesize per-ticker stances over captured musings. Returns counts.
-    Incremental (watermark-gated) and degrade-safe (per-scope failures skip)."""
+    Incremental (watermark-gated); malformed structured output skips one scope."""
+    from llm.structured import StructuredParseError
+
     synth = call or _default_call
     musings = list_notes(user_id=user_id, kind="musing", db_path=db_path, limit=10_000)
 
@@ -100,14 +108,14 @@ def run_synthesis(
             continue
         try:
             result = synth(ticker, group)
-        except Exception as exc:
-            # Hard stops (budget exhausted, auth failure) must propagate — they
-            # affect every scope, not just this one. Soft failures (parse, net)
-            # are per-scope and safely degrade.
-            from llm.cli import LLMBudgetExceeded, LLMSetupError
-
-            if isinstance(exc, (LLMBudgetExceeded, LLMSetupError)):
-                raise
+        except StructuredParseError as exc:
+            log.warning(
+                {
+                    "event": "theme_synthesis_scope_degraded",
+                    "ticker": ticker,
+                    "error": redact(f"{type(exc).__name__}: {exc}")[:200],
+                }
+            )
             counts["failed"] += 1
             continue
         if result is None:

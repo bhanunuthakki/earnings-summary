@@ -31,6 +31,8 @@ from llm.untrusted import spotlight
 from llm_artifact_store import (
     Artifact,
     UpsertRequest,
+    artifact_is_fresh,
+    artifact_is_reusable,
     compute_input_sha256,
     read_current,
     upsert,
@@ -174,9 +176,9 @@ def run_lens(
             scope=lens.scope,
             db_path=db_path,
         )
-        if existing is not None and not existing.dirty:
+        if existing is not None:
             new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=effective_cache_inputs)
-            if new_sha == existing.input_sha256:
+            if artifact_is_reusable(existing, input_sha256=new_sha):
                 log.info(
                     {
                         "event": "lens_cache_hit",
@@ -297,11 +299,12 @@ def read_holdings_json(ticker: str, repo_root: Path) -> dict[str, object]:
 
 
 def load_prior_bear_case(ticker: str, repo_root: Path) -> Artifact | None:
-    return read_current(
+    artifact = read_current(
         ticker=ticker.upper(),
         purpose="bear_case",
         db_path=repo_root / "data" / "portfolio.db",
     )
+    return artifact if artifact is not None and artifact_is_fresh(artifact) else None
 
 
 def load_recent_summaries(ticker: str, repo_root: Path, n: int = 4) -> list[tuple[str, str]]:

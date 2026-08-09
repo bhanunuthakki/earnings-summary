@@ -70,7 +70,7 @@ from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 import llm_artifact_store
 from llm.cli import LLMBudgetExceeded, is_hard_stop
@@ -147,6 +147,20 @@ class BriefItem(BaseModel):
     effort_estimate: Literal["quick", "moderate", "substantial"] | None = None
     ticker: str | None = None
     source_refs: list[str] = Field(default_factory=list[str])
+
+
+class _BriefWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    what_changed: list[BriefItem]
+    highest_priority_decision: BriefItem | None
+    capital_use: BriefItem | None
+    assumption_challenge: BriefItem | None
+    decision_revisit: BriefItem | None
+    active_week_explanation: str
+
+
+_BRIEF_ADAPTER = TypeAdapter(_BriefWire)
 
 
 class SeniorPartnerBrief(BaseModel):
@@ -956,9 +970,10 @@ def _call_and_validate(
         scope="portfolio",
         expect="object",
         required_keys=("what_changed",),
+        schema=_BRIEF_ADAPTER,
         db_path=db_path,
     )
-    raw = cast("dict[str, object]", payload)
+    raw = _BriefWire.model_validate(payload).model_dump()
     raw["as_of"] = inputs.as_of
     raw["iso_year"] = inputs.iso_year
     raw["iso_week"] = inputs.iso_week

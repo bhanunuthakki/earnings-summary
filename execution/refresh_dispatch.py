@@ -1,13 +1,13 @@
 """Per-ticker refresh dispatcher with stale-only mode.
 
-Wraps the 6-step chain from full_refresh.bat (FMP fetch → transcripts →
-IR-doc summarize → KPI extraction → SayDo pairs → report rebuild) into a
-single Python entry point the dashboard can spawn as a subprocess and
+Owns the canonical 6-step full-refresh chain (FMP fetch → transcripts →
+IR-doc summarize → KPI extraction → SayDo pairs → report rebuild) as a
+single Python entry point the dashboard and managed runtime can spawn and
 stream output from.
 
 Two modes:
 
-    --mode full   : run every step (matches full_refresh.bat)
+    --mode full   : run every standard refresh step
     --mode stale  : skip FMP if pulled in the last 7 days. Cheaper steps
                     (transcripts / IR-summarize / KPI / SayDo / build)
                     always run because they're either idempotent skips
@@ -64,7 +64,7 @@ STEP_NAMES: tuple[str, ...] = (
     "thesis_eval",
     "build_report",
 )
-# Default chain when no explicit --steps is given (the full_refresh.bat six).
+# Default chain when no explicit --steps is given (the standard six-step refresh).
 # news / dcf / thesis_eval are opt-in via --steps so a routine refresh isn't
 # silently made heavier / more expensive.
 DEFAULT_STEPS: tuple[str, ...] = (
@@ -239,7 +239,7 @@ def execute(
         rc = getattr(result, "returncode", 1)
         _emit(out, f"[dispatch] step={name} action=end rc={rc}")
         if rc != 0:
-            rc_total = rc  # remember last failure; chain continues per full_refresh.bat semantics
+            rc_total = rc  # remember last failure; independent later steps still run
 
     _emit(out, f"[dispatch] all_done rc={rc_total}")
     return rc_total

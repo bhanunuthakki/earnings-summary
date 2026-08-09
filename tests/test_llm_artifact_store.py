@@ -11,6 +11,7 @@ import pytest
 from llm_artifact_store import (
     UpsertRequest,
     artifact_is_fresh,
+    artifact_is_reusable,
     compute_input_sha256,
     drain_dirty,
     history,
@@ -141,7 +142,10 @@ def test_artifact_freshness_rejects_dirty_and_expired_rows(db: Path) -> None:
     artifact = read_artifact(artifact_id or 0, db_path=db)
     assert artifact is not None
     assert artifact_is_fresh(artifact, now=now) is True
+    assert artifact_is_fresh(artifact, now=now + timedelta(hours=1)) is False
     assert artifact_is_fresh(artifact, now=now + timedelta(hours=2)) is False
+    assert artifact_is_reusable(artifact, input_sha256=artifact.input_sha256, now=now) is True
+    assert artifact_is_reusable(artifact, input_sha256="different", now=now) is False
 
     conn = sqlite3.connect(str(db))
     conn.execute("UPDATE llm_artifacts SET dirty = 1 WHERE id = ?", (artifact.id,))
@@ -164,6 +168,20 @@ def test_upsert_returns_cache_hit_on_same_inputs(db: Path) -> None:
     assert aid1 == aid2
     assert hit1 is False
     assert hit2 is True  # second call hits cache
+
+
+def test_upsert_does_not_cache_hit_expired_same_inputs(db: Path) -> None:
+    req = UpsertRequest(
+        ticker="GOOG",
+        purpose="bear_case",
+        content_md="# bear",
+        cache_inputs=["thesis-v1"],
+        expires_at=datetime(2020, 1, 1, tzinfo=UTC),
+    )
+    aid1, _ = upsert(req, db_path=db)
+    aid2, hit = upsert(req, db_path=db)
+    assert hit is False
+    assert aid2 != aid1
 
 
 def test_upsert_supersedes_on_input_change(db: Path) -> None:

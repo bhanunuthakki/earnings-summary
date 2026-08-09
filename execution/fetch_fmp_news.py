@@ -34,22 +34,20 @@ import json
 import os
 import sqlite3
 import sys
-import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple, cast
 from zoneinfo import ZoneInfo
 
-import requests
 from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from db import ACTIVE_LIST_TYPES_SQL, DB_PATH  # noqa: E402
-from log_redact import redact as _redact  # noqa: E402
 from models.fmp_payloads import FmpStockNewsRecord  # noqa: E402
+from net.client import FMP_CLIENT, HttpCallError, HttpErrorKind, JsonShape  # noqa: E402
 from news.store import SOURCE_FEED_FMP, NewsRow, upsert_news_rows  # noqa: E402
 from runtime.secrets import load_project_env  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
@@ -61,13 +59,9 @@ FMP_NEWS_ENDPOINT = "https://financialmodelingprep.com/stable/news/stock"
 _EASTERN = ZoneInfo("America/New_York")
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-RETRY_LIMIT = 3
-RETRY_BACKOFF = 2.0  # seconds, multiplied by attempt number
 MAX_WORKERS = 16
 DEFAULT_DAYS = 2  # FMP from/to window — margin over the trigger's 24h recency
 DEFAULT_LIMIT = 50  # the trigger reads only the latest 15; 50 is generous headroom
-REQUEST_TIMEOUT = 30
-
 _VALIDATION_DUMP_DIR = PROJECT_ROOT / ".tmp" / "fmp_validation_failures"
 
 
@@ -189,14 +183,6 @@ def _dump_validation_failure(ticker: str, body: object, err: ValidationError) ->
 # ---------------------------------------------------------------------------
 
 
-def _safe_json(resp: requests.Response) -> object:
-    """resp.json() or None on a non-JSON body (kept as the raw refusal signal)."""
-    try:
-        return resp.json()
-    except ValueError:
-        return None
-
-
 def fetch_news_for_ticker(
     ticker: str,
     *,
@@ -217,51 +203,45 @@ def fetch_news_for_ticker(
         "to": today.isoformat(),
         "limit": str(limit),
         "page": "0",
-        "apikey": api_key,
     }
-
-    last_err = ""
-    for attempt in range(1, RETRY_LIMIT + 1):
-        try:
-            resp = requests.get(FMP_NEWS_ENDPOINT, params=params, timeout=REQUEST_TIMEOUT)
-        except requests.RequestException as exc:
-            last_err = f"network: {_redact(exc)}"
-            if attempt < RETRY_LIMIT:
-                time.sleep(RETRY_BACKOFF * attempt)
-                continue
-            return FmpNewsResult(ticker, 0, None, [], last_err)
-
-        status = resp.status_code
-        if status in (401, 402, 403):
+    try:
+        response = FMP_CLIENT.get_json(
+            "news/stock",
+            params=params,
+            api_key=api_key,
+            # A 200 plan-refusal envelope must reach the dispatcher's fallback
+            # predicate, so this endpoint deliberately accepts any JSON shape.
+            expected=JsonShape.ANY,
+        )
+    except HttpCallError as exc:
+        status = exc.status_code or 0
+        if exc.kind in {HttpErrorKind.AUTH, HttpErrorKind.PLAN}:
             _log("fmp_news_auth_error", ticker=ticker, status=status)
-            return FmpNewsResult(ticker, status, _safe_json(resp), [], f"auth: HTTP {status}")
-        if status == 429 or status >= 500:
-            last_err = f"HTTP {status}"
-            if attempt < RETRY_LIMIT:
-                _log("fmp_news_transient_retry", ticker=ticker, status=status, attempt=attempt)
-                time.sleep(RETRY_BACKOFF * attempt)
-                continue
-            return FmpNewsResult(ticker, status, _safe_json(resp), [], last_err)
+            error = f"auth: HTTP {status}"
+        elif exc.kind is HttpErrorKind.NETWORK:
+            error = f"network: {exc}"
+        else:
+            error = f"HTTP {status}" if status else str(exc)
+        return FmpNewsResult(ticker, status, exc.payload, [], error)
 
-        body = _safe_json(resp)
-        rows, drift = _validate_and_map(body, ticker)
-        if drift is not None:
-            dump = _dump_validation_failure(ticker, body, drift)
-            try:
-                shown = str(dump.relative_to(PROJECT_ROOT))
-            except ValueError:
-                shown = str(dump)  # dump dir outside the repo (e.g. under test)
-            _log("fmp_news_schema_drift_halt", ticker=ticker, dump=shown)
-            return FmpNewsResult(
-                ticker,
-                status,
-                body,
-                [],
-                f"schema_drift: {len(drift.errors())} errors; dumped {shown}",
-            )
-        return FmpNewsResult(ticker, status, body, rows, None)
-
-    return FmpNewsResult(ticker, 0, None, [], last_err or "retries exhausted")
+    status = response.status_code
+    body = response.payload
+    rows, drift = _validate_and_map(body, ticker)
+    if drift is not None:
+        dump = _dump_validation_failure(ticker, body, drift)
+        try:
+            shown = str(dump.relative_to(PROJECT_ROOT))
+        except ValueError:
+            shown = str(dump)  # dump dir outside the repo (e.g. under test)
+        _log("fmp_news_schema_drift_halt", ticker=ticker, dump=shown)
+        return FmpNewsResult(
+            ticker,
+            status,
+            body,
+            [],
+            f"schema_drift: {len(drift.errors())} errors; dumped {shown}",
+        )
+    return FmpNewsResult(ticker, status, body, rows, None)
 
 
 # ---------------------------------------------------------------------------

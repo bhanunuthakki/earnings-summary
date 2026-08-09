@@ -73,6 +73,7 @@ def _build_prompt(comment_text: str, context_line: str) -> str:
 
 
 def _default_call(comment_text: str, context_line: str) -> dict[str, object]:
+    from llm.contracts import TRIAGE_SUGGESTION_SCHEMA
     from llm.structured import call_llm_structured
 
     obj = call_llm_structured(
@@ -80,6 +81,7 @@ def _default_call(comment_text: str, context_line: str) -> dict[str, object]:
         purpose=PURPOSE,
         expect="object",
         required_keys=("intent",),
+        schema=TRIAGE_SUGGESTION_SCHEMA,
     )
     return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
 

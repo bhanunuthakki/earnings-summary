@@ -45,7 +45,9 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import Literal, TypeVar, cast
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from synthesis.insights import list_insights
 from synthesis.tenets import list_tenets
@@ -57,6 +59,17 @@ log = logging.getLogger(__name__)
 PURPOSE = "capture_triage"
 
 ROUTES: tuple[str, ...] = ("answer_now", "contradiction", "plain")
+
+
+class _TriageWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    route: Literal["answer_now", "contradiction", "plain"]
+    conflicts_with: str | None = Field(default=None, max_length=40)
+    why: str = Field(default="", max_length=300)
+
+
+_TRIAGE_ADAPTER = TypeAdapter(_TriageWire)
 
 # How much of the rendered Shown-items block the prompt carries — a budget,
 # not a per-section limit; sections are dropped whole once the budget is hit
@@ -315,8 +328,9 @@ def _default_call(note_body: str, context_text: str) -> dict[str, object]:
         purpose=PURPOSE,
         expect="object",
         required_keys=("route",),
+        schema=_TRIAGE_ADAPTER,
     )
-    return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
+    return _TriageWire.model_validate(obj).model_dump()
 
 
 def _regex_fallback(note_body: str, *, degraded: bool = False) -> TriageVerdict:

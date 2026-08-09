@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-08-08",
+  "source": {
+    "path": "data/portfolio.db.pre0273.bak",
+    "sha256": "0dd0a9a6c04c4e2b2caf6858aa42ae656d0a077c243c0dc0a09519ee1092b106",
+    "revision": "0272_archive_generation_catalog",
+    "integrity_check": "ok",
+    "foreign_key_violations": 0
+  },
+  "bridge": {
+    "status": "bridged",
+    "to_revision": "0003_restore_baseline_defaults",
+    "integrity_check": "ok",
+    "foreign_key_violations": 0
+  },
+  "recovery_copy": {
+    "sha256": "bf8394d130086854f13f42c866bba9378462c774f9d6015ae776e573244f7174"
+  },
+  "row_counts": {
+    "latest_governed_document_entries": 0,
+    "latest_governed_fact_entries": 0,
+    "latest_governed_narrative_entries": 0,
+    "latest_governed_narrative_fts": 0,
+    "latest_governed_narrative_fts_config": 1,
+    "latest_governed_narrative_fts_data": 2,
+    "latest_governed_narrative_fts_docsize": 0,
+    "latest_governed_narrative_fts_idx": 0,
+    "latest_governed_population_operation_ledger": 0,
+    "latest_governed_population_operation_ledger_v2": 0,
+    "latest_governed_refresh_changes": 0,
+    "latest_governed_refresh_receipts": 0,
+    "latest_governed_refresh_runs": 0,
+    "latest_governed_refresh_stage": 0,
+    "latest_governed_scope_heads": 0,
+    "capital_actions": 0,
+    "critical_accounting_estimates": 0,
+    "exec_holdings": 0,
+    "fx_rates": 0,
+    "kpi_aliases": 0,
+    "litigation_matters": 0,
+    "numerical_claims": 0,
+    "segment_aliases": 0
+  },
+  "absent_defensive_drop_targets": {
+    "latest_governed_population": "No migration or runtime DDL created this table.",
+    "tracked_companies_new": "Archived migrations used this only as an in-transaction rebuild name."
+  }
+}

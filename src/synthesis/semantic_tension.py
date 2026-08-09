@@ -84,6 +84,7 @@ def _build_prompt(body_md: str, tenets_text: str) -> str:
 
 
 def _default_call(body_md: str, tenets_text: str) -> dict[str, object]:
+    from llm.contracts import SEMANTIC_TENSION_SCHEMA
     from llm.structured import call_llm_structured  # lazy: CI needs no CLI
 
     obj = call_llm_structured(
@@ -91,6 +92,7 @@ def _default_call(body_md: str, tenets_text: str) -> dict[str, object]:
         purpose=PURPOSE,
         expect="object",
         required_keys=("tension_with",),
+        schema=SEMANTIC_TENSION_SCHEMA,
     )
     return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
 
@@ -126,7 +128,7 @@ def detect_semantic_tension(
 
         tenets_text, tokens = _render_tenets(current)
         raw = (call or _default_call)(body_md, tenets_text)
-        raw_token = raw.get("tension_with") if isinstance(raw, dict) else None
+        raw_token = raw.get("tension_with")
         token = raw_token.strip() if isinstance(raw_token, str) else ""
         if not token:
             return None

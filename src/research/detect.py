@@ -72,6 +72,7 @@ def _build_prompt(text: str) -> str:
 
 
 def _default_call(text: str) -> dict[str, object]:
+    from llm.contracts import WONDERING_SCHEMA
     from llm.structured import call_llm_structured
 
     obj = call_llm_structured(
@@ -79,6 +80,7 @@ def _default_call(text: str) -> dict[str, object]:
         purpose=PURPOSE,
         expect="object",
         required_keys=("is_wondering", "claim"),
+        schema=WONDERING_SCHEMA,
     )
     return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
 

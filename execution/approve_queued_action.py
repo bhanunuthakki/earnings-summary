@@ -56,6 +56,8 @@ from alerts import (  # noqa: E402
     get_alert,
     list_queued_actions_for_alert,
 )
+from db_paths import configured_db_path  # noqa: E402
+from db_paths import resolve_db_path as canonical_db_path  # noqa: E402
 from user_state.ledger import ThesisLedgerEntryRow, append_entry  # noqa: E402
 from user_state.sizing import PositionSizingIntentRow, append_intent  # noqa: E402
 
@@ -459,10 +461,8 @@ def _err(msg: str) -> None:
 
 
 def _resolve_db_path(repo_root: Path, override: Path | None) -> Path | None:
-    if override is not None:
-        return override
-    candidate = repo_root.resolve() / "data" / "portfolio.db"
-    return candidate if candidate.exists() else None
+    candidate = canonical_db_path(override) if override is not None else configured_db_path(repo_root)
+    return candidate if candidate is not None and candidate.exists() else None
 
 
 def _fetch_action_or_raise(action_id: int, db_path: Path | None) -> QueuedActionRow:

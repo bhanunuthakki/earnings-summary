@@ -811,13 +811,16 @@ def test_build_artifacts_dispatches_to_etf_path(
 # ---------------------------------------------------------------------------
 
 
-def test_fmp_get_does_not_leak_api_key_on_network_error() -> None:
+def test_fmp_get_does_not_leak_api_key_on_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A RequestException whose string embeds the resolved ``?apikey=<key>`` URL
     must not surface the key in the RuntimeError ``_fmp_get`` raises, nor in any
     exception chained onto it."""
     import requests
 
     from execution.fetch_etf_data import _fmp_get  # pyright: ignore[reportPrivateUsage]
+    from net.client import HttpCallError, HttpErrorKind
 
     secret = "FMPKEY_SUPERSECRET_9f8e7d6c5b4a"
 
@@ -840,8 +843,18 @@ def test_fmp_get_does_not_leak_api_key_on_network_error() -> None:
                 f"(Caused by NewConnectionError('Failed to establish a new connection'))"
             )
 
+    def _leaky_client(url: str, **kwargs: object) -> object:
+        key = kwargs.get("api_key", "")
+        raise HttpCallError(
+            kind=HttpErrorKind.NETWORK,
+            message=f"connection failed for {url}?apikey={key}",
+            retryable=True,
+        )
+
+    monkeypatch.setattr("execution.fetch_etf_data.FMP_CLIENT.get_url_json", _leaky_client)
+
     with pytest.raises(RuntimeError) as excinfo:
-        _fmp_get(cast("requests.Session", _LeakySession()), secret, "SOXX", "etf/info")
+        _fmp_get(secret, "SOXX", "etf/info")
 
     raised = excinfo.value
     # The secret must not appear anywhere reachable from the raised exception:

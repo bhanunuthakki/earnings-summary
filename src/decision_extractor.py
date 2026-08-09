@@ -36,7 +36,6 @@ depend on this module; this is downstream-only.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import sqlite3
@@ -44,6 +43,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
+
+from pydantic import BaseModel, TypeAdapter
 
 from model_provenance.basis import Basis, dcf_basis
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -64,6 +65,13 @@ OutcomeLabel = Literal["correct", "wrong", "mixed", "unfalsifiable", "pending"]
 # can grade 'correct' (right for the wrong reasons).
 ProcessQuality = Literal["sound", "flawed", "lucky"]
 PROCESS_QUALITY_VOCAB: frozenset[str] = frozenset({"sound", "flawed", "lucky"})
+
+
+class _ExtractedDecision(BaseModel):
+    kind: RecommendationKind | None
+    value: float | None = None
+    conviction: Literal["low", "medium", "high"] | None = None
+
 
 # Recognized recommendation kinds. Order matters for the regex alternation —
 # put longer literals first so "INITIATE" wins over "INIT" if someone writes
@@ -235,7 +243,8 @@ def _llm_fallback_extract(*, body: str, ticker: str, source_lens: str) -> list[D
     recommendation. Returns at most one candidate. Defensive against
     JSON-decoding failures and unknown kinds."""
     try:
-        from llm_client import call_llm
+        from llm.structured import StructuredParseError, call_llm_structured
+        from llm.untrusted import spotlight
     except ImportError:
         log.debug({"event": "decision_extractor_llm_unavailable"})
         return []
@@ -254,56 +263,35 @@ If the paragraph contains no extractable recommendation, return:
 {{"kind": null}}
 
 Paragraph:
-{body[:2000]}
+{spotlight(body[:2000], source="analyst memo recommendation paragraph")}
 """
 
     try:
         # Model resolves from LLM_MODELS["decision_extraction"] — the registry
         # is the single reviewable surface for pins (llm_evals_plan.md §5.5).
-        raw = call_llm(
-            prompt,
-            purpose="decision_extraction",
-            ticker=ticker,
+        extracted = cast(
+            "_ExtractedDecision",
+            call_llm_structured(
+                prompt,
+                purpose="decision_extraction",
+                ticker=ticker,
+                scope=source_lens,
+                schema=TypeAdapter(_ExtractedDecision),
+            ),
         )
+    except StructuredParseError as exc:
+        log.warning({"event": "decision_extractor_structured_failed", "error": str(exc)})
+        return []
     except Exception as exc:  # extractor is best-effort
         log.warning({"event": "decision_extractor_llm_failed", "error": str(exc)})
         return []
-
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning({"event": "decision_extractor_llm_parse_failed", "raw_head": raw[:200]})
+    if extracted.kind is None:
         return []
-    if not isinstance(decoded, dict):
-        return []
-    d = cast("dict[str, object]", decoded)
-    kind_raw = d.get("kind")
-    if not isinstance(kind_raw, str):
-        return []
-    kind = kind_raw.lower()
-    if kind not in _KIND_VOCAB:
-        return []
-    value: float | None = None
-    raw_value = d.get("value")
-    if isinstance(raw_value, (int, float)):
-        value = float(raw_value)
-    conviction_raw = d.get("conviction")
-    conviction = (
-        conviction_raw
-        if isinstance(conviction_raw, str) and conviction_raw in {"low", "medium", "high"}
-        else None
-    )
     return [
         DecisionCandidate(
-            kind=cast("RecommendationKind", kind),
-            value=value,
-            conviction=conviction,
+            kind=extracted.kind,
+            value=extracted.value,
+            conviction=extracted.conviction,
             rationale_excerpt=body.strip()[:512],
             source_lens=source_lens,
         )

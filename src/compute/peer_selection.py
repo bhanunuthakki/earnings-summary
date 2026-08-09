@@ -44,10 +44,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, TypeAdapter, ValidationError, field_validator
 
 from llm.cli import DEFAULT_MODEL, LLM_MODELS
 from llm.structured import StructuredParseError, call_llm_structured
+from net.client import FMP_CLIENT, HttpCallError, HttpErrorKind, JsonShape, RetryPolicy
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ _MAX_DESC_CHARS = 4000
 # each run tops up only the files still missing, so a budget-capped (or 429'd)
 # fetch completes over successive builds instead of stalling forever.
 _MAX_FETCH_CALLS = 40
+_PEER_FETCH_RETRY = RetryPolicy(max_attempts=1)
 _FETCH_ENDPOINTS: tuple[tuple[str, str, dict[str, str]], ...] = (
     # (stable endpoint path, cache-file suffix p3_data reads, extra params)
     ("profile", "profile", {}),
@@ -99,6 +101,9 @@ class PeerSuggestion(BaseModel):
     @classmethod
     def _norm_text(cls, v: str) -> str:
         return v.strip()
+
+
+_PEER_SELECTION_ADAPTER = TypeAdapter(list[PeerSuggestion])
 
 
 @dataclass
@@ -203,13 +208,17 @@ def suggest_peers(
         max_peers=max_peers,
     )
     payload = call_llm_structured(
-        prompt, purpose=PURPOSE, ticker=ticker, model=model, backend=backend, expect="array"
+        prompt,
+        purpose=PURPOSE,
+        ticker=ticker,
+        model=model,
+        backend=backend,
+        expect="array",
+        schema=_PEER_SELECTION_ADAPTER,
     )
     out: list[PeerSuggestion] = []
     seen: set[str] = set()
     for entry in cast("list[object]", payload):
-        if not isinstance(entry, dict):
-            continue
         try:
             sug = PeerSuggestion.model_validate(entry)
         except ValidationError:
@@ -491,11 +500,6 @@ def _fetch_peer_fundamentals(
     fmp_dir = repo_root / "data" / "historical" / "fmp"
     fmp_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        import requests  # late — keep the render/import path free of it
-    except ImportError:
-        return PeerFetchOutcome()
-
     fetched_any: list[str] = []
     fetched_complete: list[str] = []
     calls = 0
@@ -515,7 +519,7 @@ def _fetch_peer_fundamentals(
                 )
                 return PeerFetchOutcome(fetched_any=fetched_any, fetched_complete=fetched_complete)
             calls += 1
-            body = _stable_get(requests, endpoint, peer, api_key, params)
+            body = _stable_get(endpoint, peer, api_key, params)
             if body is _RATE_LIMITED:
                 log.warning(
                     {"event": "peer_fetch_rate_limited", "ticker": self_ticker, "calls": calls}
@@ -538,7 +542,6 @@ def _fetch_peer_fundamentals(
 
 
 def _stable_get(
-    requests_mod: Any,
     endpoint: str,
     symbol: str,
     api_key: str,
@@ -548,36 +551,35 @@ def _stable_get(
     HTTP 429 (daily budget gone — the caller aborts the run); None on any other
     non-200 / empty / error. Mirrors save_fmp_data's stable URL shape.
 
-    ``requests_mod`` is the dynamically-imported ``requests`` module typed as
-    ``Any`` — the network boundary, kept off the import/render path on purpose.
+    Uses the canonical pooled client, but intentionally disables transport
+    retries: the peer-fetch contract aborts the whole run on the first 429.
     """
-    url = f"https://financialmodelingprep.com/stable/{endpoint}"
-    params = {"symbol": symbol, "apikey": api_key, **(extra_params or {})}
+    params = {"symbol": symbol, **(extra_params or {})}
     try:
-        resp = requests_mod.get(url, params=params, timeout=20)
-    except Exception as exc:  # network best-effort — any failure → skip this file
-        from log_redact import redact
-
+        response = FMP_CLIENT.get_json(
+            endpoint,
+            params=params,
+            api_key=api_key,
+            expected=JsonShape.ANY,
+            timeout=(3.05, 20.0),
+            retry=_PEER_FETCH_RETRY,
+        )
+    except HttpCallError as exc:
+        if exc.kind is HttpErrorKind.RATE_LIMIT:
+            return _RATE_LIMITED
         log.info(
             {
                 "event": "peer_fetch_http_error",
                 "symbol": symbol,
                 "endpoint": endpoint,
-                "error": redact(str(exc)[:120]),
+                "error": str(exc)[:120],
             }
         )
         return None
-    if resp.status_code == 429:
-        return _RATE_LIMITED
-    if resp.status_code != 200:
-        return None
-    try:
-        body = resp.json()  # Any (requests boundary)
-    except ValueError:
-        return None
+    body = response.payload
     if isinstance(body, list) and not body:
         return None  # accessible but empty — nothing to cache
-    return cast("object", body)
+    return body
 
 
 # ---------------------------------------------------------------------------

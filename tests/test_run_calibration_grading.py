@@ -1,7 +1,7 @@
 """Tests for execution/run_calibration_grading.py — the calibration-grader orchestrator.
 
-It runs a provider-free capture-retention sweep, then the nine existing grading
-rungs (predictions -> decisions -> bear_cases -> five eval-audit rungs ->
+It runs a provider-free capture-retention sweep, then eleven grading
+rungs (predictions -> decisions -> bear_cases -> seven eval-audit rungs ->
 behavior-distill, LAST) as subprocesses. Its load-bearing contract mirrors
 run_morning_pipeline:
 attempt every non-skipped rung even when an earlier one fails or times out, and
@@ -30,13 +30,15 @@ EVALS = "run_llm_evals.py"
 CAPTURE_RETENTION = "prune_llm_capture.py"
 BEHAVIOR_DISTILL = "run_behavior_distill.py"
 
-# The full run order: outcome graders, then the four eval-audit rungs, then
+# The full run order: outcome graders, then the seven eval-audit rungs, then
 # the tenet-2 Phase 4 behavioral-rules distiller (always last).
 ALL_SCRIPTS = [
     CAPTURE_RETENTION,
     PREDICTIONS,
     DECISIONS,
     BEAR,
+    EVALS,
+    EVALS,
     EVALS,
     EVALS,
     EVALS,
@@ -190,6 +192,8 @@ def test_skip_omits_a_grader(
         EVALS,
         EVALS,
         EVALS,
+        EVALS,
+        EVALS,
         BEHAVIOR_DISTILL,
     ]
     assert BEAR not in fake.scripts
@@ -211,7 +215,7 @@ def test_all_fail_exit_code_counts_all(
 def test_eval_audit_rungs_scope_to_fresh_artifacts(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The four eval-audit rungs (llm_evals_plan PR 3 + close_the_loops L3)
+    """The seven eval-audit rungs (llm_evals_plan PR 3 + close_the_loops L3)
     call run_llm_evals.py one purpose each, scoped by --since-days so the weekly
     cron only judges the week's fresh artifacts; their statuses land in the
     summary JSON."""
@@ -231,6 +235,8 @@ def test_eval_audit_rungs_scope_to_fresh_artifacts(
         "advisor_next_dollar",
         "ask_advisory_answer",
         "calibration_coach",
+        "material_news_classification",
+        "earnings_tone_diff",
     ]
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -239,6 +245,8 @@ def test_eval_audit_rungs_scope_to_fresh_artifacts(
     assert summary["eval_advisor_next_dollar"] == "ok"
     assert summary["eval_ask_advisory_answer"] == "ok"
     assert summary["eval_calibration_coach"] == "ok"
+    assert summary["eval_material_news_capture"] == "ok"
+    assert summary["eval_earnings_tone_capture"] == "ok"
 
 
 def test_behavior_distill_runs_last_and_a_hard_failure_is_counted(
@@ -288,6 +296,8 @@ def test_skip_an_eval_rung(
         "advisor_next_dollar",
         "ask_advisory_answer",
         "calibration_coach",
+        "material_news_classification",
+        "earnings_tone_diff",
     ]
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["eval_transcript_summary"] == "skipped"

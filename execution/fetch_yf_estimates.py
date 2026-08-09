@@ -40,7 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -54,6 +54,7 @@ from models.yf_payloads import (  # noqa: E402
     YfGrowthRow,
     YfPriceTargets,
 )
+from pipeline.row_validation import validate_provider_rows  # noqa: E402
 
 YF_FILE_SUFFIX = "_yf_estimates.json"
 
@@ -160,20 +161,24 @@ def build_snapshot(
     validated: dict[str, list[object]] = {}
     for field_name, _ in _FRAME_TABLES:
         model = _ROW_MODELS[field_name]
-        rows: list[object] = []
-        for raw in tables.get(field_name, []):
-            try:
-                rows.append(model.model_validate(raw))
-            except ValidationError:
-                _log("yf_estimates_row_rejected", ticker=ticker, table=field_name)
-        validated[field_name] = rows
+        validated[field_name] = list(
+            validate_provider_rows(
+                tables.get(field_name, []),
+                TypeAdapter(model),
+                source=f"yf_estimates_{field_name}",
+                context={"ticker": ticker, "table": field_name},
+            )
+        )
     targets: YfPriceTargets | None = None
     raw_targets = tables.get("analyst_price_targets", [])
     if raw_targets:
-        try:
-            targets = YfPriceTargets.model_validate(raw_targets[0])
-        except ValidationError:
-            _log("yf_estimates_row_rejected", ticker=ticker, table="analyst_price_targets")
+        validated_targets = validate_provider_rows(
+            raw_targets[:1],
+            TypeAdapter(YfPriceTargets),
+            source="yf_estimates_analyst_price_targets",
+            context={"ticker": ticker, "table": "analyst_price_targets"},
+        )
+        targets = validated_targets[0] if validated_targets else None
     return YfEstimatesSnapshot(
         ticker=ticker,
         asof_date=asof_date,

@@ -4,12 +4,62 @@ import json
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+import upgrade_database as upgrade_database_module
 from upgrade_database import ACTIVE_HEAD, UpgradeDatabaseError, upgrade_database
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_upgrade_requires_safe_sqlite_before_touching_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "must-not-exist.db"
+
+    def unsafe_runtime() -> None:
+        raise RuntimeError("unsafe SQLite test sentinel")
+
+    monkeypatch.setattr(
+        upgrade_database_module,
+        "require_safe_sqlite_writer_runtime",
+        unsafe_runtime,
+    )
+    with pytest.raises(RuntimeError, match="unsafe SQLite test sentinel"):
+        upgrade_database(db_path, repo_root=ROOT)
+    assert not db_path.exists()
+
+
+def test_upgrade_classifies_database_only_after_lock_acquisition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "locked-classification.db"
+    db_path.touch()
+    lock_held = False
+
+    @contextmanager
+    def fake_lock(*_args: object, **_kwargs: object) -> Iterator[None]:
+        nonlocal lock_held
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    def revisions_only_under_lock(_db_path: Path) -> tuple[str, ...]:
+        assert lock_held
+        return (ACTIVE_HEAD,)
+
+    monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
+    monkeypatch.setattr(upgrade_database_module, "_read_revisions", revisions_only_under_lock)
+    monkeypatch.setattr(upgrade_database_module, "_integrity_check", lambda _path: None)
+
+    receipt = upgrade_database(db_path, repo_root=ROOT)
+
+    assert receipt.status == "already_current"
 
 
 def _revision(db_path: Path) -> str:
@@ -49,6 +99,7 @@ def test_upgrade_database_bridges_archived_revision_with_verified_backup(
     result = subprocess.run(
         [
             sys.executable,
+            str(ROOT / "execution" / "sqlite_bootstrap.py"),
             str(ROOT / "execution" / "upgrade_database.py"),
             "--db-path",
             str(db_path),
@@ -111,6 +162,7 @@ def test_upgrade_database_cli_emits_valid_json_receipt(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
+            str(ROOT / "execution" / "sqlite_bootstrap.py"),
             str(ROOT / "execution" / "upgrade_database.py"),
             "--db-path",
             str(db_path),

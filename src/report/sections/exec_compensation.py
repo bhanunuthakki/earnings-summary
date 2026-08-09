@@ -359,6 +359,7 @@ def _generate_alignment_narrative(
     try:
         from llm_artifact_store import (  # type: ignore[import-not-found]
             UpsertRequest,
+            artifact_is_reusable,
             read_current,
             upsert,
         )
@@ -406,12 +407,12 @@ def _generate_alignment_narrative(
         purpose="exec_comp_alignment",
         db_path=db_path,
     )
-    if existing is not None and not existing.dirty:
+    if existing is not None:
         # Compare input_sha256
         from llm_artifact_store import compute_input_sha256  # type: ignore[import-not-found]
 
         new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=cache_inputs)
-        if new_sha == existing.input_sha256 and existing.content_md:
+        if artifact_is_reusable(existing, input_sha256=new_sha) and existing.content_md:
             return existing.content_md
 
     # Build the prompt

@@ -11,6 +11,7 @@ stubbing the shared transport ``llm.structured.call_llm`` that
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 
@@ -40,3 +41,19 @@ def test_qa_topics_raises_loudly_on_double_failure(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(structured, "call_llm", lambda prompt, **_kw: "not json at all")
     with pytest.raises(StructuredParseError):
         generate_qa_topics("GOOG", "Q1 2026", _Q)
+
+
+def test_structured_failure_diagnostics_redact_secrets(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = "sk-secret-value-123456789"
+    monkeypatch.setattr(
+        structured,
+        "call_llm",
+        lambda prompt, **_kw: f'not json {{"api_key": "{secret}"}}',
+    )
+    with caplog.at_level(logging.WARNING), pytest.raises(StructuredParseError) as exc_info:
+        generate_qa_topics("GOOG", "Q1 2026", _Q)
+    assert secret not in caplog.text
+    assert secret not in exc_info.value.raw_head
+    assert "***" in caplog.text

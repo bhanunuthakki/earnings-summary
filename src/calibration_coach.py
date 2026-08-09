@@ -46,7 +46,9 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
+
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from attribution import SkillDecomposition, decompose_alpha
 from calibration_guard import confidence_note, is_confident
@@ -320,6 +322,79 @@ class NamedBias:
     tell: str  # the observable signal that he's doing it again
 
 
+class _ConditionWire(BaseModel):
+    metric: str = Field(min_length=1, max_length=160)
+    metric_source: Literal["kpi", "financial"] | None = None
+    op: Literal["lt", "le", "gt", "ge"]
+    threshold: float
+    unit: Literal["actual", "percent", "ratio", "count", "bps", "millions", "billions"]
+    for_periods: int = Field(ge=1)
+    note: str | None = Field(default=None, max_length=400)
+
+
+class _BiasWire(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    pattern: str = Field(min_length=1, max_length=400)
+    evidence: list[str] = Field(min_length=1, max_length=_MAX_EVIDENCE)
+    tell: str = Field(default="", max_length=300)
+
+
+class _BiasResponse(BaseModel):
+    biases: list[_BiasWire] = Field(max_length=_MAX_BIASES)
+
+    @field_validator("biases", mode="before")
+    @classmethod
+    def _drop_invalid_biases(cls, value: object) -> list[_BiasWire]:
+        if not isinstance(value, list):
+            raise ValueError("biases must be an array")
+        valid: list[_BiasWire] = []
+        for entry in cast("list[object]", value):
+            try:
+                valid.append(_BiasWire.model_validate(entry))
+            except ValueError:
+                continue
+        return valid
+
+
+class _ExperimentResponse(BaseModel):
+    hypothesis: str = Field(min_length=1, max_length=300)
+    rationale: str = Field(default="", max_length=300)
+    condition: _ConditionWire | None = None
+
+    @field_validator("condition", mode="before")
+    @classmethod
+    def _drop_invalid_condition(cls, value: object) -> _ConditionWire | None:
+        if value is None:
+            return None
+        try:
+            return _ConditionWire.model_validate(value)
+        except ValueError:
+            return None
+
+
+class _PremortemResponse(BaseModel):
+    resemblances: list[str] = Field(min_length=1, max_length=3)
+    conditions: list[_ConditionWire] = Field(default_factory=list[_ConditionWire], max_length=3)
+
+    @field_validator("conditions", mode="before")
+    @classmethod
+    def _drop_invalid_conditions(cls, value: object) -> list[_ConditionWire]:
+        if not isinstance(value, list):
+            return []
+        valid: list[_ConditionWire] = []
+        for entry in cast("list[object]", value):
+            try:
+                valid.append(_ConditionWire.model_validate(entry))
+            except ValueError:
+                continue
+        return valid
+
+
+_BIAS_ADAPTER = TypeAdapter(_BiasResponse)
+_EXPERIMENT_ADAPTER = TypeAdapter(_ExperimentResponse)
+_PREMORTEM_ADAPTER = TypeAdapter(_PremortemResponse)
+
+
 _BIAS_PROMPT = """You are the owner's calibration coach. From his OWN track record below —
 graded decisions, conviction calibration, realized selection/sizing/timing
 skill, and his own closed-position lessons — name the {min_b}-{max_b} most
@@ -401,7 +476,10 @@ def synthesize_biases(inputs: CoachInputs) -> list[NamedBias]:
         min_b=_MIN_BIASES, max_b=_MAX_BIASES, grounding=grounding_block(inputs)
     )
     try:
-        payload = call_llm_structured(prompt, purpose=COACH_PURPOSE, expect="object")
+        payload = call_llm_structured(
+            prompt, purpose=COACH_PURPOSE, expect="object", schema=_BIAS_ADAPTER
+        )
+        response = _BiasResponse.model_validate(payload)
     except StructuredParseError as exc:
         log.warning({"event": "coach_biases_parse_failed", "error": str(exc)})
         raise TransientCoachError(f"bias synthesis parse miss: {exc}") from exc
@@ -410,14 +488,9 @@ def synthesize_biases(inputs: CoachInputs) -> list[NamedBias]:
             raise
         log.warning({"event": "coach_biases_llm_failed", "error": f"{type(exc).__name__}: {exc}"})
         raise TransientCoachError(f"bias synthesis LLM failure: {type(exc).__name__}") from exc
-    if not isinstance(payload, dict):
-        return []
-    biases_raw = cast("dict[str, object]", payload).get("biases")
-    if not isinstance(biases_raw, list):
-        return []
     out: list[NamedBias] = []
-    for entry in cast("list[object]", biases_raw):
-        bias = _parse_bias(entry)
+    for entry in response.biases:
+        bias = _parse_bias(entry.model_dump())
         if bias is not None:
             out.append(bias)
         if len(out) >= _MAX_BIASES:
@@ -483,7 +556,10 @@ def propose_experiment(inputs: CoachInputs, biases: list[NamedBias]) -> Behavior
     )
     prompt = _EXPERIMENT_PROMPT.format(grounding=grounding_block(inputs), biases=biases_text)
     try:
-        payload = call_llm_structured(prompt, purpose=COACH_PURPOSE, expect="object")
+        payload = call_llm_structured(
+            prompt, purpose=COACH_PURPOSE, expect="object", schema=_EXPERIMENT_ADAPTER
+        )
+        response = _ExperimentResponse.model_validate(payload)
     except StructuredParseError as exc:
         log.warning({"event": "coach_experiment_parse_failed", "error": str(exc)})
         raise TransientCoachError(f"experiment parse miss: {exc}") from exc
@@ -492,21 +568,10 @@ def propose_experiment(inputs: CoachInputs, biases: list[NamedBias]) -> Behavior
             raise
         log.warning({"event": "coach_experiment_llm_failed", "error": str(exc)})
         raise TransientCoachError(f"experiment LLM failure: {type(exc).__name__}") from exc
-    if not isinstance(payload, dict):
-        return None
-    obj = cast("dict[str, object]", payload)
-    hypothesis = obj.get("hypothesis")
-    rationale = obj.get("rationale")
-    if not (isinstance(hypothesis, str) and hypothesis.strip()):
-        return None
-    condition = parse_condition(obj.get("condition"))
+    condition = parse_condition(response.condition.model_dump() if response.condition else None)
     return BehavioralExperiment(
-        hypothesis=" ".join(hypothesis.split())[:300],
-        rationale=(
-            " ".join(rationale.split())[:300]
-            if isinstance(rationale, str) and rationale.strip()
-            else ""
-        ),
+        hypothesis=" ".join(response.hypothesis.split())[:300],
+        rationale=" ".join(response.rationale.split())[:300],
         condition=condition,
     )
 
@@ -629,7 +694,14 @@ def compose_premortem(
         max_c=_MAX_DRAFT_CONDITIONS,
     )
     try:
-        payload = call_llm_structured(prompt, purpose=COACH_PURPOSE, ticker=t, expect="object")
+        payload = call_llm_structured(
+            prompt,
+            purpose=COACH_PURPOSE,
+            ticker=t,
+            expect="object",
+            schema=_PREMORTEM_ADAPTER,
+        )
+        response = _PremortemResponse.model_validate(payload)
     except StructuredParseError as exc:
         log.warning({"event": "premortem_parse_failed", "ticker": t, "error": str(exc)})
         return None
@@ -638,28 +710,14 @@ def compose_premortem(
             raise
         log.warning({"event": "premortem_llm_failed", "ticker": t, "error": str(exc)})
         return None
-    if not isinstance(payload, dict):
-        return None
-    obj = cast("dict[str, object]", payload)
-    resemblances_raw = obj.get("resemblances")
-    resemblances = (
-        [
-            " ".join(str(r).split())[:400]
-            for r in cast("list[object]", resemblances_raw)
-            if str(r).strip()
-        ][:_MAX_RESEMBLANCES]
-        if isinstance(resemblances_raw, list)
-        else []
-    )
+    resemblances = [" ".join(r.split())[:400] for r in response.resemblances if r.strip()]
     if not resemblances:  # a pre-mortem with no grounded parallel is exactly what we reject
         return None
-    conditions_raw = obj.get("conditions")
     drafted: list[DecisionCondition] = []
-    if isinstance(conditions_raw, list):
-        for entry in cast("list[object]", conditions_raw):
-            cond = parse_condition(entry)
-            if cond is not None:
-                drafted.append(cond)
+    for entry in response.conditions:
+        cond = parse_condition(entry.model_dump())
+        if cond is not None:
+            drafted.append(cond)
             if len(drafted) >= _MAX_DRAFT_CONDITIONS:
                 break
     return Premortem(ticker=t, stance=stance, resemblances=resemblances, drafted_conditions=drafted)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -38,6 +39,12 @@ from evals.peer_selection import (  # noqa: E402
     run_peer_selection_eval,
 )
 from llm.structured import StructuredParseError  # noqa: E402
+from net.client import (  # noqa: E402
+    HttpCallError,
+    HttpErrorKind,
+    HttpJsonResponse,
+    JsonValue,
+)
 from report.sections.p3_data import load_peer_comp  # noqa: E402
 
 
@@ -267,13 +274,13 @@ def test_metricless_thesis_peer_dropped_not_rendered_as_dashes(tmp_path: Path) -
 class _StubResponse:
     def __init__(self, status_code: int, body: object) -> None:
         self.status_code = status_code
-        self._body = body
+        self.body = body
 
     def json(self) -> object:
-        return self._body
+        return self.body
 
 
-class _StubRequests:
+class _StubFmpClient:
     """Stands in for the lazily-imported ``requests`` module: records every
     (endpoint, params) and returns a fixed response."""
 
@@ -281,9 +288,29 @@ class _StubRequests:
         self.response = response
         self.calls: list[tuple[str, dict[str, str]]] = []
 
-    def get(self, url: str, params: dict[str, str], timeout: int) -> _StubResponse:
-        self.calls.append((url.rsplit("/", 1)[-1], dict(params)))
-        return self.response
+    def get_json(self, endpoint: str, **kwargs: object) -> HttpJsonResponse:
+        params = cast(dict[str, str], kwargs.get("params", {}))
+        api_key = kwargs.get("api_key")
+        self.calls.append((endpoint, {**params, "apikey": str(api_key or "")}))
+        if self.response.status_code >= 400:
+            kind = (
+                HttpErrorKind.RATE_LIMIT
+                if self.response.status_code == 429
+                else HttpErrorKind.PLAN
+                if self.response.status_code == 402
+                else HttpErrorKind.CLIENT
+            )
+            raise HttpCallError(
+                kind=kind,
+                message=f"HTTP {self.response.status_code}",
+                retryable=self.response.status_code == 429,
+                status_code=self.response.status_code,
+                payload=cast(JsonValue, self.response.body),
+            )
+        return HttpJsonResponse(
+            status_code=self.response.status_code,
+            payload=cast(JsonValue, self.response.body),
+        )
 
 
 def _no_sleep(_seconds: float) -> None:
@@ -292,9 +319,9 @@ def _no_sleep(_seconds: float) -> None:
 
 def _install_stub(
     monkeypatch: pytest.MonkeyPatch, response: _StubResponse, *, api_key: str | None = "k-env"
-) -> _StubRequests:
-    stub = _StubRequests(response)
-    monkeypatch.setitem(sys.modules, "requests", stub)
+) -> _StubFmpClient:
+    stub = _StubFmpClient(response)
+    monkeypatch.setattr(ps, "FMP_CLIENT", stub)
     monkeypatch.setattr(ps.time, "sleep", _no_sleep)
     if api_key is None:
         monkeypatch.delenv("FMP_API_KEY", raising=False)
@@ -387,7 +414,7 @@ def test_fetch_skips_cleanly_without_any_key(
     assert stub.calls == []
 
 
-class _StubRequestsPerEndpoint:
+class _StubFmpClientPerEndpoint:
     """Like ``_StubRequests`` but the response varies by endpoint — models a
     free-tier account where some ``/stable`` endpoints 402 for a given symbol
     while others (``profile``) succeed."""
@@ -397,10 +424,23 @@ class _StubRequestsPerEndpoint:
         self._default = default
         self.calls: list[str] = []
 
-    def get(self, url: str, params: dict[str, str], timeout: int) -> _StubResponse:
-        endpoint = url.rsplit("/", 1)[-1]
+    def get_json(self, endpoint: str, **_kwargs: object) -> HttpJsonResponse:
         self.calls.append(endpoint)
-        return self._by_endpoint.get(endpoint, self._default)
+        response = self._by_endpoint.get(endpoint, self._default)
+        if response.status_code >= 400:
+            raise HttpCallError(
+                kind=(
+                    HttpErrorKind.RATE_LIMIT if response.status_code == 429 else HttpErrorKind.PLAN
+                ),
+                message=f"HTTP {response.status_code}",
+                retryable=response.status_code == 429,
+                status_code=response.status_code,
+                payload=cast(JsonValue, response.body),
+            )
+        return HttpJsonResponse(
+            status_code=response.status_code,
+            payload=cast(JsonValue, response.body),
+        )
 
 
 def test_fetch_marks_partial_free_tier_peer_as_not_complete(
@@ -412,11 +452,11 @@ def test_fetch_marks_partial_free_tier_peer_as_not_complete(
     land in fetched_any (so the panel doesn't skip it) but NOT in
     fetched_complete (so partial-data peers stay distinguishable from
     fully-resolved ones in the cache)."""
-    stub = _StubRequestsPerEndpoint(
+    stub = _StubFmpClientPerEndpoint(
         by_endpoint={"profile": _StubResponse(200, [{"symbol": "GRAB"}])},
         default=_StubResponse(402, {"error": "premium endpoint"}),
     )
-    monkeypatch.setitem(sys.modules, "requests", stub)
+    monkeypatch.setattr(ps, "FMP_CLIENT", stub)
     monkeypatch.setattr(ps.time, "sleep", _no_sleep)
     monkeypatch.setenv("FMP_API_KEY", "k-env")
 

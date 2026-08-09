@@ -22,12 +22,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import sys
 from pathlib import Path
 from typing import cast
+
+from pydantic import BaseModel, Field, TypeAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -35,7 +36,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from exec_comp_store import ExecCompPackage, PerformanceMetric, upsert_package  # noqa: E402
 from filing_text_fetcher import fetch_latest_def14a_text  # noqa: E402
-from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
+from llm.structured import StructuredParseError, call_llm_structured  # noqa: E402
+from llm.untrusted import spotlight  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_exec_comp")
@@ -43,6 +45,40 @@ log = logging.getLogger("extract_exec_comp")
 # DEF 14A texts are ~150KB-500KB. Cap input for the prompt; the comp tables
 # we care about typically appear in the first 60-80% of the doc.
 _MAX_PROXY_CHARS = 180_000
+
+
+class _MetricExtraction(BaseModel):
+    metric: str
+    weight: float | None = None
+    threshold: float | None = None
+    target: float | None = None
+    max: float | None = None
+    actual: float | None = None
+    unit: str | None = None
+
+
+class _ExecutiveExtraction(BaseModel):
+    executive_name: str
+    role: str | None = None
+    is_ceo: bool = False
+    currency: str | None = None
+    base_salary: float | None = None
+    cash_bonus_target: float | None = None
+    cash_bonus_actual: float | None = None
+    equity_grant_value: float | None = None
+    equity_grant_breakdown: dict[str, float | None] = Field(default_factory=dict)
+    other_comp: float | None = None
+    total_comp_granted: float | None = None
+    total_comp_realized: float | None = None
+    performance_metrics: list[_MetricExtraction] = Field(default_factory=list[_MetricExtraction])
+
+
+class _ExecCompExtraction(BaseModel):
+    executives: list[_ExecutiveExtraction]
+    peer_group: list[str] = Field(default_factory=list[str])
+    cic_terms: dict[str, object] = Field(default_factory=dict[str, object])
+    hedging_pledging_policy: str | None = None
+    ceo_pay_ratio: float | None = None
 
 
 _PROMPT = """You are extracting executive compensation disclosures from {ticker}'s
@@ -127,96 +163,66 @@ def extract_for_ticker(
         return {"ticker": ticker, "status": "no_def14a", "n": 0}
 
     proxy_text = result.text[:_MAX_PROXY_CHARS]
-    prompt = _PROMPT.format(ticker=ticker, fiscal_year=result.fiscal_year, proxy_text=proxy_text)
+    prompt = _PROMPT.format(
+        ticker=ticker,
+        fiscal_year=result.fiscal_year,
+        proxy_text=spotlight(proxy_text, source="SEC DEF 14A proxy filing text"),
+    )
 
     try:
-        raw = call_llm(
-            prompt,
-            purpose="exec_comp_extraction",
-            ticker=ticker,
-        ).strip()
+        validated = cast(
+            "_ExecCompExtraction",
+            call_llm_structured(
+                prompt,
+                purpose="exec_comp_extraction",
+                ticker=ticker,
+                scope="executive_compensation",
+                schema=TypeAdapter(_ExecCompExtraction),
+            ),
+        )
+    except StructuredParseError as exc:
+        log.warning({"event": "exec_comp_structured_failed", "ticker": ticker, "error": str(exc)})
+        return {"ticker": ticker, "status": "structured_failed", "n": 0}
     except Exception as exc:
         log.warning({"event": "exec_comp_llm_failed", "ticker": ticker, "error": str(exc)})
         return {"ticker": ticker, "status": "llm_failed", "n": 0}
-
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning({"event": "exec_comp_parse_failed", "ticker": ticker, "head": raw[:200]})
-        return {"ticker": ticker, "status": "parse_failed", "n": 0}
-    if not isinstance(decoded, dict):
-        return {"ticker": ticker, "status": "not_an_object", "n": 0}
-
-    d = cast("dict[str, object]", decoded)
-    execs_raw = d.get("executives")
-    if not isinstance(execs_raw, list):
-        return {"ticker": ticker, "status": "no_executives", "n": 0}
-
-    peer_group = d.get("peer_group") if isinstance(d.get("peer_group"), list) else []
-    peer_group_list = [str(p) for p in cast("list[object]", peer_group) if isinstance(p, str)]
-    cic_terms = d.get("cic_terms") if isinstance(d.get("cic_terms"), dict) else {}
-    hedging = d.get("hedging_pledging_policy")
-    hedging_str = str(hedging) if isinstance(hedging, str) else None
-    ceo_pay_ratio = d.get("ceo_pay_ratio")
-    ceo_pay_ratio_float = (
-        float(ceo_pay_ratio)
-        if isinstance(ceo_pay_ratio, (int, float)) and not isinstance(ceo_pay_ratio, bool)
-        else None
-    )
-
     db_path = repo_root / "data" / "portfolio.db"
     inserted = 0
-    for exec_obj in execs_raw:
-        if not isinstance(exec_obj, dict):
+    for executive in validated.executives:
+        if not executive.executive_name.strip():
             continue
-        e = cast("dict[str, object]", exec_obj)
-        name = e.get("executive_name")
-        if not isinstance(name, str) or not name.strip():
-            continue
-        metrics: list[PerformanceMetric] = []
-        metrics_raw = e.get("performance_metrics")
-        if isinstance(metrics_raw, list):
-            for m in metrics_raw:
-                if not isinstance(m, dict):
-                    continue
-                md = cast("dict[str, object]", m)
-                metric_name = md.get("metric")
-                weight = md.get("weight")
-                if not isinstance(metric_name, str):
-                    continue
-                metrics.append(
-                    PerformanceMetric(
-                        metric=metric_name,
-                        weight=float(weight) if isinstance(weight, (int, float)) else 0.0,
-                        threshold=_f(md.get("threshold")),
-                        target=_f(md.get("target")),
-                        max=_f(md.get("max")),
-                        actual=_f(md.get("actual")),
-                        unit=str(md.get("unit", "")) if md.get("unit") else None,
-                    )
-                )
+        metrics = [
+            PerformanceMetric(
+                metric=metric.metric,
+                weight=metric.weight or 0.0,
+                threshold=metric.threshold,
+                target=metric.target,
+                max=metric.max,
+                actual=metric.actual,
+                unit=metric.unit,
+            )
+            for metric in executive.performance_metrics
+        ]
         pkg = ExecCompPackage(
             ticker=ticker,
             fiscal_year=result.fiscal_year,
-            executive_name=name.strip(),
-            role=str(e.get("role") or "").strip() or None,
-            is_ceo=bool(e.get("is_ceo")),
-            currency=str(e.get("currency") or "USD"),
-            base_salary=_f(e.get("base_salary")),
-            cash_bonus_target=_f(e.get("cash_bonus_target")),
-            cash_bonus_actual=_f(e.get("cash_bonus_actual")),
-            equity_grant_value=_f(e.get("equity_grant_value")),
-            equity_grant_breakdown=cast("dict[str, object]", e.get("equity_grant_breakdown") or {}),
-            other_comp=_f(e.get("other_comp")),
-            total_comp_granted=_f(e.get("total_comp_granted")),
-            total_comp_realized=_f(e.get("total_comp_realized")),
+            executive_name=executive.executive_name.strip(),
+            role=executive.role.strip() if executive.role else None,
+            is_ceo=executive.is_ceo,
+            currency=executive.currency or "USD",
+            base_salary=executive.base_salary,
+            cash_bonus_target=executive.cash_bonus_target,
+            cash_bonus_actual=executive.cash_bonus_actual,
+            equity_grant_value=executive.equity_grant_value,
+            equity_grant_breakdown=cast("dict[str, object]", executive.equity_grant_breakdown),
+            other_comp=executive.other_comp,
+            total_comp_granted=executive.total_comp_granted,
+            total_comp_realized=executive.total_comp_realized,
             performance_metrics=metrics,
-            peer_group=peer_group_list,
-            cic_terms=cast("dict[str, object]", cic_terms),
-            hedging_pledging_policy=hedging_str,
-            ceo_pay_ratio=ceo_pay_ratio_float,
+            peer_group=validated.peer_group,
+            cic_terms=validated.cic_terms,
+            hedging_pledging_policy=validated.hedging_pledging_policy,
+            ceo_pay_ratio=validated.ceo_pay_ratio,
             source_excerpt=None,
         )
         if upsert_package(pkg, db_path=db_path) is not None:
@@ -225,19 +231,10 @@ def extract_for_ticker(
     return {
         "ticker": ticker,
         "fiscal_year": result.fiscal_year,
-        "n_executives": len(execs_raw),
+        "n_executives": len(validated.executives),
         "n_inserted": inserted,
         "status": "ok",
     }
-
-
-def _f(v: object) -> float | None:
-    if v is None or isinstance(v, bool):
-        return None
-    try:
-        return float(v)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
-        return None
 
 
 def main() -> int:
@@ -289,7 +286,9 @@ def main() -> int:
             fiscal_year=args.fiscal_year,
         )
         log.info(outcome)
-        total += int(outcome.get("n_inserted", 0))
+        n_inserted = outcome.get("n_inserted", 0)
+        if isinstance(n_inserted, int) and not isinstance(n_inserted, bool):
+            total += n_inserted
     print(f"\nExec comp extraction done · {total} package rows across {len(tickers)} ticker(s).")
     return 0
 

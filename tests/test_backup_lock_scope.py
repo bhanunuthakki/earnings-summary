@@ -69,3 +69,32 @@ def test_scheduler_wrapper_declares_the_backup_write_set() -> None:
     )
     assert '"db-backup"' in invocation, invocation
     assert '"portfolio-db"' not in invocation, invocation
+
+
+def test_scheduler_backup_requires_encrypted_receipt_before_file_gc_apply() -> None:
+    """File retention belongs to the existing daily backup chain.
+
+    A zero exit alone is insufficient because the backup's idempotency guard can
+    suppress an invocation. The wrapper must prove that this invocation emitted
+    an encrypted snapshot receipt, prove the referenced file exists, and only
+    then run destructive file retention. Its exit code must remain the final
+    scheduled-task result.
+    """
+    text = BACKUP_WRAPPER.read_text(encoding="utf-8", errors="replace")
+    lowered = text.lower()
+
+    backup_index = lowered.index("cron\\backup_db.py")
+    receipt_index = lowered.index("ok backup ->")
+    existence_index = lowered.index("test-path -literalpath")
+    gc_index = lowered.index("execution\\backup_file_gc.py")
+    assert backup_index < receipt_index < existence_index < gc_index
+    assert ".gz.enc" in lowered[receipt_index:gc_index]
+
+    gc_invocation = next(
+        line
+        for line in text.splitlines()
+        if "run_python.bat" in line and "backup_file_gc.py" in line
+    )
+    assert '"backup-file-gc"' in gc_invocation
+    assert "--apply" in gc_invocation
+    assert text.rstrip().endswith("endlocal & exit /b %RC%")

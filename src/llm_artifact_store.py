@@ -159,6 +159,29 @@ def _parse_dt(v: object) -> datetime:
     return datetime.fromisoformat(str(v))
 
 
+def _cache_state_is_reusable(
+    *,
+    dirty: bool,
+    expires_at: datetime | None,
+    current_input_sha256: str | None = None,
+    expected_input_sha256: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Single source of truth for dirty, expiry, and input-key reuse."""
+    if dirty:
+        return False
+    if expected_input_sha256 is not None and current_input_sha256 != expected_input_sha256:
+        return False
+    if expires_at is None:
+        return True
+    reference = now if now is not None else datetime.now(UTC)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at > reference
+
+
 def artifact_is_fresh(artifact: Artifact, *, now: datetime | None = None) -> bool:
     """Return whether an artifact is safe to reuse as current LLM context.
 
@@ -166,17 +189,33 @@ def artifact_is_fresh(artifact: Artifact, *, now: datetime | None = None) -> boo
     can label those states. Context-building callers use this predicate to keep
     stale recommendations out of a new model prompt.
     """
-    if artifact.dirty:
-        return False
-    if artifact.expires_at is None:
-        return True
-    reference = now if now is not None else datetime.now(UTC)
-    expires_at = artifact.expires_at
-    if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=UTC)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
-    return expires_at >= reference
+    return _cache_state_is_reusable(
+        dirty=artifact.dirty,
+        expires_at=artifact.expires_at,
+        now=now,
+    )
+
+
+def artifact_is_reusable(
+    artifact: Artifact,
+    *,
+    input_sha256: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Canonical cache-hit predicate for artifact generators and consumers.
+
+    A reusable artifact must be clean, unexpired, and—when the caller has
+    recomputed its deterministic cache key—match the current inputs. Keeping
+    this rule here prevents individual prompt builders from accidentally
+    treating hash equality alone as freshness.
+    """
+    return _cache_state_is_reusable(
+        dirty=artifact.dirty,
+        expires_at=artifact.expires_at,
+        current_input_sha256=artifact.input_sha256,
+        expected_input_sha256=input_sha256,
+        now=now,
+    )
 
 
 def read_current(
@@ -279,7 +318,7 @@ def upsert(
 
         existing = conn.execute(
             """
-            SELECT id, input_sha256, dirty FROM llm_artifacts
+            SELECT id, input_sha256, dirty, expires_at FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
               AND scope = ? AND purpose = ?
               AND COALESCE(fiscal_period, '') = COALESCE(?, '')
@@ -294,7 +333,17 @@ def upsert(
         # over hash equality because a trigger may have flagged the row even
         # though inputs didn't change (e.g. prompt_version bump applied
         # retroactively to the table).
-        if existing is not None and existing["input_sha256"] == input_sha and not existing["dirty"]:
+        existing_expires = (
+            _parse_dt(existing["expires_at"])
+            if existing is not None and existing["expires_at"]
+            else None
+        )
+        if existing is not None and _cache_state_is_reusable(
+            dirty=bool(existing["dirty"]),
+            expires_at=existing_expires,
+            current_input_sha256=str(existing["input_sha256"]),
+            expected_input_sha256=input_sha,
+        ):
             return (int(existing["id"]), True)
 
         # Either no existing row, hash drift, or dirty — insert a new row and

@@ -15,6 +15,7 @@ repos:
           - >-
             ^(?:config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|
             docs[\\/]design[\\/]deletion_catalog_2026_08\.json|
+            docs[\\/]hardening[\\/]L1[\\/]deletion_recovery_receipt_2026_08_08\.json|
             evals[\\/]golden[\\/]metric_lifecycle_triage\.json|
             tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|
             test_peer_selection|test_validate_environment)\.py)$

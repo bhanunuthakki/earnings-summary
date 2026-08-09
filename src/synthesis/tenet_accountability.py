@@ -243,10 +243,15 @@ def _default_call(prompt: str) -> dict[str, object] | None:
     on a parse/call failure (deliberately NOT swallowed to ``None`` here);
     ``assess_tenet``'s transient/hard-stop classification decides whether to
     defer-and-retry or propagate."""
+    from llm.contracts import TENET_ACCOUNTABILITY_SCHEMA
     from llm.structured import call_llm_structured
 
     obj = call_llm_structured(
-        prompt, purpose=PURPOSE, scope="tenet_accountability", expect="object"
+        prompt,
+        purpose=PURPOSE,
+        scope="tenet_accountability",
+        expect="object",
+        schema=TENET_ACCOUNTABILITY_SCHEMA,
     )
     if not isinstance(obj, dict):
         return None

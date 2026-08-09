@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
-import requests
+from net.client import HTTP_CLIENT, HttpCallError, JsonShape
 
 _PERIOD_SUFFIXES = ("annual", "quarterly", "ttm")
 _DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}")
@@ -269,10 +269,9 @@ def set_instrument_type_from_fmp(
 
 
 _SEC_SUBMISSIONS_HEADERS = {
-    "User-Agent": "EarningsSummary/1.0 (research@example.com)",
     "Accept-Encoding": "gzip, deflate",
 }
-_SEC_SUBMISSIONS_TIMEOUT_S = 15
+_SEC_SUBMISSIONS_TIMEOUT = (3.05, 15.0)
 
 _REGIME_FORMS: dict[str, str] = {
     "10-K": "10-K",
@@ -304,13 +303,16 @@ def _fetch_sec_regime(cik: str) -> str | None:
     here degrades, it never raises."""
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
     try:
-        resp = requests.get(
-            url, headers=_SEC_SUBMISSIONS_HEADERS, timeout=_SEC_SUBMISSIONS_TIMEOUT_S
+        response = HTTP_CLIENT.request_json(
+            "GET",
+            url,
+            headers=_SEC_SUBMISSIONS_HEADERS,
+            timeout=_SEC_SUBMISSIONS_TIMEOUT,
+            expected=JsonShape.OBJECT,
         )
-        resp.raise_for_status()
-        payload: object = resp.json()
-    except (requests.RequestException, ValueError):
+    except HttpCallError:
         return None
+    payload: object = response.payload
     if not isinstance(payload, dict):
         return None
     filings = cast(dict[str, object], payload).get("filings")

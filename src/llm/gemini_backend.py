@@ -327,7 +327,12 @@ def usage_meta_from_response(
             "output_tokens": candidate_tokens,
             "cache_read_input_tokens": cached_tokens,
         },
-        "total_cost_usd": estimated_call_usd(model, prompt_tokens, candidate_tokens),
+        "total_cost_usd": estimated_call_usd(
+            model,
+            prompt_tokens,
+            candidate_tokens,
+            cached_input_tokens=cached_tokens,
+        ),
     }
 
 

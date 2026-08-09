@@ -7,8 +7,13 @@ blow the daily FMP tier cap halfway through.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import pytest
+
+from execution import onboard_pending_tickers
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -72,3 +77,40 @@ def test_empty_pending_list_is_allowed() -> None:
     """Zero pending tickers — gate is a no-op."""
     allowed, _ = check_onboarding_budget(pending_count=0, remaining_calls=10)
     assert allowed is True
+
+
+def test_expected_budget_deferral_is_scheduler_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Quota capacity leaves durable work pending; it is not an outage."""
+    pending = [("NU", "no_financial_facts")]
+
+    def _pending(_db: Path) -> list[tuple[str, str]]:
+        return pending
+
+    def _backoff(
+        rows: list[tuple[str, str]], _db: Path, _holdings: Path
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        return rows, []
+
+    monkeypatch.setattr(
+        onboard_pending_tickers,
+        "find_pending_tickers",
+        _pending,
+    )
+    monkeypatch.setattr(
+        onboard_pending_tickers,
+        "apply_ipo_backoff",
+        _backoff,
+    )
+    monkeypatch.setattr(onboard_pending_tickers, "_remaining_fmp_budget", lambda: 0)
+    monkeypatch.setattr(onboard_pending_tickers, "_LOG_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["onboard_pending_tickers.py", "--db", str(tmp_path / "x.db")])
+
+    assert onboard_pending_tickers.main() == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["deferred"] is True
+    assert report["defer_reason"] == "fmp_budget_gate"
+    assert report["pending_count"] == 1

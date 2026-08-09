@@ -22,18 +22,20 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from pydantic import BaseModel, Field, TypeAdapter
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from llm_client import call_llm  # noqa: E402
+from llm.structured import call_llm_structured  # noqa: E402
+from llm.untrusted import spotlight  # noqa: E402
 from models.patents import NvoSelfDisclosedPatent, NvoSelfDisclosedTimeline  # noqa: E402
 from parser import extract_text_from_pdf  # noqa: E402
 from runtime.secrets import load_project_env  # noqa: E402
@@ -61,11 +63,21 @@ Return a JSON object with a single key "patents" containing a list of these reco
 Document text:
 """
 
-JSON_FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+class _PatentExtraction(BaseModel):
+    molecule: str
+    jurisdictions: list[str] = Field(default_factory=list)
+    expected_loe_year: int | None = None
+    extension_strategy_text: str | None = None
+    raw_text: str
+
+
+class _PatentExtractionBundle(BaseModel):
+    patents: list[_PatentExtraction] = Field(default_factory=list[_PatentExtraction])
 
 
 def _log(event: str, **kwargs: Any) -> None:
-    payload = {"event": event, "ts": datetime.utcnow().isoformat() + "Z", **kwargs}
+    payload = {"event": event, "ts": datetime.now(UTC).isoformat(), **kwargs}
     sys.stderr.write(json.dumps(payload) + "\n")
 
 
@@ -100,7 +112,7 @@ def infer_fiscal_year(pdf_path: Path) -> int:
     for token in name.split():
         if token.isdigit() and len(token) == 4 and 2000 <= int(token) <= 2099:
             return int(token)
-    return datetime.utcnow().year - 1
+    return datetime.now(UTC).year - 1
 
 
 def extract_timeline(pdf_path: Path) -> NvoSelfDisclosedTimeline:
@@ -115,27 +127,28 @@ def extract_timeline(pdf_path: Path) -> NvoSelfDisclosedTimeline:
     # LLM_MODELS["patent_timeline"] (Haiku for batch latency).
     capped = text[:80_000]
 
-    raw = call_llm(EXTRACTION_PROMPT + capped, purpose="patent_timeline").strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RX.sub("", raw).strip()
-    payload = json.loads(raw)
-    if not isinstance(payload, dict) or "patents" not in payload:
-        raise ValueError(f"LLM returned unexpected schema: {payload!r}")
+    payload = cast(
+        "_PatentExtractionBundle",
+        call_llm_structured(
+            EXTRACTION_PROMPT + spotlight(capped, source="issuer annual report PDF text"),
+            purpose="patent_timeline",
+            ticker="NVO",
+            scope="patent_timeline",
+            schema=TypeAdapter(_PatentExtractionBundle),
+        ),
+    )
 
     fiscal_year = infer_fiscal_year(pdf_path)
-    extracted_at = datetime.utcnow()
+    extracted_at = datetime.now(UTC)
     patents: list[NvoSelfDisclosedPatent] = []
-    raw_patents = payload["patents"]
-    if not isinstance(raw_patents, list):
-        raise ValueError(f"'patents' field is not a list: {type(raw_patents)}")
-    for entry in raw_patents:
+    for entry in payload.patents:
         patents.append(
             NvoSelfDisclosedPatent(
-                molecule=str(entry.get("molecule", "")).lower(),
-                jurisdictions=[str(j).upper() for j in entry.get("jurisdictions", [])],
-                expected_loe_year=entry.get("expected_loe_year"),
-                extension_strategy_text=entry.get("extension_strategy_text"),
-                raw_text=str(entry.get("raw_text", "")),
+                molecule=entry.molecule.lower(),
+                jurisdictions=[j.upper() for j in entry.jurisdictions],
+                expected_loe_year=entry.expected_loe_year,
+                extension_strategy_text=entry.extension_strategy_text,
+                raw_text=entry.raw_text,
                 source_filename=pdf_path.name,
                 extracted_at=extracted_at,
             )
@@ -158,7 +171,7 @@ def write_output(timeline: NvoSelfDisclosedTimeline) -> Path:
     .tmp file is the audit trail.
     """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    run_date = datetime.utcnow().strftime("%Y-%m-%d")
+    run_date = datetime.now(UTC).strftime("%Y-%m-%d")
     payload = timeline.model_dump(mode="json")
 
     history_path = OUT_DIR / f"nvo_self_disclosed_{run_date}.json"
@@ -190,7 +203,7 @@ def main() -> None:
         sys.stderr.write(f"ERROR: PDF not found: {pdf_path}\n")
         sys.exit(1)
 
-    run_date = datetime.utcnow().strftime("%Y-%m-%d")
+    run_date = datetime.now(UTC).strftime("%Y-%m-%d")
     expected = OUT_DIR / f"nvo_self_disclosed_{run_date}.json"
     if expected.exists() and not args.force:
         _log("idempotent_skip", path=str(expected))

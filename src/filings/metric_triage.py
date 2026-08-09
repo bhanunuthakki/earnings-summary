@@ -44,7 +44,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from filings.metric_lifecycle import MetricCandidate
 from llm.cli import is_hard_stop
@@ -71,6 +71,15 @@ class TriageVerdict(BaseModel):
     relevance: Relevance
     prior: LifecyclePrior
     rationale: str = Field(max_length=500)
+
+
+class _TriageVerdictWire(BaseModel):
+    relevance: Relevance
+    prior: LifecyclePrior
+    rationale: str = Field(max_length=500)
+
+
+_METRIC_TRIAGE_ADAPTER = TypeAdapter(dict[str, _TriageVerdictWire])
 
 
 class TriageOutcome(BaseModel):
@@ -150,6 +159,7 @@ def triage_candidates(
             purpose=TRIAGE_PURPOSE,
             ticker=ticker,
             expect="object",
+            schema=_METRIC_TRIAGE_ADAPTER,
             db_path=db_path,
         )
     except Exception as exc:
@@ -172,16 +182,13 @@ def triage_candidates(
     verdicts: dict[str, TriageVerdict] = {}
     dropped = 0
     for qname, raw in cast("dict[str, object]", decoded).items():
-        if not isinstance(raw, dict):
-            dropped += 1
-            continue
-        row = cast("dict[str, object]", raw)
         try:
+            row = _TriageVerdictWire.model_validate(raw)
             verdicts[qname] = TriageVerdict(
                 qualified_name=qname,
-                relevance=Relevance(str(row.get("relevance"))),
-                prior=LifecyclePrior(str(row.get("prior"))),
-                rationale=str(row.get("rationale") or "")[:500],
+                relevance=row.relevance,
+                prior=row.prior,
+                rationale=row.rationale,
             )
         except (ValueError, TypeError):
             dropped += 1

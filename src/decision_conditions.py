@@ -71,7 +71,9 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
 
 from clock import now_iso
 from llm.cli import is_hard_stop
@@ -108,6 +110,61 @@ _UNIT_VALUES: frozenset[str] = frozenset(u.value for u in Unit)
 _MAX_CONDITIONS_PER_DECISION = 8
 _MAX_QUALITATIVE_PER_DECISION = 6
 _MAX_VOCAB_ENTRIES = 80
+
+
+class _DecisionConditionWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    metric: str = Field(min_length=1, max_length=200)
+    metric_source: Literal["kpi", "financial"] | None
+    op: Literal["lt", "le", "gt", "ge"]
+    threshold: float
+    unit: Literal["actual", "thousands", "millions", "billions", "percent", "ratio", "bps", "count"]
+    for_periods: int = Field(ge=1)
+    not_before: str | None = None
+    note: str | None = Field(default=None, max_length=300)
+
+
+class _QualitativeConditionWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phrase: str = Field(min_length=1, max_length=200)
+    watch_for: Literal["news", "earnings", "both"] = "both"
+    note: str | None = Field(default=None, max_length=300)
+
+
+class _DecisionConditionsWire(RootModel[list[_DecisionConditionWire]]):
+    @field_validator("root", mode="before")
+    @classmethod
+    def _drop_invalid(cls, value: object) -> list[_DecisionConditionWire]:
+        if not isinstance(value, list):
+            raise ValueError("decision conditions must be an array")
+        valid: list[_DecisionConditionWire] = []
+        for entry in cast("list[object]", value):
+            try:
+                valid.append(_DecisionConditionWire.model_validate(entry))
+            except ValueError:
+                continue
+        return valid
+
+
+class _QualitativeConditionsWire(RootModel[list[_QualitativeConditionWire]]):
+    @field_validator("root", mode="before")
+    @classmethod
+    def _drop_invalid(cls, value: object) -> list[_QualitativeConditionWire]:
+        if not isinstance(value, list):
+            raise ValueError("qualitative conditions must be an array")
+        valid: list[_QualitativeConditionWire] = []
+        for entry in cast("list[object]", value):
+            try:
+                valid.append(_QualitativeConditionWire.model_validate(entry))
+            except ValueError:
+                continue
+        return valid
+
+
+_DECISION_CONDITIONS_ADAPTER = TypeAdapter(_DecisionConditionsWire)
+_QUALITATIVE_CONDITIONS_ADAPTER = TypeAdapter(_QualitativeConditionsWire)
 
 # Matches "## What would change my mind" in both source shapes: the
 # five_min_reread lens numbers it ("## 3. What would change my mind"), the
@@ -550,10 +607,16 @@ def extract_conditions(
         line_items=_format_vocab(line_items),
         section=section[:4000],
     )
-    payload = call_llm_structured(prompt, purpose=PURPOSE, ticker=ticker.upper(), expect="array")
+    payload = call_llm_structured(
+        prompt,
+        purpose=PURPOSE,
+        ticker=ticker.upper(),
+        expect="array",
+        schema=_DECISION_CONDITIONS_ADAPTER,
+    )
     out: list[DecisionCondition] = []
-    for entry in cast("list[object]", payload):
-        cond = parse_condition(entry)
+    for entry in _DecisionConditionsWire.model_validate(payload).root:
+        cond = parse_condition(entry.model_dump())
         if cond is not None:
             out.append(cond)
         if len(out) >= _MAX_CONDITIONS_PER_DECISION:
@@ -606,11 +669,15 @@ def extract_qualitative_conditions(section: str, *, ticker: str) -> list[Qualita
     """
     prompt = _QUALITATIVE_PROMPT.format(ticker=ticker.upper(), section=section[:4000])
     payload = call_llm_structured(
-        prompt, purpose=QUALITATIVE_PURPOSE, ticker=ticker.upper(), expect="array"
+        prompt,
+        purpose=QUALITATIVE_PURPOSE,
+        ticker=ticker.upper(),
+        expect="array",
+        schema=_QUALITATIVE_CONDITIONS_ADAPTER,
     )
     out: list[QualitativeCondition] = []
-    for entry in cast("list[object]", payload):
-        cond = parse_qualitative_condition(entry)
+    for entry in _QualitativeConditionsWire.model_validate(payload).root:
+        cond = parse_qualitative_condition(entry.model_dump())
         if cond is not None:
             out.append(cond)
         if len(out) >= _MAX_QUALITATIVE_PER_DECISION:
