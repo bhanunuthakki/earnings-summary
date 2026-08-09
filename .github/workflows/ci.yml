@@ -13,10 +13,10 @@ name: CI
 #               every PR.
 #
 # pyright (the strict type gate) runs as the `typecheck` job below — a RATCHET:
-# it compares the whole-repo strict error count in the PR against the base
-# branch and fails only when the PR RAISES it. The ~3070-error baseline is
-# tolerated (never blocking) and paid down incrementally, exactly like the ruff
-# diff gate. pyright also still runs locally via pre-commit / `make typecheck`.
+# it compares normalized whole-repo diagnostics in the PR against the base
+# branch and fails on any genuinely NEW error. The legacy baseline is tolerated
+# (never blocking) and paid down incrementally, exactly like the ruff diff gate.
+# pyright also still runs locally via pre-commit / `make typecheck`.
 
 on:
   pull_request:
@@ -293,8 +293,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          head_json=$(pyright --outputjson 2>/dev/null || true)
-          head_n=$(printf '%s' "$head_json" | python .github/scripts/ci_gate.py pyright-count)
+          head_json="$RUNNER_TEMP/pyright-head.json"
+          base_json="$RUNNER_TEMP/pyright-base.json"
+          pyright --outputjson > "$head_json" 2>/dev/null || true
           base="${{ steps.base.outputs.ref }}"
           wt="$RUNNER_TEMP/base-pyright"
           # Clear any stale worktree path from a retried job, then REQUIRE the
@@ -310,16 +311,14 @@ jobs:
           fi
           cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
           trap cleanup EXIT
-          base_json=$( (cd "$wt" && pyright --outputjson 2>/dev/null) || true )
-          base_n=$(printf '%s' "$base_json" | python .github/scripts/ci_gate.py pyright-count)
+          (cd "$wt" && pyright --outputjson > "$base_json" 2>/dev/null) || true
           git worktree remove --force "$wt" 2>/dev/null || true
           trap - EXIT
-          echo "pyright strict errors — base=$base_n  head=$head_n"
-          if [ "$head_n" -gt "$base_n" ]; then
-            echo "::error::pyright introduced $((head_n - base_n)) new strict error(s) ($base_n -> $head_n). Run 'make typecheck-changed' locally to see them on your changed files."
-            exit 1
-          fi
-          echo "No new pyright strict errors (baseline $base_n tolerated)."
+          python .github/scripts/ci_gate.py pyright-diff \
+            --base-json "$base_json" \
+            --head-json "$head_json" \
+            --base-root "$wt" \
+            --head-root "$GITHUB_WORKSPACE"
 
   security:
     needs: [changes]
