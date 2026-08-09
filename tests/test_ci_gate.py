@@ -139,6 +139,76 @@ def test_pyright_count_requires_valid_non_negative_integer(helper: ModuleType) -
             helper.pyright_error_count(payload)
 
 
+def test_pyright_diff_ignores_worktree_root_and_source_location(helper: ModuleType) -> None:
+    base = {
+        "summary": {"errorCount": 1},
+        "generalDiagnostics": [
+            {
+                "file": "/tmp/base/src/example.py",
+                "severity": "error",
+                "message": "Type of value is unknown",
+                "rule": "reportUnknownVariableType",
+                "range": {"start": {"line": 1, "character": 2}},
+            }
+        ],
+    }
+    head = {
+        "summary": {"errorCount": 1},
+        "generalDiagnostics": [
+            {
+                "file": "/home/runner/head/src/example.py",
+                "severity": "error",
+                "message": "Type of value is unknown",
+                "rule": "reportUnknownVariableType",
+                "range": {"start": {"line": 20, "character": 8}},
+            }
+        ],
+    }
+
+    assert (
+        helper.pyright_new_errors(
+            base,
+            head,
+            base_root=Path("/tmp/base"),
+            head_root=Path("/home/runner/head"),
+        )
+        == []
+    )
+
+
+def test_pyright_diff_is_a_multiset_and_catches_new_errors(helper: ModuleType) -> None:
+    diagnostic = {
+        "file": "/repo/src/example.py",
+        "severity": "error",
+        "message": "Type of value is unknown",
+        "rule": "reportUnknownVariableType",
+    }
+    base = {"summary": {"errorCount": 1}, "generalDiagnostics": [diagnostic]}
+    head = {
+        "summary": {"errorCount": 2},
+        "generalDiagnostics": [diagnostic, diagnostic],
+    }
+
+    assert helper.pyright_new_errors(
+        base,
+        head,
+        base_root=Path("/repo"),
+        head_root=Path("/repo"),
+    ) == [("src/example.py", "reportUnknownVariableType", "Type of value is unknown")]
+
+
+def test_pyright_diff_rejects_incomplete_diagnostics(helper: ModuleType) -> None:
+    invalid: object = {"summary": {"errorCount": 1}, "generalDiagnostics": []}
+    valid: object = {"summary": {"errorCount": 0}, "generalDiagnostics": []}
+    with pytest.raises(ValueError):
+        helper.pyright_new_errors(
+            invalid,
+            valid,
+            base_root=Path("/repo"),
+            head_root=Path("/repo"),
+        )
+
+
 def test_ci_test_partitions_are_exhaustive_disjoint_and_nonempty(helper: ModuleType) -> None:
     files = [f"tests/test_{index:04d}.py" for index in range(257)]
     partitions = (
@@ -174,8 +244,11 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "dorny/paths-filter" not in workflow
     assert 'git diff --name-only --no-renames -z "$base...$head"' in workflow
     assert 'git diff --name-only --no-renames -z "$PUSH_BEFORE_SHA" "$CURRENT_SHA"' in workflow
-    assert "head_json=$(pyright --outputjson 2>/dev/null || true)" in workflow
-    assert "ci_gate.py pyright-count" in workflow
+    assert 'pyright --outputjson > "$head_json" 2>/dev/null || true' in workflow
+    assert "ci_gate.py pyright-diff" in workflow
+    assert (
+        'pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"' in workflow
+    )
     assert "ci_gate.py select-tests" in workflow
     assert "errcount || echo 0" not in workflow
     assert "python .github/scripts/ci_gate.py classify" in workflow

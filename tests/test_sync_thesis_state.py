@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -53,7 +54,7 @@ def _seed(
     conn.commit()
 
 
-def _write(tmp_path: Path, ticker: str, payload: dict[str, object]) -> None:
+def _write(tmp_path: Path, ticker: str, payload: Mapping[str, object]) -> None:
     (tmp_path / f"{ticker}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -155,3 +156,51 @@ def test_sync_drifted_is_noop_without_drift(tmp_path: Path) -> None:
     _seed(conn, "OK", json.dumps(payload), thesis="t")
     records = sync.audit_thesis_state(conn, tmp_path)
     assert sync.sync_drifted(conn, tmp_path, records) == []
+
+
+def test_audit_and_apply_bootstraps_empty_mirror(tmp_path: Path) -> None:
+    """Holdings files, not a migration snapshot, bootstrap an empty mirror."""
+    conn = _conn()
+    alpha = {"ticker": "AAA", "thesis": "Alpha thesis", "verdict": "Intact"}
+    beta = {"ticker": "BBB", "thesis": "Beta thesis", "verdict": "Watch"}
+    _write(tmp_path, "BBB", beta)
+    _write(tmp_path, "AAA", alpha)
+
+    records = sync.audit_thesis_state(conn, tmp_path)
+
+    assert [(r.ticker, r.kind, r.needs_sync) for r in records] == [
+        ("AAA", sync.DriftKind.MISSING_ROW, True),
+        ("BBB", sync.DriftKind.MISSING_ROW, True),
+    ]
+    assert sync.sync_drifted(conn, tmp_path, records) == ["AAA", "BBB"]
+    assert sync.audit_thesis_state(conn, tmp_path) == [
+        sync.DriftRecord("AAA", sync.DriftKind.CLEAN, "mirror matches file"),
+        sync.DriftRecord("BBB", sync.DriftKind.CLEAN, "mirror matches file"),
+    ]
+    rows = conn.execute(
+        "SELECT ticker, thesis, raw_json FROM thesis_state ORDER BY ticker"
+    ).fetchall()
+    assert [(row["ticker"], row["thesis"], json.loads(row["raw_json"])) for row in rows] == [
+        ("AAA", "Alpha thesis", alpha),
+        ("BBB", "Beta thesis", beta),
+    ]
+
+
+def test_ticker_audit_reports_missing_row_only_when_file_exists(tmp_path: Path) -> None:
+    conn = _conn()
+    payload = {"ticker": "NU", "thesis": "Nu compounds members."}
+    _write(tmp_path, "NU", payload)
+
+    assert sync.audit_thesis_state(conn, tmp_path, ticker="nu") == [
+        sync.DriftRecord(
+            "NU",
+            sync.DriftKind.MISSING_ROW,
+            "holdings file exists but thesis_state row is absent",
+        )
+    ]
+    assert sync.audit_thesis_state(conn, tmp_path, ticker="GONE") == []
+
+
+def test_setup_documents_fresh_install_thesis_bootstrap() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "python execution/sync_thesis_state.py --apply" in readme

@@ -66,7 +66,7 @@ def _latest_view_ddls() -> tuple[str, str]:
     """(metrics_ddl, ratios_ddl) extracted from the highest-numbered migration
     that (re)defines both views — so this guard tracks the production view even
     after a future redefinition, with no migration-chain bootstrap."""
-    versions = PROJECT_ROOT / "alembic" / "versions"
+    versions = PROJECT_ROOT / "alembic" / "versions_archived"
     chosen: Path | None = None
     for path in sorted(versions.glob("*.py")):  # 4-digit zero-padded → lexical == numeric
         text = path.read_text(encoding="utf-8")

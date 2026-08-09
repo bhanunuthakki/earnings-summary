@@ -24,12 +24,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from synthesis.insights import InsightRow
 from synthesis.tenet_accountability import (
     Assessment,
@@ -101,20 +100,9 @@ CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "ledger.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db))
-    try:
-        conn.executescript(_BOOTSTRAP_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.upgrade(cfg, "head")
-    return db
+    return migrated_db(db)
 
 
 def _insert_decision(
@@ -218,14 +206,12 @@ def test_gather_evidence_caps_and_orders_newest_first(db_path: Path) -> None:
 def test_gather_evidence_no_tracker_degrades_alpha_to_none(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import requests
-
     import integrations.portfolio_tracker_client as tracker_client
 
     def _raise(*args: object, **kwargs: object) -> object:
-        raise requests.exceptions.ConnectionError("tracker unreachable")
+        raise ConnectionError("tracker unreachable")
 
-    monkeypatch.setattr(tracker_client.requests, "get", _raise)
+    monkeypatch.setattr(tracker_client, "fetch_portfolio_analytics", _raise)
     tenet = _seed_tenet(db_path)
     evidence = gather_evidence(tenet, db_path=db_path)
     # No reachable tracker — the client degrades position_alpha to None, and

@@ -146,8 +146,8 @@ def _seed_macro(repo_root: Path) -> None:
     conn = sqlite3.connect(str(_db(repo_root)))
     try:
         conn.execute(
-            "INSERT INTO macro_series (series_id, rate_date, value, source) "
-            "VALUES ('us_10y', '2026-07-18', 4.2, 'test')"
+            "INSERT INTO macro_series (series_id, rate_date, value, source, created_at) "
+            "VALUES ('us_10y', '2026-07-18', 4.2, 'test', '2026-07-18T00:00:00')"
         )
         conn.execute(
             "INSERT INTO macro_sensitivities "

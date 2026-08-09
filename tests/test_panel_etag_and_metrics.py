@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,10 +31,10 @@ import comments_server  # noqa: E402
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> FlaskClient:
+def client(tmp_path: Path, migrated_db: Callable[..., Path]) -> FlaskClient:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    sqlite3.connect(str(data_dir / "portfolio.db")).close()
+    migrated_db(data_dir / "portfolio.db")
     app = comments_server.create_app(tmp_path)
     return app.test_client()
 
@@ -92,7 +93,7 @@ def test_fresh_panel_revalidation_skips_the_expensive_renderer(
     assert calls == 1
 
 
-def test_state_change_invalidates_panel_response_cache(
+def test_metrics_post_preserves_panel_response_cache(
     client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from pipeline import dashboard_html
@@ -113,6 +114,34 @@ def test_state_change_invalidates_panel_response_cache(
         ).status_code
         == 204
     )
+    second = client.get("/api/panel/actions")
+    assert second.status_code == 200
+    assert calls == 1
+    assert b"render 1" in second.data
+
+
+def test_state_change_invalidates_panel_response_cache(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline import dashboard_html
+
+    calls = 0
+
+    def _render() -> str:
+        nonlocal calls
+        calls += 1
+        return f"<section>actions render {calls}</section>"
+
+    client.application.add_url_rule(
+        "/test/domain-mutation",
+        "test_domain_mutation",
+        lambda: ("", 204),
+        methods=["POST"],
+    )
+    monkeypatch.setattr(dashboard_html, "render_actions_panel", _render)
+    assert client.get("/api/panel/actions").status_code == 200
+    assert client.post("/test/domain-mutation").status_code == 204
+
     second = client.get("/api/panel/actions")
     assert second.status_code == 200
     assert calls == 2

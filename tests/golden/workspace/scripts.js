@@ -1086,11 +1086,11 @@ ${r?'Expression: "'+r+`"
   }
 
   function renderCommentCard(c) {
-    var statusClass = 'cmt-status-' + c.status;
+    var statusClass = 'cmt-status-' + escapeHtml(c.status);
     var head = '<div class="cmt-card-head">'
-      + '<span class="cmt-status ' + statusClass + '">' + c.status + '</span>'
-      + (c.intent ? '<span class="cmt-intent">' + c.intent + '</span>' : '')
-      + '<span class="cmt-time">' + (c.created_at || '').substring(0, 16).replace('T', ' ') + '</span>'
+      + '<span class="cmt-status ' + statusClass + '">' + escapeHtml(c.status) + '</span>'
+      + (c.intent ? '<span class="cmt-intent">' + escapeHtml(c.intent) + '</span>' : '')
+      + '<span class="cmt-time">' + escapeHtml((c.created_at || '').substring(0, 16).replace('T', ' ')) + '</span>'
       + '</div>';
     var body = '<div class="cmt-body">' + escapeHtml(c.comment) + '</div>';
     var resolution = c.resolution_note
@@ -1495,7 +1495,8 @@ ${r?'Expression: "'+r+`"
       var c = map[n];
       if (!c) return m;
       var href = c.href || c.source_url || '';
-      if (href && !/^https?:/.test(href)) href = base + href;
+      if (href && /^javascript:/i.test(href.trim())) href = '';
+      else if (href && !/^https?:/i.test(href) && base) href = base.replace(/\/$/, '') + (href.charAt(0) === '/' ? href : '/' + href);
       var pop = popHtml(c);
       if (value) {
         var badge = href

@@ -108,14 +108,20 @@ def _ttm(values: list[float | None], offset: int) -> float | None:
 # ---------------------------------------------------------------------------
 
 
-def open_repo_db(repo_root: Path, conn: sqlite3.Connection | None = None) -> sqlite3.Connection | None:
+def open_repo_db(
+    repo_root: Path, conn: sqlite3.Connection | None = None
+) -> sqlite3.Connection | None:
     """Open the portfolio DB if present, or return the provided request-scoped connection."""
     if conn is not None:
         return conn
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return None
-    c = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    c = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=True,
+    )
     c.row_factory = sqlite3.Row
     return c
 

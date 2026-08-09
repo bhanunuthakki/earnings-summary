@@ -6,10 +6,7 @@ N dimension rows under it — each dimension row carrying its own
 (dim_type, dim_name, metric, value) cell.
 
 Usage path:
-  - Backfill: scratch/backfill_segment_junction.py walks segment_facts and
-    invokes this writer once per (ticker, period, source_doc_id) tuple with
-    one dim per existing row.
-  - Forward (FMP): src/compute/segments.py also calls this writer after it
+  - Forward (FMP): src/compute/segments.py calls this writer after it
     writes segment_facts, mirroring each row into the junction shape.
 
 The contract intentionally takes pre-shaped SegmentDimension objects so the

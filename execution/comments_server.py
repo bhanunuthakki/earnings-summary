@@ -555,10 +555,14 @@ def create_app(
     @app.before_request
     def start_request_timer() -> None:
         g.request_started_ns = time.perf_counter_ns()
-        if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if request.method not in ("GET", "HEAD", "OPTIONS") and request.path != (
+            "/api/metrics/panel"
+        ):
             # A successful mutation can affect several panels. Clear before it
             # runs so the next read cannot reuse a pre-mutation fragment; a
-            # rejected mutation merely causes a harmless extra rebuild.
+            # rejected mutation merely causes a harmless extra rebuild. Panel
+            # timing telemetry is observational and must not evict the fragment
+            # whose latency it just measured.
             with panel_cache_lock:
                 panel_cache.clear()
 
@@ -572,7 +576,7 @@ def create_app(
         return _client_error("request failed; retry the request", 500)
 
     @app.teardown_request
-    def close_request_db(exception: Exception | None = None) -> None:
+    def close_request_db(exception: BaseException | None = None) -> None:
         db_conn = g.pop("request_read_db", None)
         if db_conn is not None:
             with contextlib.suppress(Exception):
@@ -581,7 +585,11 @@ def create_app(
     def get_read_db() -> sqlite3.Connection:
         if "request_read_db" not in g:
             db_path = repo_root / "data" / "portfolio.db"
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+            conn = connect_sqlite(
+                db_path,
+                role=SQLiteConnectionRole.READ_ONLY,
+                schema_preflight=True,
+            )
             conn.row_factory = sqlite3.Row
             g.request_read_db = conn
         return g.request_read_db
@@ -1342,18 +1350,15 @@ def create_app(
                 render_shell(overview_html=overview, repo_root=repo_root),
                 mimetype="text/html",
             )
-        conn = _open_db()
-        try:
-            rows = build_cockpit_rows(conn, repo_root)
-        finally:
-            conn.close()
-        coverage = tier_coverage_summary(repo_root)
+        read_conn = get_read_db()
+        rows = build_cockpit_rows(read_conn, repo_root)
+        coverage = tier_coverage_summary(repo_root, conn=read_conn)
         # Schema drift must not 500 the whole Home page, and must not render as
         # an empty rail either — the rail says it cannot be read, and the rest
         # of the cockpit still loads.
         try:
             inbox_html = render_inbox_stream(
-                collect_inbox(db_path, limit=14),
+                collect_inbox(db_path, limit=14, conn=read_conn),
                 db_path=db_path,
                 compact=True,
                 surface="home",
@@ -1363,7 +1368,7 @@ def create_app(
             inbox_html = schema_drift_notice(exc)
         # The compact earnings look-ahead above the rail — the surviving piece
         # of the retired /digest page.
-        upcoming_html = render_upcoming_strip(db_path, datetime.now(UTC).date())
+        upcoming_html = render_upcoming_strip(db_path, datetime.now(UTC).date(), conn=read_conn)
         # The ritual-debt band above the cockpit — the owner's open queues
         # (Reconcile / Tenets / proposals / decision stubs / coach digest /
         # coach sent-today / the Sunday packet state) lead the first screen;
@@ -1373,7 +1378,7 @@ def create_app(
         # line now render INSIDE this band instead of as separate bands.
         from pipeline.open_loops import render_open_loops_band
 
-        open_loops_html = render_open_loops_band(db_path)
+        open_loops_html = render_open_loops_band(db_path, conn=read_conn)
         # P2.2 (PRD §9.1): the Senior Partner Brief + the Incremental Dollar
         # Recommendation Today doorways LEAD this composition — the brief
         # owns delivery for the four governor-routed moment classes (see
@@ -1387,7 +1392,7 @@ def create_app(
         try:
             from pipeline.senior_partner_brief_panel import render_today_doorways_card
 
-            open_loops_html = render_today_doorways_card(db_path) + open_loops_html
+            open_loops_html = render_today_doorways_card(db_path, conn=read_conn) + open_loops_html
         except Exception:
             pass
         overview = render_overview_panel(
@@ -1401,11 +1406,7 @@ def create_app(
 
     @app.route("/api/dashboard", methods=["GET"])
     def dashboard_api():
-        conn = _open_db()
-        try:
-            rows = build_dashboard_rows(conn, repo_root)
-        finally:
-            conn.close()
+        rows = build_dashboard_rows(get_read_db(), repo_root)
         return {k: [r.to_dict() for r in v] for k, v in rows.items()}
 
     @app.route("/api/cockpit", methods=["GET"])
@@ -1416,11 +1417,7 @@ def create_app(
         countdown · staleness) refresh in place without a full page reload."""
         from pipeline.research_cockpit import render_research_cockpit
 
-        conn = _open_db()
-        try:
-            rows = build_cockpit_rows(conn, repo_root)
-        finally:
-            conn.close()
+        rows = build_cockpit_rows(get_read_db(), repo_root)
         return Response(render_research_cockpit(rows), mimetype="text/html")
 
     @app.route("/api/cron-health", methods=["GET"])
@@ -2097,18 +2094,14 @@ def create_app(
     activation_cache_modes = frozenset({"cold", "swr"})
 
     def _bump_activation_count(panel: str) -> None:
-        """UPSERT +1 for (panel, today) — lazy DDL so a fresh init_db database
-        works without alembic (0147 records the schema lineage). Never raises:
-        metrics must never break the shell."""
+        """UPSERT +1 for (panel, today); Alembic owns table creation.
+
+        A pre-migration database degrades to an omitted metric. Request paths
+        never perform DDL or contend on schema locks.
+        """
         try:
             conn = _open_db()
             try:
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS panel_activation_counts ("
-                    " panel_id TEXT NOT NULL, day TEXT NOT NULL,"
-                    " count INTEGER NOT NULL DEFAULT 0,"
-                    " PRIMARY KEY (panel_id, day))"
-                )
                 conn.execute(
                     "INSERT INTO panel_activation_counts (panel_id, day, count)"
                     " VALUES (?, ?, 1)"

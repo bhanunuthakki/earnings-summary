@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from user_state._db import now_iso, open_conn
+from user_state._db import now_iso, open_conn, open_read_conn
 
 RECONCILE_VERDICTS: tuple[str, ...] = ("live", "superseded", "resolved-rejected", "done")
 FALSIFIER_ACTIONS: tuple[str, ...] = ("ratify", "edit", "drop")
@@ -52,12 +53,16 @@ class ReconcileItem:
     source_ref: str | None = None
 
 
-def list_unreconciled(db_path: Path | str | None = None) -> list[ReconcileItem]:
+def list_unreconciled(
+    db_path: Path | str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[ReconcileItem]:
     """Seed items still awaiting a verdict, plus unratified falsifiers."""
     items: list[ReconcileItem] = []
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        for row in conn.execute(
+        for row in db_conn.execute(
             """
             SELECT id, kind, body, source_ref FROM analyst_notes
             WHERE source_ref LIKE 'seed:%'
@@ -74,7 +79,7 @@ def list_unreconciled(db_path: Path | str | None = None) -> list[ReconcileItem]:
                     source_ref=str(row[3] or ""),
                 )
             )
-        for row in conn.execute(
+        for row in db_conn.execute(
             """
             SELECT id, scope_key, body_md FROM insight_notes
             WHERE kind = 'theme' AND status = 'current'
@@ -90,7 +95,7 @@ def list_unreconciled(db_path: Path | str | None = None) -> list[ReconcileItem]:
                     body=str(row[2]),
                 )
             )
-        for row in conn.execute(
+        for row in db_conn.execute(
             """
             SELECT id, ticker, falsifier FROM decisions
             WHERE decided_by = 'owner' AND falsifier LIKE '%(inferred)%'
@@ -106,7 +111,8 @@ def list_unreconciled(db_path: Path | str | None = None) -> list[ReconcileItem]:
                 )
             )
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
     return items
 
 

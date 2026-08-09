@@ -137,7 +137,11 @@ def _last_release_by_ticker(conn: sqlite3.Connection) -> list[tuple[str, object]
 
 
 def upcoming_earnings(
-    db_path: Path | None, today: date, *, horizon_days: int = _UPCOMING_HORIZON_DAYS
+    db_path: Path | None,
+    today: date,
+    *,
+    horizon_days: int = _UPCOMING_HORIZON_DAYS,
+    conn: sqlite3.Connection | None = None,
 ) -> list[tuple[str, date, bool]]:
     """``(ticker, date, is_estimate)`` within the horizon for tracked names.
 
@@ -150,15 +154,16 @@ def upcoming_earnings(
     if db_path is None or not Path(db_path).exists():
         return []
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:
-        tracked = _tracked_tickers(conn)
-        calendar = {t: d for t, d in upcoming_by_ticker(conn, today).items() if t in tracked}
-        last_releases = _last_release_by_ticker(conn)
+        tracked = _tracked_tickers(db_conn)
+        calendar = {t: d for t, d in upcoming_by_ticker(db_conn, today).items() if t in tracked}
+        last_releases = _last_release_by_ticker(db_conn)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
     horizon_end = today + timedelta(days=horizon_days)
     out: list[tuple[str, date, bool]] = []
     for ticker, nxt in calendar.items():
@@ -179,19 +184,35 @@ def upcoming_earnings(
 
 
 def _open_notes(
-    db_path: Path | None, user_id: str, *, ticker: str | None = None
+    db_path: Path | None,
+    user_id: str,
+    *,
+    ticker: str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[AnalystNoteRow]:
     """Open analyst notes, lead-kinds first — best-effort ([] on any miss)."""
     if db_path is None or not Path(db_path).exists():
         return []
     try:
-        rows = list_notes(user_id=user_id, ticker=ticker, status="open", db_path=db_path)
+        rows = list_notes(
+            user_id=user_id,
+            ticker=ticker,
+            status="open",
+            db_path=db_path,
+            conn=conn,
+        )
     except sqlite3.Error:
         return []
     return sorted(rows, key=lambda n: _OPEN_ITEM_KIND_RANK.get(n.kind, 9))
 
 
-def _watch_doorways(db_path: Path | None, user_id: str, ticker: str) -> str:
+def _watch_doorways(
+    db_path: Path | None,
+    user_id: str,
+    ticker: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Inline, clickable "things to watch out for" for one upcoming name.
 
     Wave 2 (walkthrough #2): the doorways sit IN the row, in the horizontal
@@ -200,7 +221,7 @@ def _watch_doorways(db_path: Path | None, user_id: str, ticker: str) -> str:
     global delegate (``goAsk``) opens in Ask scoped to the name; overflow
     collapses to a "+n" count. Returns "" when the name has no open notes
     (hide-don't-stub — the row still renders ticker + prep chip + date)."""
-    notes = _open_notes(db_path, user_id, ticker=ticker)
+    notes = _open_notes(db_path, user_id, ticker=ticker, conn=conn)
     if not notes:
         return ""
     out = StringIO()
@@ -241,6 +262,7 @@ def render_upcoming_strip(
     *,
     user_id: str = DEFAULT_USER_ID,
     horizon_days: int = _UPCOMING_HORIZON_DAYS,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """The compact "Upcoming earnings" strip for the Home rail: one row per
     tracked name reporting within the horizon — ticker (shell hover mini-card
@@ -248,7 +270,7 @@ def render_upcoming_strip(
     fallback path), and the owner's open watch items / questions rendered INLINE
     beneath as clickable ``data-ask-q`` doorways. Returns ``""`` when nothing is
     upcoming (a quiet strip renders as no strip at all)."""
-    upcoming = upcoming_earnings(db_path, today, horizon_days=horizon_days)
+    upcoming = upcoming_earnings(db_path, today, horizon_days=horizon_days, conn=conn)
     if not upcoming:
         return ""
 
@@ -256,14 +278,15 @@ def render_upcoming_strip(
     tiers: dict[str, str] = {}
     if db_path is not None and Path(db_path).exists():
         try:
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+            tier_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         except sqlite3.Error:
-            conn = None
-        if conn is not None:
+            tier_conn = None
+        if tier_conn is not None:
             try:
-                tiers = _tier_by_ticker(conn, {t for t, _, _ in upcoming}, today)
+                tiers = _tier_by_ticker(tier_conn, {t for t, _, _ in upcoming}, today)
             finally:
-                conn.close()
+                if conn is None:
+                    tier_conn.close()
 
     out = StringIO()
     # data-up-summary: the one-line informative summary the shell hoists into
@@ -306,7 +329,7 @@ def render_upcoming_strip(
             # the ticker — prep doorway first, then the owner's open items.
             out.write('<span class="up-chips">')
             out.write(_prep_chip(ticker))
-            out.write(_watch_doorways(db_path, user_id, ticker))
+            out.write(_watch_doorways(db_path, user_id, ticker, conn=conn))
             out.write("</span>")
             out.write(f'<span class="up-date">{_esc(date_txt)}</span>')
             out.write("</div>")

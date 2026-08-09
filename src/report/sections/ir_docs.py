@@ -32,7 +32,12 @@ _KIND_TO_DOCTYPE: dict[str, DocType] = {
 }
 
 
-def build(ticker: str, repo_root: Path) -> IrDocsSection:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> IrDocsSection:
     tmp_dir = repo_root / ".tmp"
     cards = _scan_briefs(tmp_dir, ticker)
 
@@ -46,7 +51,7 @@ def build(ticker: str, repo_root: Path) -> IrDocsSection:
             ),
         )
 
-    _attach_source_urls(cards, ticker, repo_root)
+    _attach_source_urls(cards, ticker, repo_root, conn=conn)
     return IrDocsSection(status=SectionStatus.OK, cards=cards)
 
 
@@ -82,18 +87,25 @@ def _scan_briefs(tmp_dir: Path, ticker: str) -> list[IrDocCard]:
     return cards
 
 
-def _attach_source_urls(cards: list[IrDocCard], ticker: str, repo_root: Path) -> None:
+def _attach_source_urls(
+    cards: list[IrDocCard],
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> None:
     """Best-effort: join cards to documents.source_url where the period_end matches."""
-    conn = open_repo_db(repo_root)
-    if conn is None or not has_table(conn, "documents"):
-        if conn is not None:
-            conn.close()
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None or not has_table(db_conn, "documents"):
+        if db_conn is not None and conn is None:
+            db_conn.close()
         return
     for card in cards:
-        url = _lookup_source_url(conn, ticker, card)
+        url = _lookup_source_url(db_conn, ticker, card)
         if url is not None:
             card.source_url = url
-    conn.close()
+    if conn is None:
+        db_conn.close()
 
 
 def _lookup_source_url(conn: sqlite3.Connection, ticker: str, card: IrDocCard) -> str | None:

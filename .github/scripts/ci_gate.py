@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
@@ -41,6 +42,7 @@ CONDITIONAL_JOBS = {
     "security": "code",
 }
 TERMINAL_SUCCESS_RESULTS = {"success", "skipped"}
+DiagnosticFingerprint = tuple[str, str, str]
 
 
 def _normalize(path: str) -> str:
@@ -134,6 +136,70 @@ def pyright_error_count(payload: object) -> int:
     return count
 
 
+def _relative_pyright_path(file_path: str, root: Path) -> str:
+    normalized_file = _normalize(file_path)
+    normalized_root = _normalize(str(root)).rstrip("/")
+    if not normalized_root:
+        raise ValueError("pyright repository root must not be empty")
+    prefix = f"{normalized_root}/"
+    if not normalized_file.startswith(prefix):
+        raise ValueError(f"pyright diagnostic is outside repository root: {file_path}")
+    return normalized_file[len(prefix) :]
+
+
+def _pyright_error_fingerprints(payload: object, *, root: Path) -> list[DiagnosticFingerprint]:
+    expected_count = pyright_error_count(payload)
+    payload_map = cast(Mapping[object, object], payload)
+    diagnostics = payload_map.get("generalDiagnostics")
+    if not isinstance(diagnostics, Sequence) or isinstance(diagnostics, (str, bytes)):
+        raise ValueError("pyright output is missing generalDiagnostics")
+    diagnostic_sequence = cast(Sequence[object], diagnostics)
+
+    fingerprints: list[DiagnosticFingerprint] = []
+    for raw_diagnostic in diagnostic_sequence:
+        if not isinstance(raw_diagnostic, Mapping):
+            raise ValueError("pyright diagnostic must be a JSON object")
+        diagnostic = cast(Mapping[object, object], raw_diagnostic)
+        severity = diagnostic.get("severity")
+        if not isinstance(severity, str):
+            raise ValueError("pyright diagnostic severity must be a string")
+        if severity != "error":
+            continue
+        file_path = diagnostic.get("file")
+        message = diagnostic.get("message")
+        rule = diagnostic.get("rule")
+        if not isinstance(file_path, str) or not isinstance(message, str):
+            raise ValueError("pyright error must include string file and message fields")
+        if rule is not None and not isinstance(rule, str):
+            raise ValueError("pyright diagnostic rule must be a string or null")
+        relative_path = _relative_pyright_path(file_path, root)
+        normalized_message = message.replace(str(root), "<repo>").replace(
+            _normalize(str(root)), "<repo>"
+        )
+        fingerprints.append((relative_path, rule or "", normalized_message))
+
+    if len(fingerprints) != expected_count:
+        raise ValueError(
+            "pyright summary errorCount does not match error diagnostics "
+            f"({expected_count} != {len(fingerprints)})"
+        )
+    return fingerprints
+
+
+def pyright_new_errors(
+    base_payload: object,
+    head_payload: object,
+    *,
+    base_root: Path,
+    head_root: Path,
+) -> list[DiagnosticFingerprint]:
+    """Return new strict errors as a multiset, independent of line movement."""
+
+    base_errors = Counter(_pyright_error_fingerprints(base_payload, root=base_root))
+    head_errors = Counter(_pyright_error_fingerprints(head_payload, root=head_root))
+    return sorted((head_errors - base_errors).elements())
+
+
 def _pyright_count_command() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -142,6 +208,40 @@ def _pyright_count_command() -> int:
         print(f"::error::invalid pyright JSON: {exc}", file=sys.stderr)
         return 1
     print(count)
+    return 0
+
+
+def _pyright_diff_command(args: argparse.Namespace) -> int:
+    try:
+        with args.base_json.open(encoding="utf-8") as base_file:
+            base_payload = json.load(base_file)
+        with args.head_json.open(encoding="utf-8") as head_file:
+            head_payload = json.load(head_file)
+        new_errors = pyright_new_errors(
+            base_payload,
+            head_payload,
+            base_root=args.base_root,
+            head_root=args.head_root,
+        )
+        base_count = pyright_error_count(base_payload)
+        head_count = pyright_error_count(head_payload)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"::error::invalid pyright comparison: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"pyright strict errors - base={base_count} head={head_count}")
+    errors_by_file = Counter(path for path, _rule, _message in new_errors)
+    for path, count in errors_by_file.most_common():
+        print(f"new pyright errors - {path}: {count}")
+    for path, rule, message in new_errors[:100]:
+        rule_prefix = f"{rule}: " if rule else ""
+        print(f"::error file={path}::{rule_prefix}{message}")
+    if len(new_errors) > 100:
+        print(f"::error::{len(new_errors) - 100} additional new pyright errors omitted")
+    if new_errors:
+        print(f"::error::pyright introduced {len(new_errors)} new strict error(s)")
+        return 1
+    print("No new pyright strict diagnostics (legacy baseline tolerated).")
     return 0
 
 
@@ -204,6 +304,11 @@ def _build_parser() -> argparse.ArgumentParser:
     for job_name in ("changes", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
     subparsers.add_parser("pyright-count")
+    pyright_diff = subparsers.add_parser("pyright-diff")
+    pyright_diff.add_argument("--base-json", type=Path, required=True)
+    pyright_diff.add_argument("--head-json", type=Path, required=True)
+    pyright_diff.add_argument("--base-root", type=Path, required=True)
+    pyright_diff.add_argument("--head-root", type=Path, required=True)
     select_tests = subparsers.add_parser("select-tests")
     select_tests.add_argument("--source-shard", type=int, required=True)
     select_tests.add_argument("--source-shards", type=int, default=8)
@@ -218,6 +323,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _classify_command(args.github_output)
     if args.command == "pyright-count":
         return _pyright_count_command()
+    if args.command == "pyright-diff":
+        return _pyright_diff_command(args)
     if args.command == "select-tests":
         return _select_tests_command(args)
     return _verify_command(args)

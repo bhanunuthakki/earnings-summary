@@ -122,7 +122,10 @@ def _schema(conn: sqlite3.Connection) -> None:
         """
     )
     migration_path = (
-        Path(__file__).parents[1] / "alembic" / "versions" / "0253_ask_sealed_answer_audit.py"
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions_archived"
+        / "0253_ask_sealed_answer_audit.py"
     )
     spec = importlib.util.spec_from_file_location(
         "migration_0253_ask_sealed_answer_audit", migration_path

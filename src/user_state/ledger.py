@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from identity import DEFAULT_USER_ID
-from user_state._db import now_iso, open_conn, parse_dt
+from user_state._db import now_iso, open_conn, open_read_conn, parse_dt
 
 
 @dataclass(slots=True)
@@ -120,6 +120,7 @@ def list_recent_entries(
     user_id: str = DEFAULT_USER_ID,
     limit: int = 20,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[ThesisLedgerEntryRow]:
     """Newest-first ledger entries across ALL tickers for ``user_id``.
 
@@ -127,9 +128,9 @@ def list_recent_entries(
     append-only history of every accepted, alert-driven thesis edit, which
     otherwise has no reader on any surface. ``limit`` keeps the panel bounded.
     """
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        rows = conn.execute(
+        rows = db_conn.execute(
             """
             SELECT * FROM thesis_ledger_entries
             WHERE user_id = ?
@@ -140,7 +141,8 @@ def list_recent_entries(
         ).fetchall()
         return [_row_to_dc(r) for r in rows]
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def _fetch_one(conn: sqlite3.Connection, row_id: int) -> ThesisLedgerEntryRow:

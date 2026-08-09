@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from execution import session_context_pack
 from synthesis.insights import record_insight
 from synthesis.tenets import record_tenet
@@ -106,13 +106,11 @@ def _cfg(db: Path) -> Config:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db_dir = tmp_path / "data"
     db_dir.mkdir(parents=True, exist_ok=True)
     db = db_dir / "portfolio.db"
-    _bootstrap_base_tables(db)
-    command.upgrade(_cfg(db), "head")
-    return db
+    return migrated_db(db)
 
 
 def _insert_owner_decision(

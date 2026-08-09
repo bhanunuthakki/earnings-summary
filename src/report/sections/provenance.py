@@ -27,9 +27,14 @@ _SEVERITY_SORT_SQL = (
 )
 
 
-def build(ticker: str, repo_root: Path) -> ProvenanceSection:
-    conn = open_repo_db(repo_root)
-    if conn is None:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> ProvenanceSection:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return ProvenanceSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
@@ -39,10 +44,11 @@ def build(ticker: str, repo_root: Path) -> ProvenanceSection:
             ),
         )
 
-    coverage = _coverage(conn, ticker)
-    source_docs = _source_docs(conn, ticker)
-    open_issues_count, open_issues_detail = _open_validation_issues(conn, ticker)
-    conn.close()
+    coverage = _coverage(db_conn, ticker)
+    source_docs = _source_docs(db_conn, ticker)
+    open_issues_count, open_issues_detail = _open_validation_issues(db_conn, ticker)
+    if conn is None:
+        db_conn.close()
 
     if not coverage and not source_docs:
         return ProvenanceSection(

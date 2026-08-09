@@ -29,6 +29,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from db_paths import resolve_db_path
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -56,8 +57,8 @@ class Artifact:
     superseded_by_id: int | None
     dirty: bool
     dirty_reason: str | None
-    source_doc_ids: list[int] = field(default_factory=list)
-    parent_artifact_ids: list[int] = field(default_factory=list)
+    source_doc_ids: list[int] = field(default_factory=list[int])
+    parent_artifact_ids: list[int] = field(default_factory=list[int])
     llm_call_id: int | None = None
 
 
@@ -77,10 +78,10 @@ class UpsertRequest:
     model: str | None = None
     prompt_version: str = "v1"
     # Inputs that determine the cache key, hashed in order:
-    cache_inputs: list[bytes | str] = field(default_factory=list)
+    cache_inputs: list[bytes | str] = field(default_factory=list[bytes | str])
     # Provenance — NOT hashed; these are descriptive metadata for the brief.
-    source_doc_ids: list[int] = field(default_factory=list)
-    parent_artifact_ids: list[int] = field(default_factory=list)
+    source_doc_ids: list[int] = field(default_factory=list[int])
+    parent_artifact_ids: list[int] = field(default_factory=list[int])
     expires_at: datetime | None = None
     llm_call_id: int | None = None
 
@@ -108,14 +109,16 @@ def _row_to_artifact(row: sqlite3.Row) -> Artifact:
         try:
             decoded = json.loads(raw_src)
             if isinstance(decoded, list):
-                src_ids = [int(v) for v in decoded if isinstance(v, (int, float))]
+                decoded_values = cast("list[object]", decoded)
+                src_ids = [int(v) for v in decoded_values if isinstance(v, (int, float))]
         except (json.JSONDecodeError, TypeError):
             pass
     if raw_par:
         try:
             decoded = json.loads(raw_par)
             if isinstance(decoded, list):
-                par_ids = [int(v) for v in decoded if isinstance(v, (int, float))]
+                decoded_values = cast("list[object]", decoded)
+                par_ids = [int(v) for v in decoded_values if isinstance(v, (int, float))]
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -156,6 +159,26 @@ def _parse_dt(v: object) -> datetime:
     return datetime.fromisoformat(str(v))
 
 
+def artifact_is_fresh(artifact: Artifact, *, now: datetime | None = None) -> bool:
+    """Return whether an artifact is safe to reuse as current LLM context.
+
+    ``read_current`` intentionally exposes dirty and expired rows so UI callers
+    can label those states. Context-building callers use this predicate to keep
+    stale recommendations out of a new model prompt.
+    """
+    if artifact.dirty:
+        return False
+    if artifact.expires_at is None:
+        return True
+    reference = now if now is not None else datetime.now(UTC)
+    expires_at = artifact.expires_at
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at >= reference
+
+
 def read_current(
     *,
     ticker: str | None,
@@ -163,16 +186,17 @@ def read_current(
     fiscal_period: str | None = None,
     scope: str = "ticker",
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> Artifact | None:
     """Read the most recent non-superseded artifact for the scope tuple.
     Returns None when no artifact exists (e.g. first-run for this ticker)
     or when DB / table is unavailable."""
-    conn = _open(db_path)
-    if conn is None:
+    db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    if db_conn is None:
         return None
     try:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
+        db_conn.row_factory = sqlite3.Row
+        row = db_conn.execute(
             """
             SELECT * FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
@@ -194,7 +218,8 @@ def read_current(
         log.warning({"event": "artifact_read_current_failed", "error": str(exc)})
         return None
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def read_artifact(
@@ -203,7 +228,7 @@ def read_artifact(
     db_path: Path | str | None = None,
 ) -> Artifact | None:
     """Read one historical artifact by stable id, including superseded rows."""
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return None
     try:
@@ -537,7 +562,7 @@ def drain_dirty(
     generator + upsert; dirty=0 + a fresh expires_at are written on the new
     row.
     """
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return []
     now_iso = (now if now is not None else datetime.now(UTC)).isoformat()
@@ -577,7 +602,7 @@ def history(
 ) -> list[Artifact]:
     """Return all artifacts for the scope tuple (current + superseded), newest
     first. Powers "show me the evolution of META's bear case" queries."""
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return []
     try:
@@ -617,7 +642,7 @@ def quarter_index(
     chain. This reader is the orthogonal ticker x quarter index: it omits
     superseded rows and spans every non-null fiscal period for the purpose.
     """
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return []
     try:
@@ -642,7 +667,11 @@ def quarter_index(
         conn.close()
 
 
-def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
+def _open(
+    db_path: Path | str | None,
+    *,
+    role: SQLiteConnectionRole = SQLiteConnectionRole.WRITER,
+) -> sqlite3.Connection | None:
     """Open a connection or return None when the DB or table is unavailable.
     Best-effort pattern matches llm_call_ledger so the LLM pipeline never
     fails on telemetry."""
@@ -652,8 +681,8 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
             return None
         conn = connect_sqlite(
             path,
-            role=SQLiteConnectionRole.WRITER,
-            schema_preflight=True,
+            role=role,
+            schema_preflight=role is SQLiteConnectionRole.WRITER,
         )
         conn.execute("PRAGMA busy_timeout = 5000")
         # Verify table exists — graceful return otherwise

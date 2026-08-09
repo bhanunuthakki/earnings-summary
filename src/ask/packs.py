@@ -905,7 +905,11 @@ def _allocation_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[st
         )
     except Exception:
         return None
-    if artifact is None or not isinstance(artifact.content_json, dict):
+    if (
+        artifact is None
+        or not llm_artifact_store.artifact_is_fresh(artifact)
+        or not isinstance(artifact.content_json, dict)
+    ):
         return _item(spec, "no Incremental Dollar Recommendation has been generated yet")
 
     from allocation.recommendation_schema import IncrementalDollarRecommendation
@@ -981,7 +985,11 @@ def _brief_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, ob
         )
     except Exception:
         return None
-    if artifact is None or not isinstance(artifact.content_json, dict):
+    if (
+        artifact is None
+        or not llm_artifact_store.artifact_is_fresh(artifact)
+        or not isinstance(artifact.content_json, dict)
+    ):
         return _item(spec, "no Senior Partner Brief has been composed yet")
 
     content = cast("dict[str, object]", artifact.content_json)

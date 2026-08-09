@@ -13,11 +13,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
-
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -94,27 +91,24 @@ def _bootstrap_base_tables(db_path: Path) -> None:
         conn.close()
 
 
-def _build_db(tmp_path: Path) -> Path:
+def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db_dir = tmp_path / "data"
     db_dir.mkdir(parents=True, exist_ok=True)
     db_path = db_dir / "portfolio.db"
-    _bootstrap_base_tables(db_path)
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.upgrade(cfg, "head")
-    return db_path
+    return migrated_db(db_path)
 
 
-def test_empty_state_renders_one_line(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_empty_state_renders_one_line(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     html = _decision_journal_section(db_path)
     assert "Owner Decision journal" in html
     assert "No Owner Decisions recorded yet." in html
 
 
-def test_populated_row_renders_advice_disposition_outcome(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_populated_row_renders_advice_disposition_outcome(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         cur = conn.execute(
@@ -160,8 +154,10 @@ def test_populated_row_renders_advice_disposition_outcome(tmp_path: Path) -> Non
     assert 'data-peek-url="/api/peek/memo/position_review"' in html
 
 
-def test_bare_decision_with_no_advice_renders_dashes(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_bare_decision_with_no_advice_renders_dashes(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(

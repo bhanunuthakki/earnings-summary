@@ -37,7 +37,12 @@ from report.sections._common import has_table, open_repo_db
 log = logging.getLogger(__name__)
 
 
-def build(ticker: str, repo_root: Path) -> SignalsSection:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> SignalsSection:
     """Build the §3.5 SignalsSection for one ticker.
 
     Returns an OK section even when the table is missing — the renderer's
@@ -45,8 +50,8 @@ def build(ticker: str, repo_root: Path) -> SignalsSection:
     show a "missing data" callout for a feature this ticker simply hasn't
     been profiled for yet.
     """
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return SignalsSection(
             status=SectionStatus.MISSING_DATA,
             missing=MissingReason(
@@ -56,11 +61,12 @@ def build(ticker: str, repo_root: Path) -> SignalsSection:
             ),
         )
     try:
-        if not has_table(conn, "timeseries_signals"):
+        if not has_table(db_conn, "timeseries_signals"):
             return SignalsSection(status=SectionStatus.OK)
-        rows = _fetch_signal_rows(conn, ticker)
+        rows = _fetch_signal_rows(db_conn, ticker)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
     red, yellow, green = _bucket_and_sort(rows)
     return SignalsSection(

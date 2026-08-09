@@ -10,12 +10,14 @@ import subprocess
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 import llm_client
 from llm import cli as llm_cli
 from llm import codex_backend
+from llm_call_ledger import usage_from_json_meta
 
 
 def _good_cli_response(text: str = "ok") -> str:
@@ -69,6 +71,88 @@ def test_empty_codex_response_is_ledgered_only_as_failure(
     assert recorded[0]["failure_class"] == "empty_response"
     assert recorded[0]["error"] == "[codex] RuntimeError: empty response"
     assert "response_text" not in recorded[0]
+
+
+def test_codex_ledger_includes_public_api_equivalent_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[dict[str, object]] = []
+    result = SimpleNamespace(
+        text="answer",
+        usage=SimpleNamespace(input_tokens=1_000, cached_input_tokens=200, output_tokens=100),
+    )
+
+    def call_result(
+        _prompt: str, *, model: str, timeout_seconds: int, web_search: str = "disabled"
+    ) -> SimpleNamespace:
+        return result
+
+    def record(**kwargs: object) -> None:
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(codex_backend, "_load_wrapper", lambda: call_result)
+    monkeypatch.setattr("llm.ledger.record_llm_call", record)
+
+    assert (
+        codex_backend.call_codex_llm(
+            "question",
+            purpose="bear_case",
+            fallback_used="codex",
+            fallback_from_provider="anthropic",
+            fallback_from_transport="subscription_cli",
+        )
+        == "answer"
+    )
+    meta = recorded[0]["meta"]
+    assert isinstance(meta, dict)
+    typed_meta = cast("dict[str, object]", meta)
+    assert typed_meta["total_cost_usd"] == pytest.approx(0.00284)
+    assert usage_from_json_meta(typed_meta)["cost_estimate_usd"] == pytest.approx(0.00284)
+    assert recorded[0]["fallback_used"] == "codex"
+    assert recorded[0]["fallback_from_provider"] == "anthropic"
+
+
+def test_codex_cost_estimate_applies_long_context_rates() -> None:
+    assert codex_backend.estimate_api_equivalent_cost_usd(
+        model="gpt-5.6-terra",
+        input_tokens=273_000,
+        cached_input_tokens=0,
+        output_tokens=1_000,
+    ) == pytest.approx(1.11)
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("gpt-5.6-luna", 0.000284),
+        ("gpt-5.6-terra", 0.00284),
+        ("gpt-5.6-sol", 0.0071),
+    ],
+)
+def test_codex_cost_estimate_matches_current_public_rates(
+    model: str,
+    expected_cost: float,
+) -> None:
+    assert codex_backend.estimate_api_equivalent_cost_usd(
+        model=model,
+        input_tokens=1_000,
+        cached_input_tokens=200,
+        output_tokens=100,
+    ) == pytest.approx(expected_cost)
+
+
+def test_codex_unknown_model_blocks_before_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    def must_not_load() -> object:
+        raise AssertionError("must not dispatch")
+
+    monkeypatch.setattr(
+        codex_backend,
+        "_load_wrapper",
+        must_not_load,
+    )
+
+    with pytest.raises(ValueError, match="missing public API price"):
+        codex_backend.call_codex_llm("question", model="gpt-future")
 
 
 def test_default_purpose_routes_to_codex_before_claude(

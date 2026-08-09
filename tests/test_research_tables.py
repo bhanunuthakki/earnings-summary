@@ -53,7 +53,15 @@ def test_no_foreign_keys(db_path: Path) -> None:
         conn.close()
 
 
-def test_downgrade_to_0119_drops_them(db_path: Path) -> None:
+def test_downgrade_to_0119_drops_them(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = migrated_db(
+        tmp_path / "research-archived.db",
+        stamp=PRIOR_HEAD,
+        archived=True,
+    )
     command.downgrade(_cfg(db_path), "0119_ledger_synthesis_budget")
     names = _tables(db_path)
     for table in _TABLES:

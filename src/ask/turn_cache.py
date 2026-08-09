@@ -59,6 +59,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Generic, TypeVar, cast
 
+from sqlite_freshness import SQLiteFileToken, sqlite_file_token
+
 _K = TypeVar("_K")
 _V = TypeVar("_V")
 
@@ -217,7 +219,7 @@ def gather_key(
     repo_root: Path,
     scope_tickers: list[str],
     norm_question: str,
-    db_token: int,
+    db_token: SQLiteFileToken | int,
 ) -> tuple[object, ...]:
     """The full-retrieval memo key. ``cache_key`` scopes it to one thread (a
     session id, or ticker:report_date) so two conversations never share a memo;
@@ -237,12 +239,9 @@ def put_gather(key: tuple[object, ...], items: list[object]) -> None:
     _gather.put(key, list(items))
 
 
-def db_mtime_token(db_path: Path) -> int:
-    """A cheap freshness token for the DB — its mtime in ns, 0 when absent."""
-    try:
-        return db_path.stat().st_mtime_ns
-    except OSError:
-        return 0
+def db_mtime_token(db_path: Path) -> SQLiteFileToken:
+    """A cheap main-file plus WAL freshness token; all zeros when absent."""
+    return sqlite_file_token(db_path) or (0, 0, 0, 0)
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | Task | Schedule | XML | Wrapper | Owner |
 |---|---|---|---|---|
 | `\earnings-summary\backfill_earnings_surprises` | daily at 06:15:00 | `backfill_earnings_surprises.task.xml` | `run_backfill_earnings_surprises.bat` | Task Scheduler |
-| `\earnings-summary\backfill_transcripts` | daily at 04:30:00 | `backfill_transcripts.task.xml` | `run_backfill_transcripts.bat` | Task Scheduler |
+| `\earnings-summary\backfill_transcripts` | daily at 02:00:00 | `backfill_transcripts.task.xml` | `run_backfill_transcripts.bat` | Task Scheduler |
 | `\earnings-summary\backup_db` | daily at 02:45:00 | `backup_db.task.xml` | `run_backup_db.bat` | Task Scheduler |
 | `\earnings-summary\capture_poller` | LogonTrigger | `capture_poller.task.xml` | `run_capture_poller.bat` | Windows service |
 | `\earnings-summary\check_comp_set_drift` | weekly Sunday at 12:15:00 | `check_comp_set_drift.task.xml` | `run_check_comp_set_drift.bat` | Task Scheduler |
@@ -34,7 +34,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\refresh_scenario_priors` | monthly day 1 at 03:40:00 | `refresh_scenario_priors.task.xml` | `run_refresh_scenario_priors.bat` | Task Scheduler |
 | `\earnings-summary\restore_drill` | monthly day 15 at 09:00:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | Task Scheduler |
 | `\earnings-summary\run_morning_pipeline` | daily at 04:00:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | Task Scheduler |
-| `\earnings-summary\scan_ir_transcripts` | daily at 04:15:00 | `scan_ir_transcripts.task.xml` | `run_scan_ir_transcripts.bat` | Task Scheduler |
+| `\earnings-summary\scan_ir_transcripts` | daily at 02:15:00 | `scan_ir_transcripts.task.xml` | `run_scan_ir_transcripts.bat` | Task Scheduler |
 | `\earnings-summary\senior_partner_brief` | weekly Sunday at 09:00:00 | `senior_partner_brief.task.xml` | `run_senior_partner_brief.bat` | Task Scheduler |
 | `\earnings-summary\session_distill` | daily at 18:00:00 | `session_distill.task.xml` | `run_session_distill.bat` | Task Scheduler |
 | `\earnings-summary\submit_saydo_batch` | weekly Saturday at 02:00:00 | `submit_saydo_batch.task.xml` | `run_submit_saydo_batch.bat` | Task Scheduler |

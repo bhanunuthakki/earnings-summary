@@ -13,10 +13,10 @@ name: CI
 #               every PR.
 #
 # pyright (the strict type gate) runs as the `typecheck` job below — a RATCHET:
-# it compares the whole-repo strict error count in the PR against the base
-# branch and fails only when the PR RAISES it. The ~3070-error baseline is
-# tolerated (never blocking) and paid down incrementally, exactly like the ruff
-# diff gate. pyright also still runs locally via pre-commit / `make typecheck`.
+# it compares normalized whole-repo diagnostics in the PR against the base
+# branch and fails on any genuinely NEW error. The legacy baseline is tolerated
+# (never blocking) and paid down incrementally, exactly like the ruff diff gate.
+# pyright also still runs locally via pre-commit / `make typecheck`.
 
 on:
   pull_request:
@@ -102,6 +102,11 @@ jobs:
           - { label: "8", source_shard: 8, split_count: 1, split_part: 0 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Deletion governance verifies a recent audited commit is an
+          # ancestor. Keep this bounded for merge latency while retaining
+          # enough history for the governed cleanup window.
+          fetch-depth: 32
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -244,12 +249,9 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.python == 'true' }}
     # Diff-aware pyright (strict) ratchet. The repo carries a large pre-existing
-    # strict baseline (~3070 — tooling drift), so a whole-repo "must be clean"
-    # gate is impossible. Instead we compare the whole-repo strict error count in
-    # this PR against the base branch and fail only when the PR RAISES it — new
-    # code stays strict-clean while the baseline is paid down incrementally.
-    # Whole-repo (not per-file) so cross-module regressions are caught and the
-    # count is computed in identical import context for base and head.
+    # strict baseline, so a whole-repo "must be clean" gate is impossible. Compare
+    # normalized diagnostics in identical import context and block genuinely new
+    # errors while the legacy baseline is paid down incrementally.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -269,7 +271,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
-          pip install "pyright>=1.1.380"
+          pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
       - name: Resolve base ref
         id: base
         run: |
@@ -288,8 +290,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          head_json=$(pyright --outputjson 2>/dev/null || true)
-          head_n=$(printf '%s' "$head_json" | python .github/scripts/ci_gate.py pyright-count)
+          head_json="$RUNNER_TEMP/pyright-head.json"
+          base_json="$RUNNER_TEMP/pyright-base.json"
+          pyright --outputjson > "$head_json" 2>/dev/null || true
           base="${{ steps.base.outputs.ref }}"
           wt="$RUNNER_TEMP/base-pyright"
           # Clear any stale worktree path from a retried job, then REQUIRE the
@@ -305,16 +308,14 @@ jobs:
           fi
           cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
           trap cleanup EXIT
-          base_json=$( (cd "$wt" && pyright --outputjson 2>/dev/null) || true )
-          base_n=$(printf '%s' "$base_json" | python .github/scripts/ci_gate.py pyright-count)
+          (cd "$wt" && pyright --outputjson > "$base_json" 2>/dev/null) || true
           git worktree remove --force "$wt" 2>/dev/null || true
           trap - EXIT
-          echo "pyright strict errors — base=$base_n  head=$head_n"
-          if [ "$head_n" -gt "$base_n" ]; then
-            echo "::error::pyright introduced $((head_n - base_n)) new strict error(s) ($base_n -> $head_n). Run 'make typecheck-changed' locally to see them on your changed files."
-            exit 1
-          fi
-          echo "No new pyright strict errors (baseline $base_n tolerated)."
+          python .github/scripts/ci_gate.py pyright-diff \
+            --base-json "$base_json" \
+            --head-json "$head_json" \
+            --base-root "$wt" \
+            --head-root "$GITHUB_WORKSPACE"
 
   security:
     needs: [changes]
@@ -346,7 +347,7 @@ jobs:
           git ls-files -z |
           xargs -0 detect-secrets-hook
           --exclude-files
-          '^(?:config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
+          '^(?:config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
       - name: Generate CycloneDX SBOM
         run: cyclonedx-py requirements requirements.lock --output-file sbom.cdx.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

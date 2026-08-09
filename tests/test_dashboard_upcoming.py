@@ -51,11 +51,24 @@ def _seed_calendar(db_path: Path) -> None:
         # ORCL: last release 5d before TODAY -> est +91 ~ TODAY+86 (beyond horizon) -> hidden.
         # ZZ: within horizon but a watchlist name -> hidden.
         conn.executemany(
-            "INSERT INTO earnings_surprises (ticker, release_date) VALUES (?,?)",
+            "INSERT INTO earnings_surprises "
+            "(ticker, release_date, source_name, fetched_at) VALUES (?, ?, 'test', ?)",
             [
-                ("NU", (TODAY - timedelta(days=80)).isoformat()),
-                ("ORCL", (TODAY - timedelta(days=5)).isoformat()),
-                ("ZZ", (TODAY - timedelta(days=80)).isoformat()),
+                (
+                    "NU",
+                    (TODAY - timedelta(days=80)).isoformat(),
+                    TODAY.isoformat(),
+                ),
+                (
+                    "ORCL",
+                    (TODAY - timedelta(days=5)).isoformat(),
+                    TODAY.isoformat(),
+                ),
+                (
+                    "ZZ",
+                    (TODAY - timedelta(days=80)).isoformat(),
+                    TODAY.isoformat(),
+                ),
             ],
         )
         conn.commit()

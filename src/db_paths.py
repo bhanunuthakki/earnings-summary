@@ -1,13 +1,12 @@
 """Canonical resolution of the active ``portfolio.db`` path.
 
-This is a home for :func:`resolve_db_path` that is SAFE TO IMPORT AT MODULE TOP:
-it does not import ``db`` at module load, so importing it never triggers
-``db.init_db()`` (which runs as a side effect of importing the ``db`` module).
+This is a home for :func:`resolve_db_path` that is safe to import at module top.
+It does not import ``db`` until path resolution is actually requested, keeping
+dependency loading light and avoiding unnecessary initialization work.
 
 Roughly a dozen modules each used to define a private ``_resolve_db_path`` with
-this exact body, precisely to dodge that import-time side effect via a lazy
-in-function ``from db import DB_PATH``. This centralizes the logic without
-re-introducing the side effect. Modules with a *different* resolution contract
+this exact body. This centralizes the logic while preserving lazy loading.
+Modules with a *different* resolution contract
 (e.g. ``timeseries.loaders`` which takes ``repo_root`` + ``db_path``, or
 ``compute.segment_cache`` which derives the path from ``__file__`` to stay
 db-import-free) keep their own resolvers — this helper covers only the

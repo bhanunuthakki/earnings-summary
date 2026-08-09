@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from identity import DEFAULT_USER_ID
-from user_state._db import now_iso, open_conn, parse_dt
+from user_state._db import now_iso, open_conn, open_read_conn, parse_dt
 
 if TYPE_CHECKING:
     from datetime import date
@@ -207,14 +207,20 @@ def create_note(
         conn.close()
 
 
-def get_note(note_id: int, *, db_path: Path | str | None = None) -> AnalystNoteRow | None:
+def get_note(
+    note_id: int,
+    *,
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> AnalystNoteRow | None:
     """One note by id, or None."""
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
+        row = db_conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
         return None if row is None else _row_to_dc(row)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def list_notes(
@@ -225,6 +231,7 @@ def list_notes(
     status: str | None = None,
     limit: int = 200,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[AnalystNoteRow]:
     """Newest-first notes, filtered.
 
@@ -252,9 +259,9 @@ def list_notes(
     else:
         clauses.append("status NOT IN ('superseded', 'archived')")
     params.append(int(limit))
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        rows = conn.execute(
+        rows = db_conn.execute(
             "SELECT * FROM analyst_notes WHERE "
             + " AND ".join(clauses)
             + " ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -262,7 +269,8 @@ def list_notes(
         ).fetchall()
         return [_row_to_dc(r) for r in rows]
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 # The On My Mind feed's default kinds: a captured *thought* (musing) or a saved

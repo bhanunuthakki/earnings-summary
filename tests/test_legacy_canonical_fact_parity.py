@@ -580,6 +580,7 @@ def test_legacy_pages_are_bounded_and_cursor_is_scope_bound(tmp_path: Path) -> N
 
     assert first.legacy_rows_scanned == 2
     assert [row.fact_row_id for row in first.rows] == [1, 2]
+    assert first.next_cursor is not None
     assert first.next_cursor == LegacyFactCursor(
         issuer_id="issuer-1",
         temporal_scope=PopulationTemporalScope(

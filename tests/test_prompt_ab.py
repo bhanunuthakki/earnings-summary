@@ -5,6 +5,7 @@ monkeypatched; the suite never spends."""
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -348,3 +349,30 @@ def test_call_llm_hook_wired(monkeypatch: pytest.MonkeyPatch) -> None:
     sent.clear()
     cli.call_llm("Task. Answer briefly.", purpose="zz_test_purpose", scope="model_eval")
     assert sent and sent[0] == "Task. Answer briefly."
+
+
+def test_prompt_override_failure_log_redacts_credentials(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import llm.cli as cli
+    import llm.prompt_ab as pab
+
+    secret = "top-secret-token"  # pragma: allowlist secret - synthetic redaction fixture
+
+    def fail_override(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError(f"https://example.test?apikey={secret}")
+
+    monkeypatch.setenv(cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "claude")
+    monkeypatch.setattr(pab, "apply_prompt_override", fail_override)
+
+    def fake_claude(_prompt: str, **_kwargs: object) -> str:
+        return "ok"
+
+    monkeypatch.setattr(cli, "_call_claude", fake_claude)
+
+    with caplog.at_level(logging.DEBUG, logger="llm.cli"):
+        assert cli.call_llm("Task.", purpose="zz_test_purpose") == "ok"
+
+    assert secret not in caplog.text
+    assert "prompt_override_hook_failed" in caplog.text
+    assert "apikey=" in caplog.text

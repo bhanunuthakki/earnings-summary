@@ -225,6 +225,7 @@ def tier_coverage_summary(
     repo_root: Path,
     *,
     now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, dict[str, int]]:
     """Return per-tier (fresh, stale, total) counts for dashboard display.
 
@@ -247,13 +248,17 @@ def tier_coverage_summary(
     now = now if now is not None else datetime.now()
     thresholds = _DUE_THRESHOLDS_DAYS["daily"]
 
-    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
-        conn.row_factory = sqlite3.Row
-        if not _has_processing_tier_column(conn):
+    db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        db_conn.row_factory = sqlite3.Row
+        if not _has_processing_tier_column(db_conn):
             return out
-        rows = conn.execute(
+        rows = db_conn.execute(
             "SELECT processing_tier, last_built_at FROM tracked_companies WHERE archived_at IS NULL"
         ).fetchall()
+    finally:
+        if conn is None:
+            db_conn.close()
 
     for r in rows:
         tier = (r["processing_tier"] or "P3").upper()
