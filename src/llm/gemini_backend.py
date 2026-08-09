@@ -276,6 +276,11 @@ def _anneal_models(broken: str, client: object) -> list[str]:
     return candidates
 
 
+def _is_flash_model(model: str) -> bool:
+    """Return whether ``model`` belongs to the governed Flash family."""
+    return re.match(r"^gemini-[\d.]+-flash(?:-|$)", model) is not None
+
+
 def _verify_gemini_setup_once() -> None:
     """Resolve and cache the Gemini API key.
 
@@ -423,11 +428,12 @@ def call_gemini(
 
     prompt_sha = sha256_text(prompt)
 
-    # Self-annealing retry: _models starts as [resolved_model]. On a
+    # Self-annealing retry: _models starts as [resolved_model]. On a Flash
     # NotFound (preview alias expired / rotated), _anneal_models queries the
     # live API catalog for the current Flash model id, then appends
-    # [discovered, stable-fallback] so the loop retries in order. Every
-    # attempt writes its own ledger row so failures are fully auditable.
+    # [discovered, stable-fallback] so the loop retries in order. Pro and other
+    # capability families fail back to the governed outer router; they never
+    # cross tiers here. Every attempt writes its own ledger row.
     try:
         _models: list[str] = [resolved_model]
         _annealed = False
@@ -501,7 +507,7 @@ def call_gemini(
                     failure_class="gemini_transport",
                 )
                 is_not_found = _gemini_api_error_code(gemini_error) == 404
-                if is_not_found:
+                if is_not_found and _is_flash_model(_try_model):
                     if not _annealed and _try_model != _GEMINI_FAST_MODEL_FALLBACK:
                         _models.extend(_anneal_models(_try_model, client))
                         _annealed = True

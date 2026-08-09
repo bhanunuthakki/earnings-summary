@@ -689,6 +689,50 @@ def test_call_gemini_anneals_to_stable_fallback_when_catalog_lookup_fails(
     ]
 
 
+def test_call_gemini_pro_not_found_never_anneals_to_flash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing Pro endpoint must stay in the governed router path.
+
+    Flash alias repair is safe within the Flash family; silently crossing from
+    Pro to Flash would bypass the purpose-level capability/eval decision.
+    """
+    _no_budget(monkeypatch)
+    _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend, "_effective_fast_model", None)
+    monkeypatch.setattr(gemini_backend, "record_llm_call", _record_discard)
+
+    attempted_models: list[str] = []
+
+    class _MissingProModels:
+        def generate_content(self, *, model: str, contents: str) -> SimpleNamespace:
+            attempted_models.append(model)
+            raise genai_errors.ClientError(
+                404, {"error": {"message": "not found", "status": "NOT_FOUND"}}
+            )
+
+        def list(self) -> list[object]:
+            raise AssertionError("Pro failures must not query the Flash catalog")
+
+    class _MissingProClient(_FakeClient):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            self.models = _MissingProModels()
+
+    monkeypatch.setattr(gemini_backend.genai, "Client", _MissingProClient)
+
+    with pytest.raises(genai_errors.ClientError) as exc_info:
+        gemini_backend.call_gemini(
+            "p",
+            model="gemini-3.1-pro-preview",
+            purpose="bear_case",
+        )
+
+    assert exc_info.value.code == 404
+    assert attempted_models == ["gemini-3.1-pro-preview"]
+    assert gemini_backend._effective_fast_model is None
+
+
 def test_discover_flash_model_uses_new_sdk_supported_actions() -> None:
     _FakeClient.catalog = [
         SimpleNamespace(name="models/gemini-3.5-pro", supported_actions=["generateContent"]),
