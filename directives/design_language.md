@@ -75,10 +75,19 @@ by the executable guard `tests/test_ui_controls.py`. Status pills/wells use the
 
 ## 3. Chrome & 3-Layer Work OS Architecture
 
-- **Harvey/Legora 3-Layer Sidebar Navigation**: Dashboard surfaces adopt the 3-Layer Work OS sidebar structure (`.app-sidebar`, `--sidebar-width: 240px`):
-  - **L1 · Portfolio Intelligence**: `Portfolio Cockpit`, `Performance vs Index`, `Risk & Allocations`, Active Holdings shortcuts (`NU`, `BKNG`, `TSM`).
-  - **L2 · Research Engine**: `Company Desk (NU)`, `Thesis Contracts`, `Signals Stream`, `Financials & DCF`.
-  - **L3 · Operations & Governance**: `Decision Audit Log`, `Execution Queue`, `Settings & Calibration`.
+- **Harvey/Legora 3-Layer Sidebar Navigation**: Dashboard surfaces adopt the 3-Layer Work OS sidebar structure (`.app-sidebar`, `--sidebar-width: 240px`, collapsed rail width: 56px):
+  - **L1 · Portfolio Intelligence**: `Portfolio Cockpit`, `Performance Benchmark`, `Portfolio Allocation`.
+  - **L2 · Research Engine**: `Company Desk`, `Full Research Brief Canvas` (`#screen-full-brief`), `Fact & Metric Analytics Playground` (`#screen-analytics-playground`).
+  - **L3 · Operations & Governance**: `Decision Audit Log`, `Execution Queue & Operations Hub` (`#screen-execution-queue`).
+- **Collapsed Sidebar Rail Hover Tooltips**: When `.app-sidebar.is-collapsed` is active, hovering over any `.nav-item` displays a floating label tooltip (`data-tooltip="..."`) positioned to the right of the icon rail. Standalone settings and footer stubs are excised from the LHS rail.
+- **Dedicated Full-Canvas L2 Surfaces vs Contextual Drawers**:
+  - Dense exploratory matrices and report briefs belong on **dedicated full-canvas screens** (`#screen-full-brief` with 6 tabbed panes, `#screen-analytics-playground` with 42+ extracted 3-statement facts). Never force multi-metric statement matrices into narrow slide drawers.
+  - Slide-over drawers (`openDrillDrawer()`) are reserved for **rich multi-panel contextual drill-downs**:
+    - `saydo`: Guidance audit ledger, CFO tone check (`CONFIDENT / EXPANSIVE 88%`), transcript summary, and analyst Q&A roster (Goldman Sachs, Morgan Stanley).
+    - `dcf-priors`: WACC baseline, perpetual growth rate $g$, high growth fade horizon, refresh cadence.
+    - `llm-routing`: Model tier routing (Claude 3.5 Sonnet / Opus cheapest-at-parity vs Gemini 1.5 Pro).
+    - `governance-limits`: Position cap, LatAm FX limit, VaR thresholds, API provider integration statuses.
+- **Direct Google Sheets DCF Model Link**: Replace narrow slider drawer stubs on Company Desk with direct **`Google Sheets DCF Model ↗`** links (`openSheetDCFModel()`), pointing directly to canonical 9-sheet workbooks (`dcf/<TICKER>.xlsx`).
 - **Zero-Layout-Pop Card Dismissal Contract**: Action cards implement the `.card-dismissing` collapse contract (`dismissCard()`, height-locked transition with `border-color: transparent !important`, `max-height: 0`, `opacity: 0`, `transform: scale(0.97) translateY(-2px)`). Dismissing an item prevents vertical layout jumping and persists state to `data/portfolio.db` with a `.toast-notice` toast.
 - **One radius hierarchy**: `--radius` (8px) for inputs/buttons; `--radius-card` (10px) for surface cards; `--radius-drawer` (14px) for slide drawers; `--radius-full` (999px) for pills, dots, and chips.
 - **One motion**: `var(--transition)` (150ms ease) or `var(--transition-fluid)` (250ms cubic-bezier) with explicit properties — never `transition: all`.
