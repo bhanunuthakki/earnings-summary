@@ -347,7 +347,11 @@ def _materialized_weights(db_path: Path | None) -> dict[str, float]:
         return {}
 
 
-def _thesis_tones(db_path: Path | None) -> dict[str, str]:
+def _thesis_tones(
+    db_path: Path | None,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, str]:
     """Latest thesis-evaluation tone per ticker, normalized through the kit's
     shared vocabulary (:func:`ui.controls.thesis_status_tone`): 'ok' | 'warn' |
     'bad' | '' (unresolved/unknown status, neutral). Missing DB/table → {}
@@ -368,26 +372,32 @@ def _thesis_tones(db_path: Path | None) -> dict[str, str]:
         and now - cached[1] <= _DB_MEMO_TTL_SECONDS
     ):
         return cached[2]
-    tones = _compute_thesis_tones(path)
+    tones = _compute_thesis_tones(path, conn=conn)
     if token is not None:
         _TONES_MEMO[key] = (token, now, tones)
     return tones
 
 
-def _compute_thesis_tones(db_path: Path) -> dict[str, str]:
+def _compute_thesis_tones(
+    db_path: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, str]:
+    owns_connection = conn is None
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:
-        rows = conn.execute(
+        rows = db_conn.execute(
             "SELECT ticker, overall_status FROM thesis_evaluations "
             "ORDER BY ticker, evaluated_at DESC"
         ).fetchall()
     except sqlite3.Error:
         return {}
     finally:
-        conn.close()
+        if owns_connection:
+            db_conn.close()
     out: dict[str, str] = {}
     for raw_ticker, raw_status in rows:
         ticker = str(raw_ticker).upper()
@@ -400,7 +410,12 @@ def _compute_thesis_tones(db_path: Path) -> dict[str, str]:
     return out
 
 
-def _news_meta(db_path: Path | None, news_ids: list[int]) -> dict[int, tuple[str, str]]:
+def _news_meta(
+    db_path: Path | None,
+    news_ids: list[int],
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[int, tuple[str, str]]:
     """news.id → (source, source_feed), lowercased, for material_news refinement.
     Memoized per (path, mtime, requested-id-set) — the same stream's
     material-news ids repeat across re-renders of an unchanged DB."""
@@ -420,33 +435,45 @@ def _news_meta(db_path: Path | None, news_ids: list[int]) -> dict[int, tuple[str
         and now - cached[1] <= _DB_MEMO_TTL_SECONDS
     ):
         return cached[2]
-    meta = _compute_news_meta(path, list(key[1]))
+    meta = _compute_news_meta(path, list(key[1]), conn=conn)
     if token is not None:
         _NEWS_META_MEMO[key] = (token, now, meta)
     return meta
 
 
-def _compute_news_meta(db_path: Path, news_ids: list[int]) -> dict[int, tuple[str, str]]:
+def _compute_news_meta(
+    db_path: Path,
+    news_ids: list[int],
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[int, tuple[str, str]]:
     if not news_ids:
         return {}
+    owns_connection = conn is None
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:
         marks = ",".join("?" for _ in news_ids)
-        rows = conn.execute(
+        rows = db_conn.execute(
             f"SELECT id, source, source_feed FROM news WHERE id IN ({marks})",
             [int(i) for i in news_ids],
         ).fetchall()
     except sqlite3.Error:
         return {}
     finally:
-        conn.close()
+        if owns_connection:
+            db_conn.close()
     return {int(r[0]): (str(r[1] or "").lower(), str(r[2] or "").lower()) for r in rows}
 
 
-def _signal_types_by_news(db_path: Path | None, news_ids: list[int]) -> dict[int, str]:
+def _signal_types_by_news(
+    db_path: Path | None,
+    news_ids: list[int],
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[int, str]:
     """news.id → signals.signal_type for the mirrored diet rows (alembic 0095).
 
     The diet substrate mirrors every `news` row into `signals` with a TYPE
@@ -457,20 +484,22 @@ def _signal_types_by_news(db_path: Path | None, news_ids: list[int]) -> dict[int
     un-mirrored rows."""
     if db_path is None or not news_ids or not Path(db_path).exists():
         return {}
+    owns_connection = conn is None
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:
         marks = ",".join("?" for _ in news_ids)
-        rows = conn.execute(
+        rows = db_conn.execute(
             f"SELECT news_id, signal_type FROM signals WHERE news_id IN ({marks})",
             [int(i) for i in news_ids],
         ).fetchall()
     except sqlite3.Error:
         return {}
     finally:
-        conn.close()
+        if owns_connection:
+            db_conn.close()
     return {int(r[0]): str(r[1]) for r in rows if r[0] is not None}
 
 
@@ -496,7 +525,12 @@ def _alert_news_evidence(item: InboxItem) -> tuple[int | None, str]:
 # ----------------------------------------------------------------------------
 
 
-def _categorize(items: list[InboxItem], db_path: Path | None) -> list[str]:
+def _categorize(
+    items: list[InboxItem],
+    db_path: Path | None,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[str]:
     """One category slug per item, parallel to ``items``."""
     news_ids: list[int] = []
     evidence: dict[int, tuple[int | None, str]] = {}
@@ -506,8 +540,8 @@ def _categorize(items: list[InboxItem], db_path: Path | None) -> list[str]:
             evidence[idx] = (news_id, headline)
             if news_id is not None:
                 news_ids.append(news_id)
-    meta = _news_meta(db_path, news_ids)
-    signal_types = _signal_types_by_news(db_path, news_ids)
+    meta = _news_meta(db_path, news_ids, conn=conn)
+    signal_types = _signal_types_by_news(db_path, news_ids, conn=conn)
 
     out: list[str] = []
     for idx, it in enumerate(items):
@@ -715,6 +749,7 @@ def annotate_and_rank(
     db_path: Path | None,
     now: datetime,
     position_weights: Mapping[str, float] | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[InboxItem]:
     """Assign category/score/score_why to every item and order the stream
     flat: score descending, newest-first on ties (recency lives inside the
@@ -727,8 +762,8 @@ def annotate_and_rank(
     weights = (
         dict(position_weights) if position_weights is not None else _materialized_weights(db_path)
     )
-    tones = _thesis_tones(db_path)
-    categories = _categorize(items, db_path)
+    tones = _thesis_tones(db_path, conn=conn)
+    categories = _categorize(items, db_path, conn=conn)
     annotated: list[InboxItem] = []
     for it, category in zip(items, categories, strict=True):
         score, why = _score_one(it, category, now=now, weights=weights, tones=tones)

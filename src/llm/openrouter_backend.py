@@ -13,7 +13,7 @@ OpenRouter THIRD backend behind ``call_llm`` — a unified, OpenAI-compatible
 gateway to many cheap open-weight models (DeepSeek, Qwen, Llama, Mistral, ...)
 through ONE metered API key. Its reason to exist: widen the pareto optimizer's
 cheap-candidate pool without a bespoke SDK per provider (contrast the Claude
-subprocess wrapper and the Gemini google.generativeai SDK — each a full
+subprocess wrapper and the Gemini google.genai SDK — each a full
 integration; OpenRouter is one HTTP client reaching hundreds of models).
 
 THE MODEL-IDENTITY GUARDRAIL (the eval-integrity requirement).

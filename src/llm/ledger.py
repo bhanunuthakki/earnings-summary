@@ -153,10 +153,10 @@ def fallback_call_logged(
 ) -> str:
     """Wrap try_gemini_fallback with its own ledger row.
 
-    Gemini's google-generativeai SDK doesn't surface per-call cost/token
-    counts in a stable shape, so the row records latency + response_chars
-    only; usage/cost stay NULL. That's still enough to track *how often*
-    fallback fires and how much latency it adds.
+    The emergency fallback wrapper intentionally returns text only, so this
+    compatibility row records latency + response_chars; the canonical Gemini
+    backend records the SDK's token usage and estimated cost separately. This
+    row still tracks how often emergency fallback fires and its added latency.
 
     A ledger row is written ONLY when a Gemini attempt actually fires. When
     the fallback is disabled or unconfigured, ``try_gemini_fallback`` raises

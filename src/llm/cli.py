@@ -1518,7 +1518,7 @@ def call_llm(
     this repo — including from `execution/` scripts, `src/report/sections/`, and
     anywhere else that needs a Claude-then-Gemini-fallback round-trip.
 
-    Direct use of `google.generativeai`, the `anthropic` SDK, or any other
+    Direct use of `google.genai`, the `anthropic` SDK, or any other
     provider client is forbidden outside this module's fallback wiring; route
     through call_llm so retunes (model swap, timeout change, billing change,
     fallback policy) happen in one place.

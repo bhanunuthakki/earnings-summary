@@ -512,7 +512,7 @@ def test_risk_budget_mismatched_provenance_suppresses_delta(tmp_path: Path) -> N
 
     assert "4.0pp vs prior" not in html  # no false delta across the version change
     assert "3.0pp vs prior" not in html
-    assert "metric definition changed (v1 → v2)" in html
+    assert "metric definition changed (v1 -&gt; v2)" in html
     assert 'k-pill k-pill-warn">metric definition changed' in html
 
 

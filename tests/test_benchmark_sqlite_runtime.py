@@ -22,7 +22,9 @@ def test_production_overview_benchmark_is_source_read_only_and_counts_connection
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    source = migrated_db(tmp_path / "production-derived.db")
+    source = migrated_db(tmp_path / "repo" / "data" / "portfolio.db")
+    weights = source.parent / "portfolio_weights.json"
+    weights.write_text('{"schema_version": 1, "weights": {}}', encoding="utf-8")
     before = _digest(source)
 
     payload = benchmark_production_overview(source, iterations=3)
@@ -36,14 +38,19 @@ def test_production_overview_benchmark_is_source_read_only_and_counts_connection
         "wal_bytes": payload["wal_read"]["wal_bytes"],
     }
     assert payload["wal_read"]["wal_bytes"] > 0
-    fresh = payload["fresh_connection_per_request"]
-    reused = payload["request_scoped_reused_connection"]
-    assert fresh["connection_opens"] == 3
-    assert reused["connection_opens"] == 1
-    assert payload["connection_open_reduction"] == 2
-    assert len(fresh["request_ms"]) == len(reused["request_ms"]) == 3
-    assert fresh["warm_median_ms"] >= 0
-    assert reused["warm_median_ms"] >= 0
+    legacy = payload["legacy_component_owned"]
+    scoped = payload["request_scoped_per_request"]
+    assert legacy["connection_opens"] > scoped["connection_opens"]
+    assert scoped["connection_opens"] == 3
+    assert payload["connection_open_reduction"] == (
+        legacy["connection_opens"] - scoped["connection_opens"]
+    )
+    assert len(legacy["request_ms"]) == len(scoped["request_ms"]) == 3
+    assert legacy["warm_median_ms"] >= 0
+    assert scoped["warm_median_ms"] >= 0
+    assert payload["receipts_equal"] is True
+    assert payload["workload_receipt"]["inbox_items"] >= 0
+    assert payload["staged_cache_files"] == ["data/portfolio_weights.json"]
 
 
 def test_cli_emits_structured_production_overview_json(
@@ -69,5 +76,7 @@ def test_cli_emits_structured_production_overview_json(
 
     payload = json.loads(completed.stdout)
     assert payload["mode"] == "production_overview_read"
-    assert payload["fresh_connection_per_request"]["connection_opens"] == 2
+    assert payload["request_scoped_per_request"]["connection_opens"] == 2
+    assert payload["legacy_component_owned"]["connection_opens"] > 2
+    assert payload["receipts_equal"] is True
     assert completed.stderr == ""

@@ -32,10 +32,10 @@ mcp
 # CLI honors either ANTHROPIC_API_KEY (metered API billing) or `claude auth login`
 # (Pro/Max subscription) — see .env.example.
 #
-# LLM access — fallback path: Gemini via google-generativeai SDK. Used only when the
+# LLM access — fallback path: Gemini via the Google Gen AI SDK. Used only when the
 # Claude CLI call fails (timeout, non-zero exit, empty output, binary missing). Reads
 # GEMINI_API_KEY (or GOOGLE_API_KEY) from .env via python-dotenv. See .env.example.
-google-generativeai
+google-genai
 # Anthropic Python SDK — used ONLY by execution/submit_saydo_batch.py for the
 # message-batches API (which the Claude CLI doesn't expose). Reads
 # ANTHROPIC_API_KEY from .env (metered API billing — already the project default;

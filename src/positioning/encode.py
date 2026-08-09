@@ -30,7 +30,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # NOTE: ``llm.structured`` is imported function-locally in ``propose_profile``
 # (the only caller), NOT here. A module-level import drags the whole llm
-# transport chain — llm.cli → llm.ledger → llm.fallback → google.generativeai,
+# transport chain — llm.cli → llm.ledger → llm.fallback → google.genai,
 # ~10s cold — into every importer of :class:`ProposedProfile`, and
 # ``pipeline.positioning_panel``'s render path never makes an LLM call.
 

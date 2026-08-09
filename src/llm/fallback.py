@@ -18,37 +18,10 @@ from __future__ import annotations
 
 import logging
 import os
-import warnings
-from typing import Any
 
-# NOTE: `google.generativeai` is deprecated as of late 2025; Google's path forward
-# is `google-genai` with a different API (genai.Client / client.models.generate_content).
-# Migrate when convenient — the deprecated package still works and avoids forcing
-# users to re-install for the fallback path. See:
-# https://github.com/google-gemini/deprecated-generative-ai-python
-#
-# The import is LAZY (_ensure_genai), not module-level: this module loads on the
-# boot-critical chain (llm.cli -> llm.ledger -> here), and importing google.*
-# runs google.api_core's check_python_version(), whose packages_distributions()
-# scan stats every file of every installed distribution (measured 43s+ per
-# process on this machine; hung comments_server boot for minutes, 2026-07-31).
-# Only an actual fallback attempt may pay that. Same pattern as
-# ``llm.gemini_backend._ensure_genai``.
-genai: Any = None  # the google.generativeai module, set by _ensure_genai()
+from log_redact import redact
 
 log = logging.getLogger(__name__)
-
-
-def _ensure_genai() -> None:
-    """Import the Gemini SDK on first use, binding the module global the
-    call path (and tests, via ``fb.genai``) reference."""
-    global genai
-    if genai is not None:
-        return
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)  # silence deprecation noise
-        import google.generativeai as _genai
-    genai = _genai
 
 
 # Gemini fallback model. Single Flash variant for both heavy (thesis tracker)
@@ -79,8 +52,8 @@ def _stderr_tail(exc: BaseException, limit: int = 400) -> str:
 def _describe(claude_error: Exception, limit: int = 300) -> str:
     """``{type}: {message}`` plus any captured stderr/stdout tail — the
     single place the three RuntimeErrors below render the Claude root cause."""
-    base = f"{type(claude_error).__name__}: {str(claude_error)[:limit]}"
-    tail = _stderr_tail(claude_error)
+    base = redact(f"{type(claude_error).__name__}: {str(claude_error)[:limit]}")
+    tail = redact(_stderr_tail(claude_error))
     return f"{base} | output: {tail}" if tail else base
 
 
@@ -122,7 +95,7 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
         log.info(
             {
                 "event": "cli_failed_fallback_disabled",
-                "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
+                "claude_error": redact(f"{type(claude_error).__name__}: {str(claude_error)[:200]}"),
                 "fallback_state": "disabled_by_env",
             }
         )
@@ -148,7 +121,7 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     log.warning(
         {
             "event": "primary_cli_failed_falling_back_to_gemini",
-            "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
+            "claude_error": redact(f"{type(claude_error).__name__}: {str(claude_error)[:200]}"),
             "gemini_model": model,
         }
     )
@@ -157,6 +130,6 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     except Exception as gemini_err:
         raise RuntimeError(
             "Both LLMs failed: Primary CLI errored AND Gemini fallback call failed.\n"
-            f"Gemini error: {type(gemini_err).__name__}: {str(gemini_err)[:200]}\n"
+            f"Gemini error: {redact(f'{type(gemini_err).__name__}: {str(gemini_err)[:200]}')}\n"
             f"Original error: {_describe(claude_error)}"
         ) from claude_error
