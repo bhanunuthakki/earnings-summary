@@ -11,10 +11,12 @@
 .DEFAULT_GOAL := help
 PY ?= python
 BASE ?= origin/main
+PYTEST_WORKERS ?= 2
+PYTEST_XDIST_ARGS := $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS) --dist=loadfile)
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
 CHANGED := $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
 
-.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-changed check check-fast ci-local
+.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-serial test-changed check check-fast ci-local
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -47,6 +49,9 @@ typecheck-changed:  ## pyright strict on files changed vs BASE (the enforceable 
 	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs pyright; else echo "no changed .py files"; fi
 
 test:  ## Run the full test suite
+	pytest -q $(PYTEST_XDIST_ARGS)
+
+test-serial:  ## Run the full suite in one process (lowest local RAM/CPU pressure)
 	pytest -q
 
 test-changed:  ## Run pytest only on changed test files vs BASE

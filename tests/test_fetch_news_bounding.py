@@ -23,6 +23,7 @@ monkeypatched with fakes that sleep to simulate a hang.
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -77,9 +78,11 @@ def test_one_hung_ticker_times_out_without_blocking_the_rest(
     tickers' rows from being collected, and the whole call must return well
     under "hang forever"."""
 
+    release_hung = threading.Event()
+
     def _fake_collect(ticker: str, **_kwargs: object) -> list[NewsRow]:
         if ticker == "HUNG":
-            time.sleep(5.0)  # longer than the test's timeout budget below
+            release_hung.wait(timeout=5.0)  # longer than the timeout budget below
             return [_row("HUNG")]  # pragma: no cover — never reached in time
         return [_row(ticker)]
 
@@ -87,15 +90,18 @@ def test_one_hung_ticker_times_out_without_blocking_the_rest(
 
     tickers = ["AAA", "HUNG", "BBB", "CCC"]
     t0 = time.monotonic()
-    rows = fetch_news.collect_primary(
-        tickers,
-        source="auto",
-        db_path=":memory:",
-        days=2,
-        limit=50,
-        workers=4,
-        per_ticker_timeout_s=0.2,
-    )
+    try:
+        rows = fetch_news.collect_primary(
+            tickers,
+            source="auto",
+            db_path=":memory:",
+            days=2,
+            limit=50,
+            workers=4,
+            per_ticker_timeout_s=0.2,
+        )
+    finally:
+        release_hung.set()
     elapsed = time.monotonic() - t0
 
     tickers_seen = {r.ticker for r in rows}
@@ -109,23 +115,28 @@ def test_hung_ticker_logs_a_timeout_event(
     """A timed-out ticker is logged by name so a killed stage's cron log names
     the culprit instead of showing an empty section."""
 
+    release_slow = threading.Event()
+
     def _fake_collect(ticker: str, **_kwargs: object) -> list[NewsRow]:
         if ticker == "SLOW":
-            time.sleep(2.0)
+            release_slow.wait(timeout=2.0)
             return []  # pragma: no cover
         return [_row(ticker)]
 
     monkeypatch.setattr(fetch_news, "_collect_for_ticker", _fake_collect)
 
-    fetch_news.collect_primary(
-        ["FAST", "SLOW"],
-        source="auto",
-        db_path=":memory:",
-        days=2,
-        limit=50,
-        workers=2,
-        per_ticker_timeout_s=0.2,
-    )
+    try:
+        fetch_news.collect_primary(
+            ["FAST", "SLOW"],
+            source="auto",
+            db_path=":memory:",
+            days=2,
+            limit=50,
+            workers=2,
+            per_ticker_timeout_s=0.2,
+        )
+    finally:
+        release_slow.set()
 
     err = capsys.readouterr().err
     assert '"event": "news_primary_ticker_timeout"' in err

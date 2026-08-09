@@ -7,7 +7,7 @@ contract. Injected fake price readers only; no network.
 
 from __future__ import annotations
 
-import time
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -51,12 +51,17 @@ def test_prefetch_degrades_a_ticker_that_hangs() -> None:
     rather than hanging the whole prefetch (mirrors reprice.py's own
     ticker-timeout contract)."""
 
+    release_slow = threading.Event()
+
     def slow(repo_root: Path, ticker: str) -> LivePrice | None:
         if ticker == "SLOW":
-            time.sleep(1.0)
+            release_slow.wait(timeout=1.0)
         return _fixed(5.0)
 
-    out = prefetch_live_prices(_ROOT, ["FAST", "SLOW"], price_reader=slow, timeout_s=0.05)
+    try:
+        out = prefetch_live_prices(_ROOT, ["FAST", "SLOW"], price_reader=slow, timeout_s=0.05)
+    finally:
+        release_slow.set()
     assert out["FAST"] is not None
     assert out["SLOW"] is None
 

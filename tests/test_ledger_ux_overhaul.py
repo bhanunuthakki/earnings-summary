@@ -25,13 +25,11 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -68,12 +66,7 @@ CREATE TABLE tracked_companies (
 """
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+def _add_legacy_tables(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
         conn.executescript(_DECISIONS_DDL)
@@ -83,12 +76,16 @@ def _build_db(db_path: Path) -> None:
 
 
 @pytest.fixture
-def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FlaskClient, Path, Path]:
+def ctx(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+) -> tuple[FlaskClient, Path, Path]:
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     monkeypatch.setenv("LEDGER_WORLDVIEW", "1")
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+    migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+    _add_legacy_tables(db)
     client = comments_server.create_app(tmp_path).test_client()
     return client, db, tmp_path
 

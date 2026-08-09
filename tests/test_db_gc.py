@@ -11,6 +11,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -1077,12 +1078,14 @@ class TestIncidentHardening:
         monkeypatch.setattr(db_gc, "VACUUM_PREFLIGHT_TIMEOUT_S", 0.3)
         blocker = sqlite3.connect(gc_db)
         blocker.execute("BEGIN IMMEDIATE")
+        started_at = time.monotonic()
         try:
             with pytest.raises(db_gc.GcAbortedError, match="write lock"):
                 _run(gc_db, apply=True, policies=["maintenance"], vacuum=True)
         finally:
             blocker.rollback()
             blocker.close()
+        assert time.monotonic() - started_at < 2.0
 
     def test_vacuum_runs_under_guards_when_uncontended(self, gc_db: Path) -> None:
         self._seed_facts(gc_db)

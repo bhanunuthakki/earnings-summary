@@ -14,15 +14,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
 
-from alembic import command
 from alerts import fire_alert, queue_action
 from dashboard._card import render_alert_card
 from dashboard.inbox import collect_inbox, render_inbox_stream
@@ -84,12 +83,7 @@ CREATE TABLE IF NOT EXISTS documents (
 """
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+def _add_legacy_tables(db_path: Path) -> None:
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(_EXTRA_DDL)
@@ -99,10 +93,10 @@ def _build_db(db_path: Path) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+    migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
+    _add_legacy_tables(db)
     return tmp_path
 
 
