@@ -10,6 +10,7 @@ import subprocess
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -104,8 +105,9 @@ def test_codex_ledger_includes_public_api_equivalent_cost(
     )
     meta = recorded[0]["meta"]
     assert isinstance(meta, dict)
-    assert meta["total_cost_usd"] == pytest.approx(0.00284)
-    assert usage_from_json_meta(meta)["cost_estimate_usd"] == pytest.approx(0.00284)
+    typed_meta = cast("dict[str, object]", meta)
+    assert typed_meta["total_cost_usd"] == pytest.approx(0.00284)
+    assert usage_from_json_meta(typed_meta)["cost_estimate_usd"] == pytest.approx(0.00284)
     assert recorded[0]["fallback_used"] == "codex"
     assert recorded[0]["fallback_from_provider"] == "anthropic"
 
