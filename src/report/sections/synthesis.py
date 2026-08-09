@@ -98,7 +98,12 @@ def _citations_for_source_docs(
     return items
 
 
-def build(ticker: str, repo_root: Path) -> SynthesisSection:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> SynthesisSection:
     ticker = ticker.upper()
 
     # Late import so the report layer doesn't depend on the synthesis_lenses
@@ -125,6 +130,7 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
                 purpose=f"lens:{lens_name}",
                 scope="ticker",
                 db_path=db_path,
+                conn=conn,
             )
             if art is None or not art.content_md:
                 continue
@@ -136,7 +142,9 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
             # a lens authored to cite. Everything else renders exactly as before.
             citations: list[dict[str, object]] = []
             if art.source_doc_ids and _MARKER_RX.search(art.content_md):
-                if cite_conn is None and db_path.exists():
+                if cite_conn is None and conn is not None:
+                    cite_conn = conn
+                elif cite_conn is None and db_path.exists():
                     cite_conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
                 if cite_conn is not None:
                     citations = _citations_for_source_docs(
@@ -155,7 +163,7 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
                 )
             )
     finally:
-        if cite_conn is not None:
+        if cite_conn is not None and cite_conn is not conn:
             cite_conn.close()
 
     # Lenses are sorted by analytical importance (most-decision-critical first)

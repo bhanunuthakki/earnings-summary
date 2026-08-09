@@ -19,6 +19,7 @@ PARENT = "0243_metric_ontology"
 def test_canonical_fact_resolution_revision_has_the_exact_ontology_parent() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic" / "versions_archived"))
     script = ScriptDirectory.from_config(config)
     revision = script.get_revision("0244_canonical_fact_resolution")
     assert revision is not None
@@ -26,7 +27,7 @@ def test_canonical_fact_resolution_revision_has_the_exact_ontology_parent() -> N
 
 
 def test_canonical_resolution_migration_declares_sealed_cross_cell_tables() -> None:
-    source = (ROOT / "alembic/versions/0244_canonical_fact_resolution.py").read_text(
+    source = (ROOT / "alembic/versions_archived/0244_canonical_fact_resolution.py").read_text(
         encoding="utf-8"
     )
     for table in (
@@ -65,6 +66,7 @@ def test_0244_installs_and_downgrades_staged_exact_boundaries(
     conn.close()
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic" / "versions_archived"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
     command.stamp(config, BASE_REVISION)
     command.upgrade(config, REVISION)

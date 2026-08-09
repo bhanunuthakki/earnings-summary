@@ -187,10 +187,16 @@ def test_schema_preflighted_writer_refuses_to_create_database(
     assert not path.exists()
 
 
-def test_schema_preflight_is_writer_only(tmp_path: Path) -> None:
+def test_read_only_connection_can_preflight_schema(tmp_path: Path) -> None:
     path = tmp_path / "portfolio.db"
-    sqlite3.connect(path).close()
-    with pytest.raises(ValueError, match="writer"):
+    raw = sqlite3.connect(path)
+    try:
+        raw.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
+        raw.execute("INSERT INTO alembic_version VALUES ('stale_revision')")
+        raw.commit()
+    finally:
+        raw.close()
+    with pytest.raises(SchemaRevisionMismatch):
         connect_sqlite(
             path,
             role=SQLiteConnectionRole.READ_ONLY,

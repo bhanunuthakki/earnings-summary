@@ -43,11 +43,12 @@ two more bands folded into this one rather than living beside it.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 
-from user_state._db import open_conn
+from user_state._db import open_read_conn
 
 # Doorways are PANEL hashes — the shell router treats unknown hashes as panel
 # ids, so these must stay panel ids ('musings' = the Ledger tab, where the
@@ -96,34 +97,40 @@ def _age_suffix(oldest_iso: object) -> str:
         return ""
 
 
-def _reconcile_count(db_path: Path | str | None) -> int:
+def _reconcile_count(db_path: Path | str | None, *, conn: sqlite3.Connection | None = None) -> int:
     from synthesis.reconcile import list_unreconciled
 
-    return len(list_unreconciled(db_path))
+    return len(list_unreconciled(db_path, conn=conn))
 
 
-def _proposed_tenet_count(db_path: Path | str | None) -> int:
+def _proposed_tenet_count(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> int:
     from pipeline.worldview_panel import worldview_enabled
     from synthesis.tenets import list_tenets
 
     if not worldview_enabled():
         return 0
-    return len(list_tenets(status="proposed", db_path=db_path))
+    return len(list_tenets(status="proposed", db_path=db_path, conn=conn))
 
 
-def _pending_proposal_count(db_path: Path | str | None) -> int:
+def _pending_proposal_count(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> int:
     from research.proposals import list_proposals
 
-    return len(list_proposals(status="pending", db_path=db_path))
+    return len(list_proposals(status="pending", db_path=db_path, conn=conn))
 
 
-def _decision_stub_debt(db_path: Path | str | None) -> tuple[int, str]:
+def _decision_stub_debt(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> tuple[int, str]:
     """Owner decisions still ungradeable — NULL conviction or falsifier. The
     same debt the governor's retro_annotation ping chases, counted without its
     channel/age filters (any incomplete stub starves Brier + the tripwires)."""
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        row = conn.execute(
+        row = db_conn.execute(
             """
             SELECT COUNT(*), MIN(created_at) FROM decisions
             WHERE decided_by = 'owner' AND outcome_label = 'pending'
@@ -132,23 +139,29 @@ def _decision_stub_debt(db_path: Path | str | None) -> tuple[int, str]:
         ).fetchone()
         return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
-def _digest_ping_debt(db_path: Path | str | None) -> tuple[int, str]:
+def _digest_ping_debt(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> tuple[int, str]:
     """Coach pings parked in the digest lane (over-cap or send-failed) — the
     write-only queue the audit found no surface ever rendered."""
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        row = conn.execute(
+        row = db_conn.execute(
             "SELECT COUNT(*), MIN(created_at) FROM coach_pings WHERE status = 'digest'"
         ).fetchone()
         return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
-def _routed_to_brief_debt(db_path: Path | str | None) -> tuple[int, str]:
+def _routed_to_brief_debt(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> tuple[int, str]:
     """P2.2 (personal_investment_partner_prd.md §9.1): coach pings the
     governor routed to the Senior Partner Brief (calibration_finding /
     capacity_breach / life_event_checkpoint / profile_drift —
@@ -157,39 +170,45 @@ def _routed_to_brief_debt(db_path: Path | str | None) -> tuple[int, str]:
     items would be invisible on Home between the moment the governor routes
     them and the next weekly brief — the digest-debt line above only ever
     counted ``status = 'digest'``, which these rows never reach."""
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        row = conn.execute(
+        row = db_conn.execute(
             "SELECT COUNT(*), MIN(created_at) FROM coach_pings WHERE status = 'routed_to_brief'"
         ).fetchone()
         return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
-def _pending_draft_confirmation_debt(db_path: Path | str | None) -> tuple[int, str]:
+def _pending_draft_confirmation_debt(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> tuple[int, str]:
     """Decision drafts (tracker/Telegram/web capture — any ``source_channel``)
     still ``awaiting_confirmation`` — the same ``decision_drafts`` read
     ``pipeline.mobile_inbox_panel._drafts_section`` uses, so this line and
     the mobile Inbox never drift."""
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        row = conn.execute(
+        row = db_conn.execute(
             "SELECT COUNT(*), MIN(created_at) FROM decision_drafts "
             "WHERE status = 'awaiting_confirmation'"
         ).fetchone()
         return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
-def _undispositioned_card_debt(db_path: Path | str | None) -> int:
+def _undispositioned_card_debt(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> int:
     """Evaluation-list Investment Decision Cards with no pass/watch/promote
     disposition recorded yet — the same read
     ``pipeline.mobile_inbox_panel._card_dispositions_section`` uses."""
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        row = conn.execute(
+        row = db_conn.execute(
             """
             SELECT COUNT(*)
             FROM tracked_companies tc
@@ -207,10 +226,16 @@ def _undispositioned_card_debt(db_path: Path | str | None) -> int:
         ).fetchone()
         return int(row[0] or 0)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
-def _coach_sent_today_debt(db_path: Path | str | None, *, now: datetime | None = None) -> int:
+def _coach_sent_today_debt(
+    db_path: Path | str | None,
+    *,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> int:
     """Coach pings actually pushed to Telegram today — the ONE count the
     retired ``coach_strip`` band carried that ``_digest_ping_debt`` /
     ``_routed_to_brief_debt`` above don't already cover (those two count the
@@ -221,19 +246,23 @@ def _coach_sent_today_debt(db_path: Path | str | None, *, now: datetime | None =
     Telegram showed"), not a duplicate reading surface."""
     stamp = now or datetime.now(UTC).replace(tzinfo=None)
     day_start = stamp.date().isoformat()
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        row = conn.execute(
+        row = db_conn.execute(
             "SELECT COUNT(*) FROM coach_pings WHERE status = 'sent' AND created_at >= ?",
             (day_start,),
         ).fetchone()
         return int(row[0] or 0)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def _packet_state(
-    db_path: Path | str | None, *, now: datetime | None = None
+    db_path: Path | str | None,
+    *,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[int, int] | None:
     """(answered, total) for the CURRENT ISO week's Sunday packet run, or
     ``None`` when there is nothing to show — no run yet this week, or the run
@@ -244,9 +273,9 @@ def _packet_state(
     Sunday packet itself already showed on Telegram."""
     stamp = now or datetime.now(UTC).replace(tzinfo=None)
     iso_year, iso_week, _ = stamp.isocalendar()
-    conn = open_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
-        row = conn.execute(
+        row = db_conn.execute(
             "SELECT id, status, total_items FROM weekly_packet_runs "
             "WHERE iso_year = ? AND iso_week = ?",
             (iso_year, iso_week),
@@ -256,14 +285,15 @@ def _packet_state(
         run_id, status, total_items = int(row[0]), str(row[1]), int(row[2] or 0)
         if status != "open" or not total_items:
             return None
-        pending_row = conn.execute(
+        pending_row = db_conn.execute(
             "SELECT COUNT(*) FROM weekly_packet_items WHERE run_id = ? AND verdict IS NULL",
             (run_id,),
         ).fetchone()
         pending = int(pending_row[0] or 0)
         return total_items - pending, total_items
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def render_weekly_packet_peek(db_path: Path | str | None, *, now: datetime | None = None) -> str:
@@ -277,7 +307,7 @@ def render_weekly_packet_peek(db_path: Path | str | None, *, now: datetime | Non
     try:
         stamp = now or datetime.now(UTC).replace(tzinfo=None)
         iso_year, iso_week, _ = stamp.isocalendar()
-        conn = open_conn(db_path)
+        conn = open_read_conn(db_path)
         try:
             run = conn.execute(
                 "SELECT id, status, total_items FROM weekly_packet_runs "
@@ -312,7 +342,12 @@ def render_weekly_packet_peek(db_path: Path | str | None, *, now: datetime | Non
     )
 
 
-def _packet_line(db_path: Path | str | None, *, now: datetime | None = None) -> str:
+def _packet_line(
+    db_path: Path | str | None,
+    *,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Task 3: "Sunday packet · N of M answered · finish ▸" — dark (returns
     "") when the packet is clear/complete or no run exists this week, per the
     ratified "dark-when-clear" contract (never a zero-count line). The doorway
@@ -320,7 +355,7 @@ def _packet_line(db_path: Path | str | None, *, now: datetime | None = None) -> 
     substrate queues live) for a plain click/middle-click, and opens the
     read-only quick-look in place via ``data-peek-url`` (no web reply surface
     exists — verdicts are given on Telegram, per Task 3's spec)."""
-    state = _packet_state(db_path, now=now)
+    state = _packet_state(db_path, now=now, conn=conn)
     if state is None:
         return ""
     answered, total = state
@@ -338,7 +373,9 @@ def _line(href: str, label: str, count: int, suffix: str = "") -> str:
     )
 
 
-def _red_team_escalated_count(db_path: Path | str | None) -> int:
+def _red_team_escalated_count(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> int:
     """Items that used their one allowed DEFER and are still unanswered
     (PR6, monthly_red_team.md Phase 2 — "a SECOND defer ... escalates to a
     persistent Home-band banner"). Degrades to 0 on a pre-migration DB (the
@@ -346,16 +383,18 @@ def _red_team_escalated_count(db_path: Path | str | None) -> int:
     the redteam import so a missing package can't break the whole band)."""
     from redteam.gate import escalated_items
 
-    return len(escalated_items(db_path=db_path))
+    return len(escalated_items(db_path=db_path, conn=conn))
 
 
-def _escalation_banner(db_path: Path | str | None) -> str:
+def _escalation_banner(
+    db_path: Path | str | None, *, conn: sqlite3.Connection | None = None
+) -> str:
     """The persistent 'Red Team: N items escalated' banner — a k-well -bad
     block (never the quiet ritual-debt line style; this is a forced-response
     failure, not an inert queue count) rendered ABOVE the open-loops line.
     Empty string when nothing is escalated."""
     try:
-        n = _red_team_escalated_count(db_path)
+        n = _red_team_escalated_count(db_path, conn=conn)
     except Exception:
         return ""
     if not n:
@@ -369,7 +408,10 @@ def _escalation_banner(db_path: Path | str | None) -> str:
 
 
 def render_open_loops_band(
-    db_path: Path | str | None = None, *, now: datetime | None = None
+    db_path: Path | str | None = None,
+    *,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """The persistent Red Team escalation banner (if any) followed by one
     dense line per non-empty ritual queue, each a doorway; an explicit
@@ -377,65 +419,65 @@ def render_open_loops_band(
     the wall clock for the two date-boundary-sensitive lines (coach
     sent-today, the Sunday packet's ISO week) — tests pin it to dodge the
     repo's known UTC-midnight flake class; production leaves it unset."""
-    banner = _escalation_banner(db_path)
+    banner = _escalation_banner(db_path, conn=conn)
     lines: list[str] = []
 
     try:
-        n, age = _pending_draft_confirmation_debt(db_path)
+        n, age = _pending_draft_confirmation_debt(db_path, conn=conn)
         if n:
             lines.append(_line(_MOBILE_INBOX_HREF, "Pending confirmations", n, age))
     except Exception:
         pass
     try:
-        n = _undispositioned_card_debt(db_path)
+        n = _undispositioned_card_debt(db_path, conn=conn)
         if n:
             lines.append(_line(_MOBILE_INBOX_HREF, "Cards awaiting disposition", n))
     except Exception:
         pass
     try:
-        n = _reconcile_count(db_path)
+        n = _reconcile_count(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Reconcile", n))
     except Exception:
         pass
     try:
-        n = _proposed_tenet_count(db_path)
+        n = _proposed_tenet_count(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Tenets proposed", n))
     except Exception:
         pass
     try:
-        n = _pending_proposal_count(db_path)
+        n = _pending_proposal_count(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Research proposals", n))
     except Exception:
         pass
     try:
-        n, age = _decision_stub_debt(db_path)
+        n, age = _decision_stub_debt(db_path, conn=conn)
         if n:
             lines.append(_line(_DECISIONS_HASH, "Decisions missing conviction/falsifier", n, age))
     except Exception:
         pass
     try:
-        n, age = _digest_ping_debt(db_path)
+        n, age = _digest_ping_debt(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Coach digest", n, age))
     except Exception:
         pass
     try:
-        n, age = _routed_to_brief_debt(db_path)
+        n, age = _routed_to_brief_debt(db_path, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Routed to weekly brief", n, age))
     except Exception:
         pass
     try:
-        n = _coach_sent_today_debt(db_path, now=now)
+        n = _coach_sent_today_debt(db_path, now=now, conn=conn)
         if n:
             lines.append(_line(_LEDGER_HASH, "Coach sent today", n))
     except Exception:
         pass
     try:
-        packet_line = _packet_line(db_path, now=now)
+        packet_line = _packet_line(db_path, now=now, conn=conn)
         if packet_line:
             lines.append(packet_line)
     except Exception:

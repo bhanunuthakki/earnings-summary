@@ -185,8 +185,9 @@ def list_insights(
     scope_key: str | None = None,
     status: str = "current",
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[InsightRow]:
-    conn = open_read_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
         clauses = ["status = ?"]
         params: list[object] = [status]
@@ -196,13 +197,14 @@ def list_insights(
         if scope_key is not None:
             clauses.append("scope_key = ?")
             params.append(scope_key)
-        rows = conn.execute(
+        rows = db_conn.execute(
             f"SELECT * FROM insight_notes WHERE {' AND '.join(clauses)} ORDER BY scope_key, id DESC",
             params,
         ).fetchall()
         return [_decode(r) for r in rows]
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def _has_fts(conn: sqlite3.Connection) -> bool:

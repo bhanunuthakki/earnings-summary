@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -485,19 +486,9 @@ CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
 
 
 @pytest.fixture
-def db_head(tmp_path: Path) -> Path:
+def db_head(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     path = tmp_path / "gov_head.db"
-    conn = sqlite3.connect(str(path))
-    try:
-        conn.executescript(_GOV_BOOTSTRAP_DDL)
-        conn.commit()
-    finally:
-        conn.close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.upgrade(cfg, "head")
-    return path
+    return migrated_db(path)
 
 
 def _seed_tenet_with_accountability(

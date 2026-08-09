@@ -277,7 +277,15 @@ def test_build_gate_only_lights_up_a_citing_memo(
     repo = _documents_db(tmp_path)
     art = _fake_artifact(content, doc_ids)
 
-    def fake_read_current(*, ticker: str, purpose: str, scope: str, db_path: Path) -> object:
+    def fake_read_current(
+        *,
+        ticker: str,
+        purpose: str,
+        scope: str,
+        db_path: Path,
+        conn: sqlite3.Connection | None = None,
+    ) -> object:
+        del ticker, scope, db_path, conn
         return art if purpose == "lens:mgmt_credibility_score" else None
 
     monkeypatch.setattr("llm_artifact_store.read_current", fake_read_current)

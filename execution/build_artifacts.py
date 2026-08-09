@@ -455,18 +455,32 @@ def _build_one(
     effective_bypass = force_budget_bypass or ticker_settings.get_bypass_budget(
         ticker, db_path=repo_root / "data" / "portfolio.db"
     )
-    spec = build_report(
-        ticker=ticker,
-        repo_root=repo_root,
-        model_link=f"dcf/{ticker}.xlsx",
-        enable_llm=enable_llm,
-        news_days=news_days,
-        news_cache_ttl_days=news_cache_ttl_days,
-        refresh_news=refresh_news,
-        flavor=flavor,
-        force_budget_bypass=effective_bypass,
-        force_refresh=force_refresh,
+    report_db_path = repo_root / "data" / "portfolio.db"
+    report_conn = (
+        connect_sqlite(report_db_path, role=SQLiteConnectionRole.READ_ONLY)
+        if report_db_path.exists()
+        else None
     )
+    if report_conn is not None:
+        report_conn.row_factory = sqlite3.Row
+    try:
+        spec = build_report(
+            ticker=ticker,
+            repo_root=repo_root,
+            model_link=f"dcf/{ticker}.xlsx",
+            enable_llm=enable_llm,
+            news_days=news_days,
+            news_cache_ttl_days=news_cache_ttl_days,
+            refresh_news=refresh_news,
+            flavor=flavor,
+            force_budget_bypass=effective_bypass,
+            force_refresh=force_refresh,
+            conn=report_conn,
+        )
+        per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root, conn=report_conn)
+    finally:
+        if report_conn is not None:
+            report_conn.close()
 
     workspace_html_path.write_text(render_workspace_html(spec), encoding="utf-8")
     _emit(
@@ -496,7 +510,6 @@ def _build_one(
     # Provenance rows always point at the workspace HTML — the only rendered
     # report — so audit consumers can deep-link.
     canonical_artifact = workspace_html_path
-    per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root)
     _log_brief_provenance(
         repo_root=repo_root,
         ticker=ticker,
@@ -517,7 +530,12 @@ def _build_one(
     }
 
 
-def _collect_per_metric_provenance(ticker: str, repo_root: Path) -> dict[str, dict[str, object]]:
+def _collect_per_metric_provenance(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, dict[str, object]]:
     """Collate per-line-item provenance across the sections wired for it.
 
     Today: snapshot (DCF valuation) + financials (8 quarterly line items).
@@ -527,8 +545,8 @@ def _collect_per_metric_provenance(ticker: str, repo_root: Path) -> dict[str, di
     or synthetic test environments.
     """
     merged: dict[str, dict[str, object]] = {}
-    merged.update(snapshot_section_mod.build_per_metric(ticker, repo_root))
-    merged.update(financials_section_mod.build_per_metric(ticker, repo_root))
+    merged.update(snapshot_section_mod.build_per_metric(ticker, repo_root, conn=conn))
+    merged.update(financials_section_mod.build_per_metric(ticker, repo_root, conn=conn))
     return merged
 
 

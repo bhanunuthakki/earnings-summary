@@ -252,8 +252,8 @@ def test_reading_empty_returns_empty(db_path: Path) -> None:
 
 
 def test_extract_url() -> None:
-    assert ingest._extract_url("https://example.com/deck.pdf") == "https://example.com/deck.pdf"
-    assert ingest._extract_url("  https://example.com  ") == "https://example.com"
-    assert ingest._extract_url("check out https://example.com for details") is None
-    assert ingest._extract_url("NU looks cheap to me") is None
-    assert ingest._extract_url("http://example.com/path") == "http://example.com/path"
+    assert ingest.extract_url("https://example.com/deck.pdf") == "https://example.com/deck.pdf"
+    assert ingest.extract_url("  https://example.com  ") == "https://example.com"
+    assert ingest.extract_url("check out https://example.com for details") is None
+    assert ingest.extract_url("NU looks cheap to me") is None
+    assert ingest.extract_url("http://example.com/path") == "http://example.com/path"

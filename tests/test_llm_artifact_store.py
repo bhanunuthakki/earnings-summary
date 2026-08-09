@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from llm_artifact_store import (
     UpsertRequest,
+    artifact_is_fresh,
     compute_input_sha256,
     drain_dirty,
     history,
@@ -122,6 +124,32 @@ def test_upsert_creates_row_when_missing(db: Path) -> None:
     art = read_current(ticker="GOOG", purpose="bear_case", db_path=db)
     assert art is not None
     assert art.content_md == "# bear"
+
+
+def test_artifact_freshness_rejects_dirty_and_expired_rows(db: Path) -> None:
+    now = datetime(2026, 8, 8, tzinfo=UTC)
+    artifact_id, _ = upsert(
+        UpsertRequest(
+            ticker="GOOG",
+            purpose="bear_case",
+            content_md="# bear",
+            cache_inputs=["freshness"],
+            expires_at=now + timedelta(hours=1),
+        ),
+        db_path=db,
+    )
+    artifact = read_artifact(artifact_id or 0, db_path=db)
+    assert artifact is not None
+    assert artifact_is_fresh(artifact, now=now) is True
+    assert artifact_is_fresh(artifact, now=now + timedelta(hours=2)) is False
+
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE llm_artifacts SET dirty = 1 WHERE id = ?", (artifact.id,))
+    conn.commit()
+    conn.close()
+    dirty = read_artifact(artifact.id, db_path=db)
+    assert dirty is not None
+    assert artifact_is_fresh(dirty, now=now) is False
 
 
 def test_upsert_returns_cache_hit_on_same_inputs(db: Path) -> None:

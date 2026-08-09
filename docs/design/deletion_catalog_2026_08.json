@@ -77,6 +77,20 @@
       "data_restore_note": "Migration 0002 was already applied locally. Git can restore code, not dropped SQLite rows; recover those only from a pre-0002 database backup."
     },
     {
+      "id": "segment-junction-backfill",
+      "authorization": "Owner authorized full dead-code and tech-debt clearance on 2026-08-08; the obsolete one-time segment junction backfill remains deleted.",
+      "disposition": "delete",
+      "rollback_commit": "7e8fb34a92e33023eef89b50740def28db1b9775",
+      "code_targets": [
+        "scratch/backfill_segment_junction.py"
+      ],
+      "test_targets": [],
+      "schema_targets": [],
+      "code_restore_verified": true,
+      "data_restore_verified": true,
+      "data_restore_note": "The deleted helper transformed existing rows in place and owned no independent data; the source is recoverable from the rollback commit."
+    },
+    {
       "id": "zero-ref-legacy-tables",
       "authorization": "Retrospective record of the schema deletion already merged in PR 1175 migration 0002; this catalog does not grant new deletion authority.",
       "disposition": "delete",

@@ -1061,26 +1061,30 @@ def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) 
       * log a warning + proceed when over a soft cap,
       * log a warning + record a one-shot alert at the 80% threshold.
 
-    Best-effort throughout — any unexpected error in the budget module
-    is swallowed (we'd rather over-spend by one call than block the
-    pipeline because of a budget bug). `force_budget_bypass=True` skips
-    the check entirely for CLI tools that need to override.
+    Budget enforcement fails closed. Unexpected checker errors are redacted
+    and converted to ``LLMBudgetExceeded`` so bookkeeping defects cannot
+    silently authorize token spend. ``force_budget_bypass=True`` remains the
+    explicit operator escape hatch.
     """
-    if force_budget_bypass or purpose is None:
+    if force_budget_bypass:
         return
+    budget_purpose = purpose or "__default__"
     try:
         from llm_budget import check_budget, record_alert
 
-        check = check_budget(purpose)
+        check = check_budget(budget_purpose)
     except Exception as exc:
-        log.debug(
+        log.error(
             {
-                "event": "llm_budget_check_skipped",
-                "purpose": purpose,
-                "error": f"{type(exc).__name__}: {exc}",
+                "event": "llm_budget_check_failed_closed",
+                "purpose": budget_purpose,
+                "error_type": type(exc).__name__,
             }
         )
-        return
+        raise LLMBudgetExceeded(
+            f"{budget_purpose}: budget enforcement unavailable; blocking LLM call"
+        ) from None
+    purpose = budget_purpose
     if not check.allowed:
         if check.hard_block:
             log.warning(
@@ -1535,8 +1539,9 @@ def call_llm(
     Args:
         prompt: The fully-rendered prompt text.
         purpose: Logical key for model selection (see LLM_MODELS). Required
-            for new code; the explicit `model` arg overrides it when both
-            are passed (escape hatch for one-off retunes during debugging).
+            for new code. Legacy ``None`` is normalized to the metered
+            ``__default__`` purpose; the explicit `model` arg overrides model
+            selection when both are passed.
         model: Explicit model id — a Claude id, or a Gemini id when paired
             with ``backend="gemini"``. If neither purpose nor model is set,
             falls back to DEFAULT_MODEL with a warning log. An explicit
@@ -1592,6 +1597,28 @@ def call_llm(
                 force_budget_bypass=force_budget_bypass,
                 backend=backend,
             )
+
+    if purpose is None:
+        purpose = "__default__"
+        log.warning({"event": "llm_purpose_defaulted", "purpose": purpose})
+
+    # Apply production prompt experiments before any provider is selected so
+    # Codex, Claude, Gemini, and OpenRouter all receive the same governed
+    # prompt. Eval scopes deliberately bypass the override in
+    # apply_prompt_override so captured replays remain byte-identical.
+    try:
+        from llm.prompt_ab import apply_prompt_override
+
+        prompt = apply_prompt_override(purpose, scope, prompt)
+    except Exception as hook_exc:
+        from log_redact import redact
+
+        log.debug(
+            {
+                "event": "prompt_override_hook_failed",
+                "error": redact(f"{type(hook_exc).__name__}: {hook_exc}")[:120],
+            }
+        )
 
     from llm.model_ladder import (
         GEMINI as _GEMINI_FAMILY,
@@ -1744,8 +1771,7 @@ def call_llm(
                     "event": "openrouter_backend_failed_falling_back_to_claude",
                     "purpose": purpose,
                     "error": (
-                        f"{type(openrouter_error).__name__}: "
-                        f"{redact(str(openrouter_error)[:200])}"
+                        f"{type(openrouter_error).__name__}: {redact(str(openrouter_error)[:200])}"
                     ),
                 }
             )
@@ -1759,7 +1785,7 @@ def call_llm(
     # DEFAULT_MODEL.
     _non_claude_families = (_GEMINI_FAMILY, _OPENROUTER_FAMILY)
     if family_of(resolved_model) in _non_claude_families:
-        candidate = LLM_MODELS.get(purpose, DEFAULT_MODEL) if purpose is not None else DEFAULT_MODEL
+        candidate = LLM_MODELS.get(purpose, DEFAULT_MODEL)
         resolved_model = (
             candidate if family_of(candidate) not in _non_claude_families else DEFAULT_MODEL
         )
@@ -2235,25 +2261,27 @@ def call_llm_with_web(
     web-enabled callers (e.g. the news structurer) be retuned centrally in
     ``LLM_MODELS``. Callers passing an explicit ``model`` are unaffected.
     """
+    if purpose is None:
+        purpose = "__default__"
+        log.warning({"event": "llm_web_purpose_defaulted", "purpose": purpose})
     explicit_model = model is not None
-    if model is None:
-        if purpose is None:
-            log.warning({"event": "llm_web_call_no_purpose", "fallback": DEFAULT_MODEL})
-            resolved_model = DEFAULT_MODEL
-        else:
-            resolved_model = _model_for(purpose)
-    else:
-        resolved_model = model
+    resolved_model = _model_for(purpose) if model is None else model
     # Prompt-override auto-apply (§10 Q1) — web purposes are A/B-eligible even
     # though downgrade-ineligible. Same fail-open, production-scopes-only hook
     # as call_llm.
-    if purpose is not None:
-        try:
-            from llm.prompt_ab import apply_prompt_override
+    try:
+        from llm.prompt_ab import apply_prompt_override
 
-            prompt = apply_prompt_override(purpose, scope, prompt)
-        except Exception as hook_exc:
-            log.debug({"event": "prompt_override_hook_failed", "error": str(hook_exc)[:120]})
+        prompt = apply_prompt_override(purpose, scope, prompt)
+    except Exception as hook_exc:
+        from log_redact import redact
+
+        log.debug(
+            {
+                "event": "prompt_override_hook_failed",
+                "error": redact(f"{type(hook_exc).__name__}: {hook_exc}")[:120],
+            }
+        )
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
 
     codex_fell_back = False

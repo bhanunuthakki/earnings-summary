@@ -448,21 +448,25 @@ def get_proposal(proposal_id: int, *, db_path: Path | str | None = None) -> Rese
 
 
 def list_proposals(
-    *, status: str | None = "pending", db_path: Path | str | None = None
+    *,
+    status: str | None = "pending",
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[ResearchProposal]:
-    conn = open_read_conn(db_path)
+    db_conn = conn or open_read_conn(db_path)
     try:
         if status is not None:
-            rows = conn.execute(
+            rows = db_conn.execute(
                 "SELECT * FROM research_proposals WHERE status = ? ORDER BY id DESC", (status,)
             ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM research_proposals ORDER BY id DESC").fetchall()
+            rows = db_conn.execute("SELECT * FROM research_proposals ORDER BY id DESC").fetchall()
         return [_row_to_proposal(r) for r in rows]
     except sqlite3.Error:
         return []
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def act_on_proposal(

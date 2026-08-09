@@ -22,13 +22,13 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from alerts.store import TRIGGER_KINDS, fire_alert
 from triggers.risk_drift import (
     FACTOR_LEG_DRIFT_THRESHOLD,
@@ -276,18 +276,12 @@ def _build_config(db_path: Path) -> Config:
 
 
 @pytest.fixture(scope="module")
-def head_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def head_template(
+    tmp_path_factory: pytest.TempPathFactory,
+    migrated_db: Callable[..., Path],
+) -> Path:
     db = tmp_path_factory.mktemp("risk_drift_tmpl") / "at_head.db"
-    import db as dbmod
-
-    saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
-    dbmod.set_db_path(str(db))
-    dbmod.init_db()
-    cfg = _build_config(db)
-    command.stamp(cfg, "0000_baseline")
-    command.upgrade(cfg, "head")
-    dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
-    return db
+    return migrated_db(db)
 
 
 @pytest.fixture

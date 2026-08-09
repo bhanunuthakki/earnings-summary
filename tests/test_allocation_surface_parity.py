@@ -159,6 +159,21 @@ def test_same_artifact_id_across_all_four_surfaces(tmp_path: Path) -> None:
     assert "NU" in str(pack_items[0]["text"])
 
 
+def test_ask_allocation_pack_does_not_reuse_dirty_recommendation(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    artifact_id = _insert_artifact(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("UPDATE llm_artifacts SET dirty = 1 WHERE id = ?", (artifact_id,))
+    conn.commit()
+    conn.close()
+
+    pack_items = load_packs(["allocation"], db_path=db_path, focus_tickers=[])
+
+    assert len(pack_items) == 1
+    assert f"artifact #{artifact_id}" not in str(pack_items[0]["text"])
+    assert "no Incremental Dollar Recommendation" in str(pack_items[0]["text"])
+
+
 def test_telegram_text_omits_book_total_dollar_figure(tmp_path: Path) -> None:
     """§11.4: Telegram may show recommended PERCENTAGES and the owner-supplied
     deploy amount, never a book-total/account-balance dollar figure. The

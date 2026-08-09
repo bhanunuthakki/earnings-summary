@@ -87,7 +87,7 @@ def render_alert_card(
     body.write(stamp_html(alert.fired_at, css="fired-at"))
     body.write("</div>")
 
-    memo_text = _memo_text_from_evidence(alert.evidence_json)
+    memo_text = memo_text_from_evidence(alert.evidence_json)
     if memo_text:
         body.write(f'<div class="alert-memo">{_esc(memo_text)}</div>')
     else:
@@ -164,7 +164,7 @@ def _action_body(payload: Mapping[str, object]) -> str:
 _MEMO_EVIDENCE_FIELDS: tuple[str, ...] = ("memo", "summary", "why_material", "narrative")
 
 
-def _memo_text_from_evidence(raw: str) -> str | None:
+def memo_text_from_evidence(raw: str) -> str | None:
     """Pull the card's at-a-glance memo line from evidence_json.
 
     Tries ``_MEMO_EVIDENCE_FIELDS`` in order and returns the first non-empty

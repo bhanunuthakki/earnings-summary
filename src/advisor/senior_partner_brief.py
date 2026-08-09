@@ -279,7 +279,11 @@ def _gather_recommendation(db_path: Path) -> _RecommendationInput:
         )
     except Exception:
         return _RecommendationInput(None, None)
-    if artifact is None or not isinstance(artifact.content_json, dict):
+    if (
+        artifact is None
+        or not llm_artifact_store.artifact_is_fresh(artifact)
+        or not isinstance(artifact.content_json, dict)
+    ):
         return _RecommendationInput(None, None)
     content = cast("dict[str, object]", artifact.content_json)
     status = str(content.get("status") or "")

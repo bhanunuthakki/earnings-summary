@@ -866,7 +866,11 @@ _TODAY_STYLE = """<style>
 </style>"""
 
 
-def render_allocation_today_card(db_path: Path | str | None) -> str:
+def render_allocation_today_card(
+    db_path: Path | str | None,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """The Today compact doorway: preferred plan headline + staleness + a
     doorway into `/#portfolio_allocation`. Renders nothing when there is no
     current recommendation (Today stays quiet — never a "no recommendation"
@@ -875,7 +879,11 @@ def render_allocation_today_card(db_path: Path | str | None) -> str:
         return ""
     try:
         artifact = llm_artifact_store.read_current(
-            ticker=None, purpose=PURPOSE, scope="portfolio", db_path=Path(db_path)
+            ticker=None,
+            purpose=PURPOSE,
+            scope="portfolio",
+            db_path=Path(db_path),
+            conn=conn,
         )
     except Exception:
         return ""

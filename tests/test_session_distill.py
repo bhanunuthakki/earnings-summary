@@ -129,7 +129,7 @@ def test_migration_seeds_budget_row_against_real_llm_budgets_table(tmp_path: Pat
 
     import sqlalchemy as sa
 
-    module_path = PROJECT_ROOT / "alembic" / "versions" / "0190_session_distill.py"
+    module_path = PROJECT_ROOT / "alembic" / "versions_archived" / "0190_session_distill.py"
     spec = importlib.util.spec_from_file_location("_migration_0190", module_path)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)

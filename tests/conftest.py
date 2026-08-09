@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
+import sqlite3
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -36,9 +39,267 @@ os.environ.setdefault(
     "EARNINGS_SUMMARY_ENV_FILE",
     os.path.join(os.path.dirname(__file__), ".pytest-no-external-env"),
 )
-_worker_suffix = (
-    f"-{os.environ['PYTEST_XDIST_WORKER']}" if "PYTEST_XDIST_WORKER" in os.environ else ""
-)
+
+# Test modules may resolve the default database during collection, before any
+# fixture can redirect it. Point every pytest process at its own disposable DB
+# so collection and tests cannot touch the checkout's data/portfolio.db or
+# contend with another xdist worker. The PID is unique even across simultaneous
+# local sessions; the worker id keeps paths useful when diagnosing a retained
+# crash directory.
+_worker_id = os.environ.get("PYTEST_XDIST_WORKER", "controller")
+_test_db_dir = Path(tempfile.mkdtemp(prefix=f"earnings-summary-pytest-{_worker_id}-"))
+_test_db_path = _test_db_dir / f"portfolio-{os.getpid()}.db"
+_db_original_marker = "_EARNINGS_SUMMARY_PYTEST_ORIGINAL_DB_PATH"
+_db_path_absent = "__pytest_db_path_was_absent__"
+if _db_original_marker not in os.environ:
+    os.environ[_db_original_marker] = os.environ.get(
+        "EARNINGS_SUMMARY_DB_PATH",
+        _db_path_absent,
+    )
+_encoded_original_db_path = os.environ[_db_original_marker]
+_db_path_was_set = _encoded_original_db_path != _db_path_absent
+_original_db_path = _encoded_original_db_path if _db_path_was_set else None
+os.environ["EARNINGS_SUMMARY_DB_PATH"] = os.fspath(_test_db_path)
+
+
+def _restore_collection_db_override() -> None:
+    if os.environ.get("EARNINGS_SUMMARY_DB_PATH") != os.fspath(_test_db_path):
+        return
+    if _db_path_was_set and _original_db_path is not None:
+        os.environ["EARNINGS_SUMMARY_DB_PATH"] = _original_db_path
+    else:
+        os.environ.pop("EARNINGS_SUMMARY_DB_PATH", None)
+    os.environ.pop(_db_original_marker, None)
+
+
+def pytest_collection_modifyitems(
+    session: pytest.Session,
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Restore runtime env semantics after each process collects its tests."""
+    del session, config, items
+    _restore_collection_db_override()
+
+
+atexit.register(shutil.rmtree, _test_db_dir, ignore_errors=True)
+atexit.register(_restore_collection_db_override)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def archived_migration_harness() -> Iterator[None]:
+    """Route explicit historical revision tests to the archived Alembic graph.
+
+    Production keeps one simple active graph (0001→0003). Historical migration
+    unit tests still exercise their exact old revisions. A relative target or
+    ``head`` follows the graph already stamped in that SQLite database; a fresh
+    database defaults to the active graph. Explicit ``version_locations`` is
+    always authoritative, including the production upgrade bridge. Completed
+    legacy fixtures expose the schema-equivalent active head to runtime writer
+    guards, while historical downgrade operations restore the archived head.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    from alembic import command
+
+    archive = Path(__file__).resolve().parents[1] / "alembic" / "versions_archived"
+    active = archive.parent / "versions"
+    original_stamp = command.stamp
+    original_upgrade = command.upgrade
+    original_downgrade = command.downgrade
+    reanchored_archive_databases: set[Path] = set()
+
+    def graph_head(directory: Path) -> str:
+        graph_config = Config()
+        graph_config.set_main_option("script_location", str(directory.parent))
+        graph_config.set_main_option("version_locations", str(directory))
+        head = ScriptDirectory.from_config(graph_config).get_current_head()
+        if head is None:
+            raise RuntimeError(f"migration graph has no head: {directory}")
+        return head
+
+    archive_head = graph_head(archive)
+    active_head = graph_head(active)
+
+    def database_path(config: Config) -> Path | None:
+        from sqlalchemy.engine import make_url
+
+        raw_url = config.get_main_option("sqlalchemy.url", "").strip()
+        if not raw_url:
+            return None
+        url = make_url(raw_url)
+        if not url.drivername.startswith("sqlite") or url.database in {None, "", ":memory:"}:
+            return None
+        return Path(str(url.database)).resolve()
+
+    def database_revision(database: Path) -> str | None:
+        if not database.exists():
+            return None
+        try:
+            with sqlite3.connect(database) as connection:
+                row = connection.execute(
+                    "SELECT version_num FROM alembic_version LIMIT 1"
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return None if row is None else str(row[0])
+
+    def replace_database_revision(database: Path, old: str, new: str) -> None:
+        with sqlite3.connect(database) as connection:
+            updated = connection.execute(
+                "UPDATE alembic_version SET version_num=? WHERE version_num=?",
+                (new, old),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError(
+                    f"test migration graph re-anchor failed for {database}: expected revision {old}"
+                )
+
+    def configured_graph(config: Config) -> str | None:
+        configured_locations = config.get_main_option("version_locations", "").strip()
+        if configured_locations:
+            location = Path(configured_locations).resolve()
+            if location == archive.resolve():
+                return "archive"
+            if location == active.resolve():
+                return "active"
+            return "configured"
+        return None
+
+    def database_graph(config: Config) -> str | None:
+        """Infer the graph for a new Config from its stamped SQLite revision."""
+        database = database_path(config)
+        if database is None:
+            return None
+        if database in reanchored_archive_databases:
+            return "archive"
+        current = database_revision(database)
+        if current is None:
+            return None
+        if any(archive.glob(f"{current}*.py")):
+            return "archive"
+        if any(active.glob(f"{current}*.py")):
+            return "active"
+        return None
+
+    def graph_for_operation(
+        config: Config,
+        revision: str | list[str] | tuple[str, ...],
+    ) -> str:
+        configured = configured_graph(config)
+        if configured is not None:
+            return configured
+        revisions = (revision,) if isinstance(revision, str) else tuple(revision)
+        for requested in revisions:
+            for token in requested.split(":"):
+                if token in {"base", "head", "heads"} or token.startswith(("+", "-")):
+                    continue
+                if any(archive.glob(f"{token}*.py")):
+                    return "archive"
+                if any(active.glob(f"{token}*.py")):
+                    return "active"
+        remembered = config.attributes.get("pytest_last_migration_graph")
+        if remembered in {"archive", "active"}:
+            return str(remembered)
+        return database_graph(config) or "active"
+
+    @contextmanager
+    def selected_graph(config: Config, directory: Path) -> Generator[None, None, None]:
+        section = config.config_ini_section
+        had_locations = config.file_config.has_option(section, "version_locations")
+        previous = config.get_main_option("version_locations")
+        config.set_main_option("version_locations", str(directory))
+        try:
+            yield
+        finally:
+            if had_locations and previous is not None:
+                config.set_main_option("version_locations", previous)
+            else:
+                config.file_config.remove_option(section, "version_locations")
+
+    @contextmanager
+    def operation_graph(config: Config, graph: str) -> Generator[None, None, None]:
+        if graph == "configured":
+            yield
+            return
+        with selected_graph(config, archive if graph == "archive" else active):
+            yield
+
+    def record_graph(config: Config, graph: str) -> None:
+        if graph != "configured":
+            config.attributes["pytest_last_migration_graph"] = graph
+
+    def restore_archived_revision(config: Config, graph: str) -> None:
+        """Undo a test-only active-head re-anchor before another archive op."""
+        if graph != "archive" or configured_graph(config) is not None:
+            return
+        database = database_path(config)
+        # The squashed active baseline is a schema-equivalent snapshot of the
+        # archived head. Historical downgrade tests therefore re-anchor only
+        # Alembic's metadata before walking the archived graph; they never
+        # replay the active baseline over existing tables.
+        if database is not None and database_revision(database) == active_head:
+            replace_database_revision(database, active_head, archive_head)
+
+    def expose_archive_schema_as_current(config: Config, graph: str) -> None:
+        """Let production writer guards accept a fully upgraded legacy fixture."""
+        if graph != "archive" or configured_graph(config) is not None:
+            return
+        database = database_path(config)
+        if database is not None and database_revision(database) == archive_head:
+            replace_database_revision(database, archive_head, active_head)
+            reanchored_archive_databases.add(database)
+
+    def stamp(
+        config: Config,
+        revision: str | list[str] | tuple[str, ...],
+        sql: bool = False,
+        tag: str | None = None,
+        purge: bool = False,
+    ) -> None:
+        graph = graph_for_operation(config, revision)
+        with operation_graph(config, graph):
+            original_stamp(config, revision, sql=sql, tag=tag, purge=purge)
+        record_graph(config, graph)
+
+    def upgrade(
+        config: Config,
+        revision: str,
+        sql: bool = False,
+        tag: str | None = None,
+    ) -> None:
+        graph = graph_for_operation(config, revision)
+        restore_archived_revision(config, graph)
+        with operation_graph(config, graph):
+            original_upgrade(config, revision, sql=sql, tag=tag)
+        if not sql:
+            expose_archive_schema_as_current(config, graph)
+        record_graph(config, graph)
+
+    def downgrade(
+        config: Config,
+        revision: str,
+        sql: bool = False,
+        tag: str | None = None,
+    ) -> None:
+        graph = graph_for_operation(config, revision)
+        restore_archived_revision(config, graph)
+        with operation_graph(config, graph):
+            original_downgrade(config, revision, sql=sql, tag=tag)
+        record_graph(config, graph)
+
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(command, "stamp", stamp)
+    patcher.setattr(command, "upgrade", upgrade)
+    patcher.setattr(command, "downgrade", downgrade)
+    try:
+        yield
+    finally:
+        patcher.undo()
+
+
+_worker_suffix = f"-{_worker_id}" if _worker_id != "controller" else ""
 os.environ.setdefault(
     "EARNINGS_SUMMARY_SECRETS_DIR",
     os.path.join(
@@ -72,6 +333,20 @@ def _restore_os_environ() -> Iterator[None]:
     for key, value in saved.items():
         if os.environ.get(key) != value:
             os.environ[key] = value
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bind ``db`` defaults per test without changing runtime environment."""
+    import db
+
+    database = tmp_path / "default-db" / "portfolio.db"
+    monkeypatch.setattr(db, "DB_PATH", os.fspath(database))
+    monkeypatch.setattr(db, "DATA_DIR", os.fspath(database.parent))
+    monkeypatch.setattr(db, "FMP_DIR", os.fspath(database.parent / "historical" / "fmp"))
 
 
 @pytest.fixture(autouse=True)
@@ -168,7 +443,7 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 # point, against 13.5ms to copy the resulting file. That is the difference
 # between a 24-minute CI run behind 8-way sharding and a few minutes.
 #
-# ``migrated_db`` builds each distinct (stamp, target) recipe once per session
+# ``migrated_db`` builds each distinct graph/target once per session
 # and hands every test a fresh copy. Correctness is unchanged — each test still
 # gets its own private, writable database file; only the construction is
 # amortised.
@@ -179,18 +454,21 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 # their own. The helper is for the pure stamp→upgrade case, which is most of
 # them.
 
-_DB_TEMPLATES: dict[tuple[str, str], Path] = {}
+_DB_TEMPLATES: dict[tuple[str, str, str], Path] = {}
 
 
 @pytest.fixture(scope="session")
 def migrated_db(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Callable[..., Path]:
-    """Return ``build(dest, stamp=..., target="head") -> dest``.
+    """Return ``build(dest, stamp=..., target="head", archived=False)``.
 
     Copies a session-cached migrated database instead of replaying migrations.
-    The cache key is the exact ``(stamp, target)`` recipe, so files that build
-    different schemas do not collide and each distinct recipe is paid for once.
+    ``stamp`` remains accepted as compatibility metadata for older tests, but
+    the squashed graph normally builds directly to ``target``. Migration-only
+    downgrade tests may request the archived graph explicitly; they share one
+    archived-head template rather than attempting an unsafe cross-graph
+    downgrade from active 0003.
     """
     from alembic.config import Config
 
@@ -199,19 +477,36 @@ def migrated_db(
     project_root = Path(__file__).resolve().parents[1]
     cache_dir = tmp_path_factory.mktemp("migrated_db_templates")
 
-    def _config(db: Path) -> Config:
+    def _config(db: Path, *, archived: bool) -> Config:
         cfg = Config(str(project_root / "alembic.ini"))
         cfg.set_main_option("script_location", str(project_root / "alembic"))
+        if archived:
+            cfg.set_main_option(
+                "version_locations",
+                str(project_root / "alembic" / "versions_archived"),
+            )
         cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db.as_posix()}")
         return cfg
 
-    def build(dest: Path, *, stamp: str = "head", target: str = "head") -> Path:
-        key = (stamp, target)
+    def build(
+        dest: Path,
+        *,
+        stamp: str = "head",
+        target: str = "head",
+        archived: bool = False,
+    ) -> Path:
+        graph = "archived" if archived else "active"
+        effective_stamp = stamp if archived else "squashed"
+        key = (graph, effective_stamp, target)
         template = _DB_TEMPLATES.get(key)
         if template is None or not template.exists():
-            safe = f"{stamp}__{target}".replace("/", "_").replace("\\", "_")
-            template = cache_dir / f"{safe}.db"
-            command.upgrade(_config(template), target)
+            safe = target.replace("/", "_").replace("\\", "_")
+            stamp_safe = effective_stamp.replace("/", "_").replace("\\", "_")
+            template = cache_dir / f"{graph}_{stamp_safe}_{safe}.db"
+            config = _config(template, archived=archived)
+            if archived and stamp not in {"base", "head", "heads"}:
+                command.stamp(config, stamp)
+            command.upgrade(config, target)
             _DB_TEMPLATES[key] = template
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(template, dest)

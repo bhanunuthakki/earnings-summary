@@ -14,9 +14,11 @@ from pathlib import Path
 
 import pytest
 
+import llm_budget as budget_module
 from llm_budget import (
     DEFAULT_BUDGET_KEY,
     BudgetCheck,
+    budget_mode,
     check_budget,
     current_month_spend,
     list_budgets,
@@ -24,6 +26,7 @@ from llm_budget import (
     record_alert,
     set_cap,
 )
+from sqlite_runtime import SQLiteConnectionRole
 
 # ---------------------------------------------------------------------------
 # Helpers — mirror migrations 0034 + 0052 inline so the tests stay
@@ -250,6 +253,33 @@ def test_check_budget_falls_back_to_default(tmp_path: Path) -> None:
     assert check.cap == Decimal("25.0000")
 
 
+def test_check_budget_uses_one_read_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-call gate must not open the database twice per LLM call."""
+    db = tmp_path / "test.db"
+    _init_db(db)
+    _insert_budget(db, "bear_case", cap_usd=50.00)
+    calls = 0
+    real_connect = budget_module.connect_sqlite
+
+    def counted_connect(
+        path: str | Path,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection:
+        nonlocal calls
+        calls += 1
+        return real_connect(path, role=role, schema_preflight=schema_preflight)
+
+    monkeypatch.setattr(budget_module, "connect_sqlite", counted_connect)
+
+    check_budget("bear_case", db_path=db)
+
+    assert calls == 1
+
+
 def test_check_budget_returns_allowed_for_none_purpose(tmp_path: Path) -> None:
     """purpose=None is a legacy caller — never block."""
     db = tmp_path / "test.db"
@@ -381,6 +411,35 @@ def test_list_budgets_annotates_with_spend_and_headroom(tmp_path: Path) -> None:
     assert ts["hard_block"] is True
 
 
+def test_list_budgets_uses_one_read_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dashboard budget loading must not perform one connection per row."""
+    db = tmp_path / "test.db"
+    _init_db(db)
+    _insert_budget(db, "bear_case", cap_usd=50.00)
+    _insert_budget(db, "transcript_summary", cap_usd=80.00)
+    calls = 0
+    real_connect = budget_module.connect_sqlite
+
+    def counted_connect(
+        path: str | Path,
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection:
+        nonlocal calls
+        calls += 1
+        return real_connect(path, role=role, schema_preflight=schema_preflight)
+
+    monkeypatch.setattr(budget_module, "connect_sqlite", counted_connect)
+
+    rows = list_budgets(db_path=db)
+
+    assert len(rows) == 2
+    assert calls == 1
+
+
 def test_list_budgets_returns_empty_when_no_tables(tmp_path: Path) -> None:
     missing = tmp_path / "no.db"
     assert list_budgets(db_path=missing) == []
@@ -469,13 +528,53 @@ def test_budget_check_is_frozen_and_slots() -> None:
         bc.allowed = False  # type: ignore[misc]
 
 
-def test_check_budget_when_corruption_handled_gracefully(tmp_path: Path) -> None:
-    """A non-SQLite file at the DB path → check_budget returns allowed.
-    No exception escapes the enforcer."""
+def test_check_budget_fails_closed_when_existing_db_is_corrupt(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An existing unreadable ledger must never silently authorize spend."""
     db = tmp_path / "corrupt.db"
     db.write_text("not a sqlite db")
-    check = check_budget("bear_case", db_path=db)
-    assert check.allowed is True
+    with caplog.at_level("ERROR"):
+        check = check_budget("bear_case", db_path=db)
+
+    assert check.allowed is False
+    assert check.hard_block is True
+    assert check.on_exceed == "block"
+    assert check.reason == "bear_case: budget data unavailable; blocking LLM call"
+    assert "check_budget_read_failed" in caplog.text
+    assert str(db) not in caplog.text
+    assert "not a database" not in caplog.text
+
+
+def test_check_budget_fails_closed_and_redacts_connection_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    db = tmp_path / "existing.db"
+    _init_db(db)
+
+    def failed_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        del args, kwargs
+        raise sqlite3.OperationalError("credential=top-secret")
+
+    monkeypatch.setattr(budget_module, "connect_sqlite", failed_connect)
+
+    with caplog.at_level("ERROR"):
+        check = check_budget("bear_case", db_path=db)
+
+    assert check.allowed is False
+    assert check.hard_block is True
+    assert check.on_exceed == "block"
+    assert "OperationalError" in caplog.text
+    assert "top-secret" not in caplog.text
+
+
+def test_budget_mode_fails_closed_when_existing_db_is_corrupt(tmp_path: Path) -> None:
+    db = tmp_path / "corrupt.db"
+    db.write_text("not a sqlite db")
+
+    assert budget_mode("bear_case", db_path=db) == "block"
 
 
 def test_current_month_spend_clean_window_boundary(tmp_path: Path) -> None:

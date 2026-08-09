@@ -359,12 +359,13 @@ def pending_reconciliation(
     user_id: str = DEFAULT_USER_ID,
     ticker: str | None = None,
     limit: int = 50,
+    conn: sqlite3.Connection | None = None,
 ) -> list[ReconciliationItem]:
     """OPEN notes whose linked decision graded / linked position exited,
     newest-concluded first. A note linked to both objects surfaces once —
     the decision conclusion wins (it carries the verdict)."""
-    conn = _open_ro(db_path)
-    if conn is None:
+    db_conn = conn or _open_ro(db_path)
+    if db_conn is None:
         return []
     try:
         ticker_clause = " AND n.ticker = ?" if ticker is not None else ""
@@ -372,7 +373,7 @@ def pending_reconciliation(
         # d.*/p.* lead the SELECT so the labelers read the target columns;
         # the only added name (note_id) is aliased — no Row-key collisions.
         decision_rows = _safe_rows(
-            conn,
+            db_conn,
             f"""
             SELECT d.*, n.id AS note_id
             FROM analyst_notes n JOIN decisions d ON d.id = n.decision_id
@@ -383,7 +384,7 @@ def pending_reconciliation(
             (user_id, *ticker_params, limit),
         )
         position_rows = _safe_rows(
-            conn,
+            db_conn,
             f"""
             SELECT p.*, n.id AS note_id
             FROM analyst_notes n JOIN position_entries p ON p.id = n.position_entry_id
@@ -394,7 +395,8 @@ def pending_reconciliation(
             (user_id, *ticker_params, limit),
         )
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
     items: list[ReconciliationItem] = []
     seen: set[int] = set()
@@ -403,7 +405,7 @@ def pending_reconciliation(
             note_id = int(row["note_id"])
             if note_id in seen:
                 continue
-            note = get_note(note_id, db_path=db_path)
+            note = get_note(note_id, db_path=db_path, conn=conn)
             if note is None:
                 continue
             target = labeler(row)
@@ -424,13 +426,16 @@ def _suggestion(target: LinkTarget) -> str:
 
 
 def pending_reconciliation_note_ids(
-    *, db_path: Path | str | None, user_id: str = DEFAULT_USER_ID
+    *,
+    db_path: Path | str | None,
+    user_id: str = DEFAULT_USER_ID,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[int, str]:
     """note_id → one-line conclusion, for surfaces that already hold the
     notes (the inbox stream) and only need the marker."""
     return {
         item.note.id: _suggestion(item.target)
-        for item in pending_reconciliation(db_path=db_path, user_id=user_id)
+        for item in pending_reconciliation(db_path=db_path, user_id=user_id, conn=conn)
     }
 
 

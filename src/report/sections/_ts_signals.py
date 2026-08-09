@@ -21,6 +21,7 @@ Public API:
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,7 +51,11 @@ class SignalRow:
 
 
 def load_signals_for_metrics(
-    ticker: str, metric_names: list[str], *, repo_root: Path
+    ticker: str,
+    metric_names: list[str],
+    *,
+    repo_root: Path,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, list[SignalRow]]:
     """Return signals for each requested metric, grouped by metric_name.
 
@@ -66,14 +71,14 @@ def load_signals_for_metrics(
     if not metric_names:
         return {}
 
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return {}
     try:
-        if not has_table(conn, "timeseries_signals"):
+        if not has_table(db_conn, "timeseries_signals"):
             return {}
         placeholders = ",".join("?" * len(metric_names))
-        rows = conn.execute(
+        rows = db_conn.execute(
             f"""
             SELECT metric_name, metric_kind, signal_type, value_json,
                    severity, narrative
@@ -84,7 +89,8 @@ def load_signals_for_metrics(
             (ticker.upper(), *metric_names),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
     grouped: dict[str, list[SignalRow]] = defaultdict(list)
     for r in rows:
@@ -101,20 +107,25 @@ def load_signals_for_metrics(
     return dict(grouped)
 
 
-def load_all_signals(ticker: str, *, repo_root: Path) -> list[SignalRow]:
+def load_all_signals(
+    ticker: str,
+    *,
+    repo_root: Path,
+    conn: sqlite3.Connection | None = None,
+) -> list[SignalRow]:
     """Return every signal for the ticker in (metric_name, signal_type) order.
 
     Bear case wants the broadest coverage (any disconfirming pattern is
     worth surfacing), so it pulls everything rather than enumerating the
     metric list it cares about.
     """
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return []
     try:
-        if not has_table(conn, "timeseries_signals"):
+        if not has_table(db_conn, "timeseries_signals"):
             return []
-        rows = conn.execute(
+        rows = db_conn.execute(
             """
             SELECT metric_name, metric_kind, signal_type, value_json,
                    severity, narrative
@@ -125,7 +136,8 @@ def load_all_signals(ticker: str, *, repo_root: Path) -> list[SignalRow]:
             (ticker.upper(),),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
     return [
         SignalRow(
@@ -140,7 +152,12 @@ def load_all_signals(ticker: str, *, repo_root: Path) -> list[SignalRow]:
     ]
 
 
-def load_segment_signals(ticker: str, *, repo_root: Path) -> list[SignalRow]:
+def load_segment_signals(
+    ticker: str,
+    *,
+    repo_root: Path,
+    conn: sqlite3.Connection | None = None,
+) -> list[SignalRow]:
     """Return only ``metric_kind='segment'`` rows for the ticker.
 
     Segment signals are written with ``metric_name='<segment>:<metric>'``
@@ -148,13 +165,13 @@ def load_segment_signals(ticker: str, *, repo_root: Path) -> list[SignalRow]:
     segments section wants every signal that pertains to a per-segment
     series, not the consolidated financial baseline.
     """
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return []
     try:
-        if not has_table(conn, "timeseries_signals"):
+        if not has_table(db_conn, "timeseries_signals"):
             return []
-        rows = conn.execute(
+        rows = db_conn.execute(
             """
             SELECT metric_name, metric_kind, signal_type, value_json,
                    severity, narrative
@@ -165,7 +182,8 @@ def load_segment_signals(ticker: str, *, repo_root: Path) -> list[SignalRow]:
             (ticker.upper(),),
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
     return [
         SignalRow(

@@ -30,7 +30,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 #: Files that still replay migrations in their own fixture. Ratchet DOWN only.
 #: Raising this number means a new test just bought the suite another
 #: multi-minute fixture — convert it to ``migrated_db`` instead.
-_MAX_DIRECT_CHAIN_BUILDERS = 186
+_MAX_DIRECT_CHAIN_BUILDERS = 177
 
 
 def _direct_chain_builders() -> list[str]:

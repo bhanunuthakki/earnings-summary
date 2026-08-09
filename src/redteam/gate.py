@@ -18,6 +18,7 @@ unanswered.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,11 +53,15 @@ def month_status(*, db_path: Path | str | None, run_key: str | None) -> MonthSta
     )
 
 
-def escalated_items(*, db_path: Path | str | None) -> list[RedTeamItemRow]:
+def escalated_items(
+    *,
+    db_path: Path | str | None,
+    conn: sqlite3.Connection | None = None,
+) -> list[RedTeamItemRow]:
     """Every item, across every run, still sitting ``deferred`` — the
     persistent nag for the Home band. ``[]`` on a missing DB/table (never
     raises — matches every other ``redteam.store`` read)."""
-    return store.list_items_by_status(db_path=db_path, statuses=ESCALATED_STATUSES)
+    return store.list_items_by_status(db_path=db_path, statuses=ESCALATED_STATUSES, conn=conn)
 
 
 __all__ = [

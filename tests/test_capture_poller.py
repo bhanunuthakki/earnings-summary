@@ -9,13 +9,18 @@ from pathlib import Path
 
 import pytest
 
-from capture import poller, telegram, transcribe
+from capture import poller, telegram, token_store, transcribe
 from capture.matcher import build_roster_index
 from execution import capture_poller
 from user_state import notes
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 ROSTER = build_roster_index(symbols=["NU", "MELI"], phrases={"nubank": "NU"})
+
+
+@pytest.fixture(autouse=True)
+def _authorize_test_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "1")
 
 
 def test_runtime_configuration_binds_implicit_consumers_to_canonical_db(
@@ -44,6 +49,115 @@ def test_load_save_offset_roundtrip(tmp_path: Path) -> None:
     assert poller.load_offset(p) is None
     poller.save_offset(p, 42)
     assert poller.load_offset(p) == 42
+
+
+@pytest.mark.parametrize("configured", [None, "not-an-integer"])
+def test_poll_once_rejects_updates_when_allowlist_is_missing_or_invalid(
+    configured: str | None,
+    db_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    update = telegram.Update(update_id=8, kind="text", chat_id=7, text="claim the bot")
+
+    def get_updates(
+        _token: str, offset: int | None = None, timeout: int = 50
+    ) -> list[telegram.Update]:
+        del offset, timeout
+        return [update]
+
+    monkeypatch.setattr(telegram, "get_updates", get_updates)
+    monkeypatch.setattr(token_store, "load_chat_id", lambda: None)
+    saved: list[int] = []
+    monkeypatch.setattr(token_store, "save_chat_id", saved.append)
+    if configured is None:
+        monkeypatch.delenv("TELEGRAM_ALLOWED_CHAT_ID", raising=False)
+    else:
+        monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", configured)
+    offset_path = tmp_path / "offset.json"
+
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=offset_path,
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=False,
+    )
+
+    assert counts["unauthorized_chat_id"] == 1
+    assert notes.list_notes(kind="musing", db_path=db_path) == []
+    assert saved == []
+    assert json.loads(offset_path.read_text(encoding="utf-8"))["offset"] == 9
+
+
+def test_poll_once_rejects_foreign_chat_and_still_advances_offset(
+    db_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    update = telegram.Update(update_id=9, kind="text", chat_id=2, text="foreign chat")
+
+    def get_updates(
+        _token: str, offset: int | None = None, timeout: int = 50
+    ) -> list[telegram.Update]:
+        del offset, timeout
+        return [update]
+
+    monkeypatch.setattr(telegram, "get_updates", get_updates)
+    offset_path = tmp_path / "offset.json"
+
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=offset_path,
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=False,
+    )
+
+    assert counts["unauthorized_chat_id"] == 1
+    assert notes.list_notes(kind="musing", db_path=db_path) == []
+    assert json.loads(offset_path.read_text(encoding="utf-8"))["offset"] == 10
+
+
+def test_poll_once_fails_closed_when_stored_allowlist_cannot_be_read(
+    db_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    update = telegram.Update(update_id=10, kind="text", chat_id=7, text="claim the bot")
+
+    def get_updates(
+        _token: str, offset: int | None = None, timeout: int = 50
+    ) -> list[telegram.Update]:
+        del offset, timeout
+        return [update]
+
+    def fail_load_chat_id() -> int | None:
+        raise OSError("corrupt store")
+
+    monkeypatch.setattr(telegram, "get_updates", get_updates)
+    monkeypatch.setattr(
+        token_store,
+        "load_chat_id",
+        fail_load_chat_id,
+    )
+    monkeypatch.delenv("TELEGRAM_ALLOWED_CHAT_ID", raising=False)
+    offset_path = tmp_path / "offset.json"
+
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=offset_path,
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=False,
+    )
+
+    assert counts["unauthorized_chat_id"] == 1
+    assert notes.list_notes(kind="musing", db_path=db_path) == []
+    assert json.loads(offset_path.read_text(encoding="utf-8"))["offset"] == 11
 
 
 def test_poll_once_ingests_text_and_advances_offset(

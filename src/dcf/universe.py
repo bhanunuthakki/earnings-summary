@@ -23,8 +23,8 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The lists that auto-produce a full brief (and thus a §Valuation DCF card).
 # Mirror of ``db.BRIEFED_LIST_TYPES`` / ``pipeline.queries.BRIEFED_LIST_TYPES``,
-# duplicated here on purpose: importing ``db`` runs ``init_db()`` against the
-# default DB at import time, a side effect this lightweight helper must not have.
+# duplicated here on purpose so this lightweight helper does not load the
+# broader legacy DB facade merely to resolve list semantics.
 BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
 
 

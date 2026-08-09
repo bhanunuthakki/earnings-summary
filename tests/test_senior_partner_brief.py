@@ -110,6 +110,46 @@ def _seed_portfolio_shift(db_path: Path) -> None:
         conn.close()
 
 
+@pytest.mark.parametrize(
+    ("dirty", "expires_at"),
+    [(1, None), (0, "2026-07-19T09:00:00+00:00")],
+)
+def test_compose_excludes_dirty_or_expired_recommendation_from_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dirty: int,
+    expires_at: str | None,
+) -> None:
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO llm_artifacts "
+        "(scope, purpose, content_json, input_sha256, generated_at, expires_at, dirty) "
+        "VALUES ('portfolio', 'incremental_dollar_recommendation', ?, 'sha', ?, ?, ?)",
+        (
+            '{"status":"ready","central_hypothesis":"stale advice"}',
+            "2026-07-18T09:00:00+00:00",
+            expires_at,
+            dirty,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    prompts: list[str] = []
+
+    def capture_prompt(prompt: str, **_kwargs: object) -> dict[str, object]:
+        prompts.append(prompt)
+        return _valid_llm_payload(n_action=0)
+
+    monkeypatch.setattr(spb, "call_llm_structured", capture_prompt)
+
+    spb.compose_brief(db_path, tmp_path, now=_NOW)
+
+    assert prompts
+    assert "stale advice" not in prompts[0]
+
+
 def _fake_call_factory(payload: dict[str, object]) -> object:
     def fake_call(prompt: str, **kw: object) -> object:
         return dict(payload)

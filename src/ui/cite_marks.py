@@ -151,7 +151,7 @@ CITE_MARKS_JS = r"""
       if (!c) return m;
       var href = c.href || c.source_url || '';
       if (href && /^javascript:/i.test(href.trim())) href = '';
-      else if (href && !/^https?:/i.test(href) && !/^\//.test(href)) href = base + href;
+      else if (href && !/^https?:/i.test(href) && base) href = base.replace(/\/$/, '') + (href.charAt(0) === '/' ? href : '/' + href);
       var pop = popHtml(c);
       if (value) {
         var badge = href
@@ -339,8 +339,8 @@ def linkify(text: str, payload: CitationsPayload | None, *, href_base: str = "")
         href = str(c.get("href") or c.get("source_url") or "").strip()
         if href.lower().startswith("javascript:"):
             href = ""
-        elif href and not _ABS_URL_RX.match(href) and not href.startswith("/"):
-            href = href_base + href
+        elif href and not _ABS_URL_RX.match(href) and href_base:
+            href = f"{href_base.rstrip('/')}/{href.lstrip('/')}"
         pop = _cite_pop_html(c)
         if value:
             # value is already-rendered, already-escaped prose HTML — wrap as-is.
