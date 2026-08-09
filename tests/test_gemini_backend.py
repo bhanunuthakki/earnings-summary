@@ -337,6 +337,36 @@ def test_gemini_model_pin_operational_failure_falls_back_to_claude(
     assert claude_seen["model"] == llm_cli.DEFAULT_MODEL
 
 
+def test_gemini_api_error_falls_back_through_full_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unforced SDK API failure remains inside the governed fallback path."""
+
+    def _missing_pro(prompt: str, **kw: object) -> str:
+        raise genai_errors.ClientError(
+            404, {"error": {"message": "not found", "status": "NOT_FOUND"}}
+        )
+
+    monkeypatch.setattr(gemini_backend, "call_gemini", _missing_pro)
+    claude_seen: dict[str, object] = {}
+
+    def _fake_claude(prompt: str, **kw: object) -> str:
+        claude_seen.update(kw)
+        return "C"
+
+    monkeypatch.setattr(llm_cli, "_call_claude", _fake_claude)
+
+    assert (
+        llm_cli.call_llm(
+            "p",
+            purpose="bear_case",
+            model="gemini-3.1-pro-preview",
+        )
+        == "C"
+    )
+    assert claude_seen["model"] == llm_cli.DEFAULT_MODEL
+
+
 def test_forced_gemini_operational_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """backend='gemini' means the caller wants GEMINI's answer (the compare
     harness): a failure must surface, never silently switch backends."""
@@ -352,6 +382,32 @@ def test_forced_gemini_operational_failure_raises(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(llm_cli, "_call_claude", _fail)
     with pytest.raises(RuntimeError, match="gemini transient failure"):
         llm_cli.call_llm("p", purpose="bear_case", backend="gemini")
+
+
+def test_forced_gemini_api_error_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The compare harness keeps exact-provider failure semantics."""
+    error = genai_errors.ClientError(
+        404, {"error": {"message": "not found", "status": "NOT_FOUND"}}
+    )
+
+    def _missing_pro(prompt: str, **kw: object) -> str:
+        raise error
+
+    monkeypatch.setattr(gemini_backend, "call_gemini", _missing_pro)
+
+    def _fail(prompt: str, **kw: object) -> str:
+        raise AssertionError("claude must not run on a forced-gemini API failure")
+
+    monkeypatch.setattr(llm_cli, "_call_claude", _fail)
+
+    with pytest.raises(genai_errors.ClientError) as exc_info:
+        llm_cli.call_llm(
+            "p",
+            purpose="bear_case",
+            model="gemini-3.1-pro-preview",
+            backend="gemini",
+        )
+    assert exc_info.value is error
 
 
 @pytest.mark.parametrize(

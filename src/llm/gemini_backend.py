@@ -85,6 +85,17 @@ def _ensure_genai() -> None:
     genai_types = _genai_types
 
 
+def gemini_api_error_type() -> type[Exception]:
+    """Return the official SDK's operational API-error base class.
+
+    The outer purpose router uses this narrow boundary to distinguish provider
+    failures that may degrade to Claude from setup/budget hard stops. Keeping
+    the lookup here preserves the SDK's lazy-import behavior everywhere else.
+    """
+    _ensure_genai()
+    return cast("type[Exception]", genai_errors.APIError)
+
+
 # Gemini API tiers for analytical writing (Pro) vs the short structured calls
 # that run on Haiku under the Claude backend (Flash). The tier derivation in
 # gemini_model_for keeps these two aligned with LLM_MODELS so retuning a
