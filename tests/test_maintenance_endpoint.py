@@ -44,14 +44,28 @@ def _argv(client, **body) -> list[str]:
     return job.argv
 
 
+def _managed_target(argv: list[str]) -> Path:
+    assert len(argv) >= 3
+    assert Path(argv[1]).name == "sqlite_bootstrap.py"
+    target = Path(argv[2])
+    assert target.suffix == ".py"
+    return target
+
+
 def test_repo_wide_actions_map_to_their_clis(client) -> None:
     # Call each action once — a second call to the same action 409s (single-flight).
     seed = _argv(client, action="seed_kpis")
-    assert Path(seed[1]).name == "seed_kpi_definitions.py"
+    assert _managed_target(seed).name == "seed_kpi_definitions.py"
     assert "--all" in seed
-    assert Path(_argv(client, action="process_inbox")[1]).name == "register_dropped_documents.py"
-    assert Path(_argv(client, action="sweep_history")[1]).name == "sweep_output_history.py"
-    assert Path(_argv(client, action="onboard_pending")[1]).name == "onboard_pending_tickers.py"
+    assert (
+        _managed_target(_argv(client, action="process_inbox")).name
+        == "register_dropped_documents.py"
+    )
+    assert _managed_target(_argv(client, action="sweep_history")).name == "sweep_output_history.py"
+    assert (
+        _managed_target(_argv(client, action="onboard_pending")).name
+        == "onboard_pending_tickers.py"
+    )
 
 
 def test_onboard_requires_ticker(client) -> None:
@@ -61,7 +75,7 @@ def test_onboard_requires_ticker(client) -> None:
 
 def test_onboard_with_ticker(client) -> None:
     argv = _argv(client, action="onboard", ticker="nu")
-    assert Path(argv[1]).name == "onboard_ticker.py"
+    assert _managed_target(argv).name == "onboard_ticker.py"
     assert "--ticker" in argv
     assert "NU" in argv  # uppercased
 

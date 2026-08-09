@@ -16,5 +16,5 @@ exit /b 1
 "%PYTHON_EXE%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>nul
 if errorlevel 1 goto missing_python
 
-"%PYTHON_EXE%" "%PROJECT_ROOT%\cron\job_runtime.py" --scheduler-wrapper --python-executable "%PYTHON_EXE%" -- %*
+"%PYTHON_EXE%" -u "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" "%PROJECT_ROOT%\cron\job_runtime.py" --scheduler-wrapper --python-executable "%PYTHON_EXE%" --python-bootstrap "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" -- %*
 exit /b %ERRORLEVEL%

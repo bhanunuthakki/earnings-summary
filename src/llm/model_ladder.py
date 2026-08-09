@@ -9,12 +9,12 @@ Cost basis is **public API marginal $/MTok**, output-weighted to reflect these
 prompts' roughly 6:1 input:output ratio. The eval loop is what decides whether
 the cheaper model's *quality* holds; this module only orders them by price.
 
-Blended ladder order (cheapest → most expensive, 2026-07-21 API list prices —
-see ``C:\\Users\\Bhanu\\.gemini\\procedures\\model-frontier.REFERENCE.md``, the
-dated cross-provider authority; verify there before editing prices below):
-  Gemini 2.5 Flash ($0.30/$2.50) → Haiku 4.5 ($1.00/$5.00)
-  → Gemini 3.1 Pro ($1.25/$10.00) → Sonnet 5 ($2.00/$10.00, launch price
-  through 2026-08-31, then $3.00/$15.00) → Opus 4.8 ($5.00/$25.00)
+Blended ladder order (cheapest → most expensive; Gemini prices verified from
+Google's official Developer API pricing page on 2026-08-08):
+  Gemini 2.5 Flash ($0.30/$2.50) → Gemini 3 Flash ($0.50/$3.00)
+  → Haiku 4.5 ($1.00/$5.00) → Sonnet 5 ($2.00/$10.00 launch price
+  through 2026-08-31) → Gemini 3.1 Pro ($2.00/$12.00 for prompts <=200k;
+  $4.00/$18.00 above) → Opus 4.8 ($5.00/$25.00)
   → Fable 5 ($10.00/$50.00).
 
 2026-07 migration note: ``claude-sonnet-5`` and the rolling ``claude-haiku-4-5``
@@ -59,6 +59,11 @@ class ModelCost:
     family: str
     input_usd_per_mtok: float
     output_usd_per_mtok: float
+    cached_input_usd_per_mtok: float | None = None
+    long_context_threshold_tokens: int | None = None
+    long_input_usd_per_mtok: float | None = None
+    long_output_usd_per_mtok: float | None = None
+    long_cached_input_usd_per_mtok: float | None = None
 
     @property
     def blended_usd_per_mtok(self) -> float:
@@ -74,8 +79,8 @@ MODEL_LADDER: dict[str, ModelCost] = {
     # Claude tiers (public API list prices, $/MTok in/out; verified against
     # model-frontier.REFERENCE.md 2026-07-21 unless noted).
     # Dated Haiku snapshot — the CURRENT LLM_MODELS incumbent pin
-    # (FAST_CLASSIFIER_MODEL). Price is its historical, still-accurate value.
-    "claude-haiku-4-5-20251001": ModelCost("claude-haiku-4-5-20251001", CLAUDE, 0.80, 4.00),
+    # (FAST_CLASSIFIER_MODEL). Current public price matches the rolling alias.
+    "claude-haiku-4-5-20251001": ModelCost("claude-haiku-4-5-20251001", CLAUDE, 1.00, 5.00),
     # Rolling alias of the same Haiku 4.5 model family — NEWLY REGISTERED
     # 2026-07 as an eval candidate for the dated snapshot above. Not yet an
     # LLM_MODELS pin; promote only after a per-purpose SWITCH_DOWN verdict.
@@ -102,9 +107,23 @@ MODEL_LADDER: dict[str, ModelCost] = {
     # NotFound: gemini-3-flash-preview → API-catalog-discovered model → gemini-2.5-flash
     # (stable GA fallback).
     # Both Flash ids live here so family_of() routes either to the Gemini backend.
-    "gemini-3-flash-preview": ModelCost("gemini-3-flash-preview", GEMINI, 0.30, 2.50),
-    "gemini-2.5-flash": ModelCost("gemini-2.5-flash", GEMINI, 0.30, 2.50),
-    "gemini-3.1-pro-preview": ModelCost("gemini-3.1-pro-preview", GEMINI, 1.25, 10.00),
+    "gemini-3-flash-preview": ModelCost(
+        "gemini-3-flash-preview", GEMINI, 0.50, 3.00, cached_input_usd_per_mtok=0.05
+    ),
+    "gemini-2.5-flash": ModelCost(
+        "gemini-2.5-flash", GEMINI, 0.30, 2.50, cached_input_usd_per_mtok=0.03
+    ),
+    "gemini-3.1-pro-preview": ModelCost(
+        "gemini-3.1-pro-preview",
+        GEMINI,
+        2.00,
+        12.00,
+        cached_input_usd_per_mtok=0.20,
+        long_context_threshold_tokens=200_000,
+        long_input_usd_per_mtok=4.00,
+        long_output_usd_per_mtok=18.00,
+        long_cached_input_usd_per_mtok=0.40,
+    ),
     # OpenRouter cheap-candidate pool (metered gateway; src/llm/openrouter_backend.py).
     # The pareto optimizer's WIDE, cheap axis — open-weight models graded per purpose
     # by the same brand-blind judge before any promotion. Ids are OpenRouter's
@@ -200,7 +219,12 @@ def ladder_sha() -> str:
     import hashlib
 
     payload = "|".join(
-        f"{mid}:{c.family}:{c.input_usd_per_mtok}:{c.output_usd_per_mtok}"
+        (
+            f"{mid}:{c.family}:{c.input_usd_per_mtok}:{c.output_usd_per_mtok}:"
+            f"{c.cached_input_usd_per_mtok}:{c.long_context_threshold_tokens}:"
+            f"{c.long_input_usd_per_mtok}:{c.long_output_usd_per_mtok}:"
+            f"{c.long_cached_input_usd_per_mtok}"
+        )
         for mid, c in sorted(MODEL_LADDER.items())
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -258,7 +282,13 @@ def cheaper_candidates(
     return out
 
 
-def estimated_call_usd(model_id: str | None, input_tokens: int, output_tokens: int) -> float:
+def estimated_call_usd(
+    model_id: str | None,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cached_input_tokens: int = 0,
+) -> float:
     """Marginal $ for one call at the given token counts. Returns 0.0 for
     unknown models (not in the ladder) — cost is unknown, not free."""
     if model_id is None:
@@ -266,7 +296,32 @@ def estimated_call_usd(model_id: str | None, input_tokens: int, output_tokens: i
     cost = MODEL_LADDER.get(model_id)
     if cost is None:
         return 0.0
+    prompt_tokens = max(0, input_tokens)
+    cached_tokens = min(prompt_tokens, max(0, cached_input_tokens))
+    uncached_tokens = prompt_tokens - cached_tokens
+    is_long = (
+        cost.long_context_threshold_tokens is not None
+        and prompt_tokens > cost.long_context_threshold_tokens
+    )
+    input_rate = (
+        cost.long_input_usd_per_mtok
+        if is_long and cost.long_input_usd_per_mtok is not None
+        else cost.input_usd_per_mtok
+    )
+    output_rate = (
+        cost.long_output_usd_per_mtok
+        if is_long and cost.long_output_usd_per_mtok is not None
+        else cost.output_usd_per_mtok
+    )
+    cached_rate = (
+        cost.long_cached_input_usd_per_mtok
+        if is_long and cost.long_cached_input_usd_per_mtok is not None
+        else cost.cached_input_usd_per_mtok
+    )
+    if cached_rate is None:
+        cached_rate = input_rate
     return (
-        input_tokens / 1_000_000.0 * cost.input_usd_per_mtok
-        + output_tokens / 1_000_000.0 * cost.output_usd_per_mtok
+        uncached_tokens / 1_000_000.0 * input_rate
+        + cached_tokens / 1_000_000.0 * cached_rate
+        + max(0, output_tokens) / 1_000_000.0 * output_rate
     )

@@ -5,6 +5,7 @@ states, split-view reflow, pop-out handoff contract) and the
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
 from datetime import UTC, datetime
@@ -176,16 +177,26 @@ def test_peers_api_returns_scored_set(client: FlaskClient, monkeypatch: pytest.M
 
 
 def test_peers_api_degrades_on_lookup_failure(
-    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    client: FlaskClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from report.sections import p3_data
 
     def boom(*_a: object, **_kw: object) -> list[object]:
-        raise RuntimeError("no peer file")
+        raise RuntimeError("no peer file?api_key=secret-value")
 
     monkeypatch.setattr(p3_data, "load_peer_comp", boom)
-    res = client.get("/api/peers/NU")
+    with caplog.at_level(logging.ERROR, logger=client.application.logger.name):
+        res = client.get(
+            "/api/peers/NU",
+            headers={"X-Correlation-ID": "peer-failure-test"},
+        )
     assert res.status_code == 200  # best-effort surface, never a 500
     body = res.get_json()
     assert body["peers"] == []
     assert "peer lookup failed" in body["error"]
+    assert body["correlation_id"] == "peer-failure-test"
+    assert "secret-value" not in res.get_data(as_text=True)
+    assert "secret-value" not in caplog.text
+    assert "Traceback" not in caplog.text

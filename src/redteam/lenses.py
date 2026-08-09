@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from bear_lint import BearLintFinding
 from llm.anchors import load_thesis_anchor
@@ -544,6 +544,7 @@ def generate_per_name_item(
             run_id=run_key,
             expect="object",
             required_keys=("attack_md", "question_md", "proposed_change_md", "severity"),
+            schema=TypeAdapter(RedTeamLLMItem),
         )
     except StructuredParseError as exc:
         raise RedTeamLensError(f"{pack.ticker}/{lens}: unusable JSON: {exc}") from exc

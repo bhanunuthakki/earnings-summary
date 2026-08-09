@@ -151,7 +151,8 @@ def test_steering_health_freshness_and_meta_cost(tmp_path: Path) -> None:
     health = load_steering_health(conn)
     conn.close()
     assert health.nomination_stale is True  # 60d > 45d
-    assert health.sweep_stale is False  # 1d < 14d
+    # INSUFFICIENT_FRAME is an honesty label, not a completed graded sweep.
+    assert health.sweep_stale is True
     assert health.meta_cost_30d_usd == 2.5  # production line excluded
     assert health.meta_calls_30d == 1
     assert health.active_candidate_models == 1

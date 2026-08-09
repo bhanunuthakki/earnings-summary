@@ -1,18 +1,18 @@
 """Read/write API for the llm_artifacts table.
 
 Pattern:
-  - ``read_current(ticker, purpose, fiscal_period=None, scope='ticker')`` →
+  - ``read_current(ticker, purpose, fiscal_period=None, scope='ticker')`` â†’
     the most recent non-superseded artifact, or None.
-  - ``upsert(...)`` → idempotent insert. When the existing row's input_sha256
+  - ``upsert(...)`` â†’ idempotent insert. When the existing row's input_sha256
     matches the new one, returns the existing row's id without inserting
     (cache hit). When it differs, marks the prior superseded and inserts a
     new row, preserving history. Returns the new row's id.
-  - ``mark_dirty(ticker, purposes, reason)`` → flips dirty=1 on a set of
+  - ``mark_dirty(ticker, purposes, reason)`` â†’ flips dirty=1 on a set of
     current artifacts. Called from the brief_dirty trigger chain (Phase 1.6).
-  - ``drain_dirty(limit)`` → returns the next batch of artifacts that need
+  - ``drain_dirty(limit)`` â†’ returns the next batch of artifacts that need
     regeneration. Used by the daily drain cron (Phase 8).
 
-The module is best-effort against missing DB / missing table — the LLM call
+The module is best-effort against missing DB / missing table â€” the LLM call
 that produced the row must never fail because the store can't write.
 
 JSON columns (source_doc_ids, parent_artifact_ids) are stored as TEXT
@@ -66,7 +66,7 @@ class Artifact:
 class UpsertRequest:
     """Inputs to upsert(). Composes deterministically into the input_sha256
     cache key so any caller can be cache-correct without knowing the hash
-    function. Add inputs here only when they actually affect the output —
+    function. Add inputs here only when they actually affect the output â€”
     spurious inputs invalidate the cache unnecessarily."""
 
     ticker: str | None
@@ -79,7 +79,7 @@ class UpsertRequest:
     prompt_version: str = "v1"
     # Inputs that determine the cache key, hashed in order:
     cache_inputs: list[bytes | str] = field(default_factory=list[bytes | str])
-    # Provenance — NOT hashed; these are descriptive metadata for the brief.
+    # Provenance â€” NOT hashed; these are descriptive metadata for the brief.
     source_doc_ids: list[int] = field(default_factory=list[int])
     parent_artifact_ids: list[int] = field(default_factory=list[int])
     expires_at: datetime | None = None
@@ -159,6 +159,29 @@ def _parse_dt(v: object) -> datetime:
     return datetime.fromisoformat(str(v))
 
 
+def _cache_state_is_reusable(
+    *,
+    dirty: bool,
+    expires_at: datetime | None,
+    current_input_sha256: str | None = None,
+    expected_input_sha256: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Single source of truth for dirty, expiry, and input-key reuse."""
+    if dirty:
+        return False
+    if expected_input_sha256 is not None and current_input_sha256 != expected_input_sha256:
+        return False
+    if expires_at is None:
+        return True
+    reference = now if now is not None else datetime.now(UTC)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at > reference
+
+
 def artifact_is_fresh(artifact: Artifact, *, now: datetime | None = None) -> bool:
     """Return whether an artifact is safe to reuse as current LLM context.
 
@@ -166,17 +189,33 @@ def artifact_is_fresh(artifact: Artifact, *, now: datetime | None = None) -> boo
     can label those states. Context-building callers use this predicate to keep
     stale recommendations out of a new model prompt.
     """
-    if artifact.dirty:
-        return False
-    if artifact.expires_at is None:
-        return True
-    reference = now if now is not None else datetime.now(UTC)
-    expires_at = artifact.expires_at
-    if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=UTC)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=UTC)
-    return expires_at >= reference
+    return _cache_state_is_reusable(
+        dirty=artifact.dirty,
+        expires_at=artifact.expires_at,
+        now=now,
+    )
+
+
+def artifact_is_reusable(
+    artifact: Artifact,
+    *,
+    input_sha256: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Canonical cache-hit predicate for artifact generators and consumers.
+
+    A reusable artifact must be clean, unexpired, andâ€”when the caller has
+    recomputed its deterministic cache keyâ€”match the current inputs. Keeping
+    this rule here prevents individual prompt builders from accidentally
+    treating hash equality alone as freshness.
+    """
+    return _cache_state_is_reusable(
+        dirty=artifact.dirty,
+        expires_at=artifact.expires_at,
+        current_input_sha256=artifact.input_sha256,
+        expected_input_sha256=input_sha256,
+        now=now,
+    )
 
 
 def read_current(
@@ -213,7 +252,7 @@ def read_current(
         # Best-effort read: _open() already guards a missing table, but a table
         # that exists with a *drifted* schema (a legacy DB predating a column
         # add, or a partial test fixture) would otherwise raise here and crash
-        # the render path. Degrade to "no cached artifact" instead — the caller
+        # the render path. Degrade to "no cached artifact" instead â€” the caller
         # recomputes or shows the empty state, same as a genuine cache miss.
         log.warning({"event": "artifact_read_current_failed", "error": str(exc)})
         return None
@@ -259,12 +298,12 @@ def upsert(
     """Idempotent upsert.
 
     Returns (artifact_id, was_cache_hit):
-      - was_cache_hit=True  → existing row's input_sha256 matches; existing id
+      - was_cache_hit=True  â†’ existing row's input_sha256 matches; existing id
                               returned, no new row inserted.
-      - was_cache_hit=False → either no prior row (insert) or prior input_sha256
+      - was_cache_hit=False â†’ either no prior row (insert) or prior input_sha256
                               differs (supersede + insert). New id returned.
 
-    On DB unavailability returns (None, False) — caller must treat as "go
+    On DB unavailability returns (None, False) â€” caller must treat as "go
     ahead, compute the artifact" (the LLM call still produces output, just
     no persistence).
     """
@@ -279,7 +318,7 @@ def upsert(
 
         existing = conn.execute(
             """
-            SELECT id, input_sha256, dirty FROM llm_artifacts
+            SELECT id, input_sha256, dirty, expires_at FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
               AND scope = ? AND purpose = ?
               AND COALESCE(fiscal_period, '') = COALESCE(?, '')
@@ -290,14 +329,24 @@ def upsert(
             (req.ticker, req.scope, req.purpose, req.fiscal_period),
         ).fetchone()
 
-        # Cache hit — same input hash AND not marked dirty. The dirty flag wins
+        # Cache hit â€” same input hash AND not marked dirty. The dirty flag wins
         # over hash equality because a trigger may have flagged the row even
         # though inputs didn't change (e.g. prompt_version bump applied
         # retroactively to the table).
-        if existing is not None and existing["input_sha256"] == input_sha and not existing["dirty"]:
+        existing_expires = (
+            _parse_dt(existing["expires_at"])
+            if existing is not None and existing["expires_at"]
+            else None
+        )
+        if existing is not None and _cache_state_is_reusable(
+            dirty=bool(existing["dirty"]),
+            expires_at=existing_expires,
+            current_input_sha256=str(existing["input_sha256"]),
+            expected_input_sha256=input_sha,
+        ):
             return (int(existing["id"]), True)
 
-        # Either no existing row, hash drift, or dirty — insert a new row and
+        # Either no existing row, hash drift, or dirty â€” insert a new row and
         # supersede any prior current row.
         content_json_str = (
             json.dumps(req.content_json, ensure_ascii=False)
@@ -360,12 +409,12 @@ def upsert(
 # stale cache is not served.
 #
 # Two refresh paths consume this set, by purpose family:
-#   * Brief-side purposes (bear_case, valuation_basis, qa_topics, …) are
-#     regenerated by the drain executor — see _PURPOSE_TO_REGENERATOR in
+#   * Brief-side purposes (bear_case, valuation_basis, qa_topics, â€¦) are
+#     regenerated by the drain executor â€” see _PURPOSE_TO_REGENERATOR in
 #     execution/refresh_dirty_artifacts.py, which must cover exactly those.
 #   * Trigger/news-side purposes (earnings_tone_diff, kpi_inflection_context,
 #     saydo_due_context, material_news_classification, news_structuring) have
-#     NO standalone drain regenerator — recomputing them is a side effect of the
+#     NO standalone drain regenerator â€” recomputing them is a side effect of the
 #     daily trigger scan / news fetch, which already honor the dirty flag. The
 #     drain intentionally classifies these as "refreshed by the daily scan"
 #     rather than warning "no regenerator". Their TTLs (above) only let the
@@ -381,7 +430,7 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
     # Earnings-tone diff caches the LLM comparison of a new transcript
     # against the prior 4 quarters' transcripts. Keyed by transcript ids,
     # so a fact-side restatement of the *same* transcript doesn't move
-    # the key — but the trigger framework re-runs on every transcript
+    # the key â€” but the trigger framework re-runs on every transcript
     # arrival anyway. Inclusion here participates in the existing
     # mark-dirty chain so a restatement that touches financial_facts
     # (which the comparison anchor reads) invalidates the cached diff.
@@ -410,7 +459,7 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
     # for the next day's date-key rollover.
     "news_structuring",
     # Investment Decision Card (P1.1, personal_investment_partner_prd.md
-    # §8.1): the per-ticker synthesis over the thesis, DCF, bear case, and
+    # Â§8.1): the per-ticker synthesis over the thesis, DCF, bear case, and
     # candidate fit. A fact-side restatement of any of those should
     # invalidate the cached card, so it joins the mark-dirty chain here.
     # Regenerator: execution/build_investment_decision_card.py (see
@@ -424,11 +473,11 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
 # loop treats `expires_at < now` as a soft dirty signal so cached LLM
 # outputs don't live forever even if no fact change ever flips brief_dirty.
 # Tuned by data sensitivity:
-#   bear_case / company_description: company narrative changes slowly →
+#   bear_case / company_description: company narrative changes slowly ->
 #     30 days
 #   qa_topics / saydo_filter / exec_comp_alignment / valuation_basis:
-#     anchored to the most recent quarter → 14 days
-#   filing_intelligence: anchored to a specific 10-K/10-Q → 60 days
+#     anchored to the most recent quarter -> 14 days
+#   filing_intelligence: anchored to a specific 10-K/10-Q -> 60 days
 # A purpose not in this table gets no default TTL (caller must opt in).
 _DEFAULT_TTL_DAYS: dict[str, int] = {
     "bear_case": 30,
@@ -474,7 +523,7 @@ _DEFAULT_TTL_DAYS: dict[str, int] = {
 def default_expires_at(purpose: str, *, now: datetime | None = None) -> datetime | None:
     """Compute the canonical expires_at for an artifact of the given purpose.
 
-    Returns None for purposes without a TTL policy — caller may still set
+    Returns None for purposes without a TTL policy â€” caller may still set
     expires_at explicitly on the UpsertRequest. now is injectable for tests.
     """
     days = _DEFAULT_TTL_DAYS.get(purpose)
@@ -499,7 +548,7 @@ def mark_artifacts_dirty_for_fact_change(
     the LLM artifact cache stays valid even though the inputs to the prompt
     have shifted underneath it.
 
-    Returns the count of rows actually flipped from clean→dirty.
+    Returns the count of rows actually flipped from cleanâ†’dirty.
     """
     return mark_dirty(
         ticker=ticker,
@@ -517,7 +566,7 @@ def mark_dirty(
     db_path: Path | str | None = None,
 ) -> int:
     """Flip dirty=1 on all current artifacts matching (ticker, purpose IN ...).
-    Returns the count of rows updated. Best-effort — returns 0 on DB error."""
+    Returns the count of rows updated. Best-effort â€” returns 0 on DB error."""
     if not purposes:
         return 0
     conn = _open(db_path)
@@ -684,8 +733,7 @@ def _open(
             role=role,
             schema_preflight=role is SQLiteConnectionRole.WRITER,
         )
-        conn.execute("PRAGMA busy_timeout = 5000")
-        # Verify table exists — graceful return otherwise
+        # Verify table exists â€” graceful return otherwise
         cur = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"
         ).fetchone()

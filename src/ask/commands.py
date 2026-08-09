@@ -11,10 +11,10 @@ endpoint behavior.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 from dispatch_registry import Registry, RegistryConflict
+from runtime.python_process import managed_python_prefix
 
 _HELP_TEXT = (
     "Commands handled instantly (no LLM):\n"
@@ -75,7 +75,7 @@ def _start_full_verdict_job(
     note rather than breaking the instant reply that already rendered.
     """
     argv = [
-        sys.executable,
+        *managed_python_prefix(repo_root),
         str(repo_root / "execution" / "review_position.py"),
         ticker,
         "--verdict",
@@ -212,7 +212,7 @@ def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
                 f"{arg} isn't buildable (must be a live candidate in new/queued status). " + usage
             )
         argv = [
-            sys.executable,
+            *managed_python_prefix(repo_root),
             str(repo_root / "execution" / "discovery_build.py"),
             "--tickers",
             arg,

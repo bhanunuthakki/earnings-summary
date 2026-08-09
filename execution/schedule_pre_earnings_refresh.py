@@ -34,13 +34,12 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import requests
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db as portfolio_db  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
+from net.client import FMP_CLIENT, HttpCallError, JsonShape  # noqa: E402
 from runtime.secrets import load_project_env  # noqa: E402
 from sources.earnings_calendar import next_earnings_date  # noqa: E402
 
@@ -80,17 +79,32 @@ def _fetch_earnings_calendar(start: date, end: date) -> list[dict[str, str]]:
     """
     if not API_KEY:
         raise RuntimeError("FMP_API_KEY not set in .env")
-    url = "https://financialmodelingprep.com/stable/earnings-calendar"
-    params = {"from": start.isoformat(), "to": end.isoformat(), "apikey": API_KEY}
+    params = {"from": start.isoformat(), "to": end.isoformat()}
     try:
-        r = requests.get(url, params=params, timeout=30)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        raise RuntimeError(f"FMP earnings-calendar fetch failed: {_redact(e)}") from None
-    body = r.json()
+        response = FMP_CLIENT.get_json(
+            "earnings-calendar",
+            params=params,
+            api_key=API_KEY,
+            expected=JsonShape.ARRAY,
+        )
+    except HttpCallError as exc:
+        raise RuntimeError(f"FMP earnings-calendar fetch failed: {exc}") from None
+    body = response.payload
     if not isinstance(body, list):
-        raise RuntimeError(f"unexpected calendar shape: {type(body).__name__}")
-    return [{"symbol": e.get("symbol", "").upper(), "date": e.get("date", "")} for e in body]
+        raise RuntimeError("unexpected calendar shape")
+    entries: list[dict[str, str]] = []
+    for raw in body:
+        if not isinstance(raw, dict):
+            raise RuntimeError("unexpected calendar record shape")
+        symbol = raw.get("symbol")
+        event_date = raw.get("date")
+        entries.append(
+            {
+                "symbol": symbol.upper() if isinstance(symbol, str) else "",
+                "date": event_date if isinstance(event_date, str) else "",
+            }
+        )
+    return entries
 
 
 def _load_hints() -> dict[str, str]:

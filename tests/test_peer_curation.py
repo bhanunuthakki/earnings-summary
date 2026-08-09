@@ -63,8 +63,8 @@ def _comment(text: str, key: str = "peer_comp") -> comments.Comment:
 
 
 def _canned(payload: dict[str, object]):
-    def _f(*_a: object, **_k: object) -> str:
-        return json.dumps(payload)
+    def _f(*_a: object, **_k: object) -> object:
+        return prc._PeerCuration.model_validate(payload)
 
     return _f
 
@@ -86,7 +86,7 @@ def test_pins_append_to_watchlist_dedup(tmp_path: Path, monkeypatch: pytest.Monk
     path = _holdings(tmp_path, competitive_watchlist=["Itau Unibanco"])
     monkeypatch.setattr(
         prc,
-        "call_llm",
+        "call_llm_structured",
         _canned(
             {
                 "pin": ["HOOD", "Itau Unibanco"],  # one new, one already-pinned
@@ -108,7 +108,7 @@ def test_excludes_write_peer_exclude(tmp_path: Path, monkeypatch: pytest.MonkeyP
     path = _holdings(tmp_path)
     monkeypatch.setattr(
         prc,
-        "call_llm",
+        "call_llm_structured",
         _canned(
             {"pin": [], "exclude": ["BARC"], "hide_unless_quality": False, "diff_summary": "drop"}
         ),
@@ -124,7 +124,7 @@ def test_conditional_persists_reevaluable_override(
     path = _holdings(tmp_path)
     monkeypatch.setattr(
         prc,
-        "call_llm",
+        "call_llm_structured",
         _canned(
             {
                 "pin": [],
@@ -151,7 +151,7 @@ def test_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     path = _holdings(tmp_path, competitive_watchlist=["A"])
     monkeypatch.setattr(
         prc,
-        "call_llm",
+        "call_llm_structured",
         _canned({"pin": ["HOOD"], "exclude": [], "hide_unless_quality": True, "diff_summary": "x"}),
     )
     prc._route_curate_peers(tmp_path, "NU", _comment("pin HOOD"), apply=False)
@@ -166,7 +166,7 @@ def test_no_actionable_curation_touches_nothing(
     path = _holdings(tmp_path)
     monkeypatch.setattr(
         prc,
-        "call_llm",
+        "call_llm_structured",
         _canned({"pin": [], "exclude": [], "hide_unless_quality": False, "diff_summary": "n/a"}),
     )
     res = prc._route_curate_peers(tmp_path, "NU", _comment("nice section"), apply=True)

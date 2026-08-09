@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
@@ -112,12 +113,17 @@ def db(tmp_path: Path) -> Path:
     return p
 
 
-def _mock_llm(response_rows: list[dict[str, object]]):
-    """Build a fake call_llm that returns the given rows as JSON."""
+class _Validator(Protocol):
+    def validate_python(self, value: object) -> object: ...
 
-    def _fake(prompt: str, **kwargs: object) -> str:
-        del prompt, kwargs
-        return json.dumps(response_rows)
+
+def _mock_llm(response_rows: list[dict[str, object]]):
+    """Build a fake structured call that validates the given rows."""
+
+    def _fake(prompt: str, **kwargs: object) -> object:
+        del prompt
+        schema = cast(_Validator, kwargs["schema"])
+        return schema.validate_python(response_rows)
 
     return _fake
 
@@ -150,7 +156,7 @@ def test_extract_persists_named_and_anonymized(
     db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "table_extractors.customer_concentration.call_llm",
+        "table_extractors.customer_concentration.call_llm_structured",
         _mock_llm(
             [
                 {
@@ -227,7 +233,7 @@ def test_extract_handles_empty_disclosure(
     db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "table_extractors.customer_concentration.call_llm",
+        "table_extractors.customer_concentration.call_llm_structured",
         _mock_llm([]),
     )
     outcome = cc.extract(
@@ -248,7 +254,7 @@ def test_extract_normalizes_percentage_above_one(
 ) -> None:
     # Model sometimes emits 12 (meaning 12%) instead of 0.12; normalize.
     monkeypatch.setattr(
-        "table_extractors.customer_concentration.call_llm",
+        "table_extractors.customer_concentration.call_llm_structured",
         _mock_llm(
             [
                 {
@@ -285,7 +291,7 @@ def test_extract_skips_out_of_range_percentage(
 ) -> None:
     # 500 is clearly malformed — should be dropped, not stored.
     monkeypatch.setattr(
-        "table_extractors.customer_concentration.call_llm",
+        "table_extractors.customer_concentration.call_llm_structured",
         _mock_llm(
             [
                 {
@@ -317,7 +323,7 @@ def test_extract_skips_out_of_range_percentage(
 
 def test_extract_is_idempotent(db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "table_extractors.customer_concentration.call_llm",
+        "table_extractors.customer_concentration.call_llm_structured",
         _mock_llm(
             [
                 {
@@ -358,7 +364,7 @@ def test_extract_returns_llm_failed_when_llm_raises(
         del prompt, kwargs
         raise RuntimeError("simulated upstream LLM failure")
 
-    monkeypatch.setattr("table_extractors.customer_concentration.call_llm", _boom)
+    monkeypatch.setattr("table_extractors.customer_concentration.call_llm_structured", _boom)
     outcome = cc.extract(
         ticker="X",
         fiscal_year=2024,
@@ -374,11 +380,13 @@ def test_extract_returns_llm_failed_when_llm_raises(
 def test_extract_returns_parse_failed_on_non_json_response(
     db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def _bad(prompt: str, **kwargs: object) -> str:
+    def _bad(prompt: str, **kwargs: object) -> object:
         del prompt, kwargs
-        return "Here is the answer: not really json"
+        from llm.structured import StructuredParseError
 
-    monkeypatch.setattr("table_extractors.customer_concentration.call_llm", _bad)
+        raise StructuredParseError("invalid structured response")
+
+    monkeypatch.setattr("table_extractors.customer_concentration.call_llm_structured", _bad)
     outcome = cc.extract(
         ticker="X",
         fiscal_year=2024,
@@ -387,17 +395,27 @@ def test_extract_returns_parse_failed_on_non_json_response(
         db_path=db,
         repo_root=tmp_path,
     )
-    assert outcome.status == "parse_failed"
+    assert outcome.status == "structured_failed"
 
 
 def test_extract_strips_json_code_fence(
     db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def _fenced(prompt: str, **kwargs: object) -> str:
-        del prompt, kwargs
-        return '```json\n[{"customer_label":"Y","pct_of_revenue":0.11,"anonymized":false,"source_excerpt":"y"}]\n```'
+    def _fenced(prompt: str, **kwargs: object) -> object:
+        del prompt
+        schema = cast(_Validator, kwargs["schema"])
+        return schema.validate_python(
+            [
+                {
+                    "customer_label": "Y",
+                    "pct_of_revenue": 0.11,
+                    "anonymized": False,
+                    "source_excerpt": "y",
+                }
+            ]
+        )
 
-    monkeypatch.setattr("table_extractors.customer_concentration.call_llm", _fenced)
+    monkeypatch.setattr("table_extractors.customer_concentration.call_llm_structured", _fenced)
     outcome = cc.extract(
         ticker="Z",
         fiscal_year=2024,

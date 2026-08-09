@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -209,6 +210,103 @@ def test_panel_backup_directive_shown(tmp_path: Path) -> None:
 
     html = render_cron_health_panel(db_path)
     assert "DB backup" in html
+
+
+def test_operational_alarms_flag_stale_backup_large_wal_and_stale_eval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.cron_health_panel import operational_alarms
+
+    db_path = tmp_path / "data" / "portfolio.db"
+    db_path.parent.mkdir()
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE eval_runs (started_at TEXT, finished_at TEXT)")
+    conn.execute("INSERT INTO eval_runs VALUES ('2026-07-01T00:00:00+00:00', NULL)")
+    conn.commit()
+    conn.close()
+    wal = Path(f"{db_path}-wal")
+    wal.write_bytes(b"oversized")
+    monkeypatch.setenv("ES_WAL_WARN_BYTES", "1")
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
+
+    html = operational_alarms(db_path, now=datetime(2026, 8, 8, tzinfo=UTC))
+
+    assert "Database backup is stale" in html
+    assert "SQLite WAL is oversized" in html
+    assert "LLM evaluations are stale" in html
+
+
+def test_wal_probe_surfaces_io_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pipeline.operational_health import wal_size
+
+    original_stat = Path.stat
+    wal = Path(f"{tmp_path / 'portfolio.db'}-wal")
+
+    def fail_for_wal(path: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if path == wal:
+            raise PermissionError("WAL permission denied")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_for_wal)
+    with pytest.raises(PermissionError, match="WAL permission denied"):
+        wal_size(tmp_path / "portfolio.db")
+
+
+def test_operational_alarms_are_quiet_for_fresh_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.cron_health_panel import operational_alarms
+
+    now = datetime.now(UTC)
+    db_path = tmp_path / "data" / "portfolio.db"
+    db_path.parent.mkdir()
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE eval_runs (started_at TEXT, finished_at TEXT)")
+    conn.execute("INSERT INTO eval_runs VALUES (?, ?)", (now.isoformat(), now.isoformat()))
+    conn.commit()
+    conn.close()
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    snapshot = backup_dir / "portfolio.db.20260808_000000_000000.gz.enc"
+    snapshot.write_bytes(b"encrypted")
+    os.utime(snapshot, (now.timestamp(), now.timestamp()))
+    monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
+
+    html = operational_alarms(db_path, now=now)
+
+    assert "Database backup is stale" not in html
+    assert "SQLite WAL is oversized" not in html
+    assert "LLM evaluations are stale" not in html
+    assert "freshness is unavailable" not in html
+
+
+def test_operational_alarms_require_current_gc_archive_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline.cron_health_panel import operational_alarms
+
+    now = datetime.now(UTC)
+    db_path = tmp_path / "data" / "portfolio.db"
+    archive = tmp_path / "data" / "archive" / "portfolio_gc_archive.db"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"rows")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE eval_runs (started_at TEXT, finished_at TEXT)")
+    conn.execute("INSERT INTO eval_runs VALUES (?, ?)", (now.isoformat(), now.isoformat()))
+    conn.commit()
+    conn.close()
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    primary = backup_dir / "portfolio.db.20260808_000000_000000.gz.enc"
+    primary.write_bytes(b"encrypted")
+    os.utime(primary, (now.timestamp(), now.timestamp()))
+    monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
+
+    html = operational_alarms(db_path, now=now)
+
+    assert "GC archive is not backed up" in html
 
 
 # ---------------------------------------------------------------------------

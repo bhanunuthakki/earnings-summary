@@ -23,6 +23,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from runtime.python_process import managed_python_prefix  # noqa: E402
 from synthesis.seed_decisions import backfill_seed_decisions  # noqa: E402
 
 
@@ -43,7 +44,10 @@ def main() -> int:
     if not args.no_grade and tally["inserted"]:
         # Same grader, same methodology as the advisor stream (weekly cron).
         result = subprocess.run(
-            [sys.executable, str(repo_root / "execution" / "grade_decisions.py")],
+            [
+                *managed_python_prefix(PROJECT_ROOT),
+                str(repo_root / "execution" / "grade_decisions.py"),
+            ],
             cwd=str(repo_root),
             check=False,
         )

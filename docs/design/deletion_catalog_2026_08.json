@@ -72,9 +72,12 @@
         "latest_governed_refresh_stage",
         "latest_governed_scope_heads"
       ],
+      "data_restore_exemptions": {
+        "latest_governed_population": "No migration or runtime DDL ever created this table; the similarly named module persisted only the operation-ledger tables. The 0002 DROP IF EXISTS entry was a defensive no-op."
+      },
       "code_restore_verified": true,
-      "data_restore_verified": false,
-      "data_restore_note": "Migration 0002 was already applied locally. Git can restore code, not dropped SQLite rows; recover those only from a pre-0002 database backup."
+      "data_restore_verified": true,
+      "data_restore_note": "Production-derived data/portfolio.db.pre0273.bak (SHA-256 0dd0a9a6c04c4e2b2caf6858aa42ae656d0a077c243c0dc0a09519ee1092b106) passed integrity/FK checks and bridged from archived 0272 to active 0003. All user-data targets had zero rows; the three FTS housekeeping rows remain readable. See docs/hardening/L1/deletion_recovery_receipt_2026_08_08.json."
     },
     {
       "id": "segment-junction-backfill",
@@ -86,9 +89,62 @@
       ],
       "test_targets": [],
       "schema_targets": [],
+      "data_restore_exemptions": {},
       "code_restore_verified": true,
       "data_restore_verified": true,
       "data_restore_note": "The deleted helper transformed existing rows in place and owned no independent data; the source is recoverable from the rollback commit."
+    },
+    {
+      "id": "restored-test-only-provenance",
+      "authorization": "Owner authorized full dead-code clearance on 2026-08-08; a transitive product-import scan confirmed these restored provenance modules were referenced only by their tests.",
+      "disposition": "delete",
+      "rollback_commit": "b3812812411f4139ea396cac22e0b844afa3a426",
+      "code_targets": [
+        "src/provenance/fact_identity_policy.py",
+        "src/provenance/postgres_shadow.py"
+      ],
+      "test_targets": [
+        "tests/test_postgres_shadow.py"
+      ],
+      "schema_targets": [],
+      "code_restore_verified": true,
+      "data_restore_verified": true,
+      "data_restore_note": "The removed modules owned no schema or persisted data; their exact source and focused tests are recoverable from the rollback commit."
+    },
+    {
+      "id": "legacy-full-refresh-wrapper",
+      "authorization": "Owner authorized full tech-debt clearance on 2026-08-08; the roadmap explicitly replaces the duplicate batch wrapper with refresh_dispatch.py --mode full.",
+      "disposition": "delete",
+      "rollback_commit": "b3812812411f4139ea396cac22e0b844afa3a426",
+      "code_targets": [
+        "full_refresh.bat"
+      ],
+      "test_targets": [],
+      "schema_targets": [],
+      "data_restore_exemptions": {},
+      "code_restore_verified": true,
+      "data_restore_verified": true,
+      "data_restore_note": "The wrapper owned no persisted data. Its six-step behavior remains in execution/refresh_dispatch.py --mode full and its exact source is recoverable from the rollback commit."
+    },
+    {
+      "id": "unreachable-python-residue",
+      "authorization": "Owner explicitly approved the exact dead-code deletion on 2026-08-08 after the privacy-bearing Telegram renderer was excluded; transitive reachability from production entrypoints, scheduler, manifest, dynamic imports, and manual CLI references found no product path to these modules.",
+      "disposition": "delete",
+      "rollback_commit": "b3812812411f4139ea396cac22e0b844afa3a426",
+      "code_targets": [
+        "src/compute/holding_scorecard.py",
+        "src/evals/p0_capture_runner.py",
+        "src/table_extractors/_stubs.py"
+      ],
+      "test_targets": [
+        "tests/test_compute_holding_scorecard.py",
+        "tests/test_p0_capture_runner.py"
+      ],
+      "schema_targets": [],
+      "data_restore_exemptions": {},
+      "code_restore_verified": true,
+      "data_restore_verified": true,
+      "data_restore_note": "The removed modules were read-only aggregation/eval or unimplemented stubs and owned no schema or persisted data; exact source and deleted focused tests are recoverable from the rollback commit."
     },
     {
       "id": "zero-ref-legacy-tables",
@@ -108,9 +164,12 @@
         "segment_aliases",
         "tracked_companies_new"
       ],
+      "data_restore_exemptions": {
+        "tracked_companies_new": "Archived migrations used this only as an in-transaction SQLite rebuild name and immediately renamed it to tracked_companies; it is absent at the archived production head. The 0002 DROP IF EXISTS entry was a defensive no-op."
+      },
       "code_restore_verified": true,
-      "data_restore_verified": false,
-      "data_restore_note": "Migration 0002 was already applied locally. These dropped rows are recoverable only from a pre-0002 database backup."
+      "data_restore_verified": true,
+      "data_restore_note": "Production-derived data/portfolio.db.pre0273.bak passed integrity/FK checks and contained every persistent target with zero rows. tracked_companies_new was an evidenced in-transaction rebuild name, not a persisted head table. See docs/hardening/L1/deletion_recovery_receipt_2026_08_08.json."
     }
   ]
 }

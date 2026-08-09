@@ -58,6 +58,7 @@ import db  # noqa: E402
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
 from pipeline.tier_runner import tickers_due_for_refresh  # noqa: E402
 from provenance.selection import selected_transcripts_relation  # noqa: E402
+from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_EVAL_CADENCE_DAYS = 7
@@ -413,7 +414,7 @@ def _refresh_one_ticker(
         _run_step(
             "thesis_evaluator",
             [
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(PROJECT_ROOT / "execution" / "run_thesis_evaluator.py"),
                 "--ticker",
                 ticker,
@@ -425,7 +426,7 @@ def _refresh_one_ticker(
         _run_step(
             "match_commitments",
             [
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(PROJECT_ROOT / "execution" / "match_commitments.py"),
                 "--ticker",
                 ticker,
@@ -437,7 +438,7 @@ def _refresh_one_ticker(
         _run_step(
             "refresh_dcf",
             [
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(PROJECT_ROOT / "execution" / "refresh_dcf.py"),
                 "--ticker",
                 ticker,
@@ -468,7 +469,7 @@ def _refresh_one_ticker(
         )
 
     build_cmd = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "build_artifacts.py"),
         "--ticker",
         ticker,
@@ -489,7 +490,7 @@ def _refresh_one_ticker(
             _run_step(
                 "sweep_output_history",
                 [
-                    sys.executable,
+                    *managed_python_prefix(PROJECT_ROOT),
                     str(PROJECT_ROOT / "execution" / "sweep_output_history.py"),
                     "--ticker",
                     ticker,
@@ -522,7 +523,7 @@ def _run_step(name: str, cmd: list[str], cwd: Path) -> dict[str, object]:
     """Run one step. Captures exit code + truncated stderr; never raises."""
     try:
         proc = subprocess.run(
-            cmd,
+            ensure_managed_python_argv(cwd, cmd),
             cwd=str(cwd),
             capture_output=True,
             text=True,

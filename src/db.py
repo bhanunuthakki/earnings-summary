@@ -19,6 +19,7 @@ from urllib.parse import unquote
 
 import requests
 
+from db_paths import configured_db_path
 from identity import DEFAULT_USER_ID
 from models.artifacts import (
     ArtifactFlags,
@@ -27,6 +28,7 @@ from models.artifacts import (
     parse_tmp_artifact,
     parse_transcript_processed,
 )
+from runtime.python_process import managed_python_argv
 from sec_identity import sec_user_agent
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -43,13 +45,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # the gap for cron children that never call configure_runtime_db. Unset (the
 # universal case in CI/dev and every scheduled run) => the checkout default,
 # unchanged.
-_CONFIGURED_DB_PATH = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
-if _CONFIGURED_DB_PATH:
-    DB_PATH = os.fspath(Path(_CONFIGURED_DB_PATH).expanduser().resolve())
-    DATA_DIR = os.path.dirname(DB_PATH)
-else:
-    DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-    DB_PATH = os.path.join(DATA_DIR, "portfolio.db")
+DB_PATH = os.fspath(configured_db_path(Path(PROJECT_ROOT)))
+DATA_DIR = os.path.dirname(DB_PATH)
 FMP_DIR = os.path.join(DATA_DIR, "historical", "fmp")
 
 
@@ -543,7 +540,7 @@ def _spawn_onboard_async(ticker: str) -> None:
     os.makedirs(log_dir, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
     log_path = os.path.join(log_dir, f"onboard_{ticker}_{stamp}.log")
-    cmd = [sys.executable, script, "--ticker", ticker]
+    cmd = managed_python_argv(PROJECT_ROOT, script, "--ticker", ticker)
 
     try:
         with open(log_path, "w", encoding="utf-8") as log_handle:

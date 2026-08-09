@@ -551,7 +551,11 @@ def collect_inbox_counted(
     # Categorize + score + order (flat score-desc, newest-first ties) — the
     # Inbox v2 ranking layer (inbox_rank).
     ranked = annotate_and_rank(
-        deduped, db_path=Path(db_path), now=now_dt, position_weights=position_weights
+        deduped,
+        db_path=Path(db_path),
+        now=now_dt,
+        position_weights=position_weights,
+        conn=conn,
     )
     return ranked[:limit], len(ranked)
 

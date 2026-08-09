@@ -34,7 +34,9 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 import llm_artifact_store
 from allocation.recommendation import (
@@ -43,7 +45,7 @@ from allocation.recommendation import (
     build_frontier,
     format_allocation_citation,
 )
-from allocation.recommendation_schema import IncrementalDollarRecommendation
+from allocation.recommendation_schema import IncrementalDollarRecommendation, RecommendationPlan
 from llm.cli import LLMBudgetExceeded, is_hard_stop
 from llm.prompt_versions import prompt_version_for
 from llm.structured import StructuredParseError, call_llm_structured
@@ -53,6 +55,32 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 PURPOSE = "incremental_dollar_recommendation"
 ENGINE_VERSION = "v1"
+
+
+class _RecommendationWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    as_of_date: str = Field(min_length=1)
+    input_sha: str = Field(min_length=1)
+    status: Literal["deploy_all", "deploy_partial", "retain_all", "defer"]
+    preferred_plan: RecommendationPlan
+    best_alternative: RecommendationPlan | None = None
+    best_diversifier: RecommendationPlan | None = None
+    central_hypothesis: str = Field(min_length=1)
+    personalization_why: str = Field(min_length=1)
+    supporting_evidence: list[str]
+    main_unknowns: list[str] = Field(min_length=1)
+    disconfirming_evidence: list[str] = Field(min_length=1)
+    scenario_reasoning: str
+    confidence_verbal: Literal["low", "moderate", "high"]
+    confidence_basis: str = Field(min_length=1)
+    followup_research: list[str]
+    frontier_plan_ids: list[str]
+    source_refs: list[str]
+    risk_snapshot_ref: str | None
+
+
+_RECOMMENDATION_ADAPTER = TypeAdapter(_RecommendationWire)
 
 __all__ = ["RecommendationResult", "generate_recommendation"]
 
@@ -451,9 +479,10 @@ def _call_and_validate(
         scope="portfolio",
         expect="object",
         required_keys=("status", "preferred_plan", "central_hypothesis"),
+        schema=_RECOMMENDATION_ADAPTER,
         db_path=db_path,
     )
-    raw = cast("dict[str, object]", payload)
+    raw = _RecommendationWire.model_validate(payload).model_dump()
     raw.setdefault("engine_version", ENGINE_VERSION)
     raw.setdefault("prompt_version", prompt_version_for(PURPOSE))
     raw.setdefault("selection_mode", "llm")

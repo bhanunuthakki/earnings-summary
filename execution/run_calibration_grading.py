@@ -11,12 +11,13 @@ dimension. Three OUTCOME graders over matured outputs vs realized data:
   * ``grade_decisions.py``   -- decision-audit outcomes vs realized price moves.
   * ``grade_bear_cases.py``  -- bear-hypothesis materialization.
 
-Plus five QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
+Plus seven QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
 rubric audits over the week's fresh artifacts (``--since-days``):
 ``bear_case``, ``transcript_summary``, ``advisor_next_dollar``,
 ``ask_advisory_answer`` (the conversational ask path's prose answers from
 ``ask_turns`` — close_the_loops L3), and ``calibration_coach`` (the monthly
-scorecard prose — close_the_loops L8). Each also writes an ``eval_runs`` row with
+scorecard prose — close_the_loops L8), plus capture audits for
+``material_news_classification`` and ``earnings_tone_diff``. Each also writes an ``eval_runs`` row with
 per-case judge evidence; a week with no fresh artifacts is a clean no-op.
 
 A final rung (tenet-2 Phase 4, docs/design/tenet2_advisory_program.md §3.3:
@@ -66,6 +67,9 @@ from enum import StrEnum
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # The deterministic graders are quick SQLite sweeps; bear_cases calls an LLM
 # judge per due hypothesis, so it gets the long pole's headroom.
@@ -142,6 +146,26 @@ _GRADERS: tuple[_Grader, ...] = (
         _BEAR_TIMEOUT_S,
         ("--purpose", "calibration_coach", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
     ),
+    # The two morning trigger purposes ingest the highest-risk untrusted text
+    # (news and transcripts). Their private capture corpus is populated by the
+    # 04:00 wrapper and judged here in the existing weekly eval window.
+    _Grader(
+        "eval_material_news_capture",
+        "run_llm_evals.py",
+        _BEAR_TIMEOUT_S,
+        (
+            "--purpose",
+            "material_news_classification",
+            "--since-days",
+            _EVAL_AUDIT_SINCE_DAYS,
+        ),
+    ),
+    _Grader(
+        "eval_earnings_tone_capture",
+        "run_llm_evals.py",
+        _BEAR_TIMEOUT_S,
+        ("--purpose", "earnings_tone_diff", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
+    ),
     # Behavioral-rules distiller (tenet-2 Phase 4) -- LAST, so it re-derives
     # from the corpus AFTER every grader above has had a chance to write
     # fresh outcome_label/process_quality rows this batch (§3.3: "behavioral:
@@ -175,7 +199,11 @@ def _run_grader(grader: _Grader) -> _GraderResult:
     )
     sys.stdout.flush()
 
-    argv = [sys.executable, str(PROJECT_ROOT / "execution" / grader.script), *grader.args]
+    argv = [
+        *managed_python_prefix(PROJECT_ROOT),
+        str(PROJECT_ROOT / "execution" / grader.script),
+        *grader.args,
+    ]
     t0 = time.monotonic()
     try:
         proc = subprocess.run(

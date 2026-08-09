@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from pydantic import TypeAdapter
+
 from llm.prompt_registry import PromptTemplate, register
 from research.proposals import create_proposal, get_task, set_task_status
 from research.tier import resolve_tier
@@ -70,9 +72,28 @@ def _call_web(prompt: str, *, purpose: str, ticker: str | None, max_budget_usd: 
 
 def _call_struct(prompt: str, *, purpose: str, required_keys: tuple[str, ...]) -> dict[str, object]:
     """Plain structured call — NO web tools. Used by the assess + narrate passes."""
+    from llm.contracts import (
+        RESEARCH_ASSESS_SCHEMA,
+        RESEARCH_CODE_SPEC_SCHEMA,
+        RESEARCH_NARRATIVE_SCHEMA,
+    )
     from llm.structured import call_llm_structured
 
-    obj = call_llm_structured(prompt, purpose=purpose, expect="object", required_keys=required_keys)
+    schemas = {
+        "research_adversarial_assess": RESEARCH_ASSESS_SCHEMA,
+        "research_narrate": RESEARCH_NARRATIVE_SCHEMA,
+        "research_code_spec": RESEARCH_CODE_SPEC_SCHEMA,
+    }
+    schema = schemas.get(purpose)
+    if schema is None:
+        raise ValueError(f"no structured contract registered for purpose {purpose!r}")
+    obj = call_llm_structured(
+        prompt,
+        purpose=purpose,
+        expect="object",
+        required_keys=required_keys,
+        schema=cast("TypeAdapter[object]", schema),
+    )
     return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
 
 

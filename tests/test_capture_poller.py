@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from capture import poller, telegram, token_store, transcribe
+from capture import ingest, poller, telegram, token_store, transcribe
 from capture.matcher import build_roster_index
 from execution import capture_poller
 from user_state import notes
@@ -228,6 +228,83 @@ def test_poll_once_voice_downloads_lands_and_purges_audio(
     assert len(musings) == 1
     assert musings[0].ticker == "NU"
     assert not (audio / "tg_30.oga").exists()  # audio purged once landed
+
+
+def test_poll_once_document_download_uses_contained_authorized_path(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_names = [
+        "../../outside.pdf",
+        r"..\..\outside.pdf",
+        r"C:\temp\secret.pdf",
+        "D:drive-relative.pdf",
+        "/absolute/path.pdf",
+        "report\x00\n.pdf",
+    ]
+    updates = [
+        telegram.Update(
+            update_id=45 + index,
+            kind="document",
+            chat_id=1,
+            text="quarterly materials",
+            document_file_id=f"DOC{index}",
+            document_file_name=raw_name,
+            document_mime_type="application/pdf",
+        )
+        for index, raw_name in enumerate(raw_names)
+    ]
+
+    def _get_updates(
+        _token: str, offset: int | None = None, timeout: int = 50
+    ) -> list[telegram.Update]:
+        del offset, timeout
+        return updates
+
+    def _get_file_path(_token: str, file_id: str) -> str:
+        return f"documents/{file_id.lower()}"
+
+    monkeypatch.setattr(telegram, "get_updates", _get_updates)
+    monkeypatch.setattr(telegram, "get_file_path", _get_file_path)
+    downloaded: list[Path] = []
+
+    def _download(_token: str, _file_path: str, dest: Path | str) -> Path:
+        target = Path(dest)
+        target.write_bytes(b"pdf")
+        downloaded.append(target)
+        return target
+
+    landed_paths: list[Path] = []
+    landed_names: list[str] = []
+
+    def _ingest_reading(**kwargs: object) -> ingest.IngestResult:
+        landed_paths.append(Path(str(kwargs["local_path"])))
+        landed_names.append(str(kwargs["file_name"]))
+        return ingest.IngestResult(status="landed")
+
+    monkeypatch.setattr(telegram, "download_file", _download)
+    monkeypatch.setattr(ingest, "ingest_reading", _ingest_reading)
+    audio_dir = tmp_path / "capture" / "audio"
+
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=audio_dir,
+        roster=ROSTER,
+        confirm=False,
+    )
+
+    authorized_root = (tmp_path / "capture" / "docs").resolve()
+    assert counts["reading_landed"] == len(raw_names)
+    assert downloaded == landed_paths
+    assert len(downloaded) == len(raw_names)
+    for index, destination in enumerate(downloaded):
+        prefix = f"tg_{45 + index}_"
+        assert destination.parent == authorized_root
+        assert destination.name.startswith(prefix)
+        assert destination.suffix == ".pdf"
+        assert not any(char in destination.name for char in ("/", "\\", ":", "\x00", "\n"))
+        assert landed_names[index] == destination.name.removeprefix(prefix)
 
 
 def test_poll_once_needs_ticker_offers_inline_candidates(

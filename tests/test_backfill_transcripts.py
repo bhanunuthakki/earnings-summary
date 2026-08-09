@@ -55,7 +55,8 @@ def test_run_ingest_uses_repo_root_for_cwd_and_script_path(
     rc = mod._run_ingest(repo_root, dry_run=False)
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
-    assert captured["cmd"][1] == str(repo_root / "execution" / "ingest_transcripts.py")
+    assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
+    assert captured["cmd"][2] == str(repo_root / "execution" / "ingest_transcripts.py")
 
 
 def test_run_extract_uses_repo_root_for_cwd_and_script_path(
@@ -78,7 +79,8 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
     rc = mod._run_extract(repo_root, "AAPL", dry_run=False)
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
-    assert captured["cmd"][1] == str(
+    assert captured["cmd"][1] == str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
+    assert captured["cmd"][2] == str(
         repo_root / "execution" / "extract_commitments_from_transcript.py"
     )
     assert "--auto" in captured["cmd"]

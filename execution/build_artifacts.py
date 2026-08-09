@@ -53,6 +53,7 @@ from report.renderers.workspace_html import render as render_workspace_html  # n
 from report.sections import financials as financials_section_mod  # noqa: E402
 from report.sections import snapshot as snapshot_section_mod  # noqa: E402
 from report.sections.etf_holdings import build_etf_brief  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Ticker-specific extractors that auto-populate data/ticker_specific/<T>/
@@ -82,7 +83,7 @@ def _run_ticker_specific_extractors(ticker: str, repo_root: Path) -> None:
         return
     for script_name, extra_args in entries:
         cmd = [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(PROJECT_ROOT / "execution" / script_name),
             *extra_args,
         ]

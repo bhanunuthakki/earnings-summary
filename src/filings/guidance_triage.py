@@ -41,7 +41,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from filings.guidance_lifecycle import GuidanceCandidate
 from filings.metric_triage import LifecyclePrior
@@ -71,6 +71,15 @@ class GuidanceTriageVerdict(BaseModel):
     relevance: GuidanceRelevance
     prior: LifecyclePrior
     rationale: str = Field(max_length=500)
+
+
+class _GuidanceVerdictWire(BaseModel):
+    relevance: GuidanceRelevance
+    prior: LifecyclePrior
+    rationale: str = Field(max_length=500)
+
+
+_GUIDANCE_TRIAGE_ADAPTER = TypeAdapter(dict[str, _GuidanceVerdictWire])
 
 
 class GuidanceTriageOutcome(BaseModel):
@@ -144,6 +153,7 @@ def triage_guidance_candidates(
             purpose=GUIDANCE_TRIAGE_PURPOSE,
             ticker=ticker,
             expect="object",
+            schema=_GUIDANCE_TRIAGE_ADAPTER,
             db_path=db_path,
         )
     except Exception as exc:
@@ -166,16 +176,13 @@ def triage_guidance_candidates(
     verdicts: dict[str, GuidanceTriageVerdict] = {}
     dropped = 0
     for key, raw in cast("dict[str, object]", decoded).items():
-        if not isinstance(raw, dict):
-            dropped += 1
-            continue
-        row = cast("dict[str, object]", raw)
         try:
+            row = _GuidanceVerdictWire.model_validate(raw)
             verdicts[key] = GuidanceTriageVerdict(
                 subject_key=key,
-                relevance=GuidanceRelevance(str(row.get("relevance"))),
-                prior=LifecyclePrior(str(row.get("prior"))),
-                rationale=str(row.get("rationale") or "")[:500],
+                relevance=row.relevance,
+                prior=row.prior,
+                rationale=row.rationale,
             )
         except (ValueError, TypeError):
             dropped += 1

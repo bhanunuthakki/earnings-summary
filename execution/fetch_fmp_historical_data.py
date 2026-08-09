@@ -17,10 +17,9 @@ import argparse
 import json
 import os
 import sys
-import time
+from collections.abc import Mapping
 from pathlib import Path
-
-import requests
+from typing import cast
 
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,14 +29,18 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data", "historical", "fmp")
 sys.path.append(SRC_DIR)
 
 import db  # noqa: E402
-from log_redact import redact as _redact  # noqa: E402
+from net.client import (  # noqa: E402
+    FMP_CLIENT,
+    HttpCallError,
+    JsonShape,
+    JsonValue,
+    QueryValue,
+)
 from runtime.secrets import load_project_env  # noqa: E402
 
 # Load API Key
 load_project_env(Path(PROJECT_ROOT))
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
-
-FMP_BASE = "https://financialmodelingprep.com/stable"
 
 # --all previously walked EVERY tracked company — including the ~2,350
 # index_member peers — at full --limit depth, one of the writers behind the
@@ -46,42 +49,36 @@ FMP_BASE = "https://financialmodelingprep.com/stable"
 # --all now defaults to the active universe; override with --list-types.
 ACTIVE_LIST_TYPES = ("portfolio", "watchlist", "evaluation")
 
-# Retry transient FMP responses (rate-limit / upstream 5xx) with exponential
-# backoff instead of silently returning None and skipping the statement. Mirrors
-# the backoff in execution/save_fmp_data.py; the sibling fetchers already do this.
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
-_MAX_ATTEMPTS = 3
-_BACKOFF_BASE_S = 5
 
-
-def fetch_from_fmp(path: str, params: dict) -> list | dict | None:
-    params["apikey"] = FMP_API_KEY
-    url = f"{FMP_BASE}/{path}"
-    for attempt in range(_MAX_ATTEMPTS):
-        try:
-            resp = requests.get(url, params=params, timeout=30)
-        except requests.RequestException as e:
-            print(f"  [Error] {path}: {_redact(e)}", file=sys.stderr)
-            return None
-        if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_ATTEMPTS - 1:
-            wait = _BACKOFF_BASE_S * (2**attempt)
-            print(
-                f"  [HTTP {resp.status_code} retry {attempt + 1}/{_MAX_ATTEMPTS - 1} "
-                f"in {wait}s] {path}",
-                file=sys.stderr,
-            )
-            time.sleep(wait)
-            continue
-        try:
-            resp.raise_for_status()
-        except requests.HTTPError as e:
-            print(f"  [HTTP {resp.status_code}] {path}: {_redact(e)}", file=sys.stderr)
-            return None
-        return resp.json()
+def fetch_from_fmp(
+    path: str,
+    params: Mapping[str, QueryValue],
+) -> list[JsonValue] | dict[str, JsonValue] | None:
+    try:
+        response = FMP_CLIENT.get_json(
+            path,
+            params=params,
+            api_key=FMP_API_KEY,
+            expected=JsonShape.ANY,
+        )
+    except HttpCallError as exc:
+        label = f"HTTP {exc.status_code}" if exc.status_code is not None else "Error"
+        print(f"  [{label}] {path}: {exc}", file=sys.stderr)
+        return None
+    payload = response.payload
+    if isinstance(payload, list):
+        return cast(list[JsonValue], payload)
+    if isinstance(payload, dict):
+        return cast(dict[str, JsonValue], payload)
+    print(f"  [Schema] {path}: expected list or object", file=sys.stderr)
     return None
 
 
-def save_data(ticker: str, data_type: str, data: list | dict) -> str:
+def save_data(
+    ticker: str,
+    data_type: str,
+    data: list[JsonValue] | dict[str, JsonValue],
+) -> str:
     os.makedirs(DATA_DIR, exist_ok=True)
     filename = f"{ticker.upper()}_{data_type}.json"
     filepath = os.path.join(DATA_DIR, filename)
@@ -144,7 +141,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
         print("  [--] geo_segments      -> not available (normal for some tickers)")
 
     # 6. Update Database
-    if income and len(income) > 0:
+    if income and isinstance(income, list) and isinstance(income[-1], dict):
         earliest_period = income[-1].get("date")
         conn = db.get_connection()
         cursor = conn.cursor()

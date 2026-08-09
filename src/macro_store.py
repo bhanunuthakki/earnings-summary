@@ -3,7 +3,7 @@
 Mirrors the shape of `predictions_store.py`:
   - Single-file write surface, every function takes an optional db_path so
     callers (tests, alt-roots) can target a non-default DB.
-  - Returns None / [] on missing DB rather than raising — callers compose
+  - Returns None / [] on missing DB rather than raising â€” callers compose
     these into pipelines that should degrade quietly when a table isn't
     migrated yet.
   - Idempotent inserts via the natural key (`uq_macro_series`,
@@ -18,7 +18,7 @@ Public surface:
       -> dict[series_id, (beta, r_squared, n_obs)]
 
 The compute_sensitivities helper is pure: it consumes ticker price history +
-the registry's series ids and regresses weekly returns. No DB writes — the
+the registry's series ids and regresses weekly returns. No DB writes â€” the
 caller decides whether to persist (and the CLI driver does). This keeps the
 math testable without setting up the schema.
 """
@@ -54,13 +54,13 @@ class Sensitivity:
     lookback_window_days: int
     computed_at: datetime
     # Observations behind the regression (migration 0184). None on legacy rows
-    # written before the column existed — consumers treat None as "unknown"
-    # (the r² floor still applies; the n floor only when n is known).
+    # written before the column existed â€” consumers treat None as "unknown"
+    # (the rÂ² floor still applies; the n floor only when n is known).
     n_obs: int | None = None
 
 
 # ---------------------------------------------------------------------------
-# Connection helpers — same pattern as predictions_store
+# Connection helpers â€” same pattern as predictions_store
 # ---------------------------------------------------------------------------
 
 
@@ -74,7 +74,6 @@ def _open(db_path: Path | str | None, *, expect_table: str) -> sqlite3.Connectio
             role=SQLiteConnectionRole.WRITER,
             schema_preflight=True,
         )
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         present = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -104,7 +103,7 @@ def _parse_date(raw: object) -> date | None:
 
 
 # ---------------------------------------------------------------------------
-# macro_series — write + read
+# macro_series â€” write + read
 # ---------------------------------------------------------------------------
 
 
@@ -211,7 +210,7 @@ def series_row_count(*, series_id: str, db_path: Path | str | None = None) -> in
 
 
 # ---------------------------------------------------------------------------
-# macro_sensitivities — write + read
+# macro_sensitivities â€” write + read
 # ---------------------------------------------------------------------------
 
 
@@ -343,7 +342,7 @@ def fetch_sensitivities(
 
 
 # ---------------------------------------------------------------------------
-# Sensitivity math — pure, testable
+# Sensitivity math â€” pure, testable
 # ---------------------------------------------------------------------------
 
 
@@ -356,7 +355,7 @@ def _weekly_returns(points: list[tuple[date, float]]) -> list[tuple[date, float]
     (an FX rate of 0 would blow up the log)."""
     if len(points) < 3:
         return []
-    # Bucket by ISO (year, week) — keep the latest in-bucket observation.
+    # Bucket by ISO (year, week) â€” keep the latest in-bucket observation.
     last_per_week: dict[tuple[int, int], tuple[date, float]] = {}
     for d, v in points:
         if v <= 0:
@@ -401,7 +400,7 @@ def _ols_beta(xs: list[float], ys: list[float]) -> tuple[float, float, int]:
         return beta, 0.0, n
     # r^2 = (cov_xy)^2 / (var_x * var_y)
     r_squared = (cov_xy * cov_xy) / (var_x * var_y)
-    # Clamp floating-noise overshoots — r^2 is mathematically in [0, 1].
+    # Clamp floating-noise overshoots â€” r^2 is mathematically in [0, 1].
     if r_squared < 0.0:
         r_squared = 0.0
     elif r_squared > 1.0:
@@ -418,12 +417,12 @@ def compute_sensitivities(
 ) -> dict[str, tuple[float, float, int]]:
     """Regress weekly log-returns of `ticker_prices` against each macro series.
 
-    Inputs are date-sorted ascending. Output: per series_id → (beta, r^2, n_obs).
+    Inputs are date-sorted ascending. Output: per series_id â†’ (beta, r^2, n_obs).
     Series with too few overlapping weeks (< min_observations) are SKIPPED rather
     than returned with junk numbers.
 
     The lookback_days cap is applied to the input window (latest N days),
-    not the regression — this lets the caller pass historical archives and
+    not the regression â€” this lets the caller pass historical archives and
     have the math automatically use a recent window."""
     if not ticker_prices:
         return {}

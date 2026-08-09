@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
+from runtime.python_process import ensure_managed_python_argv
+
 
 class JobAlreadyRunningError(RuntimeError):
     """A mutable write set is already owned by another live process.
@@ -368,12 +370,9 @@ class JobLock(AbstractContextManager["JobLock"]):
 
 
 def portfolio_db_path(repo_root: Path) -> Path:
-    configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
-    return (
-        Path(configured).expanduser().resolve()
-        if configured
-        else (repo_root / "data" / "portfolio.db").resolve()
-    )
+    from db_paths import configured_db_path
+
+    return configured_db_path(repo_root)
 
 
 def _write_set_lock_path(repo_root: Path, write_set: str) -> Path:
@@ -520,7 +519,8 @@ def run_job(
                 **os.environ,
                 "EARNINGS_SUMMARY_JOB_LOCK_PROOF": lock.inheritance_proof(),
             }
-            completed = subprocess.run(command, cwd=repo_root, check=False, env=child_env)
+            managed_command = ensure_managed_python_argv(repo_root, command)
+            completed = subprocess.run(managed_command, cwd=repo_root, check=False, env=child_env)
         exit_code = completed.returncode
         status = "ok" if exit_code == 0 else "failed"
         detail = None
@@ -566,6 +566,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--python-executable")
+    parser.add_argument("--python-bootstrap")
     parser.add_argument("--python-arg", action="append", default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -575,10 +576,18 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--scheduler-wrapper cannot be combined with --job/--write-set")
         if args.python_executable is None:
             parser.error("--scheduler-wrapper requires --python-executable")
+        if args.python_bootstrap is None:
+            parser.error("--scheduler-wrapper requires --python-bootstrap")
         if len(command) < 3:
             parser.error("--scheduler-wrapper requires JOB WRITE_SET SCRIPT [SCRIPT_ARGS ...]")
         job_name, write_set, *script_command = command
-        command = [args.python_executable, *args.python_arg, *script_command]
+        command = [
+            args.python_executable,
+            "-u",
+            *args.python_arg,
+            args.python_bootstrap,
+            *script_command,
+        ]
         write_sets = [write_set]
     else:
         if args.job is None:

@@ -707,7 +707,7 @@ def test_run_scenario_route_dispatches_valid_scenario(tmp_path: Path) -> None:
     assert len(stub.calls) == 1
     job = stub.calls[0]
     assert job.kind == "run-scenario"
-    assert "run_scenario.py" in job.argv[1]
+    assert any(argument.endswith("run_scenario.py") for argument in job.argv)
     assert "--scenario" in job.argv and "fed_cuts_50bps" in job.argv
     assert "--portfolio" in job.argv
 

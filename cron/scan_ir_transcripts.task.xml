@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Daily post-earnings IR-transcript scan: for each tracked ticker within 14 days of its last earnings date, re-check the issuer's own IR site for the latest reported quarter's transcript and fetch + ingest it. Idempotent on transcripts/processed/&lt;T&gt;_Q&lt;n&gt;_&lt;Y&gt;.txt (stops once ingested). Fires at 04:15 — just before backfill_transcripts (04:30) so the broad sweep finds the file already on disk and daily_fetch_and_brief (06:30) sees the fresh transcript.</Description>
+    <Description>Daily 02:15 post-earnings IR-transcript scan: for each tracked ticker within 14 days of its last earnings date, re-check the issuer's own IR site for the latest reported quarter's transcript and fetch + ingest it. Idempotent on transcripts/processed/&lt;T&gt;_Q&lt;n&gt;_&lt;Y&gt;.txt (stops once ingested). Runs before the protected 03:00-05:00 LLM window and daily_fetch_and_brief (06:30).</Description>
     <URI>\earnings-summary\scan_ir_transcripts</URI>
   </RegistrationInfo>
   <Triggers>

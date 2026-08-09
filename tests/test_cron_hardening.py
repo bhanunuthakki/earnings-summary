@@ -46,7 +46,10 @@ def test_production_capture_is_allowlisted_and_has_no_extra_llm_job() -> None:
             "company_description",
             "recent_developments",
         },
-        "run_morning_pipeline.bat": {"material_news_classification"},
+        "run_morning_pipeline.bat": {
+            "material_news_classification",
+            "earnings_tone_diff",
+        },
     }
     for filename, purposes in expected.items():
         text = (CRON / filename).read_text(encoding="utf-8")

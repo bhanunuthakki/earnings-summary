@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -71,15 +72,33 @@ def test_synthesis_rejects_hallucinated_citation(db_path: Path) -> None:
     assert insights.list_insights(kind="stance", scope_key="NU", db_path=db_path) == []
 
 
-def test_synthesis_survives_call_failure(db_path: Path) -> None:
+def test_synthesis_degrades_only_for_structured_parse_failure(
+    db_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from llm.structured import StructuredParseError
+
+    _seed_nu_musings(db_path)
+    leak_marker = "fixture-credential-material"
+
+    def boom(ticker: str, musings: Sequence[AnalystNoteRow]) -> tuple[str, list[int]]:
+        raise StructuredParseError(f"unusable response https://example.test?apikey={leak_marker}")
+
+    with caplog.at_level(logging.WARNING, logger="synthesis.theme_synth"):
+        counts = theme_synth.run_synthesis(db_path, call=boom)
+    assert counts["failed"] == 1
+    assert counts["synthesized"] == 0
+    assert "theme_synthesis_scope_degraded" in caplog.text
+    assert leak_marker not in caplog.text
+
+
+def test_synthesis_reraises_unexpected_programming_error(db_path: Path) -> None:
     _seed_nu_musings(db_path)
 
     def boom(ticker: str, musings: Sequence[AnalystNoteRow]) -> tuple[str, list[int]]:
-        raise RuntimeError("llm transport down")
+        raise RuntimeError("unexpected invariant failure")
 
-    counts = theme_synth.run_synthesis(db_path, call=boom)
-    assert counts["failed"] == 1
-    assert counts["synthesized"] == 0
+    with pytest.raises(RuntimeError, match="unexpected invariant"):
+        theme_synth.run_synthesis(db_path, call=boom)
 
 
 def test_synthesis_re_runs_after_new_musing(db_path: Path) -> None:

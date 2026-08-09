@@ -112,6 +112,9 @@ _CORE_RUNNABLE_PURPOSES: tuple[str, ...] = (
     # in sync with run_llm_evals.GOLDEN_PURPOSES.
     "metric_lifecycle_triage",
     "disclosure_item_specificity_triage",
+    # Podcast takeaway summary has a checked-in mode-A golden set and a live
+    # production caller; keep it reachable from the same eval run bar.
+    "podcast_takeaway_summary",
 )
 RUNNABLE_PURPOSES: tuple[str, ...] = _CORE_RUNNABLE_PURPOSES + CAPTURE_QUALITY_PURPOSES
 

@@ -67,13 +67,13 @@ def _raise_transient(*_a: object, **_k: object):
 
 
 def test_hardstop_propagates_on_dry_run(repo: Path, monkeypatch) -> None:
-    monkeypatch.setattr(prc, "call_llm", _raise_budget)
+    monkeypatch.setattr(prc, "call_llm_structured", _raise_budget)
     with pytest.raises(LLMBudgetExceeded):
         prc.process_comments_for_ticker(repo, "NU", _DATE, apply=False, clear=False)
 
 
 def test_hardstop_propagates_on_apply(repo: Path, monkeypatch) -> None:
-    monkeypatch.setattr(prc, "call_llm", _raise_budget)
+    monkeypatch.setattr(prc, "call_llm_structured", _raise_budget)
     with pytest.raises(LLMBudgetExceeded):
         prc.process_comments_for_ticker(repo, "NU", _DATE, apply=True, clear=False)
     # And the thesis on disk is untouched (we bailed, didn't half-apply).
@@ -82,7 +82,7 @@ def test_hardstop_propagates_on_apply(repo: Path, monkeypatch) -> None:
 
 
 def test_transient_error_still_degrades_per_comment(repo: Path, monkeypatch) -> None:
-    monkeypatch.setattr(prc, "call_llm", _raise_transient)
+    monkeypatch.setattr(prc, "call_llm_structured", _raise_transient)
     res = prc.process_comments_for_ticker(repo, "NU", _DATE, apply=False, clear=False)
     assert res["applied"] is False
     assert any(r["status"] == "error" for r in res["results"])  # degraded, not raised
@@ -101,7 +101,7 @@ def _raise_setup(*_a: object, **_k: object):
 
 def test_setup_error_also_propagates(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The other hard-stop type (CLI not installed) propagates too — not just budget.
-    monkeypatch.setattr(prc, "call_llm", _raise_setup)
+    monkeypatch.setattr(prc, "call_llm_structured", _raise_setup)
     with pytest.raises(LLMSetupError):
         prc.process_comments_for_ticker(repo, "NU", _DATE, apply=True, clear=False)
 
@@ -125,7 +125,7 @@ def test_hardstop_propagates_in_sequencer(monkeypatch: pytest.MonkeyPatch) -> No
         {"comment": c1, "intent": "edit_thesis", "dry": {"diff_summary": "d1"}, "_error": None},
         {"comment": c2, "intent": "edit_structured", "dry": {"diff_summary": "d2"}, "_error": None},
     ]
-    monkeypatch.setattr(prc, "call_llm", _raise_budget)
+    monkeypatch.setattr(prc, "call_llm_structured", _raise_budget)
     with pytest.raises(LLMBudgetExceeded):
         prc.sequence_resolutions(plan, "NU")
 
@@ -139,7 +139,7 @@ def test_hardstop_propagates_in_synthesis(tmp_path: Path, monkeypatch: pytest.Mo
         json.dumps({"ticker": "NU", "thesis": "Original.", "tier_1_kpis": [{"name": "ROE"}]}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(prc, "call_llm", _raise_budget)
+    monkeypatch.setattr(prc, "call_llm_structured", _raise_budget)
     with pytest.raises(LLMBudgetExceeded):
         prc._synthesize_holdings_coherence(tmp_path, "NU")
 
@@ -177,7 +177,7 @@ def test_hardstop_propagates_in_extract_kpi(
     # the guard a cap would be swallowed into a per-comment summary BEFORE the
     # apply loop could see it (and the comment would be marked "addressed").
     c = _extract_kpi_setup(tmp_path)
-    monkeypatch.setattr(prc, "call_llm", _raise_budget)
+    monkeypatch.setattr(prc, "call_llm_structured", _raise_budget)
     with pytest.raises(LLMBudgetExceeded):
         prc._route_extract_kpi(tmp_path, "NU", c, apply=False)
 
@@ -186,6 +186,6 @@ def test_extract_kpi_transient_still_degrades(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     c = _extract_kpi_setup(tmp_path)
-    monkeypatch.setattr(prc, "call_llm", _raise_transient)
+    monkeypatch.setattr(prc, "call_llm_structured", _raise_transient)
     out = cast("dict[str, object]", prc._route_extract_kpi(tmp_path, "NU", c, apply=False))
     assert "extract_kpi: error" in str(out.get("summary"))  # degraded, not raised

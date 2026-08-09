@@ -1,17 +1,17 @@
 """Read/write API for the predictions table.
 
-Generalizes management_commitments. Every forward-looking claim — management
-commitment, LLM bear-case hypothesis, 10-K risk factor, sell-side estimate —
+Generalizes management_commitments. Every forward-looking claim â€” management
+commitment, LLM bear-case hypothesis, 10-K risk factor, sell-side estimate â€”
 lands here with a polymorphic source_kind. The matcher pipeline grades
 ``outcome`` against realized values from financial_facts / kpi_facts.
 
 Patterns:
-  record(...)       — insert one prediction. Idempotent on (ticker, source_kind,
+  record(...)       â€” insert one prediction. Idempotent on (ticker, source_kind,
                       source_doc_id, kpi_name, target_period) where applicable.
-  pending_for_grading() — predictions whose target_period has passed but
+  pending_for_grading() â€” predictions whose target_period has passed but
                           outcome is still 'pending'. Drives the grader cron.
-  grade(...)        — record an outcome. Best-effort; safe to re-run.
-  history(ticker)   — recent predictions across all source_kinds — feeds the
+  grade(...)        â€” record an outcome. Best-effort; safe to re-run.
+  history(ticker)   â€” recent predictions across all source_kinds â€” feeds the
                       "Predictions" tab on the workspace renderer.
 """
 
@@ -70,7 +70,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         if path is None or not Path(path).exists():
             return None
         conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         if (
             conn.execute(
@@ -120,11 +119,11 @@ def record(
     """Insert one prediction row. Idempotent on the natural key when defined:
     (ticker, source_kind, source_doc_id, kpi_name, target_period). When the
     natural key is incomplete (no kpi_name, no target_period), allows
-    duplicates — matcher pipelines can dedupe later."""
+    duplicates â€” matcher pipelines can dedupe later."""
     from llm.postprocess import strip_inline_markdown
 
     # kpi_name is a scalar (matcher key + rendered label); prediction_md is
-    # deliberately left untouched — it is prose that bear_case_grader writes
+    # deliberately left untouched â€” it is prose that bear_case_grader writes
     # already formatted.
     if kpi_name is not None:
         kpi_name = strip_inline_markdown(kpi_name)

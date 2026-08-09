@@ -8,7 +8,7 @@ must therefore run from a neutral directory that has no `.mcp.json`.
 
 This is the regression guard for that invariant. The web path historically
 passed no `cwd`, so it inherited the caller's — and a caller whose cwd was the
-repo root (e.g. `build_artifacts` launched by `full_refresh.bat` for the §8
+repo root (e.g. `build_artifacts` launched by `refresh_dispatch.py` for the §8
 "Recent Developments" web brief) would hang. WebSearch and WebFetch are
 built-in Claude tools that do not need the project `.mcp.json`, so the neutral
 cwd does not break the web path.
@@ -107,7 +107,7 @@ def test_both_paths_run_in_neutral_cwd(capture_run_calls: list[dict[str, Any]]) 
 
     # The cwd is neutral: an existing directory with no project `.mcp.json`, so
     # the nested `claude -p` doesn't boot MCP servers. (The repo root — the cwd a
-    # caller like full_refresh.bat would otherwise leak in — DOES have one.)
+    # caller like refresh_dispatch.py would otherwise leak in — DOES have one.)
     assert os.path.isdir(web_cwd)
     assert not os.path.exists(os.path.join(web_cwd, ".mcp.json"))
 

@@ -4,7 +4,7 @@ A research-grade pipeline that turns raw filings, earnings calls, IR documents, 
 
 Active universe lives in `tracked_companies` (DB-driven, not hardcoded) with four list types: `portfolio` (P1 tier, daily refresh), `watchlist` (P2, weekly), `evaluation` (P2, weekly with 7-day skip), and `archived`. Per-ticker thesis specs live as JSON in [`micro_thesis/holdings/`](micro_thesis/holdings/).
 
-The **dashboard command center** — `python execution/comments_server.py` → `http://127.0.0.1:7421` — is the primary interface: portfolio + per-ticker status, cross-ticker analytics (budget, decisions, trigger ladder), a per-ticker drill-down (artifacts, analyses-ran, thesis, live position), refreshes with per-step/force overrides, and comment + thesis editing with a preview→apply diff. It also deep-links each ticker into the companion **portfolio-tracker** app. See [HOW_TO_USE_REPORTS.md → Command center](HOW_TO_USE_REPORTS.md#command-center-start-here).
+The **dashboard command center** — `python execution/sqlite_bootstrap.py execution/comments_server.py` → `http://127.0.0.1:7421` — is the primary interface: portfolio + per-ticker status, cross-ticker analytics (budget, decisions, trigger ladder), a per-ticker drill-down (artifacts, analyses-ran, thesis, live position), refreshes with per-step/force overrides, and comment + thesis editing with a preview→apply diff. It also deep-links each ticker into the companion **portfolio-tracker** app. See [HOW_TO_USE_REPORTS.md → Command center](HOW_TO_USE_REPORTS.md#command-center-start-here).
 
 This README is the system overview + user manual. Two companion docs:
 
@@ -48,7 +48,7 @@ Each stage is idempotent, resumable from `stage_transitions`, and writes typed o
 
 **Three trigger modes** drive when work happens:
 
-- **Cron** — 42 declared tasks (see `cron/task_manifest.json` for the authoritative set and `cron/TASKS.generated.md` for the generated inventory): a daily data chain, daily standalones (morning pipeline, macro, DB backup), an hourly catch-up, and weekly/monthly jobs. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
+- **Cron** — 44 declared tasks (see `cron/task_manifest.json` for the authoritative set and `cron/TASKS.generated.md` for the generated inventory): a daily data chain, daily standalones (morning pipeline, macro, DB backup), an hourly catch-up, and weekly/monthly jobs. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
 - **Comment-driven** — when the analyst applies a comment with `--apply`, the comment processor edits holdings JSON, re-runs the affected stages synchronously, and rebuilds the brief inline.
 - **Manual CLI** — every step has a direct invocation. `.bat` launchers wrap the most common ones for cmd.exe.
 
@@ -81,7 +81,7 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | `src/report/` | Report generator. `builder.py` produces a typed `ReportSpec`; `models.py` defines the section schemas; `sections/` builds each section; `renderers/` emits HTML/Markdown/JSON/Excel + the workspace tabbed renderer + the chat/comments overlay |
 | `src/report/renderers/workspace_*.py` | The analyst workspace renderer — splits into `workspace_html.py` (tab layout), `workspace_styles.py`, `workspace_script.py`, `workspace_data.py` (data hand-off to JS), `workspace_charts.py`, `workspace_comments.py`, `workspace_chat.py` |
 | `src/report/sections/` | One file per report section: `snapshot`, `thesis`, `financials`, `segments`, `earnings`, `recent_developments`, `valuation`, `bear_case`, `qa_roster`, `saydo`, `ir_docs`, `filing_intelligence`, `portfolio_position`, `exec_compensation`, `evaluation_snapshot`, `etf_holdings`, `provenance`, `appendix`, `synthesis` |
-| `src/compute/` | Deterministic financial computations: `income_statement`, `balance_sheet`, `cashflow`, `as_reported`, `segments`, `segment_definitions`, `segment_oi_10k`, `segment_crosstabs_llm`, `company_description`, `say_do` + `say_do_extractor`, `thesis_evaluator`, `soft_rule_evaluator`, `holding_scorecard`, `kpi_extract_summaries`, `valuation_basis`, `dcf`, `earnings_surprise` |
+| `src/compute/` | Deterministic financial computations: `income_statement`, `balance_sheet`, `cashflow`, `as_reported`, `segments`, `segment_definitions`, `segment_oi_10k`, `segment_crosstabs_llm`, `company_description`, `say_do` + `say_do_extractor`, `thesis_evaluator`, `soft_rule_evaluator`, `kpi_extract_summaries`, `valuation_basis`, `dcf`, `earnings_surprise` |
 | `src/dcf/` | DCF subsystem: `workbook_reader` (extract FCF stream from xlsx), `valuation` (PV/share + over-under %), `forecast` (auto-derive forecast assumptions from history), `live_price` (FMP profile lookup), `seeder` + `refresher` (workbook lifecycle), `persist` (upsert `dcf_runs`) |
 | `src/pipeline/` | Pipeline plumbing: `source_routing`, `run_accounting`, `queries`, `kpi_persistence`, `sec_xbrl`, `quarterly_refresh`, `restatement_detector`, `validation_engine`, `tier_runner`, `segment_junction_writer`, `dashboard_html`/`dashboard_status`, `analytical_dashboard`, `refresh_eval` |
 | `src/synthesis/lenses/` | LLM "lenses" — one per analytical perspective: `five_min_reread`, `thesis_drift_qoq`, `bull_case`, `cross_portfolio_synthesis`, `mgmt_credibility_score`, `reverse_dcf`, `macro_scenario`, `portfolio_macro_stress`, `catalyst_calendar`, `customer_concentration_risk`, `filing_diff_narrative`, `footnote_anomaly`, `underweighted_facts`, `llm_calibration` |
@@ -101,7 +101,7 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | `data/bear_case/`, `data/valuation_basis/`, `data/company_description/`, `data/qa_topics/` | LLM-output caches (SHA256-keyed; rebuilt on input change) |
 | `data/surprise/`, `data/report_comments/`, `data/report_chats/` | Surprise ledger + per-report comment/chat stores |
 | `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments. Migrations in `alembic/versions/` (run `alembic heads` for the current revision) |
-| `cron/` | Canonical `task_manifest.json`, generated registration/inventory artifacts, and the 42 Windows Task Scheduler XML + `.bat` pairs |
+| `cron/` | Canonical `task_manifest.json`, generated registration/inventory artifacts, and the 44 Windows Task Scheduler XML + `.bat` pairs |
 | `tests/` | Pytest suite — compute modules + pipeline contracts |
 | `evals/` | LLM eval harness — rubrics, goldens, weekly rung configs (see `directives/model_eval_loop.md`) |
 | `templates/industry/` | Industry onboarding templates (`bank`, `software_saas`, `pharma`, …) consumed by `execution/onboard_ticker.py` |
@@ -126,8 +126,8 @@ Requires Python ≥3.11.
 ```bash
 pip install -r requirements.txt
 pip install -e ".[dev]"      # adds pytest, alembic, ruff, pyright, basedpyright
-alembic upgrade head         # initialize data/portfolio.db (run `alembic heads` for the current revision)
-python execution/sync_thesis_state.py --apply  # bootstrap the mutable thesis mirror from holdings JSON
+python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path data/portfolio.db --repo-root .
+python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply  # bootstrap the mutable thesis mirror from holdings JSON
 ```
 
 Create `.env` with whichever providers you need:
@@ -179,7 +179,7 @@ Open `output/research/<TICKER>/<YYYY-MM-DD>_workspace.html` in any browser (doub
 
 ### 2. Comments + chat server (Flask, localhost:7421)
 
-Start it with `start_comments_server.bat` (or `python execution/comments_server.py`). Endpoints under `localhost:7421`:
+Start it with `start_comments_server.bat` (or `python execution/sqlite_bootstrap.py execution/comments_server.py`). Endpoints under `localhost:7421`:
 
 - `GET /` — **Command center** (unified 3-theme tabbed shell). The **Overview** tab — the Research cockpit (one attention-ranked row per holding: thesis health · valuation · events) + a tier-coverage strip + the inbox stream + an upcoming-earnings strip — is server-inlined for instant first paint; every other tab lazy-loads via `GET /api/panel/<name>` on first activation. `/analytical` and `/ticker/<T>` remain as standalone deep-link targets. Sources: `tracked_companies`, `fmp_endpoint_status`, `transcripts`, `output/research/` mtime, `report_comments`, `thesis_evaluations`, plus inbox + expected-earnings tables.
 - `GET /reports/<ticker>` — Serves the latest `<DATE>_workspace.html` for the ticker.
@@ -209,7 +209,7 @@ Comments persist to `data/report_comments/<T>/<YYYY-MM-DD>.json`; chat threads t
 
 ### 3. Earnings calendar HTML
 
-`output/earnings_calendar.html`, regenerated by `python execution/build_earnings_calendar.py`. One self-contained page covering every portfolio + watchlist ticker, split into:
+`output/earnings_calendar.html`, regenerated by `python execution/sqlite_bootstrap.py execution/build_earnings_calendar.py`. One self-contained page covering every portfolio + watchlist ticker, split into:
 
 - **Upcoming** (next 90 days) — sorted by date, portfolio rows pinned + amber-shaded
 - **Recently reported** (last 45 days)
@@ -219,7 +219,7 @@ Each row links to the most recent brief. Overwritten in place on every run.
 
 ### 4. Analytical dashboard
 
-`output/dashboard/<DATE>_portfolio_dashboard.html`, built by `python execution/build_analytical_dashboard.py`. Cross-ticker view: portfolio-wide synthesis, per-holding 5-min rereads, decisions ledger (hit-rate strip + graded outcomes), trigger ladder (SELL/TRIM/HOLD/ADD), cross-ticker insider activity (90d, conviction-scored), prediction outcomes (SayDo / bear-case / risk-factor materialization), LLM budget panel. Regenerated by the **weekly_synthesis** cron (Sunday 23:00).
+`output/dashboard/<DATE>_portfolio_dashboard.html`, built by `python execution/sqlite_bootstrap.py execution/build_analytical_dashboard.py`. Cross-ticker view: portfolio-wide synthesis, per-holding 5-min rereads, decisions ledger (hit-rate strip + graded outcomes), trigger ladder (SELL/TRIM/HOLD/ADD), cross-ticker insider activity (90d, conviction-scored), prediction outcomes (SayDo / bear-case / risk-factor materialization), LLM budget panel. Regenerated by the **weekly_synthesis** cron (Sunday 23:00).
 
 ### 5. `.bat` launchers (repo root — cmd.exe-friendly)
 
@@ -229,7 +229,6 @@ Each row links to the most recent brief. Overwritten in place on every run.
 | `refresh_fmp.bat <T> [LIMIT]` | `execution/fetch_fmp_historical_data.py` | Pull fresh FMP financial data |
 | `refresh_transcripts.bat <T>` | `execution/backfill_transcripts.py` | Backfill last 6 quarters of transcripts |
 | `refresh_news.bat <T> [DAYS]` | `execution/refresh_news.py` | Force-refresh §News with fresh WebSearch |
-| `full_refresh.bat <T>` | Orchestrates 6 steps | FMP → transcripts → IR processing → KPI extract → SayDo → workspace report |
 | `start_comments_server.bat` | `execution/comments_server.py` | Flask server on `:7421` (dashboard + comments + chat) |
 | `process_comments.bat <T> [--apply] [--clear]` | `execution/process_report_comments.py` | Drain open comments → edits + LLM calls + rebuild |
 
@@ -243,26 +242,27 @@ Every step is also a direct Python entrypoint. See [HOW_TO_USE_REPORTS.md §Full
 
 ## Cron jobs and automation
 
-42 declared tasks — see `cron/task_manifest.json` for the authoritative set and generated inventory; the load-bearing ones are tabled below. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
+44 declared tasks — see `cron/task_manifest.json` for the authoritative set and generated inventory; the load-bearing ones are tabled below. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
 
-### Daily chain (03:00 → 06:30)
+### Daily chain (02:00 → 06:30)
 
-The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow upstream responses and let each step's writes commit before the next reads.
+The six daily tasks feed the 06:30 brief. The transcript jobs run before the protected 03:00–05:00 LLM window so they are not predictably starved by the morning pipeline's writer lock.
 
 | Task | Cadence | Script | What it does |
 |---|---|---|---|
 | `refresh_cache` | Daily 03:00 | `execution/refresh_cache.py run` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (`free`=250/day & /stable-only — propagates `FMP_TIER=free` so the fetcher drops the v3/v4 fallback rungs that 403 globally on free; `basic`=250/day; `starter`=unlimited @ 5/sec; `premium`=unlimited @ 12/sec). Drains highest-priority stale endpoints up to the daily cap. Failed endpoints (403 / Legacy) get a 30-day retry window — a downgrade builds a backlog automatically; an upgrade catches up over following days. Force-stale hints from `schedule_pre_earnings_refresh` override cadence for tickers reporting in the next 7 days |
-| `backfill_transcripts` | Daily 04:30 | `execution/backfill_transcripts.py` | For every active ticker, fetches the last 6 fiscal quarters of Q&A from the free aggregator chain (roic.ai → stockanalysis.com → tickertrends.io), ingests, extracts forward-looking commitments. Idempotent — file-exists check + sha256 dedup |
+| `backfill_transcripts` | Daily 02:00 | `execution/backfill_transcripts.py` | For every active ticker, fetches the last 6 fiscal quarters of Q&A from the free aggregator chain (roic.ai → stockanalysis.com → tickertrends.io), ingests, extracts forward-looking commitments. Idempotent — file-exists check + sha256 dedup |
+| `scan_ir_transcripts` | Daily 02:15 | `execution/scan_ir_transcripts.py` | Re-checks issuer IR sites for active tickers inside the 14-day post-earnings window, then ingests any newly published official transcript. Idempotent on the processed transcript artifact |
 | `fetch_fmp_earnings_calendar` | Daily 05:45 | `execution/fetch_fmp_earnings_calendar.py --all` then `execution/refresh_expected_earnings.py` | Step 1 refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker (on free/basic tier FMP refuses — 402 since 2026-06-10 — and the cache stays at its last good state). Step 2 materializes the **canonical `expected_earnings` table** through the `next_earnings_date` stack in [src/sources/earnings_calendar.py](src/sources/earnings_calendar.py) (FMP cache → yfinance fallback); the Home rail's upcoming-earnings strip, cockpit, and portfolio-tracker bridge all read that table |
 | `backfill_earnings_surprises` | Daily 06:15 | `execution/backfill_earnings_surprises.py` + `ingest_earnings_surprises.py` | Two-stage: merges `<TICKER>_earnings_calendar.json` (FMP primary, EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Stage-2 gate prevents partial ingestion if stage-1 fails |
 | `daily_fetch_and_brief` | Daily 06:30 | `execution/daily_fetch_and_brief.py --enable-llm` | **The drainer.** Picks up every ticker with `brief_dirty=1`, applies three gates (see §[When the report auto-updates](#when-the-report-auto-updates)), runs `thesis_evaluator → match_commitments → refresh_dcf → build_artifacts` for un-skipped tickers, clears the flag |
 
-### Daily standalones (not in the 03:00→06:30 chain)
+### Daily standalones (not in the 02:00→06:30 chain)
 
 | Task | Cadence | Script | What it does |
 |---|---|---|---|
 | `backup_db` | Daily 02:45 | `cron/backup_db.py` | Consistent, sync-safe snapshot of `data/portfolio.db` via the SQLite online-backup API (safe while the DB is live) — Drive no longer backs the scratch tree |
-| `run_morning_pipeline` | Daily 04:00 | `execution/run_morning_pipeline.py --max-cost-usd 10` | Chains the morning alert pipeline that was previously unchained: `fetch_news` (per-ticker news) → `run_triggers` (fan registered triggers, persist alerts) → `build_alert_feed` (rebuild the chronological feed HTML) → `run_validation_engine --gate` (population-level data checks) |
+| `run_morning_pipeline` | Daily 04:00 | `execution/run_morning_pipeline.py --max-cost-usd 10` | Executes the typed 20-stage manifest in `src/pipeline/morning_manifest.py`: preflight; news and state reconciliation; fundamentals, DCF, fit, factor, risk, guard, and wealth materializations; triggers and standup; pre/post-earnings artifacts; feed; validation. Day + manifest-scoped atomic checkpoints resume only compatible successful stages. |
 | `fetch_macro_series` | Daily 05:35 | `execution/fetch_macro_series.py` then `compute_macro_sensitivities.py --portfolio` | Upserts the 12-series macro registry into `macro_series` (provider-candidate fallback, idempotent), then recomputes per-portfolio macro sensitivities |
 
 ### Hourly catch-up
@@ -293,12 +293,13 @@ The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow ups
 ### Cron chain map
 
 ```
+02:00  backfill_transcripts ──► transcripts/processed/* + transcripts + management_commitments
+02:15  scan_ir_transcripts ───► issuer IR transcript discovery + ingest
 02:45  backup_db ───────────► consistent data/portfolio.db snapshot (standalone)
 03:00  refresh_cache ───────► FMP cache files + financial_facts/* writes
          │                    └─► (SQL trigger 0026) brief_dirty=1
          ▼
-04:00  run_morning_pipeline ──► fetch_news → run_triggers → build_alert_feed → validate --gate (standalone)
-04:30  backfill_transcripts ──► transcripts/processed/* + transcripts + management_commitments
+04:00  run_morning_pipeline ──► typed 20-stage manifest → atomic checkpoint/resume → validation gate
          │
          ▼
 05:35  fetch_macro_series ──► macro_series + compute_macro_sensitivities (standalone)
@@ -395,8 +396,8 @@ The brief regenerates inline — no `brief_dirty` flag involved, no waiting for 
 | News feels stale | `refresh_news.bat <T>` |
 | Just edited the HTML rendering / CSS | `build_report.bat <T>` (no `--enable-llm` — fast, reuses caches) |
 | New quarter just landed | `refresh_fmp.bat <T>` → `refresh_transcripts.bat <T>` → `build_report.bat <T> --enable-llm` |
-| Want everything fresh for one ticker | `full_refresh.bat <T>` |
-| Quarterly catch-all for everyone | `python execution/quarterly_refresh.py` |
+| Want everything fresh for one ticker | `cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker <T> --mode full` |
+| Quarterly catch-all for everyone | `python execution/sqlite_bootstrap.py execution/quarterly_refresh.py` |
 
 The full refresh-vs-rebuild table is in [HOW_TO_USE_REPORTS.md §When to refresh vs rebuild](HOW_TO_USE_REPORTS.md#when-to-refresh-vs-rebuild).
 
@@ -487,15 +488,15 @@ Omit `--enable-llm` for a fast rebuild that reuses cached LLM outputs. Pass `--f
 refresh_fmp.bat NVO 20            :: 20 quarters of FMP fundamentals
 refresh_transcripts.bat NVO       :: last 6 quarters of Q&A
 refresh_news.bat NVO 14           :: 14-day news lookback
-full_refresh.bat NVO              :: everything end-to-end (5-15 min)
+cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker NVO --mode full
 ```
 
 ### Onboard a new ticker
 
 ```cmd
 :: 1. Create micro_thesis/holdings/<NEW>.json (copy an existing one)
-python execution/onboard_ticker.py --ticker NEW --list-type portfolio
-full_refresh.bat NEW
+python execution/sqlite_bootstrap.py execution/onboard_ticker.py --ticker NEW --list-type portfolio
+cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker NEW --mode full
 ```
 
 ### Comment workflow
@@ -511,10 +512,10 @@ process_comments.bat NU --apply                    :: drain comments → edits +
 ```cmd
 build_report.bat AMD --enable-llm --flavor evaluation --allow-untracked
 :: ...build a DCF workbook in dcf/AMD.xlsx...
-python execution/refresh_dcf.py --ticker AMD
+python execution/sqlite_bootstrap.py execution/refresh_dcf.py --ticker AMD
 :: ...edit micro_thesis/holdings/AMD.json...
-python execution/pressure_test_thesis.py --ticker AMD
-python execution/build_investment_decision_card.py --ticker AMD
+python execution/sqlite_bootstrap.py execution/pressure_test_thesis.py --ticker AMD
+python execution/sqlite_bootstrap.py execution/build_investment_decision_card.py --ticker AMD
 ```
 
 The evaluation now concludes with the **Investment Decision Card** (PRD §8.1) at
@@ -532,8 +533,8 @@ Drop a JSON in `data/ticker_specific/<TICKER>/<feature>.json` (e.g., NVO patent 
 ### Output retention sweep
 
 ```cmd
-python execution/sweep_output_history.py --dry-run
-python execution/sweep_output_history.py --keep 10 --ticker META
+python execution/sqlite_bootstrap.py execution/sweep_output_history.py --dry-run
+python execution/sqlite_bootstrap.py execution/sweep_output_history.py --keep 10 --ticker META
 ```
 
 Groups files in `output/research/<TICKER>/` by `YYYY-MM-DD_` prefix; deletes everything older than the latest N distinct dates per ticker. Files without a date prefix survive any sweep.

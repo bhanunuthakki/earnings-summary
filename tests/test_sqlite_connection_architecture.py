@@ -59,9 +59,18 @@ CORE_SCHEDULED_DATA_PATHS = (
 # schema preflight the empty scratch DB cannot satisfy. Broad directory-level
 # debt allowlists are prohibited.
 INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
+    # Recovery audit opens only a restored temporary candidate through a
+    # read-only URI; applying portfolio writer policy would mutate the evidence.
+    "execution/audit_deleted_table_recovery.py": 1,
+    # Runtime benchmark intentionally measures raw in-memory SQLite against the
+    # managed bootstrap, so centralizing these probes would erase the control.
+    "execution/benchmark_sqlite_runtime.py": 2,
     "execution/fix_kpi_series.py": 1,
     "execution/gc_restore.py": 1,
     "src/schema_compat.py": 1,
+    # Overview benchmark creates a WAL commit only on its private staged copy
+    # to prove the read path observes uncheckpointed data.
+    "src/sqlite_overview_benchmark.py": 1,
     "src/sqlite_runtime.py": 2,
 }
 SQLITE_RUNTIME_CALLS = 2

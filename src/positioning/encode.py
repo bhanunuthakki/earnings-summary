@@ -20,7 +20,8 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+
+from pydantic import BaseModel, Field, TypeAdapter
 
 from ask.store import load_recent_history
 from positioning.profile import SLEEVE_KEYS, PositioningProfile
@@ -29,7 +30,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # NOTE: ``llm.structured`` is imported function-locally in ``propose_profile``
 # (the only caller), NOT here. A module-level import drags the whole llm
-# transport chain — llm.cli → llm.ledger → llm.fallback → google.generativeai,
+# transport chain — llm.cli → llm.ledger → llm.fallback → google.genai,
 # ~10s cold — into every importer of :class:`ProposedProfile`, and
 # ``pipeline.positioning_panel``'s render path never makes an LLM call.
 
@@ -63,6 +64,15 @@ class ProposedProfile:
 
 class EncodeError(RuntimeError):
     """The conversation could not be encoded into a valid profile."""
+
+
+class _EncodeOutput(BaseModel):
+    profile: PositioningProfile
+    summary: str = Field(min_length=1)
+    rationale: str = ""
+
+
+_ENCODE_ADAPTER = TypeAdapter(_EncodeOutput)
 
 
 def _prompt(
@@ -180,11 +190,12 @@ def propose_profile(
         scope="positioning",
         expect="object",
         required_keys=("profile", "summary"),
+        schema=_ENCODE_ADAPTER,
         db_path=db_path,
     )
-    rec = cast("dict[str, object]", payload)
     try:
-        profile = PositioningProfile.model_validate(rec.get("profile"))
+        rec = _EncodeOutput.model_validate(payload)
+        profile = rec.profile
     except ValueError as exc:
         raise EncodeError(f"encoded profile failed validation: {exc}") from exc
     if profile.is_empty():
@@ -192,13 +203,13 @@ def propose_profile(
             "the conversation hasn't expressed any quantitative target yet — "
             "iterate with the coach until at least one dimension is concrete"
         )
-    summary = str(rec.get("summary") or "").strip()
+    summary = rec.summary.strip()
     if not summary:
         raise EncodeError("encode returned an empty summary")
     return ProposedProfile(
         profile=profile,
         summary=summary,
-        rationale=str(rec.get("rationale") or "").strip(),
+        rationale=rec.rationale.strip(),
         diffs=_field_diffs(profile, active),
         session_id=session_id,
     )

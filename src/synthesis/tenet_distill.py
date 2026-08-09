@@ -126,6 +126,7 @@ def _coerce_ids(raw: object) -> list[int]:
 def _default_call(
     musings: Sequence[AnalystNoteRow], existing: Sequence[InsightRow]
 ) -> list[ProposedTenet] | None:
+    from llm.contracts import TENET_BATCH_SCHEMA
     from llm.structured import StructuredParseError, call_llm_structured  # lazy: CI needs no CLI
 
     try:
@@ -134,6 +135,7 @@ def _default_call(
             purpose="tenet_distill",
             scope="worldview",
             expect="array",
+            schema=TENET_BATCH_SCHEMA,
         )
     except StructuredParseError:
         return None  # unparseable output degrades to "no proposals"; hard stops propagate

@@ -1,11 +1,11 @@
-"""Last-known whole-book risk snapshot — persistence (L5 PR2).
+"""Last-known whole-book risk snapshot â€” persistence (L5 PR2).
 
 A single-row-per-user cache of the benchmark-risk stats, concentration, book
 drawdown, and factor exposure read from the :8000 tracker on a successful fetch.
 The Risk + Performance surfaces read it back when the tracker is offline so they
 render cached values stamped "as of <captured_at>" instead of going blank.
 
-Dumb persistence over a flat :class:`RiskSnapshot` — the panel does the mapping
+Dumb persistence over a flat :class:`RiskSnapshot` â€” the panel does the mapping
 from the tracker payloads. Never raises on a missing DB / table (returns
 ``False`` / ``None``), matching the tracker-client's degrade-don't-crash contract.
 
@@ -33,13 +33,13 @@ _TABLE = "portfolio_risk_snapshots"
 _HISTORY_TABLE = "portfolio_risk_snapshot_history"
 _DEFAULT_USER = "bhanu"
 
-# PRD §7.1 requirement 9 (acceptance gap closed 2026-07-24, migration 0199):
+# PRD Â§7.1 requirement 9 (acceptance gap closed 2026-07-24, migration 0199):
 # "Historical comparisons use snapshots produced by the same metric/version
 # definition. A metric-version change must be explicit and must not render a
 # false delta against an incomparable prior."
 #
 # METRIC_VERSION identifies the MEANING of the persisted metric columns, not
-# their current value. Bump it whenever that meaning changes — a new factor
+# their current value. Bump it whenever that meaning changes â€” a new factor
 # leg added to the roll-up, a changed annualization convention, a redefined
 # drawdown window, a different benchmark composition. Do NOT bump it when a
 # value simply moves day to day; that is exactly the delta this stamp exists
@@ -48,20 +48,20 @@ _DEFAULT_USER = "bhanu"
 METRIC_VERSION = "v1"
 
 # How the analytics window that produced a capture was established.
-#   observed         — the series starts at/after the provider's first real
+#   observed         â€” the series starts at/after the provider's first real
 #                      observation; every point is measured.
-#   modeled_backfill — the series starts BEFORE it, so the leading span is a
+#   modeled_backfill â€” the series starts BEFORE it, so the leading span is a
 #                      reconstructed walk-back.
-#   unknown          — the provider returned no observation marker, so the
+#   unknown          â€” the provider returned no observation marker, so the
 #                      basis is indeterminate. Deliberately its own value:
 #                      defaulting an unmarked series to "observed" would
 #                      assert a guarantee nobody verified.
 # Derived by comparing PerformanceSeries.start_date against
-# .earliest_observed_date — NOT from backfill_start_unreliable, which is a
+# .earliest_observed_date â€” NOT from backfill_start_unreliable, which is a
 # constant False across observed and heavily-reconstructed series alike.
 RebaseBasis = Literal["observed", "modeled_backfill", "unknown"]
 
-# The metric columns, in insert order — kept in one list so write/read stay in
+# The metric columns, in insert order â€” kept in one list so write/read stay in
 # lockstep with the migration and adding a metric is a one-line change.
 _METRIC_COLUMNS: tuple[str, ...] = (
     "window_start",
@@ -102,7 +102,7 @@ class RiskSnapshot:
     :func:`write_snapshot` (naive-UTC ISO) and echoed back on read; every metric
     is optional (a partial tracker response still records what it has).
 
-    ``metric_version`` / ``rebase_basis`` are PROVENANCE, not metric content —
+    ``metric_version`` / ``rebase_basis`` are PROVENANCE, not metric content â€”
     deliberately kept out of :data:`_METRIC_COLUMNS` (which defines the
     content hash) so that two captures of the same numbers under different
     definitions still hash identically; :func:`comparable` is what makes
@@ -138,7 +138,7 @@ class RiskSnapshot:
     rate_beta_10y: float | None = None
     names_priced: int | None = None
     names_total: int | None = None
-    # Provenance (migration 0199) — kept out of _METRIC_COLUMNS on purpose.
+    # Provenance (migration 0199) â€” kept out of _METRIC_COLUMNS on purpose.
     metric_version: str | None = None
     rebase_basis: str | None = None
     # The two raw dates rebase_basis was derived FROM, so a reader can
@@ -147,7 +147,7 @@ class RiskSnapshot:
     # these two and all four drawdown_* columns come from the PERFORMANCE
     # endpoint, and the two default to different windows (measured live
     # 2026-07-24: beta 2025-07-24, performance 2026-05-09). Checking the
-    # basis against window_start will CONTRADICT it — use these.
+    # basis against window_start will CONTRADICT it â€” use these.
     perf_window_start: str | None = None
     perf_observed_from: str | None = None
 
@@ -156,7 +156,7 @@ def snapshot_input_sha(snap: RiskSnapshot) -> str:
     """Deterministic content hash over the metric columns (not ``captured_at``,
     which is a write-time stamp). Two captures of the same analytics input
     hash identically, which is what makes the history append idempotent
-    (PRD §7.1.8: the `{user_id}_{portfolio_as_of}_{analytics_input_sha}` key —
+    (PRD Â§7.1.8: the `{user_id}_{portfolio_as_of}_{analytics_input_sha}` key â€”
     ``portfolio_as_of`` rides inside via ``window_start``/``window_end``)."""
     payload = {col: getattr(snap, col) for col in _METRIC_COLUMNS}
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -164,11 +164,11 @@ def snapshot_input_sha(snap: RiskSnapshot) -> str:
 
 
 class RiskBudgetSnapshot(BaseModel):
-    """PRD §7.1.5 validation gate for the AUTHORITATIVE (scheduled) writer.
+    """PRD Â§7.1.5 validation gate for the AUTHORITATIVE (scheduled) writer.
 
     Wraps a built :class:`RiskSnapshot` plus the context only the refresh run
     knows (per-name weights, per-endpoint fetch errors) and answers "is this
-    capture fit to become the latest truth?" — the render-path opportunistic
+    capture fit to become the latest truth?" â€” the render-path opportunistic
     write keeps its simpler performance+positioning gate, but the scheduled
     writer must not persist anything that fails here."""
 
@@ -190,8 +190,8 @@ class RiskBudgetSnapshot(BaseModel):
         if self.weights_pct:
             total = sum(self.weights_pct)
             # Long-only book in percent units; partial pricing shrinks the sum,
-            # so the floor is loose — the point is catching fraction-vs-percent
-            # mixups (sum≈1) and doubled payloads (sum≈200), not enforcing 100.
+            # so the floor is loose â€” the point is catching fraction-vs-percent
+            # mixups (sum ~1) and doubled payloads (sum ~200), not enforcing 100.
             if not 25.0 <= total <= 130.0:
                 reasons.append(f"weights implausibly normalized (sum={total:.1f})")
         concentration = (snap.top1_weight_pct, snap.hhi, snap.effective_holdings)
@@ -214,7 +214,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         # table contracts below; requiring the checkout head here would make
         # its documented best-effort compatibility branches unreachable.
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         present = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -244,17 +243,17 @@ def write_snapshot(
     The single-row table stays the cheap latest-view the offline surfaces
     read; the history table is the drift substrate ("exposure vs 30 days
     ago"), which the 0105 upsert made structurally impossible. The history
-    append is best-effort — a pre-0185 DB still gets its latest-view upsert.
+    append is best-effort â€” a pre-0185 DB still gets its latest-view upsert.
 
-    ``metric_version`` / ``rebase_basis`` (migration 0199, PRD §7.1.9) are
+    ``metric_version`` / ``rebase_basis`` (migration 0199, PRD Â§7.1.9) are
     stamped on BOTH the latest-view row and the history row so a downstream
     "vs prior" delta can tell a real risk move from a definition change
-    (:func:`comparable`). They are provenance, NOT metric content — they do
+    (:func:`comparable`). They are provenance, NOT metric content â€” they do
     NOT enter :func:`snapshot_input_sha`, so the existing content-hash dedup
     (0186) is unchanged: a re-run with the identical numbers still dedupes
     in history even if ``metric_version`` differs from the prior write.
 
-    Stamps ``captured_at`` to now (naive-UTC) — the caller's value is ignored.
+    Stamps ``captured_at`` to now (naive-UTC) â€” the caller's value is ignored.
     Returns ``True`` on a successful write, ``False`` when the DB / table is
     absent or the write fails (never raises)."""
     conn = _open(db_path)
@@ -269,7 +268,7 @@ def write_snapshot(
     prov_cols = ", ".join((cols, *prov_cols_tuple))
     # One "?" per provenance column appended to prov_cols. Kept derived from
     # the same tuple rather than hand-counted: a mismatch here does NOT raise
-    # loudly — it raises sqlite3.OperationalError, which the pre-0199 fallback
+    # loudly â€” it raises sqlite3.OperationalError, which the pre-0199 fallback
     # below catches, so the write silently succeeds WITHOUT provenance. That
     # exact bug shipped for one commit during development.
     prov_placeholders = ", ".join((placeholders, *(["?"] * len(prov_cols_tuple))))
@@ -299,15 +298,15 @@ def write_snapshot(
                     perf_observed_from,
                 ],
             )
-        except sqlite3.OperationalError:  # pre-0199 DB — no provenance columns yet
+        except sqlite3.OperationalError:  # pre-0199 DB â€” no provenance columns yet
             conn.execute(
                 f"INSERT INTO {_TABLE} ({cols}) VALUES ({placeholders}) "
                 f"ON CONFLICT(user_id) DO UPDATE SET {updates}",
                 [user_id, captured_at, *values],
             )
-        with contextlib.suppress(sqlite3.Error):  # pre-0185 DB — latest-view still lands
+        with contextlib.suppress(sqlite3.Error):  # pre-0185 DB â€” latest-view still lands
             try:
-                # 0186+: content-hash dedup — a re-run on the same analytics
+                # 0186+: content-hash dedup â€” a re-run on the same analytics
                 # input (or the render path re-persisting what the scheduled
                 # writer already captured) is a no-op, not a duplicate row.
                 conn.execute(
@@ -326,13 +325,13 @@ def write_snapshot(
                 )
             except sqlite3.OperationalError:
                 try:
-                    # 0186-0198 DB — input_sha present, no provenance columns yet.
+                    # 0186-0198 DB â€” input_sha present, no provenance columns yet.
                     conn.execute(
                         f"INSERT OR IGNORE INTO {_HISTORY_TABLE} ({cols}, input_sha) "
                         f"VALUES ({placeholders}, ?)",
                         [user_id, captured_at, *values, sha],
                     )
-                except sqlite3.OperationalError:  # pre-0186 DB — legacy append
+                except sqlite3.OperationalError:  # pre-0186 DB â€” legacy append
                     conn.execute(
                         f"INSERT INTO {_HISTORY_TABLE} ({cols}) VALUES ({placeholders})",
                         [user_id, captured_at, *values],
@@ -348,7 +347,7 @@ def write_snapshot(
 def _snapshot_from_row(row: sqlite3.Row) -> RiskSnapshot:
     """Build a :class:`RiskSnapshot` from a fetched row, tolerating a
     pre-0199 row shape (no ``metric_version``/``rebase_basis`` columns
-    selected) by falling back to ``None`` — "unknown", per :func:`comparable`."""
+    selected) by falling back to ``None`` â€” "unknown", per :func:`comparable`."""
     keys = row.keys()
     return RiskSnapshot(
         captured_at=str(row["captured_at"]),
@@ -368,7 +367,7 @@ def read_history(
     db_path: Path | str | None = None,
 ) -> list[RiskSnapshot]:
     """History captures for ``user_id``, newest first. ``since`` (ISO string)
-    floors the window. [] on a pre-0185 DB / any failure — degrade-don't-crash
+    floors the window. [] on a pre-0185 DB / any failure â€” degrade-don't-crash
     like every reader here. Workstream C8's drift trigger reads this."""
     conn = _open(db_path)
     if conn is None:
@@ -387,7 +386,7 @@ def read_history(
                 "ORDER BY captured_at DESC LIMIT ?",
                 params,
             ).fetchall()
-        except sqlite3.OperationalError:  # pre-0199 DB — no provenance columns yet
+        except sqlite3.OperationalError:  # pre-0199 DB â€” no provenance columns yet
             rows = conn.execute(
                 f"SELECT captured_at, {', '.join(_METRIC_COLUMNS)} FROM {_HISTORY_TABLE} "
                 f"WHERE {' AND '.join(clauses)} ORDER BY captured_at DESC LIMIT ?",
@@ -407,7 +406,7 @@ def history_has_sha(
     db_path: Path | str | None = None,
 ) -> bool:
     """True when the history already carries a capture with this content hash
-    — the scheduled writer's "already done" check (PRD §7.1: re-running the
+    â€” the scheduled writer's "already done" check (PRD Â§7.1: re-running the
     same input does not duplicate history). False on pre-0186 DBs / failure."""
     conn = _open(db_path)
     if conn is None:
@@ -442,7 +441,7 @@ def read_latest_snapshot(
                 f"FROM {_TABLE} WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
-        except sqlite3.OperationalError:  # pre-0199 DB — no provenance columns yet
+        except sqlite3.OperationalError:  # pre-0199 DB â€” no provenance columns yet
             row = conn.execute(
                 f"SELECT captured_at, {', '.join(_METRIC_COLUMNS)} FROM {_TABLE} WHERE user_id = ?",
                 (user_id,),
@@ -457,11 +456,11 @@ def read_latest_snapshot(
 
 
 def comparable(a: RiskSnapshot, b: RiskSnapshot) -> bool:
-    """PRD §7.1.9: True only when ``a`` and ``b`` were produced by the same
+    """PRD Â§7.1.9: True only when ``a`` and ``b`` were produced by the same
     metric-version definition AND the same analytics-window rebase basis.
-    ``None`` (unknown provenance — a pre-0199 row, or a capture that hasn't
+    ``None`` (unknown provenance â€” a pre-0199 row, or a capture that hasn't
     stamped one of the two fields) is NEVER comparable to anything, including
-    another ``None`` — an unknown definition might silently differ from
+    another ``None`` â€” an unknown definition might silently differ from
     another unknown definition, so treating two unknowns as a match would be
     exactly the false-delta risk this function exists to prevent.
 
@@ -480,21 +479,21 @@ def comparable(a: RiskSnapshot, b: RiskSnapshot) -> bool:
 def incomparable_reason(current: RiskSnapshot, prior: RiskSnapshot) -> str | None:
     """A human sentence for the UI explaining why ``current`` cannot be
     diffed against ``prior``, or ``None`` when it can be (:func:`comparable`
-    is True). Reads "prior → current" (e.g. ``"metric definition changed
-    (v1 → v2)"``). When the mismatch spans both fields, the metric-version
-    story leads — it is the more consequential change (it can move every
+    is True). Reads "prior â†’ current" (e.g. ``"metric definition changed
+    (v1 â†’ v2)"``). When the mismatch spans both fields, the metric-version
+    story leads â€” it is the more consequential change (it can move every
     metric at once)."""
     if comparable(current, prior):
         return None
     if current.metric_version != prior.metric_version:
         prior_v = prior.metric_version or "unknown"
         current_v = current.metric_version or "unknown"
-        return f"metric definition changed ({prior_v} → {current_v})"
+        return f"metric definition changed ({prior_v} -> {current_v})"
     prior_basis = prior.rebase_basis or "unknown"
     current_basis = current.rebase_basis or "unknown"
     if prior_basis == current_basis:
-        # Both sides unknown (or both None): nothing "changed" — we simply
+        # Both sides unknown (or both None): nothing "changed" â€” we simply
         # cannot vouch that they rest on the same basis, which is a
         # different and more honest statement than asserting a change.
         return "analytics window basis is unrecorded for these captures"
-    return f"analytics window basis changed ({prior_basis} → {current_basis})"
+    return f"analytics window basis changed ({prior_basis} -> {current_basis})"

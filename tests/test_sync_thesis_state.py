@@ -203,4 +203,4 @@ def test_ticker_audit_reports_missing_row_only_when_file_exists(tmp_path: Path) 
 
 def test_setup_documents_fresh_install_thesis_bootstrap() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "python execution/sync_thesis_state.py --apply" in readme
+    assert "python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply" in readme

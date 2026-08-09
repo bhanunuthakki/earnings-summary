@@ -34,8 +34,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
-import requests
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -44,11 +42,18 @@ sys.path.insert(0, str(SRC_DIR))
 from log_redact import redact as _redact  # noqa: E402
 from macro_series import REGISTRY, ProviderSpec, SeriesSpec  # noqa: E402
 from macro_store import upsert_series_value  # noqa: E402
+from net.client import (  # noqa: E402
+    DEFAULT_FMP_BASE_URL,
+    FMP_CLIENT,
+    HttpCallError,
+    HttpErrorKind,
+    JsonShape,
+)
 from runtime.secrets import load_project_env  # noqa: E402
 
 load_project_env(PROJECT_ROOT)
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
-FMP_STABLE = "https://financialmodelingprep.com/stable"
+FMP_STABLE = DEFAULT_FMP_BASE_URL
 
 log = logging.getLogger("fetch_macro_series")
 
@@ -79,34 +84,30 @@ def _fetch_json(provider: ProviderSpec, *, sleep_seconds: float = 0.0) -> object
         log.warning({"event": "macro_no_api_key", "series_path": provider.path})
         return None
     params = dict(provider.params)
-    params["apikey"] = FMP_API_KEY
     url = _resolve_url(provider)
     if sleep_seconds > 0:
         time.sleep(sleep_seconds)
     try:
-        resp = requests.get(url, params=params, timeout=30)
-    except Exception as exc:
-        log.info({"event": "macro_fetch_error", "url": url, "error": _redact(exc)})
-        return None
-    if resp.status_code == 429:
-        log.warning({"event": "macro_rate_limited", "url": url, "status": resp.status_code})
-        return "RATE_LIMITED"
-    try:
-        resp.raise_for_status()
-        return resp.json()
-    except requests.HTTPError as exc:
+        response = FMP_CLIENT.get_url_json(
+            url,
+            params=params,
+            api_key=FMP_API_KEY,
+            expected=JsonShape.ANY,
+        )
+    except HttpCallError as exc:
+        if exc.kind is HttpErrorKind.RATE_LIMIT:
+            log.warning({"event": "macro_rate_limited", "url": url, "status": exc.status_code})
+            return "RATE_LIMITED"
         log.info(
             {
-                "event": "macro_http_error",
+                "event": "macro_fetch_error",
                 "url": url,
-                "status": resp.status_code,
-                "error": _redact(exc),
+                "status": exc.status_code,
+                "error": str(exc),
             }
         )
         return None
-    except Exception as exc:
-        log.info({"event": "macro_parse_error", "url": url, "error": _redact(exc)})
-        return None
+    return response.payload
 
 
 def _extract_rows(payload: object, provider: ProviderSpec) -> list[dict[str, Any]]:

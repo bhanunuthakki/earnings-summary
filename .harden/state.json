@@ -5,24 +5,24 @@
   "gates": {
     "L1": {
       "architecture-reviewer": {
-        "verdict": "PASS",
-        "open_findings": 1,
-        "last_run": "2026-08-07"
+        "verdict": "BLOCK",
+        "open_findings": 9,
+        "last_run": "2026-08-08"
       },
       "data-engineer": {
-        "verdict": "PASS",
-        "open_findings": 3,
-        "last_run": "2026-08-07"
+        "verdict": "BLOCK",
+        "open_findings": 4,
+        "last_run": "2026-08-08"
       },
       "llm-evals-orchestrator": {
-        "verdict": "PASS",
-        "open_findings": 1,
-        "last_run": "2026-08-07"
+        "verdict": "BLOCK",
+        "open_findings": 9,
+        "last_run": "2026-08-08"
       },
       "qa-test-strategy": {
-        "verdict": "PASS",
-        "open_findings": 3,
-        "last_run": "2026-08-07"
+        "verdict": "BLOCK",
+        "open_findings": 6,
+        "last_run": "2026-08-08"
       }
     }
   }

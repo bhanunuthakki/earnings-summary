@@ -56,6 +56,7 @@ from ir_pipeline._net import (  # noqa: E402
     safe_redirect_url,
 )
 from log_redact import redact  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
@@ -340,7 +341,7 @@ def _write_incoming_sidecar(root: Path, mapping: dict[str, str]) -> None:
 def _run_categorize(ticker: str, root: Path, db_path: Path, calendar: str | None) -> int:
     """Invoke categorize_ir_uploads.py for ``ticker`` (content-classify + register)."""
     argv = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(_CATEGORIZER),
         "--ticker",
         ticker.upper(),

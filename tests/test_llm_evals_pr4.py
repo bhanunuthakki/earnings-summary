@@ -13,7 +13,7 @@ import json
 import sqlite3
 import sys
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import TypeVar
@@ -25,8 +25,11 @@ import llm.structured as structured
 from evals.coverage import (
     GRANDFATHERED_UNCOVERED_PURPOSES,
     META_PURPOSES,
+    build_eval_run_receipt,
     eval_coverage,
     eval_coverage_gate,
+    load_latest_eval_run_receipt,
+    persist_eval_run_receipt,
     render_coverage_gate_text,
     render_coverage_text,
 )
@@ -48,6 +51,36 @@ from llm.prompt_versions import registered_purposes
 from llm.structured import StructuredParseError, call_llm_structured, parse_json_payload
 
 _T = TypeVar("_T")
+
+
+def test_eval_run_receipt_requires_graded_evidence_and_separates_errors(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    receipt = build_eval_run_receipt(
+        ["INSUFFICIENT_FRAME", "INSUFFICIENT_DATA", "CANDIDATE_ERRORED", "UNKNOWN"],
+        run_id="run-1",
+        started_at=now,
+        finished_at=now,
+    )
+
+    assert (receipt.attempted, receipt.graded, receipt.insufficient, receipt.errors) == (4, 0, 2, 2)
+    assert receipt.status == "alert" and receipt.alert_count == 2
+
+    path = persist_eval_run_receipt(tmp_path, receipt)
+    assert path == tmp_path / "data" / "model_eval_runs" / "run-1.json"
+    assert load_latest_eval_run_receipt(tmp_path) == receipt
+
+
+def test_eval_run_receipt_passes_only_with_grade_and_zero_errors() -> None:
+    now = datetime.now(UTC)
+    receipt = build_eval_run_receipt(
+        ["KEEP_INCUMBENT", "HOLD", "INSUFFICIENT_FRAME"],
+        run_id="run-2",
+        started_at=now,
+        finished_at=now,
+    )
+    assert (receipt.graded, receipt.insufficient, receipt.errors) == (2, 1, 0)
+    assert receipt.status == "passed" and receipt.alert_count == 0
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_DIR = PROJECT_ROOT / "evals" / "golden"

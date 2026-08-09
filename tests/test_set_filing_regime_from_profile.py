@@ -24,6 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import pipeline.fmp_doc_index as fmp_doc_index  # noqa: E402
+from net.client import HttpCallError, HttpErrorKind, HttpJsonResponse  # noqa: E402
 from pipeline.fmp_doc_index import (  # noqa: E402
     classify_filing_regime_from_profile,
     set_filing_regime_from_profile,
@@ -181,30 +182,27 @@ def test_no_tracked_row_returns_none(tmp_path: Path) -> None:
     assert result is None
 
 
-class _FakeResponse:
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> object:
-        return {"filings": {"recent": {"form": ["8-K", "10-K", "10-Q"]}}}
-
-
-def _fake_requests_get(*a: object, **k: object) -> _FakeResponse:
-    return _FakeResponse()
+def _fake_request_json(*a: object, **k: object) -> HttpJsonResponse:
+    return HttpJsonResponse(
+        status_code=200,
+        payload={"filings": {"recent": {"form": ["8-K", "10-K", "10-Q"]}}},
+    )
 
 
 def test_fetch_sec_regime_parses_real_response_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     """A minimal, real submissions.json shape resolves via the actual HTTP
-    parsing path (network itself mocked at the requests.get boundary)."""
-    monkeypatch.setattr(fmp_doc_index.requests, "get", _fake_requests_get)
+    parsing path (network itself mocked at the shared-client boundary)."""
+    monkeypatch.setattr(fmp_doc_index.HTTP_CLIENT, "request_json", _fake_request_json)
     assert fmp_doc_index._fetch_sec_regime("0001018724") == "10-K"
 
 
 def test_fetch_sec_regime_degrades_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    import requests
-
     def _raise(*a: object, **k: object) -> object:
-        raise requests.RequestException("boom")
+        raise HttpCallError(
+            kind=HttpErrorKind.NETWORK,
+            message="boom",
+            retryable=True,
+        )
 
-    monkeypatch.setattr(fmp_doc_index.requests, "get", _raise)
+    monkeypatch.setattr(fmp_doc_index.HTTP_CLIENT, "request_json", _raise)
     assert fmp_doc_index._fetch_sec_regime("0000000000") is None

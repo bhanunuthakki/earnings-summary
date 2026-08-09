@@ -11,6 +11,7 @@ import json
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
@@ -26,13 +27,18 @@ _DATE = date(2026, 5, 18)
 _REVISED = "REVISED THESIS TEXT"
 
 
+class _Validator(Protocol):
+    def validate_python(self, value: object) -> object: ...
+
+
 class _CountingLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def __call__(self, *_a, **_k) -> str:
+    def __call__(self, *_a: object, **_k: object) -> object:
         self.calls += 1
-        return json.dumps({"revised_thesis": _REVISED, "diff_summary": "tightened"})
+        schema = cast(_Validator, _k["schema"])
+        return schema.validate_python({"revised_thesis": _REVISED, "diff_summary": "tightened"})
 
 
 @pytest.fixture
@@ -70,7 +76,7 @@ def _set_thesis(repo: Path, text: str) -> None:
 
 def test_apply_reuses_preview_draft(repo: Path, monkeypatch) -> None:
     llm = _CountingLLM()
-    monkeypatch.setattr(prc, "call_llm", llm)
+    monkeypatch.setattr(prc, "call_llm_structured", llm)
 
     prev = prc.preview_thesis_edits(repo, "NU", _DATE)
     assert llm.calls == 1
@@ -85,7 +91,7 @@ def test_apply_reuses_preview_draft(repo: Path, monkeypatch) -> None:
 
 def test_cache_miss_when_thesis_changed(repo: Path, monkeypatch) -> None:
     llm = _CountingLLM()
-    monkeypatch.setattr(prc, "call_llm", llm)
+    monkeypatch.setattr(prc, "call_llm_structured", llm)
 
     prc.preview_thesis_edits(repo, "NU", _DATE)
     assert llm.calls == 1
@@ -99,7 +105,7 @@ def test_cache_miss_when_thesis_changed(repo: Path, monkeypatch) -> None:
 
 def test_preview_reuses_its_own_cache(repo: Path, monkeypatch) -> None:
     llm = _CountingLLM()
-    monkeypatch.setattr(prc, "call_llm", llm)
+    monkeypatch.setattr(prc, "call_llm_structured", llm)
     prc.preview_thesis_edits(repo, "NU", _DATE)
     prc.preview_thesis_edits(repo, "NU", _DATE)  # same state → cache hit
     assert llm.calls == 1

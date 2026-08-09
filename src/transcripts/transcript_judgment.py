@@ -47,8 +47,15 @@ from typing import cast
 from pydantic import BaseModel, Field
 
 from llm.cli import is_hard_stop
+from llm.contracts import TRANSCRIPT_TONE_SCHEMA, TRANSCRIPT_TOPIC_SCHEMA
 from llm.structured import call_llm_structured
-from llm_artifact_store import UpsertRequest, compute_input_sha256, read_current, upsert
+from llm_artifact_store import (
+    UpsertRequest,
+    artifact_is_reusable,
+    compute_input_sha256,
+    read_current,
+    upsert,
+)
 from transcripts.longitudinal import CallSnapshot
 
 log = logging.getLogger(__name__)
@@ -182,8 +189,7 @@ def judge_call(
     expected_sha = compute_input_sha256(prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs)
     if (
         cached is not None
-        and not cached.dirty
-        and cached.input_sha256 == expected_sha
+        and artifact_is_reusable(cached, input_sha256=expected_sha)
         and isinstance(cached.content_json, dict)
     ):
         return _parse_judgment(
@@ -198,6 +204,7 @@ def judge_call(
             purpose=QA_JUDGMENT_PURPOSE,
             ticker=snapshot.ticker,
             expect="object",
+            schema=TRANSCRIPT_TONE_SCHEMA,
             db_path=db_path,
         )
     except Exception as exc:
@@ -314,6 +321,7 @@ def triage_topics(
             purpose=TOPIC_TRIAGE_PURPOSE,
             ticker=ticker,
             expect="object",
+            schema=TRANSCRIPT_TOPIC_SCHEMA,
             db_path=db_path,
         )
     except Exception as exc:

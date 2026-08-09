@@ -39,7 +39,9 @@ import re
 import subprocess  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from datetime import date
 from pathlib import Path
-from typing import cast
+from typing import Annotated, Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
 
 # ---------------------------------------------------------------------------
 # Re-exports from the src/llm/ submodules
@@ -208,6 +210,194 @@ JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 # single oversized PDF doesn't blow the prompt. 6 KB matches main's prior
 # Gemini-Flash budget; well under any Claude model's context.
 INTAKE_TEXT_BUDGET = 6000
+
+
+class _BearFailureModeWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hypothesis: str = Field(min_length=1, max_length=500)
+    evidence_in_data: str = Field(min_length=1, max_length=1000)
+    leading_indicator: str = Field(min_length=1, max_length=600)
+    quantitative_impact: str = Field(min_length=1, max_length=1200)
+    refutation_criteria: str = Field(min_length=1, max_length=800)
+
+
+class _BearCaseWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    failure_modes: list[_BearFailureModeWire] = Field(min_length=3, max_length=5)
+    most_underweighted: str = Field(min_length=1, max_length=1200)
+    out_of_scope_flags: list[str] = Field(min_length=1, max_length=3)
+
+
+class _QaTopicWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=80)
+    topic: str = Field(min_length=1, max_length=120)
+    tag: Literal[
+        "INFRA",
+        "CLOUD",
+        "SEARCH",
+        "MARGIN",
+        "CAPEX",
+        "AGENT",
+        "LEGAL",
+        "OTHER BETS",
+        "CONSUMER",
+        "Q&A",
+    ]
+
+
+class _SaydoFilterWire(RootModel[list[str]]):
+    @field_validator("root")
+    @classmethod
+    def _bounded_ids(cls, values: list[str]) -> list[str]:
+        if len(values) > 6 or any(not value.strip() for value in values):
+            raise ValueError("saydo filter requires at most six non-empty ids")
+        return values
+
+
+class _SaydoImportanceWire(RootModel[list[str]]):
+    @field_validator("root")
+    @classmethod
+    def _bounded_ids(cls, values: list[str]) -> list[str]:
+        if len(values) > 8 or any(not value.strip() for value in values):
+            raise ValueError("saydo importance requires at most eight non-empty ids")
+        return values
+
+
+class _CompanyParagraphWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    opener: Literal[
+        "The cash engine is",
+        "The growth optionality is",
+        "The structural debate is",
+        "The pressure point most analysts underweight is",
+        "What is non-obvious is",
+        "The competitive dynamic is",
+        "The moat depends on",
+    ]
+    body: str = Field(min_length=1, max_length=1800)
+
+
+class _RevenueMechanicWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    topic: Literal[
+        "take_rate",
+        "unit_economics",
+        "capex_intensity",
+        "mix_shift",
+        "scale_dynamics",
+        "cash_conversion",
+    ]
+    body: str = Field(min_length=1, max_length=1400)
+
+
+class _NamedDescriptionWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=1000)
+
+
+class _CompanyDescriptionWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value_driver_phrase: str = Field(min_length=1, max_length=300)
+    central_bet: str = Field(min_length=1, max_length=500)
+    swing_variable: str | None = Field(default=None, max_length=500)
+    paragraphs: list[_CompanyParagraphWire] = Field(min_length=3, max_length=5)
+    revenue_mechanics: list[_RevenueMechanicWire] = Field(min_length=1, max_length=3)
+    segments: list[_NamedDescriptionWire]
+    geographies: list[_NamedDescriptionWire]
+
+
+class _PlatformDiagramWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    diagram: str = Field(min_length=1, max_length=4000)
+    caption: str = Field(min_length=1, max_length=600)
+
+    @field_validator("diagram")
+    @classmethod
+    def _bounded_lines(cls, value: str) -> str:
+        if any(len(line) > 78 for line in value.splitlines()):
+            raise ValueError("diagram lines must be at most 78 characters")
+        return value
+
+
+class _IntakeClassificationWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ticker: str = Field(pattern=r"^[A-Z][A-Z0-9.\-]{0,9}$")
+    period_end: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    doc_type: Literal[
+        "ir_press_release",
+        "ir_presentation",
+        "ir_supplement",
+        "ir_investor_update",
+        "earnings_call_transcript",
+        "ir_event",
+    ]
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str = Field(min_length=1, max_length=500)
+
+
+class _ValuationBasisWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    multiple: Literal[
+        "EV/NTM Revenue",
+        "EV/LTM Revenue",
+        "EV/NTM EBITDA",
+        "EV/LTM EBITDA",
+        "P/E (NTM)",
+        "P/E (LTM)",
+        "P/B",
+        "P/TBV",
+        "P/FCF",
+        "EV/FCF",
+    ]
+    rationale: str = Field(min_length=1, max_length=800)
+    target_band: str = Field(max_length=500)
+    notes: str = Field(max_length=500)
+
+
+class _ThemeEvidenceWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    period: str = Field(min_length=1, max_length=80)
+    speaker: str = Field(max_length=160)
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class _EarningsThemeWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    theme_name: str = Field(min_length=1, max_length=120)
+    mentions_per_quarter: dict[str, Annotated[int, Field(ge=1)]]
+    evidence: list[_ThemeEvidenceWire] = Field(min_length=1, max_length=2)
+
+
+class _EarningsThemesWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prepared_themes: list[_EarningsThemeWire] = Field(max_length=5)
+    qa_themes: list[_EarningsThemeWire] = Field(max_length=5)
+
+
+_BEAR_CASE_ADAPTER = TypeAdapter(_BearCaseWire)
+_QA_TOPICS_ADAPTER = TypeAdapter(list[_QaTopicWire])
+_SAYDO_FILTER_ADAPTER = TypeAdapter(_SaydoFilterWire)
+_COMPANY_DESCRIPTION_ADAPTER = TypeAdapter(_CompanyDescriptionWire)
+_PLATFORM_DIAGRAM_ADAPTER = TypeAdapter(_PlatformDiagramWire)
+_INTAKE_CLASSIFICATION_ADAPTER = TypeAdapter(_IntakeClassificationWire)
+_VALUATION_BASIS_ADAPTER = TypeAdapter(_ValuationBasisWire)
+_SAYDO_IMPORTANCE_ADAPTER = TypeAdapter(_SaydoImportanceWire)
+_EARNINGS_THEMES_ADAPTER = TypeAdapter(_EarningsThemesWire)
 
 log = logging.getLogger(__name__)
 
@@ -1600,8 +1790,14 @@ above. Return strictly the JSON object — nothing else.
         # (StructuredParseError) instead of a silent fence-strip that ships
         # malformed JSON downstream. Re-serialized so the str return contract
         # holds for the caller's json.loads.
-        payload = call_llm_structured(prompt, purpose="bear_case", ticker=ticker, expect="object")
-        return json.dumps(payload, ensure_ascii=False)
+        payload = call_llm_structured(
+            prompt,
+            purpose="bear_case",
+            ticker=ticker,
+            expect="object",
+            schema=_BEAR_CASE_ADAPTER,
+        )
+        return _BearCaseWire.model_validate(payload).model_dump_json()
     except Exception as e:
         log.error(f"CRITICAL ERROR: Bear case generation failed for {ticker}: {e}")
         raise
@@ -1649,8 +1845,15 @@ The "id" must echo back the input id verbatim. The "topic" must read cleanly
 on its own — no "asks about" prefix; just the topic itself.
 """
     try:
-        payload = call_llm_structured(prompt, purpose="qa_topics", ticker=ticker, expect="array")
-        return json.dumps(payload, ensure_ascii=False)
+        payload = call_llm_structured(
+            prompt,
+            purpose="qa_topics",
+            ticker=ticker,
+            expect="array",
+            schema=_QA_TOPICS_ADAPTER,
+        )
+        topics = cast("list[_QaTopicWire]", payload)
+        return json.dumps([topic.model_dump() for topic in topics], ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Q&A topic generation failed for {ticker}: {e}")
         raise
@@ -1698,8 +1901,14 @@ delta. The point is to filter for THESIS-relevant signal, not generic
 beats/misses.
 """
     try:
-        payload = call_llm_structured(prompt, purpose="saydo_filter", ticker=ticker, expect="array")
-        return json.dumps(payload, ensure_ascii=False)
+        payload = call_llm_structured(
+            prompt,
+            purpose="saydo_filter",
+            ticker=ticker,
+            expect="array",
+            schema=_SAYDO_FILTER_ADAPTER,
+        )
+        return json.dumps(_SaydoFilterWire.model_validate(payload).root, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: SayDo filter failed for {ticker}: {e}")
         raise
@@ -1874,9 +2083,13 @@ Return ONLY the JSON object. No markdown fence, no prose before or after.
 """
     try:
         payload = call_llm_structured(
-            prompt, purpose="company_description", ticker=ticker, expect="object"
+            prompt,
+            purpose="company_description",
+            ticker=ticker,
+            expect="object",
+            schema=_COMPANY_DESCRIPTION_ADAPTER,
         )
-        return json.dumps(payload, ensure_ascii=False)
+        return _CompanyDescriptionWire.model_validate(payload).model_dump_json()
     except Exception as e:
         log.error(f"CRITICAL ERROR: Company description generation failed for {ticker}: {e}")
         raise
@@ -1963,9 +2176,13 @@ Return strictly the JSON object — no prose before or after, no markdown fence 
 """
     try:
         payload = call_llm_structured(
-            prompt, purpose="platform_diagram", ticker=ticker, expect="object"
+            prompt,
+            purpose="platform_diagram",
+            ticker=ticker,
+            expect="object",
+            schema=_PLATFORM_DIAGRAM_ADAPTER,
         )
-        return json.dumps(payload, ensure_ascii=False)
+        return _PlatformDiagramWire.model_validate(payload).model_dump_json()
     except Exception as e:
         log.error(f"CRITICAL ERROR: Platform diagram generation failed for {ticker}: {e}")
         raise
@@ -2020,8 +2237,13 @@ def classify_intake_document(filename: str, text: str, hint: dict) -> dict | Non
         # established degrade-to-None contract is preserved by catching the
         # StructuredParseError below (this call runs ~50x/batch — a parse miss
         # on one document must not sink the others).
-        payload = call_llm_structured(prompt, purpose="intake_classifier", expect="object")
-        return cast("dict[str, object]", payload)
+        payload = call_llm_structured(
+            prompt,
+            purpose="intake_classifier",
+            expect="object",
+            schema=_INTAKE_CLASSIFICATION_ADAPTER,
+        )
+        return _IntakeClassificationWire.model_validate(payload).model_dump()
     except Exception as e:
         # Hard stops propagate — a budget cap returning None would be
         # indistinguishable from "could not classify" (llm_evals_plan §5.4).
@@ -2113,9 +2335,13 @@ def generate_valuation_basis(
     )
     try:
         payload = call_llm_structured(
-            prompt, purpose="valuation_basis", ticker=ticker, expect="object"
+            prompt,
+            purpose="valuation_basis",
+            ticker=ticker,
+            expect="object",
+            schema=_VALUATION_BASIS_ADAPTER,
         )
-        return json.dumps(payload, ensure_ascii=False)
+        return _ValuationBasisWire.model_validate(payload).model_dump_json()
     except Exception as e:
         log.error(f"CRITICAL ERROR: Valuation basis generation failed for {ticker}: {e}")
         raise
@@ -2172,9 +2398,13 @@ bullets.
 """
     try:
         payload = call_llm_structured(
-            prompt, purpose="saydo_importance", ticker=ticker, expect="array"
+            prompt,
+            purpose="saydo_importance",
+            ticker=ticker,
+            expect="array",
+            schema=_SAYDO_IMPORTANCE_ADAPTER,
         )
-        return json.dumps(payload, ensure_ascii=False)
+        return json.dumps(_SaydoImportanceWire.model_validate(payload).root, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: SayDo importance ranking failed for {ticker}: {e}")
         raise
@@ -2344,9 +2574,13 @@ Return strictly the JSON object — nothing else.
 
     try:
         payload = call_llm_structured(
-            prompt, purpose="earnings_themes_split", ticker=ticker, expect="object"
+            prompt,
+            purpose="earnings_themes_split",
+            ticker=ticker,
+            expect="object",
+            schema=_EARNINGS_THEMES_ADAPTER,
         )
-        return json.dumps(payload, ensure_ascii=False)
+        return _EarningsThemesWire.model_validate(payload).model_dump_json()
     except Exception as e:
         log.error(f"CRITICAL ERROR: Earnings themes split failed for {ticker}: {e}")
         raise

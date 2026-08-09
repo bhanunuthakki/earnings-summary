@@ -23,6 +23,14 @@ class _Result:
     returncode = 0
 
 
+def _managed_target(argv: list[str]) -> Path:
+    assert len(argv) >= 3
+    assert Path(argv[1]).name == "sqlite_bootstrap.py"
+    target = Path(argv[2])
+    assert target.suffix == ".py"
+    return target
+
+
 def _fresh_db(tmp_path: Path) -> Path:
     """A DB whose FMP pull is 'now' — so stale mode would skip fmp."""
     db = tmp_path / "portfolio.db"
@@ -86,7 +94,7 @@ def test_execute_runs_only_selected_steps_in_order() -> None:
     ran: list[str] = []
 
     def runner(argv: list[str], *, out: object) -> _Result:
-        ran.append(Path(argv[1]).name)
+        ran.append(_managed_target(argv).name)
         return _Result()
 
     plan = rd.build_plan(
@@ -102,7 +110,7 @@ def test_execute_skips_fmp_when_fresh(tmp_path: Path) -> None:
     ran: list[str] = []
 
     def runner(argv: list[str], *, out: object) -> _Result:
-        ran.append(Path(argv[1]).name)
+        ran.append(_managed_target(argv).name)
         return _Result()
 
     plan = rd.build_plan(
@@ -122,7 +130,9 @@ def test_execute_skips_fmp_when_fresh(tmp_path: Path) -> None:
 
 def test_new_step_builders_point_at_the_right_clis() -> None:
     news = rd._argv_news(PROJECT_ROOT, "NU")
-    assert Path(news[1]).name == "fetch_news.py"
+    assert _managed_target(news).name == "fetch_news.py"
     assert "--tickers" in news and "NU" in news
-    assert Path(rd._argv_dcf(PROJECT_ROOT, "NU")[1]).name == "refresh_dcf.py"
-    assert Path(rd._argv_thesis_eval(PROJECT_ROOT, "NU")[1]).name == "run_thesis_evaluator.py"
+    assert _managed_target(rd._argv_dcf(PROJECT_ROOT, "NU")).name == "refresh_dcf.py"
+    assert (
+        _managed_target(rd._argv_thesis_eval(PROJECT_ROOT, "NU")).name == "run_thesis_evaluator.py"
+    )

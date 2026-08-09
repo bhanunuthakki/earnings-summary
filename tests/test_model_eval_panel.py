@@ -19,6 +19,7 @@ from pipeline.model_eval_panel import (
     load_anon_costs,
     load_candidate_histories,
     load_purpose_costs,
+    load_steering_health,
     render_model_eval_panel,
 )
 
@@ -259,6 +260,38 @@ def test_candidate_histories_group_and_flag_errored(tmp_path: Path) -> None:
     assert flash.latest.verdict == CANDIDATE_ERRORED and flash.errored
     # A switch verdict exists for the downgraded purpose.
     assert hist[("company_description", _SONNET)].latest.verdict == "SWITCH_DOWN"
+
+
+def test_sweep_freshness_uses_latest_graded_verdict(tmp_path: Path) -> None:
+    db = tmp_path / "p.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(_DDL)
+    old_graded = (datetime.now(UTC) - timedelta(days=30)).replace(tzinfo=None).isoformat()
+    recent_insufficient = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    _verdict(
+        conn,
+        purpose="bear_case",
+        candidate=_GEMINI_PRO,
+        incumbent=_SONNET,
+        verdict="KEEP_INCUMBENT",
+        recorded_at=old_graded,
+    )
+    _verdict(
+        conn,
+        purpose="bear_case",
+        candidate=_GEMINI_FLASH,
+        incumbent=_SONNET,
+        verdict="INSUFFICIENT_FRAME",
+        recorded_at=recent_insufficient,
+    )
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    health = load_steering_health(conn)
+    conn.close()
+
+    assert health.newest_verdict_at == old_graded
+    assert health.sweep_stale
+    assert health.insufficient_frame_purposes == ["bear_case"]
 
 
 def test_active_overrides_savings_and_incumbent(tmp_path: Path) -> None:

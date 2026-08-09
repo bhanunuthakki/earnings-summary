@@ -55,16 +55,27 @@ import logging
 import os
 import subprocess
 import sys
+import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.python_process import managed_python_prefix  # noqa: E402
+
 sys.path.insert(
     0, str(PROJECT_ROOT / "execution")
 )  # for run_model_eval_sweep + apply_model_switches
 
+from evals.coverage import (  # noqa: E402
+    EvalRunReceipt,
+    build_eval_run_receipt,
+    persist_eval_run_receipt,
+)
 from llm.capture import default_capture_archive_dir  # noqa: E402
+from llm.model_eval import CandidateVerdict  # noqa: E402
 from llm.model_ladder import DEFAULT_JUDGES  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -118,6 +129,33 @@ def _rotating_sample(tickers: list[str], size: int, week: int) -> list[str]:
     return rotated[:size]
 
 
+def _persist_sweep_receipt(
+    repo_root: Path,
+    verdicts: Sequence[CandidateVerdict],
+    *,
+    run_id: str,
+    started_at: datetime,
+) -> EvalRunReceipt:
+    """Persist the scheduled sweep's fail-closed operational receipt."""
+    receipt = build_eval_run_receipt(
+        [verdict.recommendation for verdict in verdicts],
+        run_id=run_id,
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
+    )
+    path = persist_eval_run_receipt(repo_root, receipt)
+    log.info("eval sweep receipt: %s", path)
+    log.info(
+        "eval sweep counts: attempted=%d graded=%d insufficient=%d errors=%d alerts=%d",
+        receipt.attempted,
+        receipt.graded,
+        receipt.insufficient,
+        receipt.errors,
+        receipt.alert_count,
+    )
+    return receipt
+
+
 def _nominated_harvest_tickers(db_path: Path, purposes: list[str], cap: int) -> list[str]:
     """The busiest tickers (30d production calls) on the NOMINATED purposes —
     pulled to the front of the harvest sample so the frame the nominations need
@@ -158,7 +196,7 @@ def _harvest(ticker: str, capture_dir: Path, repo_root: Path, timeout_s: int) ->
     env["LLM_CAPTURE_DIR"] = str(capture_dir)
     for purpose, cmd in _HARVEST_STEPS:
         full = [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(PROJECT_ROOT / cmd[0]),
             "--ticker",
             ticker,
@@ -308,20 +346,58 @@ def main() -> int:
     from run_model_eval_sweep import run_sweep
 
     log.info("--- sweep (%s) ---", "nominated" if nominations else "discovery")
-    verdicts = run_sweep(
-        capture_dir=capture_dir,
-        db_path=db_path,
-        purposes=None,
-        judges=list(DEFAULT_JUDGES),
-        limit=args.sweep_limit,
-        lookback_days=30,
-        min_n=4,
-        parity_threshold=0.8,
-        timeout_seconds=None,
-        persist=True,
-        nominations=nominations or None,
-    )
+    sweep_run_id = uuid.uuid4().hex
+    sweep_started_at = datetime.now(UTC)
+    try:
+        verdicts = run_sweep(
+            capture_dir=capture_dir,
+            db_path=db_path,
+            purposes=None,
+            judges=list(DEFAULT_JUDGES),
+            limit=args.sweep_limit,
+            lookback_days=30,
+            min_n=4,
+            parity_threshold=0.8,
+            timeout_seconds=None,
+            persist=True,
+            nominations=nominations or None,
+            run_id=sweep_run_id,
+        )
+    except Exception:
+        _persist_sweep_receipt(
+            repo_root,
+            [
+                CandidateVerdict(
+                    purpose="__weekly_sweep__",
+                    incumbent="unknown",
+                    candidate="unknown",
+                    n=0,
+                    candidate_wins=0,
+                    incumbent_wins=0,
+                    ties=0,
+                    parity_rate=0.0,
+                    judge_agreement=0.0,
+                    recommendation="CANDIDATE_ERRORED",
+                    reason="scheduled sweep raised before producing verdicts",
+                )
+            ],
+            run_id=sweep_run_id,
+            started_at=sweep_started_at,
+        )
+        raise
     log.info("sweep wrote %d verdict(s)", len(verdicts))
+    sweep_receipt = _persist_sweep_receipt(
+        repo_root,
+        verdicts,
+        run_id=sweep_run_id,
+        started_at=sweep_started_at,
+    )
+    if sweep_receipt.status != "passed":
+        log.error(
+            "scheduled eval failed closed: %s; no switches or prompt experiments applied",
+            ", ".join(sweep_receipt.alerts),
+        )
+        return 2
 
     # ---- 3. Apply (auto-switch) ----
     if args.skip_apply:

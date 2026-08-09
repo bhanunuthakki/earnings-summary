@@ -20,7 +20,7 @@ upload backlog.
 #>
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$py   = Join-Path $repo 'venv\Scripts\python.exe'
+$runPython = Join-Path $repo 'cron\run_python.bat'
 # Drive root works in either sync mode: in Stream mode Drive mounts a virtual
 # drive (usually G:) and the old C:\...\My Drive folder lingers on disk stale
 # and UNSYNCED, so any mounted "<letter>:\My Drive" must win over the mirror
@@ -32,7 +32,7 @@ foreach ($l in [char[]]('DEFGHIJKLMNOPQRSTUVWXYZ')) {
 $root = if ($env:ES_BACKUP_ROOT) { $env:ES_BACKUP_ROOT } else { Join-Path $driveRoot 'earnings-summary-backup' }
 
 Write-Host "=== 1/2  consistent DB snapshot (AES-256-GCM encrypted) ==="
-& $py (Join-Path $repo 'cron\backup_db.py')
+& $runPython 'backup_project_db' 'db-backup' 'cron\backup_db.py'
 if ($LASTEXITCODE -ne 0) {
     throw "Database backup failed with exit code $LASTEXITCODE; project mirror aborted."
 }

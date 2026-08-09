@@ -7,6 +7,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -14,6 +15,7 @@ from llm.prompt_registry import (
     REGISTRY,
     PromptTemplate,
     RenderedPrompt,
+    attribute_plain_prompt,
     register,
     template_meta,
 )
@@ -83,6 +85,52 @@ def test_template_meta_lift() -> None:
     assert template_meta(None) == (None, None, None)
 
 
+def test_plain_prompt_gets_central_purpose_version_and_body_hash() -> None:
+    import hashlib
+
+    prompt = "raw production prompt"
+    attributed = attribute_plain_prompt(prompt, purpose="bear_case")
+
+    assert attributed == prompt
+    assert isinstance(attributed, RenderedPrompt)
+    assert attributed.template_id == "purpose:bear_case"
+    assert attributed.template_version == "v2"
+    assert attributed.vars_sha256 == hashlib.sha256(prompt.encode()).hexdigest()
+
+
+def test_central_attribution_preserves_registered_rendered_prompt() -> None:
+    rendered = PromptTemplate("t.keep", "Hi {name}", ("name",)).render(name="NU")
+    assert attribute_plain_prompt(rendered, purpose="bear_case") is rendered
+
+
+def test_call_llm_attributes_plain_prompt_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import llm.cli as cli
+
+    observed: list[str] = []
+
+    def fake_claude(prompt: str, **_kwargs: object) -> str:
+        observed.append(prompt)
+        return "ok"
+
+    monkeypatch.setattr(cli, "_call_claude", fake_claude)
+    result = cli.call_llm(
+        "raw prompt",
+        purpose="bear_case",
+        model="claude-opus-4-8",
+        backend="claude",
+        force_budget_bypass=True,
+    )
+
+    assert result == "ok"
+    assert len(observed) == 1 and isinstance(observed[0], RenderedPrompt)
+    attributed = observed[0]
+    assert isinstance(attributed, RenderedPrompt)
+    assert attributed.template_id == "purpose:bear_case"
+    assert attributed.template_version == "v2"
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -125,7 +173,10 @@ def _record(db: Path, prompt: object) -> sqlite3.Row:
 
     # The available-columns cache is keyed by db path and lives for the
     # process; tests build several DBs with different schemas.
-    llm_call_ledger._OPTIONAL_COLUMN_CACHE.pop(str(db), None)
+    optional_cache = cast(
+        "dict[str, frozenset[str]]", getattr(llm_call_ledger, "_OPTIONAL_COLUMN_CACHE")
+    )
+    optional_cache.pop(str(db), None)
 
     record_llm_call(
         started_at=datetime.now(UTC).replace(tzinfo=None),
@@ -169,8 +220,8 @@ def test_ledger_row_carries_template_identity(
     assert row["template_version"] == t.version
     assert row["template_vars_sha256"] == rendered.vars_sha256
 
-    plain = _record(db, "raw unmigrated prompt")
-    assert plain["template_id"] is None  # honest NULLs, never faked
+    plain = _record(db, "raw lower-level prompt")
+    assert plain["template_id"] is None  # direct ledger bypass stays honest
 
 
 def test_ledger_pre_migration_db_still_lands_row(
@@ -207,13 +258,14 @@ def test_ledger_pre_migration_db_still_lands_row(
 def test_scenario_prior_template_byte_identity() -> None:
     """P0 gate (directive): the registry render must be byte-identical to the
     legacy inline .format for the migrated purpose."""
-    from dcf.scenario_prior import _PROMPT, build_prompt
+    import dcf.scenario_prior as scenario_prior
 
     ticker, anchor = "nu", "=== ANCHORS ===\nthesis text {not a slot} — 100% & more"
     # The anchor block may contain braces-like text; the legacy path formatted
     # the TEMPLATE (not the anchor), so both paths must treat anchor verbatim.
-    legacy = _PROMPT.format(ticker=ticker.upper(), anchor_block=anchor)
-    rendered = build_prompt(ticker, anchor)
+    legacy_template = cast("str", getattr(scenario_prior, "_PROMPT"))
+    legacy = legacy_template.format(ticker=ticker.upper(), anchor_block=anchor)
+    rendered = scenario_prior.build_prompt(ticker, anchor)
     assert rendered == legacy
     assert isinstance(rendered, RenderedPrompt)
     assert rendered.template_id == "scenario_prior.weights"
@@ -246,6 +298,7 @@ def test_every_backend_forwards_the_prompt_object() -> None:
         for m in re.finditer(r"record_llm_call\(", src):
             start = m.end()
             depth = 0
+            k = start
             for k in range(start, len(src)):
                 if src[k] == "(":
                     depth += 1

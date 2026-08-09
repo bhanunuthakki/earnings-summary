@@ -15,10 +15,10 @@ functionality first, improvements second.** Three amendments the sources force:
 - **Security fixes and "stop the bleeding" items come before simplification** — they are small,
   independent, and current behavior lies or is exposed. They are Phase A0, not part of the debt
   campaign proper.
-- **The two owner decisions gate the largest deletion tranche and must be made up front.**
-  Deciding costs nothing; deferring blocks Phase A2 and lets the `latest_governed` plane keep
-  growing (Codex cutover PRs #1165/#1166/#1171 are actively extending it while its fate is
-  formally undecided).
+- **Resolve owner-gated deletion policy before mutating retained data.** The
+  `latest_governed_*` ruling is now resolved as deletion (2026-08-08); the remaining
+  `fmp_snapshots/` age-thinning decision still gates retention work because it changes
+  as-of granularity.
 - **A few items filed as "improvements" are actually truth/foundation debt and move into
   Track A**: poisoned July eval invalidation, Sunday-job verification, and the Home
   request-scoped read connection. Pure capability work stays in Track B.
@@ -90,17 +90,17 @@ Still open:
 - Manifest/doc reconciliations (task count, UTF-16 re-encode, runtime-path `<Command>`, 03:00
   vs 03:40).
 
-**Truth debt (moved from Track B):** re-run or invalidate the transport-poisoned July eval
-verdicts; confirm the Sunday jobs ran + add an eval-freshness alarm.
+**Truth debt (moved from Track B):** the eight-day eval-freshness alarm and durable,
+fail-closed weekly sweep receipt are shipped. Operational closure remains open until a current
+graded cohort succeeds and the transport-poisoned July verdicts are re-run or invalidated.
 
 ### Gate — Owner decisions (make before Phase A2 starts)
 
-1. **[DECISION] `latest_governed_*` plane: finish the cutover or delete it.** Largest
-   duplicated-state cost in the repo (10 tables, ~9 provenance modules, 288 refs, zero prod
-   readers per its own docstring) — yet Codex cutover PRs are landing weekly. Either commit to
-   the cutover with a dated done-by trigger, or freeze and delete. Drop the ruling into a dated
-   `directives/` note so it stops being rediscovered. Gates A2.1/A2.3/A2.4 partially and Track
-   B's activation item entirely.
+1. **[RESOLVED — DELETE, 2026-08-08] `latest_governed_*` plane.** Migration
+   `0002_drop_dead_tables` removed the unread schema and the governed deletion catalog removed
+   the unreachable code/tests. `docs/hardening/L1/deletion_recovery_receipt_2026_08_08.json`
+   records production-derived population, integrity/FK, and recovery evidence. Track B
+   activation is void; do not rebuild or repopulate this plane.
 2. **[DECISION] `fmp_snapshots/` age-thinning** (1.2 GB, 30.7k files, grows forever) — changes
    as-of granularity; owner sign-off required.
 
@@ -118,8 +118,8 @@ The census (principle 2) is the first population pass of the tier indexes (princ
 inventory, two outputs. Then execute data-infra Phase 2:
 
 - `src/provenance/` scaffolding ~17k LOC (start with the 12.5k imported by nothing).
-- ~60 `execution/` scripts: 9 zero-reference, the 22-script cutover cluster (after the gate
-  decision), 31 one-shot backfills → git-tracked `execution/archive/` + `# ARCHIVED` convention
+- ~60 `execution/` scripts: 9 zero-reference, the deleted latest-governed cutover cluster,
+  31 one-shot backfills → git-tracked `execution/archive/` + `# ARCHIVED` convention
   (exempt from Layer-3 conventions) for anything that must stay auditable.
 - Dead schema: 9 zero-reference tables, 7 write-only tables, unread views incl. the `_v2`
   family (gated where they overlap the decision). Mind the FTS/batch_alter trigger trap.
@@ -134,9 +134,10 @@ suite before push, never piped through head/tail.
 - **Migration squash** (data-infra 3.1) → **fixture migration** (3.2; 177 files replaying the
   262-step chain) → **one DB-path resolver** (3.3). Squash lands first; add
   `next_alembic_number` tooling to kill the head-collision ritual while in there.
-- **`comments_server.py` decomposition**: ~4,400-line `create_app`, 116 route closures. Extract
-  one cohesive cluster to a Blueprint over an explicit `AppContext`, prove the pattern, repeat.
-  Ordered to *produce* the route registry of principle 4, not follow it.
+- **`comments_server.py` decomposition**: five explicit route clusters now own 43 routes
+  (content 24, DCF 7, alerts 6, settings 4, journal 2); the core retains 111 routes behind an
+  exact 154-route runtime contract. Continue extracting only cohesive clusters over explicit
+  contexts; route-count reduction alone is not a reason to split a deep module.
 - Shared primitives (data-infra 3.4–3.7): `src/net/client.py` + `FmpClient`;
   `execution/_lib.py` + convention test; one `store_conn()`; `connect_sqlite` as sole policy
   authority.
@@ -166,9 +167,8 @@ Strategic frame: **activation over construction** — an item is done when consu
 production, not merged.
 
 **B1**
-- `latest_governed` activation *per the gate decision*: populate in the morning pipeline, cut
-  ONE reader over behind a before/after benchmark, expand only after it proves out. (If the
-  decision was delete, this item is void — A2 already handled it.)
+- ~~`latest_governed` activation~~ **VOID — owner chose deletion on 2026-08-08; migration 0002,
+  the deletion catalog, and the recovery receipt record A2 closure.**
 - Home render: thread one request-scoped read connection through the strip renderers (measured
   ~51 connections/~625 statements per render; cockpit leg is the precedent). Record per-leg
   timings for the B2 cache decision.
@@ -204,7 +204,7 @@ production, not merged.
 
 ## Cumulative owner-decisions list
 
-1. `latest_governed_*`: finish cutover vs delete (gate — decide now).
+1. `[RESOLVED 2026-08-08] latest_governed_*`: delete; do not reactivate.
 2. `fmp_snapshots/` age-thinning (gate for A4 retention work).
 3. Directive-edit authorizations (batched diff from the A3 docs sweep).
 4. Migration-squash go/no-go ruling (A3, destructive-adjacent: needs cited backup + restore drill).

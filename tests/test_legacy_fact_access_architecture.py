@@ -87,7 +87,6 @@ AUDITED_LEGACY_FACT_READS = {
     "src/cockpit_fundamentals.py": 2,
     "src/competitive/holdings_sync.py": 1,
     "src/compute/fmp_derived_kpis.py": 3,
-    "src/compute/holding_scorecard.py": 2,
     "src/compute/kpi_extract_summaries.py": 3,
     "src/compute/kpi_resolver.py": 3,
     "src/compute/metrics_engine/io.py": 5,

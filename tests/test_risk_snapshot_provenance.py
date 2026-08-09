@@ -271,7 +271,7 @@ def test_comparable_false_on_metric_version_mismatch() -> None:
     a = RiskSnapshot(metric_version="v2", rebase_basis="observed")
     b = RiskSnapshot(metric_version="v1", rebase_basis="observed")
     assert comparable(a, b) is False
-    assert incomparable_reason(a, b) == "metric definition changed (v1 → v2)"
+    assert incomparable_reason(a, b) == "metric definition changed (v1 -> v2)"
 
 
 def test_comparable_false_on_rebase_basis_mismatch() -> None:
@@ -279,7 +279,7 @@ def test_comparable_false_on_rebase_basis_mismatch() -> None:
     b = RiskSnapshot(metric_version="v1", rebase_basis="observed")
     assert comparable(a, b) is False
     assert (
-        incomparable_reason(a, b) == "analytics window basis changed (observed → modeled_backfill)"
+        incomparable_reason(a, b) == "analytics window basis changed (observed -> modeled_backfill)"
     )
 
 

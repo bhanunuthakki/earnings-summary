@@ -48,6 +48,7 @@ from collections import deque
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import cast
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -67,14 +68,21 @@ except ImportError:  # pragma: no cover - install hint
 
 import sqlite3  # noqa: E402
 
-from comments_server_alert_routes import AlertRouteContext, register_alert_routes  # noqa: E402
+from comments_server_alert_routes import AppContext, register_alert_routes  # noqa: E402
 from comments_server_content_routes import (  # noqa: E402
     ContentRouteContext,
     register_content_routes,
 )
+from comments_server_dcf_routes import DcfRouteContext, register_dcf_routes  # noqa: E402
 from comments_server_journal_routes import (  # noqa: E402
     JournalRouteContext,
     register_journal_routes,
+)
+from comments_server_panel_cache import (  # noqa: E402
+    PanelCacheEntry,
+    PanelCacheHit,
+    PanelCacheReservation,
+    PanelResponseCache,
 )
 from comments_server_settings_routes import (  # noqa: E402
     SettingsRouteContext,
@@ -122,6 +130,7 @@ from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
 from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
+from log_redact import redact  # noqa: E402
 from logging_config import (  # noqa: E402
     configure_logging,
     get_correlation_id,
@@ -142,6 +151,7 @@ from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
 from runtime.job_runtime import portfolio_db_path  # noqa: E402
+from runtime.python_process import managed_python_argv  # noqa: E402
 from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
 from schema_compat import SchemaRevisionMismatch  # noqa: E402
 from server_runtime.access import (  # noqa: E402
@@ -171,6 +181,7 @@ _MAX_REQUEST_BYTES = 262_144
 _MAX_USER_INPUT_CHARS = 8_000
 _STREAM_QUEUE_MAXSIZE = 64
 _CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+_BROWSER_USER_AGENT_RX = re.compile(r"(?:mozilla|chrome|chromium|safari|firefox|edg)/", re.I)
 
 
 def _cors_allow_origin(origin: str, *, repo_root: Path = PROJECT_ROOT) -> str | None:
@@ -220,6 +231,19 @@ def _referer_back_path(referer: str) -> str | None:
     if not path.startswith("/") or path[1:2] in ("/", "\\"):
         return None
     return path + (f"?{parsed.query}" if parsed.query else "")
+
+
+def _is_browser_user_agent(user_agent: str) -> bool:
+    """Identify browser requests only for the no-fetch-metadata CSRF fallback.
+
+    Browsers normally send ``Origin`` and/or ``Sec-Fetch-Site`` on mutations.
+    Privacy-hardened clients can omit both, so a browser-shaped request with no
+    trustworthy metadata must present the existing report capability. Local
+    non-browser callers (curl, the Python CLI, Flask's test client) remain
+    usable without turning a browser's ambient loopback access into a bypass.
+    """
+
+    return _BROWSER_USER_AGENT_RX.search(user_agent) is not None
 
 
 # The panel id is interpolated rather than written as one literal '#decis…'
@@ -405,6 +429,22 @@ def _record_dismiss_pass(
 # build routes share its buildable-status set via discovery.store.
 
 
+class _RedactingFlask(Flask):
+    """Flask boundary that never writes an exception traceback to logs."""
+
+    def log_exception(
+        self,
+        exc_info: tuple[type, BaseException, TracebackType] | tuple[None, None, None],
+    ) -> None:
+        exc = exc_info[1]
+        if exc is None:
+            return
+        self.logger.error(
+            "unhandled request exception: %s",
+            redact(f"{type(exc).__name__}: {exc}")[:500],
+        )
+
+
 def create_app(
     repo_root: Path,
     *,
@@ -412,9 +452,10 @@ def create_app(
     registry: Registry | None = None,
     chat_executor: concurrent.futures.Executor | None = None,
 ) -> Flask:
-    app = Flask(__name__)
+    app = _RedactingFlask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
-    db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
+    resolved_db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
+    db_path = resolved_db_path
     job_registry = registry or Registry(repo_root=repo_root)
     report_capability = ReportCapabilityStore(repo_root)
     report_capability.load_or_create()
@@ -423,10 +464,7 @@ def create_app(
     # as fresh by the shell for 30 seconds. Keep the exact rendered response for
     # that same window so HTTP revalidation can stop *before* the route builder,
     # rather than paying the full build merely to discover the ETag is unchanged.
-    panel_cache: dict[str, tuple[float, bytes, str, str]] = {}
-    panel_cache_lock = threading.Lock()
-    panel_cache_ttl_seconds = 30.0
-    panel_cache_max_entries = 256
+    panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
     # Dedicated pool so a long-running LLM subprocess doesn't pin a Flask
     # request thread for the full 10-60s of a chat turn. Pool size caps
     # the number of concurrent chats; chunks flow back via per-request
@@ -445,10 +483,17 @@ def create_app(
         app.logger.error(
             "%s: %s",
             message,
-            exc,
-            exc_info=isinstance(exc, BaseException),
+            redact(f"{type(exc).__name__}: {exc}")[:500],
         )
         return _client_error(f"{message}; retry the request", status)
+
+    def _log_redacted_failure(message: str, exc: object, *, level: str = "error") -> None:
+        log = getattr(app.logger, level)
+        log(
+            "%s: %s",
+            message,
+            redact(f"{type(exc).__name__}: {exc}")[:500],
+        )
 
     def _drain_stream(
         events: Iterator[dict[str, object]],
@@ -533,7 +578,11 @@ def create_app(
         )
 
     def _open_db() -> sqlite3.Connection:
-        return connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        return connect_sqlite(
+            resolved_db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
 
     @app.before_request
     def enforce_network_boundary():
@@ -566,8 +615,7 @@ def create_app(
             # rejected mutation merely causes a harmless extra rebuild. Panel
             # timing telemetry is observational and must not evict the fragment
             # whose latency it just measured.
-            with panel_cache_lock:
-                panel_cache.clear()
+            panel_cache.clear()
 
     @app.errorhandler(413)
     def request_too_large(_error: object):
@@ -575,7 +623,11 @@ def create_app(
 
     @app.errorhandler(500)
     def internal_server_error(error: object):
-        app.logger.error("unhandled request failure: %s", error, exc_info=True)
+        if getattr(error, "original_exception", None) is None:
+            app.logger.error(
+                "unhandled request failure: %s",
+                redact(f"{type(error).__name__}: {error}")[:500],
+            )
         return _client_error("request failed; retry the request", 500)
 
     @app.teardown_request
@@ -584,12 +636,14 @@ def create_app(
         if db_conn is not None:
             with contextlib.suppress(Exception):
                 db_conn.close()
+        reservation = g.pop("panel_cache_reservation", None)
+        if isinstance(reservation, PanelCacheReservation):
+            panel_cache.abandon(reservation)
 
     def get_read_db() -> sqlite3.Connection:
         if "request_read_db" not in g:
-            db_path = repo_root / "data" / "portfolio.db"
             conn = connect_sqlite(
-                db_path,
+                resolved_db_path,
                 role=SQLiteConnectionRole.READ_ONLY,
                 schema_preflight=True,
             )
@@ -605,8 +659,9 @@ def create_app(
         # Origin is cross-site (judged by the same loopback / "null" / whitelist
         # rule as CORS, via _cors_allow_origin). Safe methods and the OPTIONS
         # preflight are exempt. An absent Origin remains allowed for loopback
-        # CLI callers, but is refused for a remote Tailnet client: remote
-        # mutations must come from a same-origin browser surface. This
+        # non-browser CLI callers, but a browser with no Origin, Referer, or
+        # Fetch Metadata must prove possession of the static-report capability.
+        # Remote mutations must come from a same-origin browser surface. This
         # complements the
         # CORS-withholding in add_cors_headers, which only stops requests the
         # browser bothers to preflight — the Origin check also covers a simple
@@ -615,9 +670,10 @@ def create_app(
             return None
         remote_address = request.remote_addr or ""
         origin = request.headers.get("Origin", "")
-        if origin == "null" and not report_capability.matches(
+        capability_matches = report_capability.matches(
             request.headers.get(REPORT_CAPABILITY_HEADER, "")
-        ):
+        )
+        if origin == "null" and not capability_matches:
             return ({"error": "static report capability required"}, 403)
         if (
             not origin
@@ -631,6 +687,25 @@ def create_app(
             return ({"error": "Origin required for remote state-changing request"}, 403)
         if origin and _cors_allow_origin(origin, repo_root=repo_root) is None:
             return ({"error": "cross-origin state-changing request refused"}, 403)
+        if not origin:
+            fetch_site = request.headers.get("Sec-Fetch-Site", "").strip().lower()
+            if fetch_site == "cross-site":
+                return ({"error": "cross-site state-changing request refused"}, 403)
+            referer = request.headers.get("Referer", "").strip()
+            if referer:
+                try:
+                    parsed = urllib.parse.urlparse(referer)
+                    referer_origin = f"{parsed.scheme}://{parsed.netloc}"
+                except ValueError:
+                    referer_origin = ""
+                if (
+                    not referer_origin
+                    or _cors_allow_origin(referer_origin, repo_root=repo_root) is None
+                ):
+                    return ({"error": "cross-site state-changing request refused"}, 403)
+            elif fetch_site != "same-origin" and not capability_matches:
+                if _is_browser_user_agent(request.headers.get("User-Agent", "")):
+                    return ({"error": "state-changing request capability required"}, 403)
         return None
 
     @app.before_request
@@ -638,15 +713,14 @@ def create_app(
         if request.method != "GET" or not request.path.startswith("/api/panel/"):
             return None
         cache_key = request.full_path.removesuffix("?")
-        now = time.monotonic()
-        with panel_cache_lock:
-            cached = panel_cache.get(cache_key)
-            if cached is not None and now - cached[0] > panel_cache_ttl_seconds:
-                panel_cache.pop(cache_key, None)
-                cached = None
-        if cached is None:
+        lookup = panel_cache.get_or_reserve(cache_key)
+        if isinstance(lookup, PanelCacheReservation):
+            g.panel_cache_reservation = lookup
             return None
-        _, body, content_type, etag = cached
+        assert isinstance(lookup, PanelCacheHit)
+        body = lookup.entry.body
+        content_type = lookup.entry.content_type
+        etag = lookup.entry.etag
         g.panel_cache_hit = True
         if request.if_none_match.contains(etag.strip('"')):
             response = Response(status=304)
@@ -707,16 +781,15 @@ def create_app(
             response.add_etag()
             response.headers["Cache-Control"] = "no-cache"
             if not getattr(g, "panel_cache_hit", False):
-                cache_key = request.full_path.removesuffix("?")
-                with panel_cache_lock:
-                    if len(panel_cache) >= panel_cache_max_entries:
-                        oldest_key = min(panel_cache, key=lambda key: panel_cache[key][0])
-                        panel_cache.pop(oldest_key, None)
-                    panel_cache[cache_key] = (
-                        time.monotonic(),
-                        response.get_data(),
-                        response.content_type,
-                        response.headers["ETag"],
+                reservation = g.pop("panel_cache_reservation", None)
+                if isinstance(reservation, PanelCacheReservation):
+                    panel_cache.store(
+                        reservation,
+                        PanelCacheEntry(
+                            body=response.get_data(),
+                            content_type=response.content_type or "application/octet-stream",
+                            etag=response.headers["ETag"],
+                        ),
                     )
             # make_conditional mutates + returns self; the cast restores the
             # Flask subclass the werkzeug stub erases.
@@ -915,8 +988,10 @@ def create_app(
         def _run_bg() -> None:
             try:
                 proposal_id = run_research_task(task_id, db_path=db_path, repo_root=repo_root)
-            except Exception:  # the engine reverts the row; the poll sees 'proposed'
-                app.logger.warning("research run failed for task %s", task_id, exc_info=True)
+            except Exception as exc:  # the engine reverts the row; the poll sees 'proposed'
+                _log_redacted_failure(
+                    f"research run failed for task {task_id}", exc, level="warning"
+                )
                 return
             if proposal_id is None:
                 return
@@ -937,8 +1012,8 @@ def create_app(
                 prop = get_proposal(proposal_id, db_path=db_path)
                 if token and chat_id is not None and prop is not None:
                     research_notify.send_proposal_card(token, chat_id, prop)
-            except Exception:
-                app.logger.debug("research telegram push skipped", exc_info=True)
+            except Exception as exc:
+                _log_redacted_failure("research telegram push skipped", exc, level="debug")
 
         threading.Thread(target=_run_bg, daemon=True, name=f"research-run-{task_id}").start()
         _bump_activation_count("act:research_run")
@@ -990,13 +1065,17 @@ def create_app(
         _bump_activation_count(f"act:proposal:{verb}")
         status = act_on_proposal(proposal_id, verb, steer_text=steer_text, db_path=db_path)
         applied = ""
+        apply_failed = False
         if verb == "approve":
             from research.apply import apply_approved_proposal
 
             try:
                 applied = apply_approved_proposal(proposal_id, db_path=db_path)
             except Exception as exc:  # a bad apply must not 500 the action
-                applied = f"apply failed: {exc}"
+                apply_failed = True
+                _log_redacted_failure(
+                    f"research proposal apply failed for proposal {proposal_id}", exc
+                )
         # Consequence receipt (Ledger UX overhaul): a plain-English line of what
         # just happened, built from the SAME status/applied values above — never
         # a second query. 'approve' echoes the live write when there was one
@@ -1008,7 +1087,15 @@ def create_app(
             "rejected": "Rejected — this proposal won't be revisited",
         }
         receipt = receipts.get(status, "Saved")
-        return {"status": status, "applied": applied, "receipt": receipt}
+        response: dict[str, object] = {"status": status, "applied": applied, "receipt": receipt}
+        if apply_failed:
+            response.update(
+                {
+                    "apply_error": "approved proposal could not be applied; retry the request",
+                    "correlation_id": get_correlation_id(),
+                }
+            )
+        return response
 
     @app.route("/api/reconcile/<kind>/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
     def reconcile_verdict(kind: str, item_id: int, verdict: str):
@@ -2119,7 +2206,11 @@ def create_app(
         except sqlite3.Error as exc:
             print(
                 json.dumps(
-                    {"event": "panel_activation_count_failed", "panel": panel, "error": str(exc)}
+                    {
+                        "event": "panel_activation_count_failed",
+                        "panel": panel,
+                        "error": redact(f"{type(exc).__name__}: {exc}")[:500],
+                    }
                 ),
                 file=sys.stderr,
             )
@@ -2230,7 +2321,7 @@ def create_app(
 
     register_alert_routes(
         app,
-        AlertRouteContext(
+        AppContext(
             db_path=db_path,
             default_user_id=DEFAULT_USER_ID,
             referer_back_path=_referer_back_path,
@@ -2869,7 +2960,7 @@ def create_app(
         try:
             rows = p3_data.load_peer_comp(sym, repo_root=repo_root)
         except Exception as exc:  # best-effort surface, never a 500
-            app.logger.error("peer lookup failed: %s", exc, exc_info=True)
+            _log_redacted_failure(f"peer lookup failed for {sym}", exc)
             return {
                 "ticker": sym,
                 "peers": [],
@@ -3366,12 +3457,12 @@ def create_app(
         builds them."""
         if request.method == "OPTIONS":
             return ("", 204)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "run_discovery.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "run_discovery.py",
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="DISCOVERY", kind="discovery-run", argv=argv)
         except RegistryConflict as e:
@@ -3431,16 +3522,16 @@ def create_app(
                 },
                 400,
             )
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "discovery_build.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "discovery_build.py",
             "--tickers",
             ",".join(tickers),
             "--repo-root",
             str(repo_root),
             "--user-id",
             user_id,
-        ]
+        )
         slot_ticker = tickers[0] if len(tickers) == 1 else "DISCOVERY-BULK"
         try:
             job = job_registry.start(ticker=slot_ticker, kind="discovery-build", argv=argv)
@@ -3570,11 +3661,8 @@ def create_app(
             outcome = generate_for_ticker(db_path, repo_root, ticker)
         except ReadoutUnavailableError as exc:
             return ({"error": str(exc)}, 404)
-        except Exception:
-            app.logger.exception(
-                "post_earnings_readout_request_failed",
-                extra={"ticker": ticker, "correlation_id": get_correlation_id()},
-            )
+        except Exception as exc:
+            _log_redacted_failure(f"post earnings readout request failed for {ticker}", exc)
             return (
                 {
                     "error": "readout generation failed; retry the request",
@@ -3605,345 +3693,15 @@ def create_app(
         ),
     )
 
-    @app.route("/api/dcf-sheet/<ticker>", methods=["GET"])
-    def dcf_sheet_link(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """The Google Sheet linked to a ticker's DCF, if any:
-        ``{"ticker", "sheet_id", "url"}`` (sheet_id/url null when unlinked). Read
-        from holdings ``dcf_defaults.gsheet_id``, which an `export` populates."""
-        t = ticker.upper()
-        sheet_id, url = _linked_gsheet(repo_root, t)
-        return {"ticker": t, "sheet_id": sheet_id, "url": url}
-
-    @app.route("/api/dcf/inputs/<ticker>", methods=["GET"])
-    def dcf_inputs(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """The current redesigned-DCF assumption set for a ticker as a JSON dict
-        — what the in-app recompute card edits and POSTs back.
-
-        Read once from the live workbook ``dcf/<T>.xlsx`` to seed the editable
-        controls; the recompute LOOP itself never touches the xlsx. 404 when
-        there is no redesigned workbook for the ticker, 422 when the workbook is
-        present but structurally unreadable."""
-        t = ticker.upper()
-        live = repo_root / "dcf" / f"{t}.xlsx"
-        if not live.exists():
-            abort(404)
-        try:
-            inp = dcf_redesign.read_inputs(live)
-        except dcf_redesign.RedesignError as e:
-            return ({"error": str(e)}, 422)
-        if inp is None:
-            abort(404)  # present but not redesigned-format
-        return {"ticker": t, "inputs": inp.to_dict()}
-
-    @app.route("/api/dcf/recompute", methods=["POST", "OPTIONS"])
-    def dcf_recompute():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Recompute a DCF from edited assumptions — NO xlsx in the loop.
-
-        Body: ``{"inputs": {<RedesignInputs.to_dict() with edits applied>}}``.
-        Runs the existing pure ``value()/scenario_values()/sensitivity_grid()``
-        and returns base fair value + Bull/Base/Bear + the WACC × exit-multiple
-        grid + the live over/under (decimal). Stateless: the in-app card calls it
-        on every assumption edit; persistence is a separate explicit save /
-        Push-to-Sheets commit, never this route. 400 on a malformed/invalid
-        input set, 422 on a degenerate but well-formed one (perpetuity WACC ≤ g)."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return ({"error": "JSON body required"}, 400)
-        raw = cast("dict[str, object]", body).get("inputs")
-        if not isinstance(raw, dict):
-            return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
-        try:
-            inp = dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", raw))
-        except dcf_redesign.RedesignError as e:
-            return ({"error": f"invalid inputs: {e}"}, 400)
-        try:
-            return _dcf_recompute_payload(inp)
-        except dcf_redesign.RedesignError as e:
-            return ({"error": str(e)}, 422)
-
-    @app.route("/api/dcf/save", methods=["POST", "OPTIONS"])
-    def dcf_save():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Durably save edited DCF assumptions to the model — the explicit in-app
-        commit (Push-to-Sheets stays the publish-to-Google-Sheet commit).
-
-        Body: ``{"ticker": T, "inputs": {<edited RedesignInputs.to_dict()>}}``.
-        Writes the edited cell-backed levers onto ``dcf/<T>.xlsx``, reconciles the
-        S11 override ledger against the IMMUTABLE Opus baseline (the edit is
-        recorded; the baseline is never overwritten), mirrors the edits to the
-        from-scratch default, and re-persists ``dcf_runs``. Returns the recomputed
-        card payload (canonical saved inputs — WACC re-derived from the saved CAPM
-        drivers) plus the save outcome. 400 on a malformed input set, 409 when
-        there is no redesigned workbook to edit, 422 on a degenerate one."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return ({"error": "JSON body required"}, 400)
-        data = cast("dict[str, object]", body)
-        ticker = data.get("ticker")
-        if not isinstance(ticker, str) or not ticker.strip():
-            return ({"error": "body.ticker required"}, 400)
-        raw = data.get("inputs")
-        if not isinstance(raw, dict):
-            return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
-        try:
-            inp = dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", raw))
-        except dcf_redesign.RedesignError as e:
-            return ({"error": f"invalid inputs: {e}"}, 400)
-        # Reject a degenerate set up front (same 422 contract as recompute) so a
-        # save never writes an un-valuable model to the workbook.
-        try:
-            _dcf_recompute_payload(inp)
-        except dcf_redesign.RedesignError as e:
-            return ({"error": str(e)}, 422)
-
-        import refresh_dcf  # heavy CLI module — imported only on the save path
-
-        try:
-            t = ticker_validation.safe_ticker(ticker)
-        except ValueError:
-            return ({"error": "invalid ticker"}, 400)
-        result = refresh_dcf.apply_edits(t, repo_root, db_path, inp)
-        if result.get("status") != "ok":
-            reason = str(result.get("reason", "save failed"))
-            code = 409 if "no redesigned workbook" in reason else 500
-            return ({"error": reason, "result": result}, code)
-        # Reflect exactly what was persisted: recompute from the canonical saved
-        # inputs (re-read from the workbook, WACC re-derived from saved drivers).
-        saved_inp = dcf_redesign.read_inputs(repo_root / "dcf" / f"{t}.xlsx")
-        payload = _dcf_recompute_payload(saved_inp) if saved_inp is not None else {}
-        if saved_inp is not None:
-            payload["inputs"] = saved_inp.to_dict()
-        return {**payload, "saved": True, "result": result}
-
-    @app.route("/api/dcf/inject-fact", methods=["POST", "OPTIONS"])
-    def dcf_inject_fact():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Inject a picked DIY fact as a DCF driver (capture-every-number S6).
-
-        Body: ``{"ticker": T, "token": "<metric token>", "field": "<driver key>"}``.
-        Resolves the metric's LATEST value through the timeseries loaders (so
-        company-doc ``fact_overrides`` win — S2), converts it into the target
-        driver's units (the load-bearing units/scale step — percent→ratio, $→$M),
-        sanity-bounds it, then commits via ``refresh_dcf.apply_edits`` (the
-        clobber-safe cell + JSON-sync + provenance + dcf_runs path). Returns the
-        recomputed card payload plus the resolved-fact/conversion detail.
-
-        400 on a malformed body / unknown field / unparseable token; 404 when the
-        ticker has no FCFF redesign workbook (archetype models are not editable
-        this way); 422 on a fact that cannot be safely scaled, an out-of-bounds
-        converted value, or a degenerate resulting model."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from dcf import fact_drivers
-        from viewspec.spec import MetricRef, ViewSpecError
-
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return ({"error": "JSON body required"}, 400)
-        data = cast("dict[str, object]", body)
-        ticker_raw = data.get("ticker")
-        token = data.get("token")
-        field_key = data.get("field")
-        if not isinstance(ticker_raw, str) or not ticker_raw.strip():
-            return ({"error": "body.ticker required"}, 400)
-        if not isinstance(token, str) or not token.strip():
-            return ({"error": "body.token (a picked metric token) required"}, 400)
-        if not isinstance(field_key, str) or not field_key.strip():
-            return ({"error": "body.field (a driver field key) required"}, 400)
-        field = fact_drivers.DRIVER_FIELDS_BY_KEY.get(field_key)
-        if field is None:
-            return ({"error": f"unknown driver field {field_key!r}"}, 400)
-        try:
-            metric = MetricRef.parse_token(token)
-        except ViewSpecError as exc:
-            return ({"error": str(exc)}, 400)
-
-        try:
-            t = ticker_validation.safe_ticker(ticker_raw)
-        except ValueError:
-            return ({"error": "invalid ticker"}, 400)
-        # FCFF-only guard: archetype models (bank/holdco/fintech/platform) and
-        # un-built names have no redesigned workbook to seed from.
-        live = repo_root / "dcf" / f"{t}.xlsx"
-        try:
-            base_inp = dcf_redesign.read_inputs(live) if live.exists() else None
-        except dcf_redesign.RedesignError as exc:
-            return ({"error": str(exc)}, 422)
-        if base_inp is None:
-            return ({"error": f"{t} has no editable FCFF DCF model"}, 404)
-
-        # Resolve → convert → apply. A FactDriverError is a 422 (well-formed
-        # request, but the fact can't be safely turned into this driver).
-        try:
-            resolved = fact_drivers.resolve_fact_value(
-                metric, ticker=t, repo_root=repo_root, db_path=db_path
-            )
-            converted = fact_drivers.convert_to_driver(resolved.value, resolved.unit, field)
-            edited = fact_drivers.apply_to_inputs(base_inp, field, converted.value)
-        except fact_drivers.FactDriverError as exc:
-            return ({"error": str(exc)}, 422)
-        # Reject a degenerate resulting model up front (same 422 contract as save).
-        try:
-            _dcf_recompute_payload(edited)
-        except dcf_redesign.RedesignError as exc:
-            return ({"error": str(exc)}, 422)
-
-        import refresh_dcf  # heavy CLI module — imported only on the commit path
-
-        result = refresh_dcf.apply_edits(t, repo_root, db_path, edited)
-        if result.get("status") != "ok":
-            reason = str(result.get("reason", "injection failed"))
-            code = 404 if "no redesigned workbook" in reason else 500
-            return ({"error": reason, "result": result}, code)
-
-        injection: dict[str, object] = {
-            "ticker": t,
-            "field_key": field.key,
-            "field_label": field.label,
-            "metric_token": token,
-            "metric_label": metric.label,
-            "raw_value": resolved.value,
-            "raw_unit": resolved.unit,
-            "applied_value": converted.value,
-            "conversion": converted.note,
-            "source": resolved.source,
-            "fact_id": resolved.fact_id,
-            "period_end": resolved.period_end,
-        }
-        # Durable fact lineage on the assumptions JSON (best-effort, additive).
-        with contextlib.suppress(Exception):
-            fact_drivers.record_driver_provenance(
-                repo_root / "data" / "dcf_assumptions" / f"{t}.json",
-                field_key=field.key,
-                payload={
-                    "metric": token,
-                    "fact_id": resolved.fact_id,
-                    "raw_value": resolved.value,
-                    "raw_unit": resolved.unit,
-                    "applied_value": converted.value,
-                    "source": resolved.source,
-                    "period_end": resolved.period_end,
-                },
-            )
-
-        saved_inp = dcf_redesign.read_inputs(live)
-        payload = _dcf_recompute_payload(saved_inp) if saved_inp is not None else {}
-        if saved_inp is not None:
-            payload["inputs"] = saved_inp.to_dict()
-        return {**payload, "injected": True, "injection": injection, "result": result}
-
-    @app.route("/api/dcf/inject-fact-sheet", methods=["POST", "OPTIONS"])
-    def dcf_inject_fact_sheet():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Park a picked DIY fact on a ticker's DCF *reference sheet* (S7).
-
-        Body: ``{"ticker": T, "token": "<metric token>"}`` (no driver field — a
-        reference fact is not wired into the recompute). Resolves the metric's
-        LATEST value through the SAME loaders the driver path uses (so company-doc
-        ``fact_overrides`` win — S2), then writes it — value + unit + period +
-        source/provenance, in its native unit (NOT converted) — into the companion
-        workbook ``dcf/facts/<T>.xlsx`` that the refresh NEVER rebuilds, so it
-        survives every model refresh (the S7 deliverable; see
-        ``dcf.fact_sheet`` for the why).
-
-        400 on a malformed body / unparseable token; 404 when the ticker has no
-        DCF model workbook to attach a reference to; 422 when the fact cannot be
-        resolved (no observations)."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        from datetime import date as _date
-
-        from dcf import fact_drivers, fact_sheet
-        from viewspec.spec import MetricRef, ViewSpecError
-
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return ({"error": "JSON body required"}, 400)
-        data = cast("dict[str, object]", body)
-        ticker_raw = data.get("ticker")
-        token = data.get("token")
-        if not isinstance(ticker_raw, str) or not ticker_raw.strip():
-            return ({"error": "body.ticker required"}, 400)
-        if not isinstance(token, str) or not token.strip():
-            return ({"error": "body.token (a picked metric token) required"}, 400)
-        try:
-            metric = MetricRef.parse_token(token)
-        except ViewSpecError as exc:
-            return ({"error": str(exc)}, 400)
-
-        try:
-            t = ticker_validation.safe_ticker(ticker_raw)
-        except ValueError:
-            return ({"error": "invalid ticker"}, 400)
-        # A reference attaches to a ticker's DCF — any model archetype qualifies
-        # (FCFF/bank/holdco/...), since the companion file is model-agnostic. A
-        # never-built name has nothing to reference.
-        if not (repo_root / "dcf" / f"{t}.xlsx").exists():
-            return ({"error": f"{t} has no DCF model to attach a reference to"}, 404)
-
-        try:
-            resolved = fact_drivers.resolve_fact_value(
-                metric, ticker=t, repo_root=repo_root, db_path=db_path
-            )
-        except fact_drivers.FactDriverError as exc:
-            return ({"error": str(exc)}, 422)
-
-        fact = fact_sheet.ReferenceFact(
-            token=token,
-            label=metric.label,
-            value=resolved.value,
-            unit=resolved.unit,
-            period_end=resolved.period_end,
-            source=resolved.source,
-            fact_id=resolved.fact_id,
-            captured_on=_date.today().isoformat(),
-        )
-        path = fact_sheet.facts_workbook_path(repo_root, t)
-        outcome = fact_sheet.upsert_fact(path, fact)
-        return {
-            "ticker": t,
-            "added": True,
-            "action": outcome["action"],
-            "count": outcome["count"],
-            "workbook": str(path),
-            "fact": {
-                "token": fact.token,
-                "label": fact.label,
-                "value": fact.value,
-                "unit": fact.unit,
-                "period_end": fact.period_end,
-                "source": fact.source,
-                "fact_id": fact.fact_id,
-                "captured_on": fact.captured_on,
-            },
-        }
-
-    @app.route("/api/dcf/reference-facts/<ticker>", methods=["GET"])
-    def dcf_reference_facts(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
-        """Every reference fact parked on a ticker's DCF (the companion
-        ``dcf/facts/<T>.xlsx``), as ``{"ticker", "facts": [...]}``. Empty list
-        when none have been injected."""
-        from dcf import fact_sheet
-
-        t = ticker.upper()
-        facts = fact_sheet.read_facts(fact_sheet.facts_workbook_path(repo_root, t))
-        return {
-            "ticker": t,
-            "facts": [
-                {
-                    "token": f.token,
-                    "label": f.label,
-                    "value": f.value,
-                    "unit": f.unit,
-                    "period_end": f.period_end,
-                    "source": f.source,
-                    "fact_id": f.fact_id,
-                    "captured_on": f.captured_on,
-                }
-                for f in facts
-            ],
-        }
+    register_dcf_routes(
+        app,
+        DcfRouteContext(
+            repo_root=repo_root,
+            db_path=db_path,
+            linked_gsheet=_linked_gsheet,
+            recompute_payload=_dcf_recompute_payload,
+        ),
+    )
 
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
 
@@ -3976,7 +3734,7 @@ def create_app(
                 return ({"error": f"unknown step(s): {bad}; valid: {list(STEP_NAMES)}"}, 400)
 
         dispatcher = repo_root / "execution" / "refresh_dispatch.py"
-        argv = [sys.executable, str(dispatcher), "--ticker", ticker, "--mode", mode]
+        argv = managed_python_argv(repo_root, dispatcher, "--ticker", ticker, "--mode", mode)
         if force:
             argv.append("--force")
         if steps:
@@ -4070,15 +3828,15 @@ def create_app(
         if scenario not in all_scenario_ids():
             return ({"error": f"unknown scenario: {scenario or '(none)'}"}, 400)
         script = repo_root / "execution" / "run_scenario.py"
-        argv = [
-            sys.executable,
-            str(script),
+        argv = managed_python_argv(
+            repo_root,
+            script,
             "--scenario",
             scenario,
             "--portfolio",
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="_REPO", kind="run-scenario", argv=argv)
         except RegistryConflict as e:
@@ -4119,9 +3877,9 @@ def create_app(
             return ({"error": "quarters must be an integer"}, 400)
 
         script = repo_root / "execution" / "refresh_ir_kpis.py"
-        argv = [
-            sys.executable,
-            str(script),
+        argv = managed_python_argv(
+            repo_root,
+            script,
             "--ticker",
             ticker,
             "--discover",
@@ -4129,7 +3887,7 @@ def create_app(
             str(quarters),
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker=ticker, kind="refresh-ir", argv=argv)
         except RegistryConflict as e:
@@ -4164,15 +3922,15 @@ def create_app(
         except ValueError:
             return ({"error": "invalid ticker"}, 400)
         script = repo_root / "execution" / "dcf_sheets.py"
-        argv = [
-            sys.executable,
-            str(script),
+        argv = managed_python_argv(
+            repo_root,
+            script,
             "export",
             "--ticker",
             ticker,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         share_with = str(body.get("share_with", "")).strip()
         if share_with:
             argv += ["--share-with", share_with]
@@ -4210,15 +3968,15 @@ def create_app(
         except ValueError:
             return ({"error": "invalid ticker"}, 400)
         script = repo_root / "execution" / "dcf_sheets.py"
-        argv = [
-            sys.executable,
-            str(script),
+        argv = managed_python_argv(
+            repo_root,
+            script,
             "import",
             "--ticker",
             ticker,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         sheet_id = str(body.get("sheet_id", "")).strip()
         if sheet_id:
             argv += ["--sheet-id", sheet_id]
@@ -4247,13 +4005,13 @@ def create_app(
         assumptions drawer section calls this."""
         if request.method == "OPTIONS":
             return ("", 204)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "refresh_dcf.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "refresh_dcf.py",
             "--all-named",
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="_REPO", kind="rebuild-dcfs", argv=argv)
         except RegistryConflict as e:
@@ -4295,7 +4053,7 @@ def create_app(
         else:
             valid = [*sorted(_MAINTENANCE_ACTIONS), "onboard"]
             return ({"error": f"unknown action {action!r}; valid: {valid}"}, 400)
-        argv = [sys.executable, str(repo_root / "execution" / parts[0]), *parts[1:]]
+        argv = managed_python_argv(repo_root, repo_root / "execution" / parts[0], *parts[1:])
         try:
             job = job_registry.start(ticker=slot_ticker, kind=kind, argv=argv)
         except RegistryConflict as e:
@@ -4409,14 +4167,14 @@ def create_app(
         memo_kind = str(body.get("kind", ""))
         if memo_kind not in ("next_dollar", "swap_checks", "all"):
             return ({"error": "kind must be next_dollar | swap_checks | all"}, 400)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "run_advisor_memos.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "run_advisor_memos.py",
             "--kind",
             memo_kind,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
         except RegistryConflict as e:
@@ -4447,9 +4205,9 @@ def create_app(
         ticker = str(body.get("ticker", "")).strip().upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "review_position.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "review_position.py",
             ticker,
             "--verdict",
             "--db",
@@ -4458,7 +4216,7 @@ def create_app(
             # CLI defaults to 'agent', which would exclude it).
             "--source",
             "doorway",
-        ]
+        )
         try:
             job = job_registry.start(ticker=ticker, kind="position-review", argv=argv)
         except RegistryConflict as e:
@@ -4490,14 +4248,14 @@ def create_app(
         purpose = str(body.get("purpose", ""))
         if purpose not in RUNNABLE_PURPOSES:
             return ({"error": f"purpose must be one of {list(RUNNABLE_PURPOSES)}"}, 400)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "run_llm_evals.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "run_llm_evals.py",
             "--purpose",
             purpose,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="_REPO", kind=f"eval-{purpose}", argv=argv)
         except RegistryConflict as e:
@@ -4535,13 +4293,13 @@ def create_app(
         ticker = str(body.get("ticker") or "").strip().upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "run_socratic_questions.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "run_socratic_questions.py",
             ticker,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker=ticker, kind="socratic-questions", argv=argv)
         except RegistryConflict as e:
@@ -4750,8 +4508,16 @@ def create_app(
             # everything else is transient and degrades at component scope.
             if is_hard_stop(exc):
                 status = 402 if isinstance(exc, LLMBudgetExceeded) else 503
-                return ({"error": str(exc), "kind": type(exc).__name__}, status)
-            return ({"degraded": True, "reason": f"{type(exc).__name__}: {exc}"}, 200)
+                return _internal_failure("thesis preview unavailable", exc, status=status)
+            _log_redacted_failure("thesis preview degraded", exc, level="warning")
+            return (
+                {
+                    "degraded": True,
+                    "reason": "thesis preview unavailable; retry the request",
+                    "correlation_id": get_correlation_id(),
+                },
+                200,
+            )
         return (result, 200)
 
     @app.route("/api/comments/process", methods=["POST", "OPTIONS"])
@@ -4788,13 +4554,21 @@ def create_app(
             except Exception as exc:
                 if is_hard_stop(exc):
                     status = 402 if isinstance(exc, LLMBudgetExceeded) else 503
-                    return ({"error": str(exc), "kind": type(exc).__name__}, status)
-                return ({"degraded": True, "reason": f"{type(exc).__name__}: {exc}"}, 200)
+                    return _internal_failure("comment preview unavailable", exc, status=status)
+                _log_redacted_failure("comment preview degraded", exc, level="warning")
+                return (
+                    {
+                        "degraded": True,
+                        "reason": "comment preview unavailable; retry the request",
+                        "correlation_id": get_correlation_id(),
+                    },
+                    200,
+                )
             return (res, 200)
 
         # apply=true → dispatch the real run as a single-flight job.
         script = repo_root / "execution" / "process_report_comments.py"
-        argv = [sys.executable, str(script), "--ticker", ticker, "--apply"]
+        argv = managed_python_argv(repo_root, script, "--ticker", ticker, "--apply")
         if report_date is not None:
             argv += ["--report-date", report_date.isoformat()]
         if bool(body.get("clear", False)):
@@ -4932,8 +4706,11 @@ def start_boot_warmup(app: Flask, *, paths: tuple[str, ...] = WARMUP_PATHS) -> t
     def _warm() -> None:
         try:
             client = app.test_client()
-        except Exception:
-            app.logger.warning("boot warm-up could not start", exc_info=True)
+        except Exception as exc:
+            app.logger.warning(
+                "boot warm-up could not start: %s",
+                redact(f"{type(exc).__name__}: {exc}")[:500],
+            )
             return
         for path in paths:
             started_ns = time.perf_counter_ns()
@@ -4941,10 +4718,14 @@ def start_boot_warmup(app: Flask, *, paths: tuple[str, ...] = WARMUP_PATHS) -> t
                 response = client.get(path)
                 status = response.status_code
                 response.close()
-            except Exception:
+            except Exception as exc:
                 # A priming failure is never allowed to affect serving; the
                 # path simply stays cold and the owner pays what they used to.
-                app.logger.warning("boot warm-up failed for %s", path, exc_info=True)
+                app.logger.warning(
+                    "boot warm-up failed for %s: %s",
+                    path,
+                    redact(f"{type(exc).__name__}: {exc}")[:500],
+                )
                 continue
             app.logger.info(
                 "boot warm-up %s status=%s elapsed_ms=%d",

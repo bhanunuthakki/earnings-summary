@@ -28,6 +28,8 @@ see the caller's DB, without mutating process-global state the way
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from os import fspath
@@ -41,6 +43,19 @@ if TYPE_CHECKING:
 # the db.DB_PATH global. ContextVar (not a bare global) so concurrent server
 # threads / async tasks can each hold their own DB context without racing.
 _AMBIENT_DB_PATH: ContextVar[str | None] = ContextVar("ambient_db_path", default=None)
+
+
+def configured_db_path(
+    repo_root: Path,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve the process-wide portfolio DB from one environment authority."""
+    source = os.environ if environ is None else environ
+    configured = source.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (repo_root / "data" / "portfolio.db").resolve()
 
 
 @contextmanager

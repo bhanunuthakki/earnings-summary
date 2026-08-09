@@ -60,6 +60,10 @@ from typing import cast
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from evals.coverage import (  # noqa: E402
+    build_eval_run_receipt,
+    persist_eval_run_receipt,
+)
 from evals.sampler import (  # noqa: E402
     CLASSIFY_PURPOSE,
     ensure_difficulty_features,
@@ -511,6 +515,7 @@ def run_sweep(
     timeout_seconds: int | None,
     persist: bool,
     nominations: list[Nomination] | None = None,
+    run_id: str | None = None,
 ) -> list[CandidateVerdict]:
     """Run one full sweep across all active purposes. Returns all verdicts made."""
     capture_files = _find_capture_files(capture_dir)
@@ -534,7 +539,7 @@ def run_sweep(
         ", ".join(p for p, _c, _m, _r in work),
     )
 
-    run_id = uuid.uuid4().hex
+    run_id = run_id or uuid.uuid4().hex
     all_verdicts: list[CandidateVerdict] = []
 
     for purpose, candidates, suggested_min_n, nomination_row_id in work:
@@ -860,22 +865,52 @@ def main() -> int:
             log.info("--from-nominations: no pending nominations; falling back to discovery")
             nominations = None
 
-    verdicts = run_sweep(
-        capture_dir=capture_dir,
-        db_path=db_path,
-        purposes=explicit_purposes,
-        judges=judges,
-        limit=args.limit,
-        lookback_days=args.lookback_days,
-        min_n=args.min_n,
-        parity_threshold=args.parity_threshold,
-        timeout_seconds=args.timeout,
-        persist=not args.no_persist,
-        nominations=nominations,
-    )
+    run_id = uuid.uuid4().hex
+    started_at = datetime.now(UTC)
+    try:
+        verdicts = run_sweep(
+            capture_dir=capture_dir,
+            db_path=db_path,
+            purposes=explicit_purposes,
+            judges=judges,
+            limit=args.limit,
+            lookback_days=args.lookback_days,
+            min_n=args.min_n,
+            parity_threshold=args.parity_threshold,
+            timeout_seconds=args.timeout,
+            persist=not args.no_persist,
+            nominations=nominations,
+            run_id=run_id,
+        )
+    except Exception:
+        receipt = build_eval_run_receipt(
+            ["CANDIDATE_ERRORED"],
+            run_id=run_id,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+        )
+        path = persist_eval_run_receipt(repo_root, receipt, dry_run=args.no_persist)
+        log.error("eval sweep receipt: %s", path)
+        raise
 
     _emit_summary(verdicts)
-    return 0
+    receipt = build_eval_run_receipt(
+        [verdict.recommendation for verdict in verdicts],
+        run_id=run_id,
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
+    )
+    path = persist_eval_run_receipt(repo_root, receipt, dry_run=args.no_persist)
+    log.info("eval sweep receipt: %s", path)
+    log.info(
+        "eval sweep counts: attempted=%d graded=%d insufficient=%d errors=%d alerts=%d",
+        receipt.attempted,
+        receipt.graded,
+        receipt.insufficient,
+        receipt.errors,
+        receipt.alert_count,
+    )
+    return 0 if receipt.status == "passed" else 2
 
 
 if __name__ == "__main__":

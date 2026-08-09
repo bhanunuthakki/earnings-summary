@@ -19,15 +19,12 @@ when financial_facts is absent.
 
 from __future__ import annotations
 
-import contextlib
-import json
-import os
 import sqlite3
-import tempfile
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+from materialized_cache import cache_metadata, read_fresh_payload, write_payload_atomically
 from timeseries.loaders import reader_tier_join_sql, reader_tier_rank_sql
 
 __all__ = [
@@ -37,6 +34,7 @@ __all__ = [
 ]
 
 _CACHE_REL: tuple[str, ...] = ("data", "cockpit_fundamentals.json")
+_CACHE_SCHEMA = "cockpit-fundamentals"
 
 # Half-year period-end spacing guard (Jun-30 ↔ Dec-31 is 181-184d).
 _SEMI_ANNUAL_GAP_DAYS = (175, 200)
@@ -266,21 +264,12 @@ def materialize_fundamentals(conn: sqlite3.Connection, repo_root: Path) -> int:
     """
     data = compute_from_db(conn)
     serialisable = {t: list(v) for t, v in data.items()}
-    payload = {
-        "computed_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
+    payload: dict[str, object] = {
+        **cache_metadata(_CACHE_SCHEMA),
         "fundamentals": serialisable,
     }
     path = _cache_path(repo_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix="cockpit_fundamentals.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    write_payload_atomically(path, payload, prefix="cockpit_fundamentals.")
     return len(data)
 
 
@@ -292,17 +281,10 @@ def read_materialized_fundamentals(
     This is the render path's only fundamentals source — a pure disk read,
     never a DB query.
     """
-    try:
-        raw = _cache_path(repo_root).read_text(encoding="utf-8")
-    except OSError:
+    payload = read_fresh_payload(_cache_path(repo_root), schema=_CACHE_SCHEMA)
+    if not payload:
         return {}
-    try:
-        payload = json.loads(raw)
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    fund = cast("dict[str, object]", payload).get("fundamentals")
+    fund = payload.get("fundamentals")
     if not isinstance(fund, dict):
         return {}
     out: dict[str, tuple[float | None, float | None]] = {}

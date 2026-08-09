@@ -227,6 +227,8 @@ def test_scheduler_wrapper_preserves_script_arguments(
                 "--scheduler-wrapper",
                 "--python-executable",
                 "py",
+                "--python-bootstrap",
+                "execution/sqlite_bootstrap.py",
                 "--python-arg=-3.11",
                 "--",
                 "morning",
@@ -244,7 +246,9 @@ def test_scheduler_wrapper_preserves_script_arguments(
         "write_sets": ["portfolio-db"],
         "command": [
             "py",
+            "-u",
             "-3.11",
+            "execution/sqlite_bootstrap.py",
             "execution/morning pipeline.py",
             "--label",
             "two words",

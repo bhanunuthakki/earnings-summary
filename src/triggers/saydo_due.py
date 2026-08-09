@@ -72,6 +72,7 @@ from llm.anchors import (
 from llm.prompt_versions import prompt_version_for
 from llm_artifact_store import (
     UpsertRequest,
+    artifact_is_reusable,
     compute_input_sha256,
     read_current,
     upsert,
@@ -697,8 +698,7 @@ class SayDoDueTrigger:
         new_sha = compute_input_sha256(prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs)
         if (
             existing is not None
-            and not existing.dirty
-            and existing.input_sha256 == new_sha
+            and artifact_is_reusable(existing, input_sha256=new_sha)
             and isinstance(existing.content_md, str)
             and existing.content_md.strip()
         ):

@@ -254,11 +254,11 @@ def test_extract_for_ticker_runs_all_registered_by_default(
 ) -> None:
     # Mock the LLM so the customer_concentration extractor doesn't make
     # a real call. The lease extractor is deterministic.
-    def empty_llm(_prompt: str, **_kwargs: object) -> str:
-        return "[]"
+    def empty_llm(_prompt: str, **_kwargs: object) -> list[object]:
+        return []
 
     monkeypatch.setattr(
-        "table_extractors.customer_concentration.call_llm",
+        "table_extractors.customer_concentration.call_llm_structured",
         empty_llm,
     )
     _seed_fmp_json(repo_root, "GOOG", 2024)

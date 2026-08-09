@@ -1,23 +1,24 @@
-"""Read/write API for exec_comp_packages + exec_holdings.
+"""Read/write API for ``exec_comp_packages``.
 
 Persists annual DEF 14A Named-Executive-Officer compensation packages and
-beneficial ownership snapshots. The schema captures the analytical questions
-that matter for thesis-vs-incentive alignment:
+their incentive-design disclosures. The schema captures the analytical
+questions that matter for thesis-vs-incentive alignment:
 
-  performance_metrics_json — JSON list of {metric, weight, threshold, target,
+  performance_metrics_json â€” JSON list of {metric, weight, threshold, target,
                               max, actual}. Powers the alignment lens: do
                               management's pay metrics match the thesis
                               tier-1 KPIs?
-  peer_group_json          — JSON list of peer tickers. Peer-group shifts are
+  peer_group_json          â€” JSON list of peer tickers. Peer-group shifts are
                               their own signal (when comp benchmarks drift,
                               management is rebasing).
-  total_comp_granted vs realized — granted is the contract; realized is what
+  total_comp_granted vs realized â€” granted is the contract; realized is what
                               they banked. Big gaps are alignment signals.
-  ceo_pay_ratio            — required CEO/median-employee disclosure.
+  ceo_pay_ratio            â€” required CEO/median-employee disclosure.
 
-Companion fetcher (Phase 5b LLM extractor) reads the proxy and emits an
-exec_comp_packages row + 1+ exec_holdings rows per NEO. See
-execution/extract_exec_comp.py.
+The companion extractor reads the proxy and emits one ``exec_comp_packages``
+row per NEO. The former ``exec_holdings`` table was retired by migration 0002;
+insider ownership signals now come from their canonical store. See
+``execution/extract_exec_comp.py``.
 """
 
 from __future__ import annotations
@@ -86,7 +87,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
             role=SQLiteConnectionRole.WRITER,
             schema_preflight=True,
         )
-        conn.execute("PRAGMA busy_timeout = 10000")
         conn.row_factory = sqlite3.Row
         if (
             conn.execute(

@@ -58,6 +58,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
 from capture import pending_replies, telegram
 from user_state._db import now_iso, now_naive_utc, open_conn
 
@@ -71,6 +73,15 @@ PredraftCall = Callable[[str], "dict[str, object]"]
 
 PREDRAFT_PURPOSE = "weekly_packet_predraft"
 REWRITE_KIND = "packet_rewrite"
+
+
+class _PredraftWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft: str = Field(min_length=1, max_length=400)
+
+
+_PREDRAFT_ADAPTER = TypeAdapter(_PredraftWire)
 
 ITEM_KINDS: tuple[str, ...] = (
     "reconcile_note",
@@ -550,8 +561,9 @@ def _default_predraft_call(prompt: str, *, ticker: str | None) -> dict[str, obje
         scope="ledger",
         expect="object",
         required_keys=("draft",),
+        schema=_PREDRAFT_ADAPTER,
     )
-    return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
+    return _PredraftWire.model_validate(obj).model_dump()
 
 
 def predraft(item: PacketItemRow, *, call: PredraftCall | None = None) -> str | None:

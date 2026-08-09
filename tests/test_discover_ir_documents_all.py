@@ -39,7 +39,7 @@ def _ticker_of(argv: list[str]) -> str:
 
 
 def _stage_of(argv: list[str]) -> str:
-    return "discover" if any("discover_ir_documents.py" in a for a in argv) else "fetch"
+    return "discover" if _script_of(argv) == "discover_ir_documents.py" else "fetch"
 
 
 class _RecordingRun:
@@ -146,10 +146,11 @@ def _argv(tmp_path: Path, extra: list[str] | None = None) -> list[str]:
 
 
 def _script_of(argv: list[str]) -> str:
-    for tok in argv:
-        if tok.endswith(".py"):
-            return Path(tok).name
-    return ""
+    assert len(argv) >= 3
+    assert Path(argv[1]).name == "sqlite_bootstrap.py"
+    target = Path(argv[2])
+    assert target.suffix == ".py"
+    return target.name
 
 
 def _make_tracked_db(db: Path, ticker: str) -> None:
@@ -178,9 +179,9 @@ def test_all_roster_tickers_succeed(
     assert s["ok"] == 2
     assert s["failed"] == 0
     assert s["downloaded"] == 7
-    # Network-only discovery fans out first; shared fetch/register work stays
-    # serialized in deterministic ticker order.
-    assert [item for item in fake.stages if item[1] == "discover"] == [
+    # Network-only discovery fans out in scheduler-dependent order; shared
+    # fetch/register work stays serialized in deterministic ticker order.
+    assert sorted(item for item in fake.stages if item[1] == "discover") == [
         ("NU", "discover"),
         ("ORCL", "discover"),
     ]

@@ -51,6 +51,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+
 from ask.grounding import EvidenceItem, used_citation_items
 from llm.structured import call_llm_structured
 from llm_budget import should_skip_for_budget
@@ -70,6 +72,53 @@ _MARKER_RX = re.compile(r"\[(\d{1,2})\]")
 # newline (markdown bullets/paragraphs break sentences too).
 _SENTENCE_SPLIT_RX = re.compile(r"(?<=[.!?])\s+|\n+")
 _NORM_STRIP_RX = re.compile(r"\[\d{1,2}\]|[*_`#]+")
+
+
+class _ClaimWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quote: str = Field(min_length=_MIN_QUOTE_CHARS, max_length=_CLAIM_TEXT_CHARS)
+    cites: list[int] = Field(max_length=30)
+    supported: bool = True
+
+    @field_validator("cites", mode="before")
+    @classmethod
+    def _integer_cites_only(cls, value: object) -> list[int]:
+        if not isinstance(value, list):
+            return []
+        return [
+            item
+            for item in cast("list[object]", value)
+            if isinstance(item, int) and not isinstance(item, bool)
+        ]
+
+    @model_validator(mode="after")
+    def _unsupported_has_no_cites(self) -> _ClaimWire:
+        if not self.supported and self.cites:
+            raise ValueError("unsupported claims must not cite evidence")
+        return self
+
+
+class _ClaimMapWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claims: list[_ClaimWire] = Field(max_length=_MAX_CLAIMS)
+
+    @field_validator("claims", mode="before")
+    @classmethod
+    def _drop_invalid_claims(cls, value: object) -> list[_ClaimWire]:
+        if not isinstance(value, list):
+            raise ValueError("claims must be an array")
+        valid: list[_ClaimWire] = []
+        for entry in cast("list[object]", value):
+            try:
+                valid.append(_ClaimWire.model_validate(entry))
+            except ValueError:
+                continue
+        return valid
+
+
+_CLAIM_MAP_ADAPTER = TypeAdapter(_ClaimMapWire)
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +295,7 @@ def extract_claim_map(
             scope="ask",
             expect="object",
             required_keys=("claims",),
+            schema=_CLAIM_MAP_ADAPTER,
         )
     except Exception as exc:
         if strict:
@@ -256,12 +306,8 @@ def extract_claim_map(
             {"event": "ask_claim_grounding_failed", "error": f"{type(exc).__name__}: {exc}"}
         )
         return None
-    raw = cast("dict[str, object]", payload).get("claims")
-    if not isinstance(raw, list):
-        if strict:
-            raise ValueError("claim map: `claims` field is not a list")
-        return None
-    return _reconcile(cast("list[object]", raw), text, items)
+    raw = _ClaimMapWire.model_validate(payload)
+    return _reconcile([claim.model_dump() for claim in raw.claims], text, items)
 
 
 def build_citations_payload(

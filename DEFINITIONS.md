@@ -296,12 +296,6 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Lives in.** `src/search/exact_semantic.py` and the semantic-receipt section of `src/search/heterogeneous_retrieval.py`.
 **Not to be confused with.** An opaque vector-service response or approximate-nearest-neighbor receipt. Those cannot enter an investor-grade Heterogeneous Retrieval Trace unless a separately governed evaluation and admission contract is added.
 
-## Shadow Read Contract
-
-**Definition.** A database-neutral, canonical-JSON protocol for asynchronously reproducing sealed projections and retrieval traces in a secondary read store. It binds the exact stream cursor, cutoff, ontology, resolution, Research Snapshot, and projection seals; hash-chained batches are idempotent under duplicate or reordered delivery and checkpoints advance by compare-and-swap.
-**Lives in.** `src/provenance/postgres_shadow.py`.
-**Not to be confused with.** A deployed PostgreSQL replica or write cutover. The contract defines parity and replay rules; an operational shadow still requires adapters, deployment, restore tests, lag monitoring, and owner-approved read promotion.
-
 ## Legacy Canonical Parity Report
 
 **Definition.** A cutoff-pinned, read-only, keyset-paged comparison that follows the exact accepted legacy-evidence bridge into one ontology-bound Canonical Metric Cell and its sealed, audited Canonical Fact Projection entry. It records one explicit terminal disposition for every legacy row, exact field differences, duplicate-coordinate cardinality, truncation, and cutover readiness.

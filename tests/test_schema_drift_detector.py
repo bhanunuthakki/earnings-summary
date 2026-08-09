@@ -423,14 +423,17 @@ def test_panel_reports_lost_cost_rows(tmp_path: Path) -> None:
     assert "SchemaRevisionMismatch" in body
 
 
-def test_panel_is_quiet_when_everything_is_aligned(tmp_path: Path) -> None:
+def test_panel_has_no_schema_or_ledger_alarm_when_aligned(tmp_path: Path) -> None:
     from pipeline.cron_health_panel import render_cron_health_live_body
 
     db = _versioned_db(tmp_path / "data" / "portfolio.db", expected_head())
 
     body = render_cron_health_live_body(db)
 
-    assert "ch-alarm" not in body
+    # Backup and eval freshness intentionally fail closed in an otherwise empty
+    # fixture. This test owns only the schema/ledger contracts.
+    assert "Schema drift" not in body
+    assert "LLM cost row" not in body
 
 
 # --------------------------------------------------------------------------

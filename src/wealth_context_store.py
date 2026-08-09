@@ -1,14 +1,14 @@
-"""wealth_context_snapshot_history persistence — PRD §7.6 (P0-F).
+"""wealth_context_snapshot_history persistence â€” PRD Â§7.6 (P0-F).
 
 Append-only aggregates timeseries (migration 0187). Same degrade-don't-crash
 contract as :mod:`portfolio_risk_snapshot_store`: every function returns
 ``False`` / ``None`` / ``[]`` instead of raising on a missing DB / table.
-Appends are idempotent via the UNIQUE ``input_sha`` (INSERT OR IGNORE) — a
+Appends are idempotent via the UNIQUE ``input_sha`` (INSERT OR IGNORE) â€” a
 re-run on the same observed values is a no-op, not a duplicate row.
 
-Consumers (per §7.6.5): trend/delta context for the Risk Budget and Senior
+Consumers (per Â§7.6.5): trend/delta context for the Risk Budget and Senior
 Partner Brief, Workstream-C drift alerts, and the aged fallback when the
-tracker/wealthplan are unreachable — always rendered with its age. Advice-
+tracker/wealthplan are unreachable â€” always rendered with its age. Advice-
 time reads stay LIVE; this table supplies history, not current truth.
 """
 
@@ -49,7 +49,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         return None
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         present = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -69,7 +68,7 @@ def append_snapshot(
     user_id: str = _DEFAULT_USER,
     db_path: Path | str | None = None,
 ) -> tuple[bool, bool]:
-    """Append one observation. Returns ``(written, deduped)`` — ``(False,
+    """Append one observation. Returns ``(written, deduped)`` â€” ``(False,
     True)`` means the identical observation was already recorded (idempotent
     re-run), ``(False, False)`` means the DB/table is unavailable or the
     write failed. Never raises."""

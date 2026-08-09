@@ -128,6 +128,8 @@ def _frontier(*, empty: bool = False) -> DeterministicFrontier:
 
 def _valid_payload() -> dict[str, object]:
     return {
+        "as_of_date": "2026-07-20T00:00:00",
+        "input_sha": "fixed_sha_1",
         "status": "deploy_partial",
         "preferred_plan": {
             "allocations": [

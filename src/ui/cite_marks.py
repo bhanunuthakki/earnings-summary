@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import html
 import re
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -142,6 +143,22 @@ CITE_MARKS_JS = r"""
     if (meta.length) html += '<span class="cite-pop-meta">' + meta.join(' &middot; ') + '</span>';
     return '<span class="cite-pop" role="tooltip">' + html + '</span>';
   }
+  function safeHref(raw, base) {
+    var href = String(raw || '').trim();
+    if (!href || /[\u0000-\u001f\u007f]/.test(href)) return '';
+    if (/^https?:\/\//i.test(href)) {
+      try {
+        var absolute = new URL(href);
+        if ((absolute.protocol === 'http:' || absolute.protocol === 'https:')
+            && absolute.hostname && !absolute.username && !absolute.password) return href;
+      } catch (_err) {}
+      return '';
+    }
+    if (href.charAt(0) !== '/' || href.charAt(1) === '/' || href.indexOf('\\') !== -1) return '';
+    if (!base) return href;
+    var safeBase = safeHref(base, '');
+    return safeBase ? safeBase.replace(/\/$/, '') + href : '';
+  }
   function linkify(html, items, opts) {
     var base = (opts && opts.hrefBase) || '';
     var map = {};
@@ -149,9 +166,7 @@ CITE_MARKS_JS = r"""
     return String(html).replace(CITE_RX, function (m, value, n) {
       var c = map[n];
       if (!c) return m;
-      var href = c.href || c.source_url || '';
-      if (href && /^javascript:/i.test(href.trim())) href = '';
-      else if (href && !/^https?:/i.test(href) && base) href = base.replace(/\/$/, '') + (href.charAt(0) === '/' ? href : '/' + href);
+      var href = safeHref(c.href || c.source_url || '', base);
       var pop = popHtml(c);
       if (value) {
         var badge = href
@@ -228,7 +243,6 @@ _VALUE_CORE = (
     r"(?:</(?:strong|em|code)>)?"
 )
 _CITE_RX = re.compile(r"(?:(" + _VALUE_CORE + r")\s*)?\[(\d{1,2})\]")
-_ABS_URL_RX = re.compile(r"^https?:", re.IGNORECASE)
 
 # A single citation chip payload (EvidenceItem.chip_payload's shape) and the
 # two forms ``linkify`` / ``render_prose`` accept: a bare list of items, or the
@@ -240,6 +254,31 @@ CitationsPayload = Mapping[str, object] | Sequence[CitationItem]
 def _esc(value: object) -> str:
     """HTML-escape a chip field (mirror of the JS ``esc``)."""
     return html.escape("" if value is None else str(value), quote=True)
+
+
+def _safe_href(raw: object, href_base: str) -> str:
+    href = str(raw or "").strip()
+    if not href or any(ord(char) < 32 or ord(char) == 127 for char in href):
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(href)
+    except ValueError:
+        return ""
+    if parsed.scheme:
+        if (
+            parsed.scheme.lower() in {"http", "https"}
+            and parsed.hostname
+            and parsed.username is None
+            and parsed.password is None
+        ):
+            return href
+        return ""
+    if parsed.netloc or not href.startswith("/") or href.startswith("//") or "\\" in href:
+        return ""
+    if not href_base:
+        return href
+    base = _safe_href(href_base, "")
+    return urllib.parse.urljoin(base, href) if base else ""
 
 
 def citation_items(payload: CitationsPayload | None) -> list[CitationItem]:
@@ -336,11 +375,7 @@ def linkify(text: str, payload: CitationsPayload | None, *, href_base: str = "")
         c = by_n.get(n)
         if c is None:
             return m.group(0)
-        href = str(c.get("href") or c.get("source_url") or "").strip()
-        if href.lower().startswith("javascript:"):
-            href = ""
-        elif href and not _ABS_URL_RX.match(href) and href_base:
-            href = f"{href_base.rstrip('/')}/{href.lstrip('/')}"
+        href = _safe_href(c.get("href") or c.get("source_url"), href_base)
         pop = _cite_pop_html(c)
         if value:
             # value is already-rendered, already-escaped prose HTML — wrap as-is.

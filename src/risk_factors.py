@@ -69,6 +69,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+
 from allocation.exposure import NameMix, latest_revenue_mix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from thesis_collision import ThesisSnapshot, load_thesis_snapshot
@@ -173,6 +175,24 @@ MAX_LOADINGS_PER_TICKER = 5
 _RATIONALE_CAP = 240
 _DIM_TYPES: tuple[str, ...] = ("geography", "product")
 _HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
+
+
+class _FactorLoadingWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    factor: str
+    loading: float = Field(ge=0.0, le=1.0)
+    rationale: str = Field(min_length=1, max_length=_RATIONALE_CAP)
+
+    @field_validator("factor")
+    @classmethod
+    def _closed_factor(cls, value: str) -> str:
+        if value not in TAXONOMY:
+            raise ValueError("factor must be an exact taxonomy label")
+        return value
+
+
+_FACTOR_LOADINGS_ADAPTER = TypeAdapter(list[_FactorLoadingWire])
 
 
 # ---------------------------------------------------------------------------
@@ -390,8 +410,10 @@ def _default_call() -> FactorCall:
     def call(prompt: str) -> list[object]:
         from llm.structured import call_llm_structured
 
-        payload = call_llm_structured(prompt, purpose=PURPOSE, expect="array")
-        return cast("list[object]", payload)
+        payload = call_llm_structured(
+            prompt, purpose=PURPOSE, expect="array", schema=_FACTOR_LOADINGS_ADAPTER
+        )
+        return [entry.model_dump() for entry in cast("list[_FactorLoadingWire]", payload)]
 
     return call
 
@@ -717,7 +739,9 @@ def refresh_ticker_exposures(
 
     loadings: tuple[FactorLoading, ...] | None = None
     cache_hit = False
-    if existing is not None and existing.input_sha256 == fresh_artifact_sha and not existing.dirty:
+    if existing is not None and store.artifact_is_reusable(
+        existing, input_sha256=fresh_artifact_sha
+    ):
         loadings = _loadings_from_json(existing.content_json)
         cache_hit = loadings is not None
 

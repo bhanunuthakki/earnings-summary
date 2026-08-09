@@ -60,6 +60,7 @@ from dcf import redesign as redesign_mod  # noqa: E402
 from dcf import reverse as reverse_mod  # noqa: E402
 from dcf import universe as universe_mod  # noqa: E402
 from dcf.provenance import DcfInputProvenance  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from ticker_validation import safe_ticker  # noqa: E402
 
@@ -448,7 +449,7 @@ def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
     proc = subprocess.run(
-        [sys.executable, str(_BANK_BUILDER)],
+        [*managed_python_prefix(PROJECT_ROOT), str(_BANK_BUILDER)],
         env=env,
         capture_output=True,
         text=True,
@@ -471,7 +472,7 @@ def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
     proc = subprocess.run(
-        [sys.executable, str(_HOLDCO_BUILDER)],
+        [*managed_python_prefix(PROJECT_ROOT), str(_HOLDCO_BUILDER)],
         env=env,
         capture_output=True,
         text=True,
@@ -503,7 +504,7 @@ def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
     proc = subprocess.run(
-        [sys.executable, str(_FINTECH_BUILDER)],
+        [*managed_python_prefix(PROJECT_ROOT), str(_FINTECH_BUILDER)],
         env=env,
         capture_output=True,
         text=True,
@@ -535,7 +536,7 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
     proc = subprocess.run(
-        [sys.executable, str(_PLATFORM_BUILDER)],
+        [*managed_python_prefix(PROJECT_ROOT), str(_PLATFORM_BUILDER)],
         env=env,
         capture_output=True,
         text=True,
@@ -569,7 +570,7 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
     proc = subprocess.run(
-        [sys.executable, str(_MELI_SOTP_BUILDER)],
+        [*managed_python_prefix(PROJECT_ROOT), str(_MELI_SOTP_BUILDER)],
         env=env,
         capture_output=True,
         text=True,
@@ -603,7 +604,7 @@ def _run_builder(ticker: str, repo_root: Path, dest: Path) -> subprocess.Complet
         DCF_DEST=str(dest),
     )
     return subprocess.run(
-        [sys.executable, str(_BUILDER_SCRIPT)],
+        [*managed_python_prefix(PROJECT_ROOT), str(_BUILDER_SCRIPT)],
         env=env,
         capture_output=True,
         text=True,

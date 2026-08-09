@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from capture.matcher import RosterIndex, load_roster
 from llm.untrusted import spotlight
@@ -126,6 +126,9 @@ class DecisionDraft(BaseModel):
     @classmethod
     def _upper_candidates(cls, v: list[str]) -> list[str]:
         return [str(t).strip().upper() for t in v if str(t).strip()]
+
+
+_DECISION_DRAFT_ADAPTER = TypeAdapter(DecisionDraft)
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,8 +503,9 @@ def _default_call(text: str, roster_tickers: tuple[str, ...]) -> dict[str, objec
         purpose=PURPOSE,
         expect="object",
         required_keys=("intent",),
+        schema=_DECISION_DRAFT_ADAPTER,
     )
-    return cast("dict[str, object]", payload) if isinstance(payload, dict) else {}
+    return DecisionDraft.model_validate(payload).model_dump()
 
 
 def _coerce_draft(raw: dict[str, object], *, roster: RosterIndex) -> DecisionDraft | None:

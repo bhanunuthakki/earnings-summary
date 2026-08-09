@@ -23,15 +23,17 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-from llm_client import DEFAULT_MODEL, JSON_FENCE_RE, call_llm  # noqa: E402
+from llm.structured import call_llm_structured  # noqa: E402
+from llm.untrusted import spotlight  # noqa: E402
+from llm_client import DEFAULT_MODEL  # noqa: E402
 
 log = logging.getLogger("analyze_filing_intelligence")
 
@@ -76,7 +78,7 @@ class FilingIntelligenceSummary(BaseModel):
     segment_changes: SegmentChange
     metric_redefinitions: MetricRedefinition
     executive_comp: ExecutiveCompAlignment
-    investment_signals: list[InvestmentSignal] = Field(default_factory=list)
+    investment_signals: list[InvestmentSignal] = Field(default_factory=list[InvestmentSignal])
     raw_synthesis_md: str
 
 
@@ -89,7 +91,7 @@ class FilingIntelligenceResult:
     analyzed_at: str | None = None
     elapsed_ms: int = 0
     model: str = DEFAULT_MODEL
-    summary: dict | None = None
+    summary: dict[str, object] | None = None
     skipped_reason: str | None = None
 
 
@@ -128,9 +130,9 @@ def _flatten(node: object) -> list[str]:
             if len(s) > 80:
                 out.append(s)
         elif isinstance(item, dict):
-            stack.extend(item.values())
+            stack.extend(cast("dict[object, object]", item).values())
         elif isinstance(item, list):
-            stack.extend(item)
+            stack.extend(cast("list[object]", item))
     return out
 
 
@@ -158,10 +160,12 @@ def _is_s1_anchored(ticker: str, repo_root: Path) -> bool:
     if not path.exists():
         return False
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    raw = payload.get("data_anchor") if isinstance(payload, dict) else None
+    raw = (
+        cast("dict[str, object]", payload).get("data_anchor") if isinstance(payload, dict) else None
+    )
     return isinstance(raw, str) and raw.strip().lower() == "s1"
 
 
@@ -236,7 +240,7 @@ Your task is to synthesize a high-fidelity analytical review of segment reportin
 
 SEC Footnote Disclosures:
 \"\"\"
-{relevant_text}
+{spotlight(relevant_text, source="SEC filing footnote disclosures")}
 \"\"\"
 
 Produce a structured JSON response matching the following JSON schema:
@@ -270,13 +274,16 @@ Produce a structured JSON response matching the following JSON schema:
 Return ONLY the valid JSON object. No markdown fence, no commentary, no conversational filler.
 """
 
-    raw = call_llm(prompt, purpose="strategic_analysis").strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-
-    # Parse and validate schema
-    parsed = json.loads(raw)
-    validated = FilingIntelligenceSummary(**parsed)
+    validated = cast(
+        "FilingIntelligenceSummary",
+        call_llm_structured(
+            prompt,
+            purpose="strategic_analysis",
+            ticker=ticker,
+            scope="filing_intelligence",
+            schema=TypeAdapter(FilingIntelligenceSummary),
+        ),
+    )
 
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
@@ -333,14 +340,17 @@ def main(argv: list[str] | None = None) -> int:
                 "fiscal_year": result.fiscal_year,
                 "elapsed_ms": result.elapsed_ms,
                 "total_wall_seconds": f"{elapsed:.2f}",
-                "signals_found": len(result.summary.get("investment_signals") or [])
-                if result.summary
-                else 0,
+                "signals_found": _signal_count(result.summary),
             },
             indent=2,
         )
     )
     return 0
+
+
+def _signal_count(summary: dict[str, object] | None) -> int:
+    raw = summary.get("investment_signals") if summary else None
+    return len(cast("list[object]", raw)) if isinstance(raw, list) else 0
 
 
 if __name__ == "__main__":

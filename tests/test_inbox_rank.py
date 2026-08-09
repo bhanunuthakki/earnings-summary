@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from alerts import AlertRow
+from dashboard import inbox_rank
 from dashboard.inbox import InboxItem
 from dashboard.inbox_rank import annotate_and_rank, inbox_label, note_semantic_kind
 
@@ -414,6 +415,53 @@ def test_thesis_relevance_boosts_warn_and_breach_tickers(tmp_path: Path) -> None
     assert "thesis 1.50 (bad)" in ranked[0].score_why
     assert "thesis 1.25 (warn)" in ranked[1].score_why
     assert "thesis 1.00 (ok)" in ranked[2].score_why
+
+
+def test_ranking_uses_borrowed_connection_for_all_db_enrichment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Request-scoped ranking must not open or close nested DB connections."""
+    db = tmp_path / "ranking.db"
+    borrowed = sqlite3.connect(db)
+    borrowed.executescript(
+        """
+        CREATE TABLE thesis_evaluations (
+            ticker TEXT, overall_status TEXT, evaluated_at TEXT
+        );
+        CREATE TABLE news (
+            id INTEGER PRIMARY KEY, source TEXT, source_feed TEXT
+        );
+        CREATE TABLE signals (
+            news_id INTEGER, signal_type TEXT
+        );
+        INSERT INTO thesis_evaluations VALUES ('NU', 'warn', '2026-06-09');
+        INSERT INTO news VALUES (7, 'Newswire', 'stock_news');
+        INSERT INTO signals VALUES (7, 'consensus_rating');
+        """
+    )
+    borrowed.commit()
+
+    def reject_nested_open(*_args: object, **_kwargs: object) -> sqlite3.Connection:
+        raise AssertionError("ranking opened a nested SQLite connection")
+
+    monkeypatch.setattr(inbox_rank, "connect_sqlite", reject_nested_open)
+    item = _alert_item(
+        trigger_kind="material_news",
+        evidence={"news_id": 7, "headline": "Nu update"},
+    )
+
+    ranked = annotate_and_rank(
+        [item],
+        db_path=db,
+        now=NOW,
+        position_weights={},
+        conn=borrowed,
+    )
+
+    assert ranked[0].category == "rating"
+    assert "thesis 1.25 (warn)" in ranked[0].score_why
+    assert borrowed.execute("SELECT 1").fetchone() == (1,)
+    borrowed.close()
 
 
 def test_unresolved_thesis_status_does_not_get_the_breach_factor(tmp_path: Path) -> None:

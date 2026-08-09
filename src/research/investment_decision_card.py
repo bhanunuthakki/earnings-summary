@@ -1,12 +1,12 @@
 """Investment Decision Card (PRD ``docs/design/personal_investment_partner_prd.md``
-§8.1, P1.1). The typed ``InvestmentDecisionCard`` separates company hypothesis,
+Â§8.1, P1.1). The typed ``InvestmentDecisionCard`` separates company hypothesis,
 security setup, portfolio fit, disconfirming case, evidence readiness,
 suggested disposition, and uncertainty into seven distinct sections so
-opening an evaluation answers all seven §8.1 questions at once.
+opening an evaluation answers all seven Â§8.1 questions at once.
 
 Flow (see :func:`generate_card`):
 
-1. Deterministic inputs FIRST — :func:`allocation.eligibility.assess_eligibility`
+1. Deterministic inputs FIRST â€” :func:`allocation.eligibility.assess_eligibility`
    (the evidence_readiness section is COPIED from its
    :class:`~allocation.eligibility.DecisionReadyAssessment`: ``decision_ready``
    = ``assessment.eligible``, ``blockers`` = ``assessment.blocking_reasons``),
@@ -21,21 +21,21 @@ Flow (see :func:`generate_card`):
 3. ``model_validate`` + a deterministic post-pass that OVERWRITES
    ``evidence_readiness``, ``hypothesis_origin``, and the security's
    ``current_price``/``price_as_of``/outlier caveat from the deterministic
-   inputs — **the LLM can never set ``decision_ready=True`` when the
+   inputs â€” **the LLM can never set ``decision_ready=True`` when the
    assessment says blocked**, and can never invent a price.
-4. Persist via ``llm_artifact_store.upsert`` — scope='ticker',
+4. Persist via ``llm_artifact_store.upsert`` â€” scope='ticker',
    purpose='investment_decision_card', cached on (assessment.input_sha,
    thesis hash, dcf run ref, bear artifact id, fit computed_at).
 
-Error handling (§10.6, mirrors ``allocation.recommendation_artifact``):
+Error handling (Â§10.6, mirrors ``allocation.recommendation_artifact``):
 budget-exceeded and transient LLM failures degrade to a labeled
 deterministic-minimal card when the deterministic inputs suffice (a thesis
 is on file); otherwise ``generate_card`` returns an explicit
-``CardResult(failure_reason=...)`` — never a fake-empty artifact. Any
+``CardResult(failure_reason=...)`` â€” never a fake-empty artifact. Any
 ``is_hard_stop`` exception (auth/setup) propagates loud.
 
 ``act_on_card`` is the ONE action core for the four owner verbs
-(pass/watch/research_further/promote — PRD §8.1 disposition semantics),
+(pass/watch/research_further/promote â€” PRD Â§8.1 disposition semantics),
 reachable from both the HTTP route and any future Telegram dispatcher.
 """
 
@@ -49,7 +49,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 import llm_artifact_store
 from allocation.candidate_fit import CandidateFit
@@ -86,7 +86,7 @@ __all__ = [
 PURPOSE = "investment_decision_card"
 ENGINE_VERSION = "v1"
 
-# A hypothetical add sized as 3% of book value — the §8.1 "expected
+# A hypothetical add sized as 3% of book value â€” the Â§8.1 "expected
 # Concentration Zone if funded" preview. Not a recommendation of size; purely
 # an illustrative zone read (mirrors allocation.recommendation's cash-funded
 # resulting-weight formula, applied to a fixed 3% rather than a live cash
@@ -142,11 +142,11 @@ class Uncertainty(BaseModel):
 
 
 class InvestmentDecisionCard(BaseModel):
-    """The full §8.1 structured output — the Pydantic BOUNDARY model between
+    """The full Â§8.1 structured output â€” the Pydantic BOUNDARY model between
     the LLM's raw JSON and everything downstream (persistence, routes,
     disposition). ``evidence_readiness``, ``hypothesis_origin``, and the
     price fields on ``security_setup`` are ALWAYS overwritten by
-    :func:`generate_card`'s deterministic post-pass after ``model_validate`` —
+    :func:`generate_card`'s deterministic post-pass after ``model_validate`` â€”
     never trust these three as LLM-authored in a persisted artifact."""
 
     ticker: str = Field(min_length=1)
@@ -166,7 +166,7 @@ class InvestmentDecisionCard(BaseModel):
     uncertainty: Uncertainty
 
     def validate_grounding(self, *, allowed_refs: set[str]) -> list[str]:
-        """§10.5 structural checks that go beyond schema shape: required
+        """Â§10.5 structural checks that go beyond schema shape: required
         sections carry real content, the three top-level judgments are
         distinct (not one sentence copy-pasted across sections), and every
         cited source_ref resolves against what the generator actually
@@ -188,7 +188,7 @@ class InvestmentDecisionCard(BaseModel):
         }
         if len(distinct_texts) < 3 and all(distinct_texts):
             reasons.append(
-                "company_hypothesis/security_setup/portfolio_fit are not distinct — "
+                "company_hypothesis/security_setup/portfolio_fit are not distinct â€” "
                 "at least two sections repeat the same text verbatim"
             )
 
@@ -201,11 +201,23 @@ class InvestmentDecisionCard(BaseModel):
         return reasons
 
 
+class _InvestmentDecisionCardDraft(BaseModel):
+    """Only model-authored fields; deterministic identity/readiness fields are injected later."""
+
+    company_hypothesis: CompanyHypothesis
+    security_setup: SecuritySetup
+    portfolio_fit: PortfolioFit
+    disconfirming_case: DisconfirmingCase
+    suggested_disposition: Literal["pass", "watch", "research_further", "promote"]
+    uncertainty: Uncertainty
+    source_refs: list[str] = Field(default_factory=list[str])
+
+
 @dataclass(frozen=True, slots=True)
 class CardResult:
     """The generator's output. ``card`` is populated for every outcome except
     an explicit failure (deterministic inputs insufficient to even build a
-    fallback) — never a fake-empty artifact standing in for a real failure."""
+    fallback) â€” never a fake-empty artifact standing in for a real failure."""
 
     artifact_id: int | None
     card: InvestmentDecisionCard | None
@@ -261,7 +273,7 @@ def _dcf_columns(conn: sqlite3.Connection) -> set[str]:
 
 
 def _latest_dcf_row(db_path: Path, ticker: str) -> sqlite3.Row | None:
-    """Local mirror of ``allocation.eligibility._latest_dcf_row`` — see that
+    """Local mirror of ``allocation.eligibility._latest_dcf_row`` â€” see that
     module's docstring note on why this small query template is duplicated
     per-caller rather than shared (repo convention: duplicate simple shared
     logic, don't modularize)."""
@@ -329,6 +341,8 @@ def _gather_inputs(db_path: Path, repo_root: Path, ticker: str, *, list_type: st
     bear_artifact = llm_artifact_store.read_current(
         ticker=ticker, purpose="bear_case", scope="ticker", db_path=db_path
     )
+    if bear_artifact is not None and not llm_artifact_store.artifact_is_fresh(bear_artifact):
+        bear_artifact = None
 
     holdings_dir = repo_root / "micro_thesis" / "holdings"
     spec: HoldingsSpec | None
@@ -350,7 +364,7 @@ def _gather_inputs(db_path: Path, repo_root: Path, ticker: str, *, list_type: st
                 + (f", industry={comp_set.industry}" if comp_set.industry else "")
                 + (f", benchmark ETF={comp_set.benchmark_etf}" if comp_set.benchmark_etf else "")
             )
-    except Exception:  # comp set is optional and best-effort — never blocks the card
+    except Exception:  # comp set is optional and best-effort â€” never blocks the card
         comp_set_summary = None
 
     fit_cache = read_materialized_candidate_fit(repo_root)
@@ -395,7 +409,7 @@ def _build_evidence_readiness(inputs: _Inputs) -> EvidenceReadiness:
     blockers = list(a.blocking_reasons)
     decision_ready = a.eligible and not inputs.dcf_outlier
     if inputs.dcf_outlier and not any("sanity_flag" in b for b in blockers):
-        blockers.append("latest DCF run carries a sanity_flag — valuation not decision-ready")
+        blockers.append("latest DCF run carries a sanity_flag â€” valuation not decision-ready")
     available = sorted(a.source_freshness)
     if inputs.bear_artifact is not None:
         available.append("bear_case")
@@ -448,7 +462,7 @@ def _build_prompt(
         dcf_block = (
             f"valuation_date={inputs.dcf_row['valuation_date']}, "
             f"fair_value_per_share={fv}, live_price={px}"
-            + (", SANITY_FLAG SET — treat as an unreviewed outlier" if inputs.dcf_outlier else "")
+            + (", SANITY_FLAG SET â€” treat as an unreviewed outlier" if inputs.dcf_outlier else "")
         )
     thesis_block = (
         f"{inputs.spec.thesis} (origin={inputs.hypothesis_origin})"
@@ -473,13 +487,13 @@ def _build_prompt(
         "\n".join(f"- {k}: {v}" for k, v in sorted(a.source_freshness.items())) or "(none)"
     )
     blocking_block = (
-        "\n".join(f"- {r}" for r in a.blocking_reasons) or "(none — currently eligible)"
+        "\n".join(f"- {r}" for r in a.blocking_reasons) or "(none â€” currently eligible)"
     )
 
     corrective_block = ""
     if corrective_reasons:
         corrective_block = (
-            "\n\nYOUR PRIOR ATTEMPT FAILED THESE CHECKS — fix every one:\n"
+            "\n\nYOUR PRIOR ATTEMPT FAILED THESE CHECKS â€” fix every one:\n"
             + "\n".join(f"- {r}" for r in corrective_reasons)
         )
 
@@ -510,26 +524,26 @@ SOURCE FRESHNESS (cite only these keys, or facts verbatim from the blocks
 above, in source_refs):
 {freshness_block}
 
-DECISION-READY GATE — currently {"BLOCKED" if not a.eligible else "ELIGIBLE"}. Blocking reasons
-(you do NOT control this — evidence_readiness is computed deterministically
+DECISION-READY GATE â€” currently {"BLOCKED" if not a.eligible else "ELIGIBLE"}. Blocking reasons
+(you do NOT control this â€” evidence_readiness is computed deterministically
 and will overwrite anything you write here):
 {blocking_block}
 
 VALIDATION CONSTRAINTS (a violation forces a deterministic fallback):
 - Every material claim in company_hypothesis/security_setup/portfolio_fit must
-  trace to a fact in the blocks above — never invent a figure or event.
+  trace to a fact in the blocks above â€” never invent a figure or event.
 - company_hypothesis, security_setup, and portfolio_fit must be DISTINCT
   judgments, not the same sentence repeated across sections.
 - disconfirming_case.bear_hypothesis must present a REAL case against the
   thesis (use the bear case above if present), never a token caveat.
 - uncertainty.justification and uncertainty.what_would_change_it must never
   be empty or boilerplate.
-- NEVER state a numeric probability ("62% chance") — use qualitative
+- NEVER state a numeric probability ("62% chance") â€” use qualitative
   confidence language instead (house style: "This is my read because...",
   "The main reason I could be wrong is...").
 - source_refs may only cite the SOURCE FRESHNESS keys above or facts that
-  appear verbatim in the blocks above — never an invented citation.
-- Do NOT populate an "evidence_readiness" field — it is computed
+  appear verbatim in the blocks above â€” never an invented citation.
+- Do NOT populate an "evidence_readiness" field â€” it is computed
   deterministically and any value you write is discarded.
 {corrective_block}
 
@@ -579,7 +593,7 @@ def _deterministic_card(
     as_of: str,
     extra_degraded: str | None = None,
 ) -> InvestmentDecisionCard | None:
-    """§8.1's mechanical fallback: built ONLY from grounded facts, no LLM
+    """Â§8.1's mechanical fallback: built ONLY from grounded facts, no LLM
     prose. A deterministically BLOCKED assessment persists an explicit blocker
     card even when no thesis is on file, because the missing thesis is itself
     the decision-readiness result. An eligible assessment still may not
@@ -617,18 +631,18 @@ def _deterministic_card(
         "hypothesis_origin": inputs.hypothesis_origin,
         "company_hypothesis": {
             "directional_thesis": thesis,
-            "operating_mechanism": f"mechanical fallback{degraded_note} — no LLM judgment applied",
+            "operating_mechanism": f"mechanical fallback{degraded_note} â€” no LLM judgment applied",
             "key_kpis": [],
             "confirming_evidence": [],
             "disconfirming_evidence": breakers,
         },
         "security_setup": {
             "valuation_range": valuation_range,
-            "appears_priced_in": "mechanical fallback — no LLM read of what is priced in",
-            "caveats": ["this is a mechanical fallback — no LLM judgment was applied"],
+            "appears_priced_in": "mechanical fallback â€” no LLM read of what is priced in",
+            "caveats": ["this is a mechanical fallback â€” no LLM judgment was applied"],
         },
         "portfolio_fit": {
-            "expected_role": "mechanical fallback — no LLM portfolio-fit judgment applied",
+            "expected_role": "mechanical fallback â€” no LLM portfolio-fit judgment applied",
             "candidate_fit_summary": inputs.fit.why if inputs.fit is not None else "no fit on file",
             "correlated_exposure": inputs.comp_set_summary or "no comparable set on file",
             "expected_zone_if_funded": inputs.expected_zone,
@@ -637,7 +651,7 @@ def _deterministic_card(
             "bear_hypothesis": (
                 (inputs.bear_artifact.content_md or "")[:500]
                 if inputs.bear_artifact is not None
-                else "no bear case on file — this is the weakest point of a mechanical fallback"
+                else "no bear case on file â€” this is the weakest point of a mechanical fallback"
             ),
             "evidence_that_would_confirm_it": "see the bear case artifact (if any) for specifics",
             "next_proof_point": "the next scheduled earnings print",
@@ -646,7 +660,7 @@ def _deterministic_card(
         "suggested_disposition": "research_further",
         "uncertainty": {
             "confidence_verbal": "low",
-            "justification": f"mechanical fallback{degraded_note} — no synthesized confidence",
+            "justification": f"mechanical fallback{degraded_note} â€” no synthesized confidence",
             "what_would_change_it": "a governed LLM read of the same evidence",
         },
     }
@@ -660,7 +674,7 @@ def _deterministic_card(
 
 def _render_markdown(card: InvestmentDecisionCard) -> str:
     lines = [
-        f"# Investment Decision Card — {card.ticker} ({card.as_of})",
+        f"# Investment Decision Card â€” {card.ticker} ({card.as_of})",
         "",
         f"**Suggested disposition:** {card.suggested_disposition}  |  "
         f"**Confidence:** {card.uncertainty.confidence_verbal}  |  "
@@ -670,7 +684,7 @@ def _render_markdown(card: InvestmentDecisionCard) -> str:
         card.company_hypothesis.directional_thesis,
         "",
         "## Security setup",
-        f"{card.security_setup.valuation_range} — {card.security_setup.appears_priced_in}",
+        f"{card.security_setup.valuation_range} â€” {card.security_setup.appears_priced_in}",
         "",
         "## Portfolio fit",
         card.portfolio_fit.expected_role,
@@ -710,16 +724,24 @@ def _call_and_validate(
             "suggested_disposition",
             "uncertainty",
         ),
+        schema=TypeAdapter(_InvestmentDecisionCardDraft),
         db_path=db_path,
     )
-    raw = cast("dict[str, object]", payload)
+    # Test doubles and older internal injectors may still return the decoded
+    # dict; validate that compatibility seam through the same exact contract.
+    draft = (
+        payload
+        if isinstance(payload, _InvestmentDecisionCardDraft)
+        else _InvestmentDecisionCardDraft.model_validate(payload)
+    )
+    raw = cast("dict[str, object]", draft.model_dump())
     raw["ticker"] = ticker
     raw["as_of"] = as_of
     raw["input_sha"] = inputs.input_sha
     raw["engine_version"] = ENGINE_VERSION
     raw["prompt_version"] = prompt_version_for(PURPOSE)
     # hypothesis_origin, evidence_readiness, and security_setup's price fields
-    # are ALWAYS overwritten below regardless of what the LLM sent — set here
+    # are ALWAYS overwritten below regardless of what the LLM sent â€” set here
     # only so model_validate has a structurally valid placeholder to parse.
     raw["hypothesis_origin"] = inputs.hypothesis_origin
     raw["evidence_readiness"] = _build_evidence_readiness(inputs).model_dump(mode="json")
@@ -737,7 +759,7 @@ def _call_and_validate(
 def _apply_deterministic_overrides(
     card: InvestmentDecisionCard, inputs: _Inputs
 ) -> InvestmentDecisionCard:
-    """The post-validation pass §8.1 requires: evidence_readiness and
+    """The post-validation pass Â§8.1 requires: evidence_readiness and
     hypothesis_origin are NEVER LLM-authored in the persisted artifact, and
     the security's price fields are always the real ``dcf_runs`` values (or
     None), never an LLM-invented number. A DCF outlier appends a caveat
@@ -751,7 +773,7 @@ def _apply_deterministic_overrides(
         price_as_of = str(raw_at) if raw_at else None
 
     caveats = list(card.security_setup.caveats)
-    outlier_note = "latest DCF run carries a sanity_flag — treat the valuation as an outlier"
+    outlier_note = "latest DCF run carries a sanity_flag â€” treat the valuation as an outlier"
     if inputs.dcf_outlier and outlier_note not in caveats:
         caveats.append(outlier_note)
 
@@ -769,7 +791,7 @@ def _apply_deterministic_overrides(
 
 def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
     """The full P1.1 governed pipeline for one ticker. Never raises except
-    for a genuine hard stop (auth/setup) — every other failure mode
+    for a genuine hard stop (auth/setup) â€” every other failure mode
     degrades to a labeled deterministic fallback, or an explicit
     ``CardResult(failure_reason=...)`` when even that isn't groundable."""
     ticker = ticker.upper()
@@ -942,14 +964,14 @@ def _persist(
 
 
 # --------------------------------------------------------------------------- #
-# Disposition action core (PRD §8.1 disposition semantics)
+# Disposition action core (PRD Â§8.1 disposition semantics)
 # --------------------------------------------------------------------------- #
 
 ActionVerb = Literal["pass", "watch", "research_further", "promote"]
 ACTION_VERBS: tuple[str, ...] = ("pass", "watch", "research_further", "promote")
 
 # research_further deliberately excluded: it writes a research_tasks row, NOT
-# a decisions row (PRD §8.1: "this is not an Owner Decision").
+# a decisions row (PRD Â§8.1: "this is not an Owner Decision").
 _DECISION_VERBS: tuple[str, ...] = ("pass", "watch", "promote")
 
 
@@ -963,7 +985,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection:
     if path is None or not Path(path).exists():
         raise CardActionError("portfolio DB not available")
     conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-    conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1014,17 +1035,17 @@ def act_on_card(
     notes: str | None = None,
     _connection: sqlite3.Connection | None = None,
 ) -> str:
-    """The ONE action core for the four §8.1 owner verbs. Returns a short
+    """The ONE action core for the four Â§8.1 owner verbs. Returns a short
     status string:
 
       'pass'              -> 'pass_recorded' (new decision + archived) | 'already_pass'
       'watch'             -> 'watch_recorded' (new decision + watchlist) | 'already_watch'
       'promote'           -> 'promote_recorded' (new decision only) | 'already_promote'
       'research_further'  -> 'research_task_created:<id>' | 'already_proposed:<id>'
-                              (NO decision row — PRD §8.1: not an Owner Decision)
+                              (NO decision row â€” PRD Â§8.1: not an Owner Decision)
 
     Raises :class:`CardActionError` for an unknown verb or a missing/
-    mismatched-purpose artifact — never a silent no-op on a bad input.
+    mismatched-purpose artifact â€” never a silent no-op on a bad input.
     Idempotent: a second call for the same (artifact_id, verb) does not
     write a duplicate row.
     """
@@ -1054,7 +1075,7 @@ def act_on_card(
             task_id = create_task(note_id=None, claim=claim, ticker=ticker, db_path=db_path)
             return f"research_task_created:{task_id}"
 
-        kind = verb  # 'pass' | 'watch' | 'promote' — the recommendation_kind verbatim
+        kind = verb  # 'pass' | 'watch' | 'promote' â€” the recommendation_kind verbatim
         existing_id = _existing_decision_id(conn, artifact_id, kind)
         if existing_id is not None:
             return f"already_{kind}"
@@ -1072,8 +1093,8 @@ def act_on_card(
                 "WHERE user_id = ? AND UPPER(ticker) = ? AND archived_at IS NULL",
                 (ListType.WATCHLIST.value, DEFAULT_USER_ID, ticker),
             )
-        # 'promote': list_type stays 'evaluation' — the decision row IS the
-        # marker (PRD §8.1: "does not claim the security is owned").
+        # 'promote': list_type stays 'evaluation' â€” the decision row IS the
+        # marker (PRD Â§8.1: "does not claim the security is owned").
 
         conn.execute(
             """

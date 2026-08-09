@@ -423,6 +423,8 @@ def test_morning_suppression_stops_stages_and_force_reaches_accounting(
         "invocation_inputs": {
             "max_cost_usd": 7.5,
             "news_source": "websearch",
+            "only": "",
+            "from_stage": "",
             "run_date": date.today().isoformat(),
             "skip_news": True,
             "skip_standup": True,

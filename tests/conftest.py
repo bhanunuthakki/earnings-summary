@@ -5,13 +5,21 @@ from __future__ import annotations
 import atexit
 import os
 import shutil
-import sqlite3
 import tempfile
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+
+from execution.sqlite_bootstrap import preload_sqlite
+
+# Every pytest controller and xdist worker is its own Python process. Load the
+# verified runtime before importing sqlite3 so tests exercise the same writer
+# safety contract as scheduled and interactive production launchers.
+preload_sqlite()
+
+import sqlite3  # noqa: E402
 
 # --- Deterministic FMP tier baseline (runs at conftest IMPORT, before pytest
 # collects any test module) ---------------------------------------------------

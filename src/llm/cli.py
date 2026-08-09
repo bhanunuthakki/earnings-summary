@@ -1518,7 +1518,7 @@ def call_llm(
     this repo — including from `execution/` scripts, `src/report/sections/`, and
     anywhere else that needs a Claude-then-Gemini-fallback round-trip.
 
-    Direct use of `google.generativeai`, the `anthropic` SDK, or any other
+    Direct use of `google.genai`, the `anthropic` SDK, or any other
     provider client is forbidden outside this module's fallback wiring; route
     through call_llm so retunes (model swap, timeout change, billing change,
     fallback policy) happen in one place.
@@ -1620,6 +1620,13 @@ def call_llm(
             }
         )
 
+    # Attribute the legacy/plain-string majority at the canonical seam.
+    # Registered RenderedPrompt objects pass through unchanged; raw prompts
+    # gain a purpose version and immutable body hash without caller churn.
+    from llm.prompt_registry import attribute_plain_prompt
+
+    prompt = attribute_plain_prompt(prompt, purpose=purpose)
+
     from llm.model_ladder import (
         GEMINI as _GEMINI_FAMILY,
     )
@@ -1691,7 +1698,20 @@ def call_llm(
             fallback_from_transport = "subscription_cli"
 
     if resolved_backend == "gemini":
-        from llm.gemini_backend import call_gemini  # late — avoids import cycle
+        from llm.gemini_backend import (  # late — avoids import cycle
+            call_gemini,
+            gemini_api_error_type,
+            gemini_http_error_type,
+        )
+
+        gemini_operational_errors: tuple[type[Exception], ...] = (
+            subprocess.SubprocessError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            gemini_api_error_type(),
+            gemini_http_error_type(),
+        )
 
         try:
             text = call_gemini(
@@ -1717,7 +1737,7 @@ def call_llm(
             return text
         except (LLMBudgetExceeded, LLMSetupError):
             raise  # hard stops — never paper over with a backend switch
-        except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as gemini_error:
+        except gemini_operational_errors as gemini_error:
             if backend == "gemini":
                 raise  # explicitly forced: the caller wants Gemini's answer or its error
             from log_redact import redact
@@ -1978,6 +1998,10 @@ def stream_llm(
 
     if scope != "ask":
         raise ValueError("stream_llm currently supports only the governed 'ask' scope")
+
+    from llm.prompt_registry import attribute_plain_prompt
+
+    prompt = attribute_plain_prompt(prompt, purpose=purpose)
 
     model = _model_for(purpose)
     try:
@@ -2282,6 +2306,9 @@ def call_llm_with_web(
                 "error": redact(f"{type(hook_exc).__name__}: {hook_exc}")[:120],
             }
         )
+    from llm.prompt_registry import attribute_plain_prompt
+
+    prompt = attribute_plain_prompt(prompt, purpose=purpose)
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
 
     codex_fell_back = False

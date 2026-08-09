@@ -107,9 +107,7 @@ def _open(db_path: Path) -> sqlite3.Connection | None:
         log.debug({"event": "timeseries_loader_db_missing", "path": str(db_path)})
         return None
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error as exc:
         log.warning({"event": "timeseries_loader_open_failed", "error": str(exc)})
         return None

@@ -18,17 +18,40 @@ on log wording or echoed output text.
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import subprocess
 import sys
+import time
+from collections.abc import Callable
+from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 from execution import run_morning_pipeline
+from pipeline.morning_manifest import (
+    STAGE_MANIFEST,
+    STAGE_REPRICE,
+    STAGE_STANDUP,
+    StageSpec,
+    manifest_digest,
+    validate_manifest,
+)
+from runtime import job_runtime
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_LOAD_COMPLETED_STAGES = cast(
+    "Callable[[str | None], set[str]]",
+    getattr(run_morning_pipeline, "_load_completed_stages"),
+)
+_RECORD_COMPLETED_STAGE = cast(
+    "Callable[..., None]",
+    getattr(run_morning_pipeline, "_record_completed_stage"),
+)
 
 # Script basenames in canonical run order, used to assert dispatch order.
 PREFLIGHT_SCRIPT = "validate_environment.py"
@@ -103,12 +126,12 @@ class _RecordingRun:
 
 
 def _script_of(argv: list[str]) -> str | None:
-    """The basename of the first ``.py`` token in an argv (the script path).
+    """The basename of the final ``.py`` token in an argv (the stage path).
 
-    Robust to ``sys.executable`` being an absolute path — we key on the script,
-    not argv[0].
+    Managed stage calls include ``sqlite_bootstrap.py`` before the actual
+    script, so the final Python path is the deterministic stage identity.
     """
-    for tok in argv:
+    for tok in reversed(argv):
         if tok.endswith(".py"):
             return Path(tok).name
     return None
@@ -135,6 +158,305 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, fake: _RecordingRun) -> None:
     monkeypatch.setattr("execution.run_morning_pipeline.subprocess.run", fake)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_resume_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep the production resume checkpoint isolated between test cases."""
+    monkeypatch.setattr(
+        run_morning_pipeline,
+        "STATE_FILE",
+        tmp_path / "morning_pipeline" / "state.json",
+    )
+
+
+def test_manifest_is_complete_ordered_and_selection_dependency_valid() -> None:
+    specs = run_morning_pipeline.STAGE_MANIFEST
+    keys = [spec.key for spec in specs]
+
+    assert len(keys) == len(set(keys)) == 20
+    positions = {key: index for index, key in enumerate(keys)}
+    for spec in specs:
+        assert spec.script.endswith(".py")
+        assert (PROJECT_ROOT / "execution" / spec.script).is_file()
+        assert spec.timeout_s > 0
+        assert all(dependency in positions for dependency in spec.selection_dependencies)
+        assert all(
+            positions[dependency] < positions[spec.key]
+            for dependency in spec.selection_dependencies
+        )
+
+
+@pytest.mark.parametrize(
+    "specs",
+    [
+        (
+            StageSpec("a", "A", "a.py", (), 1, ()),
+            StageSpec("a", "A again", "a.py", (), 1, ()),
+        ),
+        (StageSpec("a", "A", "a.py", (), 1, ("missing",)),),
+        (
+            StageSpec("a", "A", "a.py", (), 1, ("b",)),
+            StageSpec("b", "B", "b.py", (), 1, ()),
+        ),
+    ],
+)
+def test_manifest_validation_rejects_invalid_selection_dependencies_and_order(
+    specs: tuple[StageSpec, ...],
+) -> None:
+    with pytest.raises(ValueError):
+        validate_manifest(specs)
+
+
+def test_manifest_digest_is_deterministic_and_binds_stage_contract() -> None:
+    assert manifest_digest(STAGE_MANIFEST) == manifest_digest(tuple(STAGE_MANIFEST))
+
+    changed = (replace(STAGE_MANIFEST[0], timeout_s=31), *STAGE_MANIFEST[1:])
+
+    assert manifest_digest(changed) != manifest_digest(STAGE_MANIFEST)
+
+
+def test_only_selects_target_and_transitive_selection_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    assert run_morning_pipeline.main(["--only", STAGE_STANDUP]) == 0
+
+    assert fake.scripts[-1] == STANDUP_SCRIPT
+    assert PREFLIGHT_SCRIPT in fake.scripts
+    assert TRIGGERS_SCRIPT in fake.scripts
+    assert FEED_SCRIPT not in fake.scripts
+    manifest_scripts = [spec.script for spec in run_morning_pipeline.STAGE_MANIFEST]
+    assert fake.scripts == sorted(fake.scripts, key=manifest_scripts.index)
+
+
+def test_from_selects_manifest_suffix_and_keeps_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    assert run_morning_pipeline.main(["--from", STAGE_REPRICE]) == 0
+
+    manifest_scripts = [spec.script for spec in run_morning_pipeline.STAGE_MANIFEST]
+    expected_start = manifest_scripts.index(REPRICE_SCRIPT)
+    assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
+        *manifest_scripts[expected_start:],
+    ]
+
+
+def test_partial_failure_resumes_only_failed_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _RecordingRun(returncodes={TRIGGERS_SCRIPT: 1})
+    _install_fake(monkeypatch, first)
+    assert run_morning_pipeline.main([]) == 1
+
+    second = _RecordingRun()
+    _install_fake(monkeypatch, second)
+    assert run_morning_pipeline.main([]) == 0
+
+    assert second.scripts == [TRIGGERS_SCRIPT]
+    assert not run_morning_pipeline.STATE_FILE.exists()
+
+
+def test_resume_checkpoint_expires_after_eighteen_hours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _RecordingRun(returncodes={TRIGGERS_SCRIPT: 1})
+    _install_fake(monkeypatch, first)
+    assert run_morning_pipeline.main([]) == 1
+
+    state = json.loads(run_morning_pipeline.STATE_FILE.read_text(encoding="utf-8"))
+    state["updated_at"] = time.time() - 19 * 3600
+    run_morning_pipeline.STATE_FILE.write_text(
+        json.dumps(state),
+        encoding="utf-8",
+    )
+    second = _RecordingRun()
+    _install_fake(monkeypatch, second)
+
+    assert run_morning_pipeline.main([]) == 0
+
+    assert len(second.scripts) == 20
+
+
+def test_resume_checkpoint_is_valid_through_exact_eighteen_hour_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 2_000_000_000.0
+    scope = "scope"
+    _RECORD_COMPLETED_STAGE("stage_preflight", checkpoint_scope=scope)
+    state = json.loads(run_morning_pipeline.STATE_FILE.read_text(encoding="utf-8"))
+    state["updated_at"] = now - 18 * 3600
+    run_morning_pipeline.STATE_FILE.write_text(
+        json.dumps(state),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_morning_pipeline.time, "time", lambda: now)
+
+    assert _LOAD_COMPLETED_STAGES(scope) == {"stage_preflight"}
+
+    monkeypatch.setattr(run_morning_pipeline.time, "time", lambda: now + 0.001)
+    assert _LOAD_COMPLETED_STAGES(scope) == set()
+
+
+def test_legacy_unversioned_checkpoint_is_not_activated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_morning_pipeline.STATE_FILE.parent.mkdir(parents=True)
+    run_morning_pipeline.STATE_FILE.write_text(
+        json.dumps(
+            {
+                "completed_stages": [spec.key for spec in run_morning_pipeline.STAGE_MANIFEST],
+                "updated_at": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    assert run_morning_pipeline.main([]) == 0
+
+    assert len(fake.scripts) == 20
+
+
+def test_checkpoint_scope_binds_run_date_and_manifest_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _RecordingRun(returncodes={TRIGGERS_SCRIPT: 1})
+    _install_fake(monkeypatch, fake)
+
+    assert run_morning_pipeline.main([]) == 1
+
+    state = json.loads(run_morning_pipeline.STATE_FILE.read_text(encoding="utf-8"))
+    scope = json.loads(state["scope"])
+
+    assert scope["run_date"] == date.today().isoformat()
+    assert scope["manifest_digest"] == manifest_digest(STAGE_MANIFEST)
+
+
+def test_corrupt_checkpoint_fails_loud() -> None:
+    run_morning_pipeline.STATE_FILE.parent.mkdir(parents=True)
+    run_morning_pipeline.STATE_FILE.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(run_morning_pipeline.CheckpointStateError, match="invalid JSON"):
+        _LOAD_COMPLETED_STAGES("scope")
+
+
+def test_checkpoint_replace_failure_preserves_last_good_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _RECORD_COMPLETED_STAGE("stage_preflight", checkpoint_scope="scope")
+    before = run_morning_pipeline.STATE_FILE.read_bytes()
+
+    def fail_replace(source: str | Path, target: str | Path) -> None:
+        del source, target
+        raise OSError("replace denied")
+
+    monkeypatch.setattr(run_morning_pipeline.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace denied"):
+        _RECORD_COMPLETED_STAGE("stage_0_news", checkpoint_scope="scope")
+
+    assert run_morning_pipeline.STATE_FILE.read_bytes() == before
+
+
+def test_checkpoint_write_failure_is_loud_without_short_circuiting_stages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    def fail_replace(source: str | Path, target: str | Path) -> None:
+        del source, target
+        raise OSError("replace denied")
+
+    monkeypatch.setattr(run_morning_pipeline.os, "replace", fail_replace)
+
+    assert run_morning_pipeline.main(["--db-path", str(tmp_path / "missing.db")]) == 20
+    assert len(fake.scripts) == 20
+
+
+def test_main_uses_configured_db_path_for_parent_and_children(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configured = tmp_path / "managed" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(configured))
+    observed: dict[str, object] = {}
+
+    def fake_pipeline(
+        args: argparse.Namespace,
+        *,
+        db_path: Path,
+        t0: float,
+    ) -> int:
+        observed.update(args=args, db_path=db_path, t0=t0)
+        return 0
+
+    monkeypatch.setattr(run_morning_pipeline, "_run_pipeline", fake_pipeline)
+
+    assert run_morning_pipeline.main([]) == 0
+
+    parsed_args = cast("argparse.Namespace", observed["args"])
+    assert observed["db_path"] == configured.resolve()
+    assert getattr(parsed_args, "db_path") == configured.resolve()
+
+
+def test_scheduler_child_honors_real_inherited_portfolio_lock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    db_path.touch()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join((str(PROJECT_ROOT), str(PROJECT_ROOT / "src"))),
+    )
+    child_script = tmp_path / "morning_pipeline_lock_child.py"
+    child_script.write_text(
+        "\n".join(
+            (
+                "from execution import run_morning_pipeline as pipeline",
+                "def fail_acquire(*args, **kwargs):",
+                "    raise AssertionError('child attempted to reacquire inherited lock')",
+                "pipeline.acquire_run_lock = fail_acquire",
+                "pipeline._run_pipeline = lambda args, *, db_path, t0: 0",
+                "raise SystemExit(pipeline.main([]))",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def discard_health(repo_root: Path, record: object) -> Path:
+        del repo_root, record
+        return tmp_path / "discarded-health.json"
+
+    monkeypatch.setattr("runtime.job_runtime._write_health", discard_health)
+
+    assert (
+        job_runtime.main(
+            [
+                "--repo-root",
+                str(PROJECT_ROOT),
+                "--scheduler-wrapper",
+                "--allow-schema-drift",
+                "--python-executable",
+                sys.executable,
+                "--python-bootstrap",
+                str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py"),
+                "--",
+                "morning_pipeline",
+                "portfolio-db",
+                str(child_script),
+            ]
+        )
+        == 0
+    )
+
+
 # ---------------------------------------------------------------------------
 # Happy path — all four stages succeed
 # ---------------------------------------------------------------------------
@@ -152,6 +474,8 @@ def test_all_stages_succeed(
     rc = run_morning_pipeline.main([])
 
     assert rc == 0
+    bootstrap = str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
+    assert all(call[:3] == [sys.executable, "-u", bootstrap] for call in fake.calls)
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
@@ -745,18 +1069,27 @@ def test_db_path_passed_to_all_stages_when_set(
         assert _has_flag(argv, "--db-path", str(db_path))
 
 
-def test_db_path_omitted_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When --db-path is not passed, no stage receives a --db-path flag — each
-    script falls back to its own default DB resolution rather than a literal
-    'None'."""
+def test_configured_db_path_forwarded_when_cli_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The configured default is resolved once and explicitly shared by children."""
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
+    configured = (PROJECT_ROOT / "data" / "portfolio.db").resolve()
 
     rc = run_morning_pipeline.main([])
     assert rc == 0
 
     for argv in fake.calls:
-        assert "--db-path" not in argv
+        script = _script_of(argv)
+        if script == PREFLIGHT_SCRIPT:
+            continue
+        if script == FACTOR_PROXIES_SCRIPT:
+            assert _has_flag(argv, "--repo-root", str(PROJECT_ROOT))
+            continue
+        if script == DERIVED_METRICS_SCRIPT:
+            assert _has_flag(argv, "--db", str(configured))
+            continue
+        assert _has_flag(argv, "--db-path", str(configured))
 
 
 # ---------------------------------------------------------------------------
@@ -1022,8 +1355,8 @@ def test_stage0g_factor_proxies_takes_repo_root_from_db_path(
 ) -> None:
     """The proxy fetch writes data/factor_proxies/ under the db override's repo
     root (never the real repo on a --db-path run); it is not user-scoped, runs
-    no LLM, and needs no DB at all. Without the override, no --repo-root is
-    passed (the script defaults to its own repo)."""
+    no LLM, and needs no DB at all. The configured default is forwarded too so
+    parent and child derive their artifact root from the same authority."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
     db_path = tmp_path / "data" / "alt.db"
@@ -1039,9 +1372,10 @@ def test_stage0g_factor_proxies_takes_repo_root_from_db_path(
 
     fake_default = _RecordingRun()
     _install_fake(monkeypatch, fake_default)
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
     assert run_morning_pipeline.main([]) == 0
     default_argv = next(c for c in fake_default.calls if _script_of(c) == FACTOR_PROXIES_SCRIPT)
-    assert "--repo-root" not in default_argv
+    assert _has_flag(default_argv, "--repo-root", str(PROJECT_ROOT))
 
 
 def test_stage0h_position_guard_runs_between_factor_proxies_and_triggers(

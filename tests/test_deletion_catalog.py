@@ -24,14 +24,17 @@ def test_approved_latest_governed_code_deletion_is_complete_and_restorable() -> 
     assert report.valid is True
     assert {candidate.id for candidate in report.candidates} == {
         "latest-governed-plane",
+        "legacy-full-refresh-wrapper",
+        "restored-test-only-provenance",
         "segment-junction-backfill",
+        "unreachable-python-residue",
         "zero-ref-legacy-tables",
     }
     assert all(candidate.eligible for candidate in report.candidates)
     assert all(candidate.issues == [] for candidate in report.candidates)
     by_id = {candidate.id: candidate for candidate in report.candidates}
-    assert by_id["latest-governed-plane"].data_restore_verified is False
-    assert by_id["zero-ref-legacy-tables"].data_restore_verified is False
+    assert by_id["latest-governed-plane"].data_restore_verified is True
+    assert by_id["zero-ref-legacy-tables"].data_restore_verified is True
     assert by_id["segment-junction-backfill"].data_restore_verified is True
     assert sum(len(candidate.schema_targets) for candidate in catalog.candidates) == 25
 
@@ -108,3 +111,27 @@ def test_catalog_rejects_empty_candidate() -> None:
 
     with pytest.raises(ValueError, match="at least one target"):
         Catalog.model_validate(payload)
+
+
+def test_schema_deletion_without_verified_restore_fails_closed() -> None:
+    payload = json.loads(
+        (ROOT / "docs" / "design" / "deletion_catalog_2026_08.json").read_text(encoding="utf-8")
+    )
+    candidate = payload["candidates"][0]
+    candidate["data_restore_verified"] = False
+
+    with pytest.raises(ValueError, match="schema deletion requires verified data restore"):
+        Catalog.model_validate(payload)
+
+
+def test_evaluator_rejects_unverified_schema_restore_even_if_model_is_bypassed() -> None:
+    catalog = _catalog()
+    first = catalog.candidates[0].model_copy(update={"data_restore_verified": False})
+    bypassed = catalog.model_copy(update={"candidates": [first, *catalog.candidates[1:]]})
+
+    report = evaluate(ROOT, bypassed)
+
+    assert report.valid is False
+    assert any(
+        issue.startswith("data_restore_unverified:") for issue in report.candidates[0].issues
+    )

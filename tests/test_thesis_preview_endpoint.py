@@ -13,8 +13,10 @@ import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
+from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -25,6 +27,7 @@ import process_report_comments as prc  # noqa: E402
 
 import comments  # noqa: E402
 from llm.cli import LLMBudgetExceeded  # noqa: E402
+from llm.structured import StructuredParseError  # noqa: E402
 
 _HOLDINGS = {
     "ticker": "NU",
@@ -33,6 +36,10 @@ _HOLDINGS = {
     "verdict": "Pending",
 }
 _BEFORE = "Original thesis about ROE."
+
+
+class _Validator(Protocol):
+    def validate_python(self, value: object) -> object: ...
 
 
 @pytest.fixture
@@ -64,14 +71,19 @@ def _on_disk_thesis(repo: Path) -> str:
     return data["thesis"]
 
 
-def test_preview_happy_returns_before_after_diff(client, repo, monkeypatch) -> None:
-    monkeypatch.setattr(
-        prc,
-        "call_llm",
-        lambda *a, **k: (
-            '{"revised_thesis": "Revised: ROE durably above 30%.", "diff_summary": "tightened"}'
-        ),
+def _structured_thesis_response(*_args: object, **kwargs: object) -> object:
+    schema = cast("_Validator", kwargs["schema"])
+    return schema.validate_python(
+        {"revised_thesis": "Revised: ROE durably above 30%.", "diff_summary": "tightened"}
     )
+
+
+def _unparseable_structured_response(*_args: object, **_kwargs: object) -> object:
+    raise StructuredParseError("structured response invalid", raw_head="redacted")
+
+
+def test_preview_happy_returns_before_after_diff(client, repo, monkeypatch) -> None:
+    monkeypatch.setattr(prc, "call_llm_structured", _structured_thesis_response)
     resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-05-18"})
     assert resp.status_code == 200
     body = resp.get_json()
@@ -82,7 +94,7 @@ def test_preview_happy_returns_before_after_diff(client, repo, monkeypatch) -> N
 
 
 def test_preview_degrades_on_empty_response(client, repo, monkeypatch) -> None:
-    monkeypatch.setattr(prc, "call_llm", lambda *a, **k: "")
+    monkeypatch.setattr(prc, "call_llm_structured", _unparseable_structured_response)
     resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-05-18"})
     assert resp.status_code == 200
     assert resp.get_json()["degraded"] is True
@@ -90,7 +102,7 @@ def test_preview_degrades_on_empty_response(client, repo, monkeypatch) -> None:
 
 
 def test_preview_degrades_on_unparseable_response(client, repo, monkeypatch) -> None:
-    monkeypatch.setattr(prc, "call_llm", lambda *a, **k: "not json at all")
+    monkeypatch.setattr(prc, "call_llm_structured", _unparseable_structured_response)
     resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-05-18"})
     assert resp.status_code == 200
     assert resp.get_json()["degraded"] is True
@@ -98,13 +110,43 @@ def test_preview_degrades_on_unparseable_response(client, repo, monkeypatch) -> 
 
 def test_preview_propagates_budget_hard_stop(client, repo, monkeypatch) -> None:
     def _boom(*a, **k):
-        raise LLMBudgetExceeded("monthly cap exceeded for company_description")
+        raise LLMBudgetExceeded("monthly cap exceeded?api_key=secret-value")
 
-    monkeypatch.setattr(prc, "call_llm", _boom)
-    resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-05-18"})
+    monkeypatch.setattr(comments_server, "preview_thesis_edits", _boom)
+    resp = client.post(
+        "/api/thesis/NU/preview",
+        json={"report_date": "2026-05-18"},
+        headers={"X-Correlation-ID": "thesis-budget-test"},
+    )
     assert resp.status_code == 402  # propagated, not degraded
-    assert resp.get_json()["kind"] == "LLMBudgetExceeded"
+    assert resp.get_json() == {
+        "error": "thesis preview unavailable; retry the request",
+        "correlation_id": "thesis-budget-test",
+    }
+    assert "secret-value" not in resp.get_data(as_text=True)
     assert _on_disk_thesis(repo) == _BEFORE
+
+
+def test_preview_unexpected_failure_is_generic_and_correlated(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("provider failed?api_key=secret-value")
+
+    monkeypatch.setattr(comments_server, "preview_thesis_edits", _boom)
+    resp = client.post(
+        "/api/thesis/NU/preview",
+        json={"report_date": "2026-05-18"},
+        headers={"X-Correlation-ID": "thesis-degraded-test"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "degraded": True,
+        "reason": "thesis preview unavailable; retry the request",
+        "correlation_id": "thesis-degraded-test",
+    }
+    assert "secret-value" not in resp.get_data(as_text=True)
 
 
 def test_preview_requires_report_date(client) -> None:
@@ -115,7 +157,7 @@ def test_preview_requires_report_date(client) -> None:
 def test_preview_no_relevant_comments_is_empty(client, repo, monkeypatch) -> None:
     # An empty-string LLM would crash IF a router ran — assert it never runs
     # when there are no edit_thesis/edit_structured comments for the date.
-    monkeypatch.setattr(prc, "call_llm", lambda *a, **k: "")
+    monkeypatch.setattr(prc, "call_llm_structured", _unparseable_structured_response)
     resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-01-01"})
     assert resp.status_code == 200
     body = resp.get_json()

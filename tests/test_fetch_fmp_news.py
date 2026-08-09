@@ -1,6 +1,6 @@
 """Tests for the primary FMP stock-news feed (``execution/fetch_fmp_news.py``).
 
-Covers (plan §6.5), all hermetic (``requests.get`` mocked — no live FMP):
+Covers (plan §6.5), all hermetic (shared FMP client mocked — no live FMP):
 
   * FmpStockNewsRecord validates a real sample; a drifted shape (``link`` not
     ``url`` / missing ``publishedDate``) raises -> the fetcher dumps + halts.
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 from alembic.config import Config
@@ -30,6 +31,7 @@ import execution.fetch_fmp_news as fmpnews
 from alembic import command
 from execution.fetch_fmp_news import fetch_news_for_ticker, to_utc
 from models.fmp_payloads import FmpStockNewsRecord
+from net.client import HttpCallError, HttpErrorKind, HttpJsonResponse, JsonValue
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,26 +48,30 @@ _SAMPLE: dict[str, str] = {
 }
 
 
-class _FakeResp:
-    """Minimal stand-in for requests.Response (status_code + json())."""
+def _patch_get(monkeypatch: pytest.MonkeyPatch, status: int, payload: object) -> None:
+    json_payload = cast(JsonValue, payload)
 
-    def __init__(self, status: int, payload: object) -> None:
-        self.status_code = status
-        self._payload = payload
+    def _fake_get(*_a: object, **_k: object) -> HttpJsonResponse:
+        if status >= 400:
+            kind = (
+                HttpErrorKind.AUTH
+                if status in {401, 403}
+                else HttpErrorKind.PLAN
+                if status == 402
+                else HttpErrorKind.RATE_LIMIT
+                if status == 429
+                else HttpErrorKind.TRANSIENT
+            )
+            raise HttpCallError(
+                kind=kind,
+                message=f"HTTP {status}",
+                retryable=status == 429 or status >= 500,
+                status_code=status,
+                payload=json_payload,
+            )
+        return HttpJsonResponse(status_code=status, payload=json_payload)
 
-    def json(self) -> object:
-        return self._payload
-
-
-def _patch_get(monkeypatch: pytest.MonkeyPatch, resp: _FakeResp) -> None:
-    def _fake_get(*_a: object, **_k: object) -> _FakeResp:
-        return resp
-
-    monkeypatch.setattr(fmpnews.requests, "get", _fake_get)
-
-
-def _noop_sleep(*_a: object) -> None:
-    """Typed no-op for patching time.sleep (skip real backoff between retries)."""
+    monkeypatch.setattr(fmpnews.FMP_CLIENT, "get_json", _fake_get)
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +92,21 @@ def test_to_utc_summer_edt() -> None:
 def test_to_utc_rejects_non_canonical() -> None:
     with pytest.raises(ValueError, match=r"time data|unconverted"):
         to_utc("2026-01-15T08:30:00")
+
+
+def test_batch_drop_ratio_halts_provider_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    body: list[object] = [dict(_SAMPLE) for _ in range(8)]
+    body.extend([{"renamedTitle": "drift"}, {"renamedTitle": "drift"}])
+    monkeypatch.setattr(fmpnews, "_VALIDATION_DUMP_DIR", tmp_path)
+    _patch_get(monkeypatch, 200, body)
+
+    result = fetch_news_for_ticker("AAPL", api_key="test")
+
+    assert result.rows == []
+    assert result.error is not None and "schema_drift" in result.error
+    assert (tmp_path / "fmp-news-AAPL.jsonl").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +140,7 @@ def test_record_drift_link_instead_of_url_raises() -> None:
 
 
 def test_fetch_ok_maps_and_converts(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_get(monkeypatch, _FakeResp(200, [_SAMPLE]))
+    _patch_get(monkeypatch, 200, [_SAMPLE])
     res = fetch_news_for_ticker("AAPL", api_key="key")
     assert res.status == 200
     assert res.error is None
@@ -136,7 +157,7 @@ def test_fetch_ok_maps_and_converts(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_fetch_empty_array_is_no_news(monkeypatch: pytest.MonkeyPatch) -> None:
     # 200 + [] is a genuine no-news signal, NOT a refusal — no rows, no error.
-    _patch_get(monkeypatch, _FakeResp(200, []))
+    _patch_get(monkeypatch, 200, [])
     res = fetch_news_for_ticker("AAPL", api_key="key")
     assert res.status == 200
     assert res.rows == []
@@ -148,7 +169,7 @@ def test_fetch_200_non_list_body_carried_for_dispatcher(monkeypatch: pytest.Monk
     # not an array. The fetch returns rows=[] + the raw body so the dispatcher's
     # _fmp_refused (PR5) can treat the non-list body as a refusal and fall back.
     err_body = {"Error Message": "Limit Reach. Upgrade your plan."}
-    _patch_get(monkeypatch, _FakeResp(200, err_body))
+    _patch_get(monkeypatch, 200, err_body)
     res = fetch_news_for_ticker("AAPL", api_key="key")
     assert res.status == 200
     assert res.body == err_body
@@ -159,7 +180,7 @@ def test_fetch_200_non_list_body_carried_for_dispatcher(monkeypatch: pytest.Monk
 def test_fetch_drops_unparseable_date(monkeypatch: pytest.MonkeyPatch) -> None:
     bad_date = dict(_SAMPLE)
     bad_date["publishedDate"] = "not-a-date"
-    _patch_get(monkeypatch, _FakeResp(200, [_SAMPLE, bad_date]))
+    _patch_get(monkeypatch, 200, [_SAMPLE, bad_date])
     res = fetch_news_for_ticker("AAPL", api_key="key")
     # The good record maps; the un-timestampable one is dropped, never fabricated.
     assert res.error is None
@@ -169,7 +190,7 @@ def test_fetch_drops_unparseable_date(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_fetch_auth_refusal_carries_status_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
     err_body = {"Error Message": "Invalid API KEY"}
-    _patch_get(monkeypatch, _FakeResp(401, err_body))
+    _patch_get(monkeypatch, 401, err_body)
     res = fetch_news_for_ticker("AAPL", api_key="")
     assert res.status == 401
     assert res.body == err_body  # the dispatcher's _fmp_refused reads this
@@ -178,8 +199,7 @@ def test_fetch_auth_refusal_carries_status_and_body(monkeypatch: pytest.MonkeyPa
 
 
 def test_fetch_rate_limited_exhausts_then_returns(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fmpnews.time, "sleep", _noop_sleep)  # no real backoff sleeps
-    _patch_get(monkeypatch, _FakeResp(429, {"Error Message": "Limit Reach"}))
+    _patch_get(monkeypatch, 429, {"Error Message": "Limit Reach"})
     res = fetch_news_for_ticker("AAPL", api_key="key")
     assert res.status == 429
     assert res.rows == []
@@ -190,7 +210,7 @@ def test_fetch_schema_drift_dumps_and_halts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(fmpnews, "_VALIDATION_DUMP_DIR", tmp_path / "dumps")
-    _patch_get(monkeypatch, _FakeResp(200, [{"symbol": "AAPL"}]))  # missing required fields
+    _patch_get(monkeypatch, 200, [{"symbol": "AAPL"}])  # missing required fields
     res = fetch_news_for_ticker("AAPL", api_key="key")
     assert res.rows == []
     assert res.error is not None
@@ -222,7 +242,7 @@ def news_db(tmp_path: Path) -> Path:
 
 def test_run_persists_mapped_rows(news_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fmpnews, "FMP_API_KEY", "fake-key")
-    _patch_get(monkeypatch, _FakeResp(200, [_SAMPLE]))
+    _patch_get(monkeypatch, 200, [_SAMPLE])
 
     rc = fmpnews.run(["AAPL"], db_path=str(news_db), days=2, limit=50)
     assert rc == 0

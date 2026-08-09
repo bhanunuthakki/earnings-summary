@@ -182,8 +182,14 @@ def score_unscored_signals(
             batch = pending[start : start + int(batch_size)]
             valid_ids = {rid for rid, _firm, _title in batch}
             try:
+                from llm.contracts import QUALITY_SCORE_BATCH_SCHEMA
+
                 payload = call_llm_structured(
-                    _build_prompt(batch), purpose=PURPOSE, expect="array", db_path=path
+                    _build_prompt(batch),
+                    purpose=PURPOSE,
+                    expect="array",
+                    schema=QUALITY_SCORE_BATCH_SCHEMA,
+                    db_path=path,
                 )
             except StructuredParseError as exc:
                 log.error(

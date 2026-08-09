@@ -298,6 +298,7 @@ def run_behavior_distill(
     prompt = _build_prompt(decisions, musings)
 
     if call is None:
+        from llm.contracts import BEHAVIOR_RULE_BATCH_SCHEMA
         from llm.structured import StructuredParseError, call_llm_structured
 
         def _call(_prompt: str) -> list[ProposedRule] | None:
@@ -307,6 +308,7 @@ def run_behavior_distill(
                     purpose=PURPOSE,
                     scope="owner_profile",
                     expect="array",
+                    schema=BEHAVIOR_RULE_BATCH_SCHEMA,
                     db_path=db_path,
                 )
             except StructuredParseError:

@@ -36,6 +36,7 @@ from alembic import command
 from execution.fetch_news import fmp_refused
 from llm_client import structure_recent_news_json
 from news.store import NewsRow
+from pipeline.row_validation import RowValidationDriftError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -221,6 +222,33 @@ def test_websearch_maps_and_tags_source_feed(
     assert rows[0].url == "https://news.example/1"
     assert rows[0].published_at == "2026-01-15 13:30:00"
     assert rows[0].source == "Reuters"
+
+
+def test_websearch_batch_drift_halts_before_cache_write(
+    news_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(websearch, "load_thesis_anchor", _anchor_stub)
+    items: list[object] = [
+        {
+            "headline": f"story {index}",
+            "url": f"https://news.example/{index}",
+            "published_at": "2026-06-12 12:00:00",
+            "published_tz": "UTC",
+        }
+        for index in range(7)
+    ]
+    items.extend([{"renamed_headline": "drift"}] * 3)
+    monkeypatch.setattr(websearch, "structure_recent_news_json", _StructStub([items]))
+    writes: list[object] = []
+
+    def _record_cache_write(*_args: object, **_kwargs: object) -> None:
+        writes.append(object())
+
+    monkeypatch.setattr(websearch, "_write_cache", _record_cache_write)
+
+    with pytest.raises(RowValidationDriftError, match="3/10"):
+        websearch.fetch_websearch_news_for_ticker("AAPL", db_path=str(news_db))
+    assert writes == []
 
 
 def test_websearch_drops_items_without_determinable_date(

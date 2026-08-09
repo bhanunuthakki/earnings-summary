@@ -166,3 +166,32 @@ def template_meta(prompt: object) -> tuple[str | None, str | None, str | None]:
     if isinstance(prompt, RenderedPrompt):
         return prompt.template_id, prompt.template_version, prompt.vars_sha256
     return None, None, None
+
+
+def attribute_plain_prompt(prompt: str, *, purpose: str) -> RenderedPrompt:
+    """Give an unregistered prompt deterministic central attribution.
+
+    Registered ``RenderedPrompt`` instances keep their stronger template
+    identity unchanged. A plain string is attributed at the canonical LLM
+    entry point instead of requiring every call site to be rewritten:
+
+    * ``template_id`` identifies the production purpose;
+    * ``template_version`` is that purpose's governed prompt version; and
+    * ``vars_sha256`` carries the immutable full-body hash (there is no
+      separable variable payload for an inline prompt).
+
+    The returned value remains a ``str`` subclass, so cache keys, transport
+    bytes, token counts, and latency behavior are unchanged.
+    """
+    if isinstance(prompt, RenderedPrompt):
+        return prompt
+
+    from llm.prompt_versions import prompt_version_for
+
+    body_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    return RenderedPrompt(
+        prompt,
+        template_id=f"purpose:{purpose}",
+        template_version=prompt_version_for(purpose),
+        vars_sha256=body_sha256,
+    )

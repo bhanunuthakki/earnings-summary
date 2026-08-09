@@ -40,7 +40,15 @@ class _RecordingRunner:
 
     def __call__(self, argv: list[str], **_: object) -> _Result:
         self.calls.append(list(argv))
-        return _Result(self.returncodes.get(Path(argv[1]).name, 0))
+        return _Result(self.returncodes.get(_managed_target(argv).name, 0))
+
+
+def _managed_target(argv: list[str]) -> Path:
+    assert len(argv) >= 3
+    assert Path(argv[1]).name == "sqlite_bootstrap.py"
+    target = Path(argv[2])
+    assert target.suffix == ".py"
+    return target
 
 
 def _seed_db(path: Path) -> None:
@@ -105,7 +113,7 @@ def test_successful_ticker_runs_detectors_in_dependency_order(tmp_path: Path) ->
     )
 
     assert result.failed_tickers == ()
-    assert [Path(call[1]).name for call in runner.calls] == [
+    assert [_managed_target(call).name for call in runner.calls] == [
         "detect_disclosure_changes.py",
         "detect_discontinued_metrics.py",
         "detect_guidance_lifecycle.py",
@@ -136,7 +144,7 @@ def test_failed_step_defers_ticker_and_does_not_advance_checkpoint(tmp_path: Pat
 
     assert result.failed_tickers == ("NU",)
     assert result.failures == 1
-    assert [Path(call[1]).name for call in runner.calls] == [
+    assert [_managed_target(call).name for call in runner.calls] == [
         "detect_disclosure_changes.py",
         "detect_discontinued_metrics.py",
         "detect_guidance_lifecycle.py",
@@ -241,5 +249,5 @@ def test_ingest_fast_path_invokes_same_sweep_outside_protected_window(tmp_path: 
 
     assert outcome == "complete"
     assert len(runner.calls) == 1
-    assert Path(runner.calls[0][1]).name == "run_disclosure_change_sweep.py"
+    assert _managed_target(runner.calls[0]).name == "run_disclosure_change_sweep.py"
     assert runner.calls[0][runner.calls[0].index("--tickers") + 1] == "NU,WIX"

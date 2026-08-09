@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import sys
 import threading
@@ -215,6 +216,51 @@ def test_healthz_does_not_leak_repo_root(client):
     absolute filesystem path."""
     resp = client.get("/healthz")
     assert resp.get_json() == {"status": "ok"}
+
+
+def test_global_500_handler_redacts_and_drops_unsafe_traceback(
+    client: FlaskClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    app = client.application
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    leak_marker = "fixture-credential-material"
+
+    def fail() -> str:
+        raise RuntimeError(f"https://example.test?apikey={leak_marker}")
+
+    app.add_url_rule("/_test/unhandled", "test_unhandled", fail)
+    with caplog.at_level(logging.ERROR, logger=app.logger.name):
+        response = client.get("/_test/unhandled")
+
+    assert response.status_code == 500
+    assert response.get_json()["error"] == "request failed; retry the request"
+    assert leak_marker not in caplog.text
+    assert "RuntimeError" in caplog.text
+
+
+def test_handled_internal_failure_redacts_and_drops_unsafe_traceback(
+    client: FlaskClient,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leak_marker = "-".join(("fixture", "credential", "material"))
+
+    def fail_distill(*_args: object, **_kwargs: object) -> dict[str, int]:
+        raise RuntimeError(f"https://example.test?apikey={leak_marker}")
+
+    monkeypatch.setattr(
+        "synthesis.tenet_distill.run_tenet_distill",
+        fail_distill,
+    )
+    app = client.application
+    with caplog.at_level(logging.ERROR, logger=app.logger.name):
+        response = client.post("/api/tenets/distill")
+
+    assert response.status_code == 500
+    assert response.get_json()["error"] == "distillation failed; retry the request"
+    assert leak_marker not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_file_routes_reject_malformed_ticker(client):

@@ -348,7 +348,6 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
             role=SQLiteConnectionRole.WRITER,
             schema_preflight=True,
         )
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         if (
             conn.execute(

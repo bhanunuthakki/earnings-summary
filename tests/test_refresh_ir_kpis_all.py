@@ -60,6 +60,7 @@ class _RecordingRun:
 
     def __call__(self, argv: list[str], **kwargs: object) -> _FakeCompleted:
         self.calls.append(list(argv))
+        assert _script_of(argv) == CHILD_SCRIPT
         ticker = _ticker_of(argv) or ""
         if ticker in self._timeout_tickers:
             timeout = kwargs.get("timeout")
@@ -79,14 +80,15 @@ class _RecordingRun:
     @property
     def scripts(self) -> list[str]:
         """The ordered list of script basenames invoked (all should be the child)."""
-        return [s for c in self.calls if (s := _script_of(c)) is not None]
+        return [_script_of(c) for c in self.calls]
 
 
-def _script_of(argv: list[str]) -> str | None:
-    for tok in argv:
-        if tok.endswith(".py"):
-            return Path(tok).name
-    return None
+def _script_of(argv: list[str]) -> str:
+    assert len(argv) >= 3
+    assert Path(argv[1]).name == "sqlite_bootstrap.py"
+    target = Path(argv[2])
+    assert target.suffix == ".py"
+    return target.name
 
 
 def _ticker_of(argv: list[str]) -> str | None:

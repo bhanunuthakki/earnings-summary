@@ -10,7 +10,8 @@ substrate is built via alembic exactly like tests/test_dashboard_feed.py.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import sqlite3
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -630,6 +631,35 @@ def test_pending_action_helper_requires_pending_parent(db_path: Path) -> None:
     dismiss_alert(get_action(action_id, db_path=db_path).alert_id, db_path=db_path)
     (dismissed_card,) = collect_inbox(db_path, kinds=("alert",), status="dismissed")
     assert _pending_action(dismissed_card) is None  # settled parent → never
+
+
+# Request-scoped composition must keep the ranking layer on the same reader.
+def test_collect_inbox_threads_borrowed_connection_into_ranking(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dashboard import inbox as inbox_module
+
+    borrowed = sqlite3.connect(db_path)
+    seen: list[sqlite3.Connection | None] = []
+
+    def rank_stub(
+        items: list[InboxItem],
+        *,
+        db_path: Path | None,
+        now: datetime,
+        position_weights: Mapping[str, float] | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[InboxItem]:
+        del db_path, now, position_weights
+        seen.append(conn)
+        return items
+
+    monkeypatch.setattr(inbox_module, "annotate_and_rank", rank_stub)
+    collect_inbox(db_path, kinds=(), conn=borrowed)
+
+    assert seen == [borrowed]
+    assert borrowed.execute("SELECT 1").fetchone() == (1,)
+    borrowed.close()
 
 
 # ----------------------------------------------------------------------------

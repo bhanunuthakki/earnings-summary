@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sqlite3
 import sys
 from collections.abc import Iterable, Mapping
@@ -496,9 +495,9 @@ def repair(
     if target_path == recovery_path:
         raise ValueError("--db and --recovery-db must be distinct files")
     load_project_env(root)
-    configured_live = Path(
-        os.environ.get("EARNINGS_SUMMARY_DB_PATH", root / "data" / "portfolio.db")
-    ).resolve()
+    from db_paths import configured_db_path
+
+    configured_live = configured_db_path(root)
     if apply and target_path == configured_live and not allow_live:
         raise RepairBlockedError(
             "refusing live DB repair without explicit --allow-live after writers are stopped"

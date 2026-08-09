@@ -116,6 +116,7 @@ def _default_dcf_call(wondering: str, ticker: str | None) -> dict[str, object]:
     """Default structured caller: the governed ``dcf_assumption_extract`` purpose.
     Web-less. Degrades to {} on a double-parse failure; a budget/setup hard stop
     propagates as config (per the repo's LLM exception policy)."""
+    from llm.contracts import DCF_TWEAK_SCHEMA
     from llm.structured import StructuredParseError, call_llm_structured
 
     prompt = (
@@ -127,6 +128,7 @@ def _default_dcf_call(wondering: str, ticker: str | None) -> dict[str, object]:
             purpose="dcf_assumption_extract",
             expect="object",
             required_keys=("param", "new_value"),
+            schema=DCF_TWEAK_SCHEMA,
         )
     except StructuredParseError:
         return {}

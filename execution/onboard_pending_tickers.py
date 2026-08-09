@@ -93,6 +93,7 @@ from pipeline.cadence_policy import (  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from provenance.selection import selected_transcripts_relation  # noqa: E402
 from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
+from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
 
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
@@ -310,7 +311,7 @@ def _run_subprocess(cmd: list[str], stage: str, log_path: Path) -> StageResult:
         fh.write(f"\n[{stage}] cmd: {' '.join(cmd)}\n".encode())
         fh.flush()
         proc = subprocess.run(
-            cmd,
+            ensure_managed_python_argv(PROJECT_ROOT, cmd),
             cwd=str(PROJECT_ROOT),
             stdout=fh,
             stderr=subprocess.STDOUT,
@@ -354,19 +355,34 @@ def onboard_one(
         stages.append(_skipped("run_thesis_evaluator", "ticker already evaluated"))
         stages.append(_skipped("refresh_dcf", "ticker already has DCF"))
     else:
-        onboard_cmd = [sys.executable, "execution/onboard_ticker.py", "--ticker", ticker]
+        onboard_cmd = [
+            *managed_python_prefix(PROJECT_ROOT),
+            "execution/onboard_ticker.py",
+            "--ticker",
+            ticker,
+        ]
         if skip_fmp:
             onboard_cmd.append("--skip-fmp")
         stages.append(_run_subprocess(onboard_cmd, "onboard_ticker", log_path))
 
         # run_thesis_evaluator is best-effort — missing holdings JSON returns non-zero
         # but should not abort the rest of the chain.
-        eval_cmd = [sys.executable, "execution/run_thesis_evaluator.py", "--ticker", ticker]
+        eval_cmd = [
+            *managed_python_prefix(PROJECT_ROOT),
+            "execution/run_thesis_evaluator.py",
+            "--ticker",
+            ticker,
+        ]
         stages.append(_run_subprocess(eval_cmd, "run_thesis_evaluator", log_path))
 
         # refresh_dcf replaces the old batch_dcf path: seeds dcf/<TICKER>.xlsx
         # if missing, refreshes its Historicals, then re-runs the PV calc.
-        dcf_cmd = [sys.executable, "execution/refresh_dcf.py", "--ticker", ticker]
+        dcf_cmd = [
+            *managed_python_prefix(PROJECT_ROOT),
+            "execution/refresh_dcf.py",
+            "--ticker",
+            ticker,
+        ]
         stages.append(_run_subprocess(dcf_cmd, "refresh_dcf", log_path))
 
     if skip_commitments:
@@ -376,7 +392,7 @@ def onboard_one(
         # Idempotent: transcripts already with a commitment row are skipped.
         # Best-effort: missing LLM auth / no transcripts is non-fatal.
         commit_cmd = [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             "execution/extract_commitments_from_transcript.py",
             "--auto",
             "--ticker",
@@ -529,15 +545,20 @@ def main() -> int:
         if not allowed:
             report = {
                 "run_id": stamp,
-                "blocked": True,
-                "block_reason": "fmp_budget_gate",
+                "deferred": True,
+                "defer_reason": "fmp_budget_gate",
                 "detail": reason,
                 "pending_count": len(pending),
                 "log": str(log_path),
             }
             print(json.dumps(report, indent=2))
-            log.warning("budget gate blocked run: %s", reason)
-            return 2
+            # Budget exhaustion is an expected capacity decision, not a failed
+            # run.  The pending rows remain durable and the hourly scheduler
+            # retries them after quota resets.  Returning non-zero made every
+            # healthy deferral look like an operational outage in Task
+            # Scheduler and cron health.
+            log.info("budget gate deferred run: %s", reason)
+            return 0
         log.info("budget gate passed: %s", reason)
 
     log.info("starting run %s — %d pending tickers — log: %s", stamp, len(pending), log_path)

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -28,6 +29,7 @@ from news.store import (
     SOURCE_FEED_EDGAR_13G,
     NewsRow,
 )
+from pipeline.row_validation import RowValidationDriftError
 
 CIK = "0001326801"
 
@@ -83,6 +85,17 @@ def test_maps_8k_with_item_codes_to_edgar_8k_row() -> None:
     assert row.url == "https://www.sec.gov/Archives/edgar/data/1326801/000126000000/doc.htm"
     assert row.source == "SEC EDGAR"
     assert row.snippet is not None and "accession 0001-26-000000" in row.snippet
+
+
+def test_parallel_array_drift_halts_above_drop_threshold() -> None:
+    payload = _payload(["8-K"] * 20)
+    filings = cast("dict[str, object]", payload["filings"])
+    recent = cast("dict[str, object]", filings["recent"])
+    accessions = cast("list[str]", recent["accessionNumber"])
+    recent["accessionNumber"] = accessions[:17]
+
+    with pytest.raises(RowValidationDriftError, match="3/20"):
+        _map(payload)
 
 
 def test_8k_headline_names_first_non_boilerplate_item() -> None:

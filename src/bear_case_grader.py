@@ -32,10 +32,14 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
+from pydantic import BaseModel, Field, TypeAdapter
+
+from llm.structured import StructuredParseError, call_llm_structured
+from llm.untrusted import spotlight
 from llm_artifact_store import history as artifact_history
-from llm_client import call_llm
+from predictions_store import Prediction
 from predictions_store import grade as grade_prediction
 from predictions_store import history as prediction_history
 from predictions_store import record as record_prediction
@@ -44,6 +48,12 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 log = logging.getLogger(__name__)
 
 DEFAULT_GRADE_AGE_QUARTERS = 1  # grade hypotheses at least 1 quarter old
+
+
+class _BearGrade(BaseModel):
+    outcome: Literal["met", "missed", "mixed", "unfalsifiable"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    notes: str
 
 
 @dataclass(slots=True)
@@ -140,9 +150,9 @@ def grade_due_predictions(
         verdict = _grade_one_prediction(ticker=ticker, pred=pred, corpus=corpus)
         if verdict is None:
             continue
-        outcome = verdict.get("outcome", "unfalsifiable")
-        confidence = verdict.get("confidence", 0.5)
-        notes = verdict.get("notes", "")
+        outcome = verdict.outcome
+        confidence = verdict.confidence
+        notes = verdict.notes
         ok = grade_prediction(
             prediction_id=pred.id,
             outcome=outcome,
@@ -158,27 +168,23 @@ def grade_due_predictions(
 def _grade_one_prediction(
     *,
     ticker: str,
-    pred: object,  # Prediction dataclass
+    pred: Prediction,
     corpus: dict[str, str],
-) -> dict[str, object] | None:
+) -> _BearGrade | None:
     """Single LLM grading call. Returns {outcome, confidence, notes}."""
-    p = pred  # type: ignore[assignment]
+    p = pred
+    evidence = spotlight(
+        f"""Hypothesis date: {p.made_at.date().isoformat() if hasattr(p, "made_at") and p.made_at else "?"}
+Hypothesis: {p.prediction_md}
+Recent earnings summary: {corpus.get("latest_summary", "(none)")}
+Recent financials: {corpus.get("financials", "(none)")}
+Recent insider activity: {corpus.get("insiders", "(none)")}""",
+        source="prior LLM hypothesis and subsequent issuer/market evidence",
+    )
     prompt = f"""You are grading a prior LLM-generated bear-case hypothesis for {ticker}
 against subsequent realized data. The hypothesis was made on {p.made_at.date().isoformat() if hasattr(p, "made_at") and p.made_at else "?"}.
 
-**The hypothesis (verbatim from the prior bear case):**
-{p.prediction_md}
-
-**Subsequent data the grader can read against:**
-
-## Recent earnings summary (most recent quarter)
-{corpus.get("latest_summary", "(none)")}
-
-## Recent financials (last 8Q)
-{corpus.get("financials", "(none)")}
-
-## Recent insider activity (last 90d)
-{corpus.get("insiders", "(none)")}
+{evidence}
 
 **Your task:** read the hypothesis + the subsequent data and emit ONE
 JSON object with these fields. Return ONLY the JSON, no commentary:
@@ -200,37 +206,23 @@ Definitions:
     try:
         # Model resolves from LLM_MODELS["bear_case_grading"] — the registry
         # is the single reviewable surface for pins (llm_evals_plan.md §5.5).
-        raw = call_llm(
-            prompt,
-            purpose="bear_case_grading",
-            ticker=ticker,
+        grade = cast(
+            "_BearGrade",
+            call_llm_structured(
+                prompt,
+                purpose="bear_case_grading",
+                ticker=ticker,
+                scope="bear_case_grading",
+                schema=TypeAdapter(_BearGrade),
+            ),
         )
+    except StructuredParseError as exc:
+        log.warning({"event": "grader_structured_failed", "error": str(exc)})
+        return None
     except Exception as exc:  # log and skip — grading is retried next run
         log.warning({"event": "grader_llm_failed", "error": str(exc)})
         return None
-    raw = raw.strip()
-    if raw.startswith("```"):
-        # Strip optional code fence
-        raw = raw.strip("`")
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-    try:
-        decoded = json.loads(raw)
-        if not isinstance(decoded, dict):
-            return None
-        d = cast("dict[str, object]", decoded)
-        outcome = str(d.get("outcome", "unfalsifiable")).lower()
-        if outcome not in {"met", "missed", "mixed", "unfalsifiable", "pending"}:
-            outcome = "unfalsifiable"
-        return {
-            "outcome": outcome,
-            "confidence": d.get("confidence"),
-            "notes": str(d.get("notes") or ""),
-        }
-    except json.JSONDecodeError:
-        log.warning({"event": "grader_parse_failed", "raw_head": raw[:200]})
-        return None
+    return grade
 
 
 def _load_grading_corpus(ticker: str, repo_root: Path) -> dict[str, str]:
@@ -306,20 +298,22 @@ def _parse_failure_modes(content_md: str | None, content_json: object | None) ->
     """Parse failure modes out of either the JSON or markdown content of a
     bear case artifact. Defensive — returns [] on any parse issue."""
     if isinstance(content_json, dict):
-        fms_raw = content_json.get("failure_modes")
+        content = cast("dict[str, object]", content_json)
+        fms_raw = content.get("failure_modes")
         if isinstance(fms_raw, list):
-            return _coerce_failure_modes(fms_raw)
+            return _coerce_failure_modes(cast("list[object]", fms_raw))
     if not content_md:
         return []
     # Try JSON within markdown
     s = content_md.strip()
     if s.startswith("{"):
         try:
-            decoded = json.loads(s)
+            decoded = cast(object, json.loads(s))
             if isinstance(decoded, dict):
-                fms_raw = decoded.get("failure_modes")
+                decoded_mapping = cast("dict[str, object]", decoded)
+                fms_raw = decoded_mapping.get("failure_modes")
                 if isinstance(fms_raw, list):
-                    return _coerce_failure_modes(fms_raw)
+                    return _coerce_failure_modes(cast("list[object]", fms_raw))
         except json.JSONDecodeError:
             pass
     return []

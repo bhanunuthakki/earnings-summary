@@ -89,6 +89,7 @@ def _build_prompt(text: str) -> str:
 
 
 def _default_call(text: str) -> dict[str, object]:
+    from llm.contracts import INTENT_SCHEMA
     from llm.structured import call_llm_structured
 
     obj = call_llm_structured(
@@ -96,6 +97,7 @@ def _default_call(text: str) -> dict[str, object]:
         purpose=PURPOSE,
         expect="object",
         required_keys=("intent",),
+        schema=INTENT_SCHEMA,
     )
     return cast("dict[str, object]", obj) if isinstance(obj, dict) else {}
 

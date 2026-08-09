@@ -223,12 +223,15 @@ def draft_letter(*, evidence: AnnualLetterEvidence, db_path: Path) -> str:
     """The ONE LLM call. Raises StructuredParseError on unusable output (loud,
     per the repo's structured-output discipline); hard stops propagate."""
     prompt = _LETTER_PROMPT.format(year=evidence.year, evidence_md=render_evidence_md(evidence))
+    from llm.contracts import ANNUAL_LETTER_SCHEMA
+
     payload = call_llm_structured(
         prompt,
         purpose="annual_letter",
         scope="portfolio",
         expect="object",
         required_keys=("letter_md",),
+        schema=ANNUAL_LETTER_SCHEMA,
         db_path=db_path,
     )
     letter = (

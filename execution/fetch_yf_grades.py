@@ -40,7 +40,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -52,6 +52,7 @@ from news.store import (  # noqa: E402
     drop_duplicate_stories,
     upsert_news_rows,
 )
+from pipeline.row_validation import validate_provider_rows  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_DAYS = 3
@@ -204,7 +205,7 @@ def rows_from_records(
     essentials are dropped; a record that fails the NewsRow gate is dropped
     individually (degraded, never a halt)."""
     ticker = ticker.upper()
-    rows: list[NewsRow] = []
+    candidates: list[dict[str, object]] = []
     for record in records:
         when = _grade_datetime(record.get("GradeDate"))
         if when is None or when < since:
@@ -214,21 +215,23 @@ def rows_from_records(
             continue
         published_at = when.strftime(_DATETIME_FORMAT)
         firm = str(record.get("Firm") or "").strip()
-        try:
-            rows.append(
-                NewsRow(
-                    ticker=ticker,
-                    headline=headline,
-                    url=_event_url(ticker, published_at, firm),
-                    published_at=published_at,
-                    snippet=None,
-                    source=firm,
-                    source_feed=SOURCE_FEED_YF_GRADES,
-                )
-            )
-        except ValidationError:
-            _log("yf_grades_row_rejected", ticker=ticker, published_at=published_at)
-    return rows
+        candidates.append(
+            {
+                "ticker": ticker,
+                "headline": headline,
+                "url": _event_url(ticker, published_at, firm),
+                "published_at": published_at,
+                "snippet": None,
+                "source": firm,
+                "source_feed": SOURCE_FEED_YF_GRADES,
+            }
+        )
+    return validate_provider_rows(
+        candidates,
+        TypeAdapter(NewsRow),
+        source="yf_grades",
+        context={"ticker": ticker},
+    )
 
 
 def fetch_grades_for_ticker(

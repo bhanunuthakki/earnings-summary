@@ -4,8 +4,9 @@ Quick reference for the comment + chat workflow on rendered research reports,
 plus everything you need to refresh data, regenerate reports, and run the
 analytical pipeline.
 
-All commands work from **any directory** in cmd.exe — the `.bat` launchers
-self-locate the repo, so you don't need to `cd` first.
+The root `.bat` launchers work from **any directory** in cmd.exe because they
+self-locate the repo. Direct `python` and `cron\run_python.bat` examples assume
+the repo root is the current directory.
 
 **The dashboard command center at `http://127.0.0.1:7421` is now the primary
 interface** — status, cross-ticker analytics, per-ticker drill-down, refreshes,
@@ -32,7 +33,7 @@ the front door for status, analysis, refreshes, and editing. Launch it once and
 leave it running:
 
 ```cmd
-python execution\comments_server.py --port 7421
+python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421
 ```
 
 (add `--repo-root <path>` to point at a specific checkout). Every action below
@@ -57,7 +58,7 @@ JSON siblings for scripting: `GET /api/overview`, `GET /api/ticker/<T>`, `GET /a
 - **`force`** — run FMP even if fresh (override the stale-skip).
 - **`force_budget_bypass`** — ignore LLM budget caps for this run.
 
-Output streams over `GET /actions/stream/<job_id>` (SSE); jobs are single-flight per ticker. (CLI equivalent: `python execution/refresh_dispatch.py --ticker NU --steps dcf,build_report --force`.)
+Output streams over `GET /actions/stream/<job_id>` (SSE); jobs are single-flight per ticker. (CLI equivalent: `python execution/sqlite_bootstrap.py execution/refresh_dispatch.py --ticker NU --steps dcf,build_report --force`.)
 
 ### Process comments + change the thesis (preview → apply)
 
@@ -378,12 +379,12 @@ re-run, delete its cache file and rebuild with `--enable-llm`:
 | SayDo importance filter | `data/saydo_filter/<T>.json` | same |
 | Per-quarter summary | `.tmp/<T>_Q<n>_<Y>_summary.txt` + reset `processed=false` in `.tmp/document_index.json` | re-run `process_ir_documents.py --ticker <T>` |
 
-### 8. One-button full refresh
+### 8. Full refresh
 
 If you just want **everything** regenerated end-to-end:
 
 ```cmd
-C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\full_refresh.bat NU
+cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker NU --mode full
 ```
 
 Runs all 6 steps in sequence: FMP → transcripts → IR doc processing →
@@ -406,7 +407,6 @@ script directly when you need flags the `.bat` doesn't expose.
 | `refresh_fmp.bat <T> [LIMIT]` | Pull fresh FMP financial data |
 | `refresh_transcripts.bat <T>` | Backfill missing earnings transcripts |
 | `refresh_news.bat <T> [DAYS]` | Force-refresh §News with fresh WebSearch |
-| `full_refresh.bat <T>` | All of the above + KPI extract + SayDo + report |
 | `start_comments_server.bat` | Start the Flask server on :7421 |
 | `process_comments.bat <T> [--apply] [--clear]` | Process open comments |
 
@@ -553,12 +553,16 @@ through**:
    (Or `--list-type watchlist` / `evaluation` / `archived`.)
 3. Pull FMP data: `refresh_fmp.bat <NEW_TICKER> 20`
 4. Pull transcripts: `refresh_transcripts.bat <NEW_TICKER>`
-5. Process IR docs: `python execution\process_ir_documents.py --ticker <NEW_TICKER>`
-6. Seed KPI definitions: `python execution\seed_kpi_definitions.py`
-7. Extract KPIs: `python execution\extract_kpis_from_summaries.py --ticker <NEW_TICKER> --source earnings --repo-root <REPO>`
+5. Process IR docs: `python execution/sqlite_bootstrap.py execution/process_ir_documents.py --ticker <NEW_TICKER>`
+6. Seed KPI definitions: `python execution/sqlite_bootstrap.py execution/seed_kpi_definitions.py`
+7. Extract KPIs: `python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker <NEW_TICKER> --source earnings --repo-root <REPO>`
 8. Build: `build_report.bat <NEW_TICKER> --enable-llm`
 
-Or after step 1-2, just: `full_refresh.bat <NEW_TICKER>`
+Or after step 1-2, run the canonical dispatcher:
+
+```cmd
+cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker <NEW_TICKER> --mode full
+```
 
 ### Adding an IR document (investor day, off-cycle press release, etc.)
 
@@ -593,8 +597,8 @@ report: `build_report.bat <T> --enable-llm`.
 | New quarter just landed | `refresh_fmp.bat <T>` then `refresh_transcripts.bat <T>` then `build_report.bat <T> --enable-llm` |
 | Want to re-prompt the bear case on the same data | delete `data/bear_case/<T>.json`, then `build_report.bat <T> --enable-llm` |
 | News feels stale | `refresh_news.bat <T>` |
-| Just want everything fresh | `full_refresh.bat <T>` |
-| Quarterly catch-all for all tracked tickers | `python execution\quarterly_refresh.py` |
+| Just want everything fresh | `cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker <T> --mode full` |
+| Quarterly catch-all for all tracked tickers | `python execution/sqlite_bootstrap.py execution/quarterly_refresh.py` |
 
 ### Comment hygiene
 

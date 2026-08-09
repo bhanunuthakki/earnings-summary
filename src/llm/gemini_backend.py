@@ -51,29 +51,21 @@ import logging
 import os
 import re
 import time
-import warnings
 from datetime import UTC, datetime
 from typing import Any, cast
+
+import httpx
 
 from llm import cli as llm_cli
 from llm.ledger import record_llm_call
 
-# NOTE: `google.generativeai` is deprecated (support "has ended" per the
-# package's own FutureWarning as of 2026); Google's path forward is
-# `google-genai` with a different API (genai.Client / client.models.generate_content).
-# Migrate when convenient — the deprecated package still works and matches
-# src/llm/fallback.py, which depends on the same package for the same reason.
-# See: https://github.com/google-gemini/deprecated-generative-ai-python
-#
 # The import is LAZY (_ensure_genai), not module-level: this module loads with
 # the llm package (llm/__init__.py re-exports call_gemini), which every boot
-# path and execution/ CLI imports — and importing google.* runs
-# google.api_core's check_python_version(), whose packages_distributions()
-# scan stats every file of every installed distribution (measured 43s+ per
-# process on this machine; hung comments_server boot for minutes, 2026-07-31).
-# Only an actual Gemini call may pay that.
-genai: Any = None  # the google.generativeai module, set by _ensure_genai()
-google_exceptions: Any = None  # google.api_core.exceptions, set by _ensure_genai()
+# path and execution/ CLI imports. Only an actual Gemini call pays the SDK
+# import cost. The official SDK uses Client -> client.models.*.
+genai: Any = None  # the google.genai module, set by _ensure_genai()
+genai_errors: Any = None  # google.genai.errors, set by _ensure_genai()
+genai_types: Any = None  # google.genai.types, set by _ensure_genai()
 
 log = logging.getLogger(__name__)
 
@@ -81,15 +73,32 @@ log = logging.getLogger(__name__)
 def _ensure_genai() -> None:
     """Import the Gemini SDK on first use, binding the module globals the
     call paths (and tests, via ``gemini_backend.genai``) reference."""
-    global genai, google_exceptions
+    global genai, genai_errors, genai_types
     if genai is not None:
         return
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        import google.generativeai as _genai
-        from google.api_core import exceptions as _google_exceptions
+    from google import genai as _genai
+    from google.genai import errors as _genai_errors
+    from google.genai import types as _genai_types
+
     genai = _genai
-    google_exceptions = _google_exceptions
+    genai_errors = _genai_errors
+    genai_types = _genai_types
+
+
+def gemini_api_error_type() -> type[Exception]:
+    """Return the official SDK's operational API-error base class.
+
+    The outer purpose router uses this narrow boundary to distinguish provider
+    failures that may degrade to Claude from setup/budget hard stops. Keeping
+    the lookup here preserves the SDK's lazy-import behavior everywhere else.
+    """
+    _ensure_genai()
+    return cast("type[Exception]", genai_errors.APIError)
+
+
+def gemini_http_error_type() -> type[Exception]:
+    """Return the HTTP transport-error base used by the official SDK path."""
+    return httpx.HTTPError
 
 
 # Gemini API tiers for analytical writing (Pro) vs the short structured calls
@@ -209,9 +218,9 @@ def gemini_model_for(purpose: str | None) -> str:
     return GEMINI_BACKEND_DEFAULT_MODEL
 
 
-def _discover_api_flash_model() -> str | None:
+def _discover_api_flash_model(client: Any) -> str | None:
     """Query the Gemini Developer API's live model catalog (via the same
-    authenticated client, ``genai.list_models()``) for the highest-generation
+    authenticated client, ``client.models.list()``) for the highest-generation
     Flash model currently available to this key that supports generateContent.
     Returns None on any failure so callers fall through to the hardcoded
     stable fallback without crashing.
@@ -221,12 +230,13 @@ def _discover_api_flash_model() -> str | None:
     longer a reliable signal — the API's own catalog is the correct source of
     truth for what a given key can actually call.
     """
-    _ensure_genai()
     try:
         # Cast at this SDK boundary rather than let Any propagate downstream.
-        models = cast("list[object]", genai.list_models())
+        models = cast("list[object]", list(client.models.list()))
     except Exception as exc:
-        log.warning({"event": "gemini_anneal_list_models_failed", "error": str(exc)[:200]})
+        from log_redact import redact
+
+        log.warning({"event": "gemini_anneal_list_models_failed", "error": redact(str(exc)[:200])})
         return None
     flash_ids: list[str] = []
     for m in models:
@@ -234,8 +244,8 @@ def _discover_api_flash_model() -> str | None:
         short = name.rsplit("/", 1)[-1]
         if not re.match(r"^gemini-[\d.]+-flash", short):
             continue
-        methods: list[object] = getattr(m, "supported_generation_methods", None) or []
-        if "generateContent" in methods:
+        actions: list[object] = getattr(m, "supported_actions", None) or []
+        if "generateContent" in actions:
             flash_ids.append(short)
     if not flash_ids:
         log.warning({"event": "gemini_anneal_no_flash_models_found"})
@@ -254,7 +264,7 @@ def _discover_api_flash_model() -> str | None:
     return best
 
 
-def _anneal_models(broken: str) -> list[str]:
+def _anneal_models(broken: str, client: object) -> list[str]:
     """Build the ordered fallback sequence after `broken` returns NotFound.
 
     1. Query the live API model catalog for the current Flash model id —
@@ -267,7 +277,7 @@ def _anneal_models(broken: str) -> list[str]:
     """
     global _effective_fast_model
     candidates: list[str] = []
-    discovered = _discover_api_flash_model()
+    discovered = _discover_api_flash_model(client)
     if discovered and discovered != broken and discovered != _GEMINI_FAST_MODEL_FALLBACK:
         candidates.append(discovered)
     candidates.append(_GEMINI_FAST_MODEL_FALLBACK)
@@ -280,6 +290,11 @@ def _anneal_models(broken: str) -> list[str]:
         }
     )
     return candidates
+
+
+def _is_flash_model(model: str) -> bool:
+    """Return whether ``model`` belongs to the governed Flash family."""
+    return re.match(r"^gemini-[\d.]+-flash(?:-|$)", model) is not None
 
 
 def _verify_gemini_setup_once() -> None:
@@ -327,7 +342,12 @@ def usage_meta_from_response(
             "output_tokens": candidate_tokens,
             "cache_read_input_tokens": cached_tokens,
         },
-        "total_cost_usd": estimated_call_usd(model, prompt_tokens, candidate_tokens),
+        "total_cost_usd": estimated_call_usd(
+            model,
+            prompt_tokens,
+            candidate_tokens,
+            cached_input_tokens=cached_tokens,
+        ),
     }
 
 
@@ -336,6 +356,14 @@ def _safe_int(v: object) -> int:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return 0
     return int(v)
+
+
+def _gemini_api_error_code(exc: Exception) -> int | None:
+    """Validated status-code boundary for the SDK's dynamically loaded errors."""
+    if not isinstance(exc, genai_errors.APIError):
+        return None
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, int) and not isinstance(code, bool) else None
 
 
 def _classify_gemini_failure(exc: Exception) -> None:
@@ -352,14 +380,13 @@ def _classify_gemini_failure(exc: Exception) -> None:
     _ensure_genai()
     from log_redact import redact
 
-    if isinstance(exc, (google_exceptions.Unauthenticated, google_exceptions.PermissionDenied)):
+    code = _gemini_api_error_code(exc)
+    if code in {401, 403}:
         raise llm_cli.LLMSetupError(
             f"Gemini API key rejected ({type(exc).__name__}). {GEMINI_API_KEY_HINT}\n"
             f"API error: {redact(str(exc)[:300])}"
         ) from exc
-    if isinstance(exc, google_exceptions.InvalidArgument) and any(
-        marker in str(exc) for marker in _AUTH_ERROR_MARKERS
-    ):
+    if code == 400 and any(marker in str(exc) for marker in _AUTH_ERROR_MARKERS):
         raise llm_cli.LLMSetupError(
             f"Gemini API key invalid. {GEMINI_API_KEY_HINT}\nAPI error: {redact(str(exc)[:300])}"
         ) from exc
@@ -386,16 +413,24 @@ def call_gemini(
     falls back to Claude) belongs to ``call_llm``. Raises:
       * LLMBudgetExceeded — hard per-purpose cap (propagate; budget gate).
       * LLMSetupError — API key missing or rejected by the API.
-      * RuntimeError / ValueError / google.api_core.exceptions.GoogleAPIError —
+      * RuntimeError / ValueError / google.genai.errors.APIError —
         operational failures the caller may degrade or reroute.
     """
     llm_cli._enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_gemini_setup_once()  # setup errors propagate
     assert _gemini_api_key is not None  # set by _verify_gemini_setup_once
     _ensure_genai()
-    genai.configure(api_key=_gemini_api_key)
     resolved_model = model or gemini_model_for(purpose)
     resolved_timeout = timeout_seconds or GEMINI_BACKEND_TIMEOUT_SECONDS
+    client = genai.Client(
+        api_key=_gemini_api_key,
+        http_options=genai_types.HttpOptions(
+            timeout=resolved_timeout * 1000,
+            # Ledger attempts must match transport attempts. The shared router
+            # owns retries/degradation; do not let the SDK retry invisibly.
+            retry_options=genai_types.HttpRetryOptions(attempts=1),
+        ),
+    )
     log.info(
         {
             "event": "gemini_backend_call_start",
@@ -409,91 +444,106 @@ def call_gemini(
 
     prompt_sha = sha256_text(prompt)
 
-    # Self-annealing retry: _models starts as [resolved_model]. On a
+    # Self-annealing retry: _models starts as [resolved_model]. On a Flash
     # NotFound (preview alias expired / rotated), _anneal_models queries the
     # live API catalog for the current Flash model id, then appends
-    # [discovered, stable-fallback] so the loop retries in order. Every
-    # attempt writes its own ledger row so failures are fully auditable.
-    _models: list[str] = [resolved_model]
-    _annealed = False
-    for _attempt, _try_model in enumerate(_models):
-        started_at = datetime.now(UTC)
-        t0 = time.monotonic()
+    # [discovered, stable-fallback] so the loop retries in order. Pro and other
+    # capability families fail back to the governed outer router; they never
+    # cross tiers here. Every attempt writes its own ledger row.
+    try:
+        _models: list[str] = [resolved_model]
+        _annealed = False
+        for _attempt, _try_model in enumerate(_models):
+            started_at = datetime.now(UTC)
+            t0 = time.monotonic()
+            try:
+                response = client.models.generate_content(model=_try_model, contents=prompt)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                text = (response.text or "").strip() if hasattr(response, "text") else ""
+                if not text:
+                    raise RuntimeError(
+                        f"Gemini API returned an empty response for model {_try_model}."
+                    )
+                log.info({"event": "gemini_backend_call_done", "response_chars": len(text)})
+                usage_obj = getattr(response, "usage_metadata", None)
+                usage_dict: dict[str, object] = {
+                    "prompt_token_count": getattr(usage_obj, "prompt_token_count", 0),
+                    "candidates_token_count": getattr(usage_obj, "candidates_token_count", 0),
+                    "cached_content_token_count": getattr(
+                        usage_obj, "cached_content_token_count", 0
+                    ),
+                }
+                record_llm_call(
+                    started_at=started_at,
+                    elapsed_ms=elapsed_ms,
+                    model=_try_model,
+                    prompt_sha=prompt_sha,
+                    prompt_chars=len(prompt),
+                    purpose=purpose,
+                    ticker=ticker,
+                    scope=scope,
+                    run_id=run_id,
+                    response_text=text,
+                    meta=usage_meta_from_response(usage_dict, model=_try_model),
+                    prompt=prompt,
+                    provider="google",
+                    transport="metered_api",
+                    auth_class="api_key_metered",
+                    attempts=_attempt + 1,
+                    retries=_attempt,
+                )
+                return text
+            except (
+                genai_errors.APIError,
+                httpx.HTTPError,
+                RuntimeError,
+                ValueError,
+                OSError,
+            ) as gemini_error:
+                from log_redact import redact
+
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                record_llm_call(
+                    started_at=started_at,
+                    elapsed_ms=elapsed_ms,
+                    model=_try_model,
+                    prompt_sha=prompt_sha,
+                    prompt_chars=len(prompt),
+                    purpose=purpose,
+                    ticker=ticker,
+                    scope=scope,
+                    run_id=run_id,
+                    error=redact(f"{type(gemini_error).__name__}: {str(gemini_error)[:500]}"),
+                    prompt=prompt,
+                    provider="google",
+                    transport="metered_api",
+                    auth_class="api_key_metered",
+                    attempts=_attempt + 1,
+                    retries=_attempt,
+                    failure_class="gemini_transport",
+                )
+                is_not_found = _gemini_api_error_code(gemini_error) == 404
+                if is_not_found and _is_flash_model(_try_model):
+                    if not _annealed and _try_model != _GEMINI_FAST_MODEL_FALLBACK:
+                        _models.extend(_anneal_models(_try_model, client))
+                        _annealed = True
+                        continue
+                    if _attempt + 1 < len(_models):
+                        global _effective_fast_model
+                        _effective_fast_model = _models[_attempt + 1]
+                        continue
+                _classify_gemini_failure(gemini_error)  # auth → LLMSetupError
+                raise
+        raise RuntimeError("call_gemini: model sequence exhausted")  # unreachable
+    finally:
         try:
-            model_obj = genai.GenerativeModel(_try_model)
-            response = model_obj.generate_content(
-                prompt, request_options={"timeout": resolved_timeout}
+            client.close()
+        except Exception as close_error:
+            from log_redact import redact
+
+            log.warning(
+                {
+                    "event": "gemini_client_close_failed",
+                    "error": redact(str(close_error)[:200]),
+                }
             )
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            text = (response.text or "").strip() if hasattr(response, "text") else ""
-            if not text:
-                raise RuntimeError(f"Gemini API returned an empty response for model {_try_model}.")
-            log.info({"event": "gemini_backend_call_done", "response_chars": len(text)})
-            usage_obj = getattr(response, "usage_metadata", None)
-            usage_dict: dict[str, object] = {
-                "prompt_token_count": getattr(usage_obj, "prompt_token_count", 0),
-                "candidates_token_count": getattr(usage_obj, "candidates_token_count", 0),
-                "cached_content_token_count": getattr(usage_obj, "cached_content_token_count", 0),
-            }
-            record_llm_call(
-                started_at=started_at,
-                elapsed_ms=elapsed_ms,
-                model=_try_model,
-                prompt_sha=prompt_sha,
-                prompt_chars=len(prompt),
-                purpose=purpose,
-                ticker=ticker,
-                scope=scope,
-                run_id=run_id,
-                response_text=text,
-                meta=usage_meta_from_response(usage_dict, model=_try_model),
-                prompt=prompt,
-                provider="google",
-                transport="metered_api",
-                auth_class="api_key_metered",
-                attempts=_attempt + 1,
-                retries=_attempt,
-            )
-            return text
-        except (
-            google_exceptions.GoogleAPIError,
-            RuntimeError,
-            ValueError,
-            OSError,
-        ) as gemini_error:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            record_llm_call(
-                started_at=started_at,
-                elapsed_ms=elapsed_ms,
-                model=_try_model,
-                prompt_sha=prompt_sha,
-                prompt_chars=len(prompt),
-                purpose=purpose,
-                ticker=ticker,
-                scope=scope,
-                run_id=run_id,
-                error=f"{type(gemini_error).__name__}: {str(gemini_error)[:500]}",
-                prompt=prompt,
-                provider="google",
-                transport="metered_api",
-                auth_class="api_key_metered",
-                attempts=_attempt + 1,
-                retries=_attempt,
-                failure_class="gemini_transport",
-            )
-            if isinstance(gemini_error, google_exceptions.NotFound):
-                if not _annealed and _try_model != _GEMINI_FAST_MODEL_FALLBACK:
-                    # First NotFound: query the live catalog and build the
-                    # fallback sequence.
-                    _models.extend(_anneal_models(_try_model))
-                    _annealed = True
-                    continue
-                if _attempt + 1 < len(_models):
-                    # Discovered model also 404 — advance _effective_fast_model
-                    # to the next candidate so future calls skip it too.
-                    global _effective_fast_model
-                    _effective_fast_model = _models[_attempt + 1]
-                    continue
-            _classify_gemini_failure(gemini_error)  # auth → LLMSetupError
-            raise
-    raise RuntimeError("call_gemini: model sequence exhausted")  # unreachable

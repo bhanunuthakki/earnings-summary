@@ -1,11 +1,11 @@
 @echo off
-REM Daily 04:15 — post-earnings IR-transcript scan for the active universe.
+REM Daily 02:15 — post-earnings IR-transcript scan for the active universe.
 REM For each tracked ticker within 14 days of its last earnings date, re-checks
 REM the issuer's own IR site (issuer_ir source) for the latest reported quarter's
 REM transcript and fetches + ingests it. Idempotent on
 REM transcripts/processed/<T>_Q<n>_<Y>.txt — stops once that quarter is ingested.
-REM Runs BEFORE backfill_transcripts (04:30) so the broad sweep finds the file
-REM already on disk, and before daily_fetch_and_brief (06:30) so the brief sees it.
+REM Runs before the protected 03:00-05:00 LLM window and before
+REM daily_fetch_and_brief (06:30) so the brief sees it.
 
 setlocal
 set PYTHONUTF8=1

@@ -199,6 +199,7 @@ def _default_extract_call(text: str, roster_tickers: frozenset[str]) -> dict[str
     double-parse failure (``StructuredParseError``) degrades to ``{}``; a budget/setup
     HARD stop is NOT swallowed here -- it propagates as configuration, per the repo's
     LLM exception policy."""
+    from llm.contracts import DECISION_EXTRACTION_SCHEMA
     from llm.structured import StructuredParseError, call_llm_structured
 
     prompt = _EXTRACT_PROMPT_TEMPLATE.format(
@@ -210,6 +211,7 @@ def _default_extract_call(text: str, roster_tickers: frozenset[str]) -> dict[str
             purpose="musing_decision_extract",
             expect="object",
             required_keys=("ticker", "direction"),
+            schema=DECISION_EXTRACTION_SCHEMA,
         )
     except StructuredParseError:
         return {}

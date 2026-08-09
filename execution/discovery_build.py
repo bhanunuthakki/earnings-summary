@@ -42,6 +42,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from discovery.store import list_candidates, set_status  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # A bulk approval is deliberately capped: each build is ~25 minutes + LLM
@@ -114,7 +115,7 @@ def build_one(
     ok = _promote_to_evaluation(db_path, user_id, symbol)
     steps: list[list[str]] = [
         [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(repo_root / "execution" / "onboard_ticker.py"),
             "--ticker",
             symbol,
@@ -122,7 +123,7 @@ def build_one(
             "auto",
         ],
         [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(repo_root / "execution" / "build_artifacts.py"),
             "--ticker",
             symbol,
@@ -137,7 +138,7 @@ def build_one(
         # skipped). Runs last so the deterministic inputs it reads (thesis,
         # DCF, candidate fit) are already fresh from the steps above.
         [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(repo_root / "execution" / "build_investment_decision_card.py"),
             "--ticker",
             symbol,

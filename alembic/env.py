@@ -7,11 +7,20 @@ migrations are written by hand against `op.create_table` / `op.alter_column`.
 
 from __future__ import annotations
 
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from sqlite_runtime import require_safe_sqlite_writer_runtime  # noqa: E402
 
 config = context.config
 
@@ -43,6 +52,9 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations against a live DB connection."""
+    configured_url = config.get_main_option("sqlalchemy.url") or ""
+    if configured_url.lower().startswith("sqlite"):
+        require_safe_sqlite_writer_runtime()
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

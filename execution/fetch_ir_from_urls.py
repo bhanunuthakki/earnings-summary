@@ -46,6 +46,7 @@ import ir_fetch_status  # noqa: E402
 from execution.fetch_ir_documents import process_ticker  # noqa: E402
 from ir_pipeline.manifest import ManifestEntry, merge_write  # noqa: E402
 from ir_uploads import calendar_id_from_fye  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -92,7 +93,7 @@ def _run_narrative(ticker: str, repo_root: Path) -> None:
     """Refresh the IR anchor (cheap pypdf extraction) so the new docs feed prompts."""
     subprocess.run(
         [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(PROJECT_ROOT / "src" / "compute" / "ir_narrative.py"),
             "--ticker",
             ticker,

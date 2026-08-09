@@ -207,7 +207,6 @@ def set_value(
             schema_preflight=True,
         )
         try:
-            conn.execute("PRAGMA busy_timeout = 5000")
             cur = conn.execute(
                 """
                 INSERT INTO global_dcf_assumptions (field, value, updated_at)

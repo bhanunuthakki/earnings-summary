@@ -29,20 +29,17 @@ import sqlite3
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
-
-if TYPE_CHECKING:
-    import requests
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from instrument_store import upsert_etf_holdings, upsert_etf_profile  # noqa: E402
-from log_redact import redact as _redact  # noqa: E402
 from models.instruments import EtfHolding, EtfProfile  # noqa: E402
+from net.client import FMP_CLIENT, FMP_ORIGIN, HttpCallError, JsonShape  # noqa: E402
 
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
-FMP_BASE = "https://financialmodelingprep.com"
+FMP_BASE = FMP_ORIGIN
 
 # Tier gate: on free FMP the /api/v3 fallback 403s (v3 deprecated 2025-08-31),
 # so skip it and hit /stable only when FMP_TIER=free. Mirrors the gate in
@@ -190,19 +187,14 @@ def ingest_live(
     as_of_date: date | None = None,
 ) -> tuple[EtfProfile, int]:
     """Hit FMP, write JSON to `fmp_dir`, ingest. Requires FMP_API_KEY in env."""
-    import requests  # local import keeps test imports clean
-
     api_key = os.environ.get("FMP_API_KEY")
     if not api_key:
         raise RuntimeError(
             "FMP_API_KEY not set. Use --from-cache mode with pre-seeded JSON, "
             "or set FMP_API_KEY in .env."
         )
-    session = requests.Session()
-    session.headers["User-Agent"] = "earnings-summary/1.0"
-
-    info_payload = _fmp_get(session, api_key, ticker, "etf/info")
-    holdings_payload = _fmp_get(session, api_key, ticker, "etf/holdings")
+    info_payload = _fmp_get(api_key, ticker, "etf/info")
+    holdings_payload = _fmp_get(api_key, ticker, "etf/holdings")
 
     fmp_dir.mkdir(parents=True, exist_ok=True)
     with open(fmp_dir / f"{ticker.upper()}_etf_info.json", "w", encoding="utf-8") as f:
@@ -220,26 +212,26 @@ def ingest_live(
     )
 
 
-def _fmp_get(session: requests.Session, api_key: str, ticker: str, path: str) -> object:
+def _fmp_get(api_key: str, ticker: str, path: str) -> object:
     """Try /stable (then /api/v3 unless stable-only); return first 200 JSON body."""
-    import requests
-
     last_err: str | None = None
     bases = [f"{FMP_BASE}/stable/{path}/{ticker}"]
     if not _STABLE_ONLY:
         bases.append(f"{FMP_BASE}/api/v3/{path.replace('/', '-')}/{ticker}")
     for base in bases:
         try:
-            r = session.get(base, params={"apikey": api_key}, timeout=(10, 60))
-        except requests.RequestException as e:
-            # requests/urllib3 embed the fully-resolved URL — including the
-            # ?apikey=<key> query param — in the exception string; redact it
-            # before it reaches last_err / the RuntimeError / logs.
-            last_err = _redact(f"{base}: {e}")
+            response = FMP_CLIENT.get_url_json(
+                base,
+                api_key=api_key,
+                expected=JsonShape.ANY,
+                timeout=(10, 60),
+            )
+        except HttpCallError as exc:
+            # The shared client strips query strings and redacts transport
+            # exceptions before they can reach this caller.
+            last_err = f"{base}: {exc}"
             continue
-        if r.status_code == 200:
-            return cast("object", r.json())
-        last_err = f"{base}: HTTP {r.status_code}"
+        return response.payload
     # `from None` drops the original RequestException context as defense-in-depth:
     # its traceback also embeds the unredacted URL, so it must never be chained
     # onto the RuntimeError (last_err itself is already redacted above).

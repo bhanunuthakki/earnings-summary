@@ -514,11 +514,13 @@ def test_run_saydo_runs_summary_then_pairs(monkeypatch: pytest.MonkeyPatch) -> N
     assert rc == 0
     assert len(calls) == 2
     # 1) process_ir_documents.py --ticker UBER --regenerate-missing
-    assert calls[0][1].endswith("process_ir_documents.py")
-    assert calls[0][2:] == ["--ticker", "UBER", "--regenerate-missing"]
+    assert Path(calls[0][1]).name == "sqlite_bootstrap.py"
+    assert Path(calls[0][2]).name == "process_ir_documents.py"
+    assert calls[0][3:] == ["--ticker", "UBER", "--regenerate-missing"]
     # 2) build_saydo_pairs.py --ticker UBER
-    assert calls[1][1].endswith("build_saydo_pairs.py")
-    assert calls[1][2:] == ["--ticker", "UBER"]
+    assert Path(calls[1][1]).name == "sqlite_bootstrap.py"
+    assert Path(calls[1][2]).name == "build_saydo_pairs.py"
+    assert calls[1][3:] == ["--ticker", "UBER"]
 
 
 def test_run_saydo_short_circuits_on_summary_failure(monkeypatch: pytest.MonkeyPatch) -> None:

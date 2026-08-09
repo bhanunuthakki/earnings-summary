@@ -1,11 +1,11 @@
-"""Journal ↔ decision/position links — validation + reconciliation (S15 PR1).
+"""Journal â†” decision/position links â€” validation + reconciliation (S15 PR1).
 
 ``analyst_notes`` rows can reference the decision (decisions.id) and/or the
 position-lifecycle stint (position_entries.id) they are about (alembic 0093).
 This module owns everything that crosses those table boundaries:
 
   link_note / unlink_note
-      The validating write path over ``user_state.notes.set_note_links`` —
+      The validating write path over ``user_state.notes.set_note_links`` â€”
       a link target must exist (LookupError otherwise), because the columns
       are deliberately plain INTEGERs (no REFERENCES clause; see 0093's
       docstring for the partial-schema rationale).
@@ -26,9 +26,9 @@ This module owns everything that crosses those table boundaries:
       auto-resolves the subset that opted in at link time
       (``link_auto_resolve=1``); everything else stays for the view and the
       inbox resurfacing. Auto-resolution stamps an honest resolution_note
-      ("auto-resolved: …") so memory records *how* it closed.
+      ("auto-resolved: â€¦") so memory records *how* it closed.
 
-Read paths are best-effort (missing DB / pre-0093 schema → empty), matching
+Read paths are best-effort (missing DB / pre-0093 schema â†’ empty), matching
 decision_extractor / position_lifecycle; the write path fails loud like the
 rest of user_state.
 """
@@ -65,7 +65,7 @@ class LinkTarget:
     kind: str  # TARGET_DECISION | TARGET_POSITION
     target_id: int
     ticker: str
-    label: str  # "TRIM 20% · 2026-05-02" / "2026-01-15 → open"
+    label: str  # "TRIM 20% | 2026-05-02" / "2026-01-15 -> open"
     concluded: bool
     conclusion: str | None  # "graded correct (+18.2%)" / "exited 2026-06-01"
 
@@ -80,7 +80,7 @@ class ReconciliationItem:
 
 
 # ---------------------------------------------------------------------------
-# DB plumbing (read side — best-effort)
+# DB plumbing (read side â€” best-effort)
 # ---------------------------------------------------------------------------
 
 
@@ -90,7 +90,6 @@ def _open_ro(db_path: Path | str | None) -> sqlite3.Connection | None:
         if path is None or not path.exists():
             return None
         conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         return conn
     except (sqlite3.Error, OSError):
@@ -103,7 +102,7 @@ def _safe_rows(
     try:
         return conn.execute(sql, params).fetchall()
     except sqlite3.Error:
-        return []  # missing table / pre-0093 column — degrade to empty
+        return []  # missing table / pre-0093 column â€” degrade to empty
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +116,7 @@ def _decision_target(row: sqlite3.Row) -> LinkTarget:
     head = f"{kind} {float(value):g}%" if value is not None else kind
     made = str(row["made_at"] or "")[:10]
     conviction = str(row["conviction"]) if row["conviction"] else None
-    label = f"{head} · {made}" + (f" · {conviction} conviction" if conviction else "")
+    label = f"{head} Â· {made}" + (f" Â· {conviction} conviction" if conviction else "")
     outcome_at = row["outcome_at"]
     outcome_label = str(row["outcome_label"] or "pending")
     concluded = outcome_at is not None and outcome_label != "pending"
@@ -139,7 +138,7 @@ def _decision_target(row: sqlite3.Row) -> LinkTarget:
 def _position_target(row: sqlite3.Row) -> LinkTarget:
     entry = str(row["entry_date"]) if row["entry_date"] else "opening unknown"
     exit_date = str(row["exit_date"]) if row["exit_date"] else None
-    label = f"{entry} → {exit_date or 'open'}"
+    label = f"{entry} -> {exit_date or 'open'}"
     conclusion: str | None = None
     if exit_date is not None:
         conclusion = f"exited {exit_date}"
@@ -163,7 +162,7 @@ def linkable_targets(
     decisions_limit: int = 8,
     positions_limit: int = 5,
 ) -> list[LinkTarget]:
-    """Recent decisions + lifecycle stints for one name — the journal panel's
+    """Recent decisions + lifecycle stints for one name â€” the journal panel's
     link dropdown. Decisions first (newest-first), then stints (open first).
     Empty on a missing DB / pre-link schema."""
     normalized = ticker.upper()
@@ -234,7 +233,7 @@ def get_target(
     target_id: int,
     db_path: Path | str | None,
 ) -> LinkTarget | None:
-    """One target by kind+id, labeled — None when it (or its table) is absent."""
+    """One target by kind+id, labeled â€” None when it (or its table) is absent."""
     conn = _open_ro(db_path)
     if conn is None:
         return None
@@ -254,7 +253,7 @@ def targets_for_notes(
     notes: list[AnalystNoteRow], *, db_path: Path | str | None
 ) -> dict[tuple[str, int], LinkTarget]:
     """Batch labeling for a note list render: every (kind, id) a note in the
-    list links to → its LinkTarget. Two IN-queries total."""
+    list links to â†’ its LinkTarget. Two IN-queries total."""
     decision_ids = sorted({n.decision_id for n in notes if n.decision_id is not None})
     position_ids = sorted({n.position_entry_id for n in notes if n.position_entry_id is not None})
     if not decision_ids and not position_ids:
@@ -298,9 +297,9 @@ def link_note(
 ) -> AnalystNoteRow | None:
     """Attach a note to a decision and/or a position stint.
 
-    Validates each supplied target exists (LookupError when it doesn't —
+    Validates each supplied target exists (LookupError when it doesn't â€”
     including when its table is absent); raises ValueError when neither is
-    supplied. ``auto_resolve`` is the note's latest stated choice — relinking
+    supplied. ``auto_resolve`` is the note's latest stated choice â€” relinking
     overwrites it. Returns the updated note, None when the note is missing."""
     if decision_id is None and position_entry_id is None:
         raise ValueError("provide decision_id and/or position_entry_id")
@@ -336,7 +335,7 @@ def link_note(
 
 
 def unlink_note(note_id: int, *, db_path: Path | str | None = None) -> AnalystNoteRow | None:
-    """Detach both links (and the auto-resolve flag). The note stays open —
+    """Detach both links (and the auto-resolve flag). The note stays open â€”
     unlinking is how a pending-reconciliation item says "this note outlives
     its decision"."""
     return set_note_links(
@@ -349,7 +348,7 @@ def unlink_note(note_id: int, *, db_path: Path | str | None = None) -> AnalystNo
 
 
 # ---------------------------------------------------------------------------
-# Reconciliation — the view + the rung
+# Reconciliation â€” the view + the rung
 # ---------------------------------------------------------------------------
 
 
@@ -362,7 +361,7 @@ def pending_reconciliation(
     conn: sqlite3.Connection | None = None,
 ) -> list[ReconciliationItem]:
     """OPEN notes whose linked decision graded / linked position exited,
-    newest-concluded first. A note linked to both objects surfaces once —
+    newest-concluded first. A note linked to both objects surfaces once â€”
     the decision conclusion wins (it carries the verdict)."""
     db_conn = conn or _open_ro(db_path)
     if db_conn is None:
@@ -371,7 +370,7 @@ def pending_reconciliation(
         ticker_clause = " AND n.ticker = ?" if ticker is not None else ""
         ticker_params = (ticker.upper(),) if ticker is not None else ()
         # d.*/p.* lead the SELECT so the labelers read the target columns;
-        # the only added name (note_id) is aliased — no Row-key collisions.
+        # the only added name (note_id) is aliased â€” no Row-key collisions.
         decision_rows = _safe_rows(
             db_conn,
             f"""
@@ -420,7 +419,7 @@ def pending_reconciliation(
 
 def _suggestion(target: LinkTarget) -> str:
     return (
-        f"Linked {target.kind} concluded — {target.ticker} {target.label}: "
+        f"Linked {target.kind} concluded â€” {target.ticker} {target.label}: "
         f"{target.conclusion or 'concluded'}."
     )
 
@@ -431,7 +430,7 @@ def pending_reconciliation_note_ids(
     user_id: str = DEFAULT_USER_ID,
     conn: sqlite3.Connection | None = None,
 ) -> dict[int, str]:
-    """note_id → one-line conclusion, for surfaces that already hold the
+    """note_id â†’ one-line conclusion, for surfaces that already hold the
     notes (the inbox stream) and only need the marker."""
     return {
         item.note.id: _suggestion(item.target)
@@ -445,7 +444,7 @@ def reconcile_linked_notes(
     user_id: str = DEFAULT_USER_ID,
 ) -> dict[str, int]:
     """The morning pass: resolve open notes that opted into auto-resolve and
-    whose linked object concluded; count (don't touch) the rest. Idempotent —
+    whose linked object concluded; count (don't touch) the rest. Idempotent â€”
     a resolved note leaves the pending set. Returns
     ``{auto_resolved, pending, db_unavailable}``."""
     items = pending_reconciliation(db_path=db_path, user_id=user_id)
