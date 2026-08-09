@@ -42,13 +42,15 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeGuard, cast
 
 from signals.store import SIGNAL_CONSENSUS_RATING
+from sqlite_freshness import SQLiteFileToken, sqlite_file_token
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import thesis_status_tone
 
@@ -317,17 +319,17 @@ _THESIS_TONE_FACTORS: dict[str, float] = {"ok": 1.0, "warn": 1.25, "bad": 1.5}
 #     write busts the memo by bumping the mtime — no time-based staleness window,
 #     no schema. A scoped two-read cache, NOT a universal spine.
 
-_TONES_MEMO: dict[str, tuple[int, dict[str, str]]] = {}
-_NEWS_META_MEMO: dict[tuple[str, tuple[int, ...]], tuple[int, dict[int, tuple[str, str]]]] = {}
+_DB_MEMO_TTL_SECONDS = 30.0
+_TONES_MEMO: dict[str, tuple[SQLiteFileToken, float, dict[str, str]]] = {}
+_NEWS_META_MEMO: dict[
+    tuple[str, tuple[int, ...]],
+    tuple[SQLiteFileToken, float, dict[int, tuple[str, str]]],
+] = {}
 
 
-def _db_mtime_ns(db_path: Path) -> int | None:
-    """File mtime in ns — the memo invalidation key. ``None`` when the file is
-    gone (a vanished DB busts the memo, which is the safe default)."""
-    try:
-        return db_path.stat().st_mtime_ns
-    except OSError:
-        return None
+def _db_file_token(db_path: Path) -> SQLiteFileToken | None:
+    """Main-file plus WAL generation; ``None`` makes callers bypass cache."""
+    return sqlite_file_token(db_path)
 
 
 def _materialized_weights(db_path: Path | None) -> dict[str, float]:
@@ -356,13 +358,19 @@ def _thesis_tones(db_path: Path | None) -> dict[str, str]:
     if not path.exists():
         return {}
     key = str(path.resolve())
-    mtime = _db_mtime_ns(path)
+    token = _db_file_token(path)
+    now = time.monotonic()
     cached = _TONES_MEMO.get(key)
-    if cached is not None and mtime is not None and cached[0] == mtime:
-        return cached[1]
+    if (
+        cached is not None
+        and token is not None
+        and cached[0] == token
+        and now - cached[1] <= _DB_MEMO_TTL_SECONDS
+    ):
+        return cached[2]
     tones = _compute_thesis_tones(path)
-    if mtime is not None:
-        _TONES_MEMO[key] = (mtime, tones)
+    if token is not None:
+        _TONES_MEMO[key] = (token, now, tones)
     return tones
 
 
@@ -402,13 +410,19 @@ def _news_meta(db_path: Path | None, news_ids: list[int]) -> dict[int, tuple[str
     if not path.exists():
         return {}
     key = (str(path.resolve()), tuple(sorted(set(int(i) for i in news_ids))))
-    mtime = _db_mtime_ns(path)
+    token = _db_file_token(path)
+    now = time.monotonic()
     cached = _NEWS_META_MEMO.get(key)
-    if cached is not None and mtime is not None and cached[0] == mtime:
-        return cached[1]
+    if (
+        cached is not None
+        and token is not None
+        and cached[0] == token
+        and now - cached[1] <= _DB_MEMO_TTL_SECONDS
+    ):
+        return cached[2]
     meta = _compute_news_meta(path, list(key[1]))
-    if mtime is not None:
-        _NEWS_META_MEMO[key] = (mtime, meta)
+    if token is not None:
+        _NEWS_META_MEMO[key] = (token, now, meta)
     return meta
 
 
@@ -570,7 +584,7 @@ def _clampf(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
-def _is_num(v: object) -> bool:
+def _is_num(v: object) -> TypeGuard[int | float]:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
@@ -620,6 +634,7 @@ def _strength_factor(it: InboxItem) -> tuple[float, str]:
         return 1.0, "n/a"
     if not isinstance(ev, dict):
         return 1.0, "n/a"
+    evidence = cast("Mapping[str, object]", ev)
 
     # A tier-1/decisive signal — an OWNER-authored falsifier breach or a
     # registered threshold crossing — is the highest-quality signal there is
@@ -633,18 +648,18 @@ def _strength_factor(it: InboxItem) -> tuple[float, str]:
     if (alert.trigger_kind or "").lower() == "decision_condition":
         return _ADVISOR_CONDITION_STRENGTH, "advisor condition breach"
     # KPI inflection: scale by statistical surprise (|z|); z=2 → ~0.85, z=6 → 1.5.
-    z = ev.get("zscore")
+    z = evidence.get("zscore")
     if _is_num(z):
         az = abs(float(z))
         return _clampf(0.85 + 0.16 * (az - 2.0), _STRENGTH_MIN, _STRENGTH_MAX), f"|z| {az:.1f}"
     # Material news: LLM relevance 0..1 → 0.7..1.5.
-    rel = ev.get("relevance_score")
+    rel = evidence.get("relevance_score")
     if _is_num(rel):
         return _clampf(
             0.7 + 0.8 * float(rel), _STRENGTH_MIN, _STRENGTH_MAX
         ), f"relevance {float(rel):.2f}"
     # Restatement: bigger revision, stronger signal.
-    d = ev.get("delta_pct")
+    d = evidence.get("delta_pct")
     if _is_num(d):
         ad = abs(float(d))
         return _clampf(0.9 + 0.06 * ad, _STRENGTH_MIN, _STRENGTH_MAX), f"Δ {ad:.1f}%"

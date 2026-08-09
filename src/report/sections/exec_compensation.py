@@ -42,13 +42,14 @@ def build(
     enable_llm: bool = False,
     insider_window_days: int = 365,
     force_budget_bypass: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> ExecCompSectionModel:
     """Build the §13 Executive Compensation section for one ticker."""
     ticker = ticker.upper()
     db_path = repo_root / "data" / "portfolio.db"
 
-    packages = _load_packages(ticker, db_path)
-    insider_signals = _load_insider_signals(ticker, db_path, insider_window_days)
+    packages = _load_packages(ticker, db_path, conn=conn)
+    insider_signals = _load_insider_signals(ticker, db_path, insider_window_days, conn=conn)
     holdings_kpis = _load_thesis_kpis(ticker, repo_root)
 
     if not packages and not insider_signals:
@@ -156,31 +157,41 @@ def build(
 # ---------------------------------------------------------------------------
 
 
-def _load_packages(ticker: str, db_path: Path) -> list[dict[str, object]]:
-    if not db_path.exists():
+def _load_packages(
+    ticker: str,
+    db_path: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict[str, object]]:
+    if conn is None and not db_path.exists():
         return []
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    db_conn = conn or connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
-        conn.row_factory = sqlite3.Row
+        db_conn.row_factory = sqlite3.Row
         # Verify table exists
         if (
-            conn.execute(
+            db_conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='exec_comp_packages'"
             ).fetchone()
             is None
         ):
             return []
-        rows = conn.execute(
+        rows = db_conn.execute(
             "SELECT * FROM exec_comp_packages WHERE ticker = ? ORDER BY fiscal_year DESC, is_ceo DESC",
             (ticker,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def _load_insider_signals(
-    ticker: str, db_path: Path, window_days: int
+    ticker: str,
+    db_path: Path,
+    window_days: int,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> list[InsiderSignalRowModel]:
     if not db_path.exists():
         return []
@@ -191,7 +202,12 @@ def _load_insider_signals(
     except ImportError:
         return []
 
-    signals = conviction_signals(ticker=ticker, window_days=window_days, db_path=db_path)
+    signals = conviction_signals(
+        ticker=ticker,
+        window_days=window_days,
+        db_path=db_path,
+        conn=conn,
+    )
     return [
         InsiderSignalRowModel(
             insider_name=s.insider_name,

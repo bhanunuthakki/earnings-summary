@@ -6,6 +6,7 @@ layer."""
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -24,6 +25,7 @@ def build(
     repo_root: Path,
     enable_llm: bool,
     force_budget_bypass: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> ValuationBasisSection:
     if not enable_llm:
         cached = compute_valuation.load(repo_root, ticker)
@@ -58,9 +60,9 @@ def build(
             missing=budget_skip_missing(ticker, "valuation_basis", skip),
         )
 
-    conn = open_repo_db(repo_root)
+    db_conn = open_repo_db(repo_root, conn)
     try:
-        if conn is None:
+        if db_conn is None:
             return ValuationBasisSection(
                 status=SectionStatus.MISSING_DATA,
                 missing=missing(
@@ -69,7 +71,7 @@ def build(
                     detail="No portfolio.db on disk; cannot compute valuation basis.",
                 ),
             )
-        result = compute_valuation.extract_for_ticker(ticker, repo_root, conn)
+        result = compute_valuation.extract_for_ticker(ticker, repo_root, db_conn)
     except Exception as e:
         # Hard stops (monthly budget cap, CLI not installed) propagate — the
         # LLM multiple-picker runs through call_llm inside the compute layer,
@@ -88,8 +90,8 @@ def build(
             ),
         )
     finally:
-        if conn is not None:
-            conn.close()
+        if db_conn is not None and conn is None:
+            db_conn.close()
 
     if result.skipped_reason or result.multiple_name is None:
         return ValuationBasisSection(

@@ -12,12 +12,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -92,16 +90,11 @@ def _bootstrap_base_tables(db_path: Path) -> None:
         conn.close()
 
 
-def _build_db(tmp_path: Path) -> Path:
+def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db_dir = tmp_path / "data"
     db_dir.mkdir(parents=True, exist_ok=True)
     db_path = db_dir / "portfolio.db"
-    _bootstrap_base_tables(db_path)
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.upgrade(cfg, "head")
-    return db_path
+    return migrated_db(db_path)
 
 
 def _insert_memo(conn: sqlite3.Connection, *, ticker: str, created_at: str) -> int:
@@ -137,8 +130,10 @@ def test_missing_view_returns_none(tmp_path: Path) -> None:
     assert compute_advice_influence(db_path) is None
 
 
-def test_no_decisions_yet_returns_all_zero_with_thin_note(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_no_decisions_yet_returns_all_zero_with_thin_note(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     stats = compute_advice_influence(db_path)
     assert stats is not None
     assert stats.total_graded == 0
@@ -147,8 +142,10 @@ def test_no_decisions_yet_returns_all_zero_with_thin_note(tmp_path: Path) -> Non
     assert all(b.n == 0 for b in stats.buckets)
 
 
-def test_partition_crosses_advice_before_and_followed_overridden(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_partition_crosses_advice_before_and_followed_overridden(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         memo_id = _insert_memo(conn, ticker="NU", created_at="2026-06-01T00:00:00")
@@ -200,8 +197,8 @@ def test_partition_crosses_advice_before_and_followed_overridden(tmp_path: Path)
     assert no_advice_overridden.n == 0
 
 
-def test_above_floor_has_no_thin_note(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_above_floor_has_no_thin_note(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         for i in range(MIN_CONFIDENT_N):
@@ -222,7 +219,9 @@ def test_above_floor_has_no_thin_note(tmp_path: Path) -> None:
 
 
 def test_run_calibration_scorecard_persists_advice_influence_sibling_artifact(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     """The monthly scorecard CLI computes + persists the advice-influence read
     as a sibling JSON artifact, without touching the eval-gated
@@ -231,7 +230,7 @@ def test_run_calibration_scorecard_persists_advice_influence_sibling_artifact(
     from calibration_coach import CalibrationScorecard
     from execution import run_calibration_scorecard
 
-    db_path = _build_db(tmp_path)
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         for i in range(MIN_CONFIDENT_N):

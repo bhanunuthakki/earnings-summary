@@ -9,10 +9,8 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from execution import register_archive_generation as registration_cli
 from provenance import archive_catalog as catalog_module
 from provenance.archive_catalog import (
@@ -29,22 +27,13 @@ from provenance.archive_generation import (
 from provenance.immutable_artifact import publish_text_no_clobber
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIOR = "0271_disclosure_thesis_materiality"
-HEAD = "0273_post_earnings_readout_budget"
 STAMP = datetime(2026, 8, 2, 22, 0, tzinfo=UTC)
 EMPTY_REFERENCE_ROOT = sha256(b"[]").hexdigest()
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
 @pytest.fixture()
 def ops_database(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
-    return migrated_db(tmp_path / "ops.db", stamp=PRIOR, target=HEAD)
+    return migrated_db(tmp_path / "ops.db", stamp="archived-0271")
 
 
 def _open_ops_database(path: Path) -> sqlite3.Connection:
@@ -117,7 +106,7 @@ def _registration(
     )
 
 
-def test_migration_creates_append_only_verified_catalog_and_round_trips(
+def test_current_head_contains_append_only_verified_catalog(
     ops_database: Path,
 ) -> None:
     conn = _open_ops_database(ops_database)
@@ -138,18 +127,6 @@ def test_migration_creates_append_only_verified_catalog_and_round_trips(
     finally:
         conn.close()
 
-    command.downgrade(_config(ops_database), PRIOR)
-    conn = sqlite3.connect(ops_database)
-    try:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PRIOR,)
-        assert (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='archive_generations'"
-            ).fetchone()
-            is None
-        )
-    finally:
-        conn.close()
 
 
 def test_registration_is_atomic_append_only_and_exactly_idempotent(

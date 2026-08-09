@@ -20,7 +20,7 @@ PRIOR_HEAD = "0250_immutable_transcript_versions"
 
 
 def _migration() -> ModuleType:
-    path = PROJECT_ROOT / "alembic" / "versions" / "0251_dcf_run_inputs.py"
+    path = PROJECT_ROOT / "alembic" / "versions_archived" / "0251_dcf_run_inputs.py"
     spec = importlib.util.spec_from_file_location("migration_0251_dcf_run_inputs", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

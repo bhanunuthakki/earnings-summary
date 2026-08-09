@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from alembic.config import Config
@@ -90,16 +91,11 @@ def _bootstrap_base_tables(db_path: Path) -> None:
         conn.close()
 
 
-def _build_db(tmp_path: Path) -> Path:
+def _build_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     db_dir = tmp_path / "data"
     db_dir.mkdir(parents=True, exist_ok=True)
     db_path = db_dir / "portfolio.db"
-    _bootstrap_base_tables(db_path)
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.upgrade(cfg, "head")
-    return db_path
+    return migrated_db(db_path)
 
 
 def _insert_memo(
@@ -166,8 +162,10 @@ def _row(conn: sqlite3.Connection, decision_id: int) -> sqlite3.Row:
     return row
 
 
-def test_view_created_with_full_column_set(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_view_created_with_full_column_set(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         cols = {d[0] for d in conn.execute("SELECT * FROM v_decision_journal LIMIT 0").description}
@@ -204,11 +202,13 @@ def test_view_created_with_full_column_set(tmp_path: Path) -> None:
     } <= cols
 
 
-def test_decision_with_no_advice_reads_all_null(tmp_path: Path) -> None:
+def test_decision_with_no_advice_reads_all_null(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """The majority historical case (Phases 1-4 didn't exist yet): a decision
     with zero advice-machinery footprint must surface with honest NULLs, not
     be dropped from the view or fabricated a false join."""
-    db_path = _build_db(tmp_path)
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         dec_id = _insert_decision(
@@ -228,8 +228,10 @@ def test_decision_with_no_advice_reads_all_null(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_linked_memo_and_guard_override_and_attestation(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_linked_memo_and_guard_override_and_attestation(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         memo_id = _insert_memo(
@@ -271,12 +273,14 @@ def test_linked_memo_and_guard_override_and_attestation(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_advice_before_window_respects_lookback_and_agent_source(tmp_path: Path) -> None:
+def test_advice_before_window_respects_lookback_and_agent_source(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     """A position_review memo more than 30 days before the decision does not
     count as advice-before; one tagged context.source='agent' is excluded
     even inside the window (verification/CI runs never count as advice
     delivered to the owner)."""
-    db_path = _build_db(tmp_path)
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         # Too old — 45 days before the decision.
@@ -302,8 +306,10 @@ def test_advice_before_window_respects_lookback_and_agent_source(tmp_path: Path)
         conn.close()
 
 
-def test_advice_before_picks_most_recent_within_window(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_advice_before_picks_most_recent_within_window(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         _insert_memo(
@@ -331,8 +337,10 @@ def test_advice_before_picks_most_recent_within_window(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_coach_ping_and_decision_nudge_and_profile_point_in_time(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_coach_ping_and_decision_nudge_and_profile_point_in_time(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _build_db(tmp_path, migrated_db)
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(
@@ -396,8 +404,12 @@ def test_missing_view_degrades_gracefully_on_pre_0179_db(tmp_path: Path) -> None
         conn.close()
 
 
-def test_downgrade_drops_view(tmp_path: Path) -> None:
-    db_path = _build_db(tmp_path)
+def test_downgrade_drops_view(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    db_path = migrated_db(
+        tmp_path / "data" / "portfolio.db",
+        stamp="0059_kpi_facts_restatement",
+        archived=True,
+    )
     cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")

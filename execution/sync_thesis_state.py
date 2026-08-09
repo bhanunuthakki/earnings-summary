@@ -1,11 +1,12 @@
 """Audit + re-sync the thesis_state content mirror against on-disk holdings JSON.
 
-`thesis_state.raw_json` + `thesis` are a cache of `micro_thesis/holdings/<T>.json`,
-first seeded once by migration 0008 (2026-05-03). The evaluator (`persist_verdict`)
-only maintains `breach_status`/`last_updated`, so before #PR the *content* mirror
-froze at migration time and silently drifted as holdings files were edited — most
-visibly NU, whose row was a `stub_regenerated_from_corruption` stub while the file
-held the full current Intact thesis.
+`thesis_state.raw_json` + `thesis` are a cache of `micro_thesis/holdings/<T>.json`.
+Historical databases were first seeded by migration 0008 (2026-05-03), but the
+squashed baseline and its recovery migration intentionally omit these mutable,
+operator-authored cache rows. This command owns deterministic fresh-install
+bootstrap from the current holdings files as well as drift repair. The evaluator
+(`persist_verdict`) maintains `breach_status`/`last_updated` and refreshes existing
+content during evaluation.
 
 This is the backfill + audit tool for that drift. Read-only by default:
 
@@ -52,6 +53,7 @@ class DriftKind(StrEnum):
     kind. All kinds except CLEAN and NO_FILE are re-ingestable (`needs_sync`).
     """
 
+    MISSING_ROW = "missing_row"  # holdings JSON exists, cache row absent
     NO_FILE = "no_file"  # row exists, holdings JSON missing — cannot re-ingest
     BAD_JSON = "bad_json"  # raw_json doesn't parse — re-ingest overwrites it
     PLACEHOLDER = "placeholder"  # raw_json == '{}' — created by evaluator, never seeded
@@ -115,17 +117,49 @@ def audit_thesis_state(
     *,
     ticker: str | None = None,
 ) -> list[DriftRecord]:
-    """Classify every thesis_state row (or one ticker) against its file."""
+    """Classify every mirror row and every unmirrored holdings file.
+
+    The file set is authoritative for bootstrap: a holdings JSON with no
+    ``thesis_state`` row is actionable drift, including in single-ticker mode.
+    A ticker absent from both stores has nothing to audit and returns no record.
+    """
     if ticker:
+        normalized = ticker.upper()
         rows = conn.execute(
             "SELECT ticker, thesis, raw_json FROM thesis_state WHERE ticker = ?",
-            (ticker.upper(),),
+            (normalized,),
         ).fetchall()
+        if not rows and (holdings_dir / f"{normalized}.json").is_file():
+            return [
+                DriftRecord(
+                    normalized,
+                    DriftKind.MISSING_ROW,
+                    "holdings file exists but thesis_state row is absent",
+                )
+            ]
     else:
         rows = conn.execute(
             "SELECT ticker, thesis, raw_json FROM thesis_state ORDER BY ticker"
         ).fetchall()
-    return [classify_row(r["ticker"], r["thesis"], r["raw_json"], holdings_dir) for r in rows]
+    records = [classify_row(r["ticker"], r["thesis"], r["raw_json"], holdings_dir) for r in rows]
+    if ticker:
+        return records
+
+    mirrored = {str(r["ticker"]).upper() for r in rows}
+    file_tickers = {
+        path.stem.upper()
+        for path in holdings_dir.iterdir()
+        if path.is_file() and path.suffix.casefold() == ".json"
+    }
+    records.extend(
+        DriftRecord(
+            missing,
+            DriftKind.MISSING_ROW,
+            "holdings file exists but thesis_state row is absent",
+        )
+        for missing in file_tickers - mirrored
+    )
+    return sorted(records, key=lambda record: record.ticker)
 
 
 def sync_drifted(

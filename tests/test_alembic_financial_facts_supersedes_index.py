@@ -3,14 +3,11 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import pytest
 from alembic.config import Config
 
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "0270_financial_facts_supersedes_index"
-PARENT = "0269_latest_governed_population_receipt_v2"
 INDEX = "ix_0270_financial_facts_supersedes_id"
 
 
@@ -21,46 +18,15 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _stamp_parent(path: Path, *, table_sql: str) -> Config:
-    with sqlite3.connect(path) as conn:
-        if table_sql:
-            conn.executescript(table_sql)
-    config = _config(path)
-    command.stamp(config, PARENT)
-    return config
-
-
-def _assert_partial_schema_skips_reversibly(path: Path, config: Config) -> None:
-    command.upgrade(config, REVISION)
-    with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (REVISION,)
-        assert conn.execute(f"PRAGMA index_info('{INDEX}')").fetchall() == []
-    command.downgrade(config, PARENT)
-    with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
-
-
-def test_0270_adds_reversible_leading_fk_lookup_index(tmp_path: Path) -> None:
+def test_squashed_head_preserves_financial_fact_supersedes_lookup(tmp_path: Path) -> None:
+    """The consolidated baseline retains the formerly-0270 query contract."""
     path = tmp_path / "financial-facts-index.db"
-    config = _stamp_parent(
-        path,
-        table_sql=(
-            "CREATE TABLE financial_facts ("
-            "id INTEGER PRIMARY KEY, ticker TEXT, "
-            "supersedes_id INTEGER REFERENCES financial_facts(id))"
-        ),
-    )
-
-    command.upgrade(config, REVISION)
+    command.upgrade(_config(path), "head")
 
     with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (REVISION,)
-        assert conn.execute(f"PRAGMA index_info('{INDEX}')").fetchall() == [(0, 2, "supersedes_id")]
-        index_row = next(
-            row for row in conn.execute("PRAGMA index_list('financial_facts')") if row[1] == INDEX
-        )
-        assert index_row[2] == 0
-        assert index_row[4] == 0
+        assert conn.execute(f"PRAGMA index_info('{INDEX}')").fetchall() == [
+            (0, 12, "supersedes_id")
+        ]
         plan = tuple(
             str(row[3])
             for row in conn.execute(
@@ -68,109 +34,5 @@ def test_0270_adds_reversible_leading_fk_lookup_index(tmp_path: Path) -> None:
                 (1,),
             )
         )
-        assert any(f"COVERING INDEX {INDEX}" in step for step in plan)
-        assert not any(step == "SCAN financial_facts" for step in plan)
-
-    command.downgrade(config, PARENT)
-    with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
-        assert conn.execute(f"PRAGMA index_info('{INDEX}')").fetchall() == []
-        assert conn.execute("PRAGMA foreign_key_list('financial_facts')").fetchone()[2:] == (
-            "financial_facts",
-            "supersedes_id",
-            "id",
-            "NO ACTION",
-            "NO ACTION",
-            "NONE",
-        )
-
-
-def test_0270_partial_schema_may_omit_financial_facts_table(tmp_path: Path) -> None:
-    path = tmp_path / "missing-financial-facts.db"
-    config = _stamp_parent(path, table_sql="")
-
-    _assert_partial_schema_skips_reversibly(path, config)
-
-
-def test_0270_partial_schema_may_omit_supersedes_column(tmp_path: Path) -> None:
-    path = tmp_path / "missing-supersedes.db"
-    config = _stamp_parent(
-        path,
-        table_sql="CREATE TABLE financial_facts (id INTEGER PRIMARY KEY)",
-    )
-
-    _assert_partial_schema_skips_reversibly(path, config)
-
-
-def test_0270_partial_schema_may_omit_self_fk_contract(tmp_path: Path) -> None:
-    path = tmp_path / "missing-self-fk.db"
-    config = _stamp_parent(
-        path,
-        table_sql=("CREATE TABLE financial_facts (id INTEGER PRIMARY KEY, supersedes_id INTEGER)"),
-    )
-
-    _assert_partial_schema_skips_reversibly(path, config)
-
-
-@pytest.mark.parametrize(
-    "table_sql",
-    [
-        (
-            "CREATE TABLE financial_facts ("
-            "id INTEGER PRIMARY KEY, supersedes_id INTEGER "
-            "REFERENCES financial_facts(id) ON DELETE CASCADE)"
-        ),
-        (
-            "CREATE TABLE financial_facts ("
-            "id INTEGER PRIMARY KEY, scope_id INTEGER, supersedes_id INTEGER, "
-            "UNIQUE(id, scope_id), "
-            "FOREIGN KEY(supersedes_id, scope_id) "
-            "REFERENCES financial_facts(id, scope_id))"
-        ),
-    ],
-    ids=["cascade", "composite"],
-)
-def test_0270_partial_schema_skips_non_exact_self_fk_semantics(
-    tmp_path: Path,
-    table_sql: str,
-) -> None:
-    path = tmp_path / "drifted-self-fk.db"
-    config = _stamp_parent(path, table_sql=table_sql)
-
-    _assert_partial_schema_skips_reversibly(path, config)
-
-
-def test_0270_downgrade_refuses_missing_owned_index_for_exact_contract(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "missing-owned-index.db"
-    config = _stamp_parent(
-        path,
-        table_sql=(
-            "CREATE TABLE financial_facts ("
-            "id INTEGER PRIMARY KEY, "
-            "supersedes_id INTEGER REFERENCES financial_facts(id))"
-        ),
-    )
-    command.upgrade(config, REVISION)
-    with sqlite3.connect(path) as conn:
-        conn.execute(f"DROP INDEX {INDEX}")
-
-    with pytest.raises(RuntimeError, match="migration-owned index is missing"):
-        command.downgrade(config, PARENT)
-
-
-def test_0270_refuses_preexisting_migration_owned_index_name(tmp_path: Path) -> None:
-    path = tmp_path / "conflicting-index.db"
-    config = _stamp_parent(
-        path,
-        table_sql=(
-            "CREATE TABLE financial_facts ("
-            "id INTEGER PRIMARY KEY, ticker TEXT, "
-            "supersedes_id INTEGER REFERENCES financial_facts(id));"
-            f"CREATE INDEX {INDEX} ON financial_facts(ticker)"
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="migration-owned index name already exists"):
-        command.upgrade(config, REVISION)
+    assert any(INDEX in step for step in plan)
+    assert not any(step == "SCAN financial_facts" for step in plan)

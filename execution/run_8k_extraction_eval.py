@@ -62,7 +62,8 @@ def main() -> int:
             if isinstance(expected_raw, dict)
             else {}
         )
-        score = edgar_8k.score_segment_extraction(extracted, expected)
+        extracted_values = {name: segment.value for name, segment in extracted.items()}
+        score = edgar_8k.score_segment_extraction(extracted_values, expected)
         status = "PASS" if score >= args.threshold else "FAIL"
         if status == "FAIL":
             failures += 1

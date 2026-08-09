@@ -70,12 +70,17 @@ _METRIC_TO_BUCKET: dict[str, MetricKey] = {
 }
 
 
-def build(ticker: str, repo_root: Path) -> SegmentsSection:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> SegmentsSection:
     rules = load_rules(ticker, repo_root)
-    conn = open_repo_db(repo_root)
-    if conn is None or not _junction_tables_present(conn):
-        if conn is not None:
-            conn.close()
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None or not _junction_tables_present(db_conn):
+        if db_conn is not None and conn is None:
+            db_conn.close()
         return SegmentsSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
@@ -84,10 +89,11 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
             ),
         )
 
-    raw = _load_segment_rows(conn, ticker)
-    conn.close()
+    raw = _load_segment_rows(db_conn, ticker)
 
     if not raw:
+        if conn is None:
+            db_conn.close()
         return SegmentsSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
@@ -108,19 +114,20 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
     # Junction-driven secondary expansions (e.g. AWS by geography). Empty when
     # the junction tables are absent OR carry only the same single-dim
     # breakdowns that are already represented in `grids`.
-    conn2 = open_repo_db(repo_root)
     secondary_expansions: list[SegmentSecondaryExpansion] = []
-    if conn2 is not None:
-        try:
-            secondary_expansions = _build_secondary_expansions(
-                conn2,
-                ticker,
-                quarters_full,
-                display_labels,
-                primary_segment_names=_primary_segment_names(grids),
-            )
-        finally:
-            conn2.close()
+    secondary_expansions = _build_secondary_expansions(
+        db_conn,
+        ticker,
+        quarters_full,
+        display_labels,
+        primary_segment_names=_primary_segment_names(grids),
+    )
+    ts_context_md = format_signals_as_prompt_block(
+        load_segment_signals(ticker, repo_root=repo_root, conn=db_conn),
+        heading="Segment Time-Series Context",
+    )
+    if conn is None:
+        db_conn.close()
 
     return SegmentsSection(
         status=SectionStatus.OK if any(grids.values()) else SectionStatus.PARTIAL,
@@ -134,10 +141,7 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
         segment_definitions_fiscal_year=definitions_year,
         quarter_labels_full=quarter_labels_full,
         secondary_expansions=secondary_expansions,
-        ts_context_md=format_signals_as_prompt_block(
-            load_segment_signals(ticker, repo_root=repo_root),
-            heading="Segment Time-Series Context",
-        ),
+        ts_context_md=ts_context_md,
     )
 
 

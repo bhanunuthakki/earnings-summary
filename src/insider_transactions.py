@@ -110,15 +110,19 @@ class ConvictionSignal:
 # ---------------------------------------------------------------------------
 
 
-def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
+def _open(
+    db_path: Path | str | None,
+    *,
+    role: SQLiteConnectionRole = SQLiteConnectionRole.WRITER,
+) -> sqlite3.Connection | None:
     try:
         path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
         conn = connect_sqlite(
             path,
-            role=SQLiteConnectionRole.WRITER,
-            schema_preflight=True,
+            role=role,
+            schema_preflight=role is SQLiteConnectionRole.WRITER,
         )
         conn.execute("PRAGMA busy_timeout = 10000")
         conn.row_factory = sqlite3.Row
@@ -206,10 +210,11 @@ def fetch_transactions(
     until: datetime | None = None,
     transaction_types: list[str] | None = None,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[InsiderTransaction]:
     """Query the stored insider_transactions table."""
-    conn = _open(db_path)
-    if conn is None:
+    db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    if db_conn is None:
         return []
     try:
         clauses: list[str] = []
@@ -228,7 +233,7 @@ def fetch_transactions(
             clauses.append(f"transaction_type IN ({placeholders})")
             params.extend(transaction_types)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        rows = conn.execute(
+        rows = db_conn.execute(
             f"""
             SELECT * FROM insider_transactions
             {where}
@@ -239,7 +244,8 @@ def fetch_transactions(
         ).fetchall()
         return [_row_to_tx(r) for r in rows]
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def _row_to_tx(r: sqlite3.Row) -> InsiderTransaction:
@@ -301,10 +307,11 @@ def conviction_signals(
     ticker: str,
     window_days: int = 90,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[ConvictionSignal]:
     """Score recent insider activity. Returns sorted by signal_strength desc."""
     cutoff = datetime.now(UTC) - timedelta(days=window_days)
-    rows = fetch_transactions(ticker=ticker, since=cutoff, db_path=db_path)
+    rows = fetch_transactions(ticker=ticker, since=cutoff, db_path=db_path, conn=conn)
 
     # Group by date for cluster detection
     by_date: dict[str, list[InsiderTransaction]] = {}

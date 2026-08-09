@@ -10,6 +10,7 @@ summary table (rating + thesis view) before the per-quarter breakdown.
 from __future__ import annotations
 
 import re
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -40,16 +41,21 @@ _ATTRIBUTION_RX = re.compile(
 _RatingValue = Literal["MET", "MISSED", "EXCEEDED", "MIXED", "unknown"]
 
 
-def build(ticker: str, repo_root: Path) -> SayDoSection:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> SayDoSection:
     tmp_dir = repo_root / ".tmp"
     cards = _scan(tmp_dir, ticker)
 
     historical_metrics: list[SayDoHistoricalMetric] = []
-    conn = open_repo_db(repo_root)
-    if conn:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn:
         try:
-            if has_table(conn, "saydo_historical_metrics"):
-                cur = conn.execute(
+            if has_table(db_conn, "saydo_historical_metrics"):
+                cur = db_conn.execute(
                     "SELECT id, period_made, period_target, kpi_name, comparator, "
                     "       target_value, realized_value, outcome, guidance_narrative, realized_narrative "
                     "FROM saydo_historical_metrics WHERE ticker = ? "
@@ -84,7 +90,8 @@ def build(ticker: str, repo_root: Path) -> SayDoSection:
         except Exception:
             pass
         finally:
-            conn.close()
+            if conn is None:
+                db_conn.close()
 
     if not cards:
         return SayDoSection(

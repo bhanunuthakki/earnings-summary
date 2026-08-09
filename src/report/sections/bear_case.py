@@ -64,6 +64,7 @@ def build(
     cache_ttl_days: int = DEFAULT_CACHE_TTL_DAYS,
     force_refresh: bool = False,
     force_budget_bypass: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> BearCaseSection:
     # Serve a valid on-disk cache regardless of enable_llm so a non-LLM build
     # (the default) still surfaces a previously-generated bear case instead of
@@ -118,7 +119,7 @@ def build(
             segments_table_md=_segments_md(segments),
             kpi_status_md=_kpi_status_md(thesis),
             ticker_specific_md=_ticker_specific_md(ticker, repo_root),
-            ts_signals_md=_ts_signals_md(ticker, repo_root),
+            ts_signals_md=_ts_signals_md(ticker, repo_root, conn=conn),
             ir_anchor_md=load_ir_anchor(repo_root, ticker),
             repo_root=repo_root,
         )
@@ -225,7 +226,12 @@ def _cache_bear_response(ticker: str, repo_root: Path, response_text: str) -> No
         return
 
 
-def _ts_signals_md(ticker: str, repo_root: Path) -> str:
+def _ts_signals_md(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Render every persisted time-series signal for the ticker as a
     Disconfirmation-candidates block.
 
@@ -235,7 +241,7 @@ def _ts_signals_md(ticker: str, repo_root: Path) -> str:
     + segment) rather than enumerate a metric list. Empty string when no
     rows exist for the ticker so the prompt stays clean.
     """
-    signals = load_all_signals(ticker, repo_root=repo_root)
+    signals = load_all_signals(ticker, repo_root=repo_root, conn=conn)
     return format_signals_as_prompt_block(signals, heading="Time-Series Disconfirmation Candidates")
 
 

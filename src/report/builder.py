@@ -7,6 +7,7 @@ direct DB / filesystem coupling in the renderer layer.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -48,6 +49,7 @@ def build_report(
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
     force_budget_bypass: bool = False,
     force_refresh: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -77,21 +79,27 @@ def build_report(
     ticker = ticker.upper()
     portfolio_position_section = portfolio_position.build(ticker, repo_root)
     snapshot_section = snapshot.build(
-        ticker, repo_root, model_link, held=portfolio_position_section.held
+        ticker, repo_root, model_link, held=portfolio_position_section.held, conn=conn
     )
     evaluation_snapshot_section = (
-        evaluation_snapshot.build(ticker, repo_root) if flavor == ReportFlavor.EVALUATION else None
+        evaluation_snapshot.build(ticker, repo_root, conn=conn)
+        if flavor == ReportFlavor.EVALUATION
+        else None
     )
-    company_description_section = company_description.build(ticker, repo_root)
-    thesis_section = thesis.build(ticker, repo_root)
-    financials_section = financials.build(ticker, repo_root)
-    signals_section = signals.build(ticker, repo_root)
-    segments_section = segments.build(ticker, repo_root)
+    company_description_section = company_description.build(ticker, repo_root, conn=conn)
+    thesis_section = thesis.build(ticker, repo_root, conn=conn)
+    financials_section = financials.build(ticker, repo_root, conn=conn)
+    signals_section = signals.build(ticker, repo_root, conn=conn)
+    segments_section = segments.build(ticker, repo_root, conn=conn)
     earnings_section = earnings.build(
-        ticker, repo_root, enable_llm=enable_llm, force_budget_bypass=force_budget_bypass
+        ticker,
+        repo_root,
+        enable_llm=enable_llm,
+        force_budget_bypass=force_budget_bypass,
+        conn=conn,
     )
-    saydo_section = saydo.build(ticker, repo_root)
-    ir_docs_section = ir_docs.build(ticker, repo_root)
+    saydo_section = saydo.build(ticker, repo_root, conn=conn)
+    ir_docs_section = ir_docs.build(ticker, repo_root, conn=conn)
     recent_developments_section = recent_developments.build(
         ticker=ticker,
         repo_root=repo_root,
@@ -111,8 +119,9 @@ def build_report(
         earnings=earnings_section,
         force_refresh=force_refresh,
         force_budget_bypass=force_budget_bypass,
+        conn=conn,
     )
-    provenance_section = provenance.build(ticker, repo_root)
+    provenance_section = provenance.build(ticker, repo_root, conn=conn)
     appendix_section = appendix.build(earnings_section)
     qa_roster_section = qa_roster.build(
         appendix=appendix_section,
@@ -126,16 +135,21 @@ def build_report(
         repo_root=repo_root,
         enable_llm=enable_llm,
         force_budget_bypass=force_budget_bypass,
+        conn=conn,
     )
     filing_intelligence_section = filing_intelligence.build(ticker, repo_root)
     exec_compensation_section = exec_compensation.build(
-        ticker, repo_root, enable_llm=enable_llm, force_budget_bypass=force_budget_bypass
+        ticker,
+        repo_root,
+        enable_llm=enable_llm,
+        force_budget_bypass=force_budget_bypass,
+        conn=conn,
     )
-    synthesis_section = synthesis.build(ticker, repo_root)
+    synthesis_section = synthesis.build(ticker, repo_root, conn=conn)
     # Read-only for BOTH flavors (P1.1, PRD §8.1) — generation happens at the
     # end of a build (execution/build_investment_decision_card.py), never
     # here; this only surfaces whatever's already cached.
-    investment_decision_card_section = investment_decision_card.build(ticker, repo_root)
+    investment_decision_card_section = investment_decision_card.build(ticker, repo_root, conn=conn)
     # Roll up every section's budget-forgone marker so renderers can show a
     # brief-level "forgone due to budget" banner (and the dashboard an indicator).
     forgone_due_to_budget: list[BudgetSkip] = [

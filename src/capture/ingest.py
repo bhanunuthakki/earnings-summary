@@ -138,7 +138,7 @@ def ingest_capture(
     )
 
 
-def _extract_url(text: str) -> str | None:
+def extract_url(text: str) -> str | None:
     """Return the URL if this message is a bare URL (no whitespace), else None."""
     stripped = text.strip()
     if stripped.startswith(("http://", "https://")) and " " not in stripped:

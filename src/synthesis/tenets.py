@@ -17,6 +17,7 @@ not a confidence level on a name).
 from __future__ import annotations
 
 import re
+import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -102,10 +103,15 @@ def record_tenet(
     return got
 
 
-def list_tenets(*, status: str = "current", db_path: Path | str | None = None) -> list[InsightRow]:
+def list_tenets(
+    *,
+    status: str = "current",
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[InsightRow]:
     """Tenets by status ('current' = the live Worldview; 'proposed' = the approval
     queue)."""
-    return list_insights(kind=TENET_KIND, status=status, db_path=db_path)
+    return list_insights(kind=TENET_KIND, status=status, db_path=db_path, conn=conn)
 
 
 def tenet_for_note(note_id: int, *, db_path: Path | str | None = None) -> InsightRow | None:

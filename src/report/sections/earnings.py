@@ -105,7 +105,11 @@ _OPERATOR_FIRST_QUESTION = re.compile(
 
 
 def build(
-    ticker: str, repo_root: Path, enable_llm: bool = False, force_budget_bypass: bool = False
+    ticker: str,
+    repo_root: Path,
+    enable_llm: bool = False,
+    force_budget_bypass: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> EarningsSection:
     """Build the §5 Earnings section.
 
@@ -118,7 +122,7 @@ def build(
 
     summaries = _scan_summaries(tmp_dir, ticker)
     transcripts = _scan_transcripts(tr_root, ticker)
-    surprise_card = _build_surprise_card(ticker, repo_root)
+    surprise_card = _build_surprise_card(ticker, repo_root, conn=conn)
 
     if not summaries and not transcripts:
         return EarningsSection(
@@ -168,6 +172,7 @@ def build(
             repo_root=repo_root,
             transcripts=transcripts,
             enable_llm=enable_llm,
+            conn=conn,
         )
     return EarningsSection(
         status=SectionStatus.OK if has_any_llm else SectionStatus.PARTIAL,
@@ -186,7 +191,12 @@ def _dec_to_float(v: Decimal | None) -> float | None:
     return None if v is None else float(v)
 
 
-def _build_surprise_card(ticker: str, repo_root: Path) -> SurpriseScorecardCard | None:
+def _build_surprise_card(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> SurpriseScorecardCard | None:
     """Build the §6 header beat-rate card from the `earnings_surprises` table.
 
     Returns None when:
@@ -197,13 +207,14 @@ def _build_surprise_card(ticker: str, repo_root: Path) -> SurpriseScorecardCard 
     Decimal-to-float conversion happens here at the compute → Pydantic
     boundary; the compute layer keeps full Decimal precision internally.
     """
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return None
     try:
-        sc = surprise_scorecard_for(conn, ticker)
+        sc = surprise_scorecard_for(db_conn, ticker)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
     if sc.total_quarters == 0:
         return None
     return SurpriseScorecardCard(
@@ -319,6 +330,7 @@ def _build_themes(
     repo_root: Path,
     transcripts: dict[tuple[int, int], str],
     enable_llm: bool,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[list[ThemeRollup], list[ThemeRollup], str | None]:
     """Build the prepared / Q&A theme rollups across the 4 most recent transcripts.
 
@@ -343,7 +355,7 @@ def _build_themes(
     if not selected:
         return [], [], None
 
-    qa_flags = _load_has_qa_flags(ticker, repo_root, selected)
+    qa_flags = _load_has_qa_flags(ticker, repo_root, selected, conn=conn)
 
     prepared_present_count = 0
     qa_present_count = 0
@@ -370,7 +382,7 @@ def _build_themes(
     if not payload:
         return [], [], None
 
-    ts_block = _ts_signals_md(ticker, repo_root)
+    ts_block = _ts_signals_md(ticker, repo_root, conn=conn)
     cache_path = _themes_cache_path(repo_root, ticker)
     cache_key = _themes_cache_key(payload, ts_block)
     cached = _read_themes_cache(cache_path, cache_key)
@@ -435,7 +447,11 @@ def _build_themes(
 
 
 def _load_has_qa_flags(
-    ticker: str, repo_root: Path, periods: list[tuple[int, int]]
+    ticker: str,
+    repo_root: Path,
+    periods: list[tuple[int, int]],
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[tuple[int, int], bool | None]:
     """Look up ``transcripts.has_qa_section`` for each requested (quarter, year).
 
@@ -443,17 +459,17 @@ def _load_has_qa_flags(
     0019). Missing rows / unreadable DB → empty dict; the caller treats
     unknown as "no DB-side signal, fall back to in-file detection".
     """
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return {}
     out: dict[tuple[int, int], bool | None] = {}
     try:
-        if not _has_transcripts_table(conn):
+        if not _has_transcripts_table(db_conn):
             return {}
-        transcripts = selected_transcripts_relation(conn).sql
+        transcripts = selected_transcripts_relation(db_conn).sql
         for q, y in periods:
             try:
-                row = conn.execute(
+                row = db_conn.execute(
                     f"SELECT has_qa_section, period_end FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
                     "WHERE ticker = ? AND fiscal_period_type = ? "
                     "ORDER BY period_end DESC LIMIT 5",
@@ -479,7 +495,8 @@ def _load_has_qa_flags(
                     out[(q, y)] = None if flag is None else bool(flag)
                     break
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
     return out
 
 
@@ -614,7 +631,12 @@ def _earnings_metric_names(ticker: str, repo_root: Path) -> list[str]:
     return names
 
 
-def _ts_signals_md(ticker: str, repo_root: Path) -> str:
+def _ts_signals_md(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Render the headline-P&L + tier-1 KPI signals as a markdown block.
 
     Surfaced to the prepared-vs-Q&A themes prompt so the LLM can
@@ -623,7 +645,10 @@ def _ts_signals_md(ticker: str, repo_root: Path) -> str:
     Empty string when no signals exist for any requested metric.
     """
     grouped = load_signals_for_metrics(
-        ticker, _earnings_metric_names(ticker, repo_root), repo_root=repo_root
+        ticker,
+        _earnings_metric_names(ticker, repo_root),
+        repo_root=repo_root,
+        conn=conn,
     )
     flat = [s for metric in grouped.values() for s in metric]
     return format_signals_as_prompt_block(

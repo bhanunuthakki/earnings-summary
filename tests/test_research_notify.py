@@ -912,6 +912,7 @@ def test_poller_routes_callback_to_dispatch(
 ) -> None:
     from capture import poller
 
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "5")
     seen: list[str | None] = []
     monkeypatch.setattr(poller.telegram, "get_updates", lambda *a, **k: [_cb("rp:approve:1")])
     monkeypatch.setattr(

@@ -9,6 +9,7 @@ Current price is read in priority order:
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -28,18 +29,30 @@ from report.sections.thesis import _split_stub_warning
 
 
 def build(
-    ticker: str, repo_root: Path, model_link: str | None, *, held: bool = False
+    ticker: str,
+    repo_root: Path,
+    model_link: str | None,
+    *,
+    held: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> SnapshotSection:
     holdings = _read_holdings(ticker, repo_root)
     rules = load_rules(ticker, repo_root)
-    company_name = _company_name(ticker, repo_root)
+    company_name = _company_name(ticker, repo_root, conn=conn)
     mos_bar = _mos_bar(holdings)
     sheet_url = _linked_sheet_url(holdings)
     current_price = rules.current_price_override or _latest_price(ticker, repo_root)
     valuation = _valuation_snapshot(
-        ticker, repo_root, current_price, model_link, mos_bar, sheet_url, held=held
+        ticker,
+        repo_root,
+        current_price,
+        model_link,
+        mos_bar,
+        sheet_url,
+        held=held,
+        conn=conn,
     )
-    verdict, verdict_as_of = _verdict(ticker, repo_root)
+    verdict, verdict_as_of = _verdict(ticker, repo_root, conn=conn)
     tier_1_strip = _tier_1_strip(holdings)
     recent_decisions = _recent_decisions(ticker, repo_root)
 
@@ -98,17 +111,23 @@ def _linked_sheet_url(holdings: dict[str, object] | None) -> str | None:
     return None
 
 
-def _company_name(ticker: str, repo_root: Path) -> str | None:
-    conn = open_repo_db(repo_root)
-    if conn is None:
+def _company_name(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str | None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return None
-    cursor = conn.cursor()
+    cursor = db_conn.cursor()
     cursor.execute(
         "SELECT name FROM tracked_companies WHERE ticker = ? LIMIT 1",
         (ticker.upper(),),
     )
     row = cursor.fetchone()
-    conn.close()
+    if conn is None:
+        db_conn.close()
     return row["name"] if row else None
 
 
@@ -163,11 +182,12 @@ def _valuation_snapshot(
     mos_bar: float | None,
     sheet_url: str | None = None,
     held: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> ValuationSnapshot:
-    conn = open_repo_db(repo_root)
-    if conn is None or not has_table(conn, "dcf_runs"):
-        if conn is not None:
-            conn.close()
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None or not has_table(db_conn, "dcf_runs"):
+        if db_conn is not None and conn is None:
+            db_conn.close()
         return ValuationSnapshot(
             current_price=current_price,
             model_link=model_link,
@@ -175,7 +195,7 @@ def _valuation_snapshot(
             mos_bar=mos_bar,
         )
 
-    cursor = conn.cursor()
+    cursor = db_conn.cursor()
     # The sync-outcome columns are migration 0091 — read them only when the
     # DB has them so briefs still build against an older repo data dir.
     cols = {str(r[1]) for r in cursor.execute("PRAGMA table_info(dcf_runs)")}
@@ -203,7 +223,8 @@ def _valuation_snapshot(
         (ticker.upper(),),
     )
     row = cursor.fetchone()
-    conn.close()
+    if conn is None:
+        db_conn.close()
     if row is None:
         return ValuationSnapshot(
             current_price=current_price,
@@ -529,24 +550,28 @@ def _sum_of_segments_npv_per_share(
 
 
 def _verdict(
-    ticker: str, repo_root: Path
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[Literal["intact", "watch", "broken", "pending"], datetime | None]:
     """(verdict, as_of) — ``as_of`` is ``thesis_state.last_updated``, the
     timestamp ``persist_verdict`` writes from ``verdict.evaluated_at``. The
     chrome badge greys a verdict that predates the newest reported quarter
     instead of rendering a stale read as fresh green."""
-    conn = open_repo_db(repo_root)
-    if conn is None or not has_table(conn, "thesis_state"):
-        if conn is not None:
-            conn.close()
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None or not has_table(db_conn, "thesis_state"):
+        if db_conn is not None and conn is None:
+            db_conn.close()
         return "pending", None
-    cursor = conn.cursor()
+    cursor = db_conn.cursor()
     cursor.execute(
         "SELECT breach_status, last_updated FROM thesis_state WHERE ticker = ?",
         (ticker.upper(),),
     )
     row = cursor.fetchone()
-    conn.close()
+    if conn is None:
+        db_conn.close()
     if row is None or row["breach_status"] is None:
         return "pending", None
     as_of = _parse_iso_datetime(row["last_updated"])
@@ -623,7 +648,12 @@ def _tier_1_strip(holdings: dict[str, object] | None) -> list[KpiSnapshotRow]:
     return rows
 
 
-def build_per_metric(ticker: str, repo_root: Path) -> dict[str, dict[str, object]]:
+def build_per_metric(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, dict[str, object]]:
     """Per-metric provenance for the §1 snapshot.
 
     Today the snapshot's only auditable fact-like value is the DCF row
@@ -640,13 +670,13 @@ def build_per_metric(ticker: str, repo_root: Path) -> dict[str, dict[str, object
 
     Returns {} when no DCF row exists for the ticker.
     """
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return {}
     try:
-        if not has_table(conn, "dcf_runs"):
+        if not has_table(db_conn, "dcf_runs"):
             return {}
-        cursor = conn.cursor()
+        cursor = db_conn.cursor()
         cursor.execute(
             "SELECT id, valuation_date, created_at, live_price_at "
             "FROM dcf_runs WHERE ticker = ? "
@@ -655,7 +685,8 @@ def build_per_metric(ticker: str, repo_root: Path) -> dict[str, dict[str, object
         )
         row = cursor.fetchone()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
     if row is None:
         return {}
     fetched_at = row["live_price_at"] or row["created_at"] or row["valuation_date"]

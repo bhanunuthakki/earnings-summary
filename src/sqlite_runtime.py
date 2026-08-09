@@ -43,8 +43,6 @@ def connect_sqlite(
     require_schema = (
         role is SQLiteConnectionRole.WRITER if schema_preflight is None else schema_preflight
     )
-    if require_schema and role is not SQLiteConnectionRole.WRITER:
-        raise ValueError("schema_preflight is available only to writer connections")
 
     resolved = os.fspath(path)
     if role in (
@@ -74,9 +72,12 @@ def connect_sqlite(
     try:
         _register_scope_identity_function(conn)
         _apply_connection_policy(conn)
+        if require_schema:
+            # The compatibility probe is read-only despite its historical
+            # name. Request/report readers opt in so schema drift is visible
+            # instead of being misreported as an empty result set.
+            require_current_for_write(conn)
         if role is SQLiteConnectionRole.WRITER:
-            if require_schema:
-                require_current_for_write(conn)
             _apply_writer_policy(conn)
     except Exception:
         conn.close()

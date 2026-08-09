@@ -47,6 +47,9 @@ from __future__ import annotations
 #     new version. (Before, each trigger hardcoded ``"v1"`` and never consulted
 #     this registry, so every artifact was permanently ``v1`` — v6 re-grade.)
 _PROMPT_VERSIONS: dict[str, str] = {
+    # Weekly model-frontier web research. The prompt is stable and its output
+    # is independently schema/eval gated before it can affect routing.
+    "model_frontier_research": "v1",
     # Governed private-caller migrations: all are schema-bound extractors and
     # must have a stable prompt version for eval/ledger attribution.
     "kpi_summary_extract": "v1",

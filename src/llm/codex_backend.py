@@ -22,9 +22,9 @@ Operational notes learned wiring it up (2026-07-25):
   though the login is valid. That is a transient setup failure, not a
   credentials problem, so it is classified as such and the judge degrades
   rather than aborting a whole sweep;
-* the CLI reports no token usage in its exec events, so ledger rows carry
-  latency + response size with NULL token/cost fields. Membership billing has
-  no per-call price anyway; what matters is that the call is ATTRIBUTED.
+* the CLI reports token usage in its exec events. Membership billing has no
+  per-call charge, but ledger rows carry a public-API-equivalent cost estimate
+  so monthly controls account for token use consistently across transports.
 """
 
 from __future__ import annotations
@@ -64,6 +64,38 @@ CODEX_JUDGE_MODEL = "gpt-5.6-terra"
 
 # Cold-start tolerant: the wrapper's login check alone can take ~30s.
 DEFAULT_TIMEOUT_SECONDS = 420
+
+# Public API-equivalent prices ($/MTok), verified 2026-08-08 against OpenAI's
+# official model pages. These are a token-consumption control signal, not a
+# claim that ChatGPT membership calls incur per-call API charges.
+_CODEX_API_PRICES: dict[str, tuple[float, float, float]] = {
+    # model: (uncached input, cached input, output)
+    "gpt-5.6-luna": (0.20, 0.02, 1.20),
+    "gpt-5.6-terra": (2.00, 0.20, 12.00),
+    "gpt-5.6-sol": (5.00, 0.50, 30.00),
+}
+_LONG_CONTEXT_INPUT_TOKENS = 272_000
+
+
+def estimate_api_equivalent_cost_usd(
+    *, model: str, input_tokens: int, cached_input_tokens: int, output_tokens: int
+) -> float:
+    """Estimate public API cost for measured membership-token usage."""
+    try:
+        input_rate, cached_rate, output_rate = _CODEX_API_PRICES[model]
+    except KeyError:
+        raise ValueError(f"missing public API price for Codex model {model!r}") from None
+    if min(input_tokens, cached_input_tokens, output_tokens) < 0:
+        raise ValueError("Codex token counts must be non-negative")
+    if cached_input_tokens > input_tokens:
+        raise ValueError("cached Codex input tokens cannot exceed total input tokens")
+    uncached_input_tokens = input_tokens - cached_input_tokens
+    input_multiplier = 2.0 if input_tokens > _LONG_CONTEXT_INPUT_TOKENS else 1.0
+    output_multiplier = 1.5 if input_tokens > _LONG_CONTEXT_INPUT_TOKENS else 1.0
+    return (
+        input_multiplier * (uncached_input_tokens * input_rate + cached_input_tokens * cached_rate)
+        + output_multiplier * output_tokens * output_rate
+    ) / 1_000_000
 
 
 class _CodexCaller(Protocol):
@@ -142,6 +174,8 @@ def call_codex_llm(
     no shell/apps/hooks) bounds the blast radius of anything a hostile page
     could try. See directives/llm_calls.md and procedures/llm-ops.TRANSPORTS.md.
     """
+    if model not in _CODEX_API_PRICES:
+        raise ValueError(f"missing public API price for Codex model {model!r}")
     from llm.ledger import record_llm_call
 
     started_at = datetime.now(UTC).replace(tzinfo=None)
@@ -188,6 +222,12 @@ def call_codex_llm(
             "output_tokens": result.usage.output_tokens,
         },
         "web_search": web_search,
+        "total_cost_usd": estimate_api_equivalent_cost_usd(
+            model=model,
+            input_tokens=result.usage.input_tokens,
+            cached_input_tokens=result.usage.cached_input_tokens,
+            output_tokens=result.usage.output_tokens,
+        ),
     }
     if not text:
         record_llm_call(

@@ -24,10 +24,15 @@ from report.models import (
 from report.sections._common import has_table, missing, open_repo_db
 
 
-def build(ticker: str, repo_root: Path) -> EvaluationSnapshotSection:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> EvaluationSnapshotSection:
     ticker = ticker.upper()
-    conn = open_repo_db(repo_root)
-    if conn is None:
+    db_conn = open_repo_db(repo_root, conn)
+    if db_conn is None:
         return _missing(
             ticker,
             stage="PERSIST(init_db)",
@@ -35,8 +40,9 @@ def build(ticker: str, repo_root: Path) -> EvaluationSnapshotSection:
             detail="No portfolio.db at data/portfolio.db.",
         )
 
-    if not has_table(conn, "metrics") or not has_table(conn, "ratios"):
-        conn.close()
+    if not has_table(db_conn, "metrics") or not has_table(db_conn, "ratios"):
+        if conn is None:
+            db_conn.close()
         return _missing(
             ticker,
             stage="PERSIST(metrics_views)",
@@ -45,12 +51,13 @@ def build(ticker: str, repo_root: Path) -> EvaluationSnapshotSection:
         )
 
     # 4 FY rows so the 3y CAGR baseline (LFY-3) is available, plus TTM.
-    annual_metrics = _load_annual(conn, ticker, table="metrics", n=4)
-    annual_ratios = _load_annual(conn, ticker, table="ratios", n=4)
-    ttm_metrics = _load_ttm(conn, ticker, table="metrics")
-    ttm_ratios = _load_ttm(conn, ticker, table="ratios")
-    company_name = _load_company_name(conn, ticker)
-    conn.close()
+    annual_metrics = _load_annual(db_conn, ticker, table="metrics", n=4)
+    annual_ratios = _load_annual(db_conn, ticker, table="ratios", n=4)
+    ttm_metrics = _load_ttm(db_conn, ticker, table="metrics")
+    ttm_ratios = _load_ttm(db_conn, ticker, table="ratios")
+    company_name = _load_company_name(db_conn, ticker)
+    if conn is None:
+        db_conn.close()
 
     if not annual_metrics:
         return _missing(

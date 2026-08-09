@@ -350,6 +350,7 @@ def test_dispatch_dn_skip_marks_skipped(db_path: Path) -> None:
 def test_poller_routes_text_to_pending_reply_before_default_capture(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "5")
     did = _seed_stub(db_path)
     decision_nudge.start_fill_in(did, chat_id=5, db_path=db_path)
     monkeypatch.setattr(

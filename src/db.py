@@ -1,8 +1,8 @@
 """SQLite portfolio DB — companies, quarterly artifacts, FMP endpoint status.
 
-Schema management is currently inline (CREATE TABLE IF NOT EXISTS + ALTER TABLE
-in init_db()). Phase 2 of the backend redesign migrates schema management to
-Alembic and removes the auto-call at module import-time.
+The active schema is owned by Alembic. ``init_db()`` remains an explicit legacy
+compatibility helper for historical migration tests; importing this module is
+side-effect free and never creates or mutates a database.
 """
 
 from __future__ import annotations
@@ -124,10 +124,10 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create tables and apply inline migrations.
+    """Create the three legacy bootstrap tables when explicitly requested.
 
-    Runs at module import-time (last line of this file). Phase 2 replaces this
-    with `alembic upgrade head` invoked explicitly from a CLI entrypoint.
+    Production schema setup must use ``alembic upgrade head``. This helper is
+    retained only for historical migration tests and compatibility tooling.
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -743,7 +743,3 @@ def refresh_all_fmp_dates(user_id: str = DEFAULT_USER_ID) -> None:
         _update_company_fmp_state(cursor, ticker)
         conn.commit()
         conn.close()
-
-
-# Inline schema management — replaced with `alembic upgrade head` in Phase 2.
-init_db()

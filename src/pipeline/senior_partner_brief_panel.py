@@ -22,6 +22,7 @@ defines its own duplicate action wiring.
 from __future__ import annotations
 
 import re
+import sqlite3
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -57,7 +58,12 @@ def _current_iso_week(now: datetime | None = None) -> tuple[int, int]:
     return int(y), int(w)
 
 
-def render_brief_today_card(db_path: Path | str | None, *, now: datetime | None = None) -> str:
+def render_brief_today_card(
+    db_path: Path | str | None,
+    *,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """The Today compact doorway: highest-priority item (or a "what changed"
     headline) + effort estimate + stale/failed states, deep-linked to
     ``/mobile/inbox`` (the full brief surface — PRD §9.1 keeps ONE reading
@@ -69,7 +75,11 @@ def render_brief_today_card(db_path: Path | str | None, *, now: datetime | None 
         return ""
     try:
         artifact = llm_artifact_store.read_current(
-            ticker=None, purpose=PURPOSE, scope="portfolio", db_path=Path(db_path)
+            ticker=None,
+            purpose=PURPOSE,
+            scope="portfolio",
+            db_path=Path(db_path),
+            conn=conn,
         )
     except Exception:
         return '<div class="cc-spb-today k-well k-well-bad">Senior Partner Brief unavailable.</div>'
@@ -123,7 +133,12 @@ def _extract_chip_fragment(card_html: str) -> str | None:
     return m.group(0) if m else None
 
 
-def render_today_doorways_card(db_path: Path | str | None, *, now: datetime | None = None) -> str:
+def render_today_doorways_card(
+    db_path: Path | str | None,
+    *,
+    now: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     """Task 2 (navigation_ia.md D1): fold the allocation-today card into the
     Senior Partner Brief Today card — ONE ``.k-well`` with up to two doorway
     chips (brief first, allocation second) instead of two separate wells.
@@ -135,11 +150,11 @@ def render_today_doorways_card(db_path: Path | str | None, *, now: datetime | No
     squeezed into the shared well. Never raises: an import or render failure
     on the allocation side degrades to brief-only, matching this band's
     sibling try/except discipline in ``execution/comments_server.py``."""
-    brief_html = render_brief_today_card(db_path, now=now)
+    brief_html = render_brief_today_card(db_path, now=now, conn=conn)
     try:
         from pipeline.allocation_recommendation_panel import render_allocation_today_card
 
-        alloc_html = render_allocation_today_card(db_path)
+        alloc_html = render_allocation_today_card(db_path, conn=conn)
     except Exception:
         alloc_html = ""
 

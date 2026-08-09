@@ -51,7 +51,15 @@ def test_musing_note_round_trips(db_path: Path) -> None:
     assert got.body.startswith("NPL formation")
 
 
-def test_capture_tables_exist_then_downgrade_drops_them(db_path: Path) -> None:
+def test_capture_tables_exist_then_downgrade_drops_them(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = migrated_db(
+        tmp_path / "capture-archived.db",
+        stamp=PRIOR_HEAD,
+        archived=True,
+    )
     conn = sqlite3.connect(str(db_path))
     try:
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}

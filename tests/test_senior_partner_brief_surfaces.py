@@ -96,6 +96,24 @@ def test_today_card_renders_nothing_when_no_artifact(tmp_path: Path) -> None:
     assert render_brief_today_card(db_path) == ""
 
 
+def test_ask_brief_pack_does_not_reuse_expired_artifact(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    artifact_id, _ = _seed_brief(db_path, now=datetime(2026, 7, 20, 9, 0, 0))
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "UPDATE llm_artifacts SET expires_at = '2026-07-21T09:00:00+00:00' WHERE id = ?",
+        (artifact_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    pack_items = load_packs(["brief"], db_path=db_path, focus_tickers=[])
+
+    assert len(pack_items) == 1
+    assert f"artifact #{artifact_id}" not in str(pack_items[0]["text"])
+    assert "no Senior Partner Brief" in str(pack_items[0]["text"])
+
+
 def test_mobile_section_labels_not_generated_distinctly(tmp_path: Path) -> None:
     db_path = _make_db(tmp_path)
     html = render_mobile_inbox(db_path)

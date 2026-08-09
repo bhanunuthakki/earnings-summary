@@ -14,6 +14,7 @@ can).
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -45,7 +46,12 @@ def _str_list(raw: object) -> list[str]:
     return [str(x) for x in cast("list[object]", raw) if isinstance(x, str)]
 
 
-def build(ticker: str, repo_root: Path) -> InvestmentDecisionCardSection | None:
+def build(
+    ticker: str,
+    repo_root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> InvestmentDecisionCardSection | None:
     """The current card, or ``None`` when none has been generated yet, the
     artifact's content_json failed to decode, or the store is unavailable —
     every case the renderer must hide the strip entirely rather than stub it
@@ -61,7 +67,11 @@ def build(ticker: str, repo_root: Path) -> InvestmentDecisionCardSection | None:
 
     db_path = repo_root / "data" / "portfolio.db"
     artifact = llm_artifact_store.read_current(
-        ticker=ticker, purpose=PURPOSE, scope="ticker", db_path=db_path
+        ticker=ticker,
+        purpose=PURPOSE,
+        scope="ticker",
+        db_path=db_path,
+        conn=conn,
     )
     if artifact is None or not isinstance(artifact.content_json, dict):
         return None

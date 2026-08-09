@@ -92,6 +92,7 @@ TRIGGER_KINDS: frozenset[str] = frozenset(
         "owner_capacity_breach",
         "data_feed_stale",
         "risk_drift",
+        "model_pin_switch",
     }
 )
 # Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).
@@ -278,6 +279,7 @@ def list_alerts(
     since: datetime | None = None,
     limit: int | None = 200,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[AlertRow]:
     """General-purpose alerts list — newest first. Drives the dashboard feed.
 
@@ -302,9 +304,9 @@ def list_alerts(
     # SQLite treats a negative LIMIT as "no limit" — the documented idiom.
     params.append(-1 if limit is None else int(limit))
 
-    conn = _open(db_path)
+    db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
-        rows = conn.execute(
+        rows = db_conn.execute(
             f"""
             SELECT * FROM alerts
             WHERE {where_sql}
@@ -315,7 +317,8 @@ def list_alerts(
         ).fetchall()
         return [_row_to_alert(r) for r in rows]
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def approve_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
@@ -501,7 +504,10 @@ def list_queued_actions_for_alert(
 
 
 def list_queued_actions_for_alerts(
-    alert_ids: list[int], db_path: Path | str | None = None
+    alert_ids: list[int],
+    db_path: Path | str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[int, list[QueuedActionRow]]:
     """Queued actions for many alerts in ONE ``IN`` query — the batched form of
     ``list_queued_actions_for_alert`` for callers rendering a stream of alerts
@@ -516,9 +522,9 @@ def list_queued_actions_for_alerts(
         return {}
     out: dict[int, list[QueuedActionRow]] = {aid: [] for aid in alert_ids}
     marks = ",".join("?" for _ in alert_ids)
-    conn = _open(db_path)
+    db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
-        rows = conn.execute(
+        rows = db_conn.execute(
             f"""
             SELECT * FROM queued_actions
             WHERE alert_id IN ({marks})
@@ -527,7 +533,8 @@ def list_queued_actions_for_alerts(
             [int(a) for a in alert_ids],
         ).fetchall()
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
     for r in rows:
         action = _row_to_action(r)
         out[action.alert_id].append(action)
@@ -539,6 +546,7 @@ def list_pending_actions(
     user_id: str = DEFAULT_USER_ID,
     limit: int = 200,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[QueuedActionRow]:
     """Pending queued actions across the user's alerts, newest first.
 
@@ -546,9 +554,9 @@ def list_pending_actions(
     queued_actions table itself doesn't carry user_id; ownership flows
     through the parent alert).
     """
-    conn = _open(db_path)
+    db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
-        rows = conn.execute(
+        rows = db_conn.execute(
             """
             SELECT qa.*
             FROM queued_actions qa
@@ -561,7 +569,8 @@ def list_pending_actions(
         ).fetchall()
         return [_row_to_action(r) for r in rows]
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def get_action(action_id: int, db_path: Path | str | None = None) -> QueuedActionRow:
@@ -670,7 +679,11 @@ def _transition_action(
 # ----------------------------------------------------------------------------
 
 
-def _open(db_path: Path | str | None) -> sqlite3.Connection:
+def _open(
+    db_path: Path | str | None,
+    *,
+    role: SQLiteConnectionRole = SQLiteConnectionRole.WRITER,
+) -> sqlite3.Connection:
     """Open a connection with FK enforcement on. Fails loudly when DB or
     table is missing — these are primary writes, not telemetry."""
     path = resolve_db_path(db_path)
@@ -683,7 +696,7 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection:
         raise FileNotFoundError(f"SQLite DB does not exist: {path}")
     conn = connect_sqlite(
         path,
-        role=SQLiteConnectionRole.WRITER,
+        role=role,
         schema_preflight=True,
     )
     conn.row_factory = sqlite3.Row

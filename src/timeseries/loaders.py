@@ -511,6 +511,7 @@ def load_financial_fact_provenance(
     db_path: Path | None = None,
     period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
     as_of_date: date | datetime | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, object] | None:
     """Return tier-aware provenance for the latest-period row of `ticker.line_item`.
 
@@ -537,21 +538,23 @@ def load_financial_fact_provenance(
     Intended for the brief_provenance_log per-metric audit trail; not on
     the hot path of `detect_trend` / `yoy_acceleration` etc.
     """
-    resolved = _resolve_db_path(repo_root, db_path)
-    if resolved is None:
-        return None
-    conn = _open(resolved)
-    if conn is None:
-        return None
+    db_conn = conn
+    if db_conn is None:
+        resolved = _resolve_db_path(repo_root, db_path)
+        if resolved is None:
+            return None
+        db_conn = _open(resolved)
+        if db_conn is None:
+            return None
     period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
     placeholders = ",".join("?" * len(period_list))
     as_of_cutoff = _normalize_as_of(as_of_date)
     try:
-        if not _has_table(conn, "financial_facts"):
+        if not _has_table(db_conn, "financial_facts"):
             return None
-        has_documents = _has_table(conn, "documents")
+        has_documents = _has_table(db_conn, "documents")
         if not has_documents:
-            row = conn.execute(
+            row = db_conn.execute(
                 f"""
                 SELECT ff.id AS fact_id,
                        ff.source_doc_id,
@@ -586,7 +589,7 @@ def load_financial_fact_provenance(
                 "value": float(row["value"]),
             }
 
-        has_tier = _has_column(conn, "documents", "source_quality_tier")
+        has_tier = _has_column(db_conn, "documents", "source_quality_tier")
         rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
         as_of_clause = "AND d.fetched_at <= ? " if as_of_cutoff is not None else ""
         as_of_params: tuple[object, ...] = (as_of_cutoff,) if as_of_cutoff is not None else ()
@@ -595,7 +598,7 @@ def load_financial_fact_provenance(
             if has_tier
             else "COALESCE(d.source_type, 'unknown') AS source"
         )
-        row = conn.execute(
+        row = db_conn.execute(
             f"""
             SELECT ff.id AS fact_id,
                    ff.source_doc_id,
@@ -656,7 +659,8 @@ def load_financial_fact_provenance(
         )
         return None
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def load_financial_cell_provenance(

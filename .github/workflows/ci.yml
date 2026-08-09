@@ -13,10 +13,10 @@ name: CI
 #               every PR.
 #
 # pyright (the strict type gate) runs as the `typecheck` job below — a RATCHET:
-# it compares the whole-repo strict error count in the PR against the base
-# branch and fails only when the PR RAISES it. The ~3070-error baseline is
-# tolerated (never blocking) and paid down incrementally, exactly like the ruff
-# diff gate. pyright also still runs locally via pre-commit / `make typecheck`.
+# it compares normalized whole-repo diagnostics in the PR against the base
+# branch and fails on any genuinely NEW error. The legacy baseline is tolerated
+# (never blocking) and paid down incrementally, exactly like the ruff diff gate.
+# pyright also still runs locally via pre-commit / `make typecheck`.
 
 on:
   pull_request:
@@ -27,50 +27,50 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   changes:
     name: Check Changed Paths
     runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.filter.outputs.code }}
-      python: ${{ steps.filter.outputs.python }}
+      code: ${{ steps.classify.outputs.code }}
+      python: ${{ steps.classify.outputs.python }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dorny/paths-filter@de56cc8ed5e383fe16742b9283341939ef2a0753 # v3
-        id: filter
         with:
-          filters: |
-            code:
-              - 'src/**'
-              - 'execution/**'
-              - 'tests/**'
-              - 'alembic/**'
-              - 'cron/**'
-              - 'scripts/**'
-              - '.githooks/**'
-              - 'config/**'
-              - 'templates/**'
-              - 'pyproject.toml'
-              - 'requirements.txt'
-              - 'requirements.lock'
-              - '.bandit-baseline.json'
-              - 'alembic.ini'
-              - '.github/workflows/**'
-              - 'Makefile'
-            python:
-              - 'src/**/*.py'
-              - 'execution/**/*.py'
-              - 'tests/**/*.py'
-              - 'alembic/**/*.py'
-              - 'cron/**/*.py'
-              - 'scripts/**/*.py'
-              - 'pyproject.toml'
-              - 'requirements.lock'
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE_SHA"
+            head="$PR_HEAD_SHA"
+            git cat-file -e "$base^{commit}"
+            git cat-file -e "$head^{commit}"
+            git diff --name-only --no-renames -z "$base...$head" \
+              | python .github/scripts/ci_gate.py classify --github-output "$GITHUB_OUTPUT"
+          elif git rev-parse --quiet --verify "$PUSH_BEFORE_SHA^{commit}" >/dev/null 2>&1; then
+            git diff --name-only --no-renames -z "$PUSH_BEFORE_SHA" "$CURRENT_SHA" \
+              | python .github/scripts/ci_gate.py classify --github-output "$GITHUB_OUTPUT"
+          else
+            git diff-tree --root --no-commit-id --name-only --no-renames -z -r "$CURRENT_SHA" \
+              | python .github/scripts/ci_gate.py classify --github-output "$GITHUB_OUTPUT"
+          fi
 
   tests:
     name: tests (shard ${{ matrix.label }}/8)
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     # 40, not 25: the heaviest shards legitimately run 14-15 min, and hosted
     # runners routinely deliver ~2x slowdowns (disk/CPU contention), which put
@@ -102,6 +102,11 @@ jobs:
           - { label: "8", source_shard: 8, split_count: 1, split_part: 0 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Deletion governance verifies a recent audited commit is an
+          # ancestor. Keep this bounded for merge latency while retaining
+          # enough history for the governed cleanup window.
+          fetch-depth: 32
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -126,17 +131,14 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t all_files < <(find tests -type f -name 'test_*.py' | sort)
-          selected=()
-          shard_index=$((${{ matrix.source_shard }} - 1))
-          source_position=0
-          for i in "${!all_files[@]}"; do
-            if (( i % 8 == shard_index )); then
-              if (( source_position % ${{ matrix.split_count }} == ${{ matrix.split_part }} )); then
-                selected+=("${all_files[$i]}")
-              fi
-              source_position=$((source_position + 1))
-            fi
-          done
+          mapfile -t selected < <(
+            printf '%s\n' "${all_files[@]}" |
+              python .github/scripts/ci_gate.py select-tests \
+                --source-shard '${{ matrix.source_shard }}' \
+                --source-shards 8 \
+                --split-count '${{ matrix.split_count }}' \
+                --split-part '${{ matrix.split_part }}'
+          )
           if (( ${#selected[@]} == 0 )); then
             echo "::error::test shard ${{ matrix.label }} selected no files"
             exit 1
@@ -150,6 +152,8 @@ jobs:
           pytest -q -n 2 --dist=loadfile --durations=25 "${selected[@]}"
 
   quality:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.python == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -243,14 +247,11 @@ jobs:
 
   typecheck:
     needs: [changes]
-    if: ${{ needs.changes.outputs.python == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changes.outputs.python == 'true' }}
     # Diff-aware pyright (strict) ratchet. The repo carries a large pre-existing
-    # strict baseline (~3070 — tooling drift), so a whole-repo "must be clean"
-    # gate is impossible. Instead we compare the whole-repo strict error count in
-    # this PR against the base branch and fail only when the PR RAISES it — new
-    # code stays strict-clean while the baseline is paid down incrementally.
-    # Whole-repo (not per-file) so cross-module regressions are caught and the
-    # count is computed in identical import context for base and head.
+    # strict baseline, so a whole-repo "must be clean" gate is impossible. Compare
+    # normalized diagnostics in identical import context and block genuinely new
+    # errors while the legacy baseline is paid down incrementally.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -270,7 +271,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
-          pip install "pyright>=1.1.380"
+          pip install "pyright>=1.1.380" "pytest>=8" "alembic>=1.13" "sqlalchemy>=2.0"
       - name: Resolve base ref
         id: base
         run: |
@@ -288,9 +289,10 @@ jobs:
       - name: pyright strict — no NEW errors vs base (ratchet)
         shell: bash
         run: |
-          set -uo pipefail
-          errcount() { python -c 'import json,sys; print(json.load(sys.stdin).get("summary",{}).get("errorCount",0))'; }
-          head_n=$(pyright --outputjson 2>/dev/null | errcount || echo 0)
+          set -euo pipefail
+          head_json="$RUNNER_TEMP/pyright-head.json"
+          base_json="$RUNNER_TEMP/pyright-base.json"
+          pyright --outputjson > "$head_json" 2>/dev/null || true
           base="${{ steps.base.outputs.ref }}"
           wt="$RUNNER_TEMP/base-pyright"
           # Clear any stale worktree path from a retried job, then REQUIRE the
@@ -304,18 +306,20 @@ jobs:
             echo "::error::could not check out base ($base) for the pyright ratchet — failing the type gate (a broken ratchet must block, not silently pass)."
             exit 1
           fi
-          base_n=$( (cd "$wt" && pyright --outputjson 2>/dev/null | errcount) || echo 0 )
+          cleanup() { git worktree remove --force "$wt" 2>/dev/null || true; }
+          trap cleanup EXIT
+          (cd "$wt" && pyright --outputjson > "$base_json" 2>/dev/null) || true
           git worktree remove --force "$wt" 2>/dev/null || true
-          echo "pyright strict errors — base=$base_n  head=$head_n"
-          if [ "$head_n" -gt "$base_n" ]; then
-            echo "::error::pyright introduced $((head_n - base_n)) new strict error(s) ($base_n -> $head_n). Run 'make typecheck-changed' locally to see them on your changed files."
-            exit 1
-          fi
-          echo "No new pyright strict errors (baseline $base_n tolerated)."
+          trap - EXIT
+          python .github/scripts/ci_gate.py pyright-diff \
+            --base-json "$base_json" \
+            --head-json "$head_json" \
+            --base-root "$wt" \
+            --head-root "$GITHUB_WORKSPACE"
 
   security:
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changes.outputs.code == 'true' }}
     # Blocking supply-chain, secret, and SAST checks. Bandit carries an explicit
     # reviewed legacy baseline so regressions fail without pretending the
     # historical findings have already been remediated.
@@ -343,10 +347,36 @@ jobs:
           git ls-files -z |
           xargs -0 detect-secrets-hook
           --exclude-files
-          '^(?:config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
+          '^(?:config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json|docs[\\/]design[\\/]deletion_catalog_2026_08\.json|evals[\\/]golden[\\/]metric_lifecycle_triage\.json|tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|test_peer_selection|test_validate_environment)\.py)$'
       - name: Generate CycloneDX SBOM
         run: cyclonedx-py requirements requirements.lock --output-file sbom.cdx.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cyclonedx-sbom
           path: sbom.cdx.json
+
+  merge-gate:
+    name: CI Gate
+    if: ${{ always() }}
+    needs: [changes, tests, quality, typecheck, security]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require every applicable job to pass
+        env:
+          CODE_CHANGED: ${{ needs.changes.outputs.code || 'false' }}
+          PYTHON_CHANGED: ${{ needs.changes.outputs.python || 'false' }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TYPECHECK_RESULT: ${{ needs.typecheck.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: >-
+          python .github/scripts/ci_gate.py verify
+          --code "$CODE_CHANGED"
+          --python "$PYTHON_CHANGED"
+          --changes-result "$CHANGES_RESULT"
+          --tests-result "$TESTS_RESULT"
+          --quality-result "$QUALITY_RESULT"
+          --typecheck-result "$TYPECHECK_RESULT"
+          --security-result "$SECURITY_RESULT"
