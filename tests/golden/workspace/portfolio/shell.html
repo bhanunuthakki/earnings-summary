@@ -11,7 +11,7 @@
 </svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>[EXTRACTED]</style>
 <style>[EXTRACTED]</style>
 <style>[EXTRACTED]</style>
@@ -25,6 +25,74 @@
 <body>
 <script id="workspace-boot" type="application/json">{"ticker": "TEST", "report_date": "2026-06-11", "server_url": "http://localhost:7421", "report_capability": "test-report-capability"}</script>
 <script id="workspace-comments" type="application/json">{"ticker": "TEST", "report_date": "2026-06-11", "comments": []}</script>
+<nav class="tabs k-sidebar report-sidebar" aria-label="Research workspace">
+<div class="report-sidebar-brand">
+<span class="report-sidebar-ticker">TEST</span>
+<span class="report-sidebar-product">Research Workspace</span>
+</div>
+<div class="report-nav-scroll">
+<div class="report-nav-layer">
+<div class="report-nav-label">L1 · Portfolio Intelligence</div>
+<button type="button" class="tab k-btn k-nav-item active" data-tab="overview" aria-current="page" aria-label="Overview &amp; Moat">
+<svg class="k-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+<rect x="3" y="3" width="7" height="7" rx="1"/>
+<rect x="14" y="3" width="7" height="7" rx="1"/>
+<rect x="3" y="14" width="7" height="7" rx="1"/>
+<rect x="14" y="14" width="7" height="7" rx="1"/>
+</svg>
+<span class="tab-label">Overview &amp; Moat</span>
+<span class="tab-count">5</span>
+</button>
+</div>
+<div class="report-nav-layer">
+<div class="report-nav-label">L2 · Research Engine</div>
+<button type="button" class="tab k-btn k-nav-item" data-tab="quarter" aria-label="Quarter &amp; Guidance">
+<svg class="k-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+<path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/>
+<circle cx="5" cy="19" r="1"/>
+</svg>
+<span class="tab-label">Quarter &amp; Guidance</span>
+<span class="tab-count">4</span>
+</button>
+<button type="button" class="tab k-btn k-nav-item" data-tab="financials" aria-label="Financials &amp; DCF">
+<svg class="k-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+<path d="M3 18l5-5 4 3 8-10"/>
+<path d="M14 6h6v6"/>
+</svg>
+<span class="tab-label">Financials &amp; DCF</span>
+<span class="tab-count">12</span>
+</button>
+<button type="button" class="tab k-btn k-nav-item" data-tab="thesis-risk" aria-label="Thesis &amp; Risk">
+<svg class="k-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+<rect x="3" y="3" width="18" height="18" rx="2"/>
+<path d="m8 12 3 3 6-7"/>
+</svg>
+<span class="tab-label">Thesis &amp; Risk</span>
+<span class="tab-count">11</span>
+</button>
+<button type="button" class="tab k-btn k-nav-item" data-tab="valuation-comps" aria-label="Valuation &amp; Comps">
+<svg class="k-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+<path d="M3 21h18"/>
+<path d="M6 21V5l6-3 6 3v16"/>
+<path d="M9 9h1M9 13h1M14 9h1M14 13h1M11 21v-4h2v4"/>
+</svg>
+<span class="tab-label">Valuation &amp; Comps</span>
+<span class="tab-count">2</span>
+</button>
+</div>
+<div class="report-nav-layer">
+<div class="report-nav-label">L3 · Operations &amp; Governance</div>
+<button type="button" class="tab k-btn k-nav-item" data-tab="sources" aria-label="Sources &amp; Citations">
+<svg class="k-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/>
+<path d="M1 14h6M9 8h6M17 16h6"/>
+</svg>
+<span class="tab-label">Sources &amp; Citations</span>
+<span class="tab-count">1</span>
+</button>
+</div>
+</div>
+</nav>
 <div class="l1-root">
 <div class="l1-identity">
 <div class="identity-left">
@@ -142,34 +210,6 @@
 </div>
 </div>
 <div class="l1-tabs-wrap">
-<div class="tabs">
-<button class="tab active" data-tab="overview">
-<span class="tab-label">Overview &amp; Moat</span>
-<span class="tab-count">5</span>
-</button>
-<button class="tab" data-tab="quarter">
-<span class="tab-label">Quarter &amp; Guidance</span>
-<span class="tab-count">4</span>
-</button>
-<button class="tab" data-tab="financials">
-<span class="tab-label">Financials &amp; DCF</span>
-<span class="tab-count">12</span>
-</button>
-<button class="tab" data-tab="thesis-risk">
-<span class="tab-label">Thesis &amp; Risk</span>
-<span class="tab-count">11</span>
-</button>
-<button class="tab" data-tab="valuation-comps">
-<span class="tab-label">Valuation &amp; Comps</span>
-<span class="tab-count">2</span>
-</button>
-<button class="tab" data-tab="sources">
-<span class="tab-label">Sources &amp; Citations</span>
-<span class="tab-count">1</span>
-</button>
-<div class="tabs-spacer">
-</div>
-</div>
 <div class="tab-group-pane active" data-tab-group="overview">
 <div class="subtabs">
 <button class="subtab active" data-subtab="company">

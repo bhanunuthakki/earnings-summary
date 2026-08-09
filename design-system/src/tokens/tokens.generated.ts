@@ -76,16 +76,16 @@ export const FONT_TOKENS = {
 } as const;
 
 export const TYPE_SCALE = {
-  "fs-stat": "24px",
-  "fs-display": "22px",
-  "fs-header-title": "17px",
-  "fs-title": "16px",
-  "fs-serif-body": "14.5px",
+  "fs-display": "20px",
+  "fs-title": "15px",
   "fs-body": "13px",
   "fs-caption": "11px",
-  "fs-mono-sm": "10px",
-  "fs-micro": "9.5px",
-  "fs-nano": "9px",
+  "fs-stat": "var(--fs-display)",
+  "fs-header-title": "var(--fs-title)",
+  "fs-serif-body": "var(--fs-body)",
+  "fs-mono-sm": "var(--fs-caption)",
+  "fs-micro": "var(--fs-caption)",
+  "fs-nano": "var(--fs-caption)",
 } as const;
 
 export const SPACING_SCALE = {
@@ -100,9 +100,15 @@ export const SPACING_SCALE = {
 
 export const CHROME_TOKENS = {
   "sidebar-width": "240px",
+  "sidebar-collapsed-width": "72px",
   "main-max-width": "1240px",
   "drawer-width": "540px",
   "header-height": "48px",
+  "nav-item-height": "32px",
+  "icon-size": "16px",
+  "icon-button-size": "32px",
+  "mobile-control-font-size": "16px",
+  "touch-target-size": "44px",
   "toast-offset-bottom": "28px",
   "toast-offset-right": "28px",
   "dot-size": "6px",

@@ -28,6 +28,7 @@ from ui.tokens import (  # noqa: E402
     PALETTE_WHITE_OVERRIDES,
     SPACING_SCALE,
     TYPE_SCALE,
+    TYPE_SCALE_PX,
     page_title,
     palette_css,
 )
@@ -80,26 +81,23 @@ def test_palette_css_rejects_unknown_default() -> None:
         palette_css("sepia")
 
 
-def test_type_scale_is_the_work_os_semantic_ladder() -> None:
-    """The semantic scale is a public contract for every renderer: steps,
-    strictly descending, named by importance — stat > display > header-title >
-    title > serif-body > body > caption > mono-sm > micro > nano."""
-    order = [
-        "fs-stat",
-        "fs-display",
-        "fs-header-title",
-        "fs-title",
-        "fs-serif-body",
-        "fs-body",
-        "fs-caption",
-        "fs-mono-sm",
-        "fs-micro",
-        "fs-nano",
-    ]
-    assert list(TYPE_SCALE) == order
-    sizes = [float(TYPE_SCALE[k].removesuffix("px")) for k in order]
-    assert sizes == sorted(sizes, reverse=True)
-    assert len(set(sizes)) == 10
+def test_type_scale_has_four_visual_steps_with_legacy_aliases() -> None:
+    """The compact hierarchy has four visible sizes. Older semantic names
+    remain public aliases so renderers can migrate without inventing another
+    visual step or breaking their existing token references."""
+    canonical = {
+        "fs-display": "20px",
+        "fs-title": "15px",
+        "fs-body": "13px",
+        "fs-caption": "11px",
+    }
+    assert {name: TYPE_SCALE[name] for name in canonical} == canonical
+    assert TYPE_SCALE["fs-stat"] == "var(--fs-display)"
+    assert TYPE_SCALE["fs-header-title"] == "var(--fs-title)"
+    assert TYPE_SCALE["fs-serif-body"] == "var(--fs-body)"
+    for name in ("fs-mono-sm", "fs-micro", "fs-nano"):
+        assert TYPE_SCALE[name] == "var(--fs-caption)"
+    assert frozenset(canonical.values()) == TYPE_SCALE_PX
 
 
 def test_spacing_scale_ascends() -> None:

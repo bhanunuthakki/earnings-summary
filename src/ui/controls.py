@@ -100,6 +100,7 @@ they already do for the palette block.
 
 from __future__ import annotations
 
+from html import escape
 from typing import TYPE_CHECKING
 
 from models.validation import Severity
@@ -147,10 +148,69 @@ _CHECK_TEMPLATE = (
 _CHECK_LIGHT = _CHECK_TEMPLATE.format(ink=_glyph_ink(PALETTE_LIGHT["accent-contrast"]))
 _CHECK_DARK = _CHECK_TEMPLATE.format(ink=_glyph_ink(PALETTE_DARK["accent-contrast"]))
 
+
+# One restrained, Lucide-style stroke family for application chrome. The
+# caller supplies the accessible name on the surrounding button/link; icons
+# are decorative and therefore always hidden from assistive technology.
+_ICON_PATHS: dict[str, str] = {
+    "cockpit": '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    "portfolio": '<path d="M3 18l5-5 4 3 8-10"/><path d="M14 6h6v6"/>',
+    "company": '<path d="M3 21h18"/><path d="M6 21V5l6-3 6 3v16"/><path d="M9 9h1M9 13h1M14 9h1M14 13h1M11 21v-4h2v4"/>',
+    "ask": '<path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/>',
+    "review": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="m8 12 3 3 6-7"/>',
+    "system": '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/>',
+    "search": '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+    "feed": '<path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
+    "notes": '<path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+    "theme": '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
+    "settings": '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/>',
+    "check": '<path d="m5 12 4 4L19 6"/>',
+    "close": '<path d="M6 6l12 12M18 6 6 18"/>',
+}
+
+
+def icon_svg(name: str, *, classes: str = "") -> str:
+    """Render a decorative icon from the canonical application stroke set."""
+    try:
+        paths = _ICON_PATHS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown icon: {name!r}") from exc
+    class_name = escape(f"k-icon {classes}".strip(), quote=True)
+    return (
+        f'<svg class="{class_name}" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="1.75" stroke-linecap="round" '
+        f'stroke-linejoin="round" aria-hidden="true" focusable="false">{paths}</svg>'
+    )
+
+
 # The element baseline + the component classes. Theme-independent: the two
 # theme-dependent declarations (color-scheme, chevron ink) are prepended by
 # controls_css().
 _CONTROLS_BODY = """
+/* ---- Work OS application chrome: one sidebar, nav item, and icon family ---- */
+.k-sidebar {
+  width: var(--sidebar-width); background: var(--surface);
+  border-right: var(--bw-thin) solid var(--border);
+}
+.k-icon { width: var(--icon-size); height: var(--icon-size); flex: none; }
+.k-icon-btn {
+  width: var(--icon-button-size); height: var(--icon-button-size); padding: 0;
+  align-items: center; justify-content: center; color: var(--muted);
+}
+.k-icon-btn:hover, .k-icon-btn.active { color: var(--fg); background: var(--paper); }
+.k-nav-item {
+  width: 100%; min-height: var(--nav-item-height); padding: 0 var(--sp-2);
+  justify-content: flex-start; gap: var(--sp-2); border-color: transparent;
+  color: var(--muted); font-weight: 500;
+}
+.k-nav-item:hover { color: var(--fg); background: var(--paper); }
+.k-nav-item.active, .k-nav-item[aria-selected="true"] {
+  color: var(--fg); background: var(--accent-soft); border-color: transparent;
+}
+.k-nav-item.active .k-icon, .k-nav-item[aria-selected="true"] .k-icon {
+  color: var(--accent);
+}
+
 /* ---- form-control baseline (kit): kill the native look everywhere ---- */
 select, textarea, input[type="text"], input[type="search"], input[type="number"],
 input[type="date"], input[type="email"], input[type="url"], input[type="password"],
@@ -324,9 +384,11 @@ a.k-tick-sym:hover { color: var(--accent); }
   text-transform: uppercase; letter-spacing: 0.06em; }
 .k-label-mark { color: var(--mark); letter-spacing: 0.16em; }
 
-/* ---- mobile: 16px floor prevents iOS from zooming on input focus ---- */
+/* ---- mobile platform floors: prevent iOS focus zoom and preserve touch reach ---- */
 @media (max-width: 768px) {
-  input, select, textarea { font-size: 16px; }
+  input, select, textarea { font-size: var(--mobile-control-font-size); }
+  .k-icon-btn, .k-nav-item { min-width: var(--touch-target-size);
+    min-height: var(--touch-target-size); }
 }
 
 /* ---- data table: ONE cell padding (design-sync 2026-07-19 unified .p-table

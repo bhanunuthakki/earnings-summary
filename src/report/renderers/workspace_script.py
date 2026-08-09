@@ -29,6 +29,8 @@ JS = r"""
       var id = btn.getAttribute('data-tab');
       topTabs.forEach(function (t) {
         t.classList.toggle('active', t === btn);
+        if (t === btn) t.setAttribute('aria-current', 'page');
+        else t.removeAttribute('aria-current');
       });
       document.querySelectorAll('.tab-group-pane[data-tab-group]').forEach(function (p) {
         p.classList.toggle('active', p.getAttribute('data-tab-group') === id);

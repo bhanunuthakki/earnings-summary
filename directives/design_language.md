@@ -1,37 +1,43 @@
 # Design language — the canonical UI guidelines
 
-**Status:** canonical (v4, 2026-08-07 Masterwork Work OS Edition). Supersedes the scattered conventions in
-individual renderer docstrings. Sources of truth in code:
-`src/ui/tokens.py` (values) and `src/ui/controls.py` (components). Every HTML
+**Status:** canonical (v6, 2026-08-08 Compact Hierarchy Edition). Supersedes the scattered conventions in
+individual renderer docstrings. Sources of reusable palette/control behavior in
+code are `src/ui/tokens.py` and `src/ui/controls.py`. The four-step visible type
+scale below is the approved migration target; legacy semantic token aliases move
+to it only when the live front-end implementation is authorized. Every HTML
 surface composes its `<style>` as `palette_css(...) + controls_css(...) +
 local layout CSS` — local CSS may add **layout** (widths, grids, gaps), never
 re-skin type, color, or controls.
 
 The voice of the product is **calm desk, deep drawers**: a quiet, dense,
-dark instrument panel for daily work; an editorial paper reading surface for
-briefs. Premium here means *restraint* — curated color swatches, one radius hierarchy,
+dark instrument panel for daily work and focused research reading. Briefs change
+the arrangement, not the visual system. Premium here means *restraint* — curated color swatches, one radius hierarchy,
 one motion, mono only where mono means something.
 
 ---
 
 ## 1. Type
 
-Semantic steps (`src/ui/tokens.py::TYPE_SCALE`). Size encodes **importance, not surface**: the same kind of element renders the same size on every screen.
+Application surfaces use **four visible sizes**, matching the simplified
+dashboard. Size encodes importance, not surface: the same role renders at the
+same size everywhere.
 
-| Token               | px   | Use for                                                            |
-|---------------------|------|--------------------------------------------------------------------|
-| `--fs-stat`         | 24   | Metric stat numbers, hero ticker symbols                            |
-| `--fs-display`      | 22   | The page's ONE dominant element: page title, hero stat             |
-| `--fs-header-title` | 17   | Governed target card titles, panel hero headers                     |
-| `--fs-title`        | 16   | Panel / drawer / card titles + real sub-section headings (h2/h3)   |
-| `--fs-serif-body`   | 14.5 | Editorial thesis prose, reading memo paragraphs                     |
-| `--fs-body`         | 13   | Default UI text: tables, inputs, buttons, tabs, reading prose      |
-| `--fs-caption`      | 11   | Everything smaller: table headers, stamps, hints, sublabels, chips, badges, kind tags, axis marks |
-| `--fs-mono-sm`      | 10   | Timestamp badges, locator tags, mono sublabels                     |
-| `--fs-micro`        | 9.5  | Nav layer section headers, micro uppercase labels                  |
-| `--fs-nano`         | 9    | Provenance source chips (`.src-chip`)                              |
+| Token          | px | Use                                                        |
+|----------------|----|------------------------------------------------------------|
+| `--fs-display` | 20 | The view's one dominant title or hero value                 |
+| `--fs-title`   | 15 | Page sections, panels, cards, drawers, document sections    |
+| `--fs-body`    | 13 | Prose, tables, controls, tabs, and ordinary labels          |
+| `--fs-caption` | 11 | Metadata, table headers, chips, timestamps, and source marks |
 
-The scale encodes the Work OS hierarchy in strict descending order. Font roles (`FONT_TOKENS`): `--sans` (Inter) is the UI; `--serif` (Source Serif 4) is reading prose in reports; `--mono` (JetBrains Mono) is **only** tickers, numbers, code, timestamps, and locators. Mono is an annotation voice, not a theme — a label or button in mono is drift.
+Existing semantic names are aliases, not extra sizes: `--fs-stat` resolves to
+`--fs-display`; `--fs-header-title` resolves to `--fs-title`; and
+`--fs-mono-sm` / `--fs-micro` / `--fs-nano` resolve to `--fs-caption`.
+Hierarchy inside a shared size comes from weight, color, and spacing — never a
+new intermediate font size. `--sans` (Inter) is the application voice,
+including in-app research briefs; `--serif` (Source Serif 4) is reserved for
+standalone/exported editorial artifacts; `--mono` (JetBrains Mono) is **only**
+tickers, numbers, code, timestamps, and locators. Mono is an annotation voice,
+not a theme — a label or button in mono is drift.
 
 In a **data table** this resolves the obvious way: numeric cells are mono (`font-feature-settings: 'tnum', 'zero'`), but the row labels and column headers are sans — never put `font-family: var(--mono)` on the whole table. Every value cell is a `<td>` and every label/header a `<th>`, so the entire rule is `.matrix td { font-family: var(--mono); }` and the `<th>` inherit the UI sans.
 
@@ -47,7 +53,7 @@ Palettes live in `PALETTE_LIGHT` / `PALETTE_DARK` (+ white overrides). Roles, no
 | Ink                           | `--fg`, `--fg-soft`, `--muted`           | ONE gray of de-emphasis (`--muted-2` folded in 2026-07-19)   |
 | Lines                         | `--border`, `--border-2`, `--hairline`   | hairline = row rules; border = boxes; border-2 = hover/strong |
 | Semantics                     | `--ok` / `--warn` / `--bad` (= pos/neg)  | green=good, red=bad, **everywhere**                          |
-| Editorial mark                | `--mark`, `--mark-soft`                  | Document furniture ONLY — see below                          |
+| Legacy editorial mark         | `--mark`, `--mark-soft`                  | Existing exports only; no new in-app use                     |
 | Interactive                   | `--accent`, `--accent-soft`, `--accent-contrast` | Accent is RESERVED for interactive/selected/unread; never decoration |
 | Benchmark Series              | `--series-qqq`                           | `#5b8def` index comparator series in relative performance views |
 | Tones (report)                | `--tone-*`                               | Quote/sentiment washes in the report only                    |
@@ -75,37 +81,35 @@ by the executable guard `tests/test_ui_controls.py`. Status pills/wells use the
 
 ## 3. Chrome & 3-Layer Work OS Architecture
 
-- **Harvey/Legora 3-Layer Sidebar Navigation**: Dashboard surfaces adopt the 3-Layer Work OS sidebar structure (`.app-sidebar`, `--sidebar-width: 240px`, collapsed rail width: 56px). These eight destinations are the complete primary IA; adding a ninth requires owner approval:
-  - **L1 · Portfolio Intelligence**: `Portfolio Cockpit`, `Performance vs Index`, `Risk & Allocations`.
-  - **L2 · Research Engine**: `Company Desk`, `Full Research Brief Canvas` (`#screen-full-brief`), `Fact & Metric Analytics Playground` (`#screen-analytics-playground`).
-  - **L3 · Operations & Governance**: `Decision Audit Log`, `Execution Queue & Operations Hub` (`#screen-execution-queue`).
-- **Collapsed Sidebar Rail Hover Tooltips**: When `.app-sidebar.is-collapsed` is active, hovering over any `.nav-item` displays a floating label tooltip (`data-tooltip="..."`) positioned to the right of the icon rail. Standalone settings and footer stubs are excised from the LHS rail.
-- **Dedicated Full-Canvas L2 Surfaces vs Contextual Drawers**:
-  - Dense exploratory matrices and report briefs belong on **dedicated full-canvas screens** (`#screen-full-brief` with 6 tabbed panes, `#screen-analytics-playground` with 42+ extracted 3-statement facts). Never force multi-metric statement matrices into narrow slide drawers.
-  - Slide-over drawers (`openDrillDrawer()`) are reserved for **rich multi-panel contextual drill-downs**:
-    - `saydo`: Guidance audit ledger, CFO tone check (`CONFIDENT / EXPANSIVE 88%`), transcript summary, and analyst Q&A roster (Goldman Sachs, Morgan Stanley).
-    - `thresholds`: Buy / Hold / Trim / Sell conditions for existing positions plus governed Next-Dollar Allocation. This is decision guidance, never broker routing.
-    - `dcf-priors`: WACC baseline, perpetual growth rate $g$, high growth fade horizon, refresh cadence.
-    - `llm-routing`: Model tier routing (Claude 3.5 Sonnet / Opus cheapest-at-parity vs Gemini 1.5 Pro).
-    - `governance-limits`: Position cap, LatAm FX limit, VaR thresholds, API provider integration statuses.
-- **Direct Google Sheets DCF Model Link**: Replace narrow slider drawer stubs on Company Desk with direct **`Google Sheets DCF Model ↗`** links (`openSheetDCFModel()`), pointing directly to canonical 9-sheet workbooks (`dcf/<TICKER>.xlsx`).
-- **No trade-execution surface**: the localhost research product does not claim to submit, route, or fill orders. Allocation decisions are expressed as thresholds and next-dollar guidance; execution happens outside this application.
-- **Zero-Layout-Pop Card Dismissal Contract**: Action cards implement the `.card-dismissing` collapse contract (`dismissCard()`, height-locked transition with `border-color: transparent !important`, `max-height: 0`, `opacity: 0`, `transform: scale(0.97) translateY(-2px)`). Dismissing an item prevents vertical layout jumping and clears it for the current session. Only an explicit decision or threshold change may create durable state.
+These eight destinations are the complete primary IA. Surface-specific views,
+filters, drawers, and shortcuts nest beneath them; they do not add competing
+top-level navigation. This simplification boundary keeps the left rail stable
+while the content canvas changes depth.
+
+- **Cockpit is the only inbox.** Alerts, reviews, and pending work resolve into
+  its action stack instead of creating another feed destination.
+- **No trade-execution surface.** The product may prepare and audit a decision,
+  but remains pull-only and does not place trades.
+- **Diet destination and general-purpose feed are retired.** Signals are nested
+  in the Company Desk or summarized in Cockpit when they require action.
+- **Discovery has no primary navigation.** Search, command palette, and grounded
+  Copilot suggestions are doorways into the eight destinations.
+- **One responsive product.** Desktop and mobile share the same information
+  architecture; mobile collapses the rail to `--sidebar-collapsed-width` rather
+  than replacing it with a different top navigation.
+- Dismissing transient UI **clears it for the current session**; dismissal alone
+  never writes a durable portfolio fact. **Only an explicit decision or threshold change may create durable state.**
+
+- **Harvey/Legora 3-Layer Sidebar Navigation**: Dashboard surfaces adopt the 3-Layer Work OS sidebar structure (`.app-sidebar`, `--sidebar-width: 240px`):
+  - **L1 · Portfolio Intelligence**: `Portfolio Cockpit`, `Performance vs Index`, `Risk & Allocations`, Active Holdings shortcuts (`NU`, `BKNG`, `TSM`).
+  - **L2 · Research Engine**: `Company Desk`, `Full Research Brief`, `Analytics Playground`.
+  - **L3 · Operations & Governance**: `Decision Audit Log`, `Execution Queue & Operations`.
+- **Zero-Layout-Pop Card Dismissal Contract**: Action cards implement the `.card-dismissing` collapse contract (`dismissCard()`, height-locked transition with `border-color: transparent !important`, `max-height: 0`, `opacity: 0`, `transform: scale(0.97) translateY(-2px)`). Dismissing an item prevents vertical layout jumping and persists state to `data/portfolio.db` with a `.toast-notice` toast.
 - **One radius hierarchy**: `--radius` (8px) for inputs/buttons; `--radius-card` (10px) for surface cards; `--radius-drawer` (14px) for slide drawers; `--radius-full` (999px) for pills, dots, and chips.
 - **One motion**: `var(--transition)` (150ms ease) or `var(--transition-fluid)` (250ms cubic-bezier) with explicit properties — never `transition: all`.
 - **Elevation shadows**: `--shadow-card` for cards, `--shadow-card-hover` for interactive cards, `--shadow-pop` for popovers, and `--shadow-drawer` for slide drawers.
 
-### 3.1 Product simplification contract
-
-- **Cockpit is the only inbox.** It shows at most three ranked items and omits empty categories. An item qualifies only when it requires a decision, reports material new information, or records a breached risk/falsifier condition.
-- **Company context owns company work.** Information-diet signals, position coaching, say/do review, decision discipline, and company-specific learnings live in Company Desk drawers or the Full Research Brief. They do not get standalone navigation.
-- **Decision Audit owns durable learning.** Cross-company decisions, changed assumptions, outcomes, and lessons form one lifecycle timeline. Ledger, Journal, Triage, Review, Worldview, and advisor-memo pages are retired frontend concepts.
-- **Risk is conclusion-first.** The primary screen shows risk budget, factor exposure, concentration/correlation, allocation drift, freshness, and material warnings. Expensive stress analytics are cached backend evidence and appear only when decision-relevant.
-- **Operations is exception-first.** Data quality, pipeline health, model health/cost, and DCF health are the four diagnostic groups. Routine events remain in logs rather than the primary screen.
-- **One responsive product.** `/mobile/inbox` resolves to the responsive Cockpit. Telegram is a transport adapter for capture, bounded digests, and deep links; it never owns a separate inbox or workflow state.
-- **One interaction spine.** The shell owns screen routing, one Search/Ask entry, contextual drill drawer, source peek, action receipts, and data loading. Notes live with companies and configuration lives in Operations; no parallel palette/dock/drawer frameworks.
-
-### 3.2 Surface dismissal — the `CCOverlay` contract (Law 3)
+### 3.1 Surface dismissal — the `CCOverlay` contract (Law 3)
 
 Every transient surface — drawer, peek, palette, dock, sidebar, popover — is an
 instance of ONE primitive, `window.CCOverlay` (`src/pipeline/cc_overlay.py`),
@@ -247,6 +251,31 @@ at, so they keep the free-text anchor regime. `ask.grounding` reads any
 name-match is the FALLBACK. A note (and the report comment it mirrors) persists
 the handle in `analyst_notes.fact_ref` (0101) so it re-binds across a rename.
 
+### 4.3 Contextual card actions — capability before chrome
+
+Research cards may expose compact **Chat** and **Edit** actions when the action
+has a named product capability. Place them in the card header or relevant row;
+reveal them on card hover **and** `:focus-within`, and keep them visible on
+non-hover devices. Hover-only access is a failure. Use the kit button classes
+and preserve the dense one-band panel contract — contextual actions must not
+create a new toolbar band.
+
+Every action emits a stable `data-capability` identifier and is registered in
+the surface's interaction catalog with one of three states: **Ready now**,
+**Adapter needed**, or **New governed capability**. The catalog names the
+owning module or route, required identity/context fields, write boundary, and
+remaining backend work. Visible controls must never imply that an unbuilt
+backend mutation already exists.
+
+- **Chat is read-only.** Reuse the company-scoped Ask seam, prefill the card
+  prompt, and pass durable item/fact identifiers through `context_spec`.
+- **Edit is a proposed mutation.** Load the current revision, preview a diff,
+  validate through the module that owns the domain object, require Owner
+  approval, and persist with an idempotency key plus audit event. Never turn an
+  LLM response directly into an approved write.
+- A card without a meaningful edit contract gets Chat only. Do not add
+  symmetrical controls merely for visual balance.
+
 ## 5. The ticker label
 
 **Never render `f"{ticker} · {name}"` (or ` — `) as one string.** Use
@@ -265,10 +294,15 @@ NU  Nu Holdings Ltd.        ← mono 600 symbol · sans muted caption name
 
 ## 6. Spacing, Density & 100% Token Purity Rule
 
-Gaps/paddings snap to `--sp-1..6` (4/8/12/16/24/32) or `--sp-half` (2px). Density is deliberate, not accidental:
+Gaps/paddings snap to `--sp-1..6` (4/8/12/16/24/32) or `--sp-half` (2px).
+The default application rhythm is **16 / 12 / 8**: `--sp-4` at the view edge,
+`--sp-3` between modules and inside cards, and `--sp-2` between rows or tightly
+related elements. Density is deliberate, not accidental:
 
-- **Panel padding**: 16–18px (`--sp-4`); dense list cards 8–12px (`--sp-2` / `--sp-3`).
-- **Table rhythm**: th/td `6px 10px` on dashboards (`--sp-2` `--sp-3`); headers are `--fs-caption` uppercase muted.
+- **View padding**: `--sp-4`; `--sp-5` is reserved for a major page boundary, never repeated through nested containers.
+- **Cards use `--sp-3`** for padding and sibling gaps. A card with a separate header uses `--sp-2` vertically / `--sp-3` horizontally in the header and `--sp-3` in the body.
+- **Dense rows**: `--sp-2` vertical rhythm; do not make a list pay card padding again on every row.
+- **Table rhythm**: th/td `--sp-2` / `--sp-3`; headers are `--fs-caption` uppercase muted.
 - **Strict 100% Token Purity Rule (Zero Raw Pixel Escapes)**: Every single dimension (`width`, `height`, `max-width`, `min-width`), padding, margin, font-size, corner radius, backdrop blur filter, box shadow, transform lift, and border width outside of `:root` **MUST** bind to CSS custom variables (`var(--sp-*)`, `var(--fs-*)`, `var(--radius-*)`, `var(--blur-*)`, `var(--shadow-*)`, `var(--bw-*)`, `var(--lift-*)`). Hardcoded pixel escapes (`px`) in CSS rules are forbidden and fail CI!
 
 ---
@@ -312,10 +346,12 @@ missing`, instead of disagreeing with itself.)
 ### 6.3 The research document — a reading surface, not a panel grid
 
 Some surfaces are **documents**: a thesis review, a monthly brief, a memo. They
-carry an argument end to end, and they get a different arrangement from a
-console. This is the only place `--mark` appears (§2), and it is layout, not
-decoration — the primitives are in `controls.py`, so a document composes the
-kit like everything else.
+carry an argument end to end and use a different arrangement from a console,
+but an in-app document inherits the same Warm Obsidian palette, Inter type
+hierarchy, neutral rules, and chrome as the rest of the workspace. It does not
+introduce a paper palette, ochre furniture, a second type system, or a nested
+application shell. The primitives remain in `controls.py`, so a document
+composes the kit like every other surface.
 
 **Rules instead of boxes.** A document separates sections with hairlines and
 whitespace, never cards with fills. This is the load-bearing rule: cards,
@@ -323,6 +359,24 @@ filled pills and gradients are what make a research page read as a *dashboard*,
 and a research page that reads as a dashboard has lost the seriousness it needs
 to be trusted. Status is a **word in plain type** (`holds`, `near`), not a
 `.k-pill` — pills are chrome, and in a document state belongs to the sentence.
+
+**One application type hierarchy.** The document masthead gets the page's one
+`--fs-display`; major sections and subsections share `--fs-title`, differentiated
+by weight and spacing; prose uses `--fs-body`; labels and metadata use
+`--fs-caption`. In-app brief prose is Inter. Mono remains limited to numbers,
+tickers, dates, and locators. A brief does not add intermediate sizes just
+because it is a reading surface.
+
+**Compact vertical rhythm.** Mastheads and major sections use `--sp-4` vertical
+padding with at most `--sp-5` horizontal padding. Title-to-deck and paragraph
+gaps use `--sp-1`/`--sp-2`; subsection separation uses `--sp-3`. Do not use
+`--sp-6` or larger inside a document to manufacture importance. Tables retain
+the dashboard's `--sp-2`/`--sp-3` row rhythm.
+
+**Neutral edges.** Section rules, the contents rail, margin notes, and source
+quotes use `--border` or `--hairline`. They never introduce a colored left
+border. Selected navigation may use the normal interactive background/text
+treatment, but the rule itself remains neutral and matches the workspace.
 
 **A margin note attaches to one section, never to a standing gutter.** Use
 `.k-doc-row` for the section that has a note; leave every other section
@@ -332,22 +386,21 @@ whole surface. `.k-doc` deliberately has no `grid-template-columns`, and
 `test_doc_row_carries_the_note_column_not_the_document` keeps it that way.
 
 **The kit** (all in `controls.py`): `.k-doc` (the measure) · `.k-doc-row`
-(content + its note; tune with `--k-note-w`) · `.k-doc-mast` (identity band,
-with the mark as a short rule under its left edge) · `.k-note` / `.k-note-title`
-(the margin note; its keyline is the only legal use of `--mark-soft`) · `.k-fn`
-(footnote marker, sized in `em` so it rides its prose) · `.k-band` /
-`.k-band-v` / `.k-band-x` (a full-bleed strip of read-only figures; compose
-`.k-label` for each caption, tune with `--k-band-cols`) · `.k-qa` / `.k-qa-q` /
-`.k-qa-a` / `.k-qa-who` (a recorded exchange) · `.k-label-mark` (the section
-label tone).
+(content + its note; tune with `--k-note-w`) · `.k-doc-mast` (neutral identity
+band) · `.k-note` / `.k-note-title` (the margin note, separated by a neutral
+rule) · `.k-fn` (footnote marker, sized in `em` so it rides its prose) ·
+`.k-band` / `.k-band-v` / `.k-band-x` (a full-bleed strip of read-only figures;
+compose `.k-label` for each caption, tune with `--k-band-cols`) · `.k-qa` /
+`.k-qa-q` / `.k-qa-a` / `.k-qa-who` (a recorded exchange). Section labels use
+the normal muted label treatment.
 
 **Density does not drop.** A document is not a spacious version of a panel — it
 carries *more*, because it has room for the qualitative half a panel grid has
 nowhere to put: what is priced in, what management was asked and how they
 answered, what would falsify the thesis, what was decided and why. Tables keep
-their row rhythm and mono numerals unchanged. The warmth comes from typesetting
-— serif prose at a real measure, generous leading, a single ochre on the
-furniture — and nowhere from ornament.
+their row rhythm and mono numerals unchanged. Readability comes from a
+controlled measure, the shared hierarchy, and disciplined spacing — not from
+changing the palette, typeface, or furniture.
 
 **Where interaction lives.** A document is a reading surface; it does not grow
 its own chat. The conversational surface is the existing Ask dock
@@ -617,12 +670,7 @@ backlog + journal until then.
 
 ---
 
-## Diet-vs-alert (backend substrate; no standalone frontend)
-
-The Diet destination and general-purpose feed are retired. These rules continue
-to govern ingestion and ranking, but retained signals render only in a relevant
-Company Desk drawer or the portfolio-level Risk & Allocations drawer. A signal
-with no decision context stays out of the primary UI.
+## Diet-vs-alert (the information-diet substrate)
 
 A thesis-breach ALERTER and an information-diet CURATOR are **inverse products**
 and must not share one pipe. The repo's original `news` → decaying inbox scorer
@@ -671,12 +719,7 @@ diet rows is independent of the wall clock.
 
 ---
 
-## 12. The Discovery rule (backend-only weighted candidate ranking)
-
-Discovery has no primary navigation or dedicated dashboard. Its deterministic
-ranking service remains available to research tooling; a candidate becomes a
-Company Desk concern only after the owner explicitly adds it to tracked
-coverage. Discovery output never enters the Cockpit merely to fill space.
+## 12. The Discovery rule (weighted candidate ranking)
 
 The discovery queue is a **ranked surface**, so by the Instrument Paradigm it
 scores **by a weighted sum of typed, dated signals through a source-weight

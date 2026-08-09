@@ -2,7 +2,7 @@
 
 One page, served at ``GET /`` by ``execution/comments_server.py``, that folds the
 former three vertically-scrolling pages (``/``, ``/analytical``, ``/ticker/<t>``)
-into a single dark-themed app with a horizontal tab bar.
+into a single dark-themed Work OS with a persistent left sidebar.
 
 Design — thin shell + lazy panels:
 
@@ -20,18 +20,16 @@ Design — thin shell + lazy panels:
   content-shaped skeleton (``_SKELETON_KINDS``); fetched fragments are cached
   in sessionStorage and served stale-while-revalidate (the server ETags every
   ``/api/panel/`` response, so the background refresh is a 304 when nothing
-  changed); top-bar/sub-tab hover and an idle pass after first paint prefetch
+  changed); sidebar/sub-tab hover and an idle pass after first paint prefetch
   likely-next panels (Portfolio's tracker round-trip especially). Each
   activation's fetch/render timings POST to ``/api/metrics/panel`` and read
   back in System → Data Cache.
-* **Four primary sections + a System icon (navigation_ia.md over UX9b)**: the
-  top bar's nav carries Today / Companies / Portfolio / Review; System stays a
-  top-right icon button beside ⌘K and ⚙ Settings, and Ask is a HIDDEN section
-  (``_HIDDEN_NAV_SECTIONS``) — full section behavior (panels, deep links,
-  palette entry, goAsk/goView handoffs) but no top-bar button; it is reached
-  via the dock's ⇗ pop-out, the palette, ``data-ask-q`` doorways, and
-  ``#explore``. Only the active section's sub-tab row renders below the bar
-  (single-tab sections render none). A Ctrl/Cmd+K — or Ctrl+Space — command
+* **Three-layer sidebar navigation**: Portfolio Intelligence, Research Engine,
+  and Operations & Governance group all six destinations. Ask and System are
+  first-class destinations; their existing panel, deep-link, palette, and
+  goAsk/goView contracts remain intact. Only the active section's nested
+  sub-destinations render (single-tab sections render none). A Ctrl/Cmd+K —
+  or Ctrl+Space — command
   palette jumps to tickers, tabs, actions, open journal notes, and saved
   views; anything else you type hands off to Ask as a question. Legacy hashes
   (and the section names themselves) remap — see ``_LEGACY_PANEL_REDIRECTS``.
@@ -97,23 +95,20 @@ from pipeline.cc_state import CC_STATE_JS
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
 from ui import htmx_runtime, living_grid
-from ui.controls import controls_css, panel_section_title
+from ui.controls import controls_css, icon_svg, panel_section_title
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
-# Four primary sections + System-as-icon + Ask-as-hidden (navigation_ia.md over
-# the UX9b IA): the top bar's nav carries Today · Companies · Portfolio ·
-# Review; System (the diagnostics surfaces) stays a top-right icon button in
-# the utility cluster, and Ask keeps full section behavior with NO top-bar
-# button at all (_HIDDEN_NAV_SECTIONS — reached via dock ⇗ / palette /
-# data-ask-q doorways / #explore). Phase-5 aggressive IA collapsed the two
+# Six destinations retain the established activation/deep-link contract while
+# the visual hierarchy groups them into three persistent sidebar layers.
+# Phase-5 aggressive IA collapsed the two
 # sprawling sections into composite consoles: Portfolio's 8 sub-tabs → 3
 # (Health / Allocation / Record) and Review's 3 ritual lenses → 1 (Ledger), each
 # a page COMPOSING the existing builders behind an anchor-nav band (the S10
 # Provenance-console pattern). The active section's sub-tabs render in ONE row
 # below the bar (sections with a single sub-tab suppress the row entirely, so
-# Today · Ask · Review have zero secondary chrome).
+# Portfolio Cockpit · Research Copilot · Review have zero secondary chrome).
 #
 # Sub-tab entries keep the original shape — (panel_id, label, endpoint,
 # is_picker, picker_required). The COMPOSITE ids are new (portfolio_health /
@@ -126,12 +121,12 @@ _SubTab = tuple[str, str, str | None, bool, bool]
 _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
     (
         "home",
-        "Today",
+        "Portfolio Cockpit",
         (("overview", "Overview", None, False, False),),
     ),
     (
         "companies",
-        "Companies",
+        "Company Desk",
         (
             ("holding", "Holding", "/api/panel/holding", True, True),
             # New-name discovery queue (P5.4): screened/adjacency candidates
@@ -147,7 +142,7 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
     ),
     (
         "ask",
-        "Ask",
+        "Research Copilot",
         # On-the-fly slice-and-dice (P5.1/P5.2): NL question -> validated
         # ViewSpec; becomes the conversational Ask thread in PR5.
         (("explore", "Ask", "/api/panel/explore", False, False),),
@@ -162,7 +157,7 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         # new composite via _LEGACY_PANEL_REDIRECTS, so #portfolio_risk /
         # #decisions_record / #positioning … all still resolve.
         "portfolio",
-        "Portfolio",
+        "Performance & Allocation",
         (
             # Allocation lands the section because the first question on a
             # portfolio page is performance versus the matched benchmark;
@@ -196,7 +191,7 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         # Ledger's scroll-to-bottom completion semantics match how the owner
         # actually clears rituals (bounded packets, not standing drips).
         "review",
-        "Review",
+        "Decision Audit Log",
         (
             # Phase-5 aggressive IA — the three ritual lenses over analyst_notes
             # (Ledger feed / Triage / Journal) collapse into ONE Ledger console
@@ -212,7 +207,7 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
     ),
     (
         "system",
-        "System",
+        "Execution Queue",
         # One consolidated Provenance console (S10): the old 8-tab diagnostics
         # strip (Coverage / IR Docs / Data Cache / Cron Health / DCF Coverage /
         # Evals / Validation / Restatements) collapsed into a single page that
@@ -526,31 +521,30 @@ def render_shell(
     return "".join(
         [
             _DOC_HEAD,
-            # One sticky top bar: brand + the four primary sections + utility
-            # cluster (⌘K · System icon · ✎ Notes · ⚙ Settings). No stacked tab
-            # tiers — the active section's sub-row (if it has more than one
-            # sub-tab) is the only other chrome.
-            f'<div class="cc-topbar"><div class="cc-brand">Command Center</div>'
-            f"{_render_section_nav(themes)}"
-            f'<nav class="cc-links">'
-            f'<a href="/feed">Alert feed</a>'
-            f"</nav>"
-            f'<button class="cc-palette-btn" id="cc-palette-open" type="button" '
+            '<div class="cc-app-shell">'
+            '<aside class="cc-sidebar k-sidebar">'
+            '<div class="cc-brand">Earnings OS</div>'
+            f'<button class="cc-palette-btn k-btn k-nav-item" id="cc-palette-open" type="button" '
             f'aria-label="Command palette (Ctrl+K)" '
-            f'title="Jump to a ticker, tab, note, or saved view (Ctrl+K / Ctrl+Space)">⌘K</button>'
-            f"{_render_system_button(themes, system_status)}"
-            f'<button class="cc-notes-btn k-btn k-btn-quiet" id="cc-notes-toggle" type="button" '
+            f'title="Jump to a ticker, tab, note, or saved view (Ctrl+K / Ctrl+Space)">'
+            f"{icon_svg('search')}<span>Search or jump</span><kbd>⌘K</kbd></button>"
+            f"{_render_section_nav(themes, system_status)}"
+            '<div class="cc-sidebar-foot">'
+            f'<a class="k-btn k-nav-item" href="/feed">{icon_svg("feed")}<span>Alert feed</span></a>'
+            f"{stamp}</div></aside>"
+            '<div class="cc-workspace">'
+            '<header class="cc-topbar"><div class="cc-context">Research workspace</div>'
+            f'<button class="cc-notes-btn k-btn k-icon-btn" id="cc-notes-toggle" type="button" '
             f'aria-label="Quick notes" '
-            f'title="Quick note + open notes (scoped to the open holding)">✎</button>'
-            f'<button class="cc-theme-toggle" id="cc-theme-toggle" type="button" '
-            f'aria-label="Toggle light/dark theme" title="Toggle light / dark theme">◑</button>'
-            f'<button class="cc-settings-btn k-btn k-btn-quiet" id="cc-settings-toggle" type="button" '
-            f'title="Budgets · ticker settings · maintenance">⚙ Settings</button>'
-            f"{stamp}</div>",
-            _render_subnav_rows(themes),
+            f'title="Quick note + open notes (scoped to the open holding)">{icon_svg("notes")}</button>'
+            f'<button class="cc-theme-toggle k-btn k-icon-btn" id="cc-theme-toggle" type="button" '
+            f'aria-label="Toggle light/dark theme" title="Toggle light / dark theme">{icon_svg("theme")}</button>'
+            f'<button class="cc-settings-btn k-btn k-icon-btn" id="cc-settings-toggle" type="button" '
+            f'aria-label="Settings and maintenance" title="Budgets · ticker settings · maintenance">'
+            f"{icon_svg('settings')}</button></header>",
             '<main class="cc-panels" id="cc-main" tabindex="-1">',
             _render_panels(flat_tabs, overview_html, single_sub_pids),
-            "</main>",
+            "</main></div></div>",
             _SETTINGS_DRAWER_HTML,
             _NOTES_DRAWER_HTML,
             _PALETTE_HTML,
@@ -634,34 +628,56 @@ _NOTES_DRAWER_HTML = (
     "</aside>"
 )
 
-# Sections that live as utility icons beside ⌘K/⚙ instead of in the primary
-# nav (UX9b). They keep full section behavior — data-theme-target, sub-tab
-# row, palette entry, #<name> alias — only the button's placement and skin
-# change.
-_UTILITY_SECTIONS: frozenset[str] = frozenset({"system"})
+_NAV_LAYERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("L1 · Portfolio Intelligence", ("home", "portfolio")),
+    ("L2 · Research Engine", ("companies", "ask")),
+    ("L3 · Operations & Governance", ("review", "system")),
+)
 
-# Sections with NO top-bar presence at all (navigation_ia.md §2.1): full section
-# behavior — panels, sub-tab row, deep links, palette entry, goAsk/goView
-# handoffs — but no primary button. Ask lives here: it is a modality reached
-# via the dock's ⇗ pop-out, the ⌘K palette, data-ask-q doorways, and #explore,
-# not a destination. Distinct from _UTILITY_SECTIONS (which still render a
-# button, just as an icon — and _render_system_button supports exactly one).
-_HIDDEN_NAV_SECTIONS: frozenset[str] = frozenset({"ask"})
+_NAV_ICONS: dict[str, str] = {
+    "home": "cockpit",
+    "portfolio": "portfolio",
+    "companies": "company",
+    "ask": "ask",
+    "review": "review",
+    "system": "system",
+}
 
 
-def _render_section_nav(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
-    """The primary section buttons, inline in the top bar — every section
-    except the utility-icon ones (System) and the hidden ones (Ask). The
-    attribute contract (``data-theme-target``) is unchanged from the theme
-    era — the JS keys off it, only the visual placement moved."""
-    out = ['<nav class="cc-topnav" role="tablist">']
-    for tid, tlabel, _subs in themes:
-        if tid in _UTILITY_SECTIONS or tid in _HIDDEN_NAV_SECTIONS:
-            continue
-        out.append(
-            f'<button class="cc-tab cc-theme-tab" type="button" role="tab" '
-            f'tabindex="-1" data-theme-target="{escape(tid)}">{escape(tlabel)}</button>'
-        )
+def _render_section_nav(
+    themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...],
+    system_status: tuple[str, str] | None = None,
+) -> str:
+    """Render the accepted three-layer Work OS sidebar hierarchy.
+
+    Existing ``data-theme-target`` / ``data-cc-theme`` hooks remain unchanged,
+    so deep links and the lazy loader keep their behavior while navigation,
+    text nesting, spacing, and iconography become one coherent surface.
+    """
+    by_id = {tid: (label, subs) for tid, label, subs in themes}
+    out = ['<nav class="cc-primary-nav" aria-label="Workspace navigation">']
+    for layer_label, theme_ids in _NAV_LAYERS:
+        out.append('<section class="cc-nav-layer">')
+        out.append(f'<div class="cc-nav-layer-title">{escape(layer_label)}</div>')
+        for tid in theme_ids:
+            item = by_id.get(tid)
+            if item is None:
+                continue
+            tlabel, subs = item
+            title = tlabel
+            dot = ""
+            if tid == "system" and system_status is not None:
+                tone, summary = system_status
+                title = f"{tlabel} · {summary}"
+                dot = f'<span class="cc-system-dot k-dot k-dot-{escape(tone)}"></span>'
+            out.append(
+                f'<button class="cc-tab cc-theme-tab k-btn k-nav-item" type="button" '
+                f'data-theme-target="{escape(tid)}" '
+                f'data-pal-label="{escape(tlabel)}" title="{escape(title, quote=True)}">'
+                f'{icon_svg(_NAV_ICONS[tid])}<span class="cc-nav-label">{escape(tlabel)}</span>{dot}</button>'
+            )
+            out.append(_render_subnav_row(tid, subs))
+        out.append("</section>")
     out.append("</nav>")
     return "".join(out)
 
@@ -740,59 +756,29 @@ def system_status_summary(
     return ("bad", f"Morning pipeline failed{f' — {err}' if err else ''}")
 
 
-def _render_system_button(
-    themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...],
-    status: tuple[str, str] | None = None,
-) -> str:
-    """System as a top-right icon button (UX9b). Carries ``cc-theme-tab`` +
-    ``data-theme-target`` so the activation JS treats it exactly like a nav
-    section button; ``data-pal-label`` keeps its palette row readable (the
-    button's visible text is just the glyph). ``status`` (PR9) — an
-    (ok|warn|bad, summary) pair from :func:`system_status_summary` — renders
-    a small dot on the button and folds the summary into the title; None (no
-    cheap source available) renders the button exactly as before."""
-    for tid, tlabel, subs in themes:
-        if tid not in _UTILITY_SECTIONS:
-            continue
-        sub_labels = " · ".join(label for _pid, label, _ep, _pk, _rq in subs)
-        title = f"{tlabel} · {sub_labels}"
-        dot = ""
-        if status is not None:
-            tone, summary = status
-            title = f"{title} · {summary}"
-            dot = f'<span class="cc-system-dot k-dot k-dot-{escape(tone)}"></span>'
-        return (
-            f'<button class="cc-theme-tab cc-system-btn k-btn k-btn-quiet" type="button" role="tab" '
-            f'tabindex="-1" data-theme-target="{escape(tid)}" data-pal-label="{escape(tlabel)}" '
-            f'aria-label="{escape(tlabel)}" title="{escape(title, quote=True)}"'
-            f">▦{dot}</button>"
+def _render_subnav_row(tid: str, subs: tuple[_SubTab, ...]) -> str:
+    """Render one section's nested destinations directly below its parent."""
+    out: list[str] = []
+    single = ' data-single="1"' if len(subs) <= 1 else ""
+    out.append(
+        f'<div class="cc-tabs cc-subtabs" role="tablist" data-cc-theme="{escape(tid)}"{single} hidden>'
+    )
+    for pid, label, _endpoint, _picker, _required in subs:
+        out.append(
+            f'<button class="cc-tab k-btn k-nav-item" type="button" role="tab" '
+            f'tabindex="-1" id="cc-tab-{escape(pid)}" aria-selected="false" '
+            f'aria-controls="cc-panel-{escape(pid)}" '
+            f'data-tab-target="{escape(pid)}" data-cc-theme="{escape(tid)}">'
+            f'<span class="cc-subnav-mark" aria-hidden="true"></span>'
+            f"<span>{escape(label)}</span></button>"
         )
-    return ""
+    out.append("</div>")
+    return "".join(out)
 
 
 def _render_subnav_rows(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
-    """One sub-tab row per section, hidden unless its section is active.
-    Sections with a single sub-tab mark the row ``data-single="1"`` — it stays
-    in the DOM (the activation JS derives the active section from the sub-tab's
-    ``data-cc-theme``) but CSS suppresses it, so Home and Ask carry no second
-    chrome row. Sub-tab buttons keep the exact ``cc-tab``/``data-tab-target``
-    contract the activation JS has always used."""
-    out: list[str] = []
-    for tid, _tlabel, subs in themes:
-        single = ' data-single="1"' if len(subs) <= 1 else ""
-        out.append(
-            f'<nav class="cc-tabs cc-subtabs" role="tablist" data-cc-theme="{escape(tid)}"{single} hidden>'
-        )
-        for pid, label, _endpoint, _picker, _required in subs:
-            out.append(
-                f'<button class="cc-tab" type="button" role="tab" '
-                f'tabindex="-1" id="cc-tab-{escape(pid)}" aria-selected="false" '
-                f'aria-controls="cc-panel-{escape(pid)}" '
-                f'data-tab-target="{escape(pid)}" data-cc-theme="{escape(tid)}">'
-                f"{escape(label)}</button>"
-            )
-        out.append("</nav>")
-    return "".join(out)
+    """Compatibility helper used by focused renderer tests."""
+    return "".join(_render_subnav_row(tid, subs) for tid, _label, subs in themes)
 
 
 # Ctrl/Cmd+K command palette (PR2): one input over sections, sub-tabs, tickers
@@ -1038,43 +1024,50 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-sr-only { position: absolute; width: 1px; height: 1px; padding: 0;
   margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
-/* The shell topbar's rendered height, centralized (owner directive
-   2026-08-02: sticky console nav bands pin just below it). Every sticky band
-   further down the page (this rail, a console's chip-tab nav) reads ONE
-   number instead of a hand-measured pixel guess per consumer — bump this if
-   the topbar's own padding/content ever grows instead of re-tuning each
-   sticky consumer separately. */
-:root { --cc-topbar-h: 64px; }
+/* The compact workspace header is the one sticky offset consumed by content
+   rails and console toolbars. */
+:root { --cc-topbar-h: var(--header-height); }
 
-/* One sticky top bar: brand + section nav + utility links. The only other
-   chrome is the active section's single sub-row (suppressed entirely for
-   single-tab sections), so content starts ~90px from the top instead of ~200. */
-.cc-topbar { display: flex; align-items: center; gap: var(--sp-1);
-  padding: 10px 24px; border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; background: var(--bg); z-index: 30; }
-.cc-brand { font-size: var(--fs-title); font-weight: 600; letter-spacing: 0.2px;
-  margin-right: 18px; white-space: nowrap; }
-.cc-topnav { display: flex; gap: 2px; margin-right: auto; overflow-x: auto; }
-.cc-topnav .cc-tab { padding: 8px 13px; font-size: var(--fs-body); }
-.cc-links { display: flex; gap: 14px; margin: 0 14px 0 16px; }
-.cc-links a { color: var(--muted); text-decoration: none; font-size: var(--fs-body); }
-.cc-links a:hover { color: var(--accent); }
-.cc-stamp { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono);
-  margin-left: 12px; white-space: nowrap; }
-.cc-tabs { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--border);
-  overflow-x: auto; background: var(--bg); }
-/* display:flex above beats the [hidden] UA rule — restate it. Without this
-   every section's sub-row rendered at once (the old "four stacked menus"). */
-.cc-tabs[hidden] { display: none; }
-.cc-subtabs[data-single="1"] { display: none; }
-.cc-tab { background: transparent; border: none; border-bottom: 2px solid transparent;
-  color: var(--muted); padding: 10px 16px; font-size: var(--fs-body); font-weight: 600;
-  cursor: pointer; white-space: nowrap; font-family: var(--sans); }
-.cc-tab:hover { color: var(--fg); }
-.cc-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
-.cc-topnav .cc-tab { border-bottom-width: 2px; }
-
-.cc-panels { padding: var(--sp-4) 24px 40px; max-width: 1600px; margin: 0 auto; }
+/* Accepted Work OS frame: one 240px boxed sidebar on the warm obsidian ground,
+   a compact utility header, and the content workspace. */
+.cc-app-shell { min-height: 100dvh; display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+.cc-sidebar { position: sticky; top: 0; height: 100dvh; box-sizing: border-box;
+  padding: var(--sp-4) var(--sp-3); display: flex; flex-direction: column;
+  overflow-y: auto; z-index: 31; }
+.cc-workspace { min-width: 0; }
+.cc-topbar { height: var(--header-height); box-sizing: border-box; display: flex;
+  align-items: center; justify-content: flex-end; gap: var(--sp-1);
+  padding: 0 var(--sp-4); border-bottom: var(--bw-thin) solid var(--border);
+  position: sticky; top: 0; background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(var(--blur-sm)); z-index: 30; }
+.cc-context { margin-right: auto; color: var(--muted); font-size: var(--fs-caption); }
+.cc-brand { min-height: var(--header-height); display: flex; align-items: center;
+  padding: 0 var(--sp-2); font-size: var(--fs-title); font-weight: 600;
+  white-space: nowrap; }
+.cc-palette-btn { margin-bottom: var(--sp-4); }
+.cc-palette-btn kbd { margin-left: auto; color: var(--muted); font: inherit;
+  font-size: var(--fs-caption); }
+.cc-primary-nav { display: flex; flex-direction: column; gap: var(--sp-4); }
+.cc-nav-layer { display: flex; flex-direction: column; gap: var(--sp-half); }
+.cc-nav-layer-title { padding: 0 var(--sp-2); color: var(--muted);
+  font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; }
+.cc-theme-tab { position: relative; }
+.cc-nav-label { overflow: hidden; text-overflow: ellipsis; }
+.cc-tabs { display: flex; flex-direction: column; gap: var(--sp-half);
+  padding: var(--sp-half) 0 var(--sp-1) var(--sp-4); }
+.cc-tabs[hidden], .cc-subtabs[data-single="1"] { display: none; }
+.cc-subtabs .cc-tab { min-height: var(--nav-item-height); font-size: var(--fs-caption);
+  font-weight: 500; }
+.cc-subnav-mark { width: var(--bw-thick); height: var(--icon-size);
+  border-radius: var(--radius-full); background: var(--border-2); }
+.cc-subtabs .cc-tab.active .cc-subnav-mark { background: var(--accent); }
+.cc-sidebar-foot { margin-top: auto; padding-top: var(--sp-4); display: flex;
+  flex-direction: column; gap: var(--sp-2); }
+.cc-sidebar-foot a { text-decoration: none; }
+.cc-stamp { padding: 0 var(--sp-2); color: var(--muted); font-size: var(--fs-caption);
+  font-family: var(--mono); white-space: nowrap; }
+.cc-panels { padding: var(--sp-4); max-width: var(--main-max-width); margin: 0 auto; }
 
 /* Today band: the briefing strips pack as flex-wrapped compact cards sharing
    rows instead of stacking one full-width box per one-line strip. The scoped
@@ -1450,31 +1443,13 @@ td.ticker a:hover { color: var(--accent); }
   font-size: var(--fs-caption); color: var(--fg-soft); white-space: pre-wrap; word-break: break-all;
   max-height: 260px; overflow: auto; }
 
-/* Three-theme nav (master build P1.1): primary theme row + per-theme sub-tab
-   rows. Sub-tab rows reuse .cc-tab styling at a smaller size. */
-.cc-theme-row { padding-top: 2px; }
-.cc-theme-tab { font-size: var(--fs-body); font-weight: 600; letter-spacing: 0.01em; }
-.cc-subtabs { z-index: 19; }
-.cc-subtabs .cc-tab { font-size: var(--fs-body); }
-
-/* Settings drawer (P3.4): admin-as-drawer instead of admin-as-tab. The button
-   composes the kit .k-btn .k-btn-quiet; only its top-bar spacing is local. */
-.cc-settings-btn { margin-right: 14px; margin-left: 6px; }
-
-/* System demoted to a utility icon (UX9b): same activation contract as a nav
-   section button, rendered as a kit .k-btn .k-btn-quiet. Its selected state
-   keeps the accent edge (accent = selected, per design language). */
-.cc-system-btn { margin-left: 6px; position: relative; }
-.cc-system-btn.active { border-color: var(--accent); color: var(--accent); }
 /* System status dot (PR9) — ONE cheap ok/warn/bad tick derived from the
    daily-chain status artifact (never a heavy render-path scan; see
    _system_status_tone). The tone rides the kit .k-dot (+ .k-dot-ok/-warn/-bad);
    this rule adds only the corner position + the surface ring that lifts the dot
    off the tab. */
-.cc-system-dot { position: absolute; top: 2px; right: 2px; border: 1px solid var(--surface); }
-
-/* Shared ✎ Notes drawer trigger (UX9b) — a kit .k-btn .k-btn-quiet. */
-.cc-notes-btn { margin-left: 6px; }
+.cc-system-dot { position: absolute; top: var(--sp-half); right: var(--sp-half);
+  border: var(--bw-thin) solid var(--surface); }
 .cc-notes-drawer { width: min(560px, 94vw); }
 .cc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(780px, 94vw);
   background: var(--bg); border-left: 1px solid var(--border); z-index: 39;
@@ -1501,9 +1476,7 @@ td.ticker a:hover { color: var(--accent); }
 .cc-drawer-sec-body .panel { margin-bottom: 0; border: none; padding: 0; background: transparent; }
 
 /* Command palette (Ctrl/Cmd+K) */
-.cc-palette-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
-  border-radius: var(--radius); padding: 5px 9px; font-size: var(--fs-caption); cursor: pointer;
-  font-family: var(--sans); }
+.cc-palette-btn { border-color: var(--border); font-size: var(--fs-caption); }
 .cc-palette-btn:hover { border-color: var(--accent); color: var(--accent); }
 .cc-palette { position: fixed; top: 14vh; left: 50%; transform: translateX(-50%);
   width: min(560px, 92vw); background: var(--surface); border: 1px solid var(--border);
@@ -1615,24 +1588,20 @@ td.ticker a:hover { color: var(--accent); }
    Responsive + touch-aware overrides (S16 PR1)
    ============================================================ */
 
-/* Narrow topbar at ≤900: stamp + links go; nav already overflow-x auto.
-   The embedded report iframe gets a shorter fixed height so it scrolls
-   comfortably when the rail stacks beneath it (L13 PR2). */
+/* Compact the persistent sidebar at tablet width while keeping every primary
+   destination reachable by its icon and accessible name. */
 @media (max-width: 900px) {
-  .cc-stamp, .cc-links { display: none; }
-  .cc-topbar { padding: 8px 16px; }
+  .cc-app-shell { grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr); }
+  .cc-sidebar { width: var(--sidebar-collapsed-width); padding: var(--sp-3) var(--sp-2); }
+  .cc-brand, .cc-nav-layer-title, .cc-nav-label, .cc-palette-btn span,
+  .cc-palette-btn kbd, .cc-sidebar-foot span, .cc-stamp, .cc-subtabs { display: none; }
+  .cc-nav-layer { gap: var(--sp-1); }
+  .cc-palette-btn, .cc-theme-tab, .cc-sidebar-foot .k-nav-item {
+    width: var(--icon-button-size); padding: 0; justify-content: center;
+    align-self: center;
+  }
   .cc-report-frame { height: min(80vh, 600px); height: min(80dvh, 600px); }
 }
-
-/* Theme toggle button (L13 PR2). */
-.cc-theme-toggle {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px; border-radius: var(--radius);
-  border: 1px solid var(--border); background: transparent;
-  color: var(--muted); cursor: pointer; font-size: var(--fs-body);
-  transition: var(--transition);
-}
-.cc-theme-toggle:hover { border-color: var(--border-2); color: var(--fg); }
 
 /* Tablet portrait + phone: compress panels, full-width drawers, safe-area. */
 @media (max-width: 768px) {
@@ -1855,12 +1824,12 @@ SHELL_JS = r"""
   // ----- WAI-ARIA roving-tabindex helper (L13) -----
   // Sets up arrow-key navigation inside a role="tablist" element.
   // Moving focus also fires a click (follow-focus pattern) to activate the tab.
-  function setupTablistNav(list) {
+  function setupTablistNav(list, selector) {
     if (!list) return;
     list.addEventListener('keydown', function (ev) {
       if (ev.target.getAttribute('role') !== 'tab') return;
       var btns = Array.prototype.slice.call(
-        list.querySelectorAll('[role="tab"]:not([disabled])'));
+        list.querySelectorAll(selector || '[role="tab"]:not([disabled])'));
       var idx = btns.indexOf(ev.target);
       if (idx === -1) return;
       var next = -1;
@@ -2156,18 +2125,11 @@ SHELL_JS = r"""
       if (on) activeTheme = t.getAttribute('data-cc-theme');
     });
     if (activeTheme) {
-      // Roving tabindex for the section nav: only one topnav tab focusable at a
-      // time; the system icon (outside .cc-topnav) keeps its own tabindex.
-      var topnavBtns = Array.prototype.slice.call(
-        document.querySelectorAll('.cc-topnav [role="tab"]'));
-      topnavBtns.forEach(function (t) {
-        var on = t.getAttribute('data-theme-target') === activeTheme;
-        t.setAttribute('tabindex', on ? '0' : '-1');
-      });
       themeTabs.forEach(function (t) {
         var on = t.getAttribute('data-theme-target') === activeTheme;
         t.classList.toggle('active', on);
-        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        if (on) t.setAttribute('aria-current', 'page');
+        else t.removeAttribute('aria-current');
       });
       // While a specific holding is open (Holding panel + a ticker), suppress
       // the Companies sub-row for a clean reading view (UX9c) — the band's
@@ -3024,8 +2986,7 @@ SHELL_JS = r"""
     });
   });
 
-  // Wire arrow-key roving tabindex on each tablist (L13).
-  setupTablistNav(document.querySelector('.cc-topnav'));
+  // Wire arrow-key roving tabindex on the real subordinate tablists (L13).
   subnavs.forEach(function (n) { setupTablistNav(n); });
 
   // A ticker link anywhere in the shell (analytical panels' .ticker-link, the

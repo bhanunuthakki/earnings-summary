@@ -154,22 +154,25 @@ def _production_runtime(generated_at: datetime) -> str:
   .work-os-company-picker {{ display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }}
   .work-os-action-copy {{ display: flex; align-items: center; gap: var(--sp-3); flex: 1; }}
   @media (max-width: 47.5rem) {{
-    body {{ display: block; min-width: 0; }}
+    body {{ display: flex; min-width: 0; }}
     .app-sidebar,
     .app-sidebar.is-collapsed {{
       position: sticky; inset-block-start: 0; z-index: 200;
-      width: 100%; min-width: 0; min-height: 0;
-      padding: var(--sp-2); overflow-x: auto; overflow-y: hidden;
-      border-right: 0; border-bottom: var(--bw-thin) solid var(--border);
+      width: var(--sidebar-collapsed-width); min-width: var(--sidebar-collapsed-width);
+      height: 100dvh; min-height: 0; padding: var(--sp-2);
+      overflow-x: hidden; overflow-y: auto;
+      border-right: var(--bw-thin) solid var(--border); border-bottom: 0;
     }}
     .app-sidebar > div:first-child {{
-      display: flex; align-items: center; gap: var(--sp-1); width: max-content;
+      display: flex; flex-direction: column; align-items: stretch;
+      gap: var(--sp-1); width: 100%;
     }}
-    .sidebar-brand {{ padding: 0 var(--sp-2); margin: 0; border: 0; }}
+    .sidebar-brand {{ align-items: center; padding: var(--sp-2) 0; margin: 0; }}
     .sidebar-brand button, .nav-layer-title, .sidebar-cmd-text, .nav-text {{ display: none !important; }}
     .sidebar-cmd, .app-sidebar .nav-item, .app-sidebar.is-collapsed .nav-item {{
-      flex: 0 0 auto; justify-content: center; min-block-size: var(--header-height);
-      min-inline-size: var(--header-height); margin: 0; padding: var(--sp-2);
+      flex: 0 0 auto; justify-content: center;
+      min-block-size: var(--touch-target-size); min-inline-size: var(--touch-target-size);
+      width: 100%; margin: 0; padding: var(--sp-2);
     }}
     .app-sidebar .nav-item::after {{ display: none; }}
     .app-main {{ width: 100%; min-width: 0; padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom)); }}
@@ -180,7 +183,7 @@ def _production_runtime(generated_at: datetime) -> str:
     .k-action-row {{ flex-wrap: wrap; gap: var(--sp-2); }}
     .screen-view [style*="grid-template-columns"] {{ grid-template-columns: 1fr !important; }}
     .drill-drawer {{ width: 100%; max-width: 100%; border-radius: 0; }}
-    input, select, textarea {{ font-size: var(--fs-title); }}
+    input, select, textarea {{ font-size: var(--mobile-control-font-size) !important; }}
   }}
   .drill-drawer[hidden] {{ display: none !important; }}
   @media (prefers-reduced-motion: reduce) {{

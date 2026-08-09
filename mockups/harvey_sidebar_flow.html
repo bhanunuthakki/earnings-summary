@@ -7,29 +7,34 @@
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
   <style>
     :root {
       /* Streamlined Harmonized Typography Tokens */
-      --fs-hero: 26px;         /* Report cover title */
-      --fs-stat: 24px;         /* Metric stat numbers, hero ticker symbols */
-      --fs-display: 20px;      /* Hero stat numbers, primary display values */
-      --fs-header-title: 17px; /* Governed target card titles, panel hero headers */
+      --fs-display: 20px;      /* The view's one dominant title or hero value */
       --fs-title: 15px;        /* Section titles, card headings */
-      --fs-serif-body: 14.5px; /* Editorial thesis prose */
       --fs-body: 13px;         /* Standard body, prose, table rows, button labels */
       --fs-caption: 11px;      /* Subtext, metadata, table headers, chips, badges */
-      --fs-mono-sm: 10px;      /* Timestamp badges, annotations */
-      --fs-micro: 9.5px;       /* Nav layer section headers */
-      --fs-nano: 9px;          /* Provenance source chips */
+      --fs-hero: var(--fs-display);
+      --fs-stat: var(--fs-display);
+      --fs-header-title: var(--fs-title);
+      --fs-serif-body: var(--fs-body);
+      --fs-mono-sm: var(--fs-caption);
+      --fs-micro: var(--fs-caption);
+      --fs-nano: var(--fs-caption);
 
       /* Layout & Dimension Tokens */
       --sidebar-width: 240px;
-      --sidebar-collapsed-width: 56px;
+      --sidebar-collapsed-width: 72px;
       --main-max-width: 1240px;
       --drawer-width: 540px;
       --header-height: 48px;
+      --nav-item-height: 32px;
+      --icon-size: 16px;
+      --icon-button-size: 32px;
+      --mobile-control-font-size: 16px;
+      --touch-target-size: 44px;
       --toast-offset-bottom: 28px;
       --toast-offset-right: 28px;
       --dot-size: 6px;
@@ -75,7 +80,7 @@
 
       /* Font Family Tokens */
       --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-      --serif: 'Source Serif 4', Georgia, serif;
+      --serif: var(--sans);
       --mono: 'JetBrains Mono', monospace;
 
       /* Palette Tokens */
@@ -83,12 +88,13 @@
       --sidebar-bg: #0e0f12;
       --surface: #121316;
       --paper: #18191d;
-      --glass-drawer: rgba(18, 19, 22, 0.75);
+      --glass-bg: rgba(18, 19, 22, 0.75);
+      --glass-drawer: var(--glass-bg);
       --scrim: rgba(0, 0, 0, 0.65);
       
-      --border: rgba(255, 255, 255, 0.06);
-      --border-2: rgba(255, 255, 255, 0.12);
-      --hairline: rgba(255, 255, 255, 0.04);
+      --border: #22242a;
+      --border-2: #31343e;
+      --hairline: #18191d;
 
       --fg: #f4f3ef;
       --fg-soft: #c5c2b8;
@@ -99,7 +105,7 @@
       --bad: #f08a8a;
       --accent: #8aa8ff;
       --accent-contrast: #090a0c;
-      --accent-soft: rgba(138, 168, 255, 0.12);
+      --accent-soft: #181f38;
       --mark: #b08d5f;
       --series-qqq: #5b8def;
 
