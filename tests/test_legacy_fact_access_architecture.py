@@ -111,6 +111,7 @@ AUDITED_LEGACY_FACT_READS = {
     "src/pipeline/validation_engine.py": 4,
     "src/provenance/financial_fact_resolution.py": 2,
     "src/provenance/integrity_audit.py": 1,
+    "src/provenance/legacy_canonical_parity.py": 2,
     "src/report/metrics_view.py": 1,
     "src/report/sections/financials.py": 7,
     "src/report/sections/thesis.py": 1,

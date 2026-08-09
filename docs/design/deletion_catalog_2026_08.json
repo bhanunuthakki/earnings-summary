@@ -101,11 +101,9 @@
       "rollback_commit": "3b76037a527c3c25de1c80660163a2c7c14b8969",
       "code_targets": [
         "src/provenance/fact_identity_policy.py",
-        "src/provenance/legacy_canonical_parity.py",
         "src/provenance/postgres_shadow.py"
       ],
       "test_targets": [
-        "tests/test_legacy_canonical_fact_parity.py",
         "tests/test_postgres_shadow.py"
       ],
       "schema_targets": [],
