@@ -1,6 +1,6 @@
 # Design language — the canonical UI guidelines
 
-**Status:** canonical (v3, 2026-06-11). Supersedes the scattered conventions in
+**Status:** canonical (v4, 2026-08-07 Masterwork Work OS Edition). Supersedes the scattered conventions in
 individual renderer docstrings. Sources of truth in code:
 `src/ui/tokens.py` (values) and `src/ui/controls.py` (components). Every HTML
 surface composes its `<style>` as `palette_css(...) + controls_css(...) +
@@ -9,103 +9,51 @@ re-skin type, color, or controls.
 
 The voice of the product is **calm desk, deep drawers**: a quiet, dense,
 dark instrument panel for daily work; an editorial paper reading surface for
-briefs. Premium here means *restraint* — one accent, one radius, one shadow,
-mono only where mono means something.
+briefs. Premium here means *restraint* — curated color swatches, one radius hierarchy,
+one motion, mono only where mono means something.
 
 ---
 
 ## 1. Type
 
-**Four** semantic steps (`src/ui/tokens.py::TYPE_SCALE`). Size encodes
-**importance, not surface**: the same kind of element renders the same size on
-every screen.
+Semantic steps (`src/ui/tokens.py::TYPE_SCALE`). Size encodes **importance, not surface**: the same kind of element renders the same size on every screen.
 
-| Token          | px   | Use for                                                            |
-|----------------|------|--------------------------------------------------------------------|
-| `--fs-display` | 22   | The page's ONE dominant element: page title, hero stat            |
-| `--fs-title`   | 16   | Panel / drawer / card titles + real sub-section headings (h2/h3)   |
-| `--fs-body`    | 13   | Default UI text: tables, inputs, buttons, tabs, reading prose      |
-| `--fs-caption` | 11   | Everything smaller: table headers, stamps, hints, sublabels, chips, badges, kind tags, axis marks |
+| Token               | px   | Use for                                                            |
+|---------------------|------|--------------------------------------------------------------------|
+| `--fs-stat`         | 24   | Metric stat numbers, hero ticker symbols                            |
+| `--fs-display`      | 22   | The page's ONE dominant element: page title, hero stat             |
+| `--fs-header-title` | 17   | Governed target card titles, panel hero headers                     |
+| `--fs-title`        | 16   | Panel / drawer / card titles + real sub-section headings (h2/h3)   |
+| `--fs-serif-body`   | 14.5 | Editorial thesis prose, reading memo paragraphs                     |
+| `--fs-body`         | 13   | Default UI text: tables, inputs, buttons, tabs, reading prose      |
+| `--fs-caption`      | 11   | Everything smaller: table headers, stamps, hints, sublabels, chips, badges, kind tags, axis marks |
+| `--fs-mono-sm`      | 10   | Timestamp badges, locator tags, mono sublabels                     |
+| `--fs-micro`        | 9.5  | Nav layer section headers, micro uppercase labels                  |
+| `--fs-nano`         | 9    | Provenance source chips (`.src-chip`)                              |
 
-Four steps, not six (design-sync 2026-07-19): `--fs-section` (14) folded into
-`--fs-body` — or `--fs-title` for a real heading — and `--fs-micro` (10) into
-`--fs-caption`, which rounded 11.5 → 11. A six-step ramp on a 13px base gave
-two pairs (14/13 and 11.5/10) too close to read as distinct tiers. The guard
-derives the legal set from `TYPE_SCALE` itself, so this table is documentation
-and `tokens.py` is the contract.
+The scale encodes the Work OS hierarchy in strict descending order. Font roles (`FONT_TOKENS`): `--sans` (Inter) is the UI; `--serif` (Source Serif 4) is reading prose in reports; `--mono` (JetBrains Mono) is **only** tickers, numbers, code, timestamps, and locators. Mono is an annotation voice, not a theme — a label or button in mono is drift.
 
-Font roles (`FONT_TOKENS`): `--sans` (Inter) is the UI; `--serif` (Source
-Serif 4) is reading prose in reports; `--mono` (JetBrains Mono) is **only**
-tickers, numbers, code, timestamps, and locators. Mono is an annotation voice,
-not a theme — a label or button in mono is drift.
+In a **data table** this resolves the obvious way: numeric cells are mono (`font-feature-settings: 'tnum', 'zero'`), but the row labels and column headers are sans — never put `font-family: var(--mono)` on the whole table. Every value cell is a `<td>` and every label/header a `<th>`, so the entire rule is `.matrix td { font-family: var(--mono); }` and the `<th>` inherit the UI sans.
 
-In a **data table** this resolves the obvious way: numeric cells are mono, but
-the row labels and column headers are sans — never put `font-family: var(--mono)`
-on the whole table. Every value cell is a `<td>` and every label/header a `<th>`,
-so the entire rule is `.matrix td { font-family: var(--mono); }` and the `<th>`
-inherit the UI sans. A whole-table-mono surface (the old `.vx-matrix` /
-`.cv2-matrix`) reads as a second font beside its sans captions — that is the drift.
-
-Sanctioned escapes — everything else snaps to the scale:
-
-1. The workspace report's **reading ramp** (12.5–14px prose/cells) and
-   **display ramp** (15px lede → 28px section title → 60px identity ticker →
-   100px hero mark). The report is an editorial surface; its larger type is
-   deliberately surface-specific (see `workspace_styles.py` docstring).
-   **The exception is type ONLY**: the report's radii, chip shapes, status
-   colors, fills, and shadows follow the system like every other surface.
-2. `font-size: 0.93em` for inline mono inside running text (optical
-   correction, not an importance level).
-3. The 8.5px / 3px-corner `.src-chip` per-number provenance mark (size AND
-   corner — at that size the chip shape doesn't read; keep its
-   `ui/source_chip.py` shell twin identical).
-4. SVG chart internals (`charts_v2.py`) — axis/label sizes are tuned to the
-   plot geometry, not the UI scale.
+---
 
 ## 2. Color
 
-Palettes live in `PALETTE_LIGHT` / `PALETTE_DARK` (+ white overrides). Roles,
-not colors, in all surface CSS — **zero raw hex outside tokens.py**:
+Palettes live in `PALETTE_LIGHT` / `PALETTE_DARK` (+ white overrides). Roles, not colors, in all surface CSS — **zero raw hex outside tokens.py**:
 
 | Role                          | Tokens                                  | Rule                                                         |
 |-------------------------------|------------------------------------------|--------------------------------------------------------------|
-| Canvas / cards / wells        | `--bg`, `--surface`, `--paper`           | Page → panel → inset, in that order                          |
+| Canvas / cards / wells        | `--bg`, `--surface`, `--paper`           | Page → panel → inset (`#090a0c` → `#121316` → `#18191d`)     |
 | Ink                           | `--fg`, `--fg-soft`, `--muted`           | ONE gray of de-emphasis (`--muted-2` folded in 2026-07-19)   |
 | Lines                         | `--border`, `--border-2`, `--hairline`   | hairline = row rules; border = boxes; border-2 = hover/strong |
 | Semantics                     | `--ok` / `--warn` / `--bad` (= pos/neg)  | green=good, red=bad, **everywhere**                          |
 | Editorial mark                | `--mark`, `--mark-soft`                  | Document furniture ONLY — see below                          |
-| Interactive                   | `--accent`, `--accent-soft`, `--accent-contrast` | Accent is RESERVED for interactive/selected/unread; never decoration. `--accent-contrast` is the only ink allowed on accent fill |
+| Interactive                   | `--accent`, `--accent-soft`, `--accent-contrast` | Accent is RESERVED for interactive/selected/unread; never decoration |
+| Benchmark Series              | `--series-qqq`                           | `#5b8def` index comparator series in relative performance views |
 | Tones (report)                | `--tone-*`                               | Quote/sentiment washes in the report only                    |
-| Charts                        | `CHART_SERIES` (Okabe-Ito)               | Categorical series only                                      |
-| Elevation                     | `--shadow-pop`                           | The one popover/menu shadow                                  |
+| Elevation                     | `--shadow-pop`, `--shadow-card`, `--shadow-drawer` | Elevation shadows for cards, popovers, and drawers          |
 
-Status pills derive from semantic tokens (`color` + `color-mix(...45%,
-transparent)` border) — never freehand a new background/foreground pair per
-status (the old `#14361f/#6ee7a0` family is exactly the drift this kills).
-
-**The editorial mark (`--mark` / `--mark-soft`, 2026-07-25).** A muted ochre
-that exists so a *research document* can have warmth without a second accent.
-It is scoped to document furniture — section labels, the masthead rule,
-footnote markers, margin-note keylines — and to nothing else:
-
-- It **never fills a control.** Buttons, links, selected states and unread
-  marks stay `--accent`. The mark is not a second interactive color.
-- It is **not a status.** It is deliberately duller and browner than `--warn`
-  so a section label can never be read as a caution state; a surface that
-  wants to say "careful" uses `--warn`, always.
-- `--mark` **carries type** (5.62:1 light / 6.32:1 dark — AA-body on both).
-  `--mark-soft` is a **keyline only** (2.05:1 / 2.88:1): legal on a 1px rule
-  or border, never on text. They are two tokens precisely so that constraint
-  is expressible, and `tests/test_ui_tokens.py` pins both halves — including
-  that `--mark-soft` stays *below* the text floor, so nobody "fixes" it.
-
-**Neutral temperature (2026-07-25).** Both palettes' neutrals carry a faint
-amber cast (dark ground `#0d0d0c` rather than `#0c0d10`, borders `#272621`
-rather than `#2a2d35`). The shift is small per swatch and deliberately
-imperceptible *as a color*; it is felt as a temperature change across a whole
-surface, which is how a dense research page gets warmth without decoration.
-Semantics did not move: `--ok/--warn/--bad` keep their exact values and
-`--accent` stays blue, so "green = good" and "blue = interactive" are intact.
+**Neutral temperature (2026-08-07).** The dark ground palette uses an **Ultra-Deep Warm Obsidian ground (`#090a0c`)** with desaturated, quiet neutral temperature, glassmorphism surface tokens (`--glass-bg`, `--glass-border`), and crisp hairline borders (`rgba(255,255,255,0.06)`). Semantics did not move: `--ok/--warn/--bad` keep their exact values (`#4ade80`, `#f5c66a`, `#f08a8a`) and `--accent` stays blue (`#8aa8ff`), so "green = good" and "blue = interactive" are intact.
 
 Theme-dependent **glyphs** (`--k-chevron`, `--k-check`) are *derived* from the
 palette in `controls.py`, never copied. They used to freeze their inks as
@@ -125,21 +73,39 @@ convention — it is checked on *rendered output* over every CSS-emitting surfac
 by the executable guard `tests/test_ui_controls.py`. Status pills/wells use the
 `.k-pill` / `.k-well` kit (`controls.py`), never a freehand bg/fg hex pair.
 
-## 3. Chrome
+## 3. Chrome & 3-Layer Work OS Architecture
 
-- **One radius**: `--radius` (8px) for every rectangular box — cards, inputs,
-  popovers, drawers. `--radius-full` only for deliberately round things
-  (pills, dots, toggle tracks). 3/4/5/6px corners are drift.
-- **One motion**: `var(--transition)` (150ms ease) with explicit properties —
-  never `transition: all`.
-- **One popover elevation**: `box-shadow: var(--shadow-pop)`.
-- **Close glyphs** (the `×` buttons on drawers/popovers/peeks):
-  `var(--fs-display)`, muted → fg on hover. (Was a magic `20px`; the §7 guard
-  denies off-scale font-size px, so the glyph now takes the top scale step.)
-- **Soft status fills**: `color-mix(in srgb, var(--ok|warn|bad|accent) ~16%,
-  transparent)` + token ink — never a freehand dark-well/pastel hex pair.
+- **Harvey/Legora 3-Layer Sidebar Navigation**: Dashboard surfaces adopt the 3-Layer Work OS sidebar structure (`.app-sidebar`, `--sidebar-width: 240px`, collapsed rail width: 56px). These eight destinations are the complete primary IA; adding a ninth requires owner approval:
+  - **L1 · Portfolio Intelligence**: `Portfolio Cockpit`, `Performance vs Index`, `Risk & Allocations`.
+  - **L2 · Research Engine**: `Company Desk`, `Full Research Brief Canvas` (`#screen-full-brief`), `Fact & Metric Analytics Playground` (`#screen-analytics-playground`).
+  - **L3 · Operations & Governance**: `Decision Audit Log`, `Execution Queue & Operations Hub` (`#screen-execution-queue`).
+- **Collapsed Sidebar Rail Hover Tooltips**: When `.app-sidebar.is-collapsed` is active, hovering over any `.nav-item` displays a floating label tooltip (`data-tooltip="..."`) positioned to the right of the icon rail. Standalone settings and footer stubs are excised from the LHS rail.
+- **Dedicated Full-Canvas L2 Surfaces vs Contextual Drawers**:
+  - Dense exploratory matrices and report briefs belong on **dedicated full-canvas screens** (`#screen-full-brief` with 6 tabbed panes, `#screen-analytics-playground` with 42+ extracted 3-statement facts). Never force multi-metric statement matrices into narrow slide drawers.
+  - Slide-over drawers (`openDrillDrawer()`) are reserved for **rich multi-panel contextual drill-downs**:
+    - `saydo`: Guidance audit ledger, CFO tone check (`CONFIDENT / EXPANSIVE 88%`), transcript summary, and analyst Q&A roster (Goldman Sachs, Morgan Stanley).
+    - `thresholds`: Buy / Hold / Trim / Sell conditions for existing positions plus governed Next-Dollar Allocation. This is decision guidance, never broker routing.
+    - `dcf-priors`: WACC baseline, perpetual growth rate $g$, high growth fade horizon, refresh cadence.
+    - `llm-routing`: Model tier routing (Claude 3.5 Sonnet / Opus cheapest-at-parity vs Gemini 1.5 Pro).
+    - `governance-limits`: Position cap, LatAm FX limit, VaR thresholds, API provider integration statuses.
+- **Direct Google Sheets DCF Model Link**: Replace narrow slider drawer stubs on Company Desk with direct **`Google Sheets DCF Model ↗`** links (`openSheetDCFModel()`), pointing directly to canonical 9-sheet workbooks (`dcf/<TICKER>.xlsx`).
+- **No trade-execution surface**: the localhost research product does not claim to submit, route, or fill orders. Allocation decisions are expressed as thresholds and next-dollar guidance; execution happens outside this application.
+- **Zero-Layout-Pop Card Dismissal Contract**: Action cards implement the `.card-dismissing` collapse contract (`dismissCard()`, height-locked transition with `border-color: transparent !important`, `max-height: 0`, `opacity: 0`, `transform: scale(0.97) translateY(-2px)`). Dismissing an item prevents vertical layout jumping and clears it for the current session. Only an explicit decision or threshold change may create durable state.
+- **One radius hierarchy**: `--radius` (8px) for inputs/buttons; `--radius-card` (10px) for surface cards; `--radius-drawer` (14px) for slide drawers; `--radius-full` (999px) for pills, dots, and chips.
+- **One motion**: `var(--transition)` (150ms ease) or `var(--transition-fluid)` (250ms cubic-bezier) with explicit properties — never `transition: all`.
+- **Elevation shadows**: `--shadow-card` for cards, `--shadow-card-hover` for interactive cards, `--shadow-pop` for popovers, and `--shadow-drawer` for slide drawers.
 
-### 3.1 Surface dismissal — the `CCOverlay` contract (Law 3)
+### 3.1 Product simplification contract
+
+- **Cockpit is the only inbox.** It shows at most three ranked items and omits empty categories. An item qualifies only when it requires a decision, reports material new information, or records a breached risk/falsifier condition.
+- **Company context owns company work.** Information-diet signals, position coaching, say/do review, decision discipline, and company-specific learnings live in Company Desk drawers or the Full Research Brief. They do not get standalone navigation.
+- **Decision Audit owns durable learning.** Cross-company decisions, changed assumptions, outcomes, and lessons form one lifecycle timeline. Ledger, Journal, Triage, Review, Worldview, and advisor-memo pages are retired frontend concepts.
+- **Risk is conclusion-first.** The primary screen shows risk budget, factor exposure, concentration/correlation, allocation drift, freshness, and material warnings. Expensive stress analytics are cached backend evidence and appear only when decision-relevant.
+- **Operations is exception-first.** Data quality, pipeline health, model health/cost, and DCF health are the four diagnostic groups. Routine events remain in logs rather than the primary screen.
+- **One responsive product.** `/mobile/inbox` resolves to the responsive Cockpit. Telegram is a transport adapter for capture, bounded digests, and deep links; it never owns a separate inbox or workflow state.
+- **One interaction spine.** The shell owns screen routing, one Search/Ask entry, contextual drill drawer, source peek, action receipts, and data loading. Notes live with companies and configuration lives in Operations; no parallel palette/dock/drawer frameworks.
+
+### 3.2 Surface dismissal — the `CCOverlay` contract (Law 3)
 
 Every transient surface — drawer, peek, palette, dock, sidebar, popover — is an
 instance of ONE primitive, `window.CCOverlay` (`src/pipeline/cc_overlay.py`),
@@ -169,31 +135,8 @@ handle.open(); handle.close(); handle.isOpen();
 - **One scrim, one Escape, one scrim-click listener per document.** A single
   `.k-scrim` element is shown beneath the topmost `scrim:true` surface, its
   `z-index` set just under that surface; the per-surface scrims are deleted.
-- **Non-modal phrasing popovers get Escape-only.** Cite-marks and the
-  source-chip `<details>` register a *dismisser* (`addPopoverDismisser`), closed
-  first and Escape-only — NOT the full modal triad. Their `<details>` /
-  phrasing-content split-paragraph constraint is real; they must not gain a
-  scrim or focus trap.
-- **Gesture / persistent surfaces declare `scrim:false`** — a deliberate,
-  documented carve-out, not an undocumented divergence. The Ask dock (a
-  side-by-side copilot) and the report comments sidebar (its no-click-out is
-  load-bearing — an outside-click raced the floater's mousedown-open) both
-  declare it. The dock also passes `toggleHidden:false` (its visibility is
-  `data-mode`/CSS, never `[hidden]`) and the lowest priority, so every shell
-  overlay keeps first claim on Escape *structurally*.
-- **Mutual exclusion is `group`, not cross-calls.** Surfaces sharing a `group`
-  string are one-open-at-a-time; opening one closes its siblings. The shell's
-  settings/notes drawers + palette share `cc-primary`.
-- **Motion is the deliverable, not an afterthought.** Open motion is the kit's
-  (`k-overlay-rise`) or each surface's own keyframe; CCOverlay adds the
-  symmetric *close* (`motion: rise | slide-right | pop | none`) — animating
-  **transform + opacity only** (never layout), over one `var(--transition)`
-  step, fading the scrim concurrently, and respecting
-  `prefers-reduced-motion`.
-- **Out of v1:** History/Back-button dismissal (collides with the shell's
-  `hashchange`-closes-panels logic) — tracked, not built. The stack is
-  in-memory and ephemeral; it does NOT join `cc_state`'s `cc:v1:*`
-  sessionStorage (which surface is open should not survive a reload).
+
+---
 
 ## 4. Controls (`src/ui/controls.py`)
 
@@ -201,9 +144,7 @@ handle.open(); handle.close(); handle.isOpen();
 skins the **elements** (`select`, `input`, `textarea`) directly: dark
 `color-scheme`, `appearance: none` + a custom chevron on single selects, one
 accent focus ring, `accent-color` checkboxes. Surfaces add layout only
-(width, flex). **Never set `background:` (shorthand) on a `<select>`** — it
-wipes the chevron `background-image`; use `background-color` if a different
-well is truly needed.
+(width, flex).
 
 Buttons — three intents, no other treatments:
 
@@ -213,41 +154,17 @@ Buttons — three intents, no other treatments:
 | `.k-btn-quiet`   | outline, muted → fg on hover      | Everything else                                  |
 | `.k-btn-danger`  | red ink, red border on hover      | Destructive only (delete, dismiss-forever)       |
 
-(`.k-btn-sm` for dense rows. Legacy accent-soft "secondary" buttons migrate to
-quiet or primary — two CTAs side by side means one of them isn't primary.)
+Chips & Suggestion Prompts: `.k-chip` (+ `-ok/-warn/-bad/-accent`, `-mono`, `.is-on` for filter toggles). Pre-populated Copilot suggestion chips (`⚡ Analyze NU Q2 beat`, `📊 Compare NU vs MELI`, `⚠️ Check NPL 90+ status`, `📈 Run DCF sensitivity`) populate input fields and stream grounded AI citations (`doc:bcb_jun26_p4`).
 
-Chips: `.k-chip` (+ `-ok/-warn/-bad/-accent`, `-mono`, `.is-on` for filter
-toggles). Radius-full, micro, uppercase. One shape for every badge/status/
-filter chip in the app.
+Interactive Handles & Doorways:
+- `.drill-handle`: Dotted bottom border (`--bw-thin`) in `--accent`, launching slide drawers (`openDrillDrawer('financials')`).
+- `.src-chip`: Mono micro mark (`--fs-nano`, `--radius-md`) launching raw citation peek drawers (`openPeekDrawer('doc:ref')`).
 
-Status dots: `.k-dot` (+ `-ok/-warn/-bad/-muted`). The one filled circular
-status tick — freshness ticks, cron run-marks, system-status marks. Fill is
-`currentColor`, so a tone modifier only sets `color` (the `.k-prov-tick`
-idiom); a surface sizes it via `--k-dot-size` (default 8px) and adds layout
-only (margin, position, a ring border), never a fill. THE replacement for the
-four duplicated dot-tone systems (`.dot-*` / `.fdot-*` / `.ch-dot-*` /
-`.cc-system-dot-*`); a surface that needs a bespoke neutral shade sets a local
-`color` on the same `.k-dot`.
-
-Green/red number text: `.k-num-pos` / `.k-num-neg` → `--ok` / `--bad`. The one
-positive/negative NUMBER-text tone for dashboard/pipeline surfaces — P&L cells,
-deltas, alpha. THE home for the green/red numeric color those surfaces
-duplicated as `td.pos`/`span.pos`/`.sk-val.pos` etc.; in a compound class keep
-the layout token and swap only `pos`/`neg` (e.g. `class="sk-val pos"` →
-`class="sk-val k-num-pos"`). Status green/red **only** — the report renderers
-(`src/report/renderers/**`) keep their **local** `.pos`/`.neg`, where the class
-is semantically overloaded and sometimes means accent-wayfinding
-(`--accent`/`--muted`), not green/red. That report-local meaning is a separate
-concern and deliberately stays out of the kit; do not migrate it.
-
-Menus/popovers: `.k-menu` (+ `li.sel`) for any floating list (combobox
-results, palettes).
-
-Field captions: `.k-label` (micro size — matches `.k-chip` so a caption never
-out-sizes the chips/controls beside it — 600, uppercase, 0.06em).
-
-**Specialized controls without a kit primitive.** The kit covers
-button / pill / chip / well / label / menu. A few controls have **no** kit
+Interactive Modules & Visualizers:
+- **Card Grids**: `.card-grid-action`, `.card-grid-stat`, `.card-grid-risk` for auto-fitting card layouts.
+- **Stat Numbers**: `.stat-heading`, `.stat-number` (`--fs-stat`, mono tabular), `.stat-subtext`.
+- **Benchmark Bar Comparator**: `.perf-bar-track` (background track, `--bar-track-height: 8px`), `.perf-bar-fill` (colored performance fill).
+- **Time Horizon Picker**: `.picker-container` (`--paper` background, thin border), `.picker-btn`.
 primitive and are legitimately bespoke — "compose the kit, never reinvent" can't
 bind where there is nothing to compose. The reviewed keeps: a **segmented
 selector** (`.qbtn` quarter picker — a radio-group of buttons sharing one track),
@@ -346,16 +263,21 @@ NU  Nu Holdings Ltd.        ← mono 600 symbol · sans muted caption name
   precious (cockpit), but pickers, headers, cards, and palette rows show the
   two-part label.
 
-## 6. Spacing & density
+## 6. Spacing, Density & 100% Token Purity Rule
 
-Gaps/paddings snap to `--sp-1..6` (4/8/12/16/24/32). Density is deliberate,
-not accidental:
+Gaps/paddings snap to `--sp-1..6` (4/8/12/16/24/32) or `--sp-half` (2px). Density is deliberate, not accidental:
 
-- **Panel padding**: 16–18px (`--sp-4`); dense list cards 8–12px.
-- **Table rhythm**: th/td `6px 10px` on dashboards (cockpit-thin `4px 10px`);
-  headers are `--fs-caption` uppercase muted.
-- The report keeps its own density tokens (`--pad-*`, two densities) — they
-  are layout, owned by the surface.
+- **Panel padding**: 16–18px (`--sp-4`); dense list cards 8–12px (`--sp-2` / `--sp-3`).
+- **Table rhythm**: th/td `6px 10px` on dashboards (`--sp-2` `--sp-3`); headers are `--fs-caption` uppercase muted.
+- **Strict 100% Token Purity Rule (Zero Raw Pixel Escapes)**: Every single dimension (`width`, `height`, `max-width`, `min-width`), padding, margin, font-size, corner radius, backdrop blur filter, box shadow, transform lift, and border width outside of `:root` **MUST** bind to CSS custom variables (`var(--sp-*)`, `var(--fs-*)`, `var(--radius-*)`, `var(--blur-*)`, `var(--shadow-*)`, `var(--bw-*)`, `var(--lift-*)`). Hardcoded pixel escapes (`px`) in CSS rules are forbidden and fail CI!
+
+---
+
+## 7. Enforcement & Verification
+
+- **Executable Guard (`tests/test_ui_controls.py`)**: Automatically scans all registered surface Python files in `src/` to enforce 100% token purity, verifying zero un-tokenized hex literals, zero off-scale font sizes, zero illegal corner radii, and zero un-tokenized pixel escapes.
+- **Token Contract (`tests/test_ui_tokens.py`)**: Pins the palette swatches, type scale steps, spacing ladder, chrome corner radii, and contrast ratios.
+- **Fast Feedback**: Run `python -m pytest tests/test_ui_tokens.py tests/test_ui_controls.py -q` before pushing any front-end changes.
 
 ### 6.1 One operating band per panel
 
@@ -695,7 +617,12 @@ backlog + journal until then.
 
 ---
 
-## Diet-vs-alert (the information-diet substrate)
+## Diet-vs-alert (backend substrate; no standalone frontend)
+
+The Diet destination and general-purpose feed are retired. These rules continue
+to govern ingestion and ranking, but retained signals render only in a relevant
+Company Desk drawer or the portfolio-level Risk & Allocations drawer. A signal
+with no decision context stays out of the primary UI.
 
 A thesis-breach ALERTER and an information-diet CURATOR are **inverse products**
 and must not share one pipe. The repo's original `news` → decaying inbox scorer
@@ -744,7 +671,12 @@ diet rows is independent of the wall clock.
 
 ---
 
-## 12. The Discovery rule (weighted candidate ranking)
+## 12. The Discovery rule (backend-only weighted candidate ranking)
+
+Discovery has no primary navigation or dedicated dashboard. Its deterministic
+ranking service remains available to research tooling; a candidate becomes a
+Company Desk concern only after the owner explicitly adds it to tracked
+coverage. Discovery output never enters the Cockpit merely to fill space.
 
 The discovery queue is a **ranked surface**, so by the Instrument Paradigm it
 scores **by a weighted sum of typed, dated signals through a source-weight

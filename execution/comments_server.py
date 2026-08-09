@@ -128,6 +128,7 @@ from dcf import redesign as dcf_redesign  # noqa: E402
 from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from log_redact import redact  # noqa: E402
 from logging_config import (  # noqa: E402
@@ -137,7 +138,7 @@ from logging_config import (  # noqa: E402
     set_correlation_id,
 )
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
-from pipeline.command_center_shell import render_overview_panel, render_shell  # noqa: E402
+from pipeline.command_center_shell import render_overview_panel  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
 from pipeline.research_cockpit import build_cockpit_rows  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
@@ -147,6 +148,8 @@ from pipeline.ticker_command_center import (  # noqa: E402
     render_notes_drawer_fragment,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
+from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
+from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
 from runtime.job_runtime import portfolio_db_path  # noqa: E402
 from runtime.python_process import managed_python_argv  # noqa: E402
 from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
@@ -1419,24 +1422,8 @@ def create_app(
 
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
-    @app.route("/", methods=["GET"])
-    def dashboard_page():
-        """Unified tabbed command center. Overview — the Research cockpit
-        (one attention-ranked row per holding: thesis health · valuation ·
-        events) + the tier-coverage strip — is server-inlined for instant
-        first paint; every other tab lazy-loads from ``GET /api/panel/<name>``
-        on first activation. The standalone ``/analytical`` and ``/ticker/<t>``
-        pages remain as deep-link targets."""
-        if request.path == "/":
-            overview = (
-                '<div id="cc-overview-deferred" class="cc-loading" '
-                'hx-get="/api/panel/overview" hx-trigger="load" hx-swap="outerHTML">'
-                '<span class="muted">Loading Today...</span></div>'
-            )
-            return Response(
-                render_shell(overview_html=overview, repo_root=repo_root),
-                mimetype="text/html",
-            )
+    def _overview_fragment_response() -> Response:
+        """Build the legacy Overview fragment for compatible live drill-throughs."""
         read_conn = get_read_db()
         rows = build_cockpit_rows(read_conn, repo_root)
         coverage = tier_coverage_summary(repo_root, conn=read_conn)
@@ -1490,6 +1477,24 @@ def create_app(
             open_loops_html=open_loops_html,
         )
         return Response(overview, mimetype="text/html")
+
+    @app.route("/", methods=["GET"])
+    def dashboard_page():
+        """Eight-screen Work OS; legacy panel endpoints remain drill-throughs."""
+        return Response(render_work_os_shell(), mimetype="text/html")
+
+    @app.route("/api/work-os/portfolio", methods=["GET"])
+    def work_os_portfolio_api():
+        """Portfolio-only research state for Cockpit and Company Desk."""
+        conn = _open_db()
+        try:
+            rows = build_cockpit_rows(conn, repo_root).get("portfolio", [])
+        finally:
+            conn.close()
+        payload = build_work_os_portfolio(rows, fetch_live_portfolio())
+        response = app.json.response(payload.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/api/dashboard", methods=["GET"])
     def dashboard_api():
@@ -1597,7 +1602,7 @@ def create_app(
         if name == "overview":
             # The document shell paints immediately; Today assembles as a
             # cacheable fragment instead of blocking the initial HTML TTFB.
-            return dashboard_page()
+            return _overview_fragment_response()
 
         if name == "portfolio":
             # Portfolio → Performance: tracker analytics + live positions /
@@ -3404,12 +3409,8 @@ def create_app(
 
     @app.route("/mobile/inbox", methods=["GET"])
     def mobile_inbox_page():
-        """The compact private mobile review surface (PRD §9.2/§11.6) — same
-        Tailscale/private-host posture as every other route on this server
-        (the global CORS/security-header/CSRF-origin hooks apply unchanged)."""
-        from pipeline.mobile_inbox_panel import render_mobile_inbox
-
-        return Response(render_mobile_inbox(db_path), mimetype="text/html")
+        """Mobile uses the same responsive Cockpit and canonical action queue."""
+        return redirect("/#screen-cockpit", code=302)
 
     @app.route("/api/discovery/sources", methods=["GET"])
     def discovery_sources_api():

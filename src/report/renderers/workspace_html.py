@@ -5,9 +5,10 @@ workspace, monochrome palette, paper/white/dark themes) as a single self-
 contained HTML file. Same contract as ``html.py`` — no runtime JS framework,
 no CDN dependencies beyond the Google Fonts stylesheet.
 
-Every section of the ReportSpec has a home. UX9 folds the original 12-14
-section tabs into ~6 grouped top-level tabs (Overview / Quarter / Financials
-/ Research / Position / Sources); inside a multi-section group a slim
+Every section of the ReportSpec has a home. The Work OS folds the original
+12-14 section tabs into the prototype's six groups (Overview & Moat / Quarter
+& Guidance / Financials & DCF / Thesis & Risk / Valuation & Comps / Sources
+& Citations); inside a multi-section group a slim
 sub-tab pill row switches the section panes client-side. Section panes keep
 their legacy per-section ``data-tab`` ids so saved comment anchors,
 ``data-xtab`` cross-links and ``#tab=<id>`` deep links resolve unchanged.
@@ -185,6 +186,7 @@ from report.renderers.workspace_sections.thesis_risk import (
 )
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
 from report.renderers.workspace_styles import CSS
+from report.sections.p3_data import PeerCompRow
 from ui.living_grid import head_assets as _living_grid_head_assets
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.tokens import FAVICON_LINK
@@ -418,6 +420,16 @@ def _document(spec: ReportSpec, body: str) -> str:
 """
 
 
+def _comps_tab(body: StringIO, rows: list[PeerCompRow]) -> None:
+    """Render the dedicated prototype Valuation & Comps comparison pane."""
+    body.write('<div class="tab-body">')
+    if rows:
+        _peer_comp_panel(body, rows)
+    else:
+        _empty_panel(body, "Peer comparison", "No approved comparable set is available.")
+    body.write("</div>")
+
+
 def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
     """Return every section tab as [(tab_id, label, count_or_None, render_fn), ...].
 
@@ -511,7 +523,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
                 p3.lease_ladder,
                 suppressed_sections=frozenset(spec.suppressed_sections),
                 eval_snap=company_eval_snap,
-                peer_comp=company_peers,
+                peer_comp=None,
                 comp_set_context=p3.comp_set_context,
             ),
         ),
@@ -530,6 +542,12 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "Synthesis",
             len(spec.synthesis.lenses) if spec.synthesis is not None else None,
             lambda b: _synthesis_tab(b, spec.synthesis),
+        ),
+        (
+            "comps",
+            "Comps",
+            len(company_peers) or None,
+            lambda b: _comps_tab(b, company_peers),
         ),
     ]
     # PR10 (Monthly Red Team surface wiring): the Position tab also renders
@@ -573,34 +591,21 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
 
 
 def _tab_groups(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabGroup]:
-    """Fold the flat section tabs into the ~6 grouped top-level tabs (UX9).
-
-    Group order: portfolio/watchlist leads with Overview (thesis + valuation,
-    the analytical anchor); evaluation reports lead with Research and put
-    Company first inside it, since the reader hasn't internalized the business
-    yet. Single-section groups reuse the section id as the group id so deep
-    links and data-xtab cross-links resolve without a pill row.
-    """
+    """Fold report depth into the prototype's exact six-group brief canvas."""
     by_id = {t[0]: t for t in _tab_defs(spec, p3)}
-    is_eval = spec.flavor == ReportFlavor.EVALUATION
-    research_ids = ["bear", "company", "exec_comp", "synthesis"]
-    if is_eval:
-        research_ids = ["company", "bear", "exec_comp", "synthesis"]
-    research: tuple[str, str, list[str]] = ("research", "Research", research_ids)
-    core: list[tuple[str, str, list[str]]] = [
-        ("overview", "Overview", ["thesis", "valuation"]),
-        ("quarter", "Quarter", ["earnings", "saydo", "news"]),
-        ("financials", "Financials", ["financials"]),
-    ]
-    plan = [research, *core] if is_eval else [*core, research]
-    # Position group only when held (decision history rides along). An exited
-    # name keeps its decision audit as a standalone Decisions tab; a name with
-    # no position and no decisions hides both (P4.2 hide-don't-stub).
+    thesis_risk_ids = ["thesis", "bear"]
     if "position" in by_id:
-        plan.append(("position", "Position", ["position", "decisions"]))
-    elif by_id["decisions"][2] is not None:
-        plan.append(("decisions", "Decisions", ["decisions"]))
-    plan.append(("sources", "Sources", ["sources"]))
+        thesis_risk_ids.append("position")
+    if by_id["decisions"][2] is not None:
+        thesis_risk_ids.append("decisions")
+    plan: list[tuple[str, str, list[str]]] = [
+        ("overview", "Overview & Moat", ["company", "synthesis", "exec_comp"]),
+        ("quarter", "Quarter & Guidance", ["earnings", "saydo", "news"]),
+        ("financials", "Financials & DCF", ["financials"]),
+        ("thesis-risk", "Thesis & Risk", thesis_risk_ids),
+        ("valuation-comps", "Valuation & Comps", ["valuation", "comps"]),
+        ("sources", "Sources & Citations", ["sources"]),
+    ]
     return [(gid, label, [by_id[sid] for sid in sids]) for gid, label, sids in plan]
 
 

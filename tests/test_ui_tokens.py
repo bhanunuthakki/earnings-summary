@@ -48,8 +48,10 @@ def test_semantic_unification() -> None:
     --ok/--bad/--muted (design-sync 2026-07-19), so they must be GONE."""
     for palette in (PALETTE_LIGHT, PALETTE_DARK):
         assert palette["accent"] != palette["ok"]
+        assert "series-qqq" in palette
         for gone in ("pos", "neg", "neu", "muted-2"):
             assert gone not in palette
+    assert PALETTE_DARK["bg"] == "#090a0c"
     assert PALETTE_DARK["ok"] == "#4ade80"
     assert PALETTE_LIGHT["ok"] == "#15803d"
 
@@ -78,16 +80,26 @@ def test_palette_css_rejects_unknown_default() -> None:
         palette_css("sepia")
 
 
-def test_type_scale_is_the_four_step_importance_ladder() -> None:
-    """The semantic scale is a public contract for every renderer: four steps,
-    strictly descending, named by importance — display > title > body > caption
-    (collapsed from six in the design-sync 2026-07-19 pass: --fs-section folded
-    into --fs-body/--fs-title, --fs-micro into --fs-caption)."""
-    order = ["fs-display", "fs-title", "fs-body", "fs-caption"]
+def test_type_scale_is_the_work_os_semantic_ladder() -> None:
+    """The semantic scale is a public contract for every renderer: steps,
+    strictly descending, named by importance — stat > display > header-title >
+    title > serif-body > body > caption > mono-sm > micro > nano."""
+    order = [
+        "fs-stat",
+        "fs-display",
+        "fs-header-title",
+        "fs-title",
+        "fs-serif-body",
+        "fs-body",
+        "fs-caption",
+        "fs-mono-sm",
+        "fs-micro",
+        "fs-nano",
+    ]
     assert list(TYPE_SCALE) == order
     sizes = [float(TYPE_SCALE[k].removesuffix("px")) for k in order]
     assert sizes == sorted(sizes, reverse=True)
-    assert len(set(sizes)) == 4
+    assert len(set(sizes)) == 10
 
 
 def test_spacing_scale_ascends() -> None:
@@ -97,6 +109,8 @@ def test_spacing_scale_ascends() -> None:
 
 def test_chrome_tokens_pin_the_one_radius_and_standard_transition() -> None:
     assert CHROME_TOKENS["radius"] == "8px"
+    assert CHROME_TOKENS["radius-card"] == "10px"
+    assert CHROME_TOKENS["radius-drawer"] == "14px"
     assert CHROME_TOKENS["radius-full"] == "999px"
     assert CHROME_TOKENS["transition"] == "150ms ease"
 

@@ -558,7 +558,8 @@ def test_home_rail_renders_ranked_inbox_with_chips_and_quick_actions(
     action_id = _seed_pending_action(db_path, ticker="NU")
 
     shell = client.get("/").data.decode()
-    assert 'hx-get="/api/panel/overview"' in shell
+    assert 'data-live-endpoint="/api/panel/overview"' in shell
+    assert "workOsLoadScreen" in shell
     body = client.get("/api/panel/overview").data.decode()
     assert 'data-ix-badge="home"' in body  # unread count badge hook in the rail head
     assert 'class="ix-cats"' in body  # category chips on the rail

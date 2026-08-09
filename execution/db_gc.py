@@ -321,6 +321,18 @@ def _txn(conn: sqlite3.Connection) -> Generator[None]:
         conn.execute("COMMIT")
 
 
+@contextmanager
+def _temporary_busy_timeout(conn: sqlite3.Connection, *, timeout_s: float) -> Generator[None]:
+    """Temporarily shorten one connection's lock wait, then restore it."""
+    row = conn.execute("PRAGMA busy_timeout").fetchone()
+    previous_ms = int(row[0]) if row is not None else 30_000
+    conn.execute(f"PRAGMA busy_timeout = {int(timeout_s * 1000)}")
+    try:
+        yield
+    finally:
+        conn.execute(f"PRAGMA busy_timeout = {previous_ms}")
+
+
 def _chunks(
     rows: Sequence[tuple[object, ...]], size: int
 ) -> Iterator[Sequence[tuple[object, ...]]]:
@@ -1340,15 +1352,13 @@ def maintenance(
             ctrl.checkpoint()
         with suppress(sqlite3.OperationalError):  # not attached (maintenance-only)
             conn.execute("DETACH DATABASE gcarc")
-        conn.execute(f"PRAGMA busy_timeout = {int(VACUUM_PREFLIGHT_TIMEOUT_S * 1000)}")
-        try:
-            with _txn(conn):
-                pass
-        except GcAbortedError:
-            _log("gc_vacuum_preflight_failed", timeout_s=VACUUM_PREFLIGHT_TIMEOUT_S)
-            raise
-        finally:
-            conn.execute("PRAGMA busy_timeout = 30000")
+        with _temporary_busy_timeout(conn, timeout_s=VACUUM_PREFLIGHT_TIMEOUT_S):
+            try:
+                with _txn(conn):
+                    pass
+            except GcAbortedError:
+                _log("gc_vacuum_preflight_failed", timeout_s=VACUUM_PREFLIGHT_TIMEOUT_S)
+                raise
     if ctrl is not None:
         ctrl.checkpoint()
     conn.execute("ANALYZE")
@@ -1522,10 +1532,20 @@ def _run_gc_implementation(
         try:
             if apply:
                 # The compatibility check must run while SQLite owns the
-                # writer reservation, not merely before lock acquisition.
-                with _txn(conn):
-                    if "facts-depth" in policies:
-                        report.facts_depth_apply_preflight = _facts_depth_apply_preflight(conn)
+                # writer reservation, not merely before lock acquisition. A
+                # vacuum run uses its short fail-fast budget here too; waiting
+                # on the default 30s timeout would defeat the later preflight.
+                if vacuum and "maintenance" in policies:
+                    with (
+                        _temporary_busy_timeout(conn, timeout_s=VACUUM_PREFLIGHT_TIMEOUT_S),
+                        _txn(conn),
+                    ):
+                        if "facts-depth" in policies:
+                            report.facts_depth_apply_preflight = _facts_depth_apply_preflight(conn)
+                else:
+                    with _txn(conn):
+                        if "facts-depth" in policies:
+                            report.facts_depth_apply_preflight = _facts_depth_apply_preflight(conn)
                 attach_archive(conn, archive)
                 # FK enforcement stays ON, deliberately. #1115 turned it OFF
                 # here (the unindexed supersedes_id self-FK made each parent

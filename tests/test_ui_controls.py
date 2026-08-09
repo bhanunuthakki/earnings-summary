@@ -27,6 +27,7 @@ sys.path.insert(0, str(SRC))
 
 from ui.controls import (  # noqa: E402
     controls_css,
+    copilot_prompt_chip,
     k_empty,
     panel_section_title,
     panel_toolbar,
@@ -41,6 +42,14 @@ from ui.tokens import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # controls_css — modes
 # ---------------------------------------------------------------------------
+
+
+def test_copilot_prompt_chip_renders_interactive_chip() -> None:
+    html = copilot_prompt_chip("Analyze NU Q2 beat", citation="doc:bcb_jun26_p4")
+    assert "k-chip-copilot" in html
+    assert "k-chip-btn" in html
+    assert 'data-citation="doc:bcb_jun26_p4"' in html
+    assert "Analyze NU Q2 beat" in html
 
 
 def test_dark_mode_pins_dark_scheme_and_chevron() -> None:
@@ -534,6 +543,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/ticker_settings_panel.py",
         "pipeline/triage_panel.py",
         "pipeline/validation_issues_panel.py",
+        "pipeline/work_os_shell.py",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",
         "report/renderers/charts_v2.py",
@@ -1123,8 +1133,19 @@ def test_palette_rows_and_combobox_render_two_part_ticker_labels() -> None:
 # A CSS rule whose selector names a ``*-inputrow`` AND whose body sets font-size.
 # (The opt-out hex/px guard can't catch this: ``font-size: var(--fs-section)`` is
 # a valid token — just the WRONG one for a control row, which should match the
-# 13px ``.k-btn`` buttons beside it.)
-_INPUTROW_FONT_RULE = re.compile(r"[^{}]*-inputrow[^{}]*\{[^{}]*font-size\s*:[^{}]*\}")
+# 13px ``.k-btn`` buttons beside it.) Split at rule boundaries first so this
+# guard stays linear instead of backtracking across every registered surface.
+_FONT_SIZE_DECL = re.compile(r"(?:^|[;\s])font-size\s*:")
+
+
+def _inputrow_font_rules(css: str) -> list[str]:
+    """Find input-row font declarations without cross-surface backtracking."""
+    hits: list[str] = []
+    for chunk in css.split("}"):
+        selector, separator, body = chunk.rpartition("{")
+        if separator and "-inputrow" in selector and _FONT_SIZE_DECL.search(body):
+            hits.append(f"{selector}{{{body}}}")
+    return hits
 
 
 def test_no_font_size_on_inputrow_controls() -> None:
@@ -1135,7 +1156,7 @@ def test_no_font_size_on_inputrow_controls() -> None:
     registered CSS surface, not just the Ask panel."""
     offenders: dict[str, list[str]] = {}
     for rel in sorted(REGISTERED - EXEMPT):
-        hits = _INPUTROW_FONT_RULE.findall(_css_text(SRC / rel))
+        hits = _inputrow_font_rules(_css_text(SRC / rel))
         if hits:
             offenders[rel] = [" ".join(h.split()) for h in hits]
     assert not offenders, (

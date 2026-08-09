@@ -16,13 +16,11 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -36,24 +34,19 @@ from user_state.notes import create_note, get_note, patch_note_context  # noqa: 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-
-
 @pytest.fixture
-def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FlaskClient, Path]:
+def ctx(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+) -> tuple[FlaskClient, Path]:
     # Pin every capture-side tap deterministic: no wondering LLM, no answer
     # engine (each test patches the answer core itself).
     monkeypatch.setenv("LEDGER_RESEARCH_TAP", "0")
     monkeypatch.delenv("LEDGER_ANSWER_SYNC", raising=False)
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
+    migrated_db(db, stamp=_PRIOR_HEAD, archived=True, reanchor_to_active_head=True)
     client = comments_server.create_app(tmp_path).test_client()
     return client, db
 
@@ -156,10 +149,16 @@ def test_answer_capture_clears_pending_on_empty_answer(
     """The real answer core must clear ledger_answer_pending even when the
     engine produces nothing — a card must never say 'Answering…' forever."""
     _client, db = ctx
+    from capture.triage import TriageVerdict
     from onmymind import respond
 
     note_id = _capture_note(db, "What is my cost basis?")
     patch_note_context(note_id, {"ledger_answer_pending": True}, db_path=db)
+
+    def _answer_now(_body: str, **_kwargs: object) -> TriageVerdict:
+        return TriageVerdict(route="answer_now")
+
+    monkeypatch.setattr(respond, "classify_capture_triage", _answer_now)
     monkeypatch.setattr(
         respond, "respond_turn", lambda *a, **kw: iter([{"type": "error", "error": "nope"}])
     )

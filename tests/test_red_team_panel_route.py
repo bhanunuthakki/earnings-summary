@@ -121,10 +121,12 @@ def test_red_team_aliases_into_ask(client) -> None:
     from pipeline.command_center_shell import (
         _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]
     )
+    from pipeline.work_os_shell import _LEGACY_HASHES  # pyright: ignore[reportPrivateUsage]
 
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    # The old id aliases to Ask (mirrored in the SHELL_JS REDIRECTS map).
+    # Both shells keep the old id as an alias to the on-demand Ask surface.
     assert _LEGACY_PANEL_REDIRECTS["red_team"] == "explore"
-    assert "red_team:" in body.replace("'", "")
+    assert _LEGACY_HASHES["red_team"] == "screen-analytics-playground"
+    assert '"red_team": "screen-analytics-playground"' in body
