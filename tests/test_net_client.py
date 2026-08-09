@@ -234,7 +234,7 @@ def test_network_error_and_structured_log_redact_query_secret(
         client.request_json(
             "GET",
             "https://x.test/data",
-            params={"apikey": "VERY_SECRET"},
+            params={"apikey": "VERY_SECRET"},  # pragma: allowlist secret
         )
 
     assert "VERY_SECRET" not in str(caught.value)
@@ -257,17 +257,24 @@ def test_fmp_adapter_validates_expected_fallback_shape(
     fmp = FmpClient(http=_client(session))
 
     with pytest.raises(HttpCallError) as caught:
-        fmp.get_json("earnings", api_key="secret", expected=JsonShape.ARRAY)
+        fmp.get_json(
+            "earnings",
+            api_key="secret",  # pragma: allowlist secret
+            expected=JsonShape.ARRAY,
+        )
 
     assert caught.value.kind is HttpErrorKind.SCHEMA
     assert caught.value.payload == {"Error Message": "plan refused"}
     params = captured["params"]
     assert isinstance(params, dict)
-    assert params["apikey"] == "secret"
+    assert params["apikey"] == "secret"  # pragma: allowlist secret
 
 
 def test_fmp_adapter_rejects_non_fmp_url_before_transport() -> None:
     fmp = FmpClient(http=_client(requests.Session()))
 
     with pytest.raises(ValueError, match="FMP URL"):
-        fmp.get_url_json("https://example.test/collect", api_key="secret")
+        fmp.get_url_json(
+            "https://example.test/collect",
+            api_key="secret",  # pragma: allowlist secret
+        )

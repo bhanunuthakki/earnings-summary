@@ -284,7 +284,7 @@ def test_linkable_targets_labels(db_path: Path) -> None:
     assert kinds == ["decision", "position"]
     assert "TRIM 20%" in targets[0].label and "high conviction" in targets[0].label
     assert targets[0].concluded is False
-    assert targets[1].label.startswith("2026-01-15 → open")
+    assert targets[1].label.startswith("2026-01-15 -> open")
 
 
 def test_link_note_validates_targets(db_path: Path) -> None:

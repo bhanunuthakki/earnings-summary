@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 from flask.testing import FlaskClient
+from pydantic import TypeAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -76,12 +77,17 @@ def test_process_dry_run_returns_inline_results(
     repo: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _fake_call_llm(*_args: object, **_kwargs: object) -> str:
-        return '{"revised_thesis": "x", "diff_summary": "y"}'
+    def _fake_call_llm(*_args: object, **kwargs: object) -> object:
+        schema = kwargs.get("schema")
+        assert isinstance(schema, TypeAdapter)
+        return cast(
+            object,
+            schema.validate_python({"revised_thesis": "x", "diff_summary": "y"}),
+        )
 
     monkeypatch.setattr(
         prc,
-        "call_llm",
+        "call_llm_structured",
         _fake_call_llm,
     )
     resp = client.post(

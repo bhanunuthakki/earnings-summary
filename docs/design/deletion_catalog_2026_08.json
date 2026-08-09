@@ -98,7 +98,7 @@
       "id": "restored-test-only-provenance",
       "authorization": "Owner authorized full dead-code clearance on 2026-08-08; a transitive product-import scan confirmed these restored provenance modules were referenced only by their tests.",
       "disposition": "delete",
-      "rollback_commit": "3b76037a527c3c25de1c80660163a2c7c14b8969",
+      "rollback_commit": "b3812812411f4139ea396cac22e0b844afa3a426",
       "code_targets": [
         "src/provenance/fact_identity_policy.py",
         "src/provenance/postgres_shadow.py"
@@ -115,7 +115,7 @@
       "id": "legacy-full-refresh-wrapper",
       "authorization": "Owner authorized full tech-debt clearance on 2026-08-08; the roadmap explicitly replaces the duplicate batch wrapper with refresh_dispatch.py --mode full.",
       "disposition": "delete",
-      "rollback_commit": "3b76037a527c3c25de1c80660163a2c7c14b8969",
+      "rollback_commit": "b3812812411f4139ea396cac22e0b844afa3a426",
       "code_targets": [
         "full_refresh.bat"
       ],
@@ -130,7 +130,7 @@
       "id": "unreachable-python-residue",
       "authorization": "Owner explicitly approved the exact dead-code deletion on 2026-08-08 after the privacy-bearing Telegram renderer was excluded; transitive reachability from production entrypoints, scheduler, manifest, dynamic imports, and manual CLI references found no product path to these modules.",
       "disposition": "delete",
-      "rollback_commit": "3b76037a527c3c25de1c80660163a2c7c14b8969",
+      "rollback_commit": "b3812812411f4139ea396cac22e0b844afa3a426",
       "code_targets": [
         "src/compute/holding_scorecard.py",
         "src/evals/p0_capture_runner.py",

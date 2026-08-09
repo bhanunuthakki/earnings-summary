@@ -486,7 +486,8 @@ def test_review_command_background_job_argv_carries_verdict_and_at_price(
     run_chat_command(Path("/repo"), "/review FLKR at $70", _Capturing())
     argv = cast("list[str]", started["argv"])
     assert started["ticker"] == "FLKR"
-    assert argv[1].endswith("review_position.py")
+    assert Path(argv[1]).name == "sqlite_bootstrap.py"
+    assert Path(argv[2]).name == "review_position.py"
     assert "FLKR" in argv and "--verdict" in argv
     assert "--at-price" in argv and "70.0" in argv
 

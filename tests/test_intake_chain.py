@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -41,8 +41,16 @@ def _result(ticker: str, doc_type: DocType, *, skipped: bool = False) -> IntakeR
     )
 
 
-def _called_script_names(mock_run) -> list[str]:
-    return [Path(c.args[0][1]).name for c in mock_run.mock_calls]
+def _called_script_names(mock_run: Mock) -> list[str]:
+    return [_managed_target(c.args[0]).name for c in mock_run.mock_calls]
+
+
+def _managed_target(argv: list[str]) -> Path:
+    assert len(argv) >= 3
+    assert Path(argv[1]).name == "sqlite_bootstrap.py"
+    target = Path(argv[2])
+    assert target.suffix == ".py"
+    return target
 
 
 def _ticker_for_call(call_args: list[str]) -> str:
@@ -94,17 +102,17 @@ def test_chain_processing_handles_mixed_doctype_batch():
     process_tickers = {
         _ticker_for_call(c.args[0])
         for c in mock_run.mock_calls
-        if "process_ir_documents.py" in c.args[0][1]
+        if _managed_target(c.args[0]).name == "process_ir_documents.py"
     }
     ingest_tickers = {
         _ticker_for_call(c.args[0])
         for c in mock_run.mock_calls
-        if "ingest_transcripts.py" in c.args[0][1]
+        if _managed_target(c.args[0]).name == "ingest_transcripts.py"
     }
     commit_tickers = {
         _ticker_for_call(c.args[0])
         for c in mock_run.mock_calls
-        if "extract_commitments_from_transcript.py" in c.args[0][1]
+        if _managed_target(c.args[0]).name == "extract_commitments_from_transcript.py"
     }
 
     assert process_tickers == {"NU", "META"}
