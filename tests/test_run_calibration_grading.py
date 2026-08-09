@@ -29,6 +29,7 @@ BEAR = "grade_bear_cases.py"
 EVALS = "run_llm_evals.py"
 CAPTURE_RETENTION = "prune_llm_capture.py"
 BEHAVIOR_DISTILL = "run_behavior_distill.py"
+SQLITE_BOOTSTRAP = "sqlite_bootstrap.py"
 
 # The full run order: outcome graders, then the seven eval-audit rungs, then
 # the tenet-2 Phase 4 behavioral-rules distiller (always last).
@@ -76,18 +77,20 @@ class _RecordingRun:
             raise subprocess.TimeoutExpired(
                 cmd=argv, timeout=timeout if isinstance(timeout, float | int) else 0
             )
-        return _FakeCompleted(returncode=self._returncodes.get(script or "", 0))
+        return _FakeCompleted(returncode=self._returncodes.get(script, 0))
 
     @property
     def scripts(self) -> list[str]:
-        return [s for c in self.calls if (s := _script_of(c)) is not None]
+        return [_script_of(c) for c in self.calls]
 
 
-def _script_of(argv: list[str]) -> str | None:
-    for tok in argv:
-        if tok.endswith(".py"):
-            return Path(tok).name
-    return None
+def _script_of(argv: list[str]) -> str:
+    """Return the target while enforcing the managed-child command contract."""
+    assert len(argv) >= 3
+    assert Path(argv[1]).name == SQLITE_BOOTSTRAP
+    target = Path(argv[2])
+    assert target.suffix == ".py"
+    return target.name
 
 
 def _parse_summary(out: str) -> dict[str, object]:
