@@ -27,6 +27,7 @@ sys.path.insert(0, str(SRC))
 
 from ui.controls import (  # noqa: E402
     controls_css,
+    copilot_prompt_chip,
     k_empty,
     panel_section_title,
     panel_toolbar,
@@ -41,6 +42,14 @@ from ui.tokens import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # controls_css — modes
 # ---------------------------------------------------------------------------
+
+
+def test_copilot_prompt_chip_renders_interactive_chip() -> None:
+    html = copilot_prompt_chip("Analyze NU Q2 beat", citation="doc:bcb_jun26_p4")
+    assert "k-chip-copilot" in html
+    assert "k-chip-btn" in html
+    assert 'data-citation="doc:bcb_jun26_p4"' in html
+    assert "Analyze NU Q2 beat" in html
 
 
 def test_dark_mode_pins_dark_scheme_and_chevron() -> None:
@@ -534,6 +543,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/ticker_settings_panel.py",
         "pipeline/triage_panel.py",
         "pipeline/validation_issues_panel.py",
+        "pipeline/work_os_shell.py",
         "pipeline/worldview_panel.py",
         "redteam/brief.py",
         "report/renderers/charts_v2.py",

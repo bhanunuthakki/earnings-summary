@@ -1,0 +1,112 @@
+"""Portfolio-only hydration contract for the Work OS prototype."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
+from pipeline.dashboard_status import DashboardRow
+from pipeline.research_cockpit import CockpitRow
+from pipeline.work_os_portfolio import build_work_os_portfolio
+
+
+def _row(
+    ticker: str,
+    *,
+    name: str,
+    breach_status: str = "intact",
+    pending_alerts: int = 0,
+    pending_tier1_alerts: int = 0,
+    new_docs: int = 0,
+) -> CockpitRow:
+    return CockpitRow(
+        base=DashboardRow(
+            ticker=ticker,
+            list_type="portfolio",
+            fmp_last_pulled="2026-08-08T10:00:00+00:00",
+            last_transcript=None,
+            last_build_at="2026-08-08T09:00:00+00:00",
+            open_comments_count=0,
+            breach_status=breach_status,
+        ),
+        name=name,
+        price=14.25,
+        day_move_pct=1.5,
+        fair_value=18.50,
+        fv_gap_pct=-23.0,
+        next_earnings="2026-08-20",
+        pending_alerts=pending_alerts,
+        pending_tier1_alerts=pending_tier1_alerts,
+        new_docs=new_docs,
+    )
+
+
+def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
+    live = LivePortfolio(
+        available=True,
+        api_url="http://tracker.test",
+        total_market_value=1_000_000.0,
+        as_of="2026-08-08",
+        positions=[
+            LivePosition("NU", "Nubank", 10.0, 125_000.0, 90_000.0, 35_000.0, 12.5),
+            LivePosition("MELI", "MercadoLibre", 1.0, 50_000.0, 40_000.0, 10_000.0, 5.0),
+        ],
+    )
+
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        live,
+        generated_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
+    )
+
+    assert payload.status == "ok"
+    assert payload.total_market_value == 1_000_000.0
+    assert payload.as_of == "2026-08-08"
+    assert [company.ticker for company in payload.companies] == ["NU"]
+    company = payload.companies[0]
+    assert company.name == "Nu Holdings"
+    assert company.current_weight_pct == 12.5
+    assert company.market_value == 125_000.0
+    assert company.report_url == "/reports/NU"
+
+
+def test_portfolio_hydration_fails_closed_when_tracker_is_offline() -> None:
+    payload = build_work_os_portfolio(
+        [_row("BKNG", name="Booking Holdings")],
+        LivePortfolio(
+            available=False,
+            api_url="http://tracker.test",
+            error="connection refused with internal detail",
+        ),
+    )
+
+    assert payload.status == "degraded"
+    assert payload.total_market_value is None
+    assert payload.warnings == ["portfolio_tracker_unavailable"]
+    assert payload.companies[0].ticker == "BKNG"
+    assert payload.companies[0].current_weight_pct is None
+    assert "internal detail" not in payload.model_dump_json()
+
+
+def test_portfolio_action_queue_is_material_and_bounded_to_three() -> None:
+    rows = [
+        _row(
+            f"T{i}",
+            name=f"Company {i}",
+            breach_status="breach" if i == 0 else "warn",
+            pending_alerts=i + 1,
+            pending_tier1_alerts=1 if i == 0 else 0,
+            new_docs=i,
+        )
+        for i in range(5)
+    ]
+
+    payload = build_work_os_portfolio(
+        rows,
+        LivePortfolio(available=False, api_url="http://tracker.test"),
+    )
+
+    assert len(payload.actions) == 3
+    assert payload.actions[0].ticker == "T0"
+    assert payload.actions[0].tone == "bad"
+    assert payload.actions[0].headline == "Review thesis-decisive alert"

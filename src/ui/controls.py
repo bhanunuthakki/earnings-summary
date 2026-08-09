@@ -273,6 +273,18 @@ button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs
 button.k-chip:hover, .k-chip-btn:hover { color: var(--fg); border-color: var(--border-2); }
 button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var(--accent); }
 
+/* ---- copilot suggestion prompt chips (Ask Dock & Work OS side-drawers) ---- */
+.k-chip-copilot {
+  cursor: pointer; font: inherit; font-size: var(--fs-caption); font-weight: 500;
+  background: var(--paper); border: var(--bw-thin) solid var(--border);
+  color: var(--fg-soft); border-radius: var(--radius-full); padding: 3px 10px;
+  display: inline-flex; align-items: center; gap: 6px; text-transform: none;
+  transition: border-color var(--transition), color var(--transition), transform var(--transition);
+}
+.k-chip-copilot:hover {
+  border-color: var(--accent); color: var(--fg); transform: translateY(var(--lift-sm));
+}
+
 /* ---- chip-tab: the section-nav / pane-switcher variant of a clickable chip
    (owner directive 2026-08-02 — sticky nav bands must never change height
    between active and inactive chips). Same pill shape as any other chip;
@@ -609,6 +621,50 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
   color: var(--fg-soft); background: var(--paper); border: 1px solid var(--border);
   border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0;
   white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+
+/* ---- Work OS Card Animations & Zero-Layout-Pop Dismissal ---- */
+.k-card-interactive {
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms ease;
+}
+.k-card-interactive:hover {
+  transform: translateY(var(--lift-md));
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--border-2);
+}
+.card-dismissing {
+  transform: scale(0.97) translateY(var(--lift-md)) !important;
+  opacity: 0 !important;
+  max-height: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  border-color: transparent !important;
+}
+
+/* ---- Card Grid Layouts ---- */
+.card-grid-action { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap: var(--sp-4); }
+.card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-4); }
+.card-grid-risk { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-4); }
+
+/* ---- Performance & Stat Numbers ---- */
+.stat-heading { font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-number { font-family: var(--mono); font-size: var(--fs-stat); font-weight: 600; margin-top: var(--sp-1); font-feature-settings: 'tnum', 'zero'; }
+.stat-subtext { font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-1); }
+
+/* ---- Time Horizon Picker ---- */
+.picker-container { display: flex; gap: var(--sp-1); background: var(--paper); padding: var(--sp-1); border-radius: var(--radius); border: var(--bw-thin) solid var(--border); }
+.picker-btn { padding: var(--sp-1) var(--sp-2); font-size: var(--fs-caption); }
+
+/* ---- Relative Performance Bar Comparator ---- */
+.perf-bar-track { background: var(--paper); height: var(--bar-track-height); border-radius: var(--radius-full); overflow: hidden; display: flex; margin-top: var(--sp-2); }
+.perf-bar-fill { height: 100%; border-radius: var(--radius-full); transition: width 400ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* ---- Provenance & Drill Handles ---- */
+.drill-handle { border-bottom: var(--bw-thin) dotted var(--accent); color: var(--fg); cursor: pointer; padding: 0 var(--sp-half); border-radius: var(--radius-sm); transition: color var(--transition), background-color var(--transition); }
+.drill-handle:hover { color: var(--accent); border-bottom-style: solid; background-color: var(--accent-soft); }
+.src-chip { font-family: var(--mono); font-size: var(--fs-nano); padding: var(--sp-1) var(--sp-1); border-radius: var(--radius-md); background-color: var(--paper); color: var(--muted); border: var(--bw-thin) solid var(--border); text-decoration: none; cursor: pointer; transition: color var(--transition), border-color var(--transition); }
+.src-chip:hover { color: var(--accent); border-color: var(--accent); }
 """
 
 
@@ -1004,3 +1060,18 @@ def fact_anchor_attrs(
     if ask_q:
         attrs.append(f'data-ask-q="{escape(ask_q, quote=True)}"')
     return " ".join(attrs)
+
+
+def copilot_prompt_chip(prompt: str, *, citation: str | None = None) -> str:
+    """Canonical Copilot prompt suggestion chip HTML.
+
+    Renders a interactive prompt chip (`.k-chip .k-chip-btn .k-chip-copilot`) that populates the
+    Copilot query input and triggers grounded AI execution with citation annotations.
+    """
+    from html import escape
+
+    cite_attr = f' data-citation="{escape(citation, quote=True)}"' if citation else ""
+    return (
+        f'<button type="button" class="k-chip k-chip-btn k-chip-copilot"{cite_attr} '
+        f'onclick="populateCopilotPrompt(this)">{escape(prompt)}</button>'
+    )

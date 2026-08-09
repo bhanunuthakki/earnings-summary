@@ -68,6 +68,7 @@ PALETTE_LIGHT: dict[str, str] = {
     # tokens precisely so that constraint is expressible.
     "mark": "#8a5a28",
     "mark-soft": "#c8ad8a",
+    "series-qqq": "#5b8def",
     "seg-1": "#0d0d0c",
     "seg-2": "#443f34",
     "seg-3": "#7d7869",
@@ -78,6 +79,8 @@ PALETTE_LIGHT: dict[str, str] = {
     # The one modal scrim wash (CCOverlay / .k-scrim). A neutral black veil, not
     # a palette color — tokenized so surfaces never freehand `rgba(0,0,0,.5)`.
     "scrim": "rgba(0, 0, 0, 0.5)",
+    "glass-bg": "rgba(255, 255, 255, 0.75)",
+    "glass-border": "rgba(0, 0, 0, 0.06)",
 }
 
 # "white" is the light palette with a brighter page background.
@@ -89,31 +92,24 @@ PALETTE_WHITE_OVERRIDES: dict[str, str] = {
 
 # Dark — the dashboard surfaces' only theme; the workspace's opt-in theme.
 #
-# Warmed 2026-07-25. The neutrals used to carry a blue cast (#0c0d10 ground,
-# #2a2d35 borders, #888b94 gray) which read as "screen". Every neutral now
-# carries a faint amber cast instead, which reads as paper. The shift is small
-# per-swatch and deliberately invisible as a color change — it is felt as a
-# temperature change across the whole surface. Semantics are UNTOUCHED:
-# --ok/--warn/--bad keep their exact values and --accent stays blue, so
-# "green = good" and "blue = interactive" survive the warming intact.
+# Warmed 2026-07-25 & elevated 2026-08-07 ("calm desk, deep drawers" & quiet Work OS):
+# Ultra-deep warm obsidian ground (#090a0c) with subtle neutral temperature,
+# glassmorphism surface tokens, and crisp hairline borders.
 PALETTE_DARK: dict[str, str] = {
-    "bg": "#0d0d0c",
-    "surface": "#141412",
-    "paper": "#191815",
+    "bg": "#090a0c",
+    "surface": "#121316",
+    "paper": "#18191d",
     "fg": "#f4f3ef",
-    "fg-soft": "#d3cec3",
-    # The one de-emphasis gray (see PALETTE_LIGHT). #8b877d is the warm
-    # counterpart of the old #888b94 at the same lightness: 5.43:1 against this
-    # bg (the cool pair measured 5.71:1), so the AA-body floor still holds for
-    # the real body text it backs.
-    "muted": "#8b877d",
-    "border": "#272621",
-    "border-2": "#38342b",
-    "hairline": "#1c1b18",
+    "fg-soft": "#c5c2b8",
+    # The one de-emphasis gray (see PALETTE_LIGHT).
+    "muted": "#7c7e87",
+    "border": "#22242a",
+    "border-2": "#31343e",
+    "hairline": "#18191d",
     "accent": "#8aa8ff",
-    "accent-soft": "#1c2138",
+    "accent-soft": "#181f38",
     # Dark accent is light — ink on it must be near-black, not white.
-    "accent-contrast": "#0d0d0c",
+    "accent-contrast": "#090a0c",
     "ok": "#4ade80",
     "warn": "#f5c66a",
     "bad": "#f08a8a",
@@ -121,13 +117,16 @@ PALETTE_DARK: dict[str, str] = {
     # variant is the keyline shade, not a text color.
     "mark": "#b08d5f",
     "mark-soft": "#705737",
+    "series-qqq": "#5b8def",
     "seg-1": "#f4f3ef",
     "seg-2": "#b5b0a4",
     "seg-3": "#7d7869",
     "seg-4": "#443f34",
     "seg-5": "#262219",
-    "shadow-pop": "0 12px 32px rgba(0, 0, 0, 0.45)",
-    "scrim": "rgba(0, 0, 0, 0.5)",
+    "shadow-pop": "0 16px 48px -8px rgba(0, 0, 0, 0.7)",
+    "scrim": "rgba(0, 0, 0, 0.65)",
+    "glass-bg": "rgba(18, 19, 22, 0.75)",
+    "glass-border": "rgba(255, 255, 255, 0.05)",
 }
 
 FONT_TOKENS: dict[str, str] = {
@@ -137,44 +136,43 @@ FONT_TOKENS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Semantic type scale (UI polish foundation, 2026-06-11; collapsed to four
-# steps design-sync 2026-07-19).
+# Semantic type scale (UI polish foundation, v4 Masterwork Work OS Edition,
+# 2026-08-07).
 #
-# Size encodes IMPORTANCE, not surface. Before this scale the ten renderers
-# carried 34 distinct font sizes (8.5px-100px); the same component rendered
-# at different sizes on different surfaces (.kpi-value: 22px shell vs 18px
-# ticker page; h1: 24px shell vs 26px digest). Every rule picks the step
-# that matches the element's importance:
+# Size encodes IMPORTANCE, not surface. Evolved to the 10-step Work OS scale
+# to support information-dense financial copilot workspaces (Harvey/Legora level)
+# with ultra-deep obsidian ground (#090a0c) and clear visual hierarchy:
 #
-#   --fs-display  the page's one dominant element: page title, hero stat
-#   --fs-title    panel / drawer / card titles + real sub-section headings
-#                 (the h2/h3 tier)
-#   --fs-body     default UI text: tables, inputs, buttons, tabs, reading prose
-#   --fs-caption  everything smaller: table headers, stamps, hints, sublabels,
-#                 chips, badges, kind tags, axis marks
-#
-# Four steps, not six: --fs-section (14px) folded into --fs-body (or --fs-title
-# for real headings) and --fs-micro (10px) into --fs-caption — a six-step ramp
-# on a 13px base gave two pairs (14/13, 11.5/10) too close to read as distinct
-# tiers. --fs-caption rounded 11.5px → 11px in the same pass.
-#
-# Two sanctioned escapes, nothing else: the workspace report's 60px identity
-# ticker (a deliberate brand moment) and `font-size: 0.93em` for inline
-# code/mono inside running text (an optical correction — mono renders larger
-# than sans at equal px — not an importance level).
+#   --fs-stat          metric stat numbers, hero ticker symbols (24px)
+#   --fs-display       the page's one dominant element: page title, hero stat (22px)
+#   --fs-header-title  governed target card titles, panel hero headers (17px)
+#   --fs-title         panel / drawer / card titles + real sub-section headings (16px)
+#   --fs-serif-body    editorial thesis prose, reading memo paragraphs (14.5px)
+#   --fs-body          default UI text: tables, inputs, buttons, tabs (13px)
+#   --fs-caption       everything smaller: table headers, stamps, sublabels, chips, badges (11px)
+#   --fs-mono-sm       timestamp badges, locator tags, mono annotations (10px)
+#   --fs-micro         nav layer section headers, micro uppercase labels (9.5px)
+#   --fs-nano          provenance source chips (.src-chip) (9px)
 #
 # Queued UI sessions build on these names — treat them as a public contract.
 TYPE_SCALE: dict[str, str] = {
+    "fs-stat": "24px",
     "fs-display": "22px",
+    "fs-header-title": "17px",
     "fs-title": "16px",
+    "fs-serif-body": "14.5px",
     "fs-body": "13px",
     "fs-caption": "11px",
+    "fs-mono-sm": "10px",
+    "fs-micro": "9.5px",
+    "fs-nano": "9px",
 }
 
 # Spacing scale — gaps, paddings, and margins snap to these steps so density
 # differences between surfaces stay deliberate (a surface may still define
 # local layout tokens, but their VALUES should come from this ladder).
 SPACING_SCALE: dict[str, str] = {
+    "sp-half": "2px",
     "sp-1": "4px",
     "sp-2": "8px",
     "sp-3": "12px",
@@ -183,14 +181,41 @@ SPACING_SCALE: dict[str, str] = {
     "sp-6": "32px",
 }
 
-# Chrome: ONE corner radius for rectangular boxes (cards, panels, drawers,
-# inputs, popovers); --radius-full only for deliberately round shapes (pills,
-# dots, toggle tracks). --transition is the standard hover/drawer/popover
-# timing — use `var(--transition)` with explicit properties, never `all`.
+# Chrome & Work OS tokens: corner radii, layout dimensions, blur filters, and motion timing.
 CHROME_TOKENS: dict[str, str] = {
+    "sidebar-width": "240px",
+    "main-max-width": "1240px",
+    "drawer-width": "540px",
+    "header-height": "48px",
+    "toast-offset-bottom": "28px",
+    "toast-offset-right": "28px",
+    "dot-size": "6px",
+    "ticker-width": "34px",
+    "bar-track-height": "8px",
+    "grid-card-lg": "340px",
+    "grid-card-md": "280px",
+    "grid-card-sm": "240px",
+    "bw-thin": "1px",
+    "bw-thick": "2px",
+    "lift-sm": "-1px",
+    "lift-md": "-2px",
+    "toast-hide-y": "100px",
+    "blur-sm": "6px",
+    "blur-md": "16px",
+    "blur-lg": "24px",
+    "radius-sm": "2px",
+    "radius-md": "3px",
     "radius": "8px",
+    "radius-card": "10px",
+    "radius-drawer": "14px",
     "radius-full": "999px",
     "transition": "150ms ease",
+    "transition-fluid": "250ms cubic-bezier(0.16, 1, 0.3, 1)",
+    "shadow-btn-primary": "0 2px 10px rgba(138, 168, 255, 0.22)",
+    "shadow-btn-primary-hover": "0 4px 16px rgba(138, 168, 255, 0.38)",
+    "shadow-card": "0 4px 20px -2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.05)",
+    "shadow-card-hover": "0 12px 28px -6px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.1)",
+    "shadow-drawer": "-16px 0 48px rgba(0, 0, 0, 0.75)",
 }
 
 # Rides along inside every palette_css() :root block.
@@ -302,7 +327,7 @@ def palette_css(default: str = "paper") -> str:
 # self-contained HTML file (no asset fetches — the workspace opens file://).
 _FAVICON_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
-    "<rect width='32' height='32' rx='7' fill='%230c0d10'/>"
+    "<rect width='32' height='32' rx='7' fill='%23090a0c'/>"
     "<path d='M6 22l6-7 4.5 3.5L24 9' stroke='%234ade80' stroke-width='2.6' "
     "fill='none' stroke-linecap='round' stroke-linejoin='round'/>"
     "<circle cx='25.5' cy='8' r='2.2' fill='%238aa8ff'/>"
