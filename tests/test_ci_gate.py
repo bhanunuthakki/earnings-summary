@@ -70,6 +70,7 @@ def test_gate_requires_every_applicable_job_to_succeed(helper: ModuleType) -> No
         results={
             "changes": "success",
             "tests": "success",
+            "design": "success",
             "quality": "success",
             "typecheck": "skipped",
             "security": "success",
@@ -85,6 +86,7 @@ def test_gate_accepts_skipped_expensive_jobs_for_docs_only(helper: ModuleType) -
             results={
                 "changes": "success",
                 "tests": "skipped",
+                "design": "skipped",
                 "quality": "skipped",
                 "typecheck": "skipped",
                 "security": "skipped",
@@ -101,6 +103,7 @@ def test_gate_never_hides_failed_or_cancelled_jobs(helper: ModuleType) -> None:
         results={
             "changes": "failure",
             "tests": "skipped",
+            "design": "skipped",
             "quality": "skipped",
             "typecheck": "skipped",
             "security": "cancelled",
@@ -118,6 +121,7 @@ def test_gate_rejects_skipped_change_classification(helper: ModuleType) -> None:
         results={
             "changes": "skipped",
             "tests": "skipped",
+            "design": "skipped",
             "quality": "skipped",
             "typecheck": "skipped",
             "security": "skipped",

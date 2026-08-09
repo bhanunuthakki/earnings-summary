@@ -1758,7 +1758,8 @@ def test_workspace_uses_the_six_prototype_brief_groups(
     ]
     positions = [shell.index(f'<span class="tab-label">{label}</span>') for label in labels]
     assert positions == sorted(positions)
-    assert shell.count('class="tab active"') == 1
+    assert shell.count('class="tab k-btn k-nav-item active"') == 1
+    assert shell.count('aria-current="page"') == 1
 
 
 @pytest.mark.parametrize("part", _part_names(PORTFOLIO_PANES))

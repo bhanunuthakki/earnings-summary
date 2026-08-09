@@ -28,15 +28,18 @@ sys.path.insert(0, str(SRC))
 from ui.controls import (  # noqa: E402
     controls_css,
     copilot_prompt_chip,
+    icon_svg,
     k_empty,
     panel_section_title,
     panel_toolbar,
     ticker_label,
 )
 from ui.tokens import (  # noqa: E402
+    CHROME_TOKENS,
     FONT_FAMILY_KEYWORDS,
     RADIUS_PX,
     TYPE_SCALE_PX,
+    palette_css,
 )
 
 # ---------------------------------------------------------------------------
@@ -134,6 +137,57 @@ def test_button_hierarchy_is_three_intents_from_tokens() -> None:
     assert "border-color: var(--border)" in quiet
     danger = css.split(".k-btn-danger", 1)[1].split("}", 1)[0]
     assert "var(--bad)" in danger
+
+
+def test_work_os_navigation_and_icon_primitives_are_canonical() -> None:
+    css = controls_css("dark")
+    assert ".k-sidebar {" in css
+    assert ".k-nav-item {" in css
+    assert ".k-icon-btn {" in css
+    assert "width: var(--sidebar-width)" in css
+    assert "min-height: var(--nav-item-height)" in css
+    assert "width: var(--icon-size)" in css
+
+    icon = icon_svg("portfolio", classes="test-icon")
+    assert icon.startswith('<svg class="k-icon test-icon"')
+    assert 'aria-hidden="true"' in icon
+    assert 'stroke="currentColor"' in icon
+    assert "<path" in icon
+
+
+def test_icon_svg_rejects_unknown_names() -> None:
+    with pytest.raises(ValueError):
+        icon_svg("made-up")
+
+
+def test_standalone_earnings_calendar_composes_the_design_system() -> None:
+    """Execution-generated HTML is a product surface too; keep it inside the
+    design-sync boundary instead of letting the src-only discovery miss it."""
+    source = (PROJECT_ROOT / "execution" / "build_earnings_calendar.py").read_text(encoding="utf-8")
+    assert 'palette_css("dark")' in source
+    assert 'controls_css("dark")' in source
+    assert 'class="calendar-sidebar k-sidebar"' in source
+    assert 'class="k-chip k-chip-mono calendar-kind' in source
+    assert 'class="badge ' not in source
+    assert '"Segoe UI"' not in source
+    assert 'aria-label="Earnings calendar"' in source
+    assert 'aria-label="Open command center"' in source
+    assert 'aria-label="Research briefs"' in source
+    assert 'href="http://127.0.0.1:7421/"' in source
+    assert source.count('class="calendar-table-wrap"') == 3
+    assert "overflow-x: auto" in source
+
+
+def test_mobile_controls_keep_accessible_text_and_touch_floors() -> None:
+    css = controls_css("dark")
+    tokens = palette_css("dark")
+    assert CHROME_TOKENS["mobile-control-font-size"] == "16px"
+    assert CHROME_TOKENS["touch-target-size"] == "44px"
+    assert "--mobile-control-font-size: 16px" in tokens
+    assert "--touch-target-size: 44px" in tokens
+    mobile = css.split("@media (max-width: 768px)", 1)[1]
+    assert "font-size: var(--mobile-control-font-size)" in mobile
+    assert "min-height: var(--touch-target-size)" in mobile
 
 
 def test_chips_are_full_radius_caption_uppercase() -> None:
@@ -569,18 +623,10 @@ REGISTERED: frozenset[str] = frozenset(
 # axis/label sizes + fills are tuned to plot geometry, not the UI scale.
 EXEMPT: frozenset[str] = frozenset({"ui/tokens.py", "report/renderers/charts_v2.py"})
 
-# §1 escapes that relax a single dimension on a single surface:
-#   * workspace_styles' editorial reading/display ramp (15/28/60/100px …) — type
-#     is "deliberately surface-specific"; its non-type primitives still conform.
-#   * source_chip's 8.5px .src-chip mark.
-_FONT_SIZE_EXEMPT: frozenset[str] = frozenset(
-    {"report/renderers/workspace_styles.py", "ui/source_chip.py"}
-)
-#   * the 3px .src-chip corner (size AND corner sanctioned at that scale).
-_RADIUS_SANCTIONED: dict[str, frozenset[str]] = {
-    "report/renderers/workspace_styles.py": frozenset({"3px"}),
-    "ui/source_chip.py": frozenset({"3px"}),
-}
+# All application and in-app report surfaces now share the same visible type
+# scale and radius contracts. Fully exempt token/chart sources remain above.
+_FONT_SIZE_EXEMPT: frozenset[str] = frozenset()
+_RADIUS_SANCTIONED: dict[str, frozenset[str]] = {}
 
 # Known pre-existing drift, per (surface, dimension), each with its owner. The
 # quarantine can only SHRINK (test_quarantine_only_shrinks). Seeded empirically
@@ -620,7 +666,7 @@ QUARANTINE: dict[str, frozenset[str]] = {
     # the canonical --sans/--serif/--mono tokens (every font-family decl now reads
     # a real token).
     # workspace_chat's lone off-scale 3px code corner moved to var(--radius) in
-    # the 2026-06-14 sweep; font-size stays quarantined (report unfork).
+    # the 2026-06-14 sweep; its 20px close glyph joined the compact display step.
     # UX audit (2026-07-18): workspace_chat / workspace_comments / workspace_styles
     # / ui/cite_marks graduated their `alias` dimension — the shared legacy
     # --panel/--panel-alt/--ink/--ink-muted/--bg-elev/--link :root block in
@@ -628,12 +674,11 @@ QUARANTINE: dict[str, frozenset[str]] = {
     # tokens (--surface/--paper/--fg/--muted/--accent). Same pass graduated
     # `color` on workspace_chat / workspace_comments / cite_marks: their raw
     # rgba() drop-shadows/washes moved onto var(--shadow-pop) / color-mix(var(--fg) …).
-    "report/renderers/workspace_chat.py": frozenset({"font-size"}),
     # workspace_comments graduated its kit-badge dimension in the deferred-items
     # pass: .cmt-outbox-badge / .cmt-health-pill now ride the kit's .k-pill (tone
-    # set in JS) with layout/mono-micro refine only. font-size/radius stay
-    # quarantined (report unfork — unrelated to the pill migration).
-    "report/renderers/workspace_comments.py": frozenset({"font-size", "radius"}),
+    # set in JS) with layout/mono-micro refine only. Its 20px close glyph joined
+    # the compact display step; radius stays quarantined (report unfork).
+    "report/renderers/workspace_comments.py": frozenset({"radius"}),
     # workspace_styles graduated its kit-badge dimension in the same pass: the
     # .decision-badge.outcome-* filled chips moved onto .k-pill + tone (routed in
     # thesis_risk.py). Report-spacing-rhythm pass (2026-08-02): `color`
@@ -863,18 +908,17 @@ def test_sanctioned_escapes_survive() -> None:
         == {}
     )
     assert scan_surface("ui/tokens.py", _css_text(SRC / "ui/tokens.py")) == {}
-    # source_chip's 8.5px + 3px micro-mark is clean by sanction.
+    # Source chips and the workspace report now use the shared four-step scale.
     assert "font-size" not in scan_surface(
         "ui/source_chip.py", _css_text(SRC / "ui/source_chip.py")
     )
     assert "radius" not in scan_surface("ui/source_chip.py", _css_text(SRC / "ui/source_chip.py"))
-    # workspace reading/display ramp (60px/100px …) survives — type only.
     assert "font-size" not in scan_surface(
         "report/renderers/workspace_styles.py",
         _css_text(SRC / "report/renderers/workspace_styles.py"),
     )
     ws = _css_text(SRC / "report/renderers/workspace_styles.py")
-    assert "60px" in ws and "100px" in ws  # the ramp really is present
+    assert "font-size: 60px" not in ws and "font-size: 100px" not in ws
     # The chevron data-URIs (%23-encoded) are not colors; the kit stays clean.
     assert scan_surface("ui/controls.py", _css_text(SRC / "ui/controls.py")) == {}
     # 0.93em inline mono is an em, never a px font-size — naturally unflagged.
@@ -1067,7 +1111,7 @@ def test_scope_is_color_font_radius_never_layout() -> None:
     assert scan_surface("x", ".a { padding: 5px 9px; left: 4px; }") == {}
     # color / off-scale size / off-scale radius in a CSS rule → flagged.
     assert scan_surface("x", ".a { color: #ff0000; }")["color"] == ["#ff0000"]
-    assert scan_surface("x", ".a { font-size: 20px; }")["font-size"] == ["20px"]
+    assert scan_surface("x", ".a { font-size: 19px; }")["font-size"] == ["19px"]
     assert scan_surface("x", ".a { border-radius: 4px; }")["radius"] == ["4px"]
     # an alien font literal and a legacy alias → flagged.
     assert "font-family" in scan_surface("x", ".a { font-family: 'Roboto', sans-serif; }")
@@ -1076,7 +1120,7 @@ def test_scope_is_color_font_radius_never_layout() -> None:
     assert "font-family" not in scan_surface("x", ".a { font-family: var(--mono, monospace); }")
     # INLINE style: a color is caught, a layout width is not.
     assert scan_surface("x", '<i style="color:#abc123"></i>')["color"] == ["#abc123"]
-    assert scan_surface("x", '<i style="width:60px;font-size:20px"></i>')["font-size"] == ["20px"]
+    assert scan_surface("x", '<i style="width:60px;font-size:19px"></i>')["font-size"] == ["19px"]
     # href fragments that look like hex are NOT colors.
     assert scan_surface("x", '<a href="#dcf">x</a>') == {}
 
@@ -1089,11 +1133,8 @@ def test_full_conformance_is_red() -> None:
     assert not QUARANTINE, f"still quarantined: {sorted(QUARANTINE)}"
 
 
-def test_workspace_local_css_standardizes_non_type_primitives() -> None:
-    """PR4 (user follow-up): the report's editorial exception is TYPE ONLY.
-    Its local CSS (minus the shared palette/controls prefix, which legitimately
-    carries the token hex values) has no raw hex or rgba washes, and the only
-    3px corner left is the sanctioned .src-chip micro-mark."""
+def test_workspace_local_css_standardizes_primitives() -> None:
+    """The report's local CSS uses shared color, type, and control primitives."""
     from report.renderers.workspace_styles import CSS as WS_CSS
     from ui.controls import controls_css as _ccss
     from ui.tokens import palette_css as _pcss
@@ -1103,7 +1144,8 @@ def test_workspace_local_css_standardizes_non_type_primitives() -> None:
     assert "rgba(" not in local.replace("rgba(0,0,0", "").replace("rgba(0, 0, 0", ""), (
         "non-neutral rgba wash in workspace local CSS"
     )
-    assert local.count("border-radius: 3px") == 1  # .src-chip only
+    assert "font-size: 60px" not in local and "font-size: 100px" not in local
+    assert "font-size: 8.5px" not in local
 
 
 def test_palette_rows_and_combobox_render_two_part_ticker_labels() -> None:
@@ -1239,21 +1281,29 @@ def test_glyph_ink_tracks_the_palette() -> None:
     palette says today must be the ink in today's glyph, and the stale cool
     values must be gone from the rendered CSS.
     """
-    from ui.controls import _CHECK_DARK, _CHECK_LIGHT, _CHEVRON_DARK, _CHEVRON_LIGHT
     from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
 
     def enc(value: str) -> str:
         return "%23" + value.lstrip("#")
 
-    assert enc(PALETTE_DARK["muted"]) in _CHEVRON_DARK
-    assert enc(PALETTE_LIGHT["muted"]) in _CHEVRON_LIGHT
-    assert enc(PALETTE_DARK["accent-contrast"]) in _CHECK_DARK
-    assert enc(PALETTE_LIGHT["accent-contrast"]) in _CHECK_LIGHT
+    dark_css = controls_css("dark")
+    light_css = controls_css("paper")
+    dark_chevron = re.search(r"--k-chevron:\s*([^;]+);", dark_css)
+    light_chevron = re.search(r"--k-chevron:\s*([^;]+);", light_css)
+    dark_check = re.search(r"--k-check:\s*([^;]+);", dark_css)
+    light_check = re.search(r"--k-check:\s*([^;]+);", light_css)
+    assert dark_chevron is not None and light_chevron is not None
+    assert dark_check is not None and light_check is not None
+
+    assert enc(PALETTE_DARK["muted"]) in dark_chevron.group(1)
+    assert enc(PALETTE_LIGHT["muted"]) in light_chevron.group(1)
+    assert enc(PALETTE_DARK["accent-contrast"]) in dark_check.group(1)
+    assert enc(PALETTE_LIGHT["accent-contrast"]) in light_check.group(1)
 
     # The glyphs must differ per theme — one shared ink would mean a glyph is
     # illegible on one of the two grounds.
-    assert _CHEVRON_DARK != _CHEVRON_LIGHT
-    assert _CHECK_DARK != _CHECK_LIGHT
+    assert dark_chevron.group(1) != light_chevron.group(1)
+    assert dark_check.group(1) != light_check.group(1)
 
     # And the rendered CSS must carry no pre-warming ink.
     for mode in ("paper", "dark"):

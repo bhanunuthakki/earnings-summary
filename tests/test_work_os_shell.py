@@ -173,6 +173,11 @@ def test_mobile_inbox_is_the_same_responsive_cockpit() -> None:
     assert "env(safe-area-inset-bottom)" in html
     assert "@media (max-width:" in html
     assert 'data-mobile-surface="cockpit"' in html
+    assert "width: var(--sidebar-collapsed-width)" in html
+    assert "min-width: var(--sidebar-collapsed-width)" in html
+    assert "min-block-size: var(--touch-target-size)" in html
+    assert "font-size: var(--mobile-control-font-size) !important" in html
+    assert "overflow-x: hidden; overflow-y: auto" in html
 
 
 def test_design_directive_records_the_simplification_boundary() -> None:

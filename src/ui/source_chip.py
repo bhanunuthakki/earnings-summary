@@ -305,9 +305,9 @@ SOURCE_CHIP_CSS = """
 .src-pop > summary { list-style: none; cursor: pointer; }
 .src-pop > summary::-webkit-details-marker { display: none; }
 .src-chip {
-  display: inline-block; font-size: 8.5px; font-weight: 600;
+  display: inline-block; font-size: var(--fs-caption); font-weight: 600;
   letter-spacing: 0.04em; line-height: 1.4; padding: 0 3px;
-  border: 1px solid var(--border-2, var(--border)); border-radius: 3px;
+  border: 1px solid var(--border-2, var(--border)); border-radius: var(--radius);
   color: var(--muted); background: transparent;
   opacity: 0.65; user-select: none;
 }

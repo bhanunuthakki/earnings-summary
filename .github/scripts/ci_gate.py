@@ -18,6 +18,7 @@ CODE_PREFIXES = (
     "alembic/",
     "cron/",
     "scripts/",
+    "design-system/",
     ".githooks/",
     "config/",
     "templates/",
@@ -37,6 +38,7 @@ PYTHON_ROOT_FILES = {"pyproject.toml", "requirements.lock"}
 DOCUMENTATION_SUFFIXES = {".md", ".rst"}
 CONDITIONAL_JOBS = {
     "tests": "code",
+    "design": "code",
     "quality": "python",
     "typecheck": "python",
     "security": "code",
@@ -278,6 +280,7 @@ def _verify_command(args: argparse.Namespace) -> int:
     results = {
         "changes": args.changes_result,
         "tests": args.tests_result,
+        "design": args.design_result,
         "quality": args.quality_result,
         "typecheck": args.typecheck_result,
         "security": args.security_result,
