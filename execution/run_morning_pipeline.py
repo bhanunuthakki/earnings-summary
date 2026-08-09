@@ -62,9 +62,9 @@ the news fetch.
 
 This orchestrates the scripts via subprocess (process isolation, matching
 the repo's drain-executor + daily-fetch-and-brief pattern) rather than importing
-their ``main()``. The child interpreter is ``sys.executable`` -- the exact
-interpreter running this orchestrator -- so the children never depend on PATH
-resolution differing from the parent's.
+their ``main()``. Every repository child is built through the canonical managed
+Python command helper, which preserves the parent interpreter and applies the
+SQLite bootstrap before the target script starts.
 """
 
 from __future__ import annotations
@@ -106,6 +106,7 @@ from pipeline.run_accounting import (  # noqa: E402
 )
 from run_lock import RunLockHeldError, acquire_run_lock  # noqa: E402
 from runtime.job_runtime import inherited_lock_is_valid  # noqa: E402
+from runtime.python_process import managed_python_argv  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
@@ -229,12 +230,13 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
         _Stage(
             key=spec.key,
             label=spec.label,
-            argv=[
-                sys.executable,
-                str(exec_dir / spec.script),
+            argv=managed_python_argv(
+                PROJECT_ROOT,
+                exec_dir / spec.script,
                 *_expand_base_argv(spec, args),
                 *_dynamic_argv(spec, args),
-            ],
+                unbuffered=True,
+            ),
             timeout_s=spec.timeout_s,
         )
         for spec in _selected_specs(args)
@@ -298,9 +300,7 @@ def _load_completed_stages(checkpoint_scope: str | None = None) -> set[str]:
             f"checkpoint completed_stages must be a list of strings: {STATE_FILE}"
         )
     completed_stage_values = cast("list[object]", completed_stages_raw)
-    if not all(
-        isinstance(stage_key, str) for stage_key in completed_stage_values
-    ):
+    if not all(isinstance(stage_key, str) for stage_key in completed_stage_values):
         raise CheckpointStateError(
             f"checkpoint completed_stages must be a list of strings: {STATE_FILE}"
         )
@@ -625,9 +625,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Resolve DB path early — needed for run accounting.
     configured_path = configured_db_path(PROJECT_ROOT)
-    db_path = (
-        args.db_path.expanduser().resolve() if args.db_path is not None else configured_path
-    )
+    db_path = args.db_path.expanduser().resolve() if args.db_path is not None else configured_path
     args.db_path = db_path
     has_inherited_lock = db_path == configured_path and inherited_lock_is_valid(
         PROJECT_ROOT, "portfolio-db"

@@ -1620,6 +1620,13 @@ def call_llm(
             }
         )
 
+    # Attribute the legacy/plain-string majority at the canonical seam.
+    # Registered RenderedPrompt objects pass through unchanged; raw prompts
+    # gain a purpose version and immutable body hash without caller churn.
+    from llm.prompt_registry import attribute_plain_prompt
+
+    prompt = attribute_plain_prompt(prompt, purpose=purpose)
+
     from llm.model_ladder import (
         GEMINI as _GEMINI_FAMILY,
     )
@@ -1979,6 +1986,10 @@ def stream_llm(
     if scope != "ask":
         raise ValueError("stream_llm currently supports only the governed 'ask' scope")
 
+    from llm.prompt_registry import attribute_plain_prompt
+
+    prompt = attribute_plain_prompt(prompt, purpose=purpose)
+
     model = _model_for(purpose)
     try:
         _enforce_budget_pre_call(purpose, force_budget_bypass=False)
@@ -2282,6 +2293,9 @@ def call_llm_with_web(
                 "error": redact(f"{type(hook_exc).__name__}: {hook_exc}")[:120],
             }
         )
+    from llm.prompt_registry import attribute_plain_prompt
+
+    prompt = attribute_plain_prompt(prompt, purpose=purpose)
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
 
     codex_fell_back = False

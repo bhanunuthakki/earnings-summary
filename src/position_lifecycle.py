@@ -1,4 +1,4 @@
-"""Position-lifecycle ledger — reconciler + read/write API (fund-grade S5, PR 2).
+"""Position-lifecycle ledger â€” reconciler + read/write API (fund-grade S5, PR 2).
 
 ``position_entries`` (alembic 0088) is the durable entry/exit record: what the
 analyst believed at entry (thesis excerpt, conviction, the falsifiable
@@ -7,29 +7,29 @@ exit taught. This module populates and serves it.
 
 Population is STATE-BASED, not event-based: there is no single chokepoint for
 ``tracked_companies.list_type`` writes (scripts, manual SQL, future UI all
-flip it), so ``sync_position_lifecycle`` reconciles the current world — the
-portfolio list + the tracker's live holdings/transactions — against the open
+flip it), so ``sync_position_lifecycle`` reconciles the current world â€” the
+portfolio list + the tracker's live holdings/transactions â€” against the open
 ledger rows on every morning-pipeline run:
 
-  * portfolio ticker without an open row  → OPEN one. Entry date/price come
+  * portfolio ticker without an open row  â†’ OPEN one. Entry date/price come
     from the tracker's buy transactions / avg cost when available; conviction
     from the latest sizing intent or decisions row; thesis excerpt from the
     holdings JSON; entry_conditions snapshots the ticker's open falsifiable
     conditions (decisions.decision_conditions).
-  * open row whose ticker left the portfolio → CLOSE it. Exit date/price from
+  * open row whose ticker left the portfolio â†’ CLOSE it. Exit date/price from
     the tracker's sell transactions when visible, else the detection date.
     ``exit_reason`` / ``lessons`` stay NULL (the analyst's post-exit grading,
     written from the holding-page timeline); ``outcome_vs_thesis`` is PREFILLED
-    from the thesis breach history at exit (seam 9) — broke vs played-out — as a
+    from the thesis breach history at exit (seam 9) â€” broke vs played-out â€” as a
     suggestion the analyst confirms/overrides, not a final verdict.
 
 The tracker may be OFFLINE (``LivePortfolio.available=False``): the reconciler
-still runs — membership comes from ``tracked_companies`` alone and the
+still runs â€” membership comes from ``tracked_companies`` alone and the
 price/date enrichments are simply skipped (NULL, honest).
 
 ``--backfill`` (``assume_preexisting=True``) seeds rows for positions that
 were already held before this ledger existed: ``source='backfill'`` and
-``entry_date`` stays NULL unless a buy transaction is actually visible —
+``entry_date`` stays NULL unless a buy transaction is actually visible â€”
 "held, opening unknown" beats an invented date.
 
 Best-effort posture against a missing DB / pre-0088 schema (returns a
@@ -102,7 +102,6 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
         if not path.exists():
             return None
         conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         if (
             conn.execute(
@@ -159,7 +158,7 @@ def list_entries(
     user_id: str = DEFAULT_USER_ID,
     limit: int = 100,
 ) -> list[PositionEntry]:
-    """Lifecycle rows, open first then newest-closed-first — the timeline order."""
+    """Lifecycle rows, open first then newest-closed-first â€” the timeline order."""
     conn = _open(db_path)
     if conn is None:
         return []
@@ -190,7 +189,7 @@ def list_entries(
 def get_entry(entry_id: int, *, db_path: Path | str) -> PositionEntry | None:
     """One ``position_entries`` row by id, or None. Backs freshness
     re-verification for the B6 ``post_mortem`` governor moment (it re-checks
-    ONE specific referenced entry, not the whole ticker timeline) — mirrors
+    ONE specific referenced entry, not the whole ticker timeline) â€” mirrors
     ``list_entries``'s decode path but keyed by primary id, which
     ``list_entries`` has no filter for."""
     conn = _open(db_path)
@@ -250,13 +249,13 @@ def update_exit_fields(
 
 
 # ---------------------------------------------------------------------------
-# Enrichment sources (each defensive — absent tables / files degrade to None)
+# Enrichment sources (each defensive â€” absent tables / files degrade to None)
 # ---------------------------------------------------------------------------
 
 
 def _portfolio_tickers(conn: sqlite3.Connection) -> set[str] | None:
     """Active portfolio per tracked_companies, or None when the table is
-    absent (a partial test DB) — None makes the reconciler a no-op rather
+    absent (a partial test DB) â€” None makes the reconciler a no-op rather
     than mass-closing every open row on missing data."""
     try:
         rows = conn.execute(
@@ -301,7 +300,7 @@ def _latest_conviction(conn: sqlite3.Connection, ticker: str, user_id: str) -> s
 
 
 def _thesis_excerpt(repo_root: Path, ticker: str) -> str | None:
-    """The holdings JSON thesis statement, capped — the entry-time snapshot."""
+    """The holdings JSON thesis statement, capped â€” the entry-time snapshot."""
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
     try:
         payload: object = json.loads(path.read_text(encoding="utf-8"))
@@ -326,7 +325,7 @@ def _open_conditions_snapshot(conn: sqlite3.Connection, ticker: str) -> str | No
             for decision in load_open_decisions(conn, ticker)
             for cond in decision.conditions
         ]
-    except Exception:  # pre-0086 schema / import problem — snapshot is optional
+    except Exception:  # pre-0086 schema / import problem â€” snapshot is optional
         return None
     if not conditions:
         return None
@@ -338,7 +337,7 @@ def _txn_dates_and_price(
 ) -> tuple[str | None, float | None]:
     """(date, per-share price) of the earliest/latest visible buy or sell for
     ``ticker`` in the tracker's transaction window. The window is short
-    (~25 rows) so an opening buy is only visible for RECENT entries — exactly
+    (~25 rows) so an opening buy is only visible for RECENT entries â€” exactly
     when it's most useful; older entries honestly get None."""
     matches = [
         t
@@ -366,25 +365,25 @@ def _avg_cost(portfolio: LivePortfolio, ticker: str) -> float | None:
 
 def infer_outcome_vs_thesis(conn: sqlite3.Connection, ticker: str, exit_date: str) -> str | None:
     """Infer ``outcome_vs_thesis`` at exit from the thesis-evaluation breach
-    history (#seam 9) — a PREFILL the analyst confirms/overrides, not a verdict.
+    history (#seam 9) â€” a PREFILL the analyst confirms/overrides, not a verdict.
 
     Reads ``thesis_evaluations`` (via ``thesis_history.fetch_history``) for the
     evaluations dated on/before the exit:
-      * a BREACH anywhere before the exit → ``broke`` (the thesis broke — likely
+      * a BREACH anywhere before the exit â†’ ``broke`` (the thesis broke â€” likely
         why you sold);
-      * a WARN (and no breach) → ``mixed``;
-      * OK-only → ``played_out``;
-      * no evaluable history → None (leave NULL — honest, nothing to infer).
+      * a WARN (and no breach) â†’ ``mixed``;
+      * OK-only â†’ ``played_out``;
+      * no evaluable history â†’ None (leave NULL â€” honest, nothing to infer).
 
-    Best-effort: a missing table / pre-0016 schema / import problem → None."""
+    Best-effort: a missing table / pre-0016 schema / import problem â†’ None."""
     try:
         from compute.thesis_history import fetch_history
         from models.kpis import BreachStatus
-    except Exception:  # import problem — inference is optional
+    except Exception:  # import problem â€” inference is optional
         return None
     try:
         history = fetch_history(conn, ticker)
-    except Exception:  # missing table / unparseable status — inference is optional
+    except Exception:  # missing table / unparseable status â€” inference is optional
         return None
     prior = [h for h in history if str(h.evaluated_at)[:10] <= exit_date]
     if not prior:
@@ -396,7 +395,7 @@ def infer_outcome_vs_thesis(conn: sqlite3.Connection, ticker: str, exit_date: st
         return "mixed"
     if BreachStatus.OK in statuses:
         return "played_out"
-    return None  # only UNRESOLVED → can't say
+    return None  # only UNRESOLVED -> can't say
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +436,7 @@ def sync_position_lifecycle(
     try:
         current = _portfolio_tickers(conn)
         if current is None:
-            # tracked_companies absent — nothing trustworthy to reconcile against.
+            # tracked_companies absent â€” nothing trustworthy to reconcile against.
             return _unavailable()
         if portfolio is None:
             portfolio = fetch_live_portfolio()
@@ -465,7 +464,7 @@ def sync_position_lifecycle(
                 if entry_price is None:
                     entry_price = _avg_cost(portfolio, ticker)
             if entry_date is None and not assume_preexisting:
-                # Live transition detected this run — today is the honest date.
+                # Live transition detected this run â€” today is the honest date.
                 entry_date = today
             conn.execute(
                 """
@@ -498,7 +497,7 @@ def sync_position_lifecycle(
                 )
             final_exit_date = exit_date or today
             # Prefill the broke-vs-played-out grade from the thesis breach history
-            # (#seam 9) — a suggestion the analyst confirms/overrides on the
+            # (#seam 9) â€” a suggestion the analyst confirms/overrides on the
             # holding page, not a final verdict. Only set on the fresh close
             # (the row is NULL here), so a later manual override is never clobbered.
             inferred_outcome = infer_outcome_vs_thesis(conn, ticker, final_exit_date)
@@ -521,13 +520,13 @@ def sync_position_lifecycle(
         if closed:
             # B6 (2026-07-19 program overhaul): every freshly-closed row above
             # left exit_reason/lessons/outcome_vs_thesis NULL or PREFILLED
-            # (seam 9) — never the LLM-drafted grading itself. That drafting
+            # (seam 9) â€” never the LLM-drafted grading itself. That drafting
             # is NEVER inline here (this reconciler runs on the protected
             # 04:00 morning pipeline window and must stay zero/near-zero-LLM);
             # it is the 18:00 sweep's job
             # (synthesis.exit_postmortem.run_postmortem_drafts, wired in
             # execution/run_session_distill.py). This is just the structured
-            # breadcrumb that closes happened this run — pending drafts are
+            # breadcrumb that closes happened this run â€” pending drafts are
             # DERIVED at read time (closed + all three grading fields NULL),
             # no stamp column needed.
             log.info(
@@ -553,7 +552,7 @@ def sync_position_lifecycle(
 
         # Materialize the per-ticker book weights from the SAME live snapshot so
         # the inbox render reads them from disk instead of re-fetching the
-        # tracker on the GET / boot path (directive §4 S12). Best-effort: a cache
+        # tracker on the GET / boot path (directive Â§4 S12). Best-effort: a cache
         # write failure must not fail the reconcile, and an offline snapshot
         # leaves the last-good weights in place (materialize_weights no-ops).
         try:

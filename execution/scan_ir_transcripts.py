@@ -54,6 +54,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.python_process import managed_python_prefix  # noqa: E402
+
 # Sibling scripts in execution/ — needed when this module is imported (e.g. from
 # tests) rather than run directly via `python execution/scan_ir_transcripts.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -214,7 +217,10 @@ def _run_ingest(repo_root: Path, dry_run: bool) -> int:
     if dry_run:
         print("  [dry-run] would invoke ingest_transcripts.py", file=sys.stderr)
         return 0
-    cmd = [sys.executable, str(repo_root / "execution" / "ingest_transcripts.py")]
+    cmd = [
+        *managed_python_prefix(PROJECT_ROOT),
+        str(repo_root / "execution" / "ingest_transcripts.py"),
+    ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
 

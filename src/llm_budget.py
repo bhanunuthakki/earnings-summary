@@ -4,12 +4,12 @@ The llm_calls ledger (migration 0034) records what we spent. The
 llm_budgets / llm_budget_alerts tables (migration 0052) record what we're
 willing to spend. This module is the glue:
 
-  * `current_month_spend(purpose)` — sum cost_estimate_usd in llm_calls
+  * `current_month_spend(purpose)` â€” sum cost_estimate_usd in llm_calls
     where called_at >= start-of-month. The number any UI / pre-call check
     needs to know "are we over budget?".
-  * `check_budget(purpose)` — returns BudgetCheck telling the caller
+  * `check_budget(purpose)` â€” returns BudgetCheck telling the caller
     whether to allow / warn / block the next call.
-  * `record_alert(purpose, threshold_pct, current_spend)` — idempotent
+  * `record_alert(purpose, threshold_pct, current_spend)` â€” idempotent
     write to llm_budget_alerts so the same threshold crossing in the same
     month writes one row, not one per LLM call.
 
@@ -53,16 +53,16 @@ _DECIMAL_QUANT = Decimal("0.0001")
 class BudgetCheck:
     """Result of a pre-call budget enforcement check.
 
-    `allowed=False, hard_block=True` → caller MUST raise LLMBudgetExceeded.
-    `allowed=False, hard_block=False` → soft cap, caller logs + proceeds.
-    `warn=True` → 80% threshold crossed, caller logs + records alert.
-    `reason` is a short human-readable string for log messages — None when
+    `allowed=False, hard_block=True` â†’ caller MUST raise LLMBudgetExceeded.
+    `allowed=False, hard_block=False` â†’ soft cap, caller logs + proceeds.
+    `warn=True` â†’ 80% threshold crossed, caller logs + records alert.
+    `reason` is a short human-readable string for log messages â€” None when
     the call is fully allowed with no warning.
 
     `on_exceed` is the per-purpose cap-exceeded MODE (migration 0066) and is the
-    authoritative behavior knob: `'block'` → `hard_block=True` (raise / propagate),
-    `'skip'` → forgo the call and mark the section forgone-due-to-budget (handled
-    pre-flight via `should_skip_for_budget`), `'warn'` → proceed past the cap.
+    authoritative behavior knob: `'block'` â†’ `hard_block=True` (raise / propagate),
+    `'skip'` â†’ forgo the call and mark the section forgone-due-to-budget (handled
+    pre-flight via `should_skip_for_budget`), `'warn'` â†’ proceed past the cap.
     `hard_block` is derived from it (`on_exceed == 'block'`) for back-compat.
     """
 
@@ -118,7 +118,7 @@ def current_month_spend(
 ) -> Decimal:
     """Sum cost_estimate_usd in llm_calls for `purpose` since start of
     current month. Returns Decimal('0') when the DB / table is missing,
-    when there are no rows yet, or on any read error — the budget check
+    when there are no rows yet, or on any read error â€” the budget check
     fails open so a broken ledger doesn't block LLM calls.
 
     `now` is optional for tests that need a deterministic month boundary.
@@ -134,7 +134,7 @@ def current_month_spend(
         finally:
             conn.close()
     except sqlite3.Error as exc:
-        # Missing table, locked DB, schema mismatch — all best-effort.
+        # Missing table, locked DB, schema mismatch â€” all best-effort.
         log.debug(
             {
                 "event": "current_month_spend_read_failed",
@@ -298,14 +298,14 @@ def check_budget(
 ) -> BudgetCheck:
     """Pre-call budget enforcement.
 
-    Returns BudgetCheck — caller decides what to do based on the flags.
+    Returns BudgetCheck â€” caller decides what to do based on the flags.
     The enforcer is permissive only before budget storage is initialized:
 
-      * `purpose=None` → allowed, no warn (legacy callers not yet wired
+      * `purpose=None` â†’ allowed, no warn (legacy callers not yet wired
         through purpose-aware call_llm).
-      * No budget row found → allowed, no warn (fresh repo, migration
+      * No budget row found â†’ allowed, no warn (fresh repo, migration
         not run yet, or seed missing).
-      * Existing DB read error → hard block with an explicit unavailable reason.
+      * Existing DB read error â†’ hard block with an explicit unavailable reason.
 
     Only an actual cap crossing returns `allowed=False`.
     """
@@ -418,14 +418,14 @@ def should_skip_for_budget(
     now: datetime | None = None,
     bypass: bool = False,
 ) -> BudgetCheck | None:
-    """Pre-flight gate for the `skip` mode — the heart of "forgone due to budget".
+    """Pre-flight gate for the `skip` mode â€” the heart of "forgone due to budget".
 
     Returns the failing BudgetCheck (carrying cap / spend / headroom) when
-    `purpose` is configured `on_exceed='skip'` AND is at/over its monthly cap —
+    `purpose` is configured `on_exceed='skip'` AND is at/over its monthly cap â€”
     i.e. the section should FORGO the LLM call (no spend) and render a
     forgone-due-to-budget banner. Returns None to PROCEED: under cap, or a
     non-skip mode ('block' raises at the call gate, 'warn' overspends), or
-    `bypass=True` (per-run override). Best-effort — never raises.
+    `bypass=True` (per-run override). Best-effort â€” never raises.
     """
     if bypass:
         return None
@@ -459,7 +459,7 @@ def record_alert(
     unavailable.
 
     The dedupe is what keeps the WARNING log from spamming every LLM call
-    after burn first crosses 80% — we record once, the dashboard reads it,
+    after burn first crosses 80% â€” we record once, the dashboard reads it,
     the operator decides what to do.
     """
     path = resolve_db_path(db_path)
@@ -474,7 +474,6 @@ def record_alert(
             schema_preflight=True,
         )
         try:
-            conn.execute("PRAGMA busy_timeout = 5000")
             cur = conn.execute(
                 """
                 INSERT INTO llm_budget_alerts
@@ -685,7 +684,7 @@ def month_report(
     month: str | None = None, *, db_path: Path | str | None = None
 ) -> list[dict[str, object]]:
     """Per-purpose spend report for the given month (YYYY-MM) or the current
-    month if None. Joins budgets ⨝ aggregated spend so the report shows
+    month if None. Joins budgets â¨ aggregated spend so the report shows
     capped + uncapped purposes side by side. Returns [] when the DB is
     missing."""
     path = resolve_db_path(db_path)

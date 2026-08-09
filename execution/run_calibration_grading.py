@@ -67,6 +67,9 @@ from enum import StrEnum
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # The deterministic graders are quick SQLite sweeps; bear_cases calls an LLM
 # judge per due hypothesis, so it gets the long pole's headroom.
@@ -196,7 +199,11 @@ def _run_grader(grader: _Grader) -> _GraderResult:
     )
     sys.stdout.flush()
 
-    argv = [sys.executable, str(PROJECT_ROOT / "execution" / grader.script), *grader.args]
+    argv = [
+        *managed_python_prefix(PROJECT_ROOT),
+        str(PROJECT_ROOT / "execution" / grader.script),
+        *grader.args,
+    ]
     t0 = time.monotonic()
     try:
         proc = subprocess.run(

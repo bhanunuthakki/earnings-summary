@@ -25,6 +25,7 @@ exceeds the cap — protects the subscription / API spend.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sqlite3
 import subprocess
@@ -339,6 +340,20 @@ def _execute_jobs(
                     "unprocessed": remaining,
                 }
             )
+            print(
+                "drain receipt: "
+                + json.dumps(
+                    {
+                        "status": "deferred_cost_cap",
+                        "run": ran,
+                        "failed": failed,
+                        "deferred": remaining,
+                        "accrued_cost_usd": round(accrued, 4),
+                        "cap_usd": max_cost_usd,
+                    },
+                    sort_keys=True,
+                )
+            )
             return 0
         log.info(
             {
@@ -363,7 +378,22 @@ def _execute_jobs(
         f"drain complete: {ran} job(s) run ({failed} failed); "
         f"accrued ${final_cost:.2f} (cap ${max_cost_usd:.2f})"
     )
-    return 0
+    status = "partial_failure" if failed else "complete"
+    print(
+        "drain receipt: "
+        + json.dumps(
+            {
+                "status": status,
+                "run": ran,
+                "failed": failed,
+                "deferred": 0,
+                "accrued_cost_usd": round(final_cost, 4),
+                "cap_usd": max_cost_usd,
+            },
+            sort_keys=True,
+        )
+    )
+    return 1 if failed else 0
 
 
 def main() -> int:

@@ -2,8 +2,9 @@
 
 This is intentionally an explicit managed-launcher seam, not a global Python
 startup hook. On Windows it verifies and loads the pinned official SQLite DLL
-before importing ``sqlite3`` or the target application. Hashing and DLL loading
-happen once per process, never per database connection.
+before importing ``sqlite3``. On Unix, the launcher verifies that the process
+was started with the CI-built, hash-verified SQLite shared library preloaded.
+Hashing and library loading happen once per process, never per connection.
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ import sys
 from pathlib import Path
 
 EXPECTED_SQLITE_VERSION = "3.53.4"
-EXPECTED_DLL_SHA256 = "ab57d0437795ecc757cb693f32ea224173fa9856594d95cfa6b5033e645cd1ec"  # pragma: allowlist secret
+EXPECTED_DLL_SHA256 = (
+    "ab57d0437795ecc757cb693f32ea224173fa9856594d95cfa6b5033e645cd1ec"  # pragma: allowlist secret
+)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DLL_PATH = PROJECT_ROOT / "vendor" / "sqlite" / "windows-x64" / "sqlite3.dll"
 
@@ -48,9 +51,9 @@ def preload_sqlite() -> str:
 
     import sqlite3
 
-    if sys.platform == "win32" and sqlite3.sqlite_version != EXPECTED_SQLITE_VERSION:
+    if sqlite3.sqlite_version != EXPECTED_SQLITE_VERSION:
         raise RuntimeError(
-            "Python did not bind to the verified SQLite DLL: "
+            "Python did not bind to the verified SQLite runtime: "
             f"expected {EXPECTED_SQLITE_VERSION}, got {sqlite3.sqlite_version}"
         )
     _LOADED_VERSION = sqlite3.sqlite_version

@@ -63,6 +63,7 @@ _COST_MAX_ROWS = 60
 # The #723 infra verdict — checked FIRST in decide_switch, excluded from the
 # switch/keep streaks. Rendered as an infra flag here, never a quality pill.
 CANDIDATE_ERRORED = "CANDIDATE_ERRORED"
+_GRADED_VERDICTS: tuple[str, ...] = ("SWITCH_DOWN", "KEEP_INCUMBENT", "HOLD")
 
 # Quality verdict → (short label, kit pill tone). SWITCH_DOWN is the win (a
 # cheaper model held), HOLD is the mixed/disagree amber, KEEP/INSUFFICIENT are
@@ -482,7 +483,11 @@ def load_steering_health(
     newest_verdict: str | None = None
     insufficient: list[str] = []
     if _has_table(conn, "model_eval_verdicts"):
-        row = conn.execute("SELECT MAX(recorded_at) FROM model_eval_verdicts").fetchone()
+        placeholders = ",".join("?" * len(_GRADED_VERDICTS))
+        row = conn.execute(
+            f"SELECT MAX(recorded_at) FROM model_eval_verdicts WHERE verdict IN ({placeholders})",
+            _GRADED_VERDICTS,
+        ).fetchone()
         newest_verdict = str(row[0]) if row and row[0] is not None else None
         # Purposes whose NEWEST verdict is the INSUFFICIENT_FRAME honesty label —
         # they need harvest, not judgement.

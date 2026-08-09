@@ -17,11 +17,11 @@ BN, BAM use SEDI; etc.).
 
 Public API:
   fetch_for_ticker(ticker, since=date, until=date, regulator='auto')
-    → list[InsiderTransaction]      — fetches + persists
+    â†’ list[InsiderTransaction]      â€” fetches + persists
   resolve_insider_entity(name, ticker)
-    → entity_id                     — caches the person entity for reuse
+    â†’ entity_id                     â€” caches the person entity for reuse
   conviction_signals(ticker, window_days=90)
-    → list[ConvictionSignal]        — surfaces CEO/CFO open-market buys,
+    â†’ list[ConvictionSignal]        â€” surfaces CEO/CFO open-market buys,
                                        cluster events, anomaly flags
 
 The fetcher is idempotent: re-running over the same window re-inserts no
@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 
 # SEC EDGAR submissions API requires a User-Agent header per their fair-use policy.
 # Set yours via env var EDGAR_USER_AGENT (recommended). Default falls back to a
-# generic agent — works but please be a polite citizen and set your own.
+# generic agent â€” works but please be a polite citizen and set your own.
 #: Declared to the SEC via ``sec_identity`` so this project has ONE contact,
 #: not one per module. Override with the EDGAR_USER_AGENT env var.
 SEC_USER_AGENT_DEFAULT = sec_user_agent()
@@ -124,7 +124,6 @@ def _open(
             role=role,
             schema_preflight=role is SQLiteConnectionRole.WRITER,
         )
-        conn.execute("PRAGMA busy_timeout = 10000")
         conn.row_factory = sqlite3.Row
         if (
             conn.execute(
@@ -192,7 +191,7 @@ def upsert(
                 )
                 inserted += 1
             except sqlite3.IntegrityError:
-                # Duplicate on the natural key — skip silently.
+                # Duplicate on the natural key â€” skip silently.
                 continue
         conn.commit()
         return inserted
@@ -374,7 +373,7 @@ def conviction_signals(
                 shares=tx.shares,
                 transaction_value=tx.transaction_value,
                 signal_strength=strength,
-                rationale=" · ".join(bits),
+                rationale=" Â· ".join(bits),
             )
         )
 
@@ -454,7 +453,7 @@ def fetch_form4_from_edgar(
             continue
         acc_clean = acc.replace("-", "")
         archive_base = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_clean}"
-        # The Form 4 XML is typically named *_doc4.xml — find it via index.json
+        # The Form 4 XML is typically named *_doc4.xml â€” find it via index.json
         try:
             time.sleep(sleep_between_requests)
             idx = _http_get_json(f"{archive_base}/index.json", user_agent=ua)
@@ -501,20 +500,20 @@ def parse_form4_xml(
 
     Form 4 schema is documented at https://www.sec.gov/info/edgar/edgarfm-vol2-v68.pdf
     Key fields:
-      reportingOwner.reportingOwnerId.rptOwnerName  → insider_name
+      reportingOwner.reportingOwnerId.rptOwnerName  â†’ insider_name
       reportingOwner.reportingOwnerRelationship.{isOfficer, isDirector, ...}
       reportingOwner.reportingOwnerRelationship.officerTitle
       nonDerivativeTable.nonDerivativeTransaction[]/.transactionDate.value
-      transactionCoding.transactionCode  → 'P' (purchase), 'S' (sale), 'M' (exercise), 'A' (grant), 'G' (gift), 'F' (vesting/tax withhold), 'X' (exercise of stock options)
+      transactionCoding.transactionCode  â†’ 'P' (purchase), 'S' (sale), 'M' (exercise), 'A' (grant), 'G' (gift), 'F' (vesting/tax withhold), 'X' (exercise of stock options)
       transactionCoding.transactionFormType
       transactionAmounts.transactionShares.value
       transactionAmounts.transactionPricePerShare.value
-      transactionAmounts.transactionAcquiredDisposedCode.value  → 'A' or 'D'
+      transactionAmounts.transactionAcquiredDisposedCode.value  â†’ 'A' or 'D'
       postTransactionAmounts.sharesOwnedFollowingTransaction.value
-      ownershipNature.directOrIndirectOwnership.value  → 'D' or 'I'
-      footnotes — look for "10b5-1" mentions
+      ownershipNature.directOrIndirectOwnership.value  â†’ 'D' or 'I'
+      footnotes â€” look for "10b5-1" mentions
     """
-    # Light XML parsing via stdlib ElementTree — Form 4 is small (<50KB)
+    # Light XML parsing via stdlib ElementTree â€” Form 4 is small (<50KB)
     from xml.etree import ElementTree as ET
 
     out: list[InsiderTransaction] = []
@@ -524,7 +523,7 @@ def parse_form4_xml(
         log.debug({"event": "form4_xml_parse_failed", "error": str(exc)})
         return out
 
-    # Reporting owner block (1+ insiders per filing; take the first for now —
+    # Reporting owner block (1+ insiders per filing; take the first for now â€”
     # multi-insider filings are rare and the natural-key constraint will dedupe).
     name_el = root.find(".//reportingOwner/reportingOwnerId/rptOwnerName")
     name = name_el.text.strip() if name_el is not None and name_el.text else "(unknown)"
@@ -547,7 +546,7 @@ def parse_form4_xml(
         if title_el is not None and title_el.text:
             title = title_el.text.strip()
 
-    # 10b5-1 detection via footnotes — common encoding pattern
+    # 10b5-1 detection via footnotes â€” common encoding pattern
     is_10b5_1 = "10b5-1" in xml_text.lower() or "10b5-1" in xml_text
 
     for tx_el in root.findall(".//nonDerivativeTable/nonDerivativeTransaction"):
@@ -614,19 +613,19 @@ def _form4_code_to_type(code: str, acquired_or_disposed: str) -> str:
     """Map Form 4 transaction codes to canonical type strings.
 
     Codes (per SEC):
-      P  — open-market purchase  → open_market_buy
-      S  — open-market sale      → open_market_sell
-      A  — grant/award           → stock_grant
-      M  — exercise/conversion   → option_exercise
-      F  — tax-withhold on vest  → rsu_vesting
-      G  — gift                  → gift
-      X  — exercise of in-the-money option → option_exercise
-      V  — sale pursuant to 10b5-1 → open_market_sell (with is_10b5_1 flag)
-      I  — discretionary trans.  → open_market_buy/sell by A/D
-      D  — sale to issuer        → other
-      C  — conversion of derivative → other
-      W  — willful disposition   → other
-      Z  — voting trust deposit  → other
+      P  â€” open-market purchase  â†’ open_market_buy
+      S  â€” open-market sale      â†’ open_market_sell
+      A  â€” grant/award           â†’ stock_grant
+      M  â€” exercise/conversion   â†’ option_exercise
+      F  â€” tax-withhold on vest  â†’ rsu_vesting
+      G  â€” gift                  â†’ gift
+      X  â€” exercise of in-the-money option â†’ option_exercise
+      V  â€” sale pursuant to 10b5-1 â†’ open_market_sell (with is_10b5_1 flag)
+      I  â€” discretionary trans.  â†’ open_market_buy/sell by A/D
+      D  â€” sale to issuer        â†’ other
+      C  â€” conversion of derivative â†’ other
+      W  â€” willful disposition   â†’ other
+      Z  â€” voting trust deposit  â†’ other
     """
     code_up = (code or "").strip().upper()
     if code_up == "P":
@@ -656,7 +655,7 @@ _TICKER_CIK_CACHE: dict[str, str] = {}
 
 
 def _lookup_cik_for_ticker(ticker: str, *, user_agent: str) -> str | None:
-    """Resolve ticker → CIK via the EDGAR company_tickers.json index.
+    """Resolve ticker â†’ CIK via the EDGAR company_tickers.json index.
     Cached in-process so a single backfill doesn't hammer the endpoint."""
     if not _TICKER_CIK_CACHE:
         try:

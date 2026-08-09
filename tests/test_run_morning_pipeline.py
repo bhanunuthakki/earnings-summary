@@ -126,12 +126,12 @@ class _RecordingRun:
 
 
 def _script_of(argv: list[str]) -> str | None:
-    """The basename of the first ``.py`` token in an argv (the script path).
+    """The basename of the final ``.py`` token in an argv (the stage path).
 
-    Robust to ``sys.executable`` being an absolute path — we key on the script,
-    not argv[0].
+    Managed stage calls include ``sqlite_bootstrap.py`` before the actual
+    script, so the final Python path is the deterministic stage identity.
     """
-    for tok in argv:
+    for tok in reversed(argv):
         if tok.endswith(".py"):
             return Path(tok).name
     return None
@@ -474,6 +474,8 @@ def test_all_stages_succeed(
     rc = run_morning_pipeline.main([])
 
     assert rc == 0
+    bootstrap = str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py")
+    assert all(call[:3] == [sys.executable, "-u", bootstrap] for call in fake.calls)
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,

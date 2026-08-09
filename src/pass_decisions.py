@@ -1,26 +1,26 @@
-"""Capture errors of omission — pass/avoid as first-class decisions (L11 PR1).
+"""Capture errors of omission â€” pass/avoid as first-class decisions (L11 PR1).
 
 The decisions ledger only ever filled from HELD-name artifacts and Socratic
 memos, so a name the owner PASSED on left no graded trace and the calibration
-loop (L1/L8) could never see the omission side — a passed name that later
+loop (L1/L8) could never see the omission side â€” a passed name that later
 triples is the largest hidden cost there is. This module is the authoring path
 that closes that gap: it records "I passed on X because Y / I'd revisit if Z" as
 a first-class ``decisions`` row (``recommendation_kind='avoid'``, schema 0110),
 wired from the discovery "dismissed" action and a manual entry path.
 
-  record_pass_decision — one idempotent write. The ``reason`` becomes the row's
+  record_pass_decision â€” one idempotent write. The ``reason`` becomes the row's
       rationale_excerpt (the WHY); the optional ``revisit_text`` is stored on
-      ``decisions.source_prose`` — NOT extracted here. The existing
+      ``decisions.source_prose`` â€” NOT extracted here. The existing
       ``attach_conditions`` / ``attach_qualitative_conditions`` rungs (morning
       pipeline stage 0b) pull the numeric AND qualitative falsifiable conditions
       out of it on their next pass, so the avoid reuses L9's news/earnings bridge
-      and the numeric decision_condition trigger UNCHANGED — and the request path
+      and the numeric decision_condition trigger UNCHANGED â€” and the request path
       never pays an LLM round-trip.
 
 Idempotency: a dismiss-sourced avoid keys on ``source_dismissal_id`` (the
 candidate id, partial UNIQUE in 0110). Re-dismissing the same candidate UPDATES
 its reason/revisit text and re-opens extraction (stamps cleared) rather than
-inserting a duplicate. A manual pass (no candidate) always inserts — each is a
+inserting a duplicate. A manual pass (no candidate) always inserts â€” each is a
 distinct judgement at a distinct time.
 
 Best-effort against a missing DB / pre-0110 table (the decision_extractor
@@ -42,7 +42,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
-# The lens labels distinguishing where a pass was authored — they ride the
+# The lens labels distinguishing where a pass was authored â€” they ride the
 # decisions.source_lens column and surface in the decision_condition trigger's
 # memo ("the 2026-06-14 AVOID decision (discovery_dismissal)").
 LENS_DISCOVERY_DISMISSAL = "discovery_dismissal"
@@ -60,7 +60,7 @@ class PassResult:
 
 def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     """Best-effort open requiring the 0110 ``decisions`` schema (the
-    ``source_prose`` column). None when the DB or that column is absent — a
+    ``source_prose`` column). None when the DB or that column is absent â€” a
     pass authored against an un-migrated ledger is silently skipped, never a
     raised error on the dismiss path."""
     try:
@@ -68,7 +68,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         if path is None or not Path(path).exists():
             return None
         conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
         if "source_prose" not in cols:
@@ -104,8 +103,8 @@ def record_pass_decision(
 ) -> PassResult | None:
     """Record (or idempotently refresh) a pass/avoid decision.
 
-    ``reason`` is the WHY (→ rationale_excerpt); ``revisit_text`` is the optional
-    "what would change my mind" prose (→ source_prose, extracted later by the
+    ``reason`` is the WHY (â†’ rationale_excerpt); ``revisit_text`` is the optional
+    "what would change my mind" prose (â†’ source_prose, extracted later by the
     morning-pipeline attach rungs). Returns a :class:`PassResult`, or None when
     the DB/0110 schema is unavailable or the ticker is empty.
 

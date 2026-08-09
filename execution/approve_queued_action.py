@@ -461,7 +461,9 @@ def _err(msg: str) -> None:
 
 
 def _resolve_db_path(repo_root: Path, override: Path | None) -> Path | None:
-    candidate = canonical_db_path(override) if override is not None else configured_db_path(repo_root)
+    candidate = (
+        canonical_db_path(override) if override is not None else configured_db_path(repo_root)
+    )
     return candidate if candidate is not None and candidate.exists() else None
 
 

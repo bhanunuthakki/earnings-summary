@@ -28,6 +28,7 @@ from models.artifacts import (
     parse_tmp_artifact,
     parse_transcript_processed,
 )
+from runtime.python_process import managed_python_argv
 from sec_identity import sec_user_agent
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -539,7 +540,7 @@ def _spawn_onboard_async(ticker: str) -> None:
     os.makedirs(log_dir, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
     log_path = os.path.join(log_dir, f"onboard_{ticker}_{stamp}.log")
-    cmd = [sys.executable, script, "--ticker", ticker]
+    cmd = managed_python_argv(PROJECT_ROOT, script, "--ticker", ticker)
 
     try:
         with open(log_path, "w", encoding="utf-8") as log_handle:

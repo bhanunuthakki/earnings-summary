@@ -43,6 +43,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from filings import ingest, store  # noqa: E402
 from filings.models import FilingForm, HardStopError  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 
 _VALID_SOURCES = ("fmp", "edgar", "exhibits")
 _EXIT_HARD_STOP = 1
@@ -91,7 +92,7 @@ def _trigger_disclosure_fast_path(
     if 3 <= local_now.hour < 5:
         return "deferred_protected_window"
     argv = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(project_root / "execution" / "run_disclosure_change_sweep.py"),
         "--tickers",
         ",".join(sorted(set(tickers))),

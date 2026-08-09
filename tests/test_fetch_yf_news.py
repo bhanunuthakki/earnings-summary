@@ -17,6 +17,7 @@ import importlib.util
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Never
 
 import pytest
 
@@ -146,12 +147,14 @@ def test_fetch_many_survives_a_failing_ticker() -> None:
 
 
 def test_fetch_many_never_swallows_batch_schema_drift() -> None:
-    def drifted(_ticker: str, *, days: int) -> list[object]:
+    from execution.fetch_yf_news import fetch_many
+
+    def drifted(_ticker: str, *, days: int) -> Never:
         del days
         raise RowValidationDriftError("provider contract changed")
 
     with pytest.raises(RowValidationDriftError, match="contract changed"):
-        yfnews.fetch_many(["NU"], days=7, fetcher=drifted)
+        fetch_many(["NU"], days=7, fetcher=drifted)
 
 
 # ---------------------------------------------------------------------------

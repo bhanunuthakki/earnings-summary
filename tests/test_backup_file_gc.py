@@ -99,7 +99,7 @@ def test_gc_archive_is_protected(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_pre_migration_recovery_anchors_are_never_discovered(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import execution.backup_file_gc as gc
 

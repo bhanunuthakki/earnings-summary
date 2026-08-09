@@ -1,4 +1,4 @@
-"""Orchestrate one proactive-standup pass — watch, compose, gate, deliver.
+"""Orchestrate one proactive-standup pass â€” watch, compose, gate, deliver.
 
 The per-signal flow (ranked by materiality, highest first), with every cheap
 gate BEFORE the paid LLM steps so the run spends only on trips that survive
@@ -12,7 +12,7 @@ dedup, the per-name cooldown, and the per-day cap:
           no narrative answer?       -> record compose_failed, continue
         eval-gate the brief           (LLM judge)
           judge call/parse FAILED?   -> record judge_failed, RETRY next run
-                                        (infra miss, not a quality verdict —
+                                        (infra miss, not a quality verdict â€”
                                         standup.gate.GateOutcome.judge_failed)
           genuinely scored, < caveat_floor?      -> record suppressed_eval, continue
           genuinely scored, [caveat_floor, min_score)? -> deliver WITH a one-line
@@ -55,8 +55,8 @@ STANDUP_SESSION_TITLE = "Analyst standup"
 STANDUP_SESSION_SCOPE = "portfolio"
 _STANDUP_MODEL_TAG = "standup/ask_answer"
 
-# The deliver-with-caveat prefix (navigation_ia.md §3.3). Prepended to the
-# THREAD text only — the ledger's `conclusion` column distills the raw
+# The deliver-with-caveat prefix (navigation_ia.md Â§3.3). Prepended to the
+# THREAD text only â€” the ledger's `conclusion` column distills the raw
 # `composed.answer` (unprefixed), so the memory stub never carries the
 # caveat wording into a future brief's framing.
 _CAVEAT_PREFIX = "(below the usual bar - delivered so the channel stays alive)\n\n"
@@ -70,7 +70,7 @@ class DeliveredBrief:
     ticker: str | None
     headline: str
     # None never reaches a delivered brief in practice (a judge-infra outcome
-    # is retried, not delivered) — Optional only because GateOutcome.score is.
+    # is retried, not delivered) â€” Optional only because GateOutcome.score is.
     score: float | None
     session_id: str
     turn_id: int | None
@@ -79,7 +79,7 @@ class DeliveredBrief:
 
 @dataclass(slots=True)
 class StandupReport:
-    """Tally of one run — every signal accounted for, plus the delivered briefs."""
+    """Tally of one run â€” every signal accounted for, plus the delivered briefs."""
 
     signals_found: int = 0
     deduped: int = 0
@@ -109,7 +109,7 @@ class StandupReport:
 
 
 def _ensure_standup_session(db_path: Path, *, scope: str = STANDUP_SESSION_SCOPE) -> str:
-    """The single rolling standup thread for the owner — reused across runs by
+    """The single rolling standup thread for the owner â€” reused across runs by
     its title, created on first delivery."""
     for sess in ask_store.list_sessions(scope=scope, db_path=db_path):
         if sess.title == STANDUP_SESSION_TITLE:
@@ -164,7 +164,7 @@ def run_standup(
     dry_run: bool = False,
 ) -> StandupReport:
     """Run one standup pass. ``events_fn`` (compose) and ``judge_caller`` (gate)
-    are the two LLM seams — tests inject fakes; production wires the engine +
+    are the two LLM seams â€” tests inject fakes; production wires the engine +
     ``call_llm``. ``dry_run`` composes + gates but neither persists the thread
     nor writes the ledger (a preview)."""
     cfg = config or StandupConfig()
@@ -173,7 +173,6 @@ def run_standup(
     report = StandupReport()
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000")
     try:
         signals = collect_signals(conn, user_id=user_id, repo_root=repo_root, now=now, config=cfg)
         report.signals_found = len(signals)
@@ -188,7 +187,7 @@ def run_standup(
 
         for signal in signals:
             # A caveat delivery still occupies a thread slot (delivered_today_count
-            # counts both statuses — see standup.ledger._DELIVERED_STATUSES).
+            # counts both statuses â€” see standup.ledger._DELIVERED_STATUSES).
             if delivered_today + report.delivered + report.delivered_caveat >= cfg.max_per_day:
                 report.day_capped += 1
                 continue
@@ -234,7 +233,7 @@ def run_standup(
                 """Append the thread turns + ledger row for a clean or
                 caveat-tier delivery. ``sig``/``composed``/``outcome`` are
                 passed explicitly (never closed over the ``for signal in
-                signals`` loop variables — ruff B023 flags exactly that
+                signals`` loop variables â€” ruff B023 flags exactly that
                 pattern as a latent bug class, even though this closure is
                 always invoked within the same iteration) and their types
                 stay narrowed (``composed`` is never ``None`` here).
@@ -245,7 +244,9 @@ def run_standup(
                 text = _CAVEAT_PREFIX + composed.answer if caveat else composed.answer
                 status = ledger.STATUS_DELIVERED_CAVEAT if caveat else ledger.STATUS_DELIVERED
                 turn_id: int | None = None
-                conclusion = distill_conclusion(composed.answer)  # unprefixed — see _CAVEAT_PREFIX
+                conclusion = distill_conclusion(
+                    composed.answer
+                )  # unprefixed â€” see _CAVEAT_PREFIX
                 if not dry_run:
                     if session_id is None:
                         session_id = _ensure_standup_session(db_path)
@@ -285,7 +286,7 @@ def run_standup(
 
             if outcome.judge_failed:
                 # An infra miss (CLI error / unparseable verdict), NOT a real
-                # quality verdict — retry next run rather than lock the trip
+                # quality verdict â€” retry next run rather than lock the trip
                 # out via STATUS_SUPPRESSED_EVAL's dedup window (see the
                 # incident note on standup.ledger.STATUS_JUDGE_FAILED).
                 report.judge_failed += 1
@@ -307,12 +308,12 @@ def run_standup(
                     )
                 continue
 
-            # score=None only occurs under judge_failed (handled above) — the
+            # score=None only occurs under judge_failed (handled above) â€” the
             # narrow is defense-in-depth so a future infra shape can never be
             # compared against the caveat floor as if it were a measurement.
             if outcome.score is not None and outcome.score >= cfg.caveat_floor:
                 # GENUINELY scored (the judge ran and returned a real
-                # verdict) but below the standup's extra-caution floor —
+                # verdict) but below the standup's extra-caution floor â€”
                 # deliver with a caveat rather than bury it (the channel was
                 # otherwise silent 75%+ of the time; see cfg.caveat_floor).
                 _record_and_deliver(signal, composed, outcome, caveat=True)

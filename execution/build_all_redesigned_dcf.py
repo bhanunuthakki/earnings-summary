@@ -39,7 +39,9 @@ HERE = Path(__file__).resolve().parent
 # so the maintained set is computed from the code we're running while data is read
 # from DCF_REPO_ROOT.
 sys.path.insert(0, str(HERE.parent / "src"))
+
 from dcf.universe import dcf_universe  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 
 
 def default_tickers(repo: Path = REPO) -> list[str]:
@@ -62,7 +64,7 @@ def _run(script: str, ticker: str, dest: Path | None = None) -> tuple[str, str, 
     if dest is not None:
         env["DCF_DEST"] = str(dest)
     proc = subprocess.run(
-        [sys.executable, str(HERE / script)],
+        [*managed_python_prefix(HERE.parent), str(HERE / script)],
         env=env,
         capture_output=True,
         text=True,

@@ -86,15 +86,9 @@ def _driver(iterations: int, repetitions: int) -> dict[str, object]:
         )
         for command, destination in commands:
             destination.append(_run(command))
-    raw_connection_us = statistics.median(
-        run[0]["connection_read_us"] for run in raw_runs
-    )
-    managed_connection_us = statistics.median(
-        run[0]["connection_read_us"] for run in managed_runs
-    )
-    raw_scoped_read_us = statistics.median(
-        run[0]["request_scoped_read_us"] for run in raw_runs
-    )
+    raw_connection_us = statistics.median(run[0]["connection_read_us"] for run in raw_runs)
+    managed_connection_us = statistics.median(run[0]["connection_read_us"] for run in managed_runs)
+    raw_scoped_read_us = statistics.median(run[0]["request_scoped_read_us"] for run in raw_runs)
     managed_scoped_read_us = statistics.median(
         run[0]["request_scoped_read_us"] for run in managed_runs
     )
@@ -153,9 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         payload = (
-            _probe(args.iterations)
-            if args.probe
-            else _driver(args.iterations, args.repetitions)
+            _probe(args.iterations) if args.probe else _driver(args.iterations, args.repetitions)
         )
     print(json.dumps(payload, sort_keys=True))
     return 0

@@ -17,6 +17,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import cast
@@ -26,6 +27,24 @@ from capture.matcher import RosterIndex
 from research.proposals import detect_and_create_task, get_task, tap_enabled
 
 log = logging.getLogger(__name__)
+
+_DOCUMENT_NAME_UNSAFE = re.compile(r"[\\/:*?\"<>|\x00-\x1f\x7f]+")
+
+
+def _document_destination(docs_dir: Path, update_id: int, raw_name: str | None) -> Path:
+    """Return a contained, cross-platform-safe Telegram document destination."""
+
+    cleaned = _DOCUMENT_NAME_UNSAFE.sub("_", raw_name or "file").strip(" .")
+    cleaned = cleaned or "file"
+    suffix = Path(cleaned).suffix[:20]
+    stem_limit = max(1, 160 - len(suffix))
+    stem = Path(cleaned).stem[:stem_limit].strip(" .") or "file"
+    root = docs_dir.resolve()
+    destination = (root / f"tg_{update_id}_{stem}{suffix}").resolve()
+    if destination.parent != root:
+        raise ValueError("Telegram document path escaped the capture directory")
+    return destination
+
 
 # Per-status confirmation replies (plain ASCII — no emoji). A duplicate/empty
 # gets no reply (silence = "already had it / nothing to say"). The
@@ -709,19 +728,18 @@ def poll_once(
             # The file is downloaded and stored locally so future text extraction
             # can read it; the local path is indexed in context_json.
             docs_dir = Path(audio_dir).parent / "docs"
-            safe_name = (update.document_file_name or "file").replace("/", "_")
-            dest = docs_dir / f"tg_{update.update_id}_{safe_name}"
             try:
-                file_path = telegram.get_file_path(token, update.document_file_id)
                 docs_dir.mkdir(parents=True, exist_ok=True)
+                dest = _document_destination(docs_dir, update.update_id, update.document_file_name)
+                file_path = telegram.get_file_path(token, update.document_file_id)
                 telegram.download_file(token, file_path, dest)
-            except telegram.TelegramError:
+            except (telegram.TelegramError, ValueError):
                 bump("download_failed")
                 continue
             rd = ingest.ingest_reading(
                 channel="telegram",
                 local_path=dest,
-                file_name=update.document_file_name,
+                file_name=dest.name.removeprefix(f"tg_{update.update_id}_"),
                 mime_type=update.document_mime_type,
                 caption=update.text,
                 external_ref=f"tg:{update.update_id}",

@@ -166,8 +166,9 @@ def test_repo_registry_wraps_interactive_writer_with_shared_lock(tmp_path: Path)
         job._reader.join(timeout=2)
 
     command = popen.call_args.args[0]
-    assert command[1] == str(tmp_path / "src/runtime/job_runtime.py")
-    assert command[2:6] == ["--job", "interactive-refresh-full", "--write-set", "portfolio-db"]
+    assert command[1] == str(tmp_path / "execution/sqlite_bootstrap.py")
+    assert command[2] == str(tmp_path / "src/runtime/job_runtime.py")
+    assert command[3:7] == ["--job", "interactive-refresh-full", "--write-set", "portfolio-db"]
     assert command[-3:] == ["--", "python", "writer.py"]
 
 

@@ -215,7 +215,7 @@ def test_panel_backup_directive_shown(tmp_path: Path) -> None:
 def test_operational_alarms_flag_stale_backup_large_wal_and_stale_eval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pipeline.cron_health_panel import _operational_alarms
+    from pipeline.cron_health_panel import operational_alarms
 
     db_path = tmp_path / "data" / "portfolio.db"
     db_path.parent.mkdir()
@@ -231,7 +231,7 @@ def test_operational_alarms_flag_stale_backup_large_wal_and_stale_eval(
     backup_dir.mkdir()
     monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
 
-    html = _operational_alarms(db_path, now=datetime(2026, 8, 8, tzinfo=UTC))
+    html = operational_alarms(db_path, now=datetime(2026, 8, 8, tzinfo=UTC))
 
     assert "Database backup is stale" in html
     assert "SQLite WAL is oversized" in html
@@ -257,7 +257,7 @@ def test_wal_probe_surfaces_io_failures(tmp_path: Path, monkeypatch: pytest.Monk
 def test_operational_alarms_are_quiet_for_fresh_receipts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pipeline.cron_health_panel import _operational_alarms
+    from pipeline.cron_health_panel import operational_alarms
 
     now = datetime.now(UTC)
     db_path = tmp_path / "data" / "portfolio.db"
@@ -274,7 +274,7 @@ def test_operational_alarms_are_quiet_for_fresh_receipts(
     os.utime(snapshot, (now.timestamp(), now.timestamp()))
     monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
 
-    html = _operational_alarms(db_path, now=now)
+    html = operational_alarms(db_path, now=now)
 
     assert "Database backup is stale" not in html
     assert "SQLite WAL is oversized" not in html
@@ -285,7 +285,7 @@ def test_operational_alarms_are_quiet_for_fresh_receipts(
 def test_operational_alarms_require_current_gc_archive_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pipeline.cron_health_panel import _operational_alarms
+    from pipeline.cron_health_panel import operational_alarms
 
     now = datetime.now(UTC)
     db_path = tmp_path / "data" / "portfolio.db"
@@ -304,7 +304,7 @@ def test_operational_alarms_require_current_gc_archive_backup(
     os.utime(primary, (now.timestamp(), now.timestamp()))
     monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
 
-    html = _operational_alarms(db_path, now=now)
+    html = operational_alarms(db_path, now=now)
 
     assert "GC archive is not backed up" in html
 

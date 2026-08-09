@@ -19,7 +19,7 @@ import sqlite3
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -548,7 +548,11 @@ def test_daily_scan_purpose_classified_not_warned(
 
     assert rc == 0
     assert fake_run.calls == [], "a daily-scan purpose must not be subprocessed by the drain"
-    events = [r.msg.get("event") for r in caplog.records if isinstance(r.msg, dict)]
+    events: list[str | None] = []
+    for record in caplog.records:
+        if isinstance(record.msg, dict):
+            event = cast("dict[str, object]", record.msg).get("event")
+            events.append(event if isinstance(event, str) else None)
     assert "refreshed_by_daily_scan" in events
     assert "no_regenerator" not in events
 
@@ -605,6 +609,7 @@ def test_subprocess_failure_continues_drain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """One regenerator returning non-zero must not poison the queue. The
     drain logs the failure and proceeds to the next job."""
@@ -636,8 +641,11 @@ def test_subprocess_failure_continues_drain(
     with caplog.at_level("WARNING", logger="refresh_dirty_artifacts"):
         rc = executor.main()
 
-    assert rc == 0
+    assert rc == 1
     assert len(fake_run.calls) == 2
+    receipt = capsys.readouterr().out
+    assert '"status": "partial_failure"' in receipt
+    assert '"failed": 2' in receipt
     failures = [
         r
         for r in caplog.records

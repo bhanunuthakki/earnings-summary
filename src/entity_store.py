@@ -2,8 +2,8 @@
 
 Single module by design: entities and concepts are siblings of the same
 "semantic backbone," and bundling the access pattern keeps the API surface
-small. Read paths are common: resolve("Active Customers", ticker='NU') →
-concept_id; resolve("AI Mode") → entity_id (kind=product).
+small. Read paths are common: resolve("Active Customers", ticker='NU') â†’
+concept_id; resolve("AI Mode") â†’ entity_id (kind=product).
 
 All writers are idempotent / dedup-safe so re-running an extractor over the
 same document doesn't multiply rows. observation_count + last_observed_at
@@ -91,9 +91,8 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
             schema_preflight=True,
         )
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
-        # Verify the spine tables exist — fail gracefully if not
+        # Verify the spine tables exist â€” fail gracefully if not
         for t in ("entities", "concepts"):
             r = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,)
@@ -477,7 +476,7 @@ def resolve_concept(
     ticker: str | None = None,
     db_path: Path | str | None = None,
 ) -> int | None:
-    """Resolve alias → concept_id. Ticker-specific aliases win over universal."""
+    """Resolve alias â†’ concept_id. Ticker-specific aliases win over universal."""
     conn = _open(db_path)
     if conn is None:
         return None
@@ -655,7 +654,7 @@ def record_extraction(
 
 
 # ---------------------------------------------------------------------------
-# Mapping proposals — self-updating queue
+# Mapping proposals â€” self-updating queue
 # ---------------------------------------------------------------------------
 
 
@@ -673,9 +672,9 @@ def propose_mapping(
     """Write a mapping proposal. Returns (proposal_id, status).
 
     Confidence routing:
-      >= AUTO_APPLY_THRESHOLD (0.85) → status='auto_applied', mapping immediately applied
-      >= PENDING_REVIEW_FLOOR (0.50) → status='pending_review', queued for human
-      <  PENDING_REVIEW_FLOOR        → status='rejected' (logged only, no action)
+      >= AUTO_APPLY_THRESHOLD (0.85) â†’ status='auto_applied', mapping immediately applied
+      >= PENDING_REVIEW_FLOOR (0.50) â†’ status='pending_review', queued for human
+      <  PENDING_REVIEW_FLOOR        â†’ status='rejected' (logged only, no action)
     """
     conn = _open(db_path)
     if conn is None:
@@ -845,16 +844,16 @@ def _apply_proposal_payload(
     ticker: str | None,
 ) -> tuple[int | None, int | None]:
     """Execute a proposal's payload against the schema. Returns
-    (applied_entity_id, applied_concept_id) — at most one is non-None.
+    (applied_entity_id, applied_concept_id) â€” at most one is non-None.
 
     Payload schema per kind:
-      new_alias            — {"entity_id": int, "alias_text": str, "alias_kind": str}
-      new_entity           — {"kind": str, "canonical_name": str, ...all entity fields}
-      new_concept          — {"canonical_name": str, "kind": str, ...all concept fields}
-      new_concept_alias    — {"concept_id": int, "ticker": str?, "alias_text": str}
-      new_relationship     — {"from_entity_id": int, "to_entity_id": int,
+      new_alias            â€” {"entity_id": int, "alias_text": str, "alias_kind": str}
+      new_entity           â€” {"kind": str, "canonical_name": str, ...all entity fields}
+      new_concept          â€” {"canonical_name": str, "kind": str, ...all concept fields}
+      new_concept_alias    â€” {"concept_id": int, "ticker": str?, "alias_text": str}
+      new_relationship     â€” {"from_entity_id": int, "to_entity_id": int,
                               "relationship_kind": str, "effective_from": str?}
-      concept_redefinition — {"concept_id": int, "ticker": str, "effective_from": str,
+      concept_redefinition â€” {"concept_id": int, "ticker": str, "effective_from": str,
                               "definition_md": str, "change_md": str?}
     """
     now = _now_iso()

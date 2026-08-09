@@ -48,6 +48,9 @@ from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.python_process import managed_python_prefix  # noqa: E402
+
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 import save_fmp_data as fmp_save  # noqa: E402
@@ -175,7 +178,7 @@ def _resolve_tickers(conn: sqlite3.Connection, explicit: list[str] | None) -> li
 
 def _run_fetch(manifest_path: Path, max_calls: int) -> int:
     cmd = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "save_fmp_data.py"),
         "--manifest",
         str(manifest_path),
@@ -194,7 +197,11 @@ def _run_index(conn: sqlite3.Connection, tickers: list[tuple[str, str]]) -> int:
 
 
 def _run_extract() -> int:
-    cmd = [sys.executable, str(PROJECT_ROOT / "execution" / "extract_facts.py"), "--all"]
+    cmd = [
+        *managed_python_prefix(PROJECT_ROOT),
+        str(PROJECT_ROOT / "execution" / "extract_facts.py"),
+        "--all",
+    ]
     proc = subprocess.run(cmd, check=False)
     return proc.returncode
 

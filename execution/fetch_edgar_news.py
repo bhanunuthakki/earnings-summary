@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import cast
 
 import requests
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -61,6 +61,7 @@ from news.store import (  # noqa: E402
     drop_duplicate_stories,
     upsert_news_rows,
 )
+from pipeline.row_validation import validate_provider_rows  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -120,6 +121,18 @@ _BOILERPLATE_ITEMS = ("9.01",)
 _8K_FORMS = ("8-K", "8-K/A")
 _13D_FORMS = ("SC 13D", "SC 13D/A")
 _13G_FORMS = ("SC 13G", "SC 13G/A")
+
+
+class _EdgarRecentRow(BaseModel):
+    form: str = Field(min_length=1)
+    accession: str = Field(min_length=1)
+    filing_date: str = Field(min_length=1)
+    acceptance: str = ""
+    items: str = ""
+    primary_document: str = ""
+
+
+_EDGAR_RECENT_ADAPTER = TypeAdapter(_EdgarRecentRow)
 
 
 def _log(event: str, **kwargs: object) -> None:
@@ -335,13 +348,34 @@ def map_filings_to_news_rows(
     items_list = _str_list(recent, "items")
     primary_docs = _str_list(recent, "primaryDocument")
 
+    batch: list[object] = []
+    for idx in range(max(map(len, (forms, accessions, filing_dates)), default=0)):
+        batch.append(
+            {
+                "form": forms[idx] if idx < len(forms) else "",
+                "accession": accessions[idx] if idx < len(accessions) else "",
+                "filing_date": filing_dates[idx] if idx < len(filing_dates) else "",
+                "acceptance": acceptance_times[idx] if idx < len(acceptance_times) else "",
+                "items": items_list[idx] if idx < len(items_list) else "",
+                "primary_document": primary_docs[idx] if idx < len(primary_docs) else "",
+            }
+        )
+    validated = validate_provider_rows(
+        batch,
+        _EDGAR_RECENT_ADAPTER,
+        source=f"edgar-submissions-{ticker.upper()}",
+        context={"ticker": ticker.upper(), "cik": cik},
+        max_drop_rate=0.10,
+        min_samples=20,
+    )
+
     rows: list[NewsRow] = []
-    for idx, form in enumerate(forms):
-        filing_date = filing_dates[idx] if idx < len(filing_dates) else ""
+    for rec in validated:
+        filing_date = rec.filing_date
         if not filing_date or filing_date < since_date:
             continue
-        form_upper = form.upper().strip()
-        items = items_list[idx] if idx < len(items_list) else ""
+        form_upper = rec.form.upper().strip()
+        items = rec.items
         if form_upper in _8K_FORMS:
             feed = SOURCE_FEED_EDGAR_8K
             headline = _headline_8k(form_upper, items, company)
@@ -352,8 +386,8 @@ def map_filings_to_news_rows(
             feed = ownership
             headline = _headline_ownership(form_upper, ownership, company)
 
-        accession = accessions[idx] if idx < len(accessions) else ""
-        acceptance = acceptance_times[idx] if idx < len(acceptance_times) else ""
+        accession = rec.accession
+        acceptance = rec.acceptance
         published_at = _to_published_at(acceptance, filing_date)
         if published_at is None:
             _log("edgar_unparseable_date", ticker=ticker, accession=accession, form=form_upper)
@@ -362,7 +396,7 @@ def map_filings_to_news_rows(
         archive_base = (
             f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession.replace('-', '')}"
         )
-        primary_doc = primary_docs[idx] if idx < len(primary_docs) else ""
+        primary_doc = rec.primary_document
         url = f"{archive_base}/{primary_doc}" if primary_doc else f"{archive_base}/"
 
         try:

@@ -7,6 +7,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -55,24 +56,35 @@ def _quote_identifier(name: str) -> str:
 
 def audit(source_db: Path, catalog_path: Path) -> RecoveryReceipt:
     """Validate one backup and count every cataloged schema target."""
-    catalog: object = json.loads(catalog_path.read_text(encoding="utf-8"))
-    if not isinstance(catalog, dict) or not isinstance(catalog.get("candidates"), list):
+    catalog_raw = cast(object, json.loads(catalog_path.read_text(encoding="utf-8")))
+    if not isinstance(catalog_raw, dict):
         raise ValueError("deletion catalog must contain a candidates list")
+    catalog = cast("dict[str, object]", catalog_raw)
+    candidates_raw = catalog.get("candidates")
+    if not isinstance(candidates_raw, list):
+        raise ValueError("deletion catalog must contain a candidates list")
+    candidates = cast("list[object]", candidates_raw)
 
     requested: list[tuple[str, str, str | None]] = []
-    for raw_candidate in catalog["candidates"]:
-        if not isinstance(raw_candidate, dict):
+    for candidate_raw in candidates:
+        if not isinstance(candidate_raw, dict):
             raise ValueError("deletion catalog candidate must be an object")
+        raw_candidate = cast("dict[str, object]", candidate_raw)
         candidate_id = raw_candidate.get("id")
-        schema_targets = raw_candidate.get("schema_targets")
-        exemptions = raw_candidate.get("data_restore_exemptions", {})
-        if not isinstance(candidate_id, str) or not isinstance(schema_targets, list):
+        schema_targets_raw = raw_candidate.get("schema_targets")
+        exemptions_raw = raw_candidate.get("data_restore_exemptions", {})
+        if not isinstance(candidate_id, str) or not isinstance(schema_targets_raw, list):
             raise ValueError("candidate id/schema_targets contract is invalid")
-        if not isinstance(exemptions, dict) or any(
+        if not isinstance(exemptions_raw, dict):
+            raise ValueError("data_restore_exemptions must map target names to reasons")
+        exemptions_untyped = cast("dict[object, object]", exemptions_raw)
+        if any(
             not isinstance(key, str) or not isinstance(value, str)
-            for key, value in exemptions.items()
+            for key, value in exemptions_untyped.items()
         ):
             raise ValueError("data_restore_exemptions must map target names to reasons")
+        exemptions = {cast(str, key): cast(str, value) for key, value in exemptions_untyped.items()}
+        schema_targets = cast("list[object]", schema_targets_raw)
         for raw_name in schema_targets:
             if not isinstance(raw_name, str) or not raw_name:
                 raise ValueError("schema target names must be non-empty strings")
@@ -98,17 +110,18 @@ def audit(source_db: Path, catalog_path: Path) -> RecoveryReceipt:
         )
         if missing:
             raise ValueError("backup is missing cataloged schema targets: " + ",".join(missing))
+
+        def count_rows(name: str) -> int:
+            query = f"SELECT COUNT(*) FROM {_quote_identifier(name)}"  # nosec B608 -- closed catalog identifier is escaped and quoted
+            return int(conn.execute(query).fetchone()[0])
+
         targets = [
             RecoveryTarget(
                 candidate_id=candidate_id,
                 name=name,
                 object_type=objects.get(name, "absent"),
                 present=name in objects,
-                row_count=int(
-                    conn.execute(f"SELECT COUNT(*) FROM {_quote_identifier(name)}").fetchone()[0]
-                )
-                if name in objects
-                else 0,
+                row_count=count_rows(name) if name in objects else 0,
                 exemption_reason=exemption if name not in objects else None,
             )
             for candidate_id, name, exemption in requested

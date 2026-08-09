@@ -17,15 +17,11 @@ defensively field-by-field.
 
 from __future__ import annotations
 
-import contextlib
-import json
-import os
 import sqlite3
-import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from materialized_cache import cache_metadata, read_fresh_payload, write_payload_atomically
 from pipeline.etf_score import StyleLoadingRead, compute_etf_score, gather_etf_score_inputs
 from pipeline.research_cockpit import AttractivenessBreakdown, AttractivenessFactor
 
@@ -38,6 +34,7 @@ __all__ = [
 ]
 
 _CACHE_REL: tuple[str, ...] = ("data", "etf_score.json")
+_CACHE_SCHEMA = "etf-score"
 
 
 def _cache_path(repo_root: Path) -> Path:
@@ -122,23 +119,14 @@ def materialize_etf_scores(conn: sqlite3.Connection, repo_root: Path) -> int:
         rows = _whatif_rows(repo_root, t)
         if rows:
             whatif[t] = rows
-    payload = {
-        "computed_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
+    payload: dict[str, object] = {
+        **cache_metadata(_CACHE_SCHEMA),
         "scores": scores,
         "loadings": loadings,
         "whatif": whatif,
     }
     path = _cache_path(repo_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix="etf_score.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    write_payload_atomically(path, payload, prefix="etf_score.")
     return len(scores)
 
 
@@ -207,14 +195,7 @@ def read_materialized_etf_whatif(repo_root: Path) -> dict[str, dict[str, dict[st
 
 
 def _read_payload(repo_root: Path) -> dict[str, object]:
-    try:
-        raw = _cache_path(repo_root).read_text(encoding="utf-8")
-        payload = json.loads(raw)
-    except (OSError, ValueError, TypeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    return cast("dict[str, object]", payload)
+    return read_fresh_payload(_cache_path(repo_root), schema=_CACHE_SCHEMA)
 
 
 def _breakdown_to_json(bd: AttractivenessBreakdown) -> dict[str, object]:

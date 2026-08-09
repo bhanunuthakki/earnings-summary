@@ -14,6 +14,8 @@ from pathlib import Path
 from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
 
+SQLITE_BUSY_TIMEOUT_MS = 30_000
+
 
 def sqlite_version_is_wal_reset_safe(version: tuple[int, int, int]) -> bool:
     """Whether ``version`` contains SQLite's 2026 WAL-reset race fix."""
@@ -80,7 +82,7 @@ def connect_sqlite(
                 immutable=(role is SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY),
             ),
             uri=True,
-            timeout=30.0,
+            timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
         )
     else:
         if (
@@ -92,7 +94,7 @@ def connect_sqlite(
             raise FileNotFoundError("schema-preflighted writer requires an existing database")
         if resolved != ":memory:":
             Path(resolved).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(resolved, timeout=30.0)
+        conn = sqlite3.connect(resolved, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
 
     try:
         _register_scope_identity_function(conn)
@@ -139,7 +141,7 @@ def _apply_connection_policy(conn: sqlite3.Connection) -> None:
     """Apply the PRAGMAs that are local to every connection."""
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
 
 
 def _apply_writer_policy(conn: sqlite3.Connection) -> None:
@@ -149,6 +151,7 @@ def _apply_writer_policy(conn: sqlite3.Connection) -> None:
 
 
 __all__ = [
+    "SQLITE_BUSY_TIMEOUT_MS",
     "SQLiteConnectionRole",
     "connect_sqlite",
     "require_safe_sqlite_writer_runtime",

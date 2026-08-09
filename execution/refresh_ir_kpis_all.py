@@ -41,7 +41,7 @@ playwright install chromium``. A missing extra surfaces as a per-ticker failure
 
 This orchestrates ``refresh_ir_kpis.py`` via subprocess (process isolation,
 matching ``run_morning_pipeline.py``) rather than importing its ``main()``; the
-child interpreter is ``sys.executable`` so children never depend on PATH
+child uses the managed interpreter/bootstrap prefix so it never depends on PATH
 resolution differing from the parent's.
 
 Usage:
@@ -67,6 +67,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ir_pipeline.config import configured_tickers  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # How many recent quarters each child ingests. Mirrors refresh_ir_kpis.py's own
 # default so the batch path and the manual path behave identically.
@@ -220,7 +221,7 @@ def _run_one(job: _TickerJob, *, repo_root: Path, quarters: int, timeout_s: int)
     """
     ticker = job.ticker
     argv = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "refresh_ir_kpis.py"),
         "--ticker",
         ticker,

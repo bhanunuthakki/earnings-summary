@@ -3,6 +3,7 @@ Ledger → Research inbox lane fragment."""
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -136,6 +137,36 @@ def test_approve_action_flips_status_inert(ctx) -> None:
     assert resp.get_json()["status"] == "approved"
     prop = get_proposal(pid, db_path=db)
     assert prop is not None and prop.status == "approved"
+
+
+def test_approve_apply_failure_is_redacted_and_correlated(
+    ctx,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import research.apply as apply_mod
+
+    client, _db, _task_id, pid = ctx
+
+    def _boom(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("apply failed?api_key=secret-value")
+
+    monkeypatch.setattr(apply_mod, "apply_approved_proposal", _boom)
+    with caplog.at_level(logging.ERROR, logger=client.application.logger.name):
+        resp = client.post(
+            f"/api/research/proposal/{pid}/approve",
+            headers={"X-Correlation-ID": "research-apply-test"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "approved"
+    assert body["applied"] == ""
+    assert body["apply_error"] == "approved proposal could not be applied; retry the request"
+    assert body["correlation_id"] == "research-apply-test"
+    assert "secret-value" not in resp.get_data(as_text=True)
+    assert "secret-value" not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_steer_action_records_direction(ctx) -> None:

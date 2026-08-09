@@ -47,7 +47,7 @@ def _canned(answer: str):
         from llm.structured import StructuredParseError
 
         try:
-            return prc._IntentClassification(intent=answer)
+            return prc._IntentClassification.model_validate({"intent": answer})
         except ValueError as exc:
             raise StructuredParseError("invalid intent") from exc
 

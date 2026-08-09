@@ -58,6 +58,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import ir_fetch_status  # noqa: E402
 from ir_uploads import calendar_id_from_fye  # noqa: E402
 from log_redact import redact  # noqa: E402
+from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Roster = the "briefed" active universe (portfolio + evaluation). Hardcoded to
@@ -220,7 +221,7 @@ def _fail(
 
 def _run_child(argv: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        argv,
+        ensure_managed_python_argv(PROJECT_ROOT, argv),
         cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
@@ -272,7 +273,7 @@ def _run_process_stage(
         return False
     nar = _run_tolerant(
         [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(PROJECT_ROOT / "src" / "compute" / "ir_narrative.py"),
             "--ticker",
             ticker,
@@ -289,7 +290,7 @@ def _run_process_stage(
             return False
         _run_tolerant(
             [
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(PROJECT_ROOT / "execution" / "process_ir_documents.py"),
                 "--ticker",
                 ticker,
@@ -328,7 +329,7 @@ def _run_discovery(
     """
     t0 = time.monotonic()
     discover_argv = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "discover_ir_documents.py"),
         "--ticker",
         ticker,
@@ -464,7 +465,7 @@ def _finish_discovery(
 
     calendar = calendar_id_from_fye(_ticker_fye(db_path, ticker))
     fetch_argv = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "fetch_ir_documents.py"),
         "--ticker",
         ticker,

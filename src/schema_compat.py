@@ -8,15 +8,15 @@ it is safe to call from low-level SQLite stores.
 Two shapes, for two different callers:
 
 ``require_current_for_write`` is the per-connection guard.  It raises, which is
-correct for a guarded writer — but a caller that swallows exceptions by design
-(``llm_call_ledger.record_call`` is "best-effort … never raises") turns that
+correct for a guarded writer â€” but a caller that swallows exceptions by design
+(``llm_call_ledger.record_call`` is "best-effort â€¦ never raises") turns that
 raise into a WARNING line and keeps going.  On 2026-08-02 that cost seven LLM
 cost-ledger rows while every operator-visible surface still read healthy.
 
 ``describe_drift`` is the PREFLIGHT shape for those callers' owners: it answers
 "is this database behind this checkout?" without needing a writer connection,
 so a scheduled job can refuse to start and a dashboard panel can say so out
-loud.  It never raises — a fork or an unreadable database is reported as drift
+loud.  It never raises â€” a fork or an unreadable database is reported as drift
 rather than thrown, because its callers run before the code that would handle
 an exception.
 """
@@ -45,7 +45,7 @@ def expected_head(project_root: Path | None = None) -> str:
 
     Memoized per resolved root for the life of the process: the parse walks
     every ``alembic/versions/*.py`` (253 files, ~0.5s on this machine), and
-    ``require_current_for_write`` runs on EVERY guarded writer connection —
+    ``require_current_for_write`` runs on EVERY guarded writer connection â€”
     uncached, one Home render's ~75 ``open_conn`` calls took ~42s and read as
     "the page never loads" (2026-07-31). A checkout's migration set cannot
     change under a running process, so caching preserves the guard exactly;
@@ -133,7 +133,7 @@ _TRANSIENT_SQLITE_ERRORS = frozenset({"SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_PR
 # A transient error makes the probe defer (proceed without a verdict), which is
 # a fail-OPEN: a database that is both drifted AND locked at preflight time
 # would slip through. A read-only probe on a WAL DB almost never blocks, and
-# the connection already waits out 5s of contention per attempt — but retrying
+# the connection already waits out 5s of contention per attempt â€” but retrying
 # a few times closes the window so only sustained (not momentary) contention
 # ends in a defer. Bounded so a preflight cannot hang the whole cron fleet.
 _TRANSIENT_PROBE_ATTEMPTS = 3
@@ -180,12 +180,11 @@ class SchemaDrift:
 def _db_revisions(path: Path) -> tuple[str, ...] | None:
     """Read ``alembic_version`` read-only; ``None`` when the table is absent.
 
-    Propagates ``sqlite3.Error`` — the caller decides whether the condition is
+    Propagates ``sqlite3.Error`` â€” the caller decides whether the condition is
     transient contention or a database it must refuse to write to.
     """
-    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
     try:
-        conn.execute("PRAGMA busy_timeout = 5000")
         has_version = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='alembic_version'"
         ).fetchone()
@@ -205,7 +204,7 @@ def describe_drift(db_path: str | Path, *, project_root: Path | None = None) -> 
     ``alembic_version`` (an unversioned fixture), sits exactly on this
     checkout's head, or could not be probed after
     ``_TRANSIENT_PROBE_ATTEMPTS`` tries because the database stayed busy.
-    Every other outcome is a :class:`SchemaDrift` — this function does not
+    Every other outcome is a :class:`SchemaDrift` â€” this function does not
     raise, because its callers run BEFORE the work whose error handling would
     otherwise catch it.
     """
@@ -216,7 +215,7 @@ def describe_drift(db_path: str | Path, *, project_root: Path | None = None) -> 
     if not versions.is_dir():
         # Not a checkout (a synthetic repo root in a test, a partial copy).
         # There is no expected head to compare against, so there is no verdict
-        # to give — guarded writers still refuse drift on their own.
+        # to give â€” guarded writers still refuse drift on their own.
         log.warning({"event": "schema_drift_probe_skipped", "versions_dir": str(versions)})
         return None
     try:
@@ -253,7 +252,7 @@ def describe_drift(db_path: str | Path, *, project_root: Path | None = None) -> 
                 time.sleep(_TRANSIENT_PROBE_BACKOFF_S * (attempt + 1))
     else:
         # Every attempt hit transient contention. Defer (proceed) rather than
-        # fail the job for a busy WAL — but loudly, with the attempt count, so
+        # fail the job for a busy WAL â€” but loudly, with the attempt count, so
         # a persistent lock that keeps hiding drift is visible in the log.
         log.warning(
             {
@@ -275,7 +274,7 @@ def describe_drift(db_path: str | Path, *, project_root: Path | None = None) -> 
             reason=DRIFT_CHECKOUT_BEHIND_DB,
             detail=(
                 "database is on a revision this checkout does not define "
-                f"({','.join(unknown)}) — the CHECKOUT is stale, not the database"
+                f"({','.join(unknown)}) â€” the CHECKOUT is stale, not the database"
             ),
         )
     return SchemaDrift(

@@ -281,9 +281,7 @@ def validate_manifest(specs: tuple[StageSpec, ...] = STAGE_MANIFEST) -> None:
             if dependency not in positions:
                 raise ValueError(f"{spec.key}: unknown selection dependency {dependency}")
             if positions[dependency] >= positions[spec.key]:
-                raise ValueError(
-                    f"{spec.key}: selection dependency {dependency} must precede it"
-                )
+                raise ValueError(f"{spec.key}: selection dependency {dependency} must precede it")
 
 
 def manifest_digest(specs: tuple[StageSpec, ...] = STAGE_MANIFEST) -> str:

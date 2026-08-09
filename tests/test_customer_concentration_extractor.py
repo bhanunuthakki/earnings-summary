@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
@@ -112,13 +113,17 @@ def db(tmp_path: Path) -> Path:
     return p
 
 
+class _Validator(Protocol):
+    def validate_python(self, value: object) -> object: ...
+
+
 def _mock_llm(response_rows: list[dict[str, object]]):
     """Build a fake structured call that validates the given rows."""
 
     def _fake(prompt: str, **kwargs: object) -> object:
         del prompt
-        schema = kwargs["schema"]
-        return schema.validate_python(response_rows)  # pyright: ignore[reportAttributeAccessIssue]
+        schema = cast(_Validator, kwargs["schema"])
+        return schema.validate_python(response_rows)
 
     return _fake
 
@@ -398,7 +403,7 @@ def test_extract_strips_json_code_fence(
 ) -> None:
     def _fenced(prompt: str, **kwargs: object) -> object:
         del prompt
-        schema = kwargs["schema"]
+        schema = cast(_Validator, kwargs["schema"])
         return schema.validate_python(
             [
                 {
@@ -408,7 +413,7 @@ def test_extract_strips_json_code_fence(
                     "source_excerpt": "y",
                 }
             ]
-        )  # pyright: ignore[reportAttributeAccessIssue]
+        )
 
     monkeypatch.setattr("table_extractors.customer_concentration.call_llm_structured", _fenced)
     outcome = cc.extract(

@@ -148,6 +148,7 @@ from pipeline.ticker_command_center import (  # noqa: E402
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 from runtime.job_runtime import portfolio_db_path  # noqa: E402
+from runtime.python_process import managed_python_argv  # noqa: E402
 from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
 from schema_compat import SchemaRevisionMismatch  # noqa: E402
 from server_runtime.access import (  # noqa: E402
@@ -177,6 +178,7 @@ _MAX_REQUEST_BYTES = 262_144
 _MAX_USER_INPUT_CHARS = 8_000
 _STREAM_QUEUE_MAXSIZE = 64
 _CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+_BROWSER_USER_AGENT_RX = re.compile(r"(?:mozilla|chrome|chromium|safari|firefox|edg)/", re.I)
 
 
 def _cors_allow_origin(origin: str, *, repo_root: Path = PROJECT_ROOT) -> str | None:
@@ -226,6 +228,19 @@ def _referer_back_path(referer: str) -> str | None:
     if not path.startswith("/") or path[1:2] in ("/", "\\"):
         return None
     return path + (f"?{parsed.query}" if parsed.query else "")
+
+
+def _is_browser_user_agent(user_agent: str) -> bool:
+    """Identify browser requests only for the no-fetch-metadata CSRF fallback.
+
+    Browsers normally send ``Origin`` and/or ``Sec-Fetch-Site`` on mutations.
+    Privacy-hardened clients can omit both, so a browser-shaped request with no
+    trustworthy metadata must present the existing report capability. Local
+    non-browser callers (curl, the Python CLI, Flask's test client) remain
+    usable without turning a browser's ambient loopback access into a bypass.
+    """
+
+    return _BROWSER_USER_AGENT_RX.search(user_agent) is not None
 
 
 # The panel id is interpolated rather than written as one literal '#decis…'
@@ -465,10 +480,17 @@ def create_app(
         app.logger.error(
             "%s: %s",
             message,
-            exc,
-            exc_info=isinstance(exc, BaseException),
+            redact(f"{type(exc).__name__}: {exc}")[:500],
         )
         return _client_error(f"{message}; retry the request", status)
+
+    def _log_redacted_failure(message: str, exc: object, *, level: str = "error") -> None:
+        log = getattr(app.logger, level)
+        log(
+            "%s: %s",
+            message,
+            redact(f"{type(exc).__name__}: {exc}")[:500],
+        )
 
     def _drain_stream(
         events: Iterator[dict[str, object]],
@@ -634,8 +656,9 @@ def create_app(
         # Origin is cross-site (judged by the same loopback / "null" / whitelist
         # rule as CORS, via _cors_allow_origin). Safe methods and the OPTIONS
         # preflight are exempt. An absent Origin remains allowed for loopback
-        # CLI callers, but is refused for a remote Tailnet client: remote
-        # mutations must come from a same-origin browser surface. This
+        # non-browser CLI callers, but a browser with no Origin, Referer, or
+        # Fetch Metadata must prove possession of the static-report capability.
+        # Remote mutations must come from a same-origin browser surface. This
         # complements the
         # CORS-withholding in add_cors_headers, which only stops requests the
         # browser bothers to preflight — the Origin check also covers a simple
@@ -644,9 +667,10 @@ def create_app(
             return None
         remote_address = request.remote_addr or ""
         origin = request.headers.get("Origin", "")
-        if origin == "null" and not report_capability.matches(
+        capability_matches = report_capability.matches(
             request.headers.get(REPORT_CAPABILITY_HEADER, "")
-        ):
+        )
+        if origin == "null" and not capability_matches:
             return ({"error": "static report capability required"}, 403)
         if (
             not origin
@@ -660,6 +684,25 @@ def create_app(
             return ({"error": "Origin required for remote state-changing request"}, 403)
         if origin and _cors_allow_origin(origin, repo_root=repo_root) is None:
             return ({"error": "cross-origin state-changing request refused"}, 403)
+        if not origin:
+            fetch_site = request.headers.get("Sec-Fetch-Site", "").strip().lower()
+            if fetch_site == "cross-site":
+                return ({"error": "cross-site state-changing request refused"}, 403)
+            referer = request.headers.get("Referer", "").strip()
+            if referer:
+                try:
+                    parsed = urllib.parse.urlparse(referer)
+                    referer_origin = f"{parsed.scheme}://{parsed.netloc}"
+                except ValueError:
+                    referer_origin = ""
+                if (
+                    not referer_origin
+                    or _cors_allow_origin(referer_origin, repo_root=repo_root) is None
+                ):
+                    return ({"error": "cross-site state-changing request refused"}, 403)
+            elif fetch_site != "same-origin" and not capability_matches:
+                if _is_browser_user_agent(request.headers.get("User-Agent", "")):
+                    return ({"error": "state-changing request capability required"}, 403)
         return None
 
     @app.before_request
@@ -942,8 +985,10 @@ def create_app(
         def _run_bg() -> None:
             try:
                 proposal_id = run_research_task(task_id, db_path=db_path, repo_root=repo_root)
-            except Exception:  # the engine reverts the row; the poll sees 'proposed'
-                app.logger.warning("research run failed for task %s", task_id, exc_info=True)
+            except Exception as exc:  # the engine reverts the row; the poll sees 'proposed'
+                _log_redacted_failure(
+                    f"research run failed for task {task_id}", exc, level="warning"
+                )
                 return
             if proposal_id is None:
                 return
@@ -964,8 +1009,8 @@ def create_app(
                 prop = get_proposal(proposal_id, db_path=db_path)
                 if token and chat_id is not None and prop is not None:
                     research_notify.send_proposal_card(token, chat_id, prop)
-            except Exception:
-                app.logger.debug("research telegram push skipped", exc_info=True)
+            except Exception as exc:
+                _log_redacted_failure("research telegram push skipped", exc, level="debug")
 
         threading.Thread(target=_run_bg, daemon=True, name=f"research-run-{task_id}").start()
         _bump_activation_count("act:research_run")
@@ -1017,13 +1062,17 @@ def create_app(
         _bump_activation_count(f"act:proposal:{verb}")
         status = act_on_proposal(proposal_id, verb, steer_text=steer_text, db_path=db_path)
         applied = ""
+        apply_failed = False
         if verb == "approve":
             from research.apply import apply_approved_proposal
 
             try:
                 applied = apply_approved_proposal(proposal_id, db_path=db_path)
             except Exception as exc:  # a bad apply must not 500 the action
-                applied = f"apply failed: {exc}"
+                apply_failed = True
+                _log_redacted_failure(
+                    f"research proposal apply failed for proposal {proposal_id}", exc
+                )
         # Consequence receipt (Ledger UX overhaul): a plain-English line of what
         # just happened, built from the SAME status/applied values above — never
         # a second query. 'approve' echoes the live write when there was one
@@ -1035,7 +1084,15 @@ def create_app(
             "rejected": "Rejected — this proposal won't be revisited",
         }
         receipt = receipts.get(status, "Saved")
-        return {"status": status, "applied": applied, "receipt": receipt}
+        response: dict[str, object] = {"status": status, "applied": applied, "receipt": receipt}
+        if apply_failed:
+            response.update(
+                {
+                    "apply_error": "approved proposal could not be applied; retry the request",
+                    "correlation_id": get_correlation_id(),
+                }
+            )
+        return response
 
     @app.route("/api/reconcile/<kind>/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
     def reconcile_verdict(kind: str, item_id: int, verdict: str):
@@ -2144,7 +2201,11 @@ def create_app(
         except sqlite3.Error as exc:
             print(
                 json.dumps(
-                    {"event": "panel_activation_count_failed", "panel": panel, "error": str(exc)}
+                    {
+                        "event": "panel_activation_count_failed",
+                        "panel": panel,
+                        "error": redact(f"{type(exc).__name__}: {exc}")[:500],
+                    }
                 ),
                 file=sys.stderr,
             )
@@ -2894,7 +2955,7 @@ def create_app(
         try:
             rows = p3_data.load_peer_comp(sym, repo_root=repo_root)
         except Exception as exc:  # best-effort surface, never a 500
-            app.logger.error("peer lookup failed: %s", exc, exc_info=True)
+            _log_redacted_failure(f"peer lookup failed for {sym}", exc)
             return {
                 "ticker": sym,
                 "peers": [],
@@ -3395,12 +3456,12 @@ def create_app(
         builds them."""
         if request.method == "OPTIONS":
             return ("", 204)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "run_discovery.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "run_discovery.py",
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="DISCOVERY", kind="discovery-run", argv=argv)
         except RegistryConflict as e:
@@ -3460,16 +3521,16 @@ def create_app(
                 },
                 400,
             )
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "discovery_build.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "discovery_build.py",
             "--tickers",
             ",".join(tickers),
             "--repo-root",
             str(repo_root),
             "--user-id",
             user_id,
-        ]
+        )
         slot_ticker = tickers[0] if len(tickers) == 1 else "DISCOVERY-BULK"
         try:
             job = job_registry.start(ticker=slot_ticker, kind="discovery-build", argv=argv)
@@ -3599,11 +3660,8 @@ def create_app(
             outcome = generate_for_ticker(db_path, repo_root, ticker)
         except ReadoutUnavailableError as exc:
             return ({"error": str(exc)}, 404)
-        except Exception:
-            app.logger.exception(
-                "post_earnings_readout_request_failed",
-                extra={"ticker": ticker, "correlation_id": get_correlation_id()},
-            )
+        except Exception as exc:
+            _log_redacted_failure(f"post earnings readout request failed for {ticker}", exc)
             return (
                 {
                     "error": "readout generation failed; retry the request",
@@ -3675,7 +3733,7 @@ def create_app(
                 return ({"error": f"unknown step(s): {bad}; valid: {list(STEP_NAMES)}"}, 400)
 
         dispatcher = repo_root / "execution" / "refresh_dispatch.py"
-        argv = [sys.executable, str(dispatcher), "--ticker", ticker, "--mode", mode]
+        argv = managed_python_argv(repo_root, dispatcher, "--ticker", ticker, "--mode", mode)
         if force:
             argv.append("--force")
         if steps:
@@ -3769,15 +3827,15 @@ def create_app(
         if scenario not in all_scenario_ids():
             return ({"error": f"unknown scenario: {scenario or '(none)'}"}, 400)
         script = repo_root / "execution" / "run_scenario.py"
-        argv = [
-            sys.executable,
-            str(script),
+        argv = managed_python_argv(
+            repo_root,
+            script,
             "--scenario",
             scenario,
             "--portfolio",
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="_REPO", kind="run-scenario", argv=argv)
         except RegistryConflict as e:
@@ -3818,9 +3876,9 @@ def create_app(
             return ({"error": "quarters must be an integer"}, 400)
 
         script = repo_root / "execution" / "refresh_ir_kpis.py"
-        argv = [
-            sys.executable,
-            str(script),
+        argv = managed_python_argv(
+            repo_root,
+            script,
             "--ticker",
             ticker,
             "--discover",
@@ -3828,7 +3886,7 @@ def create_app(
             str(quarters),
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker=ticker, kind="refresh-ir", argv=argv)
         except RegistryConflict as e:
@@ -3863,15 +3921,15 @@ def create_app(
         except ValueError:
             return ({"error": "invalid ticker"}, 400)
         script = repo_root / "execution" / "dcf_sheets.py"
-        argv = [
-            sys.executable,
-            str(script),
+        argv = managed_python_argv(
+            repo_root,
+            script,
             "export",
             "--ticker",
             ticker,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         share_with = str(body.get("share_with", "")).strip()
         if share_with:
             argv += ["--share-with", share_with]
@@ -3909,15 +3967,15 @@ def create_app(
         except ValueError:
             return ({"error": "invalid ticker"}, 400)
         script = repo_root / "execution" / "dcf_sheets.py"
-        argv = [
-            sys.executable,
-            str(script),
+        argv = managed_python_argv(
+            repo_root,
+            script,
             "import",
             "--ticker",
             ticker,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         sheet_id = str(body.get("sheet_id", "")).strip()
         if sheet_id:
             argv += ["--sheet-id", sheet_id]
@@ -3946,13 +4004,13 @@ def create_app(
         assumptions drawer section calls this."""
         if request.method == "OPTIONS":
             return ("", 204)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "refresh_dcf.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "refresh_dcf.py",
             "--all-named",
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="_REPO", kind="rebuild-dcfs", argv=argv)
         except RegistryConflict as e:
@@ -3994,7 +4052,7 @@ def create_app(
         else:
             valid = [*sorted(_MAINTENANCE_ACTIONS), "onboard"]
             return ({"error": f"unknown action {action!r}; valid: {valid}"}, 400)
-        argv = [sys.executable, str(repo_root / "execution" / parts[0]), *parts[1:]]
+        argv = managed_python_argv(repo_root, repo_root / "execution" / parts[0], *parts[1:])
         try:
             job = job_registry.start(ticker=slot_ticker, kind=kind, argv=argv)
         except RegistryConflict as e:
@@ -4108,14 +4166,14 @@ def create_app(
         memo_kind = str(body.get("kind", ""))
         if memo_kind not in ("next_dollar", "swap_checks", "all"):
             return ({"error": "kind must be next_dollar | swap_checks | all"}, 400)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "run_advisor_memos.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "run_advisor_memos.py",
             "--kind",
             memo_kind,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
         except RegistryConflict as e:
@@ -4146,9 +4204,9 @@ def create_app(
         ticker = str(body.get("ticker", "")).strip().upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "review_position.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "review_position.py",
             ticker,
             "--verdict",
             "--db",
@@ -4157,7 +4215,7 @@ def create_app(
             # CLI defaults to 'agent', which would exclude it).
             "--source",
             "doorway",
-        ]
+        )
         try:
             job = job_registry.start(ticker=ticker, kind="position-review", argv=argv)
         except RegistryConflict as e:
@@ -4189,14 +4247,14 @@ def create_app(
         purpose = str(body.get("purpose", ""))
         if purpose not in RUNNABLE_PURPOSES:
             return ({"error": f"purpose must be one of {list(RUNNABLE_PURPOSES)}"}, 400)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "run_llm_evals.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "run_llm_evals.py",
             "--purpose",
             purpose,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker="_REPO", kind=f"eval-{purpose}", argv=argv)
         except RegistryConflict as e:
@@ -4234,13 +4292,13 @@ def create_app(
         ticker = str(body.get("ticker") or "").strip().upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "run_socratic_questions.py"),
+        argv = managed_python_argv(
+            repo_root,
+            repo_root / "execution" / "run_socratic_questions.py",
             ticker,
             "--repo-root",
             str(repo_root),
-        ]
+        )
         try:
             job = job_registry.start(ticker=ticker, kind="socratic-questions", argv=argv)
         except RegistryConflict as e:
@@ -4449,8 +4507,16 @@ def create_app(
             # everything else is transient and degrades at component scope.
             if is_hard_stop(exc):
                 status = 402 if isinstance(exc, LLMBudgetExceeded) else 503
-                return ({"error": str(exc), "kind": type(exc).__name__}, status)
-            return ({"degraded": True, "reason": f"{type(exc).__name__}: {exc}"}, 200)
+                return _internal_failure("thesis preview unavailable", exc, status=status)
+            _log_redacted_failure("thesis preview degraded", exc, level="warning")
+            return (
+                {
+                    "degraded": True,
+                    "reason": "thesis preview unavailable; retry the request",
+                    "correlation_id": get_correlation_id(),
+                },
+                200,
+            )
         return (result, 200)
 
     @app.route("/api/comments/process", methods=["POST", "OPTIONS"])
@@ -4487,13 +4553,21 @@ def create_app(
             except Exception as exc:
                 if is_hard_stop(exc):
                     status = 402 if isinstance(exc, LLMBudgetExceeded) else 503
-                    return ({"error": str(exc), "kind": type(exc).__name__}, status)
-                return ({"degraded": True, "reason": f"{type(exc).__name__}: {exc}"}, 200)
+                    return _internal_failure("comment preview unavailable", exc, status=status)
+                _log_redacted_failure("comment preview degraded", exc, level="warning")
+                return (
+                    {
+                        "degraded": True,
+                        "reason": "comment preview unavailable; retry the request",
+                        "correlation_id": get_correlation_id(),
+                    },
+                    200,
+                )
             return (res, 200)
 
         # apply=true → dispatch the real run as a single-flight job.
         script = repo_root / "execution" / "process_report_comments.py"
-        argv = [sys.executable, str(script), "--ticker", ticker, "--apply"]
+        argv = managed_python_argv(repo_root, script, "--ticker", ticker, "--apply")
         if report_date is not None:
             argv += ["--report-date", report_date.isoformat()]
         if bool(body.get("clear", False)):
@@ -4631,8 +4705,11 @@ def start_boot_warmup(app: Flask, *, paths: tuple[str, ...] = WARMUP_PATHS) -> t
     def _warm() -> None:
         try:
             client = app.test_client()
-        except Exception:
-            app.logger.warning("boot warm-up could not start", exc_info=True)
+        except Exception as exc:
+            app.logger.warning(
+                "boot warm-up could not start: %s",
+                redact(f"{type(exc).__name__}: {exc}")[:500],
+            )
             return
         for path in paths:
             started_ns = time.perf_counter_ns()
@@ -4640,10 +4717,14 @@ def start_boot_warmup(app: Flask, *, paths: tuple[str, ...] = WARMUP_PATHS) -> t
                 response = client.get(path)
                 status = response.status_code
                 response.close()
-            except Exception:
+            except Exception as exc:
                 # A priming failure is never allowed to affect serving; the
                 # path simply stays cold and the owner pays what they used to.
-                app.logger.warning("boot warm-up failed for %s", path, exc_info=True)
+                app.logger.warning(
+                    "boot warm-up failed for %s: %s",
+                    path,
+                    redact(f"{type(exc).__name__}: {exc}")[:500],
+                )
                 continue
             app.logger.info(
                 "boot warm-up %s status=%s elapsed_ms=%d",

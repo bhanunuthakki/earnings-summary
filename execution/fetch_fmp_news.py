@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import NamedTuple, cast
 from zoneinfo import ZoneInfo
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -49,6 +49,10 @@ from db import ACTIVE_LIST_TYPES_SQL, DB_PATH  # noqa: E402
 from models.fmp_payloads import FmpStockNewsRecord  # noqa: E402
 from net.client import FMP_CLIENT, HttpCallError, HttpErrorKind, JsonShape  # noqa: E402
 from news.store import SOURCE_FEED_FMP, NewsRow, upsert_news_rows  # noqa: E402
+from pipeline.row_validation import (  # noqa: E402
+    RowValidationDriftError,
+    validate_provider_rows,
+)
 from runtime.secrets import load_project_env  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -63,6 +67,7 @@ MAX_WORKERS = 16
 DEFAULT_DAYS = 2  # FMP from/to window — margin over the trigger's 24h recency
 DEFAULT_LIMIT = 50  # the trigger reads only the latest 15; 50 is generous headroom
 _VALIDATION_DUMP_DIR = PROJECT_ROOT / ".tmp" / "fmp_validation_failures"
+_FMP_NEWS_ADAPTER = TypeAdapter(FmpStockNewsRecord)
 
 
 def _log(event: str, **kwargs: object) -> None:
@@ -148,12 +153,17 @@ def _validate_and_map(body: object, ticker: str) -> tuple[list[NewsRow], Validat
         _ = FmpStockNewsRecord.model_validate(records[0])
     except ValidationError as exc:
         return [], exc
+    validated = validate_provider_rows(
+        records,
+        _FMP_NEWS_ADAPTER,
+        source=f"fmp-news-{ticker}",
+        context={"ticker": ticker},
+        max_drop_rate=0.10,
+        min_samples=10,
+        rejection_dir=_VALIDATION_DUMP_DIR,
+    )
     rows: list[NewsRow] = []
-    for raw in records:
-        try:
-            rec = FmpStockNewsRecord.model_validate(raw)
-        except ValidationError:
-            continue
+    for rec in validated:
         mapped = _map_record(rec, ticker)
         if mapped is not None:
             rows.append(mapped)
@@ -226,7 +236,11 @@ def fetch_news_for_ticker(
 
     status = response.status_code
     body = response.payload
-    rows, drift = _validate_and_map(body, ticker)
+    try:
+        rows, drift = _validate_and_map(body, ticker)
+    except RowValidationDriftError as exc:
+        _log("fmp_news_batch_drift_halt", ticker=ticker, error=str(exc))
+        return FmpNewsResult(ticker, status, body, [], f"schema_drift: {exc}")
     if drift is not None:
         dump = _dump_validation_failure(ticker, body, drift)
         try:

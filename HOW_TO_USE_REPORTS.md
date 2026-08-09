@@ -33,7 +33,7 @@ the front door for status, analysis, refreshes, and editing. Launch it once and
 leave it running:
 
 ```cmd
-python execution\comments_server.py --port 7421
+python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421
 ```
 
 (add `--repo-root <path>` to point at a specific checkout). Every action below
@@ -58,7 +58,7 @@ JSON siblings for scripting: `GET /api/overview`, `GET /api/ticker/<T>`, `GET /a
 - **`force`** — run FMP even if fresh (override the stale-skip).
 - **`force_budget_bypass`** — ignore LLM budget caps for this run.
 
-Output streams over `GET /actions/stream/<job_id>` (SSE); jobs are single-flight per ticker. (CLI equivalent: `python execution/refresh_dispatch.py --ticker NU --steps dcf,build_report --force`.)
+Output streams over `GET /actions/stream/<job_id>` (SSE); jobs are single-flight per ticker. (CLI equivalent: `python execution/sqlite_bootstrap.py execution/refresh_dispatch.py --ticker NU --steps dcf,build_report --force`.)
 
 ### Process comments + change the thesis (preview → apply)
 
@@ -553,9 +553,9 @@ through**:
    (Or `--list-type watchlist` / `evaluation` / `archived`.)
 3. Pull FMP data: `refresh_fmp.bat <NEW_TICKER> 20`
 4. Pull transcripts: `refresh_transcripts.bat <NEW_TICKER>`
-5. Process IR docs: `python execution\process_ir_documents.py --ticker <NEW_TICKER>`
-6. Seed KPI definitions: `python execution\seed_kpi_definitions.py`
-7. Extract KPIs: `python execution\extract_kpis_from_summaries.py --ticker <NEW_TICKER> --source earnings --repo-root <REPO>`
+5. Process IR docs: `python execution/sqlite_bootstrap.py execution/process_ir_documents.py --ticker <NEW_TICKER>`
+6. Seed KPI definitions: `python execution/sqlite_bootstrap.py execution/seed_kpi_definitions.py`
+7. Extract KPIs: `python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker <NEW_TICKER> --source earnings --repo-root <REPO>`
 8. Build: `build_report.bat <NEW_TICKER> --enable-llm`
 
 Or after step 1-2, run the canonical dispatcher:
@@ -598,7 +598,7 @@ report: `build_report.bat <T> --enable-llm`.
 | Want to re-prompt the bear case on the same data | delete `data/bear_case/<T>.json`, then `build_report.bat <T> --enable-llm` |
 | News feels stale | `refresh_news.bat <T>` |
 | Just want everything fresh | `cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker <T> --mode full` |
-| Quarterly catch-all for all tracked tickers | `python execution\quarterly_refresh.py` |
+| Quarterly catch-all for all tracked tickers | `python execution/sqlite_bootstrap.py execution/quarterly_refresh.py` |
 
 ### Comment hygiene
 

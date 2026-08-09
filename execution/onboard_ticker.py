@@ -79,6 +79,7 @@ from pipeline.run_accounting import (  # noqa: E402
     start_run,
     suppression_payload,
 )
+from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -393,7 +394,7 @@ def _set_processing_tier(*, ticker: str, db_path: Path) -> str | None:
 def _run_fmp_fetch(ticker: str) -> int:
     """Invoke save_fmp_data.py as a subprocess; return its exit code."""
     cmd = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(_FMP_SCRIPT),
         "--tickers",
         ticker,
@@ -410,7 +411,7 @@ def _run_transcript_backfill(ticker: str) -> int:
     extracts commitments. Tolerates aggregator coverage gaps.
     """
     cmd = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(_BACKFILL_SCRIPT),
         "--ticker",
         ticker,
@@ -480,13 +481,19 @@ def _run_saydo(ticker: str) -> int:
     process_ir = PROJECT_ROOT / "execution" / "process_ir_documents.py"
     build_saydo = PROJECT_ROOT / "execution" / "build_saydo_pairs.py"
     rc = subprocess.run(
-        [sys.executable, str(process_ir), "--ticker", ticker, "--regenerate-missing"],
+        [
+            *managed_python_prefix(PROJECT_ROOT),
+            str(process_ir),
+            "--ticker",
+            ticker,
+            "--regenerate-missing",
+        ],
         cwd=str(PROJECT_ROOT),
     ).returncode
     if rc != 0:
         return rc
     return subprocess.run(
-        [sys.executable, str(build_saydo), "--ticker", ticker],
+        [*managed_python_prefix(PROJECT_ROOT), str(build_saydo), "--ticker", ticker],
         cwd=str(PROJECT_ROOT),
     ).returncode
 
@@ -542,7 +549,7 @@ def run_etf_onboarding(conn: sqlite3.Connection, ticker: str, repo_root: Path) -
     print(f"[onboard] {ticker} stage=etf_role_synthesis", flush=True)
     workup_rc = subprocess.run(
         [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(PROJECT_ROOT / "execution" / "build_etf_workup.py"),
             "--ticker",
             ticker,

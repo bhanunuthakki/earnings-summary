@@ -103,6 +103,67 @@ def test_absent_origin_passes_guard(client) -> None:
     assert r.status_code != 403
 
 
+def test_browser_without_origin_referer_or_fetch_metadata_is_refused(client) -> None:
+    r = client.post(
+        _POST_ROUTE,
+        json={},
+        headers={"User-Agent": "Mozilla/5.0 Firefox/141.0"},
+    )
+    assert r.status_code == 403
+    assert b"capability required" in r.data
+
+
+def test_browser_without_fetch_metadata_can_use_report_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "test-report-capability"
+    monkeypatch.setenv("COMMENTS_SERVER_REPORT_CAPABILITY", token)
+    app = comments_server.create_app(tmp_path)
+    r = app.test_client().post(
+        _POST_ROUTE,
+        json={},
+        headers={
+            "User-Agent": "Mozilla/5.0 Firefox/141.0",
+            "X-Report-Capability": token,
+        },
+    )
+    assert r.status_code != 403
+
+
+def test_same_origin_referer_passes_when_origin_is_absent(client) -> None:
+    r = client.post(
+        _POST_ROUTE,
+        json={},
+        headers={
+            "User-Agent": "Mozilla/5.0 Firefox/141.0",
+            "Referer": "http://127.0.0.1:7421/company/NU",
+        },
+    )
+    assert r.status_code != 403
+
+
+def test_cross_site_referer_is_refused_when_origin_is_absent(client) -> None:
+    r = client.post(
+        _POST_ROUTE,
+        json={},
+        headers={
+            "User-Agent": "Mozilla/5.0 Firefox/141.0",
+            "Referer": "https://evil.example/form",
+        },
+    )
+    assert r.status_code == 403
+
+
+def test_cross_site_fetch_metadata_is_refused_when_origin_is_absent(client) -> None:
+    r = client.post(
+        _POST_ROUTE,
+        json={},
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+    assert r.status_code == 403
+
+
 def test_remote_tailnet_mutation_requires_origin(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

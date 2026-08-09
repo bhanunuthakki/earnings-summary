@@ -255,3 +255,16 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "python .github/scripts/ci_gate.py verify" in workflow
     assert "if: ${{ always() }}" in workflow
     assert "name: CI Gate" in workflow
+
+
+def test_security_job_runs_every_scanner_before_failing_closed() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    for step_id in ("pip_audit", "bandit", "detect_secrets", "sbom"):
+        assert f"id: {step_id}" in workflow
+    assert "Require every security scanner to pass" in workflow
+    assert "PIP_AUDIT_OUTCOME" in workflow
+    assert "BANDIT_OUTCOME" in workflow
+    assert "DETECT_SECRETS_OUTCOME" in workflow
+    assert "SBOM_OUTCOME" in workflow
+    assert "always() && hashFiles('sbom.cdx.json')" in workflow

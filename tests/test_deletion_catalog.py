@@ -111,3 +111,27 @@ def test_catalog_rejects_empty_candidate() -> None:
 
     with pytest.raises(ValueError, match="at least one target"):
         Catalog.model_validate(payload)
+
+
+def test_schema_deletion_without_verified_restore_fails_closed() -> None:
+    payload = json.loads(
+        (ROOT / "docs" / "design" / "deletion_catalog_2026_08.json").read_text(encoding="utf-8")
+    )
+    candidate = payload["candidates"][0]
+    candidate["data_restore_verified"] = False
+
+    with pytest.raises(ValueError, match="schema deletion requires verified data restore"):
+        Catalog.model_validate(payload)
+
+
+def test_evaluator_rejects_unverified_schema_restore_even_if_model_is_bypassed() -> None:
+    catalog = _catalog()
+    first = catalog.candidates[0].model_copy(update={"data_restore_verified": False})
+    bypassed = catalog.model_copy(update={"candidates": [first, *catalog.candidates[1:]]})
+
+    report = evaluate(ROOT, bypassed)
+
+    assert report.valid is False
+    assert any(
+        issue.startswith("data_restore_unverified:") for issue in report.candidates[0].issues
+    )

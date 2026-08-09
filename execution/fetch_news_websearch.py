@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import cast
 from zoneinfo import ZoneInfo
 
-from pydantic import ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -44,6 +44,7 @@ from llm_artifact_store import (  # noqa: E402
 )
 from llm_client import structure_recent_news_json  # noqa: E402
 from news.store import SOURCE_FEED_WEBSEARCH, NewsRow  # noqa: E402
+from pipeline.row_validation import validate_provider_rows  # noqa: E402
 
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 _EASTERN = ZoneInfo("America/New_York")
@@ -59,6 +60,18 @@ _UTC_TZ = frozenset({"", "UTC", "Z", "GMT", "UT", "ZULU"})
 _ET_TZ = frozenset({"ET", "EST", "EDT", "EASTERN", "AMERICA/NEW_YORK"})
 # Accepted published_at shapes (date-only -> midnight of that day in its tz).
 _PARSE_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
+
+
+class _StructuredNewsItem(BaseModel):
+    headline: str
+    url: str
+    published_at: str
+    published_tz: str | None = None
+    snippet: str | None = None
+    source: str | None = None
+
+
+_STRUCTURED_NEWS_ADAPTER = TypeAdapter(_StructuredNewsItem)
 
 
 def _log(event: str, **kwargs: object) -> None:
@@ -225,17 +238,31 @@ def fetch_websearch_news_for_ticker(
     cache_inputs = _cache_inputs(ticker, utc_date, anchor)
 
     items = _read_cached(ticker, db_path, cache_inputs)
+    generated = items is None
     if items is None:
         try:
             items = structure_recent_news_json(ticker, news_days=news_days, anchor_block=anchor)
         except Exception as exc:  # belt-and-suspenders; the generator already degrades
             _log("news_websearch_llm_failed", ticker=ticker, error=str(exc))
             return []
-        _write_cache(ticker, db_path, cache_inputs, items)
-
+    validated = validate_provider_rows(
+        items,
+        _STRUCTURED_NEWS_ADAPTER,
+        source=f"websearch-news-{ticker}",
+        context={"ticker": ticker},
+        max_drop_rate=0.20,
+        min_samples=10,
+    )
+    if generated:
+        _write_cache(
+            ticker,
+            db_path,
+            cache_inputs,
+            [item.model_dump(mode="json") for item in validated],
+        )
     rows: list[NewsRow] = []
-    for item in items:
-        mapped = _map_item(item, ticker)
+    for item in validated:
+        mapped = _map_item(item.model_dump(), ticker)
         if mapped is not None:
             rows.append(mapped)
     return rows

@@ -149,7 +149,7 @@ class _MockRunner:
     def __call__(self, argv: list[str], *, out):
         self.calls.append(argv)
         rc = self._exit_codes.pop(0) if self._exit_codes else 0
-        out.write(f"<mock step output for {Path(argv[1]).stem}>\n")
+        out.write(f"<mock step output for {Path(argv[2]).stem}>\n")
 
         class _Result:
             returncode = rc
@@ -163,7 +163,7 @@ def test_execute_full_runs_all_six_steps(tmp_path):
     out = io.StringIO()
     rc = execute(plan, project_root=tmp_path, out=out, runner=runner)
     assert rc == 0
-    script_names = [Path(call[1]).stem for call in runner.calls]
+    script_names = [Path(call[2]).stem for call in runner.calls]
     assert script_names == [
         "fetch_fmp_historical_data",
         "backfill_transcripts",
@@ -185,7 +185,7 @@ def test_execute_stale_skips_fmp_when_planned(tmp_path):
     out = io.StringIO()
     rc = execute(plan, project_root=tmp_path, out=out, runner=runner)
     assert rc == 0
-    script_names = [Path(call[1]).stem for call in runner.calls]
+    script_names = [Path(call[2]).stem for call in runner.calls]
     assert "fetch_fmp_historical_data" not in script_names
     assert script_names == [
         "backfill_transcripts",
@@ -239,7 +239,7 @@ def test_execute_includes_repo_root_where_needed(tmp_path):
         "build_artifacts",
     }
     for call in runner.calls:
-        script = Path(call[1]).stem
+        script = Path(call[2]).stem
         if script in needs_repo_root:
             assert "--repo-root" in call
             assert str(tmp_path) in call
@@ -249,7 +249,7 @@ def test_build_step_uses_workspace_renderer_with_enable_llm(tmp_path):
     runner = _MockRunner()
     plan = Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
     execute(plan, project_root=tmp_path, out=io.StringIO(), runner=runner)
-    build_argv = next(c for c in runner.calls if "build_artifacts" in c[1])
+    build_argv = next(c for c in runner.calls if "build_artifacts" in c[2])
     assert "--renderer" in build_argv
     assert "workspace" in build_argv
     assert "--enable-llm" in build_argv

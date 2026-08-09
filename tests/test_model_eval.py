@@ -141,6 +141,11 @@ def test_current_gemini_standard_price_constants() -> None:
     ) == (200_000, 4.00, 0.40, 18.00)
 
 
+def test_current_dated_haiku_45_price_constants() -> None:
+    haiku = model_ladder.MODEL_LADDER[HAIKU]
+    assert (haiku.input_usd_per_mtok, haiku.output_usd_per_mtok) == (1.00, 5.00)
+
+
 # ---------------------------------------------------------------------------
 # run_model dispatch
 

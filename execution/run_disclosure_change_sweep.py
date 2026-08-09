@@ -32,6 +32,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from log_redact import redact  # noqa: E402
 from provenance.selection import selected_filing_sections_relation  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -150,7 +151,7 @@ def _command(
     script: str,
 ) -> list[str]:
     return [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(project_root / "execution" / script),
         "--tickers",
         ticker,

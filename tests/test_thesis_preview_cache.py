@@ -11,6 +11,7 @@ import json
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
@@ -26,13 +27,18 @@ _DATE = date(2026, 5, 18)
 _REVISED = "REVISED THESIS TEXT"
 
 
+class _Validator(Protocol):
+    def validate_python(self, value: object) -> object: ...
+
+
 class _CountingLLM:
     def __init__(self) -> None:
         self.calls = 0
 
     def __call__(self, *_a: object, **_k: object) -> object:
         self.calls += 1
-        return prc._ThesisRevision(revised_thesis=_REVISED, diff_summary="tightened")
+        schema = cast(_Validator, _k["schema"])
+        return schema.validate_python({"revised_thesis": _REVISED, "diff_summary": "tightened"})
 
 
 @pytest.fixture

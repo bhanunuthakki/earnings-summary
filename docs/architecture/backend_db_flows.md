@@ -17,6 +17,7 @@ flowchart TB
         origin["Origin and capability checks\nstate-changing HTTP requests"]
         tg_allow["Preconfigured Telegram chat allowlist\nmissing, invalid, or unreadable means reject"]
         runlock["Shared run and DB write-set locks"]
+        child_builder["Canonical managed Python child argv\nrepository target validation"]
         sqlite_boot["Verified SQLite 3.53.4 bootstrap\none hash/load per process"]
     end
     subgraph flask["Flask cockpit :7421"]
@@ -31,7 +32,7 @@ flowchart TB
         morning["Typed 20-stage morning manifest at 04:00\nday + manifest-scoped atomic 18-hour checkpoint"]
         capture["Capture routing\ntext, transcription, documents, callbacks"]
         fetch["Market, filing, IR, transcript, and portfolio fetchers"]
-        normalize["Typed validation, plausibility checks, normalization"]
+        normalize["Typed validation and normalization\n10% batch drop-ratio drift gate"]
         compute["Deterministic compute\nDCF, KPIs, risk, signals, decisions"]
         artifact_build["Brief and recommendation artifact builders"]
         notifications["Pull surfaces and Telegram response builders"]
@@ -49,7 +50,7 @@ flowchart TB
     subgraph storage["Local durable state"]
         sqlite["data/portfolio.db\ncanonical SQLite database"]
         temp[".tmp checkpoints and intermediate payloads"]
-        cache["Bounded process and response caches"]
+        cache["Bounded process and response caches\n48-hour schema/versioned materializations"]
         outputs["Rendered briefs and operator-visible artifacts"]
         retry_receipts["Atomic retry receipts\nfor committed DCF changes awaiting lineage"]
     end
@@ -66,14 +67,15 @@ flowchart TB
     browser --> network --> routes
     routes --> origin
     telegram --> tg_allow --> capture
-    scheduler --> sqlite_boot --> runlock --> morning
-    cli --> sqlite_boot --> runlock
+    scheduler --> child_builder
+    cli --> child_builder
+    child_builder --> sqlite_boot --> runlock --> morning
     routes --> panels
     panels --> telemetry
     routes --> ask
-    routes --> jobs
+    routes --> jobs --> child_builder
     routes --> reports
-    jobs --> orchestration
+    runlock --> orchestration
     morning --> fetch --> normalize --> compute --> artifact_build
     fetch --> http
     capture --> normalize

@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 from llm.structured import StructuredParseError, call_llm_structured
 from llm.untrusted import spotlight
 from llm_artifact_store import history as artifact_history
+from predictions_store import Prediction
 from predictions_store import grade as grade_prediction
 from predictions_store import history as prediction_history
 from predictions_store import record as record_prediction
@@ -167,11 +168,11 @@ def grade_due_predictions(
 def _grade_one_prediction(
     *,
     ticker: str,
-    pred: object,  # Prediction dataclass
+    pred: Prediction,
     corpus: dict[str, str],
 ) -> _BearGrade | None:
     """Single LLM grading call. Returns {outcome, confidence, notes}."""
-    p = pred  # type: ignore[assignment]
+    p = pred
     evidence = spotlight(
         f"""Hypothesis date: {p.made_at.date().isoformat() if hasattr(p, "made_at") and p.made_at else "?"}
 Hypothesis: {p.prediction_md}
@@ -297,20 +298,22 @@ def _parse_failure_modes(content_md: str | None, content_json: object | None) ->
     """Parse failure modes out of either the JSON or markdown content of a
     bear case artifact. Defensive — returns [] on any parse issue."""
     if isinstance(content_json, dict):
-        fms_raw = content_json.get("failure_modes")
+        content = cast("dict[str, object]", content_json)
+        fms_raw = content.get("failure_modes")
         if isinstance(fms_raw, list):
-            return _coerce_failure_modes(fms_raw)
+            return _coerce_failure_modes(cast("list[object]", fms_raw))
     if not content_md:
         return []
     # Try JSON within markdown
     s = content_md.strip()
     if s.startswith("{"):
         try:
-            decoded = json.loads(s)
+            decoded = cast(object, json.loads(s))
             if isinstance(decoded, dict):
-                fms_raw = decoded.get("failure_modes")
+                decoded_mapping = cast("dict[str, object]", decoded)
+                fms_raw = decoded_mapping.get("failure_modes")
                 if isinstance(fms_raw, list):
-                    return _coerce_failure_modes(fms_raw)
+                    return _coerce_failure_modes(cast("list[object]", fms_raw))
         except json.JSONDecodeError:
             pass
     return []

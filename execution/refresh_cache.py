@@ -56,6 +56,9 @@ from dotenv import dotenv_values
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.python_process import managed_python_prefix  # noqa: E402
+
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 from log_redact import redact  # noqa: E402
@@ -719,7 +722,7 @@ def _maybe_refresh_earnings_hints() -> None:
         return
     try:
         subprocess.run(
-            [sys.executable, str(script)],
+            [*managed_python_prefix(PROJECT_ROOT), str(script)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
@@ -811,7 +814,7 @@ def _run_under_lock(args: argparse.Namespace) -> int:
     env["FMP_TIER"] = tier.name
 
     cmd = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "save_fmp_data.py"),
         "--manifest",
         str(QUEUE_PATH),
@@ -851,7 +854,7 @@ def _run_under_lock(args: argparse.Namespace) -> int:
 def _spawn_background(args: argparse.Namespace) -> int:
     """Re-exec self with --background-child and detach."""
     forwarded = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "refresh_cache.py"),
         "run",
         "--background-child",

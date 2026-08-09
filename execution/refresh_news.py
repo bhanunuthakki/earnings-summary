@@ -20,12 +20,15 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.python_process import managed_python_prefix  # noqa: E402
 
 
 def main() -> int:
     args = _parse_args()
     cmd = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "build_artifacts.py"),
         "--repo-root",
         str(args.repo_root.resolve()),

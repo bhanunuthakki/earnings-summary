@@ -112,6 +112,7 @@ from llm_client import (  # noqa: E402
     load_ir_anchor,
     load_thesis_anchor,
 )
+from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -623,7 +624,7 @@ def maybe_auto_rebuild(
             repo_root,
             name="seed_kpi_definitions",
             cmd=[
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(repo_root / "execution" / "seed_kpi_definitions.py"),
                 "--ticker",
                 ticker,
@@ -640,7 +641,7 @@ def maybe_auto_rebuild(
     # When edit_structured fired this round, we --refresh so newly-added KPI
     # names get a clean re-attempt across all quarters.
     earnings_cmd = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
         "--ticker",
         ticker,
@@ -666,7 +667,7 @@ def maybe_auto_rebuild(
     # capital adequacy, segment margins) than the qualitative earnings-call
     # summaries, so this step fills gaps that 2a couldn't.
     ir_cmd = [
-        sys.executable,
+        *managed_python_prefix(PROJECT_ROOT),
         str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
         "--ticker",
         ticker,
@@ -694,7 +695,7 @@ def maybe_auto_rebuild(
             repo_root,
             name="run_thesis_evaluator",
             cmd=[
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(repo_root / "execution" / "run_thesis_evaluator.py"),
                 "--ticker",
                 ticker,
@@ -709,7 +710,7 @@ def maybe_auto_rebuild(
             repo_root,
             name="build_artifacts",
             cmd=[
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(repo_root / "execution" / "build_artifacts.py"),
                 "--ticker",
                 ticker,
@@ -736,7 +737,7 @@ def _spawn_step(repo_root: Path, *, name: str, cmd: list[str], timeout: int) -> 
     """Run one subprocess step; return a structured record. Never raises."""
     try:
         proc = subprocess.run(
-            cmd,
+            ensure_managed_python_argv(repo_root, cmd),
             cwd=str(repo_root),
             capture_output=True,
             text=True,

@@ -134,9 +134,7 @@ def _install_wal_marker(db_path: Path) -> sqlite3.Connection:
     return writer
 
 
-def benchmark_production_overview(
-    source_db: Path, iterations: int
-) -> OverviewBenchmarkResult:
+def benchmark_production_overview(source_db: Path, iterations: int) -> OverviewBenchmarkResult:
     """Benchmark a private production-derived copy without writing to ``source_db``."""
     if iterations <= 0:
         raise ValueError("iterations must be positive")
@@ -154,9 +152,9 @@ def benchmark_production_overview(
         proof = _open(db_path)
         try:
             journal_mode = str(proof.execute("PRAGMA journal_mode").fetchone()[0])
-            marker_visible = proof.execute(
-                "SELECT value FROM benchmark_wal_marker"
-            ).fetchone()[0] == 1
+            marker_visible = (
+                proof.execute("SELECT value FROM benchmark_wal_marker").fetchone()[0] == 1
+            )
             fresh = _measure(repo_root, iterations, reuse_connection=False)
             reused = _measure(repo_root, iterations, reuse_connection=True)
         finally:

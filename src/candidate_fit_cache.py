@@ -27,12 +27,8 @@ atomic temp-file write means a crashed run never leaves a half-written cache.
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import sqlite3
-import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +38,7 @@ from allocation.candidate_fit import (
     FitFactor,
     compute_candidate_fit,
 )
+from materialized_cache import cache_metadata, read_fresh_payload, write_payload_atomically
 
 __all__ = [
     "assemble_book_context",
@@ -52,6 +49,7 @@ __all__ = [
 
 # data/candidate_fit.json, repo-root relative (the data/ disk-cache home).
 _CACHE_REL: tuple[str, ...] = ("data", "candidate_fit.json")
+_CACHE_SCHEMA = "candidate-fit"
 
 # Analytics-fetch read timeout for the book-state assembly. The client's default
 # (_ANALYTICS_TIMEOUT_SECONDS, 6s) is tuned for the render path, where a slow
@@ -295,9 +293,9 @@ def materialize_candidate_fit(
         sleeves=sleeves,
     )
 
-    payload = {
+    payload: dict[str, object] = {
+        **cache_metadata(_CACHE_SCHEMA),
         "version": 2,
-        "computed_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "book": {
             "sharpe": book.sharpe,
             "growth_tilt": book.growth_tilt,
@@ -319,16 +317,7 @@ def materialize_candidate_fit(
         "fits": {t: _fit_to_json(f) for t, f in fits.items()},
     }
     path = _cache_path(repo_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix="candidate_fit.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    write_payload_atomically(path, payload, prefix="candidate_fit.")
     return len(fits)
 
 
@@ -336,17 +325,8 @@ def read_materialized_candidate_fit(repo_root: Path) -> dict[str, CandidateFit]:
     """ticker → :class:`CandidateFit` from the cache; ``{}`` when absent,
     unreadable, or malformed. A pure disk read — never the tracker or the price
     files. This is the render path's only fit source."""
-    try:
-        raw = _cache_path(repo_root).read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    try:
-        payload = json.loads(raw)
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    fits = cast("dict[str, object]", payload).get("fits")
+    payload = read_fresh_payload(_cache_path(repo_root), schema=_CACHE_SCHEMA)
+    fits = payload.get("fits")
     if not isinstance(fits, dict):
         return {}
     out: dict[str, CandidateFit] = {}
@@ -363,14 +343,10 @@ def read_materialized_fit_meta(repo_root: Path) -> dict[str, object]:
     degradation banner, the fit peek's target header, the what-if route's book
     inputs. ``{}`` when the cache is absent/unreadable; a v1 payload simply
     lacks the ``target``/``degraded`` keys."""
-    try:
-        raw = _cache_path(repo_root).read_text(encoding="utf-8")
-        payload = json.loads(raw)
-    except (OSError, ValueError, TypeError):
+    payload = read_fresh_payload(_cache_path(repo_root), schema=_CACHE_SCHEMA)
+    if not payload:
         return {}
-    if not isinstance(payload, dict):
-        return {}
-    rec = cast("dict[str, object]", payload)
+    rec = payload
     return {k: rec.get(k) for k in ("version", "computed_at", "book", "target") if k in rec}
 
 

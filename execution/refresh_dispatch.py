@@ -47,6 +47,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from pipeline.cadence_policy import STATEMENT_STALE_DAYS  # noqa: E402
+from runtime.python_process import managed_python_argv  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 Mode = Literal["full", "stale"]
@@ -265,62 +266,62 @@ def _default_runner(argv: list[str], *, out):
 
 
 def _argv_fmp(project_root: Path, ticker: str) -> list[str]:
-    return [
-        sys.executable,
-        str(project_root / "execution" / "fetch_fmp_historical_data.py"),
+    return managed_python_argv(
+        project_root,
+        project_root / "execution" / "fetch_fmp_historical_data.py",
         "--ticker",
         ticker,
         "--limit",
         "12",
-    ]
+    )
 
 
 def _argv_transcripts(project_root: Path, ticker: str) -> list[str]:
-    return [
-        sys.executable,
-        str(project_root / "execution" / "backfill_transcripts.py"),
+    return managed_python_argv(
+        project_root,
+        project_root / "execution" / "backfill_transcripts.py",
         "--ticker",
         ticker,
-    ]
+    )
 
 
 def _argv_process_ir(project_root: Path, ticker: str) -> list[str]:
-    return [
-        sys.executable,
-        str(project_root / "execution" / "process_ir_documents.py"),
+    return managed_python_argv(
+        project_root,
+        project_root / "execution" / "process_ir_documents.py",
         "--ticker",
         ticker,
-    ]
+    )
 
 
 def _argv_extract_kpis(project_root: Path, ticker: str) -> list[str]:
-    return [
-        sys.executable,
-        str(project_root / "execution" / "extract_kpis_from_summaries.py"),
+    return managed_python_argv(
+        project_root,
+        project_root / "execution" / "extract_kpis_from_summaries.py",
         "--ticker",
         ticker,
         "--source",
         "earnings",
         "--repo-root",
         str(project_root),
-    ]
+    )
 
 
 def _argv_saydo(project_root: Path, ticker: str) -> list[str]:
-    return [
-        sys.executable,
-        str(project_root / "execution" / "build_saydo_pairs.py"),
+    return managed_python_argv(
+        project_root,
+        project_root / "execution" / "build_saydo_pairs.py",
         "--ticker",
         ticker,
         "--repo-root",
         str(project_root),
-    ]
+    )
 
 
 def _argv_build(project_root: Path, ticker: str, *, force_budget_bypass: bool = False) -> list[str]:
-    argv = [
-        sys.executable,
-        str(project_root / "execution" / "build_artifacts.py"),
+    argv = managed_python_argv(
+        project_root,
+        project_root / "execution" / "build_artifacts.py",
         "--ticker",
         ticker,
         "--renderer",
@@ -328,7 +329,7 @@ def _argv_build(project_root: Path, ticker: str, *, force_budget_bypass: bool = 
         "--enable-llm",
         "--repo-root",
         str(project_root),
-    ]
+    )
     if force_budget_bypass:
         argv.append("--force-budget-bypass")
     return argv
@@ -336,30 +337,30 @@ def _argv_build(project_root: Path, ticker: str, *, force_budget_bypass: bool = 
 
 def _argv_news(project_root: Path, ticker: str) -> list[str]:
     # Default source=auto (FMP, WebSearch+Opus fallback per ticker on refusal).
-    return [
-        sys.executable,
-        str(project_root / "execution" / "fetch_news.py"),
+    return managed_python_argv(
+        project_root,
+        project_root / "execution" / "fetch_news.py",
         "--tickers",
         ticker,
-    ]
+    )
 
 
 def _argv_dcf(project_root: Path, ticker: str) -> list[str]:
-    return [
-        sys.executable,
-        str(project_root / "execution" / "refresh_dcf.py"),
+    return managed_python_argv(
+        project_root,
+        project_root / "execution" / "refresh_dcf.py",
         "--ticker",
         ticker,
-    ]
+    )
 
 
 def _argv_thesis_eval(project_root: Path, ticker: str) -> list[str]:
-    return [
-        sys.executable,
-        str(project_root / "execution" / "run_thesis_evaluator.py"),
+    return managed_python_argv(
+        project_root,
+        project_root / "execution" / "run_thesis_evaluator.py",
         "--ticker",
         ticker,
-    ]
+    )
 
 
 def _emit(out, line: str) -> None:

@@ -79,8 +79,8 @@ MODEL_LADDER: dict[str, ModelCost] = {
     # Claude tiers (public API list prices, $/MTok in/out; verified against
     # model-frontier.REFERENCE.md 2026-07-21 unless noted).
     # Dated Haiku snapshot — the CURRENT LLM_MODELS incumbent pin
-    # (FAST_CLASSIFIER_MODEL). Price is its historical, still-accurate value.
-    "claude-haiku-4-5-20251001": ModelCost("claude-haiku-4-5-20251001", CLAUDE, 0.80, 4.00),
+    # (FAST_CLASSIFIER_MODEL). Current public price matches the rolling alias.
+    "claude-haiku-4-5-20251001": ModelCost("claude-haiku-4-5-20251001", CLAUDE, 1.00, 5.00),
     # Rolling alias of the same Haiku 4.5 model family — NEWLY REGISTERED
     # 2026-07 as an eval candidate for the dated snapshot above. Not yet an
     # LLM_MODELS pin; promote only after a per-purpose SWITCH_DOWN verdict.

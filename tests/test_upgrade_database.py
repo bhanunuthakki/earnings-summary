@@ -4,7 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -41,7 +41,7 @@ def test_upgrade_classifies_database_only_after_lock_acquisition(
     lock_held = False
 
     @contextmanager
-    def fake_lock(*_args: object, **_kwargs: object) -> Iterator[None]:
+    def fake_lock(*_args: object, **_kwargs: object) -> Generator[None]:
         nonlocal lock_held
         lock_held = True
         try:
@@ -55,7 +55,11 @@ def test_upgrade_classifies_database_only_after_lock_acquisition(
 
     monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
     monkeypatch.setattr(upgrade_database_module, "_read_revisions", revisions_only_under_lock)
-    monkeypatch.setattr(upgrade_database_module, "_integrity_check", lambda _path: None)
+
+    def accept_integrity(_path: Path) -> None:
+        return None
+
+    monkeypatch.setattr(upgrade_database_module, "_integrity_check", accept_integrity)
 
     receipt = upgrade_database(db_path, repo_root=ROOT)
 

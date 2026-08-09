@@ -49,6 +49,12 @@ class Candidate(_ClosedModel):
                 raise ValueError(f"unsafe target path: {target}")
         if (self.code_targets or self.test_targets) and not self.code_restore_verified:
             raise ValueError("delete disposition requires verified Git code restore")
+        unrestored_schema = sorted(set(self.schema_targets) - set(self.data_restore_exemptions))
+        if unrestored_schema and not self.data_restore_verified:
+            raise ValueError(
+                "schema deletion requires verified data restore or an explicit "
+                "per-target exemption: " + ",".join(unrestored_schema)
+            )
         return self
 
 
@@ -234,6 +240,11 @@ def evaluate(repo_root: Path, catalog: Catalog) -> Evaluation:
         missing_restore = _missing_git_blobs(repo_root, candidate.rollback_commit, list(targets))
         if missing_restore:
             issues.append("rollback_blob_missing:" + ",".join(missing_restore))
+        unrestored_schema = sorted(
+            set(candidate.schema_targets) - set(candidate.data_restore_exemptions)
+        )
+        if unrestored_schema and not candidate.data_restore_verified:
+            issues.append("data_restore_unverified:" + ",".join(unrestored_schema))
         live_imports = _active_imports(repo_root, _module_names(candidate.code_targets))
         if live_imports:
             issues.append("active_imports:" + ",".join(live_imports))

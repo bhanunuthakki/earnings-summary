@@ -14,7 +14,9 @@ from execution import sqlite_bootstrap
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DLL_PATH = PROJECT_ROOT / "vendor" / "sqlite" / "windows-x64" / "sqlite3.dll"
-EXPECTED_DLL_SHA256 = "ab57d0437795ecc757cb693f32ea224173fa9856594d95cfa6b5033e645cd1ec"  # pragma: allowlist secret
+EXPECTED_DLL_SHA256 = (
+    "ab57d0437795ecc757cb693f32ea224173fa9856594d95cfa6b5033e645cd1ec"  # pragma: allowlist secret
+)
 
 
 def test_vendored_sqlite_dll_matches_pinned_binary_hash() -> None:
@@ -24,8 +26,18 @@ def test_vendored_sqlite_dll_matches_pinned_binary_hash() -> None:
 def test_official_download_provenance_is_pinned() -> None:
     provenance = (DLL_PATH.parent / "PROVENANCE.md").read_text(encoding="utf-8")
     assert "https://www.sqlite.org/2026/sqlite-dll-win-x64-3530400.zip" in provenance
-    assert "deddee963c810d1eeac3ce5e15c7c41da21a1c54d7a39cf54fbf577d2f50de3a" in provenance  # pragma: allowlist secret
+    assert (
+        "deddee963c810d1eeac3ce5e15c7c41da21a1c54d7a39cf54fbf577d2f50de3a" in provenance
+    )  # pragma: allowlist secret
     assert EXPECTED_DLL_SHA256 in provenance
+
+
+def test_ci_builds_and_preloads_hash_verified_sqlite_3534() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "sqlite-amalgamation-3530400.zip" in workflow
+    assert "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e" in workflow
+    assert 'echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"' in workflow
+    assert 'assert sqlite3.sqlite_version == "3.53.4"' in workflow
 
 
 def test_application_failure_is_not_relabelled_as_bootstrap_failure(

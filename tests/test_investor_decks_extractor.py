@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
@@ -138,11 +139,15 @@ def _mock_pdf_text(_pages_text: str):
     return _fake
 
 
+class _Validator(Protocol):
+    def validate_python(self, value: object) -> object: ...
+
+
 def _mock_llm(response_rows: list[dict[str, object]]):
     def _fake(prompt: str, **kwargs: object) -> object:
         del prompt
-        schema = kwargs["schema"]
-        return schema.validate_python(response_rows)  # pyright: ignore[reportAttributeAccessIssue]
+        schema = cast(_Validator, kwargs["schema"])
+        return schema.validate_python(response_rows)
 
     return _fake
 

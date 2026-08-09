@@ -150,7 +150,7 @@ def _dropped_ledger_banner(db_path: Path, since: datetime) -> str:
     )
 
 
-def _operational_alarms(db_path: Path, *, now: datetime | None = None) -> str:
+def operational_alarms(db_path: Path, *, now: datetime | None = None) -> str:
     """Backup, WAL, and eval tripwires; metadata-only except one indexed eval read."""
     observed_now = now or datetime.now(UTC)
     alarms: list[str] = []
@@ -329,7 +329,7 @@ def render_cron_health_live_body(db_path: Path) -> str:
     alarms = (
         _schema_drift_banner(db_path)
         + _dropped_ledger_banner(db_path, since.replace(tzinfo=UTC))
-        + _operational_alarms(db_path)
+        + operational_alarms(db_path)
     )
 
     all_runs = _query_runs(db_path, since)

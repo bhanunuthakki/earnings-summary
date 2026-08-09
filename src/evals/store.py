@@ -46,7 +46,6 @@ def write_run(summary: EvalRunSummary, *, db_path: Path) -> int:
         schema_preflight=False,
     )
     try:
-        conn.execute("PRAGMA busy_timeout = 10000")
         try:
             cur = conn.execute(
                 _RUN_INSERT,
@@ -70,7 +69,7 @@ def write_run(summary: EvalRunSummary, *, db_path: Path) -> int:
         except sqlite3.OperationalError as exc:
             if "no such table" in str(exc):
                 raise RuntimeError(
-                    "eval store: eval_runs table missing — run `alembic upgrade head` "
+                    "eval store: eval_runs table missing â€” run `alembic upgrade head` "
                     "(migration 0083_eval_runs), or pass --no-persist."
                 ) from exc
             raise

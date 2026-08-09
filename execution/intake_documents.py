@@ -34,6 +34,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from intake import INBOX_DIR, IntakeResult, scan_inbox  # noqa: E402
 from models.documents import DocType  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 
 
 def summarize(results: list[IntakeResult]) -> dict:
@@ -87,7 +88,7 @@ def chain_processing(results: list[IntakeResult]) -> None:
     for ticker in tickers:
         print(f"[intake] Chaining: process_ir_documents.py --ticker {ticker}", file=sys.stderr)
         subprocess.run(
-            [sys.executable, str(process_script), "--ticker", ticker],
+            [*managed_python_prefix(PROJECT_ROOT), str(process_script), "--ticker", ticker],
             check=False,
         )
 
@@ -98,7 +99,7 @@ def chain_processing(results: list[IntakeResult]) -> None:
         )
         subprocess.run(
             [
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(ingest_script),
                 "--ticker",
                 ticker,
@@ -112,7 +113,7 @@ def chain_processing(results: list[IntakeResult]) -> None:
         )
         subprocess.run(
             [
-                sys.executable,
+                *managed_python_prefix(PROJECT_ROOT),
                 str(commitments_script),
                 "--auto",
                 "--ticker",

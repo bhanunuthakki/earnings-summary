@@ -439,6 +439,46 @@ def test_run_sweep_no_capture_files_returns_empty(
     assert verdicts == []
 
 
+def test_main_writes_receipt_and_alerts_when_nothing_is_graded(
+    sweep: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    verdict = sweep.CandidateVerdict(
+        purpose="bear_case",
+        incumbent="claude-sonnet-4-6",
+        candidate="claude-haiku-4-5-20251001",
+        n=0,
+        candidate_wins=0,
+        incumbent_wins=0,
+        ties=0,
+        parity_rate=0.0,
+        judge_agreement=0.0,
+        recommendation=sweep.INSUFFICIENT_FRAME,
+        reason="thin capture frame",
+    )
+
+    def fake_run_sweep(**_kwargs: object) -> list[Any]:
+        return [verdict]
+
+    monkeypatch.setattr(sweep, "run_sweep", fake_run_sweep)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_model_eval_sweep.py", "--repo-root", str(repo_root)],
+    )
+
+    assert sweep.main() == 2
+    receipt = json.loads(
+        (repo_root / "data" / "model_eval_runs" / "latest.json").read_text(encoding="utf-8")
+    )
+    assert receipt["attempted"] == 1
+    assert receipt["graded"] == 0
+    assert receipt["insufficient"] == 1
+    assert receipt["errors"] == 0
+    assert receipt["status"] == "alert"
+
+
 # ---------------------------------------------------------------------------
 # Cron file existence checks
 # ---------------------------------------------------------------------------

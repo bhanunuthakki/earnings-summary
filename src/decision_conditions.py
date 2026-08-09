@@ -702,7 +702,6 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
             role=SQLiteConnectionRole.WRITER,
             schema_preflight=True,
         )
-        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
         if "decision_conditions" not in cols:

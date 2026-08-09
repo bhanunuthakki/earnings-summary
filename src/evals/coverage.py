@@ -34,8 +34,13 @@ is deliberately not a coverage mode.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 from evals.capture_quality_specs import CAPTURE_QUALITY_SPECS
 from evals.golden_classifiers import CLASSIFIER_PURPOSES
@@ -111,6 +116,86 @@ _IGNORED: frozenset[str] = frozenset({"__default__"})
 # Keep the symbol for gate/test compatibility: adding any exemption is a new
 # debt decision and must not be used to bypass the real quality-mode rule.
 GRANDFATHERED_UNCOVERED_PURPOSES: frozenset[str] = frozenset()
+
+_INSUFFICIENT_VERDICTS: frozenset[str] = frozenset({"INSUFFICIENT_DATA", "INSUFFICIENT_FRAME"})
+_ERROR_VERDICTS: frozenset[str] = frozenset({"CANDIDATE_ERRORED", "JUDGE_DEGRADED"})
+_GRADED_VERDICTS: frozenset[str] = frozenset({"SWITCH_DOWN", "KEEP_INCUMBENT", "HOLD"})
+
+
+class EvalRunReceipt(BaseModel):
+    """Durable evidence that an eval sweep actually graded usable cases.
+
+    Coverage registration answers whether an eval *can* run. This receipt
+    answers whether the latest sweep did run and produced gradeable evidence.
+    Advisory insufficient-frame outcomes are kept separate from transport or
+    judge errors so operators know whether to harvest data or repair infra.
+    """
+
+    schema_version: Literal["1"] = "1"
+    run_id: str = Field(min_length=1)
+    started_at: datetime
+    finished_at: datetime
+    attempted: int = Field(ge=0)
+    graded: int = Field(ge=0)
+    insufficient: int = Field(ge=0)
+    errors: int = Field(ge=0)
+    alert_count: int = Field(ge=0)
+    alerts: tuple[str, ...] = ()
+    status: Literal["passed", "alert"]
+
+
+def build_eval_run_receipt(
+    recommendations: Sequence[str],
+    *,
+    run_id: str,
+    started_at: datetime,
+    finished_at: datetime,
+) -> EvalRunReceipt:
+    """Classify a sweep without conflating thin evidence with broken infra."""
+    insufficient = sum(item in _INSUFFICIENT_VERDICTS for item in recommendations)
+    graded = sum(item in _GRADED_VERDICTS for item in recommendations)
+    errors = len(recommendations) - insufficient - graded
+    alerts: list[str] = []
+    if graded == 0:
+        alerts.append("no_graded_verdict")
+    if errors:
+        alerts.append("eval_errors_present")
+    return EvalRunReceipt(
+        run_id=run_id,
+        started_at=started_at,
+        finished_at=finished_at,
+        attempted=len(recommendations),
+        graded=graded,
+        insufficient=insufficient,
+        errors=errors,
+        alert_count=len(alerts),
+        alerts=tuple(alerts),
+        status="alert" if alerts else "passed",
+    )
+
+
+def persist_eval_run_receipt(
+    repo_root: Path, receipt: EvalRunReceipt, *, dry_run: bool = False
+) -> Path:
+    """Atomically persist an immutable run receipt plus the latest pointer."""
+    base = repo_root / (".tmp" if dry_run else "data") / "model_eval_runs"
+    base.mkdir(parents=True, exist_ok=True)
+    payload = receipt.model_dump_json(indent=2) + "\n"
+    run_path = base / f"{receipt.run_id}.json"
+    for target in (run_path, base / "latest.json"):
+        temp = target.with_suffix(target.suffix + ".tmp")
+        temp.write_text(payload, encoding="utf-8")
+        temp.replace(target)
+    return run_path
+
+
+def load_latest_eval_run_receipt(repo_root: Path) -> EvalRunReceipt | None:
+    """Read and validate the latest durable receipt; malformed means absent."""
+    path = repo_root / "data" / "model_eval_runs" / "latest.json"
+    try:
+        return EvalRunReceipt.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 @dataclass(frozen=True, slots=True)

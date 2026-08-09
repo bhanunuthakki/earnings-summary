@@ -34,7 +34,9 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 BUILDER = SCRIPT_DIR / "build_redesigned_dcf.py"
 
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
 from dcf.segment_coverage import COVERAGE_FLOOR  # noqa: E402
+from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # Non-ticker workbook stems to ignore when scanning dcf/*.xlsx.
 _SKIP_STEM_SUFFIXES = ("_redesign", "_regress", "_sample", "_helper")
@@ -67,7 +69,7 @@ def _build_one(ticker: str, repo_root: Path, tmp_dir: Path, floor: float) -> dic
     )
     try:
         proc = subprocess.run(
-            [sys.executable, str(BUILDER)],
+            [*managed_python_prefix(PROJECT_ROOT), str(BUILDER)],
             env=env,
             capture_output=True,
             text=True,

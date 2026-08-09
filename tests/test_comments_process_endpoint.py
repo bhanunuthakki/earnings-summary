@@ -105,6 +105,28 @@ def test_process_missing_ticker_400(client) -> None:
     assert resp.status_code == 400
 
 
+def test_process_preview_failure_is_generic_and_correlated(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("provider failed?api_key=secret-value")
+
+    monkeypatch.setattr(comments_server, "process_comments_for_ticker", _boom)
+    resp = client.post(
+        "/api/comments/process",
+        json={"ticker": "NU", "report_date": "2026-05-18", "apply": False},
+        headers={"X-Correlation-ID": "comment-degraded-test"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "degraded": True,
+        "reason": "comment preview unavailable; retry the request",
+        "correlation_id": "comment-degraded-test",
+    }
+    assert "secret-value" not in resp.get_data(as_text=True)
+
+
 def _on_disk_thesis(repo: Path) -> str:
     data = json.loads((repo / "micro_thesis" / "holdings" / "NU.json").read_text(encoding="utf-8"))
     return data["thesis"]

@@ -817,31 +817,10 @@ def test_fmp_get_does_not_leak_api_key_on_network_error(
     """A RequestException whose string embeds the resolved ``?apikey=<key>`` URL
     must not surface the key in the RuntimeError ``_fmp_get`` raises, nor in any
     exception chained onto it."""
-    import requests
-
     from execution.fetch_etf_data import _fmp_get  # pyright: ignore[reportPrivateUsage]
     from net.client import HttpCallError, HttpErrorKind
 
     secret = "FMPKEY_SUPERSECRET_9f8e7d6c5b4a"
-
-    class _LeakySession:
-        """Raises the urllib3-style error that embeds the fully-resolved URL —
-        including the apikey query param requests appends to ``params`` — which
-        is the exact leak vector this regression guards against."""
-
-        def get(
-            self,
-            url: str,
-            params: dict[str, str] | None = None,
-            timeout: tuple[int, int] | None = None,
-        ) -> object:
-            key = (params or {}).get("apikey", "")
-            resolved = f"{url}?apikey={key}"
-            raise requests.exceptions.ConnectionError(
-                f"HTTPSConnectionPool(host='financialmodelingprep.com', port=443): "
-                f"Max retries exceeded with url: {resolved} "
-                f"(Caused by NewConnectionError('Failed to establish a new connection'))"
-            )
 
     def _leaky_client(url: str, **kwargs: object) -> object:
         key = kwargs.get("api_key", "")

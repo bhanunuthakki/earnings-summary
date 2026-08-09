@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -26,6 +25,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+
+from runtime.python_process import managed_python_argv
 
 MAX_CONCURRENT_DEFAULT = 3
 POLL_INTERVAL_SEC = 0.1
@@ -61,8 +62,7 @@ class Job:
         if self.lock_repo_root is not None and self.write_sets:
             runtime = Path(self.lock_repo_root) / "src" / "runtime" / "job_runtime.py"
             argv = [
-                sys.executable,
-                str(runtime),
+                *managed_python_argv(self.lock_repo_root, runtime),
                 "--job",
                 f"interactive-{self.kind}",
             ]

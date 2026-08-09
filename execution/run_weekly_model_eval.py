@@ -60,6 +60,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.python_process import managed_python_prefix  # noqa: E402
+
 sys.path.insert(
     0, str(PROJECT_ROOT / "execution")
 )  # for run_model_eval_sweep + apply_model_switches
@@ -158,7 +161,7 @@ def _harvest(ticker: str, capture_dir: Path, repo_root: Path, timeout_s: int) ->
     env["LLM_CAPTURE_DIR"] = str(capture_dir)
     for purpose, cmd in _HARVEST_STEPS:
         full = [
-            sys.executable,
+            *managed_python_prefix(PROJECT_ROOT),
             str(PROJECT_ROOT / cmd[0]),
             "--ticker",
             ticker,

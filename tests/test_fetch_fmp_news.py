@@ -94,6 +94,21 @@ def test_to_utc_rejects_non_canonical() -> None:
         to_utc("2026-01-15T08:30:00")
 
 
+def test_batch_drop_ratio_halts_provider_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    body: list[object] = [dict(_SAMPLE) for _ in range(8)]
+    body.extend([{"renamedTitle": "drift"}, {"renamedTitle": "drift"}])
+    monkeypatch.setattr(fmpnews, "_VALIDATION_DUMP_DIR", tmp_path)
+    _patch_get(monkeypatch, 200, body)
+
+    result = fetch_news_for_ticker("AAPL", api_key="test")
+
+    assert result.rows == []
+    assert result.error is not None and "schema_drift" in result.error
+    assert (tmp_path / "fmp-news-AAPL.jsonl").exists()
+
+
 # ---------------------------------------------------------------------------
 # FmpStockNewsRecord — validation / drift
 # ---------------------------------------------------------------------------

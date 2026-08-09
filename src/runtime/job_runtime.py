@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
+from runtime.python_process import ensure_managed_python_argv
+
 
 class JobAlreadyRunningError(RuntimeError):
     """A mutable write set is already owned by another live process.
@@ -517,7 +519,8 @@ def run_job(
                 **os.environ,
                 "EARNINGS_SUMMARY_JOB_LOCK_PROOF": lock.inheritance_proof(),
             }
-            completed = subprocess.run(command, cwd=repo_root, check=False, env=child_env)
+            managed_command = ensure_managed_python_argv(repo_root, command)
+            completed = subprocess.run(managed_command, cwd=repo_root, check=False, env=child_env)
         exit_code = completed.returncode
         status = "ok" if exit_code == 0 else "failed"
         detail = None
