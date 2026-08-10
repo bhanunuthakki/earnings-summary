@@ -7,7 +7,6 @@ import re
 from collections.abc import Iterator
 from typing import cast
 
-
 _DIFF_FENCE_RX = re.compile(r"```json\s*(\{[\s\S]*?\})\s*```", re.MULTILINE)
 
 
