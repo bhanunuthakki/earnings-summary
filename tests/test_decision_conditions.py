@@ -525,6 +525,45 @@ def test_attach_conditions_artifact_and_memo_sources(
     assert again["no_section"] == 0
 
 
+def test_attach_conditions_releases_writer_before_next_llm_call(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each persisted result commits before the next call writes its ledger.
+
+    The production LLM ledger uses a separate writer connection.  Holding the
+    decision UPDATE transaction across the loop makes that ledger wait for the
+    busy timeout on every later item.
+    """
+    _insert_artifact_decision(db, content_md=_FIVE_MIN_MD, ticker="NU")
+    _insert_artifact_decision(db, content_md=_FIVE_MIN_MD, ticker="MELI")
+    conn = _connect(db)
+    conn.execute("CREATE TABLE ledger_probe (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    calls = 0
+
+    def fake_extract(*_args: object, **_kwargs: object) -> list[DecisionCondition]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            ledger = sqlite3.connect(str(db), timeout=0.1)
+            try:
+                ledger.execute("INSERT INTO ledger_probe DEFAULT VALUES")
+                ledger.commit()
+            finally:
+                ledger.close()
+        return []
+
+    monkeypatch.setattr(dc, "extract_conditions", fake_extract)
+    tally = attach_conditions(db_path=db)
+
+    assert calls == 2
+    assert tally["deferred_transient"] == 0
+    conn = _connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM ledger_probe").fetchone()[0] == 1
+    conn.close()
+
+
 def test_attach_conditions_passes_made_at_into_the_prompt(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

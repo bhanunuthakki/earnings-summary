@@ -982,6 +982,7 @@ def attach_conditions(
                 # Portfolio-scope owner decision (0130): no per-ticker metric
                 # vocabulary to resolve against — displayed, never evaluated.
                 _stamp(conn, decision_id, [])
+                conn.commit()
                 tally["no_section"] += 1
                 continue
             ticker = str(row["ticker"]).upper()
@@ -996,6 +997,7 @@ def attach_conditions(
             section = resolve_extraction_section(row["artifact_md"], row["memo_md"], owner_prose)
             if section is None:
                 _stamp(conn, decision_id, [])
+                conn.commit()
                 tally["no_section"] += 1
                 continue
 
@@ -1047,6 +1049,10 @@ def attach_conditions(
             # push-fire later as "news" (alert-quality gates, 2026-07-15).
             conditions = stamp_condition_baselines(conn, ticker, conditions)
             _stamp(conn, decision_id, conditions)
+            # The LLM ledger writes through a separate connection. Release
+            # this row's UPDATE before the next model call or every later
+            # ledger write waits for SQLite's busy timeout.
+            conn.commit()
             if conditions:
                 tally["extracted"] += 1
             else:
@@ -1171,6 +1177,7 @@ def attach_qualitative_conditions(
             )
             if section is None:
                 _stamp_qualitative(conn, decision_id, [])
+                conn.commit()
                 tally["no_section"] += 1
                 continue
             try:
@@ -1205,6 +1212,9 @@ def attach_qualitative_conditions(
                 tally["deferred_transient"] += 1
                 continue
             _stamp_qualitative(conn, decision_id, conditions)
+            # The next model call must be able to ledger through its separate
+            # writer connection without waiting for this loop transaction.
+            conn.commit()
             if conditions:
                 tally["extracted"] += 1
             else:
