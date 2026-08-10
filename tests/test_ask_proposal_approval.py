@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +31,7 @@ from ask.store import delete_session, ensure_session  # noqa: E402
 from research.apply import apply_governed_proposal  # noqa: E402
 from research.proposal_approval import (  # noqa: E402
     AskProposalDecisionV1,
+    AskProposalRefV1,
     ProposalConflictError,
     ProposalValidationError,
     TargetDriftError,
@@ -76,7 +77,9 @@ def _thesis_diff(*, old: str = "Old thesis", new: str = "New thesis") -> dict[st
     }
 
 
-def _decision(proposal_id: int, *, request_id: str = "decision-1", revision: int = 0):
+def _decision(
+    proposal_id: int, *, request_id: str = "decision-1", revision: int = 0
+) -> AskProposalDecisionV1:
     return AskProposalDecisionV1(
         proposal_id=proposal_id,
         decision="approve",
@@ -231,7 +234,7 @@ def test_kpi_proposal_is_typed_bounded_and_sanitized(
 ) -> None:
     repo_root, db_path, holdings = authority
     old = _holdings_payload()["tier_1_kpis"]
-    diff = {
+    diff: dict[str, object] = {
         "target_file": "micro_thesis/holdings/NU.json",
         "target_path": "/tier_1_kpis",
         "old_value": old,
@@ -327,7 +330,7 @@ def test_kpi_approval_reconciles_removals_without_destroying_facts(
             "SELECT * FROM user_kpi_registry WHERE id=?", (unrelated_registry_id,)
         ).fetchone()
         connection.commit()
-    diff = {
+    diff: dict[str, object] = {
         "target_file": "micro_thesis/holdings/NU.json",
         "target_path": "/tier_2_kpis",
         "old_value": [{"name": "Removed KPI"}],
@@ -396,7 +399,7 @@ def test_kpi_approval_reuses_recorded_fact_unit_and_rejects_cross_tier_duplicate
             "SELECT * FROM user_kpi_registry WHERE id=?", (registry_id,)
         ).fetchone()
         connection.commit()
-    add_diff = {
+    add_diff: dict[str, object] = {
         "target_file": "micro_thesis/holdings/NU.json",
         "target_path": "/tier_2_kpis",
         "old_value": [],
@@ -465,16 +468,17 @@ def test_failed_exchange_invalidates_orphan_proposal(
         expected_revision=0,
         db_path=db_path,
     )
+    source_events: list[dict[str, object]] = [{"type": "diff_proposal", "diff": _thesis_diff()}]
     events = list(
         bind_ask_proposal_events(
-            iter([{"type": "diff_proposal", "diff": _thesis_diff()}]),
+            iter(source_events),
             repo_root=repo_root,
             db_path=db_path,
             exchange_request_id=begun.exchange.request_id,
         )
     )
-    reference = events[0]["proposal_ref"]
-    assert isinstance(reference, dict) and reference["allowed_actions"] == []
+    reference = AskProposalRefV1.model_validate(events[0]["proposal_ref"])
+    assert reference.allowed_actions == []
 
     fail_exchange(
         request_id=begun.exchange.request_id,
@@ -483,7 +487,7 @@ def test_failed_exchange_invalidates_orphan_proposal(
         db_path=db_path,
     )
 
-    detail = get_ask_proposal_detail(int(reference["proposal_id"]), db_path=db_path)
+    detail = get_ask_proposal_detail(reference.proposal_id, db_path=db_path)
     assert detail is not None
     assert detail.status == "superseded"
     assert detail.allowed_actions == []
@@ -524,11 +528,11 @@ def test_legacy_chat_cutover_never_mutates_files_or_database(
             connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             for table in ("ask_turns", "research_proposals")
         )
-    monkeypatch.setattr(
-        comments_server,
-        "respond_turn",
-        lambda *_args, **_kwargs: pytest.fail("retired chat invoked the Ask engine"),
-    )
+
+    def _retired_respond(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("retired chat invoked the Ask engine")
+
+    monkeypatch.setattr(comments_server, "respond_turn", _retired_respond)
     client = comments_server.create_app(repo_root, db_path=db_path).test_client()
 
     responses = [
@@ -576,29 +580,36 @@ def _durable_payload(*, request_id: str, revision: int = 0) -> dict[str, object]
     }
 
 
+def _empty_pack(*_args: object, **_kwargs: object) -> SimpleNamespace:
+    return SimpleNamespace()
+
+
 def test_routes_emit_durable_ref_live_and_replay_and_expose_exact_detail(
     authority: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root, db_path, _holdings = authority
     client: FlaskClient = comments_server.create_app(repo_root, db_path=db_path).test_client()
 
-    def _respond(*_args: object, **_kwargs: object):
+    def _respond(*_args: object, **_kwargs: object) -> Iterator[dict[str, object]]:
         yield {"type": "final", "text": "I prepared the governed change."}
         yield {"type": "diff_proposal", "diff": _thesis_diff()}
 
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", lambda *_a: SimpleNamespace())
+    monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
     monkeypatch.setattr(comments_server, "respond_turn", _respond)
     monkeypatch.setattr(comments_server, "ask_retrieval_mode", lambda: "legacy")
 
     live = client.post("/api/ask/stream", json=_durable_payload(request_id="ask-1"))
     live_events = _sse_events(live.get_data(as_text=True))
-    ref = next(event["proposal_ref"] for event in live_events if event["type"] == "proposal_ref")
-    assert ref["schema_version"] == "ask_proposal_ref.v1"
-    assert isinstance(ref["proposal_id"], int)
-    assert ref["allowed_actions"] == ["approve", "reject"]
+    ref = AskProposalRefV1.model_validate(
+        next(event["proposal_ref"] for event in live_events if event["type"] == "proposal_ref")
+    )
+    ref_payload = ref.model_dump(mode="json")
+    assert ref.schema_version == "ask_proposal_ref.v1"
+    assert isinstance(ref.proposal_id, int)
+    assert ref.allowed_actions == ["approve", "reject"]
     assert [event["type"] for event in live_events][-2:] == ["proposal_ref", "final"]
 
-    detail = client.get(ref["detail_url"])
+    detail = client.get(ref.detail_url)
     assert detail.status_code == 200
     assert detail.get_json()["new_value"] == "New thesis"
     session_id = live_events[0]["session_id"]
@@ -615,7 +626,7 @@ def test_routes_emit_durable_ref_live_and_replay_and_expose_exact_detail(
                 "schema_version": "exchange_artifacts.v1",
                 "route": None,
                 "view_spec": None,
-                "proposal_ref": ref,
+                "proposal_ref": ref_payload,
                 "proposal_error": None,
                 "source_links": [],
                 "fact_links": [],
@@ -634,7 +645,7 @@ def test_routes_emit_durable_ref_live_and_replay_and_expose_exact_detail(
         for event in _sse_events(replay.get_data(as_text=True))
         if event["type"] == "proposal_ref"
     ]
-    assert replay_refs == [ref]
+    assert replay_refs == [ref_payload]
 
 
 def test_proposal_error_is_identical_live_replay_and_session_reload(
@@ -643,14 +654,14 @@ def test_proposal_error_is_identical_live_replay_and_session_reload(
     repo_root, db_path, _holdings = authority
     client = comments_server.create_app(repo_root, db_path=db_path).test_client()
 
-    def _respond(*_args: object, **_kwargs: object):
+    def _respond(*_args: object, **_kwargs: object) -> Iterator[dict[str, object]]:
         yield {"type": "final", "text": "The answer remains available."}
         yield {
             "type": "diff_proposal",
             "diff": {**_thesis_diff(), "target_file": "directives/forbidden.md"},
         }
 
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
     monkeypatch.setattr(comments_server, "respond_turn", _respond)
     monkeypatch.setattr(comments_server, "ask_retrieval_mode", lambda: "legacy")
     live = client.post("/api/ask/stream", json=_durable_payload(request_id="proposal-error"))

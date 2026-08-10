@@ -3,7 +3,7 @@
 Covers the authoring path end to end: the ``record_pass_decision`` write
 (manual + idempotent dismiss-sourced), the ``source_prose`` extraction bridge
 (numeric + qualitative, reusing L9's rungs), the discovery dismiss wiring, the
-manual REST route, and the ``/discovery dismiss T <why>`` chat path.
+manual REST route, and the ``/discovery dismiss T <why>`` Ask path.
 
 No real LLM: ``decision_conditions.call_llm_structured`` is monkeypatched where
 the attach rungs run.
@@ -219,10 +219,9 @@ def test_attach_numeric_conditions_from_source_prose(
         revisit_text="revisit if the forward P/E falls below 20",
         db_path=db,
     )
-    monkeypatch.setattr(
-        dc,
-        "call_llm_structured",
-        lambda *a, **k: [
+
+    def _numeric_conditions(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        return [
             {
                 "metric": "forward P/E",
                 "metric_source": None,
@@ -232,8 +231,9 @@ def test_attach_numeric_conditions_from_source_prose(
                 "for_periods": 1,
                 "note": "forward P/E below 20",
             }
-        ],
-    )
+        ]
+
+    monkeypatch.setattr(dc, "call_llm_structured", _numeric_conditions)
     tally = dc.attach_conditions(db_path=db)
     assert tally["extracted"] == 1
     conn = sqlite3.connect(str(db))
@@ -256,13 +256,11 @@ def test_attach_qualitative_conditions_from_source_prose(
         revisit_text="revisit if a credible competitor stumbles or the CEO departs",
         db_path=db,
     )
-    monkeypatch.setattr(
-        dc,
-        "call_llm_structured",
-        lambda *a, **k: [
-            {"phrase": "a credible competitor stumbles", "watch_for": "news", "note": "x"}
-        ],
-    )
+
+    def _qualitative_conditions(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        return [{"phrase": "a credible competitor stumbles", "watch_for": "news", "note": "x"}]
+
+    monkeypatch.setattr(dc, "call_llm_structured", _qualitative_conditions)
     tally = dc.attach_qualitative_conditions(db_path=db)
     assert tally["extracted"] == 1
     conn = sqlite3.connect(str(db))
@@ -276,7 +274,7 @@ def test_attach_qualitative_conditions_from_source_prose(
 
 
 # ---------------------------------------------------------------------------
-# routes + chat
+# routes + Ask
 # ---------------------------------------------------------------------------
 
 
@@ -342,13 +340,16 @@ def test_manual_pass_route(client: FlaskClient, repo: Path) -> None:
     assert client.post("/api/decisions/pass", json={"ticker": "T"}).status_code == 400
 
 
-def test_chat_dismiss_with_reason_records(client: FlaskClient, repo: Path) -> None:
+def test_ask_dismiss_with_reason_records(client: FlaskClient, repo: Path) -> None:
     res = client.post(
-        "/chat/WDC",
-        json={"report_date": "2026-06-11", "message": "/discovery dismiss WDC too cyclical for me"},
+        "/api/ask",
+        json={"query": "/discovery dismiss WDC too cyclical for me", "tickers": ["WDC"]},
     )
     assert res.status_code == 200
-    out = res.get_data(as_text=True)
+    body = res.get_json()
+    assert body["status"] == "ok"
+    assert body["kind"] == "command"
+    out = str(body["text"])
     assert "avoid decision" in out
     rows = _rows(repo / "data" / "portfolio.db")
     assert len(rows) == 1

@@ -6,7 +6,7 @@ from __future__ import annotations
 import queue
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +31,30 @@ from ask.store import append_turn, load_turns
 from execution import comments_server
 from viewspec.nl_compile import NLCompileResult
 from viewspec.spec import ViewSpec
+
+
+def _empty_mapping(*_args: object, **_kwargs: object) -> dict[str, object]:
+    return {}
+
+
+def _empty_strings(*_args: object, **_kwargs: object) -> list[str]:
+    return []
+
+
+def _empty_evidence(*_args: object, **_kwargs: object) -> list[object]:
+    return []
+
+
+def _false(*_args: object, **_kwargs: object) -> bool:
+    return False
+
+
+def _none(*_args: object, **_kwargs: object) -> None:
+    return None
+
+
+def _final_llm_events(*_args: object, **_kwargs: object) -> Iterator[dict[str, object]]:
+    yield {"type": "final", "text": "Answer"}
 
 
 def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
@@ -84,7 +108,7 @@ def test_orchestrator_holds_final_until_trailing_artifacts_are_durable(
 ) -> None:
     db_path = _database(tmp_path, migrated_db)
     exchange = _begin(db_path)
-    source = [
+    source: list[dict[str, object]] = [
         {"type": "delta", "text": "Answer"},
         {"type": "fragment", "html": "<div>chart</div>", "spec": {"tickers": ["NU"]}},
         {"type": "final", "text": "Answer", "route": "data"},
@@ -133,15 +157,14 @@ def test_replay_reconstructs_artifact_events_and_one_terminal_final(
 ) -> None:
     db_path = _database(tmp_path, migrated_db)
     exchange = _begin(db_path)
+    source: list[dict[str, object]] = [
+        {"type": "final", "text": "Answer", "route": "narrative"},
+        {"type": "citations", "items": [{"href": "/source/7"}]},
+        {"type": "diff_proposal", "proposal_ref": "proposal:7", "diff": {}},
+    ]
     list(
         orchestrate_exchange_events(
-            iter(
-                [
-                    {"type": "final", "text": "Answer", "route": "narrative"},
-                    {"type": "citations", "items": [{"href": "/source/7"}]},
-                    {"type": "diff_proposal", "proposal_ref": "proposal:7", "diff": {}},
-                ]
-            ),
+            iter(source),
             exchange=exchange,
             db_path=db_path,
         )
@@ -167,15 +190,15 @@ def test_external_engine_mode_does_not_duplicate_narrative_or_shadow_turns(
 ) -> None:
     db_path = _database(tmp_path, migrated_db)
     exchange = _begin(db_path)
-    monkeypatch.setattr(ask_engine, "metric_catalog", lambda *_a, **_k: {})
-    monkeypatch.setattr(ask_engine, "tracked_tickers", lambda *_a, **_k: [])
-    monkeypatch.setattr(ask_engine, "gather_evidence", lambda *_a, **_k: [])
-    monkeypatch.setattr(ask_engine, "followup_armed", lambda *_a, **_k: False)
-    monkeypatch.setattr(ask_engine, "_shadow_retrieval", lambda *_a, **_k: None)
+    monkeypatch.setattr(ask_engine, "metric_catalog", _empty_mapping)
+    monkeypatch.setattr(ask_engine, "tracked_tickers", _empty_strings)
+    monkeypatch.setattr(ask_engine, "gather_evidence", _empty_evidence)
+    monkeypatch.setattr(ask_engine, "followup_armed", _false)
+    monkeypatch.setattr(ask_engine, "_shadow_retrieval", _none)
     monkeypatch.setattr(
         ask_engine.chat_session,
         "stream_llm_text",
-        lambda *_a, **_k: iter([{"type": "final", "text": "Answer"}]),
+        _final_llm_events,
     )
     turn = AskTurn(
         text="What changed?",
@@ -211,16 +234,21 @@ def test_external_multi_turn_history_excludes_current_user_and_metadata_from_pro
     exchange = _begin(db_path)
     retrieval_queries: list[str] = []
     prompts: list[str] = []
-    monkeypatch.setattr(ask_engine, "metric_catalog", lambda *_a, **_k: {})
-    monkeypatch.setattr(ask_engine, "tracked_tickers", lambda *_a, **_k: [])
+    monkeypatch.setattr(ask_engine, "metric_catalog", _empty_mapping)
+    monkeypatch.setattr(ask_engine, "tracked_tickers", _empty_strings)
+
+    def _gather_evidence(query: str, **_kwargs: object) -> list[object]:
+        retrieval_queries.append(query)
+        return []
+
     monkeypatch.setattr(
         ask_engine,
         "gather_evidence",
-        lambda query, **_kwargs: retrieval_queries.append(query) or [],
+        _gather_evidence,
     )
-    monkeypatch.setattr(ask_engine, "followup_armed", lambda *_a, **_k: False)
+    monkeypatch.setattr(ask_engine, "followup_armed", _false)
 
-    def _stream(prompt: str, **_kwargs: object):
+    def _stream(prompt: str, **_kwargs: object) -> Iterator[dict[str, object]]:
         prompts.append(prompt)
         yield {"type": "final", "text": "Current answer"}
 
@@ -313,21 +341,22 @@ def test_external_command_and_data_routes_leave_turn_persistence_to_exchange(
     )
     import viewspec.nl_compile as nl_compile
 
-    monkeypatch.setattr(
-        nl_compile,
-        "compile_nl_to_viewspec",
-        lambda *_a, **_k: NLCompileResult(status="ok", spec=spec),
-    )
-    monkeypatch.setattr(
-        ask_engine,
-        "execute_view",
-        lambda *_a, **_k: SimpleNamespace(
+    def _compile_view(*_args: object, **_kwargs: object) -> NLCompileResult:
+        return NLCompileResult(status="ok", spec=spec)
+
+    def _execute_view(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
             spec=spec,
             period_labels=["Q1", "Q2", "Q3", "Q4"],
             rows=[SimpleNamespace(cells=[])],
-        ),
-    )
-    monkeypatch.setattr(ask_engine, "render_view_fragment", lambda *_a, **_k: "<div />")
+        )
+
+    def _render_view(*_args: object, **_kwargs: object) -> str:
+        return "<div />"
+
+    monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", _compile_view)
+    monkeypatch.setattr(ask_engine, "execute_view", _execute_view)
+    monkeypatch.setattr(ask_engine, "render_view_fragment", _render_view)
     data = AskTurn(
         text="/view NU revenue",
         session_id="session-1",
@@ -352,16 +381,15 @@ def test_sealed_external_mode_reuses_authoritative_user_and_skips_assistant_cas(
         persistence_mode="external_exchange",
         authoritative_user_turn_id=exchange.user_turn_id,
     )
-    monkeypatch.setattr(
-        ask_engine,
-        "_store_append_turn",
-        lambda **_kwargs: pytest.fail("sealed mode appended a duplicate user turn"),
-    )
-    monkeypatch.setattr(
-        ask_engine,
-        "_store_append_assistant_cas",
-        lambda **_kwargs: pytest.fail("sealed mode appended a duplicate assistant turn"),
-    )
+
+    def _fail_user_turn(**_kwargs: object) -> None:
+        pytest.fail("sealed mode appended a duplicate user turn")
+
+    def _fail_assistant_turn(**_kwargs: object) -> None:
+        pytest.fail("sealed mode appended a duplicate assistant turn")
+
+    monkeypatch.setattr(ask_engine, "_store_append_turn", _fail_user_turn)
+    monkeypatch.setattr(ask_engine, "_store_append_assistant_cas", _fail_assistant_turn)
 
     assert ask_engine._bind_sealed_user_turn(turn, "What changed?", db_path=db_path) == (
         exchange.user_turn_id
@@ -381,7 +409,7 @@ def test_sealed_external_mode_reuses_authoritative_user_and_skips_assistant_cas(
 def test_disconnect_safe_drain_consumes_durable_generator_after_stop() -> None:
     consumed: list[str] = []
 
-    def events():
+    def events() -> Iterator[dict[str, object]]:
         consumed.append("started")
         yield {"type": "stage"}
         consumed.append("completed")
