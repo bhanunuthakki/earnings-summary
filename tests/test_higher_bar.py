@@ -86,7 +86,7 @@ def test_non_url_string_in_url_field_is_not_a_doorway() -> None:
 
 
 def test_mutating_kinds_membership() -> None:
-    assert {"dcf", "thesis", "code"} == MUTATING_KINDS
+    assert {"dcf", "thesis", "code", "ask_thesis_edit", "ask_kpi_edit"} == MUTATING_KINDS
     assert "memo" not in MUTATING_KINDS and "view" not in MUTATING_KINDS
 
 

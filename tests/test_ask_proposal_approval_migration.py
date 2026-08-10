@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 from alembic.config import Config
@@ -20,11 +21,11 @@ def _config(path: Path) -> Config:
     return config
 
 
-def test_upgrade_adds_authority_and_downgrade_preserves_proposals(tmp_path: Path) -> None:
-    path = tmp_path / "proposal-approval.db"
+def test_upgrade_adds_authority_and_downgrade_preserves_proposals(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "proposal-approval.db", target="head")
     config = _config(path)
-    command.upgrade(config, "head")
-    command.upgrade(config, "head")
 
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
