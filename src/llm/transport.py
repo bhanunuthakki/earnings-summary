@@ -435,16 +435,6 @@ def record_quota_exhausted(
             conn.execute("PRAGMA busy_timeout = 30000;")
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS llm_circuit_breakers (
-                    provider TEXT PRIMARY KEY,
-                    blocked_until TEXT NOT NULL,
-                    reason TEXT,
-                    set_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
                 INSERT INTO llm_circuit_breakers (provider, blocked_until, reason, set_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(provider) DO UPDATE SET

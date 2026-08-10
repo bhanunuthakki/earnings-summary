@@ -27,7 +27,7 @@ def test_legacy_stamps_share_one_current_head_template(
         original(config, target)
 
     monkeypatch.setattr(command, "upgrade", counted_upgrade)
-    target = "0003_restore_baseline_defaults"
+    target = "0004_add_llm_circuit_breakers"
     first = migrated_db(tmp_path / "first.db", stamp="archived-0100", target=target)
     second = migrated_db(tmp_path / "second.db", stamp="archived-0273", target=target)
 

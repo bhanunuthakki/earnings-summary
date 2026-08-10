@@ -15,6 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
+_ACTIVE_HEAD = "0004_add_llm_circuit_breakers"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
@@ -99,7 +100,7 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
             "SELECT trigger_kind FROM alerts WHERE signature_sha='model-pin-switch-regression'"
         ).fetchone()
 
-    assert revision == ("0003_restore_baseline_defaults",)
+    assert revision == (_ACTIVE_HEAD,)
     assert identity is not None
     assert re.fullmatch(r"database-instance:[0-9a-f]{32}", identity[0])
     assert clock == (1,)
