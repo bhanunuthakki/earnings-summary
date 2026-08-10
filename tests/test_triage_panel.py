@@ -203,24 +203,6 @@ def test_triage_drawer_stays_hidden_until_opened(db_path: Path) -> None:
     assert "display" not in bare.group(1)
 
 
-def test_shell_aliases_triage_into_the_ledger_console() -> None:
-    """Phase-5 aggressive IA: Triage is no longer a standalone sub-tab — it
-    composes into the single Review → Ledger console (reusing the `musings`
-    id) and its old #triage deep-link aliases there. The builder's own
-    /api/panel/triage route stays live (see test_panel_route_serves_full_and_list)."""
-    from pipeline.command_center_shell import (
-        _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]
-        render_shell,
-    )
-
-    html = render_shell(overview_html="<p>x</p>")
-    # No standalone Triage sub-tab anymore.
-    assert 'data-tab-target="triage"' not in html
-    # The old deep-link aliases to the reused Ledger (musings) console.
-    assert _LEGACY_PANEL_REDIRECTS["triage"] == "musings"
-    assert "triage:" in html.replace("'", "")  # mirrored in the SHELL_JS REDIRECTS map
-
-
 # ----------------------------------------------------------------------------
 # Server routes
 # ----------------------------------------------------------------------------

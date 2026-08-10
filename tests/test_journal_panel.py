@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
-from pipeline.command_center_shell import render_shell
 from pipeline.journal_panel import render_journal_list, render_journal_panel
 from user_state.notes import create_note, get_note
 
@@ -116,6 +115,24 @@ def test_lifecycle_error_paths(client: FlaskClient, db_path: Path) -> None:
     assert client.post(f"/api/notes/{n.id}/frobnicate", json={}).status_code == 404
     assert client.post("/api/notes/99999/resolve", json={}).status_code == 404
     assert client.post("/api/notes/99999/supersede", json={"body": "y"}).status_code == 404
+
+
+def test_supersede_rejects_stale_note_revision(client: FlaskClient, db_path: Path) -> None:
+    original = create_note(ticker="NU", kind="question", body="Old question", db_path=db_path)
+    stale = client.post(
+        f"/api/notes/{original.id}/supersede",
+        json={"body": "Stale edit", "expected_revision": "2000-01-01T00:00:00"},
+    )
+    assert stale.status_code == 409
+    assert stale.get_json()["error"] == "revision_conflict"
+
+    current_revision = client.get("/api/notes?ticker=NU").get_json()["notes"][0]["updated_at"]
+    accepted = client.post(
+        f"/api/notes/{original.id}/supersede",
+        json={"body": "Current edit", "expected_revision": current_revision},
+    )
+    assert accepted.status_code == 200
+    assert accepted.get_json()["note"]["body"] == "Current edit"
 
 
 # ----------------------------------------------------------------------------
@@ -238,21 +255,6 @@ def test_panel_route_serves_fragment(client: FlaskClient, db_path: Path) -> None
     assert frag.status_code == 200
     assert b"Route-served note." in frag.data
     assert b"jr-filters" not in frag.data  # list-only fragment
-
-
-def test_shell_aliases_journal_into_the_ledger_console() -> None:
-    """Phase-5 aggressive IA: Journal is no longer a standalone sub-tab — it
-    composes into the single Review → Ledger console (reusing the `musings`
-    id) and its old #journal deep-link aliases there. The builder's own
-    /api/panel/journal route stays live for the composite + direct fetch."""
-    from pipeline.command_center_shell import (
-        _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]
-    )
-
-    html = render_shell(overview_html="<p>x</p>")
-    assert 'data-tab-target="journal"' not in html
-    assert _LEGACY_PANEL_REDIRECTS["journal"] == "musings"
-    assert "journal:" in html.replace("'", "")  # mirrored in the SHELL_JS REDIRECTS map
 
 
 # ----------------------------------------------------------------------------

@@ -26,7 +26,6 @@ from alerts import fire_alert, queue_action
 from dashboard._card import render_alert_card
 from dashboard.inbox import collect_inbox, render_inbox_stream
 from pipeline.analytical_dashboard_html import render_tier_coverage_strip
-from pipeline.command_center_shell import SHELL_JS, render_shell
 from pipeline.dashboard_status import DashboardRow
 from pipeline.peeks import render_new_docs_peek, render_provenance_peek
 from pipeline.portfolio_panel import render_next_dollar_panel
@@ -911,27 +910,6 @@ def test_peek_whatif_rejects_out_of_range_weight_and_404s(client: FlaskClient, r
 # ----------------------------------------------------------------------------
 # Markup contracts: peek triggers keep their real hrefs
 # ----------------------------------------------------------------------------
-
-
-def test_shell_carries_peek_primitive() -> None:
-    html = render_shell(overview_html="<p>x</p>")
-    assert 'id="cc-peek"' in html
-    # The peek's scrim is the one shared CCOverlay .k-scrim now (no per-surface
-    # cc-peek-scrim); the peek registers as a modal surface with its closeId.
-    assert 'id="cc-peek-scrim"' not in html
-    assert "closeId: 'cc-peek-close'" in SHELL_JS
-    assert 'id="cc-hovercard"' in html
-    # The JS contract: explicit opt-in attr, automatic /source peeks, the
-    # hover endpoint, and the fragment variant marker.
-    assert "a[data-peek-url]" in SHELL_JS
-    assert 'a[href^="/source/"]' in SHELL_JS
-    assert "/api/peek/ticker/" in SHELL_JS
-    assert "fragment=1" in SHELL_JS
-    # The data-ask-q doorway rail (S9): a separate delegate that reuses goAsk,
-    # excludes the Ask panel, and yields to data-fact-ref (precedence contract).
-    assert "ev.target.closest('[data-ask-q]')" in SHELL_JS
-    assert "a.hasAttribute('data-fact-ref')" in SHELL_JS  # fact_ref wins
-    assert "a.closest('[data-panel=\"explore\"]')" in SHELL_JS  # Ask owns its own chips
 
 
 def test_cockpit_new_docs_pill_peeks_documents() -> None:

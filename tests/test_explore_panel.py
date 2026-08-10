@@ -20,8 +20,8 @@ from alembic.config import Config
 from flask.testing import FlaskClient
 
 from alembic import command
-from pipeline.command_center_shell import render_shell
 from pipeline.explore_panel import render_explore_panel, render_saved_views_list
+from tests.ask_stream_support import fold_sse_response
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -307,12 +307,6 @@ def test_keymetrics_fragment_route(client: FlaskClient) -> None:
     assert res.data == b""
 
 
-def test_shell_carries_explore_tab() -> None:
-    html_out = render_shell(overview_html="<div>x</div>")
-    assert 'data-tab-target="explore"' in html_out
-    assert 'data-endpoint="/api/panel/explore"' in html_out
-
-
 # ----------------------------------------------------------------------------
 # /api/viewspec/*
 # ----------------------------------------------------------------------------
@@ -395,7 +389,7 @@ def test_views_post_validates(client: FlaskClient) -> None:
 
 
 # ----------------------------------------------------------------------------
-# /api/ask — one Ask-thread turn through the unified engine (portfolio pack)
+# /api/ask/stream — one Ask-thread turn through the unified engine
 # ----------------------------------------------------------------------------
 
 
@@ -423,11 +417,11 @@ def test_ask_endpoint_compiles_runs_and_renders(
 
     monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
     res = client.post(
-        "/api/ask",
+        "/api/ask/stream",
         json={"query": "TST revenue", "tickers": ["TST"], "context_spec": {"tickers": ["TST"]}},
     )
     assert res.status_code == 200
-    body = res.get_json()
+    body = fold_sse_response(res.get_data(as_text=True))
     assert body["status"] == "ok"
     assert body["kind"] == "view"
     assert seen["query"] == "TST revenue"
@@ -437,22 +431,22 @@ def test_ask_endpoint_compiles_runs_and_renders(
     assert "series" in body["message"]
 
 
-def test_ask_endpoint_surfaces_forced_view_compile_failure(
+def test_ask_stream_redacts_forced_view_compile_failure(
     client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """/view forces the data path — a failed compile is the answer (no
-    narrative fallback), preserving the old tri-state degrade contract."""
+    """The sole SSE path keeps provider/compiler details behind its generic
+    correlated error boundary, including a forced local view compile."""
     from viewspec import nl_compile
 
     def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
         return nl_compile.NLCompileResult(status="error", message="no matching metric token")
 
     monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
-    res = client.post("/api/ask", json={"query": "/view garbage"})
+    res = client.post("/api/ask/stream", json={"query": "/view garbage"})
     assert res.status_code == 200  # tri-state payload, never a 500
-    body = res.get_json()
+    body = fold_sse_response(res.get_data(as_text=True))
     assert body["status"] == "error"
-    assert "no matching metric token" in body["message"]
+    assert body["message"] == "chat stream failed; retry the request"
     assert "fragment" not in body
 
 
@@ -472,14 +466,14 @@ def test_ask_endpoint_answers_narrative_questions(
 
     monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     res = client.post(
-        "/api/ask",
+        "/api/ask/stream",
         json={
             "query": "what's the bear case here?",
             "history": [{"role": "user", "text": "earlier question"}],
         },
     )
     assert res.status_code == 200
-    body = res.get_json()
+    body = fold_sse_response(res.get_data(as_text=True))
     assert body["status"] == "ok"
     assert body["kind"] == "narrative"
     assert body["text"] == "a researched answer"
@@ -505,8 +499,8 @@ def test_ask_endpoint_data_question_falls_back_to_narrative(
 
     monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
     monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
-    res = client.post("/api/ask", json={"query": "TST revenue growth, last 8 quarters"})
-    body = res.get_json()
+    res = client.post("/api/ask/stream", json={"query": "TST revenue growth, last 8 quarters"})
+    body = fold_sse_response(res.get_data(as_text=True))
     assert body["status"] == "ok"
     assert body["kind"] == "narrative"
     assert body["text"] == "prose fallback"
@@ -515,16 +509,16 @@ def test_ask_endpoint_data_question_falls_back_to_narrative(
 
 def test_ask_endpoint_runs_commands(client: FlaskClient) -> None:
     """Deterministic commands work from the Ask tab too — no LLM."""
-    res = client.post("/api/ask", json={"query": "/help"})
+    res = client.post("/api/ask/stream", json={"query": "/help"})
     assert res.status_code == 200
-    body = res.get_json()
+    body = fold_sse_response(res.get_data(as_text=True))
     assert body["status"] == "ok"
     assert body["kind"] == "command"
     assert "/discovery" in body["text"]
 
 
 def test_ask_endpoint_requires_query(client: FlaskClient) -> None:
-    assert client.post("/api/ask", json={}).status_code == 400
+    assert client.post("/api/ask/stream", json={}).status_code == 400
 
 
 # ----------------------------------------------------------------------------
@@ -535,7 +529,7 @@ def test_ask_endpoint_requires_query(client: FlaskClient) -> None:
 def test_ask_stream_endpoint_streams_data_frames(
     client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Same engine as /api/ask, SSE framing: stage frames lead (the panel's
+    """The SSE framing keeps stage frames first (the panel's
     busy line), then the fragment and the final message line."""
     from viewspec import nl_compile
     from viewspec.spec import ViewSpec
@@ -580,12 +574,13 @@ def test_ask_stream_endpoint_requires_query(client: FlaskClient) -> None:
     assert client.open("/api/ask/stream", method="OPTIONS").status_code == 204
 
 
-def test_explore_panel_js_streams_and_consumes_palette_query(db_path: Path) -> None:
-    """Ask v2 panel wiring: the thread consumes the SSE endpoint and picks
-    up the Ctrl+K palette's stashed query (store key askQ; the poke EVENT
-    keeps its 'cc-ask-q' name) at wire-up / on its event."""
+def test_explore_panel_hands_research_to_copilot_and_consumes_palette_query(
+    db_path: Path,
+) -> None:
+    """The panel opens Work OS Copilot and still consumes palette handoff."""
     html_out = render_explore_panel(db_path)
-    assert "/api/ask/stream" in html_out
+    assert "openWorkOsCopilot" in html_out
+    assert "/api/ask/stream" not in html_out
     assert "CCState.get('askQ')" in html_out
     assert "'cc-ask-q'" in html_out  # the event registration
     assert "consumePaletteQuery" in html_out

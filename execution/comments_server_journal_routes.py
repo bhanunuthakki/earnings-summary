@@ -155,6 +155,11 @@ def register_journal_routes(app: Flask, context: JournalRouteContext) -> None:
                     note_id,
                     body=new_body,
                     kind=str(kind_raw) if kind_raw is not None else None,
+                    expected_revision=(
+                        str(payload["expected_revision"])
+                        if payload.get("expected_revision") is not None
+                        else None
+                    ),
                     db_path=db_path,
                 )
             elif action == "link":
@@ -198,6 +203,14 @@ def register_journal_routes(app: Flask, context: JournalRouteContext) -> None:
                             )
             else:
                 return ({"error": f"unknown action {action!r}"}, 404)
+        except notes_store.NoteRevisionConflictError as exc:
+            return (
+                {
+                    "error": "revision_conflict",
+                    "current_revision": exc.current_revision,
+                },
+                409,
+            )
         except ValueError as exc:
             return ({"error": str(exc)}, 400)
         except LookupError as exc:

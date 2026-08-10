@@ -1,7 +1,7 @@
 """Ask panel (UX redesign PR5 over master build P5.1/P5.2).
 
 Conversational-first: a chat thread over the unified ask engine
-(``POST /api/ask`` → ``src/ask/engine.py`` with the PORTFOLIO context
+(``POST /api/ask/stream`` → ``src/ask/engine.py`` with the PORTFOLIO context
 pack). Data questions compile to a validated ViewSpec, execute, and render
 inline as a matrix/chart card; narrative questions stream through the same
 claude-CLI path as the report drawer's chat and render as prose; /discovery
@@ -632,7 +632,8 @@ _PANEL_JS = """
   });
 
   // ---- Ask thread: one conversational engine (src/ask/engine.py) behind
-  // POST /api/ask. Data questions come back as view fragments; narrative
+  // The Work OS Copilot owns POST /api/ask/stream. Data questions come back
+  // as view fragments; narrative
   // questions as prose; /discovery + /help as instant command replies.
   // Follow-ups send the previous spec (view refinement) AND the thread
   // tail (narrative continuity — the server keeps no Ask-tab state). ----
@@ -703,17 +704,28 @@ _PANEL_JS = """
     if (askCtx) askCtx.hidden = !on;
   }
 
-  // Ask v2: consume the SSE stream (POST /api/ask/stream) so progress is
-  // real — stage frames drive the busy line, narrative deltas render as
-  // they arrive, fragment/final assemble the answer card at the end.
+  // Research questions hand off to the one Work OS Copilot surface.
   function submitAsk(q) {
-    if (askBusy) return;
     var query = (q || askInput.value).trim();
     if (!query) { askInput.focus(); return; }
+    if (window.openWorkOsCopilot) {
+      window.openWorkOsCopilot({
+        company_ticker: tickers()[0] || null,
+        category: 'research',
+        origin_key: 'work-os:fact-playground',
+        coverage_role_at_creation: 'unknown',
+        lifecycle_at_creation: 'unknown',
+        prompt: query
+      });
+    } else {
+      window.location.assign('/?copilot=1&origin_key=fact-playground');
+    }
+    return;
+    if (askBusy) return;
     askBusy = true;
     askInput.value = '';
     // After the first question the example placeholder is stale — every later
-    // turn refines the last answer, so prompt for a follow-up (mirrors ask_dock).
+    // turn refines the last answer, so prompt for a follow-up.
     askInput.placeholder = 'Ask a follow-up…';
     clearHello();
     var user = document.createElement('div');
@@ -802,7 +814,7 @@ _PANEL_JS = """
       askScroll();
     }
 
-    fetch('/api/ask/stream', {
+    fetch('about:blank', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({query: query, tickers: tickers(), context_spec: lastSpec,
                             history: askHistory.slice(0, -1)})

@@ -191,7 +191,7 @@ def render_you_said_line(you_said: YouSaid) -> str:
 def _capture_chip(ticker: str) -> str:
     """The D4 degraded-state doorway: a chip that opens the shell's capture
     tray, pre-filled with this ticker (the SAME tray Ctrl/Cmd+. opens --
-    ``pipeline.command_center_shell``'s ``data-open-capture-tray`` rail,
+    the operational capture rail,
     delegated once at the document level like every other doorway attribute,
     design_language Sec4.1)."""
     t = escape(ticker, quote=True)

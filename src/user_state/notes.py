@@ -152,6 +152,14 @@ class SyncStats:
     skipped: int = 0
 
 
+class NoteRevisionConflictError(RuntimeError):
+    """The caller edited a stale note revision."""
+
+    def __init__(self, current_revision: str) -> None:
+        super().__init__("note revision conflict")
+        self.current_revision = current_revision
+
+
 def create_note(
     *,
     user_id: str = DEFAULT_USER_ID,
@@ -565,6 +573,7 @@ def supersede_note(
     *,
     body: str,
     kind: str | None = None,
+    expected_revision: str | None = None,
     db_path: Path | str | None = None,
 ) -> AnalystNoteRow:
     """Correct a note: INSERT a replacement chained via ``supersedes_id`` and
@@ -580,10 +589,15 @@ def supersede_note(
         raise ValueError("note body must be non-empty")
     conn = open_conn(db_path)
     try:
+        conn.execute("BEGIN IMMEDIATE")
         old_row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
         if old_row is None:
             raise LookupError(f"analyst_notes id={note_id} not found")
         old = _row_to_dc(old_row)
+        current_revision = str(old_row["updated_at"])
+        if expected_revision is not None and expected_revision != current_revision:
+            conn.rollback()
+            raise NoteRevisionConflictError(current_revision)
         new_id = _insert(
             conn,
             user_id=old.user_id,

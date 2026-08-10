@@ -329,11 +329,11 @@ def test_expire_stale_research_dry_run_and_apply(ctx: tuple[FlaskClient, Path]) 
 # ---------------------------------------------------------------------------
 
 
-def test_om_chat_uses_streaming_endpoint() -> None:
+def test_om_chat_hands_research_questions_to_work_os_copilot() -> None:
     from pipeline.ledger_panel import _OM_CHAT_JS  # pyright: ignore[reportPrivateUsage]
 
-    assert "/api/ask/stream" in _OM_CHAT_JS
-    assert "'/api/ask'" not in _OM_CHAT_JS  # the buffered sibling is gone
+    assert "openWorkOsCopilot" in _OM_CHAT_JS
+    assert "/api/ask/stream" not in _OM_CHAT_JS
 
 
 def test_onmymind_js_dropped_popup_branch() -> None:

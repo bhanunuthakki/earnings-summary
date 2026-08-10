@@ -11,10 +11,8 @@ Endpoints:
   DELETE /comments/<id>       hard-delete
   GET/POST /chat/<ticker>     retired report-chat compatibility tombstone
   POST   /chat/<ticker>/apply retired proposal compatibility tombstone
-  POST   /api/ask             one Ask-tab turn — the same engine with the
-                              portfolio context pack (single folded payload)
-  POST   /api/ask/stream      streaming sibling of /api/ask (SSE frames —
-                              live stage/delta/fragment progress)
+  POST   /api/ask/stream      the single research-conversation path (SSE
+                              session/stage/delta/fragment/final frames)
   GET    /healthz             health check
 
 Usage:
@@ -156,7 +154,6 @@ from logging_config import (  # noqa: E402
     set_correlation_id,
 )
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
-from pipeline.command_center_shell import render_overview_panel  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
 from pipeline.research_cockpit import build_cockpit_rows  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
@@ -166,6 +163,7 @@ from pipeline.ticker_command_center import (  # noqa: E402
     render_notes_drawer_fragment,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
+from pipeline.work_os_overview import render_overview_panel  # noqa: E402
 from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
 from research.proposal_approval import (  # noqa: E402
@@ -317,7 +315,7 @@ def _approve_consequence_href(consequence: str) -> str | None:
     none applies. Only ever a REAL registered panel hash — never invented:
     a written thesis-ledger entry or a sizing intent both land in the
     Portfolio > Decisions panel (P2.2 folded the standalone Thesis Ledger
-    tab into ``decisions_record`` — see command_center_shell.py's panel
+    tab into ``decisions_record`` — the Work OS surface owns the doorway
     registry)."""
     if "Ledger entry id=" in consequence or "position_sizing_intent id=" in consequence:
         return _DECISIONS_RECORD_HASH
@@ -1707,11 +1705,7 @@ def create_app(
     @app.route("/api/work-os/portfolio", methods=["GET"])
     def work_os_portfolio_api():
         """Portfolio-only research state for Cockpit and Company Desk."""
-        conn = _open_db()
-        try:
-            rows = build_cockpit_rows(conn, repo_root).get("portfolio", [])
-        finally:
-            conn.close()
+        rows = build_cockpit_rows(get_read_db(), repo_root).get("portfolio", [])
         payload = build_work_os_portfolio(rows, fetch_live_portfolio())
         response = app.json.response(payload.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
@@ -1721,28 +1715,6 @@ def create_app(
     def dashboard_api():
         rows = build_dashboard_rows(get_read_db(), repo_root)
         return {k: [r.to_dict() for r in v] for k, v in rows.items()}
-
-    @app.route("/api/cockpit", methods=["GET"])
-    def cockpit_fragment():
-        """The Research cockpit re-rendered as an HTML fragment for HTMX's
-        periodic poll (Wave 3): the Overview's ``#cc-cockpit-live`` wrapper
-        re-fetches this every 90s so the time-varying tiles (price · earnings
-        countdown · staleness) refresh in place without a full page reload."""
-        from pipeline.research_cockpit import render_research_cockpit
-
-        rows = build_cockpit_rows(get_read_db(), repo_root)
-        return Response(render_research_cockpit(rows), mimetype="text/html")
-
-    @app.route("/api/cron-health", methods=["GET"])
-    def cron_health_fragment():
-        """The cron-health live body (KPI strip + 7-day timeline) for HTMX's
-        periodic poll (Wave 9 live-tile): the Cron Health panel's
-        ``#cc-cron-live`` wrapper re-fetches this every 60s so today's pipeline
-        verdict flips from "Not run yet" to OK/FAILED in place — the same
-        self-refresh idiom as ``/api/cockpit``, no bespoke JS."""
-        from pipeline.cron_health_panel import render_cron_health_live_body
-
-        return Response(render_cron_health_live_body(db_path), mimetype="text/html")
 
     @app.route("/api/panel/since_last", methods=["GET"])
     def since_last_fragment():
@@ -2634,91 +2606,11 @@ def create_app(
             payload["spec"] = result.spec.to_dict()
         return payload
 
-    @app.route("/api/ask", methods=["POST", "OPTIONS"])
-    def ask_api():
-        """One Ask-thread turn through the unified durable Ask engine.
-
-        JSON body ``{"query": ..., "tickers": [...], "context_spec": {...},
-        "history": [{"role", "text"}, ...], "session_id": "..."}`` —
-        ``session_id`` (optional) resumes a prior thread (S3 persistence);
-        when omitted a new session is created and returned as
-        ``{"session_id": "..."}`` in the response.  ``history`` is the
-        legacy client-side tail, used only when no session_id is supplied.
-        Always 200 with a tri-state payload augmented with ``session_id``."""
-        if request.method == "OPTIONS":
-            return ("", 204)
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        durable = "request_id" in body
-        try:
-            turn, sess = _parse_ask_turn_with_session()
-        except ValueError as exc:
-            return _client_error(str(exc), 400)
-        if turn is None:
-            return ({"error": "query required"}, 400)
-        begun: BeginExchangeResult | None = None
-        if durable:
-            try:
-                turn, begun = _prepare_durable_ask(body, turn, sess)
-                if begun.disposition == "pending":
-                    raise PendingExchangeError("request_id is already pending")
-            except ValueError as exc:
-                return _client_error(str(exc), 400)
-            except (
-                ExchangeConflictError,
-                ExchangeStateError,
-                PendingExchangeError,
-                RevisionConflictError,
-                SessionContextConflictError,
-            ) as exc:
-                return _durable_conflict(exc, sess)
-        pack = build_portfolio_pack(repo_root, db_path)
-        if begun is not None and begun.disposition == "replayed":
-            events = replay_exchange_events(
-                begun.exchange,
-                db_path=db_path,
-                session_revision=begun.session_revision,
-            )
-        else:
-            raw_engine_events = respond_turn(
-                turn,
-                pack,
-                db_path=db_path,
-                repo_root=repo_root,
-                registry=job_registry,
-                retrieval_mode=ask_retrieval_mode(),
-            )
-            engine_events = (
-                bind_ask_proposal_events(
-                    raw_engine_events,
-                    repo_root=repo_root,
-                    db_path=db_path,
-                    exchange_request_id=begun.exchange.request_id,
-                )
-                if begun is not None
-                else raw_engine_events
-            )
-            events = (
-                orchestrate_exchange_events(engine_events, exchange=begun.exchange, db_path=db_path)
-                if begun is not None
-                else engine_events
-            )
-        result = fold_events(events)
-        # A forced /view compile is deterministic local validation, not an
-        # upstream/provider exception. Its bounded message is actionable and
-        # safe to preserve; every other Ask error stays generic.
-        if result.get("status") == "error" and not turn.text.lstrip().lower().startswith("/view"):
-            result = {
-                "status": "error",
-                "message": "ask failed; retry the request",
-                "correlation_id": get_correlation_id(),
-            }
-        result["session_id"] = sess.id if sess else (turn.session_id or "")
-        return result
-
     @app.route("/api/ask/stream", methods=["POST", "OPTIONS"])
     def ask_stream_api():
-        """Streaming sibling of /api/ask (Ask v2 / S3): same engine, same
-        PORTFOLIO pack, raw SSE frames.  The first frame is always
+        """The sole research-conversation route: durable raw SSE frames.
+
+        The first frame is always
         ``{type: "session", session_id: "..."}`` so the client can store
         the id and pass it back on the next turn."""
         if request.method == "OPTIONS":
@@ -3222,12 +3114,12 @@ def create_app(
     @app.route("/api/ask/sessions/<session_id>/distill", methods=["POST"])
     def ask_session_distill(session_id: str):
         """The explicit "Distill now" tap (B4): run the session-distillation
-        pass on ONE Ask thread immediately, skipping the 4h-idle gate the
-        18:00 sweep applies. Consequence (owner ruling 2026-07-19): distilled
+        pass on ONE Ask thread immediately, skipping the 4h-idle gate used by
+        the manual batch command. Consequence (owner ruling 2026-07-19): distilled
         belief revisions AUTO-ADOPT — live immediately, announced with a
         one-tap Revert. Returns the per-session counts dict. 409 when the
         thread was already distilled (re-running would double-land the same
-        candidates — the sweep's own idempotency comes from ``distilled_at``,
+        candidates — batch idempotency comes from ``distilled_at``,
         which this route must therefore honor too)."""
         sid = session_id.strip()
         if not sid:
@@ -4089,6 +3981,7 @@ def create_app(
             repo_root=repo_root,
             db_path=db_path,
             open_db=_open_db,
+            get_read_db=get_read_db,
             safe_ticker=ticker_validation.safe_ticker,
             build_ticker_command_center=build_ticker_command_center,
             linked_gsheet=_linked_gsheet,
@@ -5045,66 +4938,6 @@ def configure_runtime_db(repo_root: Path) -> Path:
     return db_path
 
 
-# Today's two expensive read-only builds, in the order the browser needs them:
-# the Overview fragment the shell fetches on load, then the cockpit body its
-# 90s poll re-fetches. Both are pure reads (batched DB queries + per-ticker
-# disk-cache reads); neither takes a pipeline lock or writes anything, so
-# priming them cannot contend with the morning pipeline or any other writer.
-WARMUP_PATHS: tuple[str, ...] = ("/api/panel/overview", "/api/cockpit")
-
-
-def start_boot_warmup(app: Flask, *, paths: tuple[str, ...] = WARMUP_PATHS) -> threading.Thread:
-    """Render Today once in the background so the owner's first visit is warm.
-
-    A freshly restarted server pays 35-40s on the first ``/api/panel/overview``
-    — cold module imports, cold OS page cache over the per-ticker FMP profile
-    reads, cold SQLite page cache — and ~80ms on every request after. That cost
-    is unavoidable but it does not have to land on a person waiting at the
-    browser, so a daemon thread pays it at boot instead.
-
-    Requests go through ``app.test_client`` (in-process WSGI), not a socket, so
-    the warm-up neither waits for the bind nor depends on host/port/Tailscale
-    settings, and it lands in the same 30s panel cache a real request would.
-    Wholly failure-isolated: any error is logged and the server serves normally.
-    Set ``COMMENTS_SERVER_SKIP_WARMUP=1`` to measure cold timings.
-    """
-
-    def _warm() -> None:
-        try:
-            client = app.test_client()
-        except Exception as exc:
-            app.logger.warning(
-                "boot warm-up could not start: %s",
-                redact(f"{type(exc).__name__}: {exc}")[:500],
-            )
-            return
-        for path in paths:
-            started_ns = time.perf_counter_ns()
-            try:
-                response = client.get(path)
-                status = response.status_code
-                response.close()
-            except Exception as exc:
-                # A priming failure is never allowed to affect serving; the
-                # path simply stays cold and the owner pays what they used to.
-                app.logger.warning(
-                    "boot warm-up failed for %s: %s",
-                    path,
-                    redact(f"{type(exc).__name__}: {exc}")[:500],
-                )
-                continue
-            app.logger.info(
-                "boot warm-up %s status=%s elapsed_ms=%d",
-                path,
-                status,
-                (time.perf_counter_ns() - started_ns) // 1_000_000,
-            )
-
-    thread = threading.Thread(target=_warm, name="comments-server-warmup", daemon=True)
-    thread.start()
-    return thread
-
-
 def main() -> int:
     configure_logging()  # structured root logging + correlation ids (sre-4)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -5132,8 +4965,6 @@ def main() -> int:
         file=sys.stderr,
     )
     app = create_app(repo_root, db_path=db_path)
-    if os.environ.get("COMMENTS_SERVER_SKIP_WARMUP", "") not in ("1", "true", "True"):
-        start_boot_warmup(app)
     # Flask's built-in dev server is fine here — this is a single-user
     # localhost tool, not a production service.
     app.run(host=host, port=args.port, debug=False, threaded=True)

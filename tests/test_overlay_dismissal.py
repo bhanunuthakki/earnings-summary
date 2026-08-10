@@ -26,16 +26,13 @@ from __future__ import annotations
 import inspect
 import re
 import sys
-from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from pipeline.ask_dock import _DOCK_JS, render_ask_dock  # noqa: E402
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS  # noqa: E402
-from pipeline.command_center_shell import SHELL_JS, render_shell  # noqa: E402
 from report.renderers import workspace_html  # noqa: E402
 from report.renderers.workspace_chat import JS as CHAT_JS  # noqa: E402
 from report.renderers.workspace_comments import JS as COMMENTS_JS  # noqa: E402
@@ -46,10 +43,6 @@ from report.renderers.workspace_sections.boot import (  # noqa: E402
 )
 from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS  # noqa: E402
 from ui.source_chip import SOURCE_CHIP_JS  # noqa: E402
-
-SHELL_HTML = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-DOCK_HTML = render_ask_dock()
-
 
 # ---------------------------------------------------------------------------
 # The primitive: one keydown, one scrim listener, priority resolution
@@ -112,76 +105,6 @@ def test_close_motion_is_tokenized_transform_opacity_only() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The shell: Escape delegated to CCOverlay; no per-surface scrims/listeners
-# ---------------------------------------------------------------------------
-
-
-def test_shell_delegates_escape_to_the_primitive() -> None:
-    # The shell's own script carries no Escape handler — CCOverlay owns it.
-    assert "ev.key === 'Escape'" not in SHELL_JS
-    # CCOverlay is inlined before the shell + dock scripts.
-    assert CC_OVERLAY_JS in SHELL_HTML
-
-
-def test_shell_has_no_per_surface_scrim_elements_or_listeners() -> None:
-    for stale in ("cc-drawer-scrim", "cc-palette-scrim", "cc-peek-scrim", "cc-notes-scrim"):
-        assert stale not in SHELL_HTML, f"stale per-surface scrim: {stale}"
-    assert "scrim.addEventListener('click'" not in SHELL_JS  # only the primitive's
-
-
-# Every modal surface CCOverlay registers in the shell + dock, with the id of
-# its close control (the triad's x).
-_MODAL_SURFACES = {
-    "cc-drawer-close": SHELL_HTML,
-    "cc-notes-close": SHELL_HTML,
-    "cc-palette-close": SHELL_HTML,
-    "cc-peek-close": SHELL_HTML,
-    "ask-dock-close": DOCK_HTML,
-    "ask-dock-threads-close": DOCK_HTML,
-}
-
-
-def test_every_registered_modal_surface_has_a_close_control_id() -> None:
-    js = SHELL_JS + _DOCK_JS
-    for close_id, html in _MODAL_SURFACES.items():
-        # Registered with this closeId …
-        assert f"closeId: '{close_id}'" in js, f"no register() declares closeId {close_id}"
-        # … and the element actually exists in the markup.
-        assert f'id="{close_id}"' in html, f"close-control element {close_id} missing from markup"
-
-
-def test_shell_surfaces_register_with_the_priority_ladder() -> None:
-    assert "window.CCOverlay.PRIORITY.PALETTE" in SHELL_JS
-    assert "window.CCOverlay.PRIORITY.PEEK" in SHELL_JS
-    assert "window.CCOverlay.PRIORITY.DRAWER" in SHELL_JS
-
-
-# ---------------------------------------------------------------------------
-# The Ask dock: no second keydown, no hardcoded id registry
-# ---------------------------------------------------------------------------
-
-
-def test_dock_has_no_hardcoded_overlay_id_registry() -> None:
-    assert "overlays = [" not in DOCK_HTML
-    assert "'cc-palette', 'cc-peek'" not in DOCK_HTML  # the exact stale list is gone
-
-
-def test_dock_has_no_second_keydown_listener() -> None:
-    # The split-exit keydown is gone; the only remaining keydown in the dock is
-    # the inline-rename input's (a scoped control, not document-level).
-    assert _DOCK_JS.count("document.addEventListener('keydown'") == 0
-
-
-def test_dock_registers_as_a_scrimless_gesture_surface() -> None:
-    assert "window.CCOverlay.PRIORITY.DOCK" in _DOCK_JS
-    # Declared scrim:false (a page-darkening scrim would defeat a side-by-side
-    # copilot — the same carve-out as the report comments sidebar).
-    assert "scrim: false" in _DOCK_JS
-    # Persistent surface: never toggled [hidden] by the primitive.
-    assert "toggleHidden: false" in _DOCK_JS
-
-
-# ---------------------------------------------------------------------------
 # Non-modal phrasing popovers: Escape-only, NOT the full modal triad
 # ---------------------------------------------------------------------------
 
@@ -202,15 +125,6 @@ def test_source_chip_popover_is_escape_only_dismisser_not_modal() -> None:
     assert "CCOverlay.register" not in SOURCE_CHIP_JS
     # Self-guarded so the many surfaces embedding the chip register it once.
     assert "__ccSrcChipEsc" in SOURCE_CHIP_JS
-
-
-def test_shell_wires_both_popover_dismissers() -> None:
-    # The source-chip dismisser is inlined once after CCOverlay; the cite-mark
-    # dismisser rides CITE_MARKS_JS (loaded via the always-present dock).
-    assert SOURCE_CHIP_JS in SHELL_HTML
-    assert "addPopoverDismisser" in SHELL_HTML  # cite + source both present
-    # SOURCE_CHIP_JS must come AFTER the primitive so window.CCOverlay exists.
-    assert SHELL_HTML.index(CC_OVERLAY_JS) < SHELL_HTML.index(SOURCE_CHIP_JS)
 
 
 # ---------------------------------------------------------------------------

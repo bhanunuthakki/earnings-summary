@@ -16,6 +16,9 @@ from typing import Protocol
 
 from flask import Flask, Response, abort, redirect, request, send_file
 
+from pipeline.work_os_briefs import build_brief_library, resolve_report_artifact
+from pipeline.work_os_company import build_company_desk
+
 
 class _TickerCommandCenter(Protocol):
     def to_dict(self) -> dict[str, object]: ...
@@ -28,6 +31,7 @@ class ContentRouteContext:
     repo_root: Path
     db_path: Path
     open_db: Callable[[], sqlite3.Connection]
+    get_read_db: Callable[[], sqlite3.Connection]
     safe_ticker: Callable[[str], str]
     build_ticker_command_center: Callable[[Path, str], _TickerCommandCenter]
     linked_gsheet: Callable[[Path, str], tuple[str | None, str | None]]
@@ -354,7 +358,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             validated = context.safe_ticker(ticker)
         except ValueError:
             abort(400)
-        return redirect(f"/#holding={validated}")
+        return redirect(f"/?screen=company-desk&ticker={validated}")
 
     @app.route("/reports/<ticker>", methods=["GET"])
     def latest_report_for_ticker(ticker: str):
@@ -362,6 +366,15 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             validated = context.safe_ticker(ticker)
         except ValueError:
             abort(400)
+        artifact_id = request.args.get("artifact_id")
+        if artifact_id:
+            artifact = resolve_report_artifact(repo_root, artifact_id)
+            if artifact is None or artifact.ticker != validated:
+                abort(404)
+            artifact_path = repo_root / artifact.standalone_path
+            if not artifact_path.is_file():
+                abort(404)
+            return send_file(artifact_path)
         research_dir = repo_root / "output" / "research" / validated
         if not research_dir.exists():
             abort(404)
@@ -369,6 +382,93 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         if not matches:
             abort(404)
         return send_file(matches[-1])
+
+    @app.route("/api/work-os/briefs", methods=["GET"])
+    def brief_library_api():
+        ticker = request.args.get("ticker")
+        if ticker is not None:
+            try:
+                ticker = context.safe_ticker(ticker)
+            except ValueError:
+                abort(400)
+        coverage_role = request.args.get("coverage_role")
+        if coverage_role not in (None, "portfolio", "evaluation", "unknown"):
+            return ({"error": "invalid coverage_role"}, 400)
+        status = request.args.get("status")
+        if status not in (None, "available", "degraded"):
+            return ({"error": "invalid status"}, 400)
+        try:
+            limit = int(request.args.get("limit", "50"))
+        except ValueError:
+            return ({"error": "limit must be an integer"}, 400)
+        if not 1 <= limit <= 100:
+            return ({"error": "limit must be between 1 and 100"}, 400)
+        try:
+            payload = build_brief_library(
+                repo_root,
+                ticker=ticker,
+                coverage_role=coverage_role,
+                status=status,
+                cursor=request.args.get("cursor"),
+                limit=limit,
+            )
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
+        response = Response(payload.model_dump_json(), mimetype="application/json")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/work-os/companies/<ticker>/desk", methods=["GET"])
+    def company_desk_api(ticker: str):
+        try:
+            validated = context.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        try:
+            payload = build_company_desk(repo_root, context.get_read_db(), validated)
+        except LookupError:
+            abort(404)
+        response = Response(payload.model_dump_json(), mimetype="application/json")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/work-os/briefs/<artifact_id>/body", methods=["GET"])
+    def brief_body_api(artifact_id: str):
+        artifact = resolve_report_artifact(repo_root, artifact_id)
+        if artifact is None:
+            abort(404)
+        standalone_url = f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}"
+        if artifact.reader_mode != "shared_body" or artifact.body_path is None:
+            return (
+                {
+                    "schema_version": "report_body_unavailable.v1",
+                    "artifact_id": artifact.artifact_id,
+                    "status": "legacy_standalone",
+                    "standalone_url": standalone_url,
+                },
+                409,
+            )
+        body_path = repo_root / artifact.body_path
+        if not body_path.is_file():
+            return (
+                {
+                    "schema_version": "report_body_unavailable.v1",
+                    "artifact_id": artifact.artifact_id,
+                    "status": "body_missing",
+                    "standalone_url": standalone_url,
+                },
+                409,
+            )
+        standalone_path = repo_root / artifact.standalone_path
+        if not standalone_path.is_file():
+            abort(404)
+        response = send_file(standalone_path)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Report-Artifact-ID"] = artifact.artifact_id
+        if artifact.body_sha256 is not None:
+            response.headers["X-Report-Body-SHA256"] = artifact.body_sha256
+        response.set_etag(artifact.workspace_sha256, weak=False)
+        return response
 
     @app.route("/dcf/<ticker>", methods=["GET"])
     def latest_dcf_for_ticker(ticker: str):
@@ -390,14 +490,10 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
 
     @app.route("/api/tickers", methods=["GET"])
     def tickers_api():
-        conn = context.open_db()
-        try:
-            rows = conn.execute(
-                "SELECT ticker, name, list_type FROM tracked_companies "
-                "WHERE archived_at IS NULL ORDER BY list_type, ticker"
-            ).fetchall()
-        finally:
-            conn.close()
+        rows = context.get_read_db().execute(
+            "SELECT ticker, name, list_type FROM tracked_companies "
+            "WHERE archived_at IS NULL ORDER BY list_type, ticker"
+        ).fetchall()
         return {
             "tickers": [
                 {

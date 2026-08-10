@@ -14,7 +14,7 @@ renders correctly and ``render_prose`` would corrupt.
 
 History — why this module exists. There used to be **three divergent server
 renderers** (the workspace ``_render_markdown``, the dashboard
-``light_markdown_to_html``, plus the ask-dock JS ``md()``), so the same markdown
+``light_markdown_to_html``, plus a legacy client-side ``md()``), so the same markdown
 rendered differently per surface and ``**bold**`` / ``##`` leaked wherever the
 local renderer was thinner or absent. This lifts the most complete of them — the
 workspace ``_render_markdown`` (headings, bold, italic, inline code, bullets,
@@ -23,7 +23,7 @@ pipe tables) — and folds in the ``<hr>`` rule the dashboard renderer carried, 
 replaces; ``light_markdown_to_html`` and the workspace ``_render_markdown`` are
 now thin re-exports of it.
 
-The ask-dock JS ``md()`` (``src/pipeline/ask_dock.py``) is a deliberate,
+The Work OS Copilot's streaming renderer is a deliberate,
 documented **INLINE-SUBSET MIRROR**: it cannot be server-rendered because Ask
 streams tokens token-by-token and threads cite-marks through the same string
 client-side. The server side here is canonical; keep the JS mirror in rough

@@ -71,7 +71,7 @@ def render_source_calls_panel(db_path: Path) -> str:
     )
 
 
-# Shell panel-latency readout (S14): the loader in command_center_shell.py
+# Operational panel-latency readout (S14): the panel loader
 # POSTs one sample per panel activation/refresh to /api/metrics/panel; this
 # section reads the GET aggregate back. Client-rendered by the fragment's own
 # script (re-executed on every injection — the shell's injectHtml recreates

@@ -1,6 +1,6 @@
 """Peek fragments (UX9) — the small HTML payloads behind the shell's quick-look.
 
-The command-center shell's peek primitive (``command_center_shell.SHELL_JS``)
+The report and operational-panel peek primitive
 fetches one of these head/foot-less fragments and injects it into a positioned
 popover, so reviewing an alert, reading a source excerpt, or glancing at a
 ticker no longer means navigating away from the panel you were on:

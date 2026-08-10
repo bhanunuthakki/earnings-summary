@@ -41,10 +41,6 @@ _RENDERER_SIGNATURE = r"\*\*([^*]+)\*\*"
 # exception must be added here WITH its rationale.
 _SIGNATURE_ALLOWLIST: dict[str, str] = {
     "src/ui/prose.py": "the canonical prose render boundary",
-    "src/pipeline/ask_dock.py": (
-        "pinned JS inline-subset mirror — Ask streams tokens + threads cite-marks "
-        "client-side, so it cannot be server-rendered"
-    ),
     "src/report/renderers/workspace_data.py": (
         "markdown STRIPPER (**x** -> plaintext x for a news-tile gloss), not an "
         "HTML renderer — emits no tags"

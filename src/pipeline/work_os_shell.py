@@ -19,6 +19,11 @@ from pathlib import Path
 
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
 from pipeline.work_os_copilot import render_work_os_copilot
+from pipeline.work_os_research import (
+    render_brief_library_shell,
+    render_brief_reader_shell,
+    render_company_desk_shell,
+)
 from ui.controls import controls_css
 
 
@@ -48,10 +53,10 @@ SCREEN_SPECS: tuple[ScreenSpec, ...] = (
     ),
     ScreenSpec("screen-workspace", "nav-workspace", "Company Desk", "/api/panel/holding"),
     ScreenSpec(
-        "screen-full-brief",
-        "nav-full-brief",
-        "Full Research Brief",
-        "/api/panel/holding",
+        "screen-brief-library",
+        "nav-brief-library",
+        "Brief Library",
+        "/api/work-os/briefs",
     ),
     ScreenSpec(
         "screen-analytics-playground",
@@ -78,6 +83,7 @@ _LEGACY_HASHES: dict[str, str] = {
     "overview": "screen-cockpit",
     "companies": "screen-workspace",
     "holding": "screen-workspace",
+    "screen-full-brief": "screen-brief-library",
     "diet": "screen-workspace",
     "discovery": "screen-workspace",
     "portfolio": "screen-performance",
@@ -122,6 +128,16 @@ _PIPELINE_SIMULATION_RE = re.compile(
     r"\n\s*\}\n\n\s*// AUDIT LOG FILTERING",
     re.DOTALL,
 )
+_COMPANY_DESK_SECTION_RE = re.compile(
+    r'<section id="screen-workspace".*?</section>\s*'
+    r'(?=<!-- =+\s*BRIEF LIBRARY PERSISTENT DESTINATION)',
+    re.DOTALL,
+)
+_BRIEF_LIBRARY_SECTION_RE = re.compile(
+    r'<section id="screen-brief-library".*?</section>\s*'
+    r'(?=<!-- =+\s*SURFACE: EXTRACTED FACT & METRIC)',
+    re.DOTALL,
+)
 
 
 def _endpoint_map() -> dict[str, str]:
@@ -145,12 +161,23 @@ def _production_runtime(generated_at: datetime) -> str:
   .k-scrim {{ position: fixed; inset: 0; background: var(--scrim); z-index: 250; }}
   .k-scrim[hidden], .drawer-scrim {{ display: none !important; }}
   .work-os-live-status {{ position: absolute; inline-size: var(--bw-thin); block-size: var(--bw-thin); overflow: hidden; clip: rect(0 0 0 0); }}
-  .work-os-report-frame, .work-os-brief-frame {{ width: 100%; min-height: calc(100dvh - var(--header-height) - var(--sp-6)); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); }}
-  .work-os-brief-canvas {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
+  .work-os-report-frame {{ width: 100%; min-height: calc(100dvh - var(--header-height) - var(--sp-6)); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); }}
+  .work-os-reader {{ position: fixed; inset: 0; z-index: var(--z-modal); display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; padding: var(--sp-4); background: var(--bg); overflow: hidden; }}
+  .work-os-reader[hidden] {{ display: none !important; }}
+  .work-os-reader-header {{ display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3); }}
+  .work-os-reader-body {{ flex: 1 1 auto; min-height: 0; overflow: auto; }}
   .work-os-company-desk {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
   .work-os-company-toolbar {{ display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }}
   .work-os-company-picker {{ display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }}
   .work-os-action-copy {{ display: flex; align-items: center; gap: var(--sp-3); flex: 1; }}
+  .research-screen {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
+  .research-toolbar, .research-panel-head, .research-actions {{ display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }}
+  .research-decision-band {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); }}
+  .research-grid {{ display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; }}
+  .research-list {{ display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }}
+  .research-row {{ display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3); }}
+  .research-library-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }}
+  .research-library-card {{ display: flex; flex-direction: column; gap: var(--sp-3); }}
   @media (max-width: 47.5rem) {{
     body {{ display: flex; min-width: 0; }}
     .app-sidebar,
@@ -180,6 +207,7 @@ def _production_runtime(generated_at: datetime) -> str:
     .matrix-table {{ display: block; max-width: 100%; overflow-x: auto; }}
     .k-action-row {{ flex-wrap: wrap; gap: var(--sp-2); }}
     .screen-view [style*="grid-template-columns"] {{ grid-template-columns: 1fr !important; }}
+    .research-decision-band, .research-grid, .research-library-grid {{ grid-template-columns: 1fr; }}
     .drill-drawer {{ width: 100%; max-width: 100%; border-radius: 0; }}
     input, select, textarea {{ font-size: var(--mobile-control-font-size) !important; }}
   }}
@@ -197,12 +225,17 @@ def _production_runtime(generated_at: datetime) -> str:
   const originalNavigateTo = window.navigateTo;
   window.workOsActiveTicker = 'NU';
   let workOsPortfolioHydration = null;
+  let workOsResearchCompanies = null;
+  const workOsLaunchParams = new URLSearchParams(window.location.search);
+  const workOsRequestedScreen = workOsLaunchParams.get('screen');
+  const workOsRequestedTicker = String(workOsLaunchParams.get('ticker') || '').toUpperCase();
   const originalOpenDrillDrawer = window.openDrillDrawer;
   const originalCloseDrillDrawer = window.closeDrillDrawer;
   const originalOpenPeekDrawer = window.openPeekDrawer;
   const originalClosePeekDrawer = window.closePeekDrawer;
   const drillDrawer = document.getElementById('drillDrawer');
   const peekDrawer = document.getElementById('peekDrawer');
+  const briefReader = document.getElementById('workOsBriefReader');
   const drillOverlay = drillDrawer && window.CCOverlay.register(drillDrawer, {{
     modal: true, priority: window.CCOverlay.PRIORITY.DRAWER, scrim: true,
     trapFocus: true, restoreFocus: true, motion: 'slide-right',
@@ -216,6 +249,13 @@ def _production_runtime(generated_at: datetime) -> str:
     group: 'work-os-drawer', closeId: 'peekDrawerClose', wireClose: false,
     onOpen: function () {{ peekDrawer.setAttribute('aria-hidden', 'false'); }},
     onClose: function () {{ peekDrawer.setAttribute('aria-hidden', 'true'); originalClosePeekDrawer(); }}
+  }});
+  const briefReaderOverlay = briefReader && window.CCOverlay.register(briefReader, {{
+    modal: true, priority: window.CCOverlay.PRIORITY.PALETTE, scrim: false,
+    trapFocus: true, restoreFocus: true, motion: 'fade',
+    group: 'work-os-reader', closeId: 'workOsBriefReaderClose', wireClose: true,
+    onOpen: function () {{ briefReader.hidden = false; briefReader.setAttribute('aria-hidden', 'false'); }},
+    onClose: function () {{ briefReader.hidden = true; briefReader.setAttribute('aria-hidden', 'true'); }}
   }});
 
   window.openDrillDrawer = function (type) {{
@@ -245,27 +285,45 @@ def _production_runtime(generated_at: datetime) -> str:
     return '<iframe class="' + className + '" src="/reports/' + safeTicker + '#tab=' + safeTab + '" title="' + safeTicker + ' live research brief" loading="lazy"></iframe>';
   }}
 
-  window.openFullBriefCanvas = function (ticker) {{
-    window.workOsActiveTicker = String(ticker || window.workOsActiveTicker || 'NU').toUpperCase();
-    const screen = document.getElementById('screen-full-brief');
-    if (screen) {{
-      screen.innerHTML = '<div class="work-os-brief-canvas">' +
-        '<div style="display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2);">' +
-        '<button class="k-btn k-btn-quiet k-btn-sm" type="button" onclick="navigateTo(\\'screen-workspace\\')">← Back to Company Desk</button>' +
-        '<span class="k-chip k-chip-mono">' + escapeWorkOsHtml(window.workOsActiveTicker) + ' · live brief</span></div>' +
-        workOsReportFrame(window.workOsActiveTicker, 'overview', 'work-os-brief-frame') +
-        '</div>';
-    }}
-    window.navigateTo('screen-full-brief');
-    const breadcrumb = document.getElementById('breadcrumb-title');
-    if (breadcrumb) breadcrumb.textContent = 'Full Equity Research Brief (' + window.workOsActiveTicker + ')';
-  }};
+  window.closeWorkOsBriefReader = function () {{ if (briefReaderOverlay) briefReaderOverlay.close(); }};
 
   function escapeWorkOsHtml(value) {{
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }}
+
+  function workOsLoadBriefArtifact(artifact) {{
+    const title = document.getElementById('workOsBriefReaderTitle');
+    const body = document.getElementById('workOsBriefReaderBody');
+    if (title) title.textContent = artifact.ticker + ' · ' + artifact.title;
+    if (briefReaderOverlay) briefReaderOverlay.open();
+    if (artifact.reader_mode !== 'shared_body' || !artifact.body_url) {{
+      if (body) body.innerHTML = '<div class="k-well">This legacy brief has not been migrated to the shared reader body. <a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(artifact.standalone_url) + '">Open persisted standalone brief →</a></div>';
+      return;
+    }}
+    if (body) body.innerHTML = '<iframe class="work-os-report-frame" src="' + escapeWorkOsHtml(artifact.body_url) + '" title="' + escapeWorkOsHtml(artifact.ticker + ' complete research brief') + '" loading="eager"></iframe>';
+  }}
+
+  window.openWorkOsBriefReader = async function (tickerOrArtifact) {{
+    if (tickerOrArtifact && typeof tickerOrArtifact === 'object' && tickerOrArtifact.artifact_id) {{
+      workOsLoadBriefArtifact(tickerOrArtifact);
+      return;
+    }}
+    window.workOsActiveTicker = String(tickerOrArtifact || window.workOsActiveTicker || 'NU').toUpperCase();
+    const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(window.workOsActiveTicker) + '&limit=1', {{ headers: {{ Accept: 'application/json' }} }});
+    const payload = response.ok ? await response.json() : null;
+    if (!payload || !payload.items || !payload.items.length) {{
+      const title = document.getElementById('workOsBriefReaderTitle');
+      const body = document.getElementById('workOsBriefReaderBody');
+      if (title) title.textContent = window.workOsActiveTicker + ' Full Research Brief';
+      if (body) body.innerHTML = '<div class="k-well" role="alert">No persisted research brief is indexed for this company.</div>';
+      if (briefReaderOverlay) briefReaderOverlay.open();
+      return;
+    }}
+    workOsLoadBriefArtifact(payload.items[0]);
+  }};
+  window.openFullBriefCanvas = window.openWorkOsBriefReader;
 
   function workOsMoney(value) {{
     if (!Number.isFinite(value)) return '-';
@@ -285,39 +343,131 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   function workOsCompanyByTicker(ticker) {{
-    const companies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
+    const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
       ? workOsPortfolioHydration.companies : [];
-    return companies.find(function (company) {{ return company.ticker === ticker; }}) || null;
+    const researchCompanies = Array.isArray(workOsResearchCompanies) ? workOsResearchCompanies : [];
+    return portfolioCompanies.concat(researchCompanies).find(function (company) {{ return company.ticker === ticker; }}) || null;
   }}
 
-  function workOsRenderCompanyDesk(ticker) {{
-    const company = workOsCompanyByTicker(String(ticker || '').toUpperCase());
+  async function workOsEnsureResearchCompanies() {{
+    if (Array.isArray(workOsResearchCompanies)) return workOsResearchCompanies;
+    const response = await fetch('/api/tickers', {{ headers: {{ Accept: 'application/json' }} }});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const payload = await response.json();
+    workOsResearchCompanies = Array.isArray(payload.tickers) ? payload.tickers.filter(function (item) {{
+      return item.list_type === 'portfolio' || item.list_type === 'evaluation';
+    }}).map(function (item) {{
+      return {{ ticker: String(item.ticker || '').toUpperCase(), name: item.name || item.ticker, coverage_role: item.list_type || 'unknown' }};
+    }}) : [];
+    return workOsResearchCompanies;
+  }}
+
+  async function workOsRenderCompanyDesk(ticker) {{
+    const normalized = String(ticker || window.workOsActiveTicker || '').toUpperCase();
+    try {{ await workOsEnsureResearchCompanies(); }} catch (error) {{ workOsResearchCompanies = []; }}
+    const company = workOsCompanyByTicker(normalized);
     const screen = document.getElementById('screen-workspace');
     if (!company || !screen) return;
-    window.workOsActiveTicker = company.ticker;
-    const status = company.thesis_status || 'status pending';
-    const brief = company.report_url
-      ? workOsReportFrame(company.ticker, 'overview', 'work-os-report-frame')
-      : '<div class="k-well" role="status">Research brief pending. The scheduled portfolio pipeline will populate it when governed artifacts are ready.</div>';
-    screen.innerHTML = '<div class="work-os-company-desk">' +
-      '<div class="k-card work-os-company-toolbar">' +
-        '<div class="work-os-company-picker"><label for="companyPickerSelect" class="stat-heading">Portfolio Company</label><select class="k-select" id="companyPickerSelect"></select></div>' +
-        '<div class="k-action-row"><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span>' +
-        '<button class="k-btn k-btn-quiet k-btn-sm" id="workOsThresholdButton" type="button">Buy / Hold / Trim / Sell Thresholds</button>' +
-        (company.report_url ? '<button class="k-btn k-btn-primary k-btn-sm" id="workOsFullBriefButton" type="button">Open Full Brief Canvas &rarr;</button>' : '') + '</div>' +
-      '</div>' +
-      '<div class="k-card"><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div>' +
-        '<div class="stat-subtext">' + workOsMoney(company.price) + ' price &middot; ' + workOsMoney(company.fair_value) + ' fair value &middot; ' + workOsPercent(company.current_weight_pct) + ' portfolio weight</div></div>' + brief + '</div>';
+    window.workOsActiveTicker = normalized;
     const picker = document.getElementById('companyPickerSelect');
-    const companies = workOsPortfolioHydration.companies || [];
-    if (picker) {{
-      companies.forEach(function (item) {{ picker.add(new Option(item.ticker + ' - ' + item.name, item.ticker, false, item.ticker === company.ticker)); }});
+    if (picker && !picker.dataset.bound) {{
+      const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies) ? workOsPortfolioHydration.companies : [];
+      const seenTickers = new Set();
+      const companies = portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (item) {{
+        if (!item.ticker || seenTickers.has(item.ticker)) return false;
+        seenTickers.add(item.ticker); return true;
+      }});
+      companies.forEach(function (item) {{ picker.add(new Option(item.ticker + ' · ' + item.name, item.ticker)); }});
       picker.addEventListener('change', function () {{ workOsRenderCompanyDesk(picker.value); }});
+      picker.dataset.bound = '1';
     }}
-    const thresholdButton = document.getElementById('workOsThresholdButton');
-    if (thresholdButton) thresholdButton.addEventListener('click', function () {{ openDrillDrawer('thresholds'); }});
-    const briefButton = document.getElementById('workOsFullBriefButton');
-    if (briefButton) briefButton.addEventListener('click', function () {{ openFullBriefCanvas(company.ticker); }});
+    if (picker) picker.value = normalized;
+    screen.setAttribute('aria-busy', 'true');
+    try {{
+      const response = await fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk', {{ headers: {{ Accept: 'application/json' }} }});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const desk = await response.json();
+      const identity = desk.company || {{}};
+      const breadcrumb = document.getElementById('breadcrumb-title');
+      if (breadcrumb) breadcrumb.textContent = 'Company Desk (' + (identity.ticker || normalized) + ')';
+      document.getElementById('deskTicker').textContent = identity.ticker || normalized;
+      document.getElementById('deskCompanyName').textContent = identity.name || company.name;
+      document.getElementById('deskCoverageRole').textContent = String(identity.coverage_role || 'unknown') + ' coverage';
+      const decision = desk.current_decision || {{}};
+      document.getElementById('deskOwnerState').textContent = decision.owner_state ? String(decision.owner_state).toUpperCase() : '—';
+      document.getElementById('deskModelState').textContent = decision.model_recommendation ? String(decision.model_recommendation).toUpperCase() : '—';
+      document.getElementById('deskOwnerRevision').textContent = decision.owner_state ? 'Owner · ' + decision.revision : 'No owner decision recorded';
+      const position = desk.position || {{}};
+      const hasCockpitPosition = Number.isFinite(company.current_weight_pct);
+      document.getElementById('deskPositionWeight').textContent = Number.isFinite(position.weight_pct) ? workOsPercent(position.weight_pct) : (hasCockpitPosition ? workOsPercent(company.current_weight_pct) : '—');
+      document.getElementById('deskPositionSource').textContent = position.source ? position.source + ' · ' + (position.as_of || 'as-of unavailable') : (hasCockpitPosition ? 'Portfolio Cockpit snapshot' : 'Current snapshot unavailable');
+      const brief = desk.latest_brief || null;
+      document.getElementById('deskBriefDate').textContent = brief ? brief.report_date : '—';
+      document.getElementById('deskBriefStatus').textContent = brief ? (brief.reader_mode === 'shared_body' ? 'Shared reader ready' : 'Legacy standalone') : 'No indexed artifact';
+      const briefButton = document.getElementById('workOsFullBriefButton');
+      if (briefButton) {{
+        briefButton.disabled = !brief;
+        briefButton.onclick = brief ? function () {{ openWorkOsBriefReader(brief); }} : null;
+      }}
+      const conditions = Array.isArray(desk.conditions) ? desk.conditions : [];
+      document.getElementById('deskConditions').innerHTML = conditions.length ? conditions.map(function (condition) {{
+        return '<div class="k-well research-row" data-stable-id="' + escapeWorkOsHtml(condition.stable_id) + '"><div><strong>' + escapeWorkOsHtml(condition.metric) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(condition.note || 'Governed decision condition') + '</div></div><span class="k-chip k-chip-mono">' + escapeWorkOsHtml(condition.operator) + ' ' + escapeWorkOsHtml(condition.threshold) + ' ' + escapeWorkOsHtml(condition.unit) + '</span></div>';
+      }}).join('') : '<div class="k-well">No governed conditions are attached to the current decision.</div>';
+      const questions = Array.isArray(desk.open_questions) ? desk.open_questions : [];
+      document.getElementById('deskQuestions').innerHTML = questions.length ? questions.map(function (question) {{
+        return '<div class="k-well" data-stable-id="' + escapeWorkOsHtml(question.stable_id) + '"><strong>' + escapeWorkOsHtml(question.body) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(question.owner) + ' · revision ' + escapeWorkOsHtml(question.revision) + '</div></div>';
+      }}).join('') : '<div class="k-well">No open research questions.</div>';
+      const warnings = Array.isArray(desk.warnings) ? desk.warnings : [];
+      const warningBox = document.getElementById('deskWarnings');
+      if (warningBox) {{ warningBox.hidden = !warnings.length; warningBox.textContent = warnings.length ? 'Unavailable: ' + warnings.join(', ') : ''; }}
+    }} catch (error) {{
+      const warningBox = document.getElementById('deskWarnings');
+      if (warningBox) {{ warningBox.hidden = false; warningBox.textContent = 'Company Desk data is temporarily unavailable.'; }}
+    }} finally {{
+      screen.removeAttribute('aria-busy');
+    }}
+  }}
+
+  async function workOsRenderBriefLibrary() {{
+    const target = document.getElementById('workOsBriefLibrary');
+    if (!target) return;
+    try {{ await workOsEnsureResearchCompanies(); }} catch (error) {{ workOsResearchCompanies = []; }}
+    const tickerFilter = document.getElementById('briefTickerFilter');
+    const roleFilter = document.getElementById('briefRoleFilter');
+    if (tickerFilter && !tickerFilter.dataset.bound) {{
+      const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies) ? workOsPortfolioHydration.companies : [];
+      const seenTickers = new Set();
+      portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (item) {{
+        if (!item.ticker || seenTickers.has(item.ticker)) return false;
+        seenTickers.add(item.ticker); return true;
+      }}).forEach(function (item) {{ tickerFilter.add(new Option(item.ticker + ' · ' + item.name, item.ticker)); }});
+      tickerFilter.addEventListener('change', workOsRenderBriefLibrary);
+      tickerFilter.dataset.bound = '1';
+    }}
+    if (roleFilter && !roleFilter.dataset.bound) {{ roleFilter.addEventListener('change', workOsRenderBriefLibrary); roleFilter.dataset.bound = '1'; }}
+    const params = new URLSearchParams({{ limit: '100' }});
+    if (tickerFilter && tickerFilter.value) params.set('ticker', tickerFilter.value);
+    if (roleFilter && roleFilter.value) params.set('coverage_role', roleFilter.value);
+    target.setAttribute('aria-busy', 'true');
+    target.innerHTML = '<div class="k-well" role="status">Loading persisted research artifacts…</div>';
+    try {{
+      const response = await fetch('/api/work-os/briefs?' + params.toString(), {{ headers: {{ Accept: 'application/json' }} }});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      target.innerHTML = items.length ? items.map(function (item) {{
+        const statusClass = item.status === 'available' ? 'k-pill k-pill-ok' : 'k-pill k-pill-warn';
+        return '<article class="k-card research-library-card" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(item.ticker) + '</span><span class="' + statusClass + '">' + escapeWorkOsHtml(item.status) + '</span></div><div><div class="stat-heading">' + escapeWorkOsHtml(item.artifact_kind.replaceAll('_', ' ')) + '</div><h3>' + escapeWorkOsHtml(item.title) + '</h3><div class="stat-subtext">' + escapeWorkOsHtml(item.report_date) + ' · ' + escapeWorkOsHtml(item.coverage_role) + ' · ' + escapeWorkOsHtml(item.reader_mode) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-open-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">Read complete brief →</button></article>';
+      }}).join('') : '<div class="k-well">No persisted research artifacts match these filters.</div>';
+      target.querySelectorAll('[data-open-artifact]').forEach(function (button) {{
+        const artifact = items.find(function (item) {{ return item.artifact_id === button.dataset.openArtifact; }});
+        button.addEventListener('click', function () {{ openWorkOsBriefReader(artifact); }});
+      }});
+    }} catch (error) {{
+      target.innerHTML = '<div class="k-well" role="alert">Brief Library inventory is temporarily unavailable.</div>';
+    }} finally {{
+      target.removeAttribute('aria-busy');
+    }}
   }}
 
   window.switchCompanyWorkspace = function (ticker) {{
@@ -373,8 +523,19 @@ def _production_runtime(generated_at: datetime) -> str:
     document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function () {{ switchCompanyWorkspace(node.dataset.workOsTicker); }}); }});
     document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
     document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); window.workOsActiveTicker = node.dataset.workOsThresholds; openDrillDrawer('thresholds'); }}); }});
-    const preferred = workOsCompanyByTicker(window.workOsActiveTicker) || companies[0];
-    if (preferred) workOsRenderCompanyDesk(preferred.ticker);
+  }}
+
+  function workOsApplyRequestedResearchState() {{
+    if (workOsRequestedTicker) {{
+      window.workOsActiveTicker = workOsRequestedTicker;
+    }}
+    if (workOsRequestedScreen === 'company-desk') {{
+      workOsRenderCompanyDesk(window.workOsActiveTicker);
+      window.navigateTo('screen-workspace', {{ fromHistory: true }});
+    }} else if (workOsRequestedScreen === 'brief-library') {{
+      window.navigateTo('screen-brief-library', {{ fromHistory: true }});
+      workOsRenderBriefLibrary();
+    }}
   }}
 
   async function workOsHydratePortfolio() {{
@@ -395,6 +556,7 @@ def _production_runtime(generated_at: datetime) -> str:
       if (rows) rows.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
       if (status) status.textContent = 'Portfolio companies could not be loaded';
     }}
+    workOsApplyRequestedResearchState();
   }}
 
   function workOsScreenFromHash() {{
@@ -406,6 +568,10 @@ def _production_runtime(generated_at: datetime) -> str:
 
   window.navigateTo = function (screenId, options) {{
     const target = WORK_OS_ENDPOINTS[screenId] ? screenId : 'screen-cockpit';
+    if (target === 'screen-workspace' && workOsPortfolioHydration) {{
+      workOsRenderCompanyDesk(window.workOsActiveTicker);
+    }}
+    if (target === 'screen-brief-library') workOsRenderBriefLibrary();
     originalNavigateTo(target);
     if (!(options && options.fromHistory) && window.location.hash !== '#' + target) {{
       window.history.pushState({{ screenId: target }}, '', '#' + target);
@@ -423,7 +589,17 @@ def _production_runtime(generated_at: datetime) -> str:
   window.addEventListener('hashchange', function () {{ workOsApplyHash(false); }});
   workOsApplyHash(true);
   workOsHydratePortfolio();
-  const workOsLaunchParams = new URLSearchParams(window.location.search);
+  document.addEventListener('click', function (event) {{
+    const trigger = event.target instanceof Element ? event.target.closest('[data-research-chat]') : null;
+    if (!trigger) return;
+    window.openWorkOsCopilot({{
+      company_ticker: window.workOsActiveTicker || null,
+      category: 'research',
+      origin_key: 'work-os:' + String(trigger.getAttribute('data-research-chat') || 'company'),
+      coverage_role_at_creation: (workOsCompanyByTicker(window.workOsActiveTicker) || {{}}).coverage_role || 'unknown',
+      lifecycle_at_creation: 'active'
+    }});
+  }});
   if (workOsLaunchParams.get('copilot') === '1') {{
     window.setTimeout(function () {{
       window.openWorkOsCopilot({{
@@ -440,7 +616,7 @@ def _production_runtime(generated_at: datetime) -> str:
   function workOsEndpoint(screenId) {{
     const base = WORK_OS_ENDPOINTS[screenId];
     if (!base) return '';
-    if ((screenId === 'screen-workspace' || screenId === 'screen-full-brief') && window.workOsActiveTicker) {{
+    if (screenId === 'screen-workspace' && window.workOsActiveTicker) {{
       return base + '?ticker=' + encodeURIComponent(window.workOsActiveTicker);
     }}
     return base;
@@ -553,6 +729,8 @@ def _make_allocation_language_honest(html: str) -> str:
 
 
 def _add_production_contract(html: str, generated_at: datetime) -> str:
+    html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
+    html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
     html = html.replace(
         '<div class="card-grid-stat-4col">',
         '<div class="card-grid-stat-4col" id="workOsPortfolioStats">',
@@ -618,8 +796,11 @@ def _add_production_contract(html: str, generated_at: datetime) -> str:
         )
     runtime = _production_runtime(generated_at)
     copilot = render_work_os_copilot()
+    reader = render_brief_reader_shell()
     controls = f'<style id="work-os-controls-css">{controls_css("dark")}</style>'
-    return html.replace("</body>", controls + "\n" + copilot + "\n" + runtime + "\n</body>", 1)
+    return html.replace(
+        "</body>", controls + "\n" + reader + "\n" + copilot + "\n" + runtime + "\n</body>", 1
+    )
 
 
 @lru_cache(maxsize=1)

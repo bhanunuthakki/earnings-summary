@@ -29,6 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import comments_server  # noqa: E402
 
 from capture import decision_draft_actions  # noqa: E402
+from tests.ask_stream_support import parse_sse_events  # noqa: E402
 
 
 @pytest.fixture
@@ -304,7 +305,7 @@ def test_legacy_report_chat_routes_are_non_writing_migration_handoffs(
 
 def test_ask_rejects_overlong_query_with_correlation_id(client: FlaskClient) -> None:
     resp = client.post(
-        "/api/ask",
+        "/api/ask/stream",
         json={"query": "x" * 8_001},
         headers={"X-Correlation-ID": "ask-limit-test"},
     )
@@ -332,14 +333,14 @@ def test_ask_history_is_bounded_at_the_http_boundary(
     history = [
         {"role": "user" if i % 2 == 0 else "assistant", "text": "z" * 2_000} for i in range(20)
     ]
-    resp = client.post("/api/ask", json={"query": "bounded", "history": history})
+    resp = client.post("/api/ask/stream", json={"query": "bounded", "history": history})
     assert resp.status_code == 200
     turn = captured["turn"]
     assert len(turn.history) == 8
     assert all(len(item["text"]) == 1_200 for item in turn.history)
 
 
-def test_buffered_ask_error_is_generic_and_correlated(
+def test_streaming_ask_error_is_generic_and_correlated(
     monkeypatch: pytest.MonkeyPatch, client: FlaskClient
 ) -> None:
     def _pack(*_a: object, **_k: object) -> SimpleNamespace:
@@ -351,14 +352,14 @@ def test_buffered_ask_error_is_generic_and_correlated(
     monkeypatch.setattr(comments_server, "build_portfolio_pack", _pack)
     monkeypatch.setattr(comments_server, "respond_turn", _failed)
     resp = client.post(
-        "/api/ask",
+        "/api/ask/stream",
         json={"query": "what changed?"},
-        headers={"X-Correlation-ID": "buffered-error-test"},
+        headers={"X-Correlation-ID": "stream-error-test"},
     )
     assert resp.status_code == 200
-    payload = resp.get_json()
-    assert payload["message"] == "ask failed; retry the request"
-    assert payload["correlation_id"] == "buffered-error-test"
+    payload = parse_sse_events(resp.get_data(as_text=True))[-1]
+    assert payload["error"] == "chat stream failed; retry the request"
+    assert payload["correlation_id"] == "stream-error-test"
     assert "secret-value" not in resp.get_data(as_text=True)
 
 

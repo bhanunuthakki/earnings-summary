@@ -315,7 +315,7 @@ def _timeline_table(
 
 def render_cron_health_live_body(db_path: Path) -> str:
     """The time-varying part of the panel (KPI strip + 7-day timeline) — the
-    fragment the HTMX poller re-fetches via ``GET /api/cron-health`` so today's
+    fragment the operational panel route returns when explicitly requested so today's
     pipeline verdict flips from "Not run yet" to OK/FAILED in place, without a
     manual reload. Returned alone so the wrapper's chrome + CLI note never
     re-render on a poll."""
@@ -361,7 +361,7 @@ def render_cron_health_panel(db_path: Path) -> str:
 
     The live body self-refreshes every 60s via HTMX (the Wave 3 live-tile
     pattern the Overview cockpit uses): the ``#cc-cron-live`` wrapper re-fetches
-    ``GET /api/cron-health`` so today's verdict updates in place while the
+    the operational panel route so today's verdict is current when viewed while the
     morning pipeline runs. Degrades cleanly with JS off — the body is
     server-rendered, the poll is pure enhancement."""
     return "".join(
@@ -371,9 +371,8 @@ def render_cron_health_panel(db_path: Path) -> str:
             '<p class="sub">Last 7 days of pipeline run history from '
             "<code>ingestion_runs</code>. "
             "Green = OK · Red = failed · Grey = no run recorded. "
-            '<span class="muted">Auto-refreshes every 60s.</span></p>',
-            '<div id="cc-cron-live" hx-get="/api/cron-health" '
-            'hx-trigger="every 60s" hx-swap="innerHTML">',
+            "</p>",
+            '<div id="cc-cron-live">',
             render_cron_health_live_body(db_path),
             "</div>",
             '<div class="ch-note">Run '

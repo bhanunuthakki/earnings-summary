@@ -27,6 +27,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 import comments_server  # noqa: E402
 
 from dispatch_registry import Registry  # noqa: E402
+from tests.ask_stream_support import fold_sse_response  # noqa: E402
 
 # The decisions table at the 0110 head: 0046 + 0086 + 0109 + 0110 columns, with
 # the widened source-present CHECK and the dismissal partial-unique index.
@@ -342,11 +343,11 @@ def test_manual_pass_route(client: FlaskClient, repo: Path) -> None:
 
 def test_ask_dismiss_with_reason_records(client: FlaskClient, repo: Path) -> None:
     res = client.post(
-        "/api/ask",
+        "/api/ask/stream",
         json={"query": "/discovery dismiss WDC too cyclical for me", "tickers": ["WDC"]},
     )
     assert res.status_code == 200
-    body = res.get_json()
+    body = fold_sse_response(res.get_data(as_text=True))
     assert body["status"] == "ok"
     assert body["kind"] == "command"
     out = str(body["text"])

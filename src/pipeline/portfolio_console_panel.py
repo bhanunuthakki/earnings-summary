@@ -14,7 +14,7 @@ No builder logic is duplicated — every section is one of the existing
 ``render_*`` panel builders, each of which already degrades to a quiet stub on
 missing data, so the consoles are robust by construction. The per-builder
 ``/api/panel/<id>`` fetch routes stay live (the old ids alias to these composites
-via ``command_center_shell._LEGACY_PANEL_REDIRECTS``, and any direct fetch / peek
+via the Work OS deep-link map, and any direct fetch / peek
 still hits the builder route).
 
 Wave 1 of ``docs/design/surface_density_jit_redesign.md`` (owner walkthrough

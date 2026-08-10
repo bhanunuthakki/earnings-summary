@@ -49,7 +49,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dashboard.inbox import collect_inbox, render_inbox_stream  # noqa: E402
 from dashboard.upcoming import render_upcoming_strip  # noqa: E402
-from pipeline.command_center_shell import render_overview_panel, render_shell  # noqa: E402
 from pipeline.discovery_panel import render_discovery_panel  # noqa: E402
 from pipeline.provenance_panel import render_provenance_panel  # noqa: E402
 from pipeline.research_cockpit import (  # noqa: E402
@@ -58,6 +57,8 @@ from pipeline.research_cockpit import (  # noqa: E402
     render_research_cockpit,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
+from pipeline.work_os_overview import render_overview_panel  # noqa: E402
+from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -146,7 +147,8 @@ def main() -> int:
             inbox_html=inbox_html,
             upcoming_html=upcoming_html,
         )
-        return render_shell(overview_html=overview)
+        _ = overview  # retained as a separately measured compatibility fragment
+        return render_work_os_shell()
 
     panels: list[tuple[str, Callable[[], str]]] = [
         ("cockpit (inline at boot)", cockpit),
