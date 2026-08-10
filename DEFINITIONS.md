@@ -2,6 +2,12 @@
 
 Canonical terminology for this project. Use these terms verbatim in code (variables, functions, types, columns), comments, commit messages, and PR descriptions. New domain terms must be added here before being used.
 
+## Research Level
+
+**Definition.** Architectural vocabulary for the depth to which source data for one company may advance: `catalog` preserves identity and raw-source availability; `screened` adds compact deterministic screening metrics; `monitored` adds company-specific scheduled refreshes without promising the complete investor-grade evidence plane; `governed` admits the company to the complete document, fact, provenance, and research-artifact contract. The proposed mapping is `portfolio -> governed`, `evaluation -> governed`, `watchlist -> monitored`, `index_member/legacy etf -> screened`, and `none -> catalog`.
+**Status.** Vocabulary only. Research Level is not a persisted field, runtime policy, routing input, or authorization to move data. Add a runtime owner only when a concrete feature requires raw-to-governed promotion or repeated acquisition/materialization coupling demonstrates a measurable benefit.
+**Not to be confused with.** `tracked_companies.list_type`, which records the owner's membership relationship to a company; `tracked_companies.processing_tier`, which controls scheduled cadence (`P1`, `P2`, `P3`); `instrument_type`, which classifies the security; or `archived_at`, which suppresses active work as a lifecycle state. In particular, evaluation and watchlist are both P2 but default to different Research Levels, while portfolio is governed P1 and evaluation is governed P2.
+
 ## CANONICAL ACTIONS
 
 These are the owner-facing verbs that are allowed to mutate durable state. A label names the consequence, not merely the gesture: prefer **Applied — thesis updated** over **Done** or **Saved**. Every persistent action surface owes the same feedback contract: call `CCAction.busy(...)` immediately, call `CCAction.release(...)` on failure while retaining the actionable item, and call `CCAction.receipt(...)` on success before any `CCAction.leave(...)` removal. An endpoint response is not, by itself, a visible receipt.
