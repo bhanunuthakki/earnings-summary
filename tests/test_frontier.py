@@ -5,7 +5,7 @@ calls are DI'd fakes — the suite never spends and never hits the real network.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -14,6 +14,7 @@ from llm.frontier import (
     FRONTIER_PURPOSE,
     frontier_sha,
     load_candidate_models,
+    merged_backend_for,
     merged_cheaper_candidates,
     merged_is_cheaper,
     merged_rank,
@@ -121,6 +122,19 @@ def test_load_candidate_models_active_only(tmp_path: Path) -> None:
     assert promise_of(db_path, "claude-sonnet-4-6") == 0.5  # static -> neutral
 
 
+def test_merged_backend_for_uses_overlay_family(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    _seed_candidate(db_path, "gemini-2.5-flash-lite", family="gemini")
+    assert merged_backend_for(db_path, "gemini-2.5-flash-lite") == "gemini"
+
+
+def test_merged_backend_for_rejects_unknown_overlay_family(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    _seed_candidate(db_path, "vendor/model", family="unknown")
+    with pytest.raises(ValueError, match="unsupported candidate family"):
+        merged_backend_for(db_path, "vendor/model")
+
+
 def test_merged_cheaper_candidates_unions_overlay(tmp_path: Path) -> None:
     db_path = _db(tmp_path)
     _seed_candidate(db_path, "prov/cheap-model", input_usd=0.05, output_usd=0.10)
@@ -160,7 +174,7 @@ def test_frontier_sha_changes_with_overlay(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _catalog_returning(data: list[dict[str, object]]) -> Callable[[str], object]:
+def _catalog_returning(data: Sequence[Mapping[str, object]]) -> Callable[[str], object]:
     def _get(url: str) -> object:
         assert url == "https://openrouter.ai/api/v1/models"
         return {"data": data}
