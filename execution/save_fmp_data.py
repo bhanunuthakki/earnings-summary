@@ -388,6 +388,11 @@ def fmp_call(
             return (code, body, None, kind)
         if code == 403:
             saw_403 = True
+        if code == 429:
+            # The shared client already exhausted its bounded retry policy.
+            # Trying aliases or legacy URL shapes cannot repair provider quota
+            # exhaustion and only multiplies rejected requests.
+            return (code, None, err or "http-429", kind)
         if code in (401, 402):
             return (code, None, err or f"http-{code}", kind)
     if saw_403:
@@ -967,7 +972,7 @@ def run_ticker(
     # path (matches fmp_endpoint_status granularity).
     src_calls: list[source_calls_log.PendingSourceCall] = []
 
-    for job in jobs:
+    for job_index, job in enumerate(jobs):
         endpoint = cast("str", job["path"])
         period = cast("str", job["period"])
         suffix = cast("str", job["suffix"])
@@ -1146,6 +1151,46 @@ def run_ticker(
                 f"  ok   {endpoint:48s} {period:8s} n={count:<5} "
                 f"{earliest or '?':10s} -> {latest or '?':10s}  [{kind}]"
             )
+        elif code == 429:
+            pending.append(
+                _build_status_row(
+                    ticker,
+                    endpoint,
+                    period,
+                    status="error",
+                    http_code=code,
+                    error_msg=err,
+                )
+            )
+            summary["error"] += 1
+            src_calls.append(
+                source_calls_log.PendingSourceCall(
+                    source_name=_FMP_SOURCE,
+                    kind=endpoint,
+                    ticker=ticker,
+                    status=source_calls_log.CallStatus.ERROR,
+                    latency_ms=_call_ms,
+                    http_code=code,
+                    notes="provider_quota_exhausted",
+                )
+            )
+            remaining_jobs = jobs[job_index + 1 :]
+            summary["skipped"] += len(remaining_jobs)
+            for remaining_job in remaining_jobs:
+                src_calls.append(
+                    source_calls_log.PendingSourceCall(
+                        source_name=_FMP_SOURCE,
+                        kind=cast("str", remaining_job["path"]),
+                        ticker=ticker,
+                        status=source_calls_log.CallStatus.SKIPPED,
+                        notes="provider_quota_exhausted",
+                    )
+                )
+            print(
+                f"  429  {endpoint:48s} {period:8s} "
+                f"(provider quota exhausted; skipped {len(remaining_jobs)} remaining endpoints)"
+            )
+            break
         elif code in (401, 402, 403):
             pending.append(
                 _build_status_row(
