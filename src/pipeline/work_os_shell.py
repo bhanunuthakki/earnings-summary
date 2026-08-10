@@ -634,9 +634,7 @@ def _add_production_contract(html: str, generated_at: datetime) -> str:
     runtime = _production_runtime(generated_at)
     copilot = render_work_os_copilot()
     controls = f'<style id="work-os-controls-css">{controls_css("dark")}</style>'
-    return html.replace(
-        "</body>", controls + "\n" + copilot + "\n" + runtime + "\n</body>", 1
-    )
+    return html.replace("</body>", controls + "\n" + copilot + "\n" + runtime + "\n</body>", 1)
 
 
 @lru_cache(maxsize=1)

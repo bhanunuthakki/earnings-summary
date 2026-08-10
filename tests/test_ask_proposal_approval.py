@@ -57,9 +57,7 @@ def _holdings_payload(*, thesis: str = "Old thesis") -> dict[str, object]:
 
 
 @pytest.fixture
-def authority(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> tuple[Path, Path, Path]:
+def authority(tmp_path: Path, migrated_db: Callable[..., Path]) -> tuple[Path, Path, Path]:
     repo_root = tmp_path / "repo"
     holdings = repo_root / "micro_thesis" / "holdings" / "NU.json"
     holdings.parent.mkdir(parents=True)
@@ -87,9 +85,7 @@ def _decision(proposal_id: int, *, request_id: str = "decision-1", revision: int
     )
 
 
-def _create_active(
-    diff: dict[str, object], *, repo_root: Path, db_path: Path
-):
+def _create_active(diff: dict[str, object], *, repo_root: Path, db_path: Path):
     session = ensure_session("test-session", scope="portfolio", db_path=db_path)
     put_session_context(session.id, SessionContextV1(company_ticker="NU"), db_path=db_path)
     begun = begin_exchange(
@@ -122,9 +118,7 @@ def test_approve_applies_thesis_atomically_and_synchronizes_mirrors(
     repo_root, db_path, holdings = authority
     ref = _create_active(_thesis_diff(), repo_root=repo_root, db_path=db_path)
 
-    receipt = decide_ask_proposal(
-        _decision(ref.proposal_id), repo_root=repo_root, db_path=db_path
-    )
+    receipt = decide_ask_proposal(_decision(ref.proposal_id), repo_root=repo_root, db_path=db_path)
 
     assert receipt.status == "approved"
     assert receipt.proposal_revision == 1
@@ -180,9 +174,7 @@ def test_target_drift_fails_closed_without_changing_proposal(
     holdings.write_text(json.dumps(_holdings_payload(thesis="External change")), encoding="utf-8")
 
     with pytest.raises(TargetDriftError) as raised:
-        decide_ask_proposal(
-            _decision(ref.proposal_id), repo_root=repo_root, db_path=db_path
-        )
+        decide_ask_proposal(_decision(ref.proposal_id), repo_root=repo_root, db_path=db_path)
 
     assert raised.value.expected_target_sha256 != raised.value.actual_target_sha256
     detail = get_ask_proposal_detail(ref.proposal_id, db_path=db_path)
@@ -357,12 +349,18 @@ def test_kpi_approval_reconciles_removals_without_destroying_facts(
         assert connection.execute(
             "SELECT COUNT(*) FROM user_kpi_registry WHERE ticker='NU' AND kpi_name='Removed KPI'"
         ).fetchone() == (0,)
-        assert connection.execute(
-            "SELECT * FROM kpi_definitions WHERE id=?", (unrelated_definition_id,)
-        ).fetchone() == unrelated_definition_before
-        assert connection.execute(
-            "SELECT * FROM user_kpi_registry WHERE id=?", (unrelated_registry_id,)
-        ).fetchone() == unrelated_registry_before
+        assert (
+            connection.execute(
+                "SELECT * FROM kpi_definitions WHERE id=?", (unrelated_definition_id,)
+            ).fetchone()
+            == unrelated_definition_before
+        )
+        assert (
+            connection.execute(
+                "SELECT * FROM user_kpi_registry WHERE id=?", (unrelated_registry_id,)
+            ).fetchone()
+            == unrelated_registry_before
+        )
 
 
 def test_kpi_approval_reuses_recorded_fact_unit_and_rejects_cross_tier_duplicate(
@@ -406,18 +404,19 @@ def test_kpi_approval_reuses_recorded_fact_unit_and_rejects_cross_tier_duplicate
         "summary": "Add the customer monitor",
     }
     ref = _create_active(add_diff, repo_root=repo_root, db_path=db_path)
-    receipt = decide_ask_proposal(
-        _decision(ref.proposal_id), repo_root=repo_root, db_path=db_path
-    )
+    receipt = decide_ask_proposal(_decision(ref.proposal_id), repo_root=repo_root, db_path=db_path)
     assert "follow-up required for 1 externally owned" in receipt.message
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
             "SELECT unit,primary_source,notes,definition_origin FROM kpi_definitions WHERE id=?",
             (definition_id,),
         ).fetchone() == ("count", "manual_entry", "external notes", "capture")
-        assert connection.execute(
-            "SELECT * FROM user_kpi_registry WHERE id=?", (registry_id,)
-        ).fetchone() == registry_before
+        assert (
+            connection.execute(
+                "SELECT * FROM user_kpi_registry WHERE id=?", (registry_id,)
+            ).fetchone()
+            == registry_before
+        )
 
     # A fresh fixture/session is required because the first proposal is terminal.
     payload = json.loads(holdings.read_text(encoding="utf-8"))
@@ -429,9 +428,7 @@ def test_kpi_approval_reuses_recorded_fact_unit_and_rejects_cross_tier_duplicate
         proposal = get_proposal(ref.proposal_id, db_path=db_path)
         assert proposal is not None
         with sqlite3.connect(db_path) as connection:
-            apply_canonical_ask_change(
-                proposal, repo_root=repo_root, connection=connection
-            )
+            apply_canonical_ask_change(proposal, repo_root=repo_root, connection=connection)
 
 
 def test_explicit_decision_is_the_only_higher_bar_override(
@@ -450,9 +447,7 @@ def test_explicit_decision_is_the_only_higher_bar_override(
 
     assert isinstance(blocked, str) and blocked.startswith("blocked (higher bar)")
     assert json.loads(holdings.read_text(encoding="utf-8"))["thesis"] == "Old thesis"
-    receipt = decide_ask_proposal(
-        _decision(ref.proposal_id), repo_root=repo_root, db_path=db_path
-    )
+    receipt = decide_ask_proposal(_decision(ref.proposal_id), repo_root=repo_root, db_path=db_path)
     assert receipt.status == "approved"
 
 
@@ -512,9 +507,7 @@ def test_deleted_exchange_makes_stale_decision_url_non_actionable(
     assert detail is not None and detail.status == "superseded"
     assert detail.allowed_actions == []
     with pytest.raises(ProposalConflictError) as raised:
-        decide_ask_proposal(
-            _decision(ref.proposal_id), repo_root=repo_root, db_path=db_path
-        )
+        decide_ask_proposal(_decision(ref.proposal_id), repo_root=repo_root, db_path=db_path)
     assert raised.value.code == "revision_conflict"
 
 
@@ -548,7 +541,9 @@ def test_legacy_chat_cutover_never_mutates_files_or_database(
     ]
 
     assert [response.status_code for response in responses] == [410, 410, 410]
-    assert all(response.get_json()["schema_version"] == "chat_migrated.v1" for response in responses)
+    assert all(
+        response.get_json()["schema_version"] == "chat_migrated.v1" for response in responses
+    )
     assert {path: path.read_bytes() for path in before_files} == before_files
     with sqlite3.connect(db_path) as connection:
         after_counts = tuple(

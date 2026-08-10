@@ -378,9 +378,7 @@ def create_proposal(
     conn = open_conn(db_path)
     try:
         now = now_iso()
-        columns = {
-            str(row[1]) for row in conn.execute("PRAGMA table_info(research_proposals)")
-        }
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(research_proposals)")}
         has_approval_authority = "canonical_content_json" in columns
         governed_values = (
             canonical_content_json,
@@ -502,8 +500,7 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
         ),
         target_precondition_sha256=(
             None
-            if "target_precondition_sha256" not in keys
-            or row["target_precondition_sha256"] is None
+            if "target_precondition_sha256" not in keys or row["target_precondition_sha256"] is None
             else str(row["target_precondition_sha256"])
         ),
         target_postcondition_sha256=(
@@ -518,10 +515,14 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
             else str(row["ask_exchange_request_id"])
         ),
         actionable_at=(
-            None if "actionable_at" not in keys or row["actionable_at"] is None else str(row["actionable_at"])
+            None
+            if "actionable_at" not in keys or row["actionable_at"] is None
+            else str(row["actionable_at"])
         ),
         invalidated_at=(
-            None if "invalidated_at" not in keys or row["invalidated_at"] is None else str(row["invalidated_at"])
+            None
+            if "invalidated_at" not in keys or row["invalidated_at"] is None
+            else str(row["invalidated_at"])
         ),
         invalidation_reason=(
             None

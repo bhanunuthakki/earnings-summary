@@ -155,10 +155,15 @@ def test_session_switch_resets_context_and_rehydrates_typed_exchange_artifacts()
     html = render_work_os_copilot()
 
     load_start = html.index("function loadCopilotSession(sessionId)")
-    fetch_start = html.index("fetch('/api/ask/sessions/' + encodeURIComponent(sessionId)", load_start)
+    fetch_start = html.index(
+        "fetch('/api/ask/sessions/' + encodeURIComponent(sessionId)", load_start
+    )
     assert html.index("lastSpec = null", load_start, fetch_start) < fetch_start
     assert html.index("currentSessionContext = null", load_start, fetch_start) < fetch_start
-    assert "var exchanges = Array.isArray(session.exchange_artifacts) ? session.exchange_artifacts : []" in html
+    assert (
+        "var exchanges = Array.isArray(session.exchange_artifacts) ? session.exchange_artifacts : []"
+        in html
+    )
     assert "exchangeArtifact.schema_version !== 'session_exchange_artifact.v1'" in html
     assert "typeof exchangeArtifact.exchange_id !== 'string'" in html
     assert "exchangeArtifact.exchange_id !== exchangeArtifact.request_id" in html

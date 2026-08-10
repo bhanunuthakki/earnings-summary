@@ -138,7 +138,7 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         '<button class="chat-close k-btn k-btn-quiet k-btn-sm" id="chat-close" type="button" aria-label="Close Copilot handoff">&times;</button>'
         "</header>"
         '<div class="chat-handoff k-well">'
-        '<div>Open the durable Copilot to keep this report context, history, evidence, and governed proposal review together.</div>'
+        "<div>Open the durable Copilot to keep this report context, history, evidence, and governed proposal review together.</div>"
         '<a class="k-btn k-btn-primary" id="chat-open-copilot" href="/">Open in Copilot</a>'
         "</div>"
         "</aside>"

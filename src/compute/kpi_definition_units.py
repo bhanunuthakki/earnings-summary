@@ -8,13 +8,34 @@ from models.facts import Unit
 from models.unit_convert import same_family
 
 _RATE_NAME_TOKENS = (
-    "growth", "yoy", "y/y", "deceleration", "decel", "retention", "churn",
-    "margin", "yield", "penetration", "take rate", "attach rate", "%",
+    "growth",
+    "yoy",
+    "y/y",
+    "deceleration",
+    "decel",
+    "retention",
+    "churn",
+    "margin",
+    "yield",
+    "penetration",
+    "take rate",
+    "attach rate",
+    "%",
 )
 _DOLLAR_LEVEL_NAME_TOKENS = (
-    "remaining performance obligation", "rpo", "backlog", "bookings",
-    "deferred revenue", "gross merchandise", "gmv", "payment volume", "tpv",
-    "assets under management", "aum", "deposits", "loans outstanding",
+    "remaining performance obligation",
+    "rpo",
+    "backlog",
+    "bookings",
+    "deferred revenue",
+    "gross merchandise",
+    "gmv",
+    "payment volume",
+    "tpv",
+    "assets under management",
+    "aum",
+    "deposits",
+    "loans outstanding",
 )
 
 
@@ -27,8 +48,15 @@ def infer_unit(name: str) -> Unit:
     if any(
         token in normalized
         for token in (
-            "customers", "customer count", "millions", "headcount", "subscribers",
-            "users", "accounts", "members", "merchants",
+            "customers",
+            "customer count",
+            "millions",
+            "headcount",
+            "subscribers",
+            "users",
+            "accounts",
+            "members",
+            "merchants",
         )
     ):
         return Unit.COUNT
@@ -44,9 +72,7 @@ def infer_unit(name: str) -> Unit:
     return Unit.PERCENT
 
 
-def dominant_fact_unit(
-    connection: sqlite3.Connection, ticker: str, name: str
-) -> Unit | None:
+def dominant_fact_unit(connection: sqlite3.Connection, ticker: str, name: str) -> Unit | None:
     """Return the modal recorded fact unit, breaking ties by latest period."""
 
     row = connection.execute(
@@ -64,9 +90,7 @@ def dominant_fact_unit(
         return None
 
 
-def resolve_definition_unit(
-    connection: sqlite3.Connection, ticker: str, name: str
-) -> Unit:
+def resolve_definition_unit(connection: sqlite3.Connection, ticker: str, name: str) -> Unit:
     """Prefer recorded facts, then a valid existing definition, then bootstrap inference."""
 
     row = connection.execute(

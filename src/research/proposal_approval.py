@@ -218,9 +218,7 @@ class AskProposalDecisionV1(BaseModel):
 class AskProposalDecisionReceiptV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["ask_proposal_decision_receipt.v1"] = (
-        "ask_proposal_decision_receipt.v1"
-    )
+    schema_version: Literal["ask_proposal_decision_receipt.v1"] = "ask_proposal_decision_receipt.v1"
     proposal_id: int = Field(gt=0)
     proposal_revision: int = Field(ge=1)
     status: Literal["approved", "rejected"]
@@ -357,9 +355,10 @@ def create_ask_proposal(
 ) -> AskProposalRefV1:
     """Validate and persist one immutable actionable Ask diff."""
 
-    if not 1 <= len(exchange_request_id) <= 128 or re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9._:-]*", exchange_request_id
-    ) is None:
+    if (
+        not 1 <= len(exchange_request_id) <= 128
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", exchange_request_id) is None
+    ):
         raise ProposalValidationError("Ask exchange request_id is invalid")
 
     try:
@@ -461,9 +460,7 @@ def _detail(prop: ResearchProposal) -> AskProposalDetailV1:
     )
 
 
-def get_ask_proposal_detail(
-    proposal_id: int, *, db_path: Path | str
-) -> AskProposalDetailV1 | None:
+def get_ask_proposal_detail(proposal_id: int, *, db_path: Path | str) -> AskProposalDetailV1 | None:
     prop = get_proposal(proposal_id, db_path=db_path)
     if prop is None or prop.canonical_content_json is None:
         return None
@@ -552,18 +549,12 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
             else str(row["target_postcondition_sha256"])
         ),
         ask_exchange_request_id=(
-            None
-            if row["ask_exchange_request_id"] is None
-            else str(row["ask_exchange_request_id"])
+            None if row["ask_exchange_request_id"] is None else str(row["ask_exchange_request_id"])
         ),
         actionable_at=None if row["actionable_at"] is None else str(row["actionable_at"]),
-        invalidated_at=(
-            None if row["invalidated_at"] is None else str(row["invalidated_at"])
-        ),
+        invalidated_at=(None if row["invalidated_at"] is None else str(row["invalidated_at"])),
         invalidation_reason=(
-            None
-            if row["invalidation_reason"] is None
-            else str(row["invalidation_reason"])
+            None if row["invalidation_reason"] is None else str(row["invalidation_reason"])
         ),
     )
 
@@ -586,9 +577,7 @@ def _atomic_replace(path: Path, content: bytes) -> None:
                 temporary.unlink()
 
 
-def _apply_content(
-    content: AskProposalContentV1, payload: dict[str, object]
-) -> dict[str, object]:
+def _apply_content(content: AskProposalContentV1, payload: dict[str, object]) -> dict[str, object]:
     updated = dict(payload)
     if isinstance(content, ThesisProposalContentV1):
         updated["thesis"] = content.new_value
@@ -739,8 +728,7 @@ def decide_ask_proposal(
         try:
             connection.execute("BEGIN IMMEDIATE")
             receipt_row = connection.execute(
-                "SELECT * FROM research_proposal_decision_receipts "
-                "WHERE decision_request_id=?",
+                "SELECT * FROM research_proposal_decision_receipts WHERE decision_request_id=?",
                 (request.decision_request_id,),
             ).fetchone()
             if receipt_row is not None:

@@ -8,7 +8,9 @@ same-origin Work OS link as the standalone fallback.
 
 from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS
 
-JS = CITE_MARKS_JS + r"""
+JS = (
+    CITE_MARKS_JS
+    + r"""
 (function () {
   'use strict';
 
@@ -114,8 +116,11 @@ JS = CITE_MARKS_JS + r"""
   else init();
 })();
 """
+)
 
-CSS = CITE_MARKS_CSS + r"""
+CSS = (
+    CITE_MARKS_CSS
+    + r"""
 .chat-drawer {
   position: fixed; bottom: var(--sp-4);
   right: calc(var(--sidebar-open-width, 0) + var(--sp-4));
@@ -152,3 +157,4 @@ CSS = CITE_MARKS_CSS + r"""
   .chat-sidebar, .chat-drawer { transition: none; animation: none; }
 }
 """
+)
