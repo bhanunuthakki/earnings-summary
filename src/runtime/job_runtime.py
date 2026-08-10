@@ -42,6 +42,7 @@ _CONTEXT_LOCK_CLAIMS: ContextVar[dict[str, tuple[str, int]] | None] = ContextVar
     default=None,
 )
 _ALLOW_NESTED_LOCKS: ContextVar[bool] = ContextVar("allow_nested_job_locks", default=False)
+_SCHEDULER_OWNER: tuple[int, str | None] | None = None
 
 
 @contextmanager
@@ -109,6 +110,90 @@ def _process_start_identity(pid: int) -> str | None:
     except OSError:
         return None
     return f"proc:{fields[21]}" if len(fields) > 21 else None
+
+
+def _parent_pid(pid: int) -> int | None:
+    """Return a Windows process's parent PID without spawning a helper process."""
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    class _ProcessBasicInformation(ctypes.Structure):
+        _fields_ = [
+            ("reserved1", ctypes.c_void_p),
+            ("peb_base_address", ctypes.c_void_p),
+            ("reserved2", ctypes.c_void_p * 2),
+            ("unique_process_id", ctypes.c_size_t),
+            ("inherited_from_unique_process_id", ctypes.c_size_t),
+        ]
+
+    process_query_limited_information = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return None
+    info = _ProcessBasicInformation()
+    try:
+        status = ntdll.NtQueryInformationProcess(
+            handle,
+            0,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+            None,
+        )
+        if status != 0:
+            return None
+        parent = int(info.inherited_from_unique_process_id)
+        return parent if parent > 0 else None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _process_identity_is_alive(identity: tuple[int, str | None]) -> bool:
+    pid, expected_start = identity
+    if not _pid_is_alive(pid):
+        return False
+    return expected_start is None or _process_start_identity(pid) == expected_start
+
+
+def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+        return
+    process.terminate()
+
+
+def _run_managed_child(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    scheduler_owner: tuple[int, str | None] | None,
+) -> int:
+    """Run a job and tear down its tree if Task Scheduler kills the wrapper."""
+    if scheduler_owner is None:
+        return subprocess.run(command, cwd=cwd, check=False, env=env).returncode
+
+    process = subprocess.Popen(command, cwd=cwd, env=env)
+    while True:
+        returncode = process.poll()
+        if returncode is not None:
+            return returncode
+        if not _process_identity_is_alive(scheduler_owner):
+            _terminate_process_tree(process)
+            try:
+                return process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                return process.wait(timeout=5)
+        time.sleep(0.5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,8 +605,12 @@ def run_job(
                 "EARNINGS_SUMMARY_JOB_LOCK_PROOF": lock.inheritance_proof(),
             }
             managed_command = ensure_managed_python_argv(repo_root, command)
-            completed = subprocess.run(managed_command, cwd=repo_root, check=False, env=child_env)
-        exit_code = completed.returncode
+            exit_code = _run_managed_child(
+                managed_command,
+                cwd=repo_root,
+                env=child_env,
+                scheduler_owner=_SCHEDULER_OWNER,
+            )
         status = "ok" if exit_code == 0 else "failed"
         detail = None
     except JobAlreadyRunningError as exc:
@@ -549,6 +638,7 @@ def run_job(
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _SCHEDULER_OWNER
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -594,13 +684,23 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--job is required")
         job_name = args.job
         write_sets = args.write_set or ["portfolio-db"]
-    return run_job(
-        repo_root=args.repo_root.resolve(),
-        job_name=job_name,
-        write_sets=write_sets,
-        command=command,
-        allow_schema_drift=args.allow_schema_drift,
-    )
+    previous_owner = _SCHEDULER_OWNER
+    if args.scheduler_wrapper and os.name == "nt":
+        # sqlite_bootstrap is the direct parent; its parent is the cmd.exe that
+        # Task Scheduler owns and kills on Stop-ScheduledTask.
+        owner_pid = _parent_pid(os.getppid())
+        if owner_pid is not None:
+            _SCHEDULER_OWNER = (owner_pid, _process_start_identity(owner_pid))
+    try:
+        return run_job(
+            repo_root=args.repo_root.resolve(),
+            job_name=job_name,
+            write_sets=write_sets,
+            command=command,
+            allow_schema_drift=args.allow_schema_drift,
+        )
+    finally:
+        _SCHEDULER_OWNER = previous_owner
 
 
 if __name__ == "__main__":

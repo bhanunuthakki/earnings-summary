@@ -15,6 +15,7 @@ import runtime.job_runtime as job_runtime
 from runtime.job_runtime import (
     JobAlreadyRunningError,
     JobLock,
+    _run_managed_child,
     _windows_mutex_name,
     _write_set_lock_path,
     allow_nested_job_locks,
@@ -22,6 +23,55 @@ from runtime.job_runtime import (
     main,
     run_job,
 )
+
+
+class _PollingProcess:
+    pid = 43210
+
+    def __init__(self) -> None:
+        self.terminated = False
+
+    def poll(self) -> int | None:
+        return -15 if self.terminated else None
+
+    def wait(self, timeout: float | None = None) -> int:
+        del timeout
+        return -15
+
+    def kill(self) -> None:
+        self.terminated = True
+
+
+def test_scheduler_owner_exit_terminates_managed_child_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = _PollingProcess()
+    terminated: list[int] = []
+
+    def fake_popen(*_args: object, **_kwargs: object) -> _PollingProcess:
+        return process
+
+    def owner_is_dead(_owner: tuple[int, str | None]) -> bool:
+        return False
+
+    monkeypatch.setattr(job_runtime.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(job_runtime, "_process_identity_is_alive", owner_is_dead)
+
+    def terminate_tree(target: _PollingProcess) -> None:
+        terminated.append(target.pid)
+        target.terminated = True
+
+    monkeypatch.setattr(job_runtime, "_terminate_process_tree", terminate_tree)
+
+    exit_code = _run_managed_child(
+        ["python", "worker.py"],
+        cwd=tmp_path,
+        env={},
+        scheduler_owner=(1234, "win:start"),
+    )
+
+    assert exit_code == -15
+    assert terminated == [process.pid]
 
 
 def test_lock_excludes_same_mutable_write_set(tmp_path: Path) -> None:

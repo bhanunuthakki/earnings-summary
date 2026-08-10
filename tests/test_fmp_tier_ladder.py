@@ -94,6 +94,24 @@ def test_fmp_call_legacy_requests_v3_and_v4_on_miss(monkeypatch: pytest.MonkeyPa
     assert any("/api/v4/" in u for u in requested)
 
 
+def test_fmp_call_stops_variant_ladder_after_exhausted_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sfd, "_stable_only", False)
+    requested: list[str] = []
+
+    def quota_exhausted(url: str, _params: dict[str, object]) -> tuple[int, None, str]:
+        requested.append(url)
+        return (429, None, "http: quota exhausted")
+
+    monkeypatch.setattr(sfd, "_http_get", quota_exhausted)
+    code, body, error, kind = sfd.fmp_call("cashflow-statement", "V", {})
+
+    assert (code, body, error) == (429, None, "http: quota exhausted")
+    assert kind == "stable:cashflow-statement"
+    assert len(requested) == 1
+
+
 # ---------------------------------------------------------------------------
 # FMP_TIER=free enables stable-only at import (deliberate flip, env-driven)
 # ---------------------------------------------------------------------------
