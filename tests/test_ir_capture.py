@@ -269,14 +269,13 @@ def test_build_ir_config_capture_only_when_no_holdings(tmp_path: Path, monkeypat
 
 
 def test_real_nu_config_widens_without_touching_curated_rows() -> None:
-    """End-to-end on the real hand-built NU.json + a synthetic NU-shaped sheet:
-    the four curated analyst rows are preserved verbatim and capture rows are added."""
+    """A later widening preserves the activated config's curated NU rows."""
     repo = PROJECT_ROOT
     cfg = get_config("NU", repo)
     if cfg is None:  # config lives in the main checkout; skip if absent in this tree
         return
-    assert all(k.origin == "analyst" for k in cfg.spreadsheet_kpis)
-    original = list(cfg.spreadsheet_kpis)
+    original_analyst = [k for k in cfg.spreadsheet_kpis if k.origin != "capture"]
+    assert len(original_analyst) == 4
 
     # Reuse the test sheet (the real spreadsheet lives outside the worktree); the
     # point is that widen leaves analyst rows untouched regardless of the sheet.
@@ -288,7 +287,7 @@ def test_real_nu_config_widens_without_touching_curated_rows() -> None:
         wide = widen_config(cfg, path)
 
     analyst = [k for k in wide.spreadsheet_kpis if k.origin != "capture"]
-    assert analyst == original  # curated NU rows unchanged
+    assert analyst == original_analyst  # curated NU rows unchanged
     assert any(k.origin == "capture" for k in wide.spreadsheet_kpis)
 
 
