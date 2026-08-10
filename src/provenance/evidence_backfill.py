@@ -687,11 +687,18 @@ def _resolve_legacy_path(root: Path, stored_path: str) -> Path | None:
     path_without_fragment, _, _ = stored_path.partition("#")
     candidate = Path(path_without_fragment)
     resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
-    try:
-        resolved.relative_to(root)
-    except ValueError:
-        return None
-    return resolved
+    # The production runtime is an immutable checkout whose ``data`` directory
+    # is an explicit junction to the live state directory.  Resolving that
+    # junction legitimately leaves ``root``; allow only that declared data
+    # boundary, never an arbitrary sibling path.
+    allowed_roots = (root, (root / "data").resolve())
+    for allowed_root in allowed_roots:
+        try:
+            resolved.relative_to(allowed_root)
+        except ValueError:
+            continue
+        return resolved
+    return None
 
 
 def _legacy_storage_source_uri(path: Path, stored_path: str) -> str:
