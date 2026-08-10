@@ -74,7 +74,7 @@ from evals.sampler import (  # noqa: E402
 )
 from llm.backend_judge import CLAUDE, GEMINI  # noqa: E402
 from llm.cli import DEFAULT_MODEL, LLM_MODELS  # noqa: E402
-from llm.frontier import merged_cheaper_candidates  # noqa: E402
+from llm.frontier import merged_backend_for, merged_cheaper_candidates  # noqa: E402
 from llm.model_eval import (  # noqa: E402
     INSUFFICIENT_FRAME,
     SWITCH_DOWN,
@@ -317,6 +317,7 @@ def _evaluate_candidate(
     purpose: str,
     incumbent: str,
     candidate: str,
+    candidate_backend: str,
     judges: list[str],
     run_id: str,
     min_n: int,
@@ -344,6 +345,7 @@ def _evaluate_candidate(
         cand = run_model(
             case.prompt,
             model_id=candidate,
+            backend=candidate_backend,
             purpose=purpose,
             ticker=case.ticker,
             run_id=run_id,
@@ -591,6 +593,7 @@ def run_sweep(
         )
 
         for candidate in candidates:
+            candidate_backend = merged_backend_for(db_path, candidate)
             manifest: dict[str, object]
             if census:
                 # Per-candidate draw: dedup excludes shas this pair graded in the
@@ -683,6 +686,7 @@ def run_sweep(
                 purpose=purpose,
                 incumbent=incumbent,
                 candidate=candidate,
+                candidate_backend=candidate_backend,
                 judges=judges,
                 run_id=run_id,
                 min_n=eff_min_n,

@@ -55,6 +55,7 @@ def run_model(
     prompt: str,
     *,
     model_id: str,
+    backend: str | None = None,
     purpose: str | None,
     ticker: str | None = None,
     run_id: str | None = None,
@@ -70,14 +71,14 @@ def run_model(
     explicit backend makes ``call_llm`` raise on that backend's failure instead
     of silently falling back to Claude — an eval must record the CANDIDATE's
     failure, never grade a stealth Claude answer as the candidate's."""
-    backend = backend_for(model_id)
+    resolved_backend = backend or backend_for(model_id)
     t0 = time.monotonic()
     try:
         response = call_llm(
             prompt,
             purpose=purpose,
             model=model_id,
-            backend=backend,
+            backend=resolved_backend,
             ticker=ticker,
             scope=scope,  # "model_eval" (default) or "prompt_ab" — both EVAL_SCOPES
             run_id=run_id,

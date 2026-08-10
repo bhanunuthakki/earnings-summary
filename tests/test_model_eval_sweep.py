@@ -417,6 +417,74 @@ def test_run_sweep_no_persist_writes_nothing(
     assert count == 0
 
 
+def test_run_sweep_routes_overlay_candidate_by_recorded_family(
+    sweep: Any, capture_dir: Path, minimal_db: Path
+) -> None:
+    dynamic_model = "gemini-2.5-flash-lite"
+    conn = sqlite3.connect(str(minimal_db))
+    conn.execute(
+        """
+        CREATE TABLE candidate_models (
+            model_id TEXT PRIMARY KEY,
+            family TEXT NOT NULL,
+            input_usd_per_mtok REAL NOT NULL,
+            output_usd_per_mtok REAL NOT NULL,
+            promise REAL NOT NULL DEFAULT 0.5,
+            status TEXT NOT NULL DEFAULT 'active'
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO candidate_models VALUES (?, 'gemini', 0.1, 0.4, 0.5, 'active')",
+        (dynamic_model,),
+    )
+    conn.commit()
+    conn.close()
+    _write_capture(capture_dir, [_make_record("bear_case", sha="overlay-case")])
+
+    seen: dict[str, object] = {}
+
+    def fake_evaluate(cases: list[Any], **kwargs: object) -> tuple[Any, list[object]]:
+        seen.update(kwargs)
+        return (
+            sweep.CandidateVerdict(
+                purpose="bear_case",
+                incumbent="claude-sonnet-4-6",
+                candidate=dynamic_model,
+                n=len(cases),
+                candidate_wins=0,
+                incumbent_wins=len(cases),
+                ties=0,
+                parity_rate=0.0,
+                judge_agreement=1.0,
+                recommendation="KEEP_INCUMBENT",
+                reason="test",
+            ),
+            [],
+        )
+
+    with (
+        patch.object(
+            sweep, "_work_items", return_value=[("bear_case", [dynamic_model], None, None)]
+        ),
+        patch.object(sweep, "_evaluate_candidate", side_effect=fake_evaluate),
+    ):
+        sweep.run_sweep(
+            capture_dir=capture_dir,
+            db_path=minimal_db,
+            purposes=["bear_case"],
+            judges=["claude"],
+            limit=1,
+            lookback_days=7,
+            min_n=1,
+            parity_threshold=0.8,
+            timeout_seconds=None,
+            persist=False,
+        )
+
+    assert seen["candidate_backend"] == "gemini"
+
+
 def test_run_sweep_no_capture_files_returns_empty(
     sweep: Any, tmp_path: Path, minimal_db: Path
 ) -> None:

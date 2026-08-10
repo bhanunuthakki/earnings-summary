@@ -53,7 +53,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from llm.model_ladder import MODEL_LADDER, OPENROUTER, cheaper_candidates, model_rank
+from llm.model_ladder import (
+    CLAUDE,
+    GEMINI,
+    MODEL_LADDER,
+    OPENROUTER,
+    backend_for,
+    cheaper_candidates,
+    family_of,
+    model_rank,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -141,6 +150,24 @@ def promise_of(db_path: Path, model_id: str) -> float:
     discovered ones, which carry no capability signal yet)."""
     row = load_candidate_models(db_path).get(model_id)
     return row.promise if row is not None else 0.5
+
+
+def merged_backend_for(db_path: Path, model_id: str) -> str:
+    """Resolve transport from the static ladder or active frontier overlay.
+
+    Overlay rows are executable routing data, not just price metadata. Reject
+    an unsupported recorded family instead of silently grading the model via
+    Claude or another transport.
+    """
+    static_family = family_of(model_id)
+    if static_family is not None:
+        return static_family
+    row = load_candidate_models(db_path).get(model_id)
+    if row is None:
+        return backend_for(model_id)
+    if row.family not in {CLAUDE, GEMINI, OPENROUTER}:
+        raise ValueError(f"unsupported candidate family {row.family!r} for model {model_id!r}")
+    return row.family
 
 
 def merged_rank(db_path: Path, model_id: str) -> float | None:

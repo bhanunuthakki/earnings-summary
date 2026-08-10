@@ -165,6 +165,23 @@ def test_run_model_dispatches_gemini_backend(monkeypatch: pytest.MonkeyPatch) ->
     assert seen["force_budget_bypass"] is True  # measurement, never throttled
 
 
+def test_run_model_honors_explicit_overlay_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def _fake(prompt: str, **kw: object) -> str:
+        seen.update(kw)
+        return "answer"
+
+    monkeypatch.setattr(model_eval, "call_llm", _fake)
+    res = model_eval.run_model(
+        "p",
+        model_id="gemini-2.5-flash-lite",
+        backend="gemini",
+        purpose="bear_case",
+    )
+    assert res.ok and seen["backend"] == "gemini"
+
+
 def test_run_model_dispatches_claude_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
