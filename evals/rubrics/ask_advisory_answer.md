@@ -4,7 +4,7 @@ Pass threshold: 0.70
 
 Scope: one real production Ask turn — an assistant answer from the `ask_turns`
 table (the conversational advisory path, `src/ask/engine.py` →
-`chat_session.stream_llm_text`), replayed through the eval judge. Today only
+`ask.narrative_transport.stream_llm_text`), replayed through the eval judge. Today only
 citation/grounding HYGIENE is judged anywhere; nothing scores whether the
 multi-turn advice is actually GOOD (sound reasoning, balanced risk/reward,
 calibrated synthesis). This rubric closes that gap — it is a hard prerequisite

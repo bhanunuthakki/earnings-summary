@@ -316,16 +316,11 @@ def test_gather_memo_isolated_per_thread(repo: Path) -> None:
 
 
 def test_engine_turn_cache_key_derivation() -> None:
-    from datetime import date
-
     from ask.context import ContextPack
     from ask.engine import AskTurn
     from ask.engine import _turn_cache_key as key  # pyright: ignore[reportPrivateUsage]
 
     # A server-side session id wins (the Ask tab).
     assert key(AskTurn(text="x", session_id="abc"), ContextPack(scope="portfolio")) == "sid:abc"
-    # Report drawer with no session → ticker:report_date.
-    drawer = ContextPack(scope="ticker", ticker="NU", report_date=date(2026, 3, 31))
-    assert key(AskTurn(text="x"), drawer) == "rep:NU:2026-03-31"
     # A first-turn portfolio call with no session yet disables the memo.
     assert key(AskTurn(text="x"), ContextPack(scope="portfolio")) is None

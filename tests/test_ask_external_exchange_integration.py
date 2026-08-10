@@ -93,12 +93,9 @@ def _begin(db_path: Path):
 def _portfolio_pack() -> ContextPack:
     return ContextPack(
         scope="portfolio",
-        ticker=None,
-        report_date=None,
         default_tickers=["NU"],
         system_context="Portfolio context",
         narrative_purpose="ask_answer",
-        persist=False,
     )
 
 
@@ -196,7 +193,7 @@ def test_external_engine_mode_does_not_duplicate_narrative_or_shadow_turns(
     monkeypatch.setattr(ask_engine, "followup_armed", _false)
     monkeypatch.setattr(ask_engine, "_shadow_retrieval", _none)
     monkeypatch.setattr(
-        ask_engine.chat_session,
+        ask_engine.narrative_transport,
         "stream_llm_text",
         _final_llm_events,
     )
@@ -252,7 +249,7 @@ def test_external_multi_turn_history_excludes_current_user_and_metadata_from_pro
         prompts.append(prompt)
         yield {"type": "final", "text": "Current answer"}
 
-    monkeypatch.setattr(ask_engine.chat_session, "stream_llm_text", _stream)
+    monkeypatch.setattr(ask_engine.narrative_transport, "stream_llm_text", _stream)
     turn = AskTurn(
         text="What changed?",
         session_id="session-1",

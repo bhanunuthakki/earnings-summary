@@ -117,15 +117,6 @@ _NAV_ITEM_RE = re.compile(
     r"(?P<body>.*?)</a>",
     re.DOTALL,
 )
-_COPILOT_FUNCTION_RE = re.compile(
-    r"\n\s*function populateCopilotPrompt\(promptText\) \{.*?"
-    r"\n\s*// CONTEXTUAL SLIDE-OVER DRAWER",
-    re.DOTALL,
-)
-_COPILOT_DRAWER_RE = re.compile(
-    r" else if \(type === 'ask-copilot'\) \{.*?\n\s*\}",
-    re.DOTALL,
-)
 _PIPELINE_SIMULATION_RE = re.compile(
     r"\n\s*// PIPELINE SIMULATION\n\s*function runPipelineJob\(jobName\) \{.*?"
     r"\n\s*\}\n\n\s*// AUDIT LOG FILTERING",
@@ -548,7 +539,7 @@ def _make_allocation_language_honest(html: str) -> str:
       } else if (type === 'dcf-priors')""",
         html,
     )
-    html = _PIPELINE_SIMULATION_RE.sub(
+    return _PIPELINE_SIMULATION_RE.sub(
         """
 
     // Operational jobs are observed through the existing governed backend.
@@ -559,15 +550,9 @@ def _make_allocation_language_honest(html: str) -> str:
     // AUDIT LOG FILTERING""",
         html,
     )
-    html = _COPILOT_DRAWER_RE.sub("", html)
-    return _COPILOT_FUNCTION_RE.sub(
-        "\n\n    // CONTEXTUAL SLIDE-OVER DRAWER",
-        html,
-    )
 
 
 def _add_production_contract(html: str, generated_at: datetime) -> str:
-    html = html.replace("openDrillDrawer('ask-copilot')", "openWorkOsCopilot()")
     html = html.replace(
         '<div class="card-grid-stat-4col">',
         '<div class="card-grid-stat-4col" id="workOsPortfolioStats">',

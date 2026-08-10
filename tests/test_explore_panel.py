@@ -461,7 +461,7 @@ def test_ask_endpoint_answers_narrative_questions(
 ) -> None:
     """A non-metric question routes to the narrative path with the PORTFOLIO
     context pack attached (the one-brain/two-entry-points seam)."""
-    import chat_session
+    from ask import narrative_transport
 
     prompts: list[str] = []
 
@@ -470,7 +470,7 @@ def test_ask_endpoint_answers_narrative_questions(
         yield {"type": "delta", "text": "prose"}
         yield {"type": "final", "text": "a researched answer"}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     res = client.post(
         "/api/ask",
         json={
@@ -494,7 +494,7 @@ def test_ask_endpoint_data_question_falls_back_to_narrative(
 ) -> None:
     """A data-shaped question whose compile fails still gets answered in
     prose, with the note surfaced in the payload."""
-    import chat_session
+    from ask import narrative_transport
     from viewspec import nl_compile
 
     def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
@@ -504,7 +504,7 @@ def test_ask_endpoint_data_question_falls_back_to_narrative(
         yield {"type": "final", "text": "prose fallback"}
 
     monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     res = client.post("/api/ask", json={"query": "TST revenue growth, last 8 quarters"})
     body = res.get_json()
     assert body["status"] == "ok"
@@ -559,14 +559,14 @@ def test_ask_stream_endpoint_streams_narrative_deltas(
 ) -> None:
     """Narrative turns stream their prose incrementally over the same SSE
     channel (the whole point of the streaming sibling)."""
-    import chat_session
+    from ask import narrative_transport
 
     def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "delta", "text": "chunk one "}
         yield {"type": "delta", "text": "chunk two"}
         yield {"type": "final", "text": "chunk one chunk two"}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     res = client.post("/api/ask/stream", json={"query": "what should I look at next?"})
     assert res.mimetype == "text/event-stream"
     body = res.get_data(as_text=True)

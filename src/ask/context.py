@@ -1,24 +1,10 @@
-"""Context packs — what a conversational turn is grounded in, per entry point.
-
-The unified ask engine (``ask.engine``) treats both chat surfaces the same;
-the pack is the ONLY thing that changes with where the question was asked:
-
-  ticker pack     — the report drawer. Narrative turns run through the
-                    existing ``chat_session`` machinery (report-context
-                    system prompt, per-report thread persistence, priors);
-                    data turns default to that one ticker.
-  portfolio pack  — the Ask tab. Narrative turns get a portfolio-scoped
-                    system prompt assembled here (tracked universe + thesis
-                    one-liners) with no server-side thread; data turns
-                    default to the whole portfolio.
-"""
+"""Context packs for the single durable Work OS Ask surface."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import date
 from pathlib import Path
 from typing import Literal, cast
 
@@ -36,32 +22,14 @@ _MAX_LIST_NAMES = 80
 class ContextPack:
     """Everything scope-dependent about one conversational turn."""
 
-    scope: Literal["ticker", "portfolio"]
+    scope: Literal["portfolio"]
     default_tickers: list[str] = field(default_factory=list[str])
-    ticker: str | None = None
-    report_date: date | None = None
-    # Narrative system prompt for scopes WITHOUT their own session module.
-    # Ticker scope leaves this None — chat_session builds its richer prompt
-    # (report context + priors + prior threads) and persists the thread.
     system_context: str | None = None
-    persist: bool = False
     # The LLM purpose the portfolio-narrative path bills/routes under. Packs
     # that are conversational surfaces of their own (the positioning coach)
     # override this so their spend and model routing are governed separately
     # from the Ask tab (LLM_MODELS / llm_budgets are purpose-keyed).
     narrative_purpose: str = "ask_answer"
-
-
-def build_ticker_pack(ticker: str, report_date: date) -> ContextPack:
-    """The report drawer's pack: one ticker, one report, persisted thread."""
-    sym = ticker.strip().upper()
-    return ContextPack(
-        scope="ticker",
-        default_tickers=[sym],
-        ticker=sym,
-        report_date=report_date,
-        persist=True,
-    )
 
 
 def build_portfolio_pack(repo_root: Path, db_path: Path) -> ContextPack:
@@ -72,7 +40,6 @@ def build_portfolio_pack(repo_root: Path, db_path: Path) -> ContextPack:
         scope="portfolio",
         default_tickers=portfolio,
         system_context=_portfolio_system_context(repo_root, by_list),
-        persist=False,
     )
 
 
@@ -147,10 +114,10 @@ def _owner_memory_block(repo_root: Path) -> str:
     """The owner's standing memory — Worldview tenets + themes + affirmed
     profile facts — for the OPEN-ENDED portfolio scope.
 
-    2026-07-19 review, gap G3: these anchors rode only the per-ticker chat, so
+    2026-07-19 review, gap G3: these anchors rode only the retired report chat, so
     exactly the surface meant for macro/allocation/method questions ran with
     zero knowledge of the owner's beliefs. Same hand-composed spotlight
-    treatment as chat_session (this site doesn't route through
+    treatment as the former report-chat prompt (this site doesn't route through
     compose_anchor_block); every loader degrades to "" and never raises, so a
     bare install renders the prompt unchanged."""
     bits: list[str] = []
@@ -173,9 +140,7 @@ def _owner_memory_block(repo_root: Path) -> str:
 
 def _portfolio_system_context(repo_root: Path, by_list: dict[str, list[str]]) -> str:
     """The Ask tab's narrative system prompt — the portfolio sibling of
-    chat_session._system_prompt. Same read scope, same diff contract, same
-    stance redirect; the grounding is the tracked universe instead of one
-    report."""
+    the durable Ask system prompt. The grounding is the tracked universe."""
     portfolio = by_list.get("portfolio", [])
     universe_bits: list[str] = []
     for list_type, symbols in sorted(by_list.items()):
@@ -252,6 +217,5 @@ The discovery queue has deterministic commands too: "/discovery list",
 __all__ = [
     "ContextPack",
     "build_portfolio_pack",
-    "build_ticker_pack",
     "tracked_tickers",
 ]

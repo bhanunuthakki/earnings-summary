@@ -1,6 +1,6 @@
 """Read/write API for analyst_notes (alembic 0074) — durable analyst memory.
 
-Comments and chat threads live per (ticker, report_date) and die with the
+Comments live per (ticker, report_date); durable Ask threads live in SQLite and survive
 report build; this table is the cross-build record of the analyst's
 thinking. One row per thought, anchored to an object (ticker / report
 section / KPI / fact / alert), classified by *semantics*:

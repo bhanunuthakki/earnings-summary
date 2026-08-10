@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from ask import engine as ask_engine
+from ask import narrative_transport
 from ask.context import ContextPack
 from ask.engine import AskTurn, fold_events, respond_turn
 from ask.store import (
@@ -227,7 +228,7 @@ class TestStoreTurns:
 
 
 def _fake_stream(text: str) -> Iterator[dict[str, object]]:
-    """Minimal monkeypatch for chat_session.stream_llm_text."""
+    """Minimal monkeypatch for the narrative LLM transport."""
     yield {"type": "delta", "text": text}
     yield {"type": "final", "text": text}
 
@@ -261,9 +262,7 @@ class TestEngineSessionPersistence:
     def test_first_turn_creates_user_and_asst_rows(
         self, monkeypatch: pytest.MonkeyPatch, full_db: Path, tmp_path: Path
     ) -> None:
-        monkeypatch.setattr(
-            ask_engine.chat_session, "stream_llm_text", _make_fake_stream("answer1")
-        )
+        monkeypatch.setattr(narrative_transport, "stream_llm_text", _make_fake_stream("answer1"))
         monkeypatch.setattr(ask_engine, "gather_evidence", _no_evidence)
         monkeypatch.setattr(ask_engine, "build_evidence_block", _empty_evidence_block)
 
@@ -289,7 +288,7 @@ class TestEngineSessionPersistence:
             yield {"type": "delta", "text": "answer"}
             yield {"type": "final", "text": "answer"}
 
-        monkeypatch.setattr(ask_engine.chat_session, "stream_llm_text", fake_stream)
+        monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_stream)
         monkeypatch.setattr(ask_engine, "gather_evidence", _no_evidence)
         monkeypatch.setattr(ask_engine, "build_evidence_block", _empty_evidence_block)
 
@@ -314,7 +313,7 @@ class TestEngineSessionPersistence:
             yield {"type": "delta", "text": "ok"}
             yield {"type": "final", "text": "ok"}
 
-        monkeypatch.setattr(ask_engine.chat_session, "stream_llm_text", fake_stream)
+        monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_stream)
         monkeypatch.setattr(ask_engine, "gather_evidence", _no_evidence)
         monkeypatch.setattr(ask_engine, "build_evidence_block", _empty_evidence_block)
 
@@ -330,7 +329,7 @@ class TestEngineSessionPersistence:
         self, monkeypatch: pytest.MonkeyPatch, full_db: Path, tmp_path: Path
     ) -> None:
         """DB write failures must not break the event stream."""
-        monkeypatch.setattr(ask_engine.chat_session, "stream_llm_text", _make_fake_stream("ok"))
+        monkeypatch.setattr(narrative_transport, "stream_llm_text", _make_fake_stream("ok"))
         monkeypatch.setattr(ask_engine, "gather_evidence", _no_evidence)
         monkeypatch.setattr(ask_engine, "build_evidence_block", _empty_evidence_block)
         # Point the turn at a non-existent session — _store_append_turn will fail.
@@ -344,9 +343,7 @@ class TestEngineSessionPersistence:
         self, monkeypatch: pytest.MonkeyPatch, full_db: Path, tmp_path: Path
     ) -> None:
         """fold_events output from a session-backed turn still has status/kind/text."""
-        monkeypatch.setattr(
-            ask_engine.chat_session, "stream_llm_text", _make_fake_stream("the answer")
-        )
+        monkeypatch.setattr(narrative_transport, "stream_llm_text", _make_fake_stream("the answer"))
         monkeypatch.setattr(ask_engine, "gather_evidence", _no_evidence)
         monkeypatch.setattr(ask_engine, "build_evidence_block", _empty_evidence_block)
 
@@ -377,7 +374,7 @@ class TestHistoryCaps:
             yield {"type": "delta", "text": "ok"}
             yield {"type": "final", "text": "ok"}
 
-        monkeypatch.setattr(ask_engine.chat_session, "stream_llm_text", fake_stream)
+        monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_stream)
         monkeypatch.setattr(ask_engine, "gather_evidence", _no_evidence)
         monkeypatch.setattr(ask_engine, "build_evidence_block", _empty_evidence_block)
 

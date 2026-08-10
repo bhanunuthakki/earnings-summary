@@ -9,9 +9,8 @@ Endpoints:
   GET    /comments?ticker=&report_date=   list comments for a (ticker, date)
   PATCH  /comments/<id>       update status / append thread
   DELETE /comments/<id>       hard-delete
-  POST   /chat/<ticker>       streaming chat — the unified ask engine with the
-                              ticker context pack (src/ask/engine.py)
-  POST   /chat/<ticker>/apply apply a chatbot-proposed diff (Phase 4)
+  GET/POST /chat/<ticker>     retired report-chat compatibility tombstone
+  POST   /chat/<ticker>/apply retired proposal compatibility tombstone
   POST   /api/ask             one Ask-tab turn — the same engine with the
                               portfolio context pack (single folded payload)
   POST   /api/ask/stream      streaming sibling of /api/ask (SSE frames —
@@ -19,8 +18,8 @@ Endpoints:
   GET    /healthz             health check
 
 Usage:
-    python execution/comments_server.py
-    python execution/comments_server.py --port 7421 --repo-root /path/to/repo
+    python execution/sqlite_bootstrap.py execution/comments_server.py
+    python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421 --repo-root /path/to/repo
 
 CORS: the server never emits `Access-Control-Allow-Origin: *`. It echoes back
 only the file:// renderer's `null` Origin and loopback Origins — so the local
@@ -610,8 +609,7 @@ def create_app(
         10-60s; running it inline would pin the Flask request thread for
         that whole window. Dispatch to the chat pool (the generator body
         executes lazily, on the pool thread) and pipe its events through
-        a Queue, then drain the queue into SSE frames. Shared by
-        /chat/<ticker> and /api/ask/stream."""
+        a Queue, then drain the queue into SSE frames for /api/ask/stream."""
         correlation_id = get_correlation_id()
         chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=_STREAM_QUEUE_MAXSIZE)
         stop = threading.Event()
@@ -2638,9 +2636,7 @@ def create_app(
 
     @app.route("/api/ask", methods=["POST", "OPTIONS"])
     def ask_api():
-        """One Ask-thread turn — the unified ask engine with the PORTFOLIO
-        context pack ("one brain, two entry points": same engine as the
-        report drawer's /chat/<ticker>, different attached context).
+        """One Ask-thread turn through the unified durable Ask engine.
 
         JSON body ``{"query": ..., "tickers": [...], "context_spec": {...},
         "history": [{"role", "text"}, ...], "session_id": "..."}`` —
@@ -5005,7 +5001,7 @@ def create_app(
             "status": "migrated",
             "ticker": ticker.strip().upper(),
             "message": "Report chat moved to Copilot Ask; no legacy history was imported.",
-            "replacement_url": "/#screen-copilot",
+            "replacement_url": (f"/?copilot=1&ticker={ticker.strip().upper()}#screen-workspace"),
         }
 
     @app.route("/chat/<ticker>", methods=["OPTIONS"])
@@ -5021,11 +5017,6 @@ def create_app(
     def chat_endpoint(ticker: str):
         return (_legacy_chat_migrated(ticker), 410)
 
-        # The unified ask engine with this report's TICKER context pack
-        # ("one brain, two entry points" — same engine as /api/ask).
-        # Deterministic commands reply instantly, metric questions render
-        # live view fragments, everything else streams from the narrative
-        # LLM with the report context + persisted thread.
     # ----- APPLY (Phase 4) -----
 
     @app.route("/chat/<ticker>/apply", methods=["OPTIONS"])

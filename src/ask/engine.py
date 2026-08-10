@@ -1,8 +1,8 @@
-"""The unified ask engine — one brain behind both chat surfaces.
+"""The unified Ask engine behind durable Work OS Copilot.
 
-Every conversational turn (Ask tab ``POST /api/ask``, report drawer
-``POST /chat/<ticker>``) goes through :func:`respond_turn`, which routes it
-to one of three paths and yields a single event-stream vocabulary:
+Every production conversational turn (``POST /api/ask`` or
+``POST /api/ask/stream``) goes through :func:`respond_turn`, which routes it to
+one of three paths and yields a single event-stream vocabulary:
 
   command    — deterministic slash commands (``ask.commands``): no LLM,
                instant reply. ``/discovery …``, ``/help``.
@@ -11,11 +11,9 @@ to one of three paths and yields a single event-stream vocabulary:
                ``/view <q>`` forces this path; otherwise a failed compile
                falls back to the narrative path so the question still gets
                answered.
-  narrative  — everything else: the claude-CLI chat path. Ticker scope
-               runs the existing ``chat_session.stream_response`` (report
-               context + per-report thread persistence); portfolio scope
-               composes the pack's system context + the client-supplied
-               thread tail over the shared transport.
+  narrative  — everything else: the claude-CLI chat path. Production composes
+               the typed context pack and durable SQLite history over the
+               shared transport.
 
 Routing is deterministic and cheap (regexes + the metric catalog — no
 model call), with narrative as the safe default: the narrative path can
@@ -49,14 +47,14 @@ import os
 import re
 from collections.abc import Collection, Generator, Iterable, Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-import chat_session
+from ask import narrative_transport
 from ask.audit_store import (
     AnswerAuditPackage,
     AnswerAuditRecord,
@@ -539,8 +537,6 @@ def _data_events(
     spec_dict = spec.to_dict()
     # Persist BEFORE yielding: a consumer that stops at the final frame must
     # not strand the thread write inside a suspended generator.
-    if pack.persist and pack.ticker and pack.report_date is not None:
-        _persist_data_turn(repo_root, pack.ticker, pack.report_date, turn.text, message)
     # Portfolio-scope data turns: record the exchange so the session thread
     # stays continuous for the narrative path's history loading.
     if (
@@ -560,33 +556,6 @@ def _data_events(
             log.warning({"event": "ask_store_data_turn_failed", "sid": turn.session_id})
     yield {"type": "fragment", "html": fragment, "spec": spec_dict}
     yield {"type": "final", "text": message, "route": ROUTE_DATA}
-
-
-def _persist_data_turn(
-    repo_root: Path,
-    ticker: str,
-    report_date: date,
-    user_text: str,
-    message: str,
-) -> None:
-    """Keep the per-report thread continuous when a data turn answers in the
-    report drawer (fragments themselves aren't stored — the message line is
-    enough for prior-thread context). Best-effort: the answer already
-    rendered; a failed write must not break the stream."""
-    try:
-        thread = chat_session.load_thread(repo_root, ticker, report_date)
-        thread.append(chat_session.ChatTurn(role="user", text=user_text))
-        thread.append(
-            chat_session.ChatTurn(
-                role="assistant", text=f"{message} (rendered as a live data view)"
-            )
-        )
-        chat_session.save_thread(repo_root, ticker, report_date, thread)
-    except Exception:
-        log.warning(
-            {"event": "ask_persist_data_turn_failed", "ticker": ticker},
-            exc_info=True,
-        )
 
 
 def _gate_events(
@@ -661,61 +630,13 @@ def _grounding_event(rounds: int, items: list[EvidenceItem], new_items: int) -> 
     }
 
 
-def _ticker_prior_thread_text(
-    repo_root: Path, ticker: str, report_date: date, user_text: str, need_text: str
-) -> str:
-    """The prior-thread block for ticker-scope follow-up rounds: the
-    persisted thread minus this turn's two entries (``stream_response``
-    saved the user message and the need-request before the gate caught it)."""
-    try:
-        turns = chat_session.load_thread(repo_root, ticker, report_date)
-    except Exception:
-        return ""
-    if turns and turns[-1].role == "assistant" and turns[-1].text.strip() == need_text.strip():
-        turns = turns[:-1]
-    if turns and turns[-1].role == "user" and turns[-1].text.strip() == user_text.strip():
-        turns = turns[:-1]
-    return "\n\n".join(f"[{t.role.upper()}] {t.text}" for t in turns)
-
-
-def _repair_ticker_thread(
-    repo_root: Path,
-    ticker: str,
-    report_date: date,
-    need_text: str,
-    replacement: str,
-    diff: dict[str, object] | None = None,
-) -> None:
-    """Swap the persisted need-request JSON for the loop's real outcome.
-    ``stream_response`` saved the raw JSON as the assistant turn before the
-    loop ran; left in place it would poison the next turn's prior-thread
-    context. Best-effort: a fake transport that didn't persist (tests) or a
-    racing write makes this a no-op."""
-    try:
-        turns = chat_session.load_thread(repo_root, ticker, report_date)
-        for t in reversed(turns):
-            if t.role == "assistant" and t.text.strip() == need_text.strip():
-                t.text = replacement
-                t.proposed_diff = diff
-                break
-        else:
-            return
-        chat_session.save_thread(repo_root, ticker, report_date, turns)
-    except Exception:
-        log.warning({"event": "ask_followup_thread_repair_failed", "ticker": ticker}, exc_info=True)
-
-
 def _turn_cache_key(turn: AskTurn, pack: ContextPack) -> str | None:
     """A stable per-thread identity for the retrieval memo (L14,
-    ``ask.grounding.gather_evidence``). A server-side session id (the Ask tab) or
-    ``ticker:report_date`` (the report drawer) scopes the memo to ONE
-    conversation so two threads never share retrieved evidence; ``None`` (a
-    first-turn portfolio call with no session yet) disables it — the memo is
-    opt-in and the turn behaves exactly as before."""
+    ``ask.grounding.gather_evidence``). A server-side session id scopes the memo
+    to one conversation so two threads never share retrieved evidence; ``None``
+    (a first turn with no session yet) disables it."""
     if turn.session_id:
         return f"sid:{turn.session_id}"
-    if pack.scope == "ticker" and pack.ticker and pack.report_date is not None:
-        return f"rep:{pack.ticker}:{pack.report_date.isoformat()}"
     return None
 
 
@@ -1410,10 +1331,8 @@ def _narrative_events(
     answer with what exists). Round-2 evidence joins the same [n] citation
     numbering and the same S8 per-claim audit. Not armed → turns behave
     exactly as before S7."""
-    scope_tickers = (
-        [pack.ticker]
-        if pack.scope == "ticker" and pack.ticker
-        else ([t.strip().upper() for t in turn.tickers if t.strip()] or list(pack.default_tickers))
+    scope_tickers = [t.strip().upper() for t in turn.tickers if t.strip()] or list(
+        pack.default_tickers
     )
     evidence = gather_evidence(
         _retrieval_text(text, turn),
@@ -1429,20 +1348,6 @@ def _narrative_events(
         if evidence:
             stage["note"] = f"grounded on {len(evidence)} source{'s' if len(evidence) != 1 else ''}"
         yield stage
-
-    if pack.scope == "ticker" and pack.ticker and pack.report_date is not None:
-        yield from _ticker_narrative_events(
-            text,
-            pack.ticker,
-            pack.report_date,
-            repo_root=repo_root,
-            db_path=db_path,
-            evidence=evidence,
-            evidence_block=evidence_block,
-            armed=armed,
-            scope_tickers=scope_tickers,
-        )
-        return
 
     base_context = pack.system_context or "You are a portfolio research assistant."
     system_context = base_context
@@ -1482,7 +1387,8 @@ def _narrative_events(
         + text
     )
     final_text, held, _trailing = yield from _gate_events(
-        chat_session.stream_llm_text(full_prompt, purpose=pack.narrative_purpose), sniff=armed
+        narrative_transport.stream_llm_text(full_prompt, purpose=pack.narrative_purpose),
+        sniff=armed,
     )
     if final_text is None:  # error frame already yielded / defensive no-final
         return
@@ -1541,89 +1447,7 @@ def _narrative_events(
         except Exception:
             log.warning({"event": "ask_store_asst_turn_failed", "sid": turn.session_id})
 
-    diff = chat_session.extract_diff(final_text)
-    if diff is not None:
-        yield {"type": "diff_proposal", "diff": diff}
-
-
-def _ticker_narrative_events(
-    text: str,
-    ticker: str,
-    report_date: date,
-    *,
-    repo_root: Path,
-    db_path: Path,
-    evidence: list[EvidenceItem],
-    evidence_block: str,
-    armed: bool,
-    scope_tickers: list[str],
-) -> Iterator[dict[str, object]]:
-    """Ticker scope: ``chat_session.stream_response`` owns the system prompt
-    and thread persistence; the S7 gate intercepts its final to run the
-    evidence loop, then repairs the persisted thread (the need-request JSON
-    must not stand as the saved assistant turn)."""
-    # Armed turns always carry extra_context (the NEED protocol rides with
-    # any evidence) — test fakes of stream_response must accept the kwarg.
-    protocol = need_protocol_block() if armed else ""
-    extra = "\n\n".join(b for b in (evidence_block, protocol) if b)
-    kwargs: dict[str, str] = {"extra_context": extra} if extra else {}
-    final_text, held, trailing = yield from _gate_events(
-        chat_session.build_chat_response.stream_response(
-            repo_root=repo_root,
-            ticker=ticker,
-            report_date=report_date,
-            user_message=text,
-            **kwargs,
-        ),
-        sniff=armed,
-    )
-    if final_text is None:
-        return
-
-    needs = parse_need_request(final_text) if armed else None
-    if needs is None:
-        yield from held
-        yield {"type": "final", "text": final_text}
-        yield from trailing  # e.g. the session's own diff_proposal
-        if armed:
-            yield _grounding_event(0, evidence, 0)
-        if evidence:
-            payload = build_citations_payload(final_text, evidence, db_path=db_path)
-            if payload is not None:
-                yield {"type": "citations", **payload}
-        return
-
-    outcome = yield from run_followup_rounds(
-        question=text,
-        needs=needs,
-        items=evidence,
-        base_context=chat_session.build_system_prompt(repo_root, ticker, report_date),
-        thread_text=_ticker_prior_thread_text(repo_root, ticker, report_date, text, final_text),
-        repo_root=repo_root,
-        db_path=db_path,
-        scope_tickers=scope_tickers,
-        ledger_ticker=ticker,
-    )
-    if outcome.final_text is None:
-        _repair_ticker_thread(
-            repo_root,
-            ticker,
-            report_date,
-            final_text,
-            "(requested additional evidence, but the follow-up failed — please ask again)",
-        )
-        yield {"type": "error", "error": outcome.error or "evidence follow-up failed"}
-        return
-
-    diff = chat_session.extract_diff(outcome.final_text)
-    _repair_ticker_thread(repo_root, ticker, report_date, final_text, outcome.final_text, diff=diff)
-    yield {"type": "delta", "text": outcome.final_text}
-    yield {"type": "final", "text": outcome.final_text}
-    yield _grounding_event(outcome.rounds, outcome.items, outcome.new_items)
-    # Round-2 evidence enters the S8 per-claim citation audit too.
-    payload = build_citations_payload(outcome.final_text, outcome.items, db_path=db_path)
-    if payload is not None:
-        yield {"type": "citations", **payload}
+    diff = narrative_transport.extract_diff(final_text)
     if diff is not None:
         yield {"type": "diff_proposal", "diff": diff}
 

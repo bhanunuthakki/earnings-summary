@@ -548,6 +548,8 @@ def test_workspace_strip_renders_disposition_buttons_when_present() -> None:
     assert 'data-artifact-id="42"' in html
     assert "ACME grows via X." in html
     assert "growth diversifier" in html
+    assert 'href="/?copilot=1&amp;ticker=ACME#screen-workspace"' in html
+    assert "/chat/" not in html
 
 
 def test_workspace_strip_hides_when_artifact_absent_no_stub(tmp_path: Path) -> None:

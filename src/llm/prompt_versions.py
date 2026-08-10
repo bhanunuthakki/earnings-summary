@@ -140,7 +140,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Ask advisory answer (mode-B rubric, close_the_loops L3). The audit run
     # records this version, so bump when the conversational ANSWER prompt (the
     # system context + evidence + thread assembly in src/ask/engine.py /
-    # chat_session.stream_response, generation purpose `ask_answer`) is
+    # ask.narrative_transport.stream_llm_text, generation purpose `ask_answer`) is
     # materially rewritten, then re-run `run_llm_evals.py --purpose
     # ask_advisory_answer` so the rewrite forks the score history cleanly.
     "ask_advisory_answer": "v1",

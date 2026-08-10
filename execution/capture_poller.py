@@ -6,8 +6,8 @@ RestartOnFailure + per-run logs. The bot token is read from
 the external ``telegram_bot_token`` secret; absent → exit cleanly (capture is simply
 unconfigured). ``--once`` drains a single batch (manual drain / smoke test).
 
-    python execution/capture_poller.py --once
-    python execution/capture_poller.py --repo-root /path/to/repo
+    python execution/sqlite_bootstrap.py execution/capture_poller.py --once
+    python execution/sqlite_bootstrap.py execution/capture_poller.py --repo-root /path/to/repo
 """
 
 from __future__ import annotations

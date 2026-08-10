@@ -49,23 +49,23 @@ call:
 
 ```
 # a musing / thought worth keeping
-python execution/land_session_notes.py musing --text "..." [--session-ref <id>]
+python execution/sqlite_bootstrap.py execution/land_session_notes.py musing --text "..." [--session-ref <id>]
 
 # close a standing intent the session resolved
-python execution/land_session_notes.py close-intent --ref seed:intent:leap-sleeve \
+python execution/sqlite_bootstrap.py execution/land_session_notes.py close-intent --ref seed:intent:leap-sleeve \
     --verdict resolved-rejected --reason "..." --session-ref <id>
 
 # a position decision stated in the session
-python execution/land_session_notes.py decision --ticker NVDA --direction buy \
+python execution/sqlite_bootstrap.py execution/land_session_notes.py decision --ticker NVDA --direction buy \
     --conviction high --falsifier "..." --size-usd 31000
 ```
 
 Then, ALWAYS, land the full session transcript for later distillation:
 
 ```
-python execution/land_session_notes.py transcript --file <path> --session-ref <id>
+python execution/sqlite_bootstrap.py execution/land_session_notes.py transcript --file <path> --session-ref <id>
 # or via stdin:
-python execution/land_session_notes.py transcript --session-ref <id> < transcript.txt
+python execution/sqlite_bootstrap.py execution/land_session_notes.py transcript --session-ref <id> < transcript.txt
 ```
 
 The discrete-outcome commands (musing/close-intent/decision) capture things

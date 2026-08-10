@@ -343,8 +343,8 @@ def _decision_card_strip(
             f'data-verb="{_esc(verb)}" data-artifact-id="{artifact_id}">{_esc(label)}</button>'
         )
     body.write(
-        f'<a class="panel-xlink" href="/chat/{_esc(ticker)}" target="_blank" '
-        'rel="noopener">Ask the Senior Partner &rarr;</a>'
+        f'<a class="panel-xlink" href="/?copilot=1&amp;ticker={_esc(ticker)}#screen-workspace" '
+        'target="_top">Ask the Senior Partner &rarr;</a>'
     )
     body.write(_xlink_html("thesis", "Edit hypothesis →"))
     body.write("</div>")  # /dc-actions

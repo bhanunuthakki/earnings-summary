@@ -1713,7 +1713,7 @@ def review_position(
         # Owner-profile anchor (§4 delivery seam 2 of tenet2_advisory_program.md).
         # This site composes the prompt by hand rather than via
         # compose_anchor_block, so spotlight-wrap here (same pattern as
-        # chat_session.py's hand-composed worldview block) — a load failure
+        # the prior report-chat prompt's hand-composed worldview block) — a load failure
         # must never break the review, so it degrades to "" like every other
         # anchor loader.
         try:

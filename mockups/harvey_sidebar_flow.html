@@ -844,7 +844,7 @@
       </div>
 
       <!-- Command Bar Trigger -->
-      <div class="sidebar-cmd" onclick="openDrillDrawer('ask-copilot')">
+      <div class="sidebar-cmd" onclick="openWorkOsCopilot()">
         <span style="display: flex; align-items: center; gap: var(--sp-2);">
           <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <span class="sidebar-cmd-text">⌘K Search / Ask</span>
@@ -904,7 +904,7 @@
         <span>Workspaces</span> / <span class="active" id="breadcrumb-title">Portfolio Cockpit & Review</span>
       </div>
       <div style="display: flex; gap: var(--sp-2); align-items: center;">
-        <button class="k-btn k-btn-quiet k-btn-sm" onclick="openDrillDrawer('ask-copilot')">
+        <button class="k-btn k-btn-quiet k-btn-sm" onclick="openWorkOsCopilot()">
           <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           Ask Copilot
         </button>
@@ -3313,34 +3313,6 @@
       markViewModified();
     }
 
-    function populateCopilotPrompt(promptText) {
-      const input = document.getElementById('copilotInput');
-      if (input) {
-        input.value = promptText;
-        executeCopilotQuery();
-      }
-    }
-
-    function executeCopilotQuery() {
-      const input = document.getElementById('copilotInput');
-      const responseDiv = document.getElementById('copilotResponse');
-      if (!input || !responseDiv) return;
-      const q = input.value.trim();
-      if (!q) return;
-
-      responseDiv.innerHTML = `
-        <div class="k-well" style="border-color: var(--accent-soft);">
-          <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; margin-bottom: var(--sp-1);">AI COPILOT ANALYSIS</div>
-          <div style="font-size: var(--fs-body); color: var(--fg); font-family: var(--sans); line-height: 1.6;">
-            Evaluating "${q}" across SEC 10-Q disclosures, transcripts, and financial facts...
-          </div>
-          <div style="margin-top: var(--sp-2); font-size: var(--fs-caption); color: var(--ok); font-weight: 600; display: flex; align-items: center; gap: var(--sp-2);">
-            <span class="k-dot k-dot-ok"></span> Grounded Citations: doc:bcb_jun26_p4, kpi:nu:net_margin, fin:nu:rev:q2_26
-          </div>
-        </div>
-      `;
-    }
-
     // CONTEXTUAL SLIDE-OVER DRAWER (FOR QUICK CONTEXTUAL DRILL-DOWNS ONLY)
     function openDrillDrawer(type) {
       const drawer = document.getElementById('drillDrawer');
@@ -3775,25 +3747,6 @@
             <div style="font-weight: 600; font-size: var(--fs-body); margin-top: var(--sp-1);">JPMorgan Reaffirms Overweight on NU ($20 Target)</div>
             <div style="font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-1);">Highlights accelerating deposit intake in Mexico.</div>
           </div>
-        `;
-      } else if (type === 'ask-copilot') {
-        title.innerText = "Ask Copilot Assistant";
-        subtitle.innerText = "Side-by-side natural language research copilot";
-        body.innerHTML = `
-          <div style="font-size: var(--fs-caption); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1);">Suggested Prompts:</div>
-          <div style="display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-bottom: var(--sp-3);">
-            <button class="k-chip" onclick="populateCopilotPrompt('Analyze NU Q2 earnings beat')">Analyze NU Q2 beat</button>
-            <button class="k-chip" onclick="populateCopilotPrompt('Compare NU vs MELI net margins')">Compare NU vs MELI</button>
-            <button class="k-chip" onclick="populateCopilotPrompt('Check NPL 90+ falsifier status')">Check NPL 90+ status</button>
-            <button class="k-chip" onclick="populateCopilotPrompt('Run 10-year DCF sensitivity')">Run DCF sensitivity</button>
-          </div>
-
-          <div style="display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3);">
-            <input type="text" id="copilotInput" placeholder="Ask copilot about NU, thesis, or DCF..." style="width: 100%; background: var(--paper); border: var(--bw-thin) solid var(--border); color: var(--fg); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); outline: none; font-size: var(--fs-body); font-family: var(--sans);">
-            <button class="k-btn k-btn-primary k-btn-sm" onclick="executeCopilotQuery()">Ask</button>
-          </div>
-
-          <div id="copilotResponse"></div>
         `;
       }
       scrim.classList.add('is-open');

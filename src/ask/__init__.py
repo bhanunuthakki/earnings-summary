@@ -1,14 +1,10 @@
-"""The unified conversational engine ("one brain, two entry points").
+"""The unified durable conversational engine behind Work OS Copilot.
 
-Both chat surfaces — the command center's Ask tab (``POST /api/ask``) and
-the per-report chat drawer (``POST /chat/<ticker>``) — route every turn
-through ``ask.engine.respond_turn``. What differs between them is only the
-attached :class:`ask.context.ContextPack`: a report drawer turn carries
-that ticker's report context (thesis, bear case, prior threads — the
-existing ``chat_session`` machinery), while an Ask-tab turn carries the
-portfolio-scoped pack.
+Production turns enter through ``POST /api/ask`` or ``/api/ask/stream`` and
+route through ``ask.engine.respond_turn`` with a typed context pack. Reports
+hand ticker/report identity into that same workspace; legacy ``/chat`` routes
+are non-writing migration tombstones.
 
 Import submodules directly (``from ask.engine import respond_turn``); this
-package init stays import-free so ``chat_session`` ⇄ ``ask`` can reference
-each other's submodules without an import cycle.
+package init remains import-free to avoid widening the engine's import graph.
 """
