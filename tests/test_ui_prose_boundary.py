@@ -45,10 +45,6 @@ _SIGNATURE_ALLOWLIST: dict[str, str] = {
         "pinned JS inline-subset mirror — Ask streams tokens + threads cite-marks "
         "client-side, so it cannot be server-rendered"
     ),
-    "src/report/renderers/workspace_chat.py": (
-        "pinned JS inline-subset mirror — the iframe chat streams tokens "
-        "client-side (same category as ask_dock); cannot be server-rendered"
-    ),
     "src/report/renderers/workspace_data.py": (
         "markdown STRIPPER (**x** -> plaintext x for a news-tile gloss), not an "
         "HTML renderer — emits no tags"

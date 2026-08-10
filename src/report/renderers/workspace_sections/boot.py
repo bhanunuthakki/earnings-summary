@@ -128,31 +128,24 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         '<aside class="chat-sidebar" id="chat-sidebar" aria-hidden="true">'
         '<header class="chat-head">'
         "<div>"
-        f'<div class="chat-title">Ask Claude about {_esc(ticker)}</div>'
-        f'<div class="chat-sub">{_esc(report_date)} '
-        "&middot; streams from comments_server &middot; "
+        f'<div class="chat-title">Continue {_esc(ticker)} research</div>'
+        f'<div class="chat-sub">Report {_esc(report_date)} &middot; '
         # P2.4 entry point: stances live behind the Socratic flow, never in chat.
         f'<a href="/socratic/{_esc(ticker)}" '
         f'data-server-path="/socratic/{_esc(ticker)}" target="_blank" '
         'rel="noopener">think it through &rarr;</a></div>'
         "</div>"
-        '<button class="chat-close" id="chat-close" type="button" aria-label="close">&times;</button>'
+        '<button class="chat-close k-btn k-btn-quiet k-btn-sm" id="chat-close" type="button" aria-label="Close Copilot handoff">&times;</button>'
         "</header>"
-        '<div class="chat-thread" id="chat-thread"></div>'
-        '<form class="chat-form" id="chat-form">'
-        '<textarea name="message" rows="3" required '
-        'placeholder="Ask about a KPI, propose an edit, '
-        'look up a quote in the transcript&hellip;"></textarea>'
-        '<div class="chat-form-row">'
-        '<span class="chat-hint" id="chat-hint">Cmd+Enter to send</span>'
-        '<button type="submit" class="k-btn k-btn-primary">Send</button>'
+        '<div class="chat-handoff k-well">'
+        "<div>Open the durable Copilot to keep this report context, history, evidence, and governed proposal review together.</div>"
+        '<a class="k-btn k-btn-primary" id="chat-open-copilot" href="/">Open in Copilot</a>'
         "</div>"
-        "</form>"
         "</aside>"
         '<aside class="chat-drawer" id="chat-drawer">'
-        '<button class="chat-toggle k-btn k-btn-primary" id="chat-toggle" type="button" aria-label="Open chat">'
+        '<button class="chat-toggle k-btn k-btn-primary" id="chat-toggle" type="button" aria-label="Open Copilot handoff">'
         '<span class="chat-toggle-icon">&#8984;</span>'
-        '<span class="chat-toggle-label">Chat</span>'
+        '<span class="chat-toggle-label">Copilot</span>'
         "</button>"
         "</aside>"
     )

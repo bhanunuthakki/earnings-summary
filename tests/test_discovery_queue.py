@@ -1,6 +1,6 @@
 """P5.4 discovery queue: the approval-queue panel, the /api/discovery REST
 surface, the budget-gated build/run actions (non-spawning registry — no
-real subprocesses), the deterministic /discovery chat commands, and the
+real subprocesses), the deterministic /discovery Ask commands, and the
 discovery_build worker's status ladder.
 """
 
@@ -502,46 +502,48 @@ def test_discovery_build_validation(client: FlaskClient) -> None:
 
 
 # ----------------------------------------------------------------------------
-# chat commands
+# Ask commands
 # ----------------------------------------------------------------------------
 
 
-def _chat(client: FlaskClient, message: str) -> str:
-    res = client.post("/chat/WDC", json={"report_date": "2026-06-11", "message": message})
+def _ask(client: FlaskClient, message: str) -> str:
+    res = client.post("/api/ask", json={"query": message, "tickers": ["WDC"]})
     assert res.status_code == 200
-    assert res.mimetype == "text/event-stream"
-    return res.get_data(as_text=True)
+    body = res.get_json()
+    assert body["status"] == "ok"
+    assert body["kind"] == "command"
+    return str(body["text"])
 
 
-def test_chat_discovery_list(client: FlaskClient) -> None:
-    out = _chat(client, "/discovery list")
+def test_ask_discovery_list(client: FlaskClient) -> None:
+    out = _ask(client, "/discovery list")
     assert "WDC" in out
     assert "score 4" in out
-    assert "OLD" not in out  # dismissed stays out of chat too
+    assert "OLD" not in out  # dismissed stays out of Ask too
 
 
-def test_chat_discovery_queue_and_dismiss(client: FlaskClient, repo: Path) -> None:
+def test_ask_discovery_queue_and_dismiss(client: FlaskClient, repo: Path) -> None:
     db = repo / "data" / "portfolio.db"
-    out = _chat(client, "/discovery queue WDC")
+    out = _ask(client, "/discovery queue WDC")
     assert "queued" in out
     wdc = next(c for c in list_candidates(db_path=db) if c.ticker == "WDC")
     assert wdc.status == "queued"
-    out = _chat(client, "/discovery dismiss WDC")
+    out = _ask(client, "/discovery dismiss WDC")
     assert "dismissed" in out
 
 
-def test_chat_discovery_build(client: FlaskClient, registry: _NonSpawningRegistry) -> None:
-    out = _chat(client, "/discovery build WDC")
+def test_ask_discovery_build(client: FlaskClient, registry: _NonSpawningRegistry) -> None:
+    out = _ask(client, "/discovery build WDC")
     assert "Eval build started" in out
     jobs = registry.list_jobs()
     assert any(j["kind"] == "discovery-build" for j in jobs)
     # Non-buildable names get a refusal, not a job.
-    out = _chat(client, "/discovery build DONE")
+    out = _ask(client, "/discovery build DONE")
     assert "isn't buildable" in out
 
 
-def test_chat_discovery_usage(client: FlaskClient) -> None:
-    out = _chat(client, "/discovery frobnicate")
+def test_ask_discovery_usage(client: FlaskClient) -> None:
+    out = _ask(client, "/discovery frobnicate")
     assert "Usage:" in out
 
 

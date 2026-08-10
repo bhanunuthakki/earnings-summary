@@ -1,9 +1,4 @@
-"""The in-report chat panel is a push-sidebar (like the comments sidebar),
-not a floating overlay, and the two are mutually exclusive (one open at a
-time). Tests the render-helper markup + the inlined CSS/JS contract that
-wires the push + the one-open-at-a-time handoff, matching the repo's
-render-helper test convention (see test_renderer_forgone_budget.py).
-"""
+"""The report exposes one compact handoff to the durable Work OS Copilot."""
 
 from __future__ import annotations
 
@@ -20,7 +15,7 @@ from report.renderers.workspace_comments import JS as COMMENTS_JS
 # ---------------------------------------------------------------------------
 
 
-def test_chat_shell_emits_push_sidebar_plus_launcher() -> None:
+def test_chat_shell_emits_copilot_handoff_without_a_second_composer() -> None:
     body = StringIO()
     ws_r._chat_drawer_shell(body, "NU", "2026-06-01")
     s = body.getvalue()
@@ -31,9 +26,12 @@ def test_chat_shell_emits_push_sidebar_plus_launcher() -> None:
     assert '<aside class="chat-drawer" id="chat-drawer"' in s
     assert "chat-toggle" in s and 'id="chat-toggle"' in s
     assert "k-btn k-btn-primary" in s  # composes the control kit
-    # Thread + form still live inside the (now push-sidebar) panel.
-    assert 'id="chat-thread"' in s and 'id="chat-form"' in s
-    # The old floating overlay panel is gone.
+    assert 'id="chat-open-copilot"' in s
+    assert "Open in Copilot" in s
+    assert 'id="chat-thread"' not in s
+    assert 'id="chat-form"' not in s
+    assert "textarea" not in s
+    assert 'type="submit"' not in s
     assert "chat-panel" not in s
 
 
@@ -47,10 +45,12 @@ def test_chat_css_is_a_push_sidebar() -> None:
     assert ".chat-sidebar {" in CHAT_CSS
     assert ".chat-sidebar.open" in CHAT_CSS
     # Collapsed → expanded width is the push.
-    assert "width: 0" in CHAT_CSS and "width: 460px" in CHAT_CSS
+    assert "width: 0" in CHAT_CSS and "width: var(--sidebar-width)" in CHAT_CSS
     assert "flex-shrink: 0" in CHAT_CSS
     # No leftover fixed-overlay panel rules.
     assert ".chat-panel" not in CHAT_CSS
+    assert ".chat-form" not in CHAT_CSS
+    assert ".chat-diff-actions" not in CHAT_CSS
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +70,21 @@ def test_chat_js_enforces_mutual_exclusivity_and_push() -> None:
     assert "--sidebar-open-width" in CHAT_JS
     # No stale references to the removed floating panel element.
     assert "var panel" not in CHAT_JS
+
+
+def test_report_chat_hands_off_context_without_legacy_chat_or_apply_calls() -> None:
+    assert "function openDurableCopilot(context)" in CHAT_JS
+    assert "window.parent.openWorkOsCopilot" in CHAT_JS
+    assert "company_ticker: TICKER" in CHAT_JS
+    assert "report_date: REPORT_DATE" in CHAT_JS
+    assert "category: 'research'" in CHAT_JS
+    assert "fact_ref: factRef" in CHAT_JS
+    assert "Open in Copilot" in CHAT_JS
+    assert "copilot: '1'" in CHAT_JS
+    assert "fetch(SERVER_URL + '/chat/'" not in CHAT_JS
+    assert "'/apply'" not in CHAT_JS
+    assert "requestSubmit()" not in CHAT_JS
+    assert "diff_proposal" not in CHAT_JS
 
 
 def test_comments_js_closes_chat_when_a_comment_opens() -> None:

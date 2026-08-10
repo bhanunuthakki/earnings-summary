@@ -132,15 +132,46 @@ def test_work_os_shell_has_one_search_ask_entry_and_accessible_transients() -> N
     assert "focus()" in html
 
 
-def test_search_ask_drawer_uses_the_governed_backend_instead_of_demo_copy() -> None:
+def test_work_os_search_and_command_k_open_the_one_copilot_workspace() -> None:
     html = render_work_os_shell()
-    assert "fetch('/api/ask'" in html
-    assert "work-os:ask-session" in html
+
+    assert html.count('id="workOsCopilot"') == 1
+    assert html.count('id="workOsCopilotThread"') == 1
+    assert "openWorkOsCopilot()" in html
+    assert "workOsOpenCopilot" in html
+    assert "ev.key.toLowerCase() === 'k'" in html
+    assert "metaKey || ev.ctrlKey" in html
+    assert html.count("ev.key.toLowerCase() === 'k'") == 1
+    assert "event.key.toLowerCase() === 'k'" not in html
+    assert html.count('class="screen-view') == len(SCREEN_SPECS)
+
+
+def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
+    html = render_work_os_shell()
+
+    assert '<style id="work-os-controls-css">' in html
+    assert ":root { color-scheme: dark;" in html
+    assert 'input[type="search"]' in html
+    assert "select, textarea" in html
+    assert "font-family: var(--sans)" in html
+    assert "border: 1px solid var(--border)" in html
+    assert "border-radius: var(--radius)" in html
+    assert html.index('id="work-os-controls-css"') < html.index('id="work-os-copilot-css"')
+
+
+def test_legacy_search_ask_drawer_and_non_durable_runtime_are_removed() -> None:
+    html = render_work_os_shell()
+
+    assert "ask-copilot" not in html
+    assert "executeCopilotQuery" not in html
+    assert "copilotInput" not in html
+    assert "copilotResponse" not in html
+    assert "fetch('/api/ask'," not in html
+    assert "work-os:ask-session" not in html
     assert "AI COPILOT ANALYSIS" not in html
     assert "Grounded Citations: doc:bcb_jun26_p4" not in html
     assert 'role="status"' in html
     assert 'role="alert"' in html
-    assert ".replace(/\\n/g, '<br>')" in html
 
 
 def test_company_drawers_and_full_brief_use_live_report_artifacts() -> None:

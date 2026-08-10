@@ -18,6 +18,8 @@ from html import escape
 from pathlib import Path
 
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
+from pipeline.work_os_copilot import render_work_os_copilot
+from ui.controls import controls_css
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +118,12 @@ _NAV_ITEM_RE = re.compile(
     re.DOTALL,
 )
 _COPILOT_FUNCTION_RE = re.compile(
-    r"\n\s*function executeCopilotQuery\(\) \{.*?\n\s*\}\n\n\s*// CONTEXTUAL SLIDE-OVER DRAWER",
+    r"\n\s*function populateCopilotPrompt\(promptText\) \{.*?"
+    r"\n\s*// CONTEXTUAL SLIDE-OVER DRAWER",
+    re.DOTALL,
+)
+_COPILOT_DRAWER_RE = re.compile(
+    r" else if \(type === 'ask-copilot'\) \{.*?\n\s*\}",
     re.DOTALL,
 )
 _PIPELINE_SIMULATION_RE = re.compile(
@@ -399,48 +406,6 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
-  window.executeCopilotQuery = async function () {{
-    const input = document.getElementById('copilotInput');
-    const responseDiv = document.getElementById('copilotResponse');
-    if (!input || !responseDiv) return;
-    const query = input.value.trim();
-    if (!query) return;
-    responseDiv.setAttribute('aria-busy', 'true');
-    responseDiv.innerHTML = '<div class="k-well" role="status">Searching governed research and citations…</div>';
-    let sessionId = null;
-    try {{ sessionId = window.sessionStorage.getItem('work-os:ask-session'); }} catch (error) {{}}
-    const payload = {{ query: query, tickers: window.workOsActiveTicker ? [window.workOsActiveTicker] : [] }};
-    if (sessionId) payload.session_id = sessionId;
-    try {{
-      const response = await fetch('/api/ask', {{
-        method: 'POST', headers: {{ 'Content-Type': 'application/json', Accept: 'application/json' }},
-        body: JSON.stringify(payload)
-      }});
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const data = await response.json();
-      if (data.session_id) {{
-        try {{ window.sessionStorage.setItem('work-os:ask-session', data.session_id); }} catch (error) {{}}
-      }}
-      if (data.status !== 'ok') {{
-        responseDiv.innerHTML = '<div class="k-well" role="alert">' + escapeWorkOsHtml(data.message || 'Ask is temporarily unavailable.') + '</div>';
-      }} else if (data.kind === 'view' && data.fragment) {{
-        responseDiv.innerHTML = data.fragment;
-        if (window.htmx) window.htmx.process(responseDiv);
-      }} else {{
-        const answer = data.text || data.message || 'No answer was produced.';
-        const citationCount = Array.isArray(data.citations) ? data.citations.length : 0;
-        responseDiv.innerHTML = '<div class="k-well"><div class="prose">' +
-          escapeWorkOsHtml(answer).replace(/\\n/g, '<br>') + '</div>' +
-          (citationCount ? '<div class="t-mono" style="font-size: var(--fs-caption); color: var(--ok); margin-top: var(--sp-2);">' + citationCount + ' grounded source' + (citationCount === 1 ? '' : 's') + '</div>' : '') +
-          '</div>';
-      }}
-    }} catch (error) {{
-      responseDiv.innerHTML = '<div class="k-well" role="alert">Ask is temporarily unavailable. Retry when the local research service is ready.</div>';
-    }} finally {{
-      responseDiv.removeAttribute('aria-busy');
-    }}
-  }};
-
   function workOsScreenFromHash() {{
     const raw = window.location.hash.replace(/^#/, '').split('?')[0];
     if (!raw) return 'screen-cockpit';
@@ -467,6 +432,19 @@ def _production_runtime(generated_at: datetime) -> str:
   window.addEventListener('hashchange', function () {{ workOsApplyHash(false); }});
   workOsApplyHash(true);
   workOsHydratePortfolio();
+  const workOsLaunchParams = new URLSearchParams(window.location.search);
+  if (workOsLaunchParams.get('copilot') === '1') {{
+    window.setTimeout(function () {{
+      window.openWorkOsCopilot({{
+        company_ticker: workOsLaunchParams.get('ticker') || null,
+        category: 'research',
+        report_date: workOsLaunchParams.get('report_date') || null,
+        origin_key: workOsLaunchParams.get('origin_key') || 'standalone-report',
+        coverage_role_at_creation: 'unknown',
+        lifecycle_at_creation: 'unknown'
+      }});
+    }}, 0);
+  }}
 
   function workOsEndpoint(screenId) {{
     const base = WORK_OS_ENDPOINTS[screenId];
@@ -519,16 +497,6 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
-  document.addEventListener('keydown', function (event) {{
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {{
-      event.preventDefault();
-      openDrillDrawer('ask-copilot');
-      setTimeout(function () {{
-        const input = document.getElementById('copilotInput');
-        if (input) input.focus();
-      }}, 0);
-    }}
-  }});
 </script>
 """
 
@@ -591,6 +559,7 @@ def _make_allocation_language_honest(html: str) -> str:
     // AUDIT LOG FILTERING""",
         html,
     )
+    html = _COPILOT_DRAWER_RE.sub("", html)
     return _COPILOT_FUNCTION_RE.sub(
         "\n\n    // CONTEXTUAL SLIDE-OVER DRAWER",
         html,
@@ -598,6 +567,7 @@ def _make_allocation_language_honest(html: str) -> str:
 
 
 def _add_production_contract(html: str, generated_at: datetime) -> str:
+    html = html.replace("openDrillDrawer('ask-copilot')", "openWorkOsCopilot()")
     html = html.replace(
         '<div class="card-grid-stat-4col">',
         '<div class="card-grid-stat-4col" id="workOsPortfolioStats">',
@@ -615,8 +585,8 @@ def _add_production_contract(html: str, generated_at: datetime) -> str:
     )
     html = html.replace("<tbody>", '<tbody id="workOsPortfolioRows">', 1)
     html = html.replace(
-        '<div class="sidebar-cmd" onclick="openDrillDrawer(\'ask-copilot\')">',
-        '<button type="button" class="sidebar-cmd k-btn k-btn-quiet" aria-label="Search or ask" onclick="openDrillDrawer(\'ask-copilot\')">',
+        '<div class="sidebar-cmd" onclick="openWorkOsCopilot()">',
+        '<button type="button" class="sidebar-cmd k-btn k-btn-quiet" aria-label="Search or ask" onclick="openWorkOsCopilot()">',
         1,
     )
     command_end = "</span>\n      </div>\n\n      <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->"
@@ -662,7 +632,9 @@ def _add_production_contract(html: str, generated_at: datetime) -> str:
             1,
         )
     runtime = _production_runtime(generated_at)
-    return html.replace("</body>", runtime + "\n</body>", 1)
+    copilot = render_work_os_copilot()
+    controls = f'<style id="work-os-controls-css">{controls_css("dark")}</style>'
+    return html.replace("</body>", controls + "\n" + copilot + "\n" + runtime + "\n</body>", 1)
 
 
 @lru_cache(maxsize=1)

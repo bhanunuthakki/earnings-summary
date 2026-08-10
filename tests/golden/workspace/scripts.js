@@ -1550,328 +1550,109 @@ ${r?'Expression: "'+r+`"
   }
 })();
 
-(function() {
-  // Wait until the comments module has set up boot data.
+(function () {
+  'use strict';
+
   function init() {
     var boot = window.__workspaceCommentBoot;
     if (!boot) {
-      setTimeout(init, 100);
+      window.setTimeout(init, 100);
       return;
     }
     var SERVER_URL = /^https?:$/.test(window.location.protocol)
       ? window.location.origin
       : (boot.server_url || 'http://localhost:7421');
-    var TICKER = boot.ticker;
-    var REPORT_DATE = boot.report_date;
-    var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
-
-    // The chat panel is now a push-sidebar (flex sibling of .l1-root),
-    // mirroring the comments sidebar — see _chat_drawer_shell +
-    // _comment_sidebar_shell in workspace_html.py. The floating
-    // .chat-drawer keeps only the launcher toggle; the panel content
-    // lives in .chat-sidebar and slides the document aside when open.
+    var TICKER = String(boot.ticker || '').toUpperCase();
+    var REPORT_DATE = String(boot.report_date || '');
     var sidebar = document.getElementById('chat-sidebar');
     var toggle = document.getElementById('chat-toggle');
-    if (!sidebar || !toggle) return;
+    var handoff = document.getElementById('chat-open-copilot');
+    if (!sidebar || !toggle || !handoff) return;
 
-    // De-duplicate the launcher when embedded. The command center embeds this
-    // report in a `/reports/<t>` iframe (see render_holding_fragment), and the
-    // shell already shows its own persistent "Ask" dock — the canonical Ask v5
-    // chat surface. Two launchers would then stack in the bottom-right corner.
-    // When we detect we're framed, hide THIS report's floating "⌘ Chat" pill so
-    // the shell's dock is the single entry point. The chat sidebar stays fully
-    // wired, so fact-doorway clicks (a KPI cell -> the exact series, below) still
-    // open the in-report thread. A standalone report (file:// or a top-level
-    // /reports/<t> tab) is not framed, so it keeps its launcher.
-    var embedded;
-    try { embedded = window.self !== window.top; } catch (_) { embedded = true; }
-    if (embedded) {
-      var launcher = document.getElementById('chat-drawer');
-      if (launcher) launcher.style.display = 'none';
+    var launchQuery = new URLSearchParams({
+      copilot: '1', ticker: TICKER, report_date: REPORT_DATE,
+      origin_key: 'report:' + TICKER + ':' + REPORT_DATE
+    });
+    var launchUrl = SERVER_URL + '/?' + launchQuery.toString() + '#screen-workspace';
+    handoff.href = launchUrl;
+    handoff.textContent = 'Open in Copilot';
+
+    function openDurableCopilot(context) {
+      var payload = Object.assign({
+        company_ticker: TICKER,
+        category: 'research',
+        report_date: REPORT_DATE,
+        origin_key: 'report:' + TICKER + ':' + REPORT_DATE,
+        coverage_role_at_creation: 'unknown',
+        lifecycle_at_creation: 'unknown'
+      }, context || {});
+      try {
+        if (window.parent !== window && typeof window.parent.openWorkOsCopilot === 'function') {
+          window.parent.openWorkOsCopilot(payload);
+          return true;
+        }
+      } catch (_) { /* cross-origin embeds use the clear Work OS link */ }
+      if (typeof window.openWorkOsCopilot === 'function') {
+        window.openWorkOsCopilot(payload);
+        return true;
+      }
+      return false;
     }
 
-    var threadEl = document.getElementById('chat-thread');
-    var form = document.getElementById('chat-form');
-    var hintEl = document.getElementById('chat-hint');
-    // Kept in sync with `.chat-sidebar.open { width }` in the CSS so the
-    // floating toggle (positioned via --sidebar-open-width) rides the
-    // sidebar's left edge.
-    var CHAT_WIDTH = '460px';
-
-    // Visual open/close — the push-sidebar's own .open class + width transition.
     function applyOpen(open) {
       sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
       sidebar.classList.toggle('open', open);
       toggle.classList.toggle('open', open);
-      if (open) {
-        document.documentElement.style.setProperty('--sidebar-open-width', CHAT_WIDTH);
-        form.message.focus();
-      } else {
-        document.documentElement.style.removeProperty('--sidebar-open-width');
-      }
+      if (open) document.documentElement.style.setProperty('--sidebar-open-width', 'var(--sidebar-width)');
+      else document.documentElement.style.removeProperty('--sidebar-open-width');
     }
 
-    // Dismissal (x + Esc) and one-open-at-a-time with the comments sidebar are
-    // CCOverlay's now (S4, Law 3): a push-sidebar gesture surface — scrim:false
-    // (the report stays readable beside it), motion:'none' + toggleHidden:false
-    // (its own .open class + width transition drive visuals), grouped
-    // 'report-sidebar' so opening one closes the other. This replaces the
-    // cross-document window.__close* handshake AND the per-sidebar Escape
-    // keydown — the open-surface stack now owns both.
     var chatOv = window.CCOverlay && window.CCOverlay.register(sidebar, {
       modal: true, priority: 30, scrim: false, trapFocus: false, restoreFocus: true,
       motion: 'none', toggleHidden: false, autofocus: false,
       group: 'report-sidebar', closeId: 'chat-close', wireClose: false,
-      onOpen: function() { applyOpen(true); },
-      onClose: function() { applyOpen(false); }
+      onOpen: function () { applyOpen(true); },
+      onClose: function () { applyOpen(false); }
     });
     function setOpen(open) {
-      if (!chatOv) { applyOpen(open); return; }  // degrade if the primitive is absent
+      if (!chatOv) { applyOpen(open); return; }
       if (open) chatOv.open(); else chatOv.close();
     }
 
-    toggle.addEventListener('click', function() { setOpen(sidebar.getAttribute('aria-hidden') === 'true'); });
-    sidebar.querySelector('.chat-close').addEventListener('click', function() { setOpen(false); });
+    var embedded = false;
+    try { embedded = window.self !== window.top; } catch (_) { embedded = true; }
+    if (embedded) {
+      var launcher = document.getElementById('chat-drawer');
+      if (launcher) launcher.hidden = true;
+      handoff.target = '_top';
+    }
 
-    // Cmd+Enter / Ctrl+Enter submits
-    form.message.addEventListener('keydown', function(ev) {
-      if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') form.requestSubmit();
+    toggle.addEventListener('click', function () {
+      if (!openDurableCopilot({})) setOpen(sidebar.getAttribute('aria-hidden') === 'true');
+    });
+    sidebar.querySelector('.chat-close').addEventListener('click', function () { setOpen(false); });
+    handoff.addEventListener('click', function (event) {
+      if (!openDurableCopilot({})) return;
+      event.preventDefault();
+      setOpen(false);
     });
 
-    // ----- Load existing thread -----
-    fetch(SERVER_URL + '/chat/' + TICKER + '?report_date=' + REPORT_DATE)
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        (data.thread || []).forEach(function(t) {
-          appendTurn(t.role, t.text, t.proposed_diff || null);
-        });
-      })
-      .catch(function() {
-        appendTurn('system', 'The research server is not reachable, so chat is offline.', null);
-      });
-
-    // ----- Submit handler -----
-    // lastSpec: the most recent data-view spec this drawer rendered. Sent
-    // as context_spec so short follow-ups ("now annual", "add MELI")
-    // refine the view instead of starting over — same contract as the
-    // Ask tab's thread.
-    var lastSpec = null;
-    form.addEventListener('submit', function(ev) {
-      ev.preventDefault();
-      var msg = form.message.value.trim();
-      if (!msg) return;
-      form.message.value = '';
-      appendTurn('user', msg, null);
-      var assistantEl = appendTurn('assistant', '', null);
-      var streamEl = assistantEl.querySelector('.chat-text');
-      var citations = [];
-      var claims = [];
-      hintEl.textContent = 'Working…';
-
-      // SSE via fetch + ReadableStream (EventSource doesn't support POST)
-      fetch(SERVER_URL + '/chat/' + TICKER, {
-        method: 'POST',
-        headers: MUTATION_HEADERS,
-        body: JSON.stringify({report_date: REPORT_DATE, message: msg, context_spec: lastSpec}),
-      }).then(function(resp) {
-        if (!resp.ok || !resp.body) throw new Error('chat HTTP ' + resp.status);
-        var reader = resp.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = '';
-        function pump() {
-          return reader.read().then(function(result) {
-            if (result.done) {
-              streamEl.innerHTML = renderMarkdown(streamEl.textContent);
-              if (citations.length || claims.length) {
-                streamEl.innerHTML = linkifyCites(streamEl.innerHTML, citations);
-                appendCiteRow(assistantEl, citations, claims);
-              }
-              hintEl.textContent = 'Cmd+Enter to send';
-              return;
-            }
-            buffer += decoder.decode(result.value, {stream: true});
-            var parts = buffer.split('\n\n');
-            buffer = parts.pop();
-            parts.forEach(function(frame) {
-              var line = frame.replace(/^data:\s*/, '');
-              try {
-                var ev = JSON.parse(line);
-                if (ev.type === 'stage') {
-                  // Real progress from the engine: compiling/running a
-                  // data view, or off researching in prose.
-                  hintEl.textContent =
-                    ev.stage === 'compiling' ? 'Compiling the view…'
-                    : ev.stage === 'running' ? 'Running the view…'
-                    : (ev.note || 'Researching — can take ~30s…');
-                } else if (ev.type === 'delta') {
-                  streamEl.textContent += ev.text;
-                  threadEl.scrollTop = threadEl.scrollHeight;
-                } else if (ev.type === 'fragment') {
-                  // A metric question routed to the data path: the engine
-                  // streams a rendered view fragment instead of prose.
-                  var frag = document.createElement('div');
-                  frag.className = 'chat-fragment';
-                  frag.innerHTML = ev.html || '';
-                  assistantEl.appendChild(frag);
-                  threadEl.scrollTop = threadEl.scrollHeight;
-                  if (ev.spec) lastSpec = ev.spec;
-                } else if (ev.type === 'final') {
-                  // Data turns carry no deltas — the final's message line
-                  // ("4 series · yoy · quarterly") is the turn's text.
-                  if (!streamEl.textContent) streamEl.textContent = ev.text || '';
-                } else if (ev.type === 'citations') {
-                  // Grounded narrative answers (Ask v3): numbered evidence
-                  // the answer cited — rendered as chips at stream close.
-                  citations = ev.items || [];
-                  claims = ev.claims || [];
-                } else if (ev.type === 'diff_proposal') {
-                  appendDiffButton(assistantEl, ev.diff);
-                } else if (ev.type === 'error') {
-                  streamEl.textContent += '\n\n[ERROR] ' + ev.error;
-                }
-              } catch (_) { /* ignore */ }
-            });
-            return pump();
-          });
-        }
-        return pump();
-      }).catch(function(err) {
-        streamEl.textContent = '[ERROR] ' + err.message;
-        hintEl.textContent = 'The research server is not reachable - chat is offline.';
-      });
+    document.addEventListener('click', function (event) {
+      var doorway = event.target.closest && event.target.closest('.fact-doorway');
+      if (!doorway) return;
+      var host = doorway.closest('[data-fact-ref]');
+      var factRef = host && host.getAttribute('data-fact-ref');
+      if (!factRef) return;
+      var label = (doorway.textContent || '').replace(/\s+/g, ' ').trim();
+      if (openDurableCopilot({
+        fact_ref: factRef,
+        prompt: label ? ('Review ' + label + ' with its governed evidence.') : 'Review this governed fact.'
+      })) event.preventDefault();
     });
-
-    // ----- Fact doorway (Law 2 — every datum is a doorway) -----
-    // A KPI cell rendered as a .fact-doorway carries a stable fact_ref handle
-    // (kpi:{ticker}:{def_id}) on its row. Clicking it opens this chat on the
-    // EXACT series: we submit the handle alongside the clean label, and
-    // ask.grounding's fast-path resolves it by PK (the name phrase-match is the
-    // fallback). The handle rides in the question text so resolution never
-    // depends on re-typing the metric's fragile display name.
-    document.addEventListener('click', function(ev) {
-      var dw = ev.target.closest && ev.target.closest('.fact-doorway');
-      if (!dw) return;
-      var host = dw.closest('[data-fact-ref]');
-      var ref = host && host.getAttribute('data-fact-ref');
-      if (!ref) return;
-      ev.preventDefault();
-      setOpen(true);
-      var label = (dw.textContent || '').replace(/\s+/g, ' ').trim();
-      form.message.value = label ? (label + ' — ' + ref) : ref;
-      form.requestSubmit();
-    });
-
-    function appendTurn(role, text, diff) {
-      var t = document.createElement('div');
-      t.className = 'chat-turn chat-role-' + role;
-      t.innerHTML = ''
-        + '<div class="chat-role-tag">' + role + '</div>'
-        + '<div class="chat-text">' + (text ? renderMarkdown(text) : '') + '</div>';
-      threadEl.appendChild(t);
-      threadEl.scrollTop = threadEl.scrollHeight;
-      if (diff) appendDiffButton(t, diff);
-      return t;
-    }
-
-    function appendDiffButton(turnEl, diff) {
-      var wrap = document.createElement('div');
-      wrap.className = 'chat-diff';
-      wrap.innerHTML = ''
-        + '<div class="chat-diff-summary"><strong>Proposed edit:</strong> ' + escapeHtml(diff.summary || '—') + '</div>'
-        + '<div class="chat-diff-path"><code>' + escapeHtml(diff.target_file || '') + ' · ' + escapeHtml(diff.target_path || '') + '</code></div>'
-        + '<div class="chat-diff-actions">'
-        + '  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-action="preview">Preview</button>'
-        + '  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-action="apply">Apply</button>'
-        + '</div>';
-      turnEl.appendChild(wrap);
-      wrap.querySelectorAll('button').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var dryRun = btn.getAttribute('data-action') === 'preview';
-          CCAction.busy(btn, dryRun ? 'Previewing…' : 'Applying…');
-          fetch(SERVER_URL + '/chat/' + TICKER + '/apply', {
-            method: 'POST',
-            headers: MUTATION_HEADERS,
-            body: JSON.stringify({diff: diff, report_date: REPORT_DATE, dry_run: dryRun}),
-          }).then(function(r) { return r.json(); }).then(function(res) {
-            CCAction.release(btn);
-            var msg = (res.applied ? '✓ Applied: ' : (res.dry_run ? '↗ Preview: ' : '✗ ')) +
-              (res.summary || '') + (res.error ? ' — ' + res.error : '');
-            var note = document.createElement('div');
-            note.className = 'chat-diff-note';
-            note.textContent = msg;
-            wrap.appendChild(note);
-            if (res.applied) wrap.classList.add('applied');
-          }).catch(function() { CCAction.release(btn); });
-        });
-      });
-    }
-
-    // ----- Citation chips (grounded answers, Ask v3) -----
-    // The report opens via file://, so viewer hrefs (/source/<doc_id>…)
-    // must be absolute against the research server.
-    function citeHref(c) {
-      var href = (c && (c.href || c.source_url)) || '';
-      if (!href) return '';
-      return /^https?:/.test(href) ? href : (SERVER_URL + href);
-    }
-    function linkifyCites(html, items) {
-      // Shared inline cite chips (ui.cite_marks) — hrefBase makes the
-      // /source/<doc_id> viewer links absolute against the research server.
-      if (!window.ccCiteMarks || !(items || []).length) return html;
-      return window.ccCiteMarks.linkify(html, items, {hrefBase: SERVER_URL});
-    }
-    function appendCiteRow(turnEl, items, claims) {
-      var chips = items.map(function(c) {
-        var href = citeHref(c);
-        if (!href) return '';
-        return '<a class="chat-cite" href="' + escapeHtml(href) + '" target="_blank">['
-          + escapeHtml(String(c.n)) + '] ' + escapeHtml(c.label || 'source') + '</a>';
-      }).join('');
-      var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';
-      if (!chips && !warn) return;
-      var row = document.createElement('div');
-      row.className = 'chat-cite-row';
-      row.innerHTML = chips + warn;
-      turnEl.appendChild(row);
-    }
-
-    // ----- Tiny Markdown renderer (basic) -----
-    function renderMarkdown(text) {
-      if (!text) return '';
-      var html = escapeHtml(text);
-      // code blocks
-      html = html.replace(/```([\w]*)\n([\s\S]*?)```/g, function(_, lang, body) {
-        return '<pre class="chat-code"><code>' + body + '</code></pre>';
-      });
-      // inline code
-      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-      // bold
-      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      // bullets
-      html = html.replace(/(?:^|\n)([-*])\s+(.+)/g, function(_, _bullet, body) {
-        return '\n<li>' + body + '</li>';
-      });
-      html = html.replace(/(<li>[\s\S]+?<\/li>)+/g, function(block) { return '<ul>' + block + '</ul>'; });
-      // paragraphs
-      html = html.split(/\n\n+/).map(function(p) {
-        if (/^<(pre|ul|h\d|table)/.test(p)) return p;
-        return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
-      }).join('');
-      return html;
-    }
-
-    function escapeHtml(s) {
-      if (s == null) return '';
-      return String(s).replace(/[&<>"']/g, function(ch) {
-        return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch];
-      });
-    }
   }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
 })();
 
 

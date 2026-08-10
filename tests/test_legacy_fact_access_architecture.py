@@ -80,13 +80,15 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/pressure_test_thesis.py": 1,
     "execution/prune_misscaled_capture_facts.py": 1,
     "execution/retype_misfiled_sec_ir_docs.py": 2,
-    "execution/seed_kpi_definitions.py": 1,
     "src/allocation/eligibility.py": 1,
     "src/ask/grounding.py": 5,
     "src/bear_case_grader.py": 1,
     "src/cockpit_fundamentals.py": 2,
     "src/competitive/holdings_sync.py": 1,
     "src/compute/fmp_derived_kpis.py": 3,
+    # Shared fact-aware unit resolution moved this existing read out of the
+    # seeding CLI so Ask approval and seeding use one deterministic authority.
+    "src/compute/kpi_definition_units.py": 1,
     "src/compute/kpi_extract_summaries.py": 3,
     "src/compute/kpi_resolver.py": 3,
     "src/compute/metrics_engine/io.py": 5,

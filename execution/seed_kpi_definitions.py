@@ -39,6 +39,10 @@ from typing import cast
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from compute.kpi_definition_units import (  # noqa: E402, I001
+    dominant_fact_unit as _canonical_dominant_fact_unit,
+    infer_unit as _canonical_infer_unit,
+)
 from models.documents import SourceType  # noqa: E402
 from models.facts import Unit  # noqa: E402
 from models.kpis import ThesisTier  # noqa: E402
@@ -52,46 +56,6 @@ _TIER_MAP: dict[str, ThesisTier] = {
     # since the ThesisTier enum only has BREAK + MONITOR levels.
     "tier_3_kpis": ThesisTier.TIER_2_MONITOR,
 }
-
-
-# Name fragments that mark a metric as a RATE/PROPORTION (stored "percent")
-# even when the name also carries a currency annotation. Checked BEFORE the
-# dollar-token branch so a parenthetical "(USD)" on a growth/margin metric
-# ("Revenue YoY Growth (USD)") can't flip it to ACTUAL.
-_RATE_NAME_TOKENS: tuple[str, ...] = (
-    "growth",
-    "yoy",
-    "y/y",
-    "deceleration",
-    "decel",
-    "retention",
-    "churn",
-    "margin",
-    "yield",
-    "penetration",
-    "take rate",
-    "attach rate",
-    "%",
-)
-# Absolute monetary LEVELS whose names rarely carry a "$"/"USD" token but are
-# always dollar magnitudes. Without these the PERCENT default mis-tags them as a
-# rate — the AWS RPO bug, where a ~$364B backlog was stamped "percent" because
-# the name has no currency token and the break-rule phrases RPO *growth* as a %.
-_DOLLAR_LEVEL_NAME_TOKENS: tuple[str, ...] = (
-    "remaining performance obligation",
-    "rpo",
-    "backlog",
-    "bookings",
-    "deferred revenue",
-    "gross merchandise",
-    "gmv",
-    "payment volume",
-    "tpv",
-    "assets under management",
-    "aum",
-    "deposits",
-    "loans outstanding",
-)
 
 
 def infer_unit(name: str) -> Unit:
@@ -109,41 +73,7 @@ def infer_unit(name: str) -> Unit:
     mis-tagged a rate. PERCENT stays the default — margins/growth/NIM/ROE/NPL
     dominate the analyst's monitorables and seldom carry a distinguishing token.
     """
-    n = name.lower()
-    # RATE / proportion — checked first so a currency annotation can't flip it.
-    if any(tok in n for tok in _RATE_NAME_TOKENS):
-        return Unit.PERCENT
-    # COUNT for headcount / customer count / number-of-X
-    if any(
-        tok in n
-        for tok in (
-            "customers",
-            "customer count",
-            "millions",
-            "headcount",
-            "subscribers",
-            "users",
-            "accounts",
-            "members",
-            "merchants",
-        )
-    ):
-        return Unit.COUNT
-    # ACTUAL for dollar-denominated absolute values: explicit currency tokens
-    # (ARPAC, cost-to-serve, $X revenue) plus dollar LEVELS that omit a "$".
-    if any(
-        tok in n
-        for tok in ("usd", "$", "dollar", "arpac", "arpu", "cost-to-serve", "cost to serve")
-    ) or any(tok in n for tok in _DOLLAR_LEVEL_NAME_TOKENS):
-        return Unit.ACTUAL
-    # BPS for explicit basis-point measures (rare but possible)
-    if "bps" in n or "basis point" in n:
-        return Unit.BPS
-    # RATIO when explicitly "ratio" without a % suffix or "rate" word
-    if "ratio" in n and "%" not in n and "rate" not in n:
-        return Unit.RATIO
-    # PERCENT is the most common — margins, growth rates, NPL%, NIM%, ROE%, penetration%
-    return Unit.PERCENT
+    return _canonical_infer_unit(name)
 
 
 def _dominant_fact_unit(conn: sqlite3.Connection, ticker: str, name: str) -> Unit | None:
@@ -154,19 +84,7 @@ def _dominant_fact_unit(conn: sqlite3.Connection, ticker: str, name: str) -> Uni
     Returns the most-common unit (ties broken by the most recent period). A
     legacy value outside the :class:`Unit` enum is treated as absent.
     """
-    row = conn.execute(
-        "SELECT f.unit FROM kpi_facts f "
-        "JOIN kpi_definitions d ON d.id = f.kpi_definition_id "
-        "WHERE d.ticker = ? AND d.name = ? AND f.unit IS NOT NULL "
-        "GROUP BY f.unit ORDER BY COUNT(*) DESC, MAX(f.period_end) DESC LIMIT 1",
-        (ticker, name),
-    ).fetchone()
-    if row is None or row[0] is None:
-        return None
-    try:
-        return Unit(str(row[0]))
-    except ValueError:
-        return None
+    return _canonical_dominant_fact_unit(conn, ticker, name)
 
 
 def collect_kpis_from_holdings(

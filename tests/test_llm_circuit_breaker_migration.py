@@ -16,11 +16,14 @@ from llm.transport import (
 )
 
 
-def test_current_head_owns_quota_breaker_and_transport_never_emits_ddl(
+def test_0004_owns_quota_breaker_and_transport_never_emits_ddl(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = migrated_db(tmp_path / "breaker.db", target="head")
+    db_path = migrated_db(
+        tmp_path / "breaker.db",
+        target="0004_add_llm_circuit_breakers",
+    )
 
     with sqlite3.connect(db_path) as conn:
         revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()

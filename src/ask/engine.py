@@ -112,6 +112,7 @@ log = logging.getLogger(__name__)
 
 Route = Literal["command", "data", "narrative"]
 AskRetrievalMode = Literal["legacy", "shadow", "sealed"]
+AskPersistenceMode = Literal["engine", "external_exchange"]
 ROUTE_COMMAND: Route = "command"
 ROUTE_DATA: Route = "data"
 ROUTE_NARRATIVE: Route = "narrative"
@@ -120,6 +121,7 @@ _MAX_HISTORY_TURNS = 8
 _MAX_HISTORY_CHARS = 1200
 
 _TICKERISH_RX = re.compile(r"\b[A-Z][A-Z0-9.\-]{0,5}\b")
+_EVIDENCE_REF_RX = re.compile(r"(?:kpi|fin):[A-Za-z0-9._:/-]{1,500}\Z")
 
 # Narrative markers win over data markers: "why did margins fall?" is an
 # explanation question even though "margins" is chartable.
@@ -262,6 +264,15 @@ class AskTurn:
     # Server-side session for portfolio-scope persistence.  None → the engine
     # falls back to the client-supplied history tail (pre-S3 / ticker scope).
     session_id: str | None = None
+    # Durable request orchestration can own both turn inserts outside the
+    # engine. In that mode every route must treat ask_turns as read-only.
+    persistence_mode: AskPersistenceMode = "engine"
+    # The externally inserted user turn used for authoritative history and
+    # sealed answer-audit binding. Required by ``external_exchange`` mode.
+    authoritative_user_turn_id: int | None = None
+    # Per-request card/fact coordinates. This remains separate from the prior
+    # ViewSpec refinement in ``context_spec`` and is always untrusted data.
+    research_context: dict[str, object] | None = None
 
 
 def sanitize_history(raw: object) -> list[dict[str, str]]:
@@ -532,7 +543,11 @@ def _data_events(
         _persist_data_turn(repo_root, pack.ticker, pack.report_date, turn.text, message)
     # Portfolio-scope data turns: record the exchange so the session thread
     # stays continuous for the narrative path's history loading.
-    if turn.session_id and pack.scope == "portfolio":
+    if (
+        turn.session_id
+        and pack.scope == "portfolio"
+        and turn.persistence_mode != "external_exchange"
+    ):
         data_label = f"{message} (rendered as a live data view)"
         try:
             _store_append_turn(
@@ -760,6 +775,64 @@ def _authoritative_context(
     return identities, thread_text
 
 
+def _bind_sealed_user_turn(turn: AskTurn, text: str, *, db_path: Path) -> int:
+    """Bind sealed retrieval to either engine- or exchange-owned user state."""
+
+    if not turn.session_id:
+        raise ValueError("sealed Ask requires an authoritative portfolio session")
+    if turn.persistence_mode == "external_exchange":
+        user_turn_id = turn.authoritative_user_turn_id
+        if user_turn_id is None:
+            raise ValueError("external Ask exchange is missing its authoritative user turn")
+    else:
+        user_turn_id = _store_append_turn(
+            session_id=turn.session_id,
+            role="user",
+            text=text,
+            db_path=db_path,
+        )
+    bound_turn = _store_assert_user_tail(
+        session_id=turn.session_id,
+        user_turn_id=user_turn_id,
+        user_text=text,
+        db_path=db_path,
+    )
+    if (
+        bound_turn.id != user_turn_id
+        or bound_turn.text != text
+        or retrieval_query_sha256(bound_turn.text) != retrieval_query_sha256(text)
+    ):
+        raise ValueError("sealed Ask request does not bind the authoritative user turn")
+    return user_turn_id
+
+
+def _persist_sealed_assistant(
+    turn: AskTurn,
+    *,
+    user_turn_id: int,
+    user_text: str,
+    text: str,
+    citations: Iterable[object],
+    model: str,
+    db_path: Path,
+) -> None:
+    """Leave the final turn to the exchange transaction when it owns persistence."""
+
+    if turn.persistence_mode == "external_exchange":
+        return
+    if not turn.session_id:
+        raise ValueError("sealed Ask requires an authoritative portfolio session")
+    _store_append_assistant_cas(
+        session_id=turn.session_id,
+        user_turn_id=user_turn_id,
+        user_text=user_text,
+        text=text,
+        citations=list(citations),
+        model=model,
+        db_path=db_path,
+    )
+
+
 def _evidence_prompt_fragment(sealed: SealedEvidenceItem) -> str:
     return (
         f"[{sealed.n}] {sealed.label}\n"
@@ -970,7 +1043,7 @@ def _sealed_or_shadow_narrative_events(
     mode: AskRetrievalMode,
 ) -> Iterator[dict[str, object]]:
     if mode == "shadow":
-        _shadow_retrieval(text, turn, pack, db_path=db_path)
+        _shadow_retrieval(_retrieval_text(text, turn), turn, pack, db_path=db_path)
         yield from _narrative_events(
             text,
             turn,
@@ -987,24 +1060,7 @@ def _sealed_or_shadow_narrative_events(
         }
         return
     try:
-        user_turn_id = _store_append_turn(
-            session_id=turn.session_id,
-            role="user",
-            text=text,
-            db_path=db_path,
-        )
-        bound_turn = _store_assert_user_tail(
-            session_id=turn.session_id,
-            user_turn_id=user_turn_id,
-            user_text=text,
-            db_path=db_path,
-        )
-        if (
-            bound_turn.id != user_turn_id
-            or bound_turn.text != text
-            or retrieval_query_sha256(bound_turn.text) != retrieval_query_sha256(text)
-        ):
-            raise ValueError("sealed Ask request does not bind the appended user turn")
+        user_turn_id = _bind_sealed_user_turn(turn, text, db_path=db_path)
         context_turns, thread_text = _authoritative_context(
             turn.session_id,
             user_turn_id=user_turn_id,
@@ -1235,8 +1291,8 @@ def _sealed_or_shadow_narrative_events(
         finally:
             conn.close()
         ui_citations = [evidence_by_number[number].citation_payload() for number in used_numbers]
-        _store_append_assistant_cas(
-            session_id=turn.session_id,
+        _persist_sealed_assistant(
+            turn,
             user_turn_id=user_turn_id,
             user_text=text,
             text=final_text,
@@ -1279,6 +1335,48 @@ def _sealed_or_shadow_narrative_events(
     yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
 
 
+def _portfolio_history_before_current(
+    turn: AskTurn,
+    text: str,
+    *,
+    db_path: Path,
+) -> list[dict[str, str]]:
+    if not turn.session_id:
+        return []
+    if turn.persistence_mode != "external_exchange":
+        return _store_load_history(turn.session_id, db_path=db_path)
+    user_turn_id = turn.authoritative_user_turn_id
+    if user_turn_id is None:
+        raise ValueError("external Ask exchange is missing its authoritative user turn")
+    _store_assert_user_tail(
+        session_id=turn.session_id,
+        user_turn_id=user_turn_id,
+        user_text=text,
+        db_path=db_path,
+    )
+    turns = _store_load_turns(turn.session_id, db_path=db_path)
+    if not turns or turns[-1].id != user_turn_id:
+        raise ValueError("external Ask user turn is not the authoritative session tail")
+    return [{"role": row.role, "text": row.text} for row in turns[:-1]][-_MAX_HISTORY_TURNS:]
+
+
+def _retrieval_text(text: str, turn: AskTurn) -> str:
+    """Add only allowlisted evidence handles to deterministic retrieval input."""
+
+    context = turn.research_context or {}
+    candidates: list[object] = [context.get("fact_ref")]
+    refs: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        normalized = candidate.strip()
+        if _EVIDENCE_REF_RX.fullmatch(normalized) is not None and normalized not in refs:
+            refs.append(normalized)
+    if not refs:
+        return text
+    return text + "\nEvidence handles: " + ", ".join(refs)
+
+
 def _narrative_events(
     text: str,
     turn: AskTurn,
@@ -1318,7 +1416,7 @@ def _narrative_events(
         else ([t.strip().upper() for t in turn.tickers if t.strip()] or list(pack.default_tickers))
     )
     evidence = gather_evidence(
-        text,
+        _retrieval_text(text, turn),
         repo_root=repo_root,
         db_path=db_path,
         scope_tickers=scope_tickers,
@@ -1356,21 +1454,22 @@ def _narrative_events(
     # Server-side history: when the turn carries a session_id, load the stored
     # thread from ask_turns (authoritative) instead of trusting the client tail.
     if turn.session_id:
-        server_hist = _store_load_history(turn.session_id, db_path=db_path)
+        server_hist = _portfolio_history_before_current(turn, text, db_path=db_path)
         # New session (no stored turns yet) → fall back to the client tail so the
         # first question still has context from any client-side priming.
         history = sanitize_history(server_hist if server_hist else turn.history)
         # Persist the user turn immediately so the audit trail is never missing
         # even if the assistant side errors.
-        try:
-            _store_append_turn(
-                session_id=turn.session_id,
-                role="user",
-                text=text,
-                db_path=db_path,
-            )
-        except Exception:
-            log.warning({"event": "ask_store_user_turn_failed", "sid": turn.session_id})
+        if turn.persistence_mode != "external_exchange":
+            try:
+                _store_append_turn(
+                    session_id=turn.session_id,
+                    role="user",
+                    text=text,
+                    db_path=db_path,
+                )
+            except Exception:
+                log.warning({"event": "ask_store_user_turn_failed", "sid": turn.session_id})
     else:
         history = sanitize_history(turn.history)
 
@@ -1430,7 +1529,7 @@ def _narrative_events(
             yield {"type": "citations", **payload}
 
     # Persist the assistant turn after a successful response.
-    if turn.session_id:
+    if turn.session_id and turn.persistence_mode != "external_exchange":
         try:
             _store_append_turn(
                 session_id=turn.session_id,
@@ -1575,14 +1674,19 @@ def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
     if final is None:
         return {"status": "error", "message": "no answer produced"}
     final_text = str(final.get("text") or "")
+    raw_revision = final.get("session_revision")
+    session_revision = raw_revision if isinstance(raw_revision, int) else None
     if fragment is not None:
-        return {
+        view_result: dict[str, object] = {
             "status": "ok",
             "kind": "view",
             "spec": fragment.get("spec"),
             "fragment": fragment.get("html"),
             "message": final_text,
         }
+        if session_revision is not None:
+            view_result["session_revision"] = session_revision
+        return view_result
     out: dict[str, object] = {
         "status": "ok",
         "kind": "command" if final.get("route") == ROUTE_COMMAND else "narrative",
@@ -1598,6 +1702,8 @@ def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
         out["grounding"] = grounding
     if diff is not None:
         out["diff"] = diff
+    if session_revision is not None:
+        out["session_revision"] = session_revision
     return out
 
 
