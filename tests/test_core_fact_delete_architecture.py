@@ -32,7 +32,6 @@ _DYNAMIC_CORE_TABLES = {
 # not be added here; their removal is tracked by the data-infrastructure plan.
 _SRC_AUDITED_DELETE_DEBT = {
     ("src/pipeline/kpi_persistence.py", "kpi_facts"),
-    ("src/ir_pipeline/ingest.py", "kpi_facts"),
     ("src/filings/store.py", "filing_sections"),
     ("src/filings/section_items.py", "filing_sections"),
 }
