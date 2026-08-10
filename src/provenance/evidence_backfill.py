@@ -210,6 +210,57 @@ def backfill_legacy_evidence(conn: sqlite3.Connection, request: BackfillRequest)
     return summary
 
 
+def ensure_legacy_document_evidence(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    document_id: int,
+) -> BackfillSummary:
+    """Idempotently anchor one persisted legacy document in evidence.
+
+    New deterministic document writers use this seam before inserting facts on
+    post-cutover databases. Unlike the operational batch backfill, it owns no
+    checkpoint and commits nothing: the caller retains transaction ownership.
+    """
+
+    _require_table(conn, "documents")
+    _require_ledger_tables(conn)
+    document = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+    if document is None:
+        raise ValueError(f"legacy document {document_id} does not exist")
+    root = repo_root.resolve()
+    run_at = datetime.now(UTC)
+    summary = BackfillSummary(
+        task_id=f"legacy-document-{document_id}",
+        mode="apply",
+        dry_run=False,
+        batch_size=1,
+        run_at=run_at,
+        last_document_id_before=max(0, document_id - 1),
+        last_document_id_after=document_id,
+        has_more=False,
+        documents_considered=1,
+        selection_modes=_selection_modes(conn),
+    )
+    chain = _prepare_document_chain(document, root, summary)
+    if chain is None:
+        findings = ",".join(sorted(summary.finding_counts)) or "unknown"
+        raise ValueError(f"legacy document {document_id} evidence capture failed: {findings}")
+    filing_sections = _active_filing_sections(conn, document_id, summary.selection_modes)
+    transcript_segments = _active_transcript_segments(conn, document_id, summary.selection_modes)
+    document_node = _document_node(chain, _required_text(document, "doc_type"))
+    output_sha256 = canonical_output_sha256(
+        document_node,
+        [_filing_section_node(row, chain) for row in filing_sections],
+        [_transcript_segment_node(row, chain) for row in transcript_segments],
+    )
+    summary.documents_backfilled = 1
+    _persist_document_chain(conn, document, chain, root, output_sha256, run_at, summary)
+    _backfill_filing_sections(conn, filing_sections, chain, True, summary)
+    _backfill_transcript_segments(conn, transcript_segments, chain, True, summary)
+    return summary
+
+
 def _prepare_document_chain(
     document: sqlite3.Row, root: Path, summary: BackfillSummary
 ) -> _DocumentChain | None:

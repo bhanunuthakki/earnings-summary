@@ -14,8 +14,8 @@ auto-mapped ``capture`` rows carry a RAW spreadsheet label that is routed throug
 DB connection exists) — so a captured row joins an existing series or mints a
 clean ``origin='capture'`` definition. Canonicalizing on write is also what lets
 an audited spreadsheet value cleanly supersede S3's broad LLM value for the SAME
-metric: both resolve to one definition, then `_supersede_llm_incumbents` drops the
-lower-tier LLM row.
+metric: both resolve to one definition, then the append-only fact chain points
+the audited row at the lower-tier incumbent so resolution stays deterministic.
 
 Routes through `persist_manifest` (the single kpi_facts write interface) with an
 `ir_spreadsheet` extractor tag rather than inserting directly.
@@ -42,8 +42,8 @@ from pipeline.kpi_persistence import (
     KpiValue,
     persist_manifest,
 )
-from pipeline.restatement_detector import _table_has_column
 from pipeline.run_accounting import end_run, start_run
+from provenance.evidence_backfill import ensure_legacy_document_evidence
 
 _DOC_TYPE = "ir_historical_spreadsheet"
 
@@ -83,7 +83,7 @@ def _ensure_spreadsheet_document(conn: sqlite3.Connection, ticker: str, path: Pa
         "ok",
         len(raw),
     )
-    if _table_has_column(conn, "documents", "source_quality_tier"):
+    if _documents_has_column(conn, "source_quality_tier"):
         tier = tier_for_source_type(SourceType.IR_DOC).value
         cur = conn.execute(
             "INSERT INTO documents (ticker, source_type, doc_type, period_end, "
@@ -161,6 +161,8 @@ def ingest_spreadsheet_kpis(
     config: IrConfig,
     parsed: dict[str, dict[_dt.datetime, float]],
     source_path: Path,
+    *,
+    repo_root: Path | None = None,
 ) -> tuple[int, int]:
     """Persist `parsed` ({kpi: {period_end: value}}). Returns (rows_inserted, doc_id).
 
@@ -169,6 +171,10 @@ def ingest_spreadsheet_kpis(
     ``sqlite3.Row``.
     """
     doc_id = _ensure_spreadsheet_document(conn, ticker, source_path)
+    if _has_trigger(conn, "trg_kpi_facts_observation_insert"):
+        if repo_root is None:
+            raise ValueError("post-cutover IR spreadsheet ingest requires repo_root")
+        ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=doc_id)
     series_by_name, unit_by_name, origins = _canonicalize_parsed(conn, ticker, config, parsed)
 
     # Regroup to one manifest per period_end (each manifest = a period's KPIs).
@@ -221,7 +227,6 @@ def ingest_spreadsheet_kpis(
             result = persist_manifest(conn, run_id=run_id, manifest=manifest)
             inserted += result.inserted
 
-        _supersede_llm_incumbents(conn, ticker, doc_id, series_by_name)
     except Exception as exc:
         end_run(conn, run_id, StageStatus.FAILED, error_summary=f"{type(exc).__name__}: {exc}")
         raise
@@ -229,36 +234,18 @@ def ingest_spreadsheet_kpis(
     return inserted, doc_id
 
 
-def _supersede_llm_incumbents(
-    conn: sqlite3.Connection,
-    ticker: str,
-    doc_id: int,
-    parsed: dict[str, dict[_dt.datetime, float]],
-) -> None:
-    """Delete the LLM brief/press rows the spreadsheet now restates.
-
-    The spreadsheet (IR_DOC tier) is authoritative for the KPIs it carries, so
-    its values supersede the LLM_EXTRACTED incumbents for the exact (definition,
-    period) pairs it covers — leaving a single row per logical key for every
-    consumer (charts, break-rule display, the thesis evaluator). Mirrors
-    purge_duplicate_kpi_facts (keep the highest-tier/latest source); FMP/SEC rows
-    (extracted_by not LIKE 'llm%') are deliberately left untouched.
-    """
-    for kpi_name, series in parsed.items():
-        row = conn.execute(
-            "SELECT id FROM kpi_definitions WHERE ticker = ? AND name = ?",
-            (ticker.upper(), kpi_name),
+def _has_trigger(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (name,),
         ).fetchone()
-        if row is None:
-            continue
-        def_id = int(row["id"])
-        for period_end in series:
-            conn.execute(
-                "DELETE FROM kpi_facts WHERE ticker = ? AND kpi_definition_id = ? "
-                "AND period_end = ? AND source_doc_id != ? AND extracted_by LIKE 'llm%'",
-                (ticker.upper(), def_id, period_end, doc_id),
-            )
-    conn.commit()
+        is not None
+    )
+
+
+def _documents_has_column(conn: sqlite3.Connection, column: str) -> bool:
+    return any(str(row[1]) == column for row in conn.execute("PRAGMA table_info(documents)"))
 
 
 def _unit(raw: str) -> Unit:

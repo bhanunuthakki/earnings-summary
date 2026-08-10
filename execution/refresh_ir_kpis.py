@@ -109,7 +109,14 @@ def main() -> int:
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
-        inserted, doc_id = ingest_spreadsheet_kpis(conn, args.ticker, cfg, parsed, path)
+        inserted, doc_id = ingest_spreadsheet_kpis(
+            conn,
+            args.ticker,
+            cfg,
+            parsed,
+            path,
+            repo_root=repo_root,
+        )
     except PipelineRunSuppressedError as exc:
         print(json.dumps(suppression_payload(exc)))
         return 0

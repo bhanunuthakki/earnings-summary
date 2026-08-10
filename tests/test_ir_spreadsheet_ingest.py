@@ -31,6 +31,7 @@ from ir_pipeline.config import IrConfig, SheetKpi  # noqa: E402
 from ir_pipeline.config_builder import build_ir_config, widen_config  # noqa: E402
 from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
 from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _Q = [dt.datetime(2025, 6, 30), dt.datetime(2025, 9, 30), dt.datetime(2025, 12, 31)]
 
@@ -98,6 +99,7 @@ def _conn() -> sqlite3.Connection:
 def _write_sheet(path: Path) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
+    assert ws is not None
     ws.title = "Indicators"
     for j, q in enumerate(_Q):  # header row 4, labels col B, values col C+
         ws.cell(4, 3 + j, q)
@@ -318,7 +320,86 @@ def test_ir_doc_value_supersedes_llm_incumbent_for_same_metric(tmp_path: Path) -
     ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
 
     q4 = [f for f in _facts(conn, nii_id) if str(f["period_end"]) == _Q4]
-    # The LLM incumbent is gone; only the audited IR_DOC value survives for that key.
-    assert len(q4) == 1
-    assert q4[0]["extracted_by"] == "ir_spreadsheet"
-    assert float(q4[0]["value"]) == 120.0
+    # History is append-only: the audited row points to the lower-tier incumbent.
+    assert len(q4) == 2
+    assert q4[0]["extracted_by"] == "llm:claude-haiku"
+    assert q4[1]["extracted_by"] == "ir_spreadsheet"
+    assert q4[1]["supersedes_id"] == q4[0]["id"]
+    assert float(q4[1]["value"]) == 120.0
+
+
+def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    spreadsheet_dir = repo_root / "data" / "ir_spreadsheets" / "CO"
+    spreadsheet_dir.mkdir(parents=True)
+    first_path = spreadsheet_dir / "co-first.xlsx"
+    second_path = spreadsheet_dir / "co-second.xlsx"
+    _write_sheet(first_path)
+    _write_sheet(second_path)
+    workbook = openpyxl.load_workbook(second_path)
+    workbook["Indicators"].cell(6, 5, 121.0)
+    workbook.save(second_path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="https://example.invalid/results",
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    period = dt.datetime(2025, 12, 31)
+
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
+    conn.row_factory = sqlite3.Row
+    try:
+        first_inserted, first_doc = ingest_spreadsheet_kpis(
+            conn,
+            "CO",
+            cfg,
+            {"NII": {period: 120.0}},
+            first_path,
+            repo_root=repo_root,
+        )
+        conn.execute(
+            "UPDATE documents SET fetched_at = '2025-01-01 00:00:00' WHERE id = ?",
+            (first_doc,),
+        )
+        second_inserted, second_doc = ingest_spreadsheet_kpis(
+            conn,
+            "CO",
+            cfg,
+            {"NII": {period: 121.0}},
+            second_path,
+            repo_root=repo_root,
+        )
+        facts = conn.execute(
+            "SELECT id, value, supersedes_id, source_doc_id FROM kpi_facts "
+            "WHERE ticker = 'CO' ORDER BY id"
+        ).fetchall()
+        evidence_count = conn.execute(
+            "SELECT COUNT(*) FROM evidence_document_versions WHERE legacy_document_id IN (?, ?)",
+            (first_doc, second_doc),
+        ).fetchone()[0]
+        revision_count = conn.execute(
+            "SELECT COUNT(*) FROM fact_observation_revisions "
+            "WHERE fact_table = 'kpi_facts' AND fact_row_id IN (?, ?)",
+            (facts[0]["id"], facts[1]["id"]),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert (first_inserted, second_inserted) == (1, 1)
+    assert evidence_count == 2
+    assert revision_count == 2
+    assert len(facts) == 2
+    assert facts[1]["supersedes_id"] == facts[0]["id"]
+    assert (facts[0]["source_doc_id"], facts[1]["source_doc_id"]) == (
+        first_doc,
+        second_doc,
+    )

@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from provenance.financial_fact_resolution import resolve_fact_row
@@ -60,7 +60,7 @@ def _fiscal_year_of_document(
     Returns (None, None) if the document row is missing or unreadable.
     """
     try:
-        row = conn.execute(
+        row = conn.execute(  # nosec B608 -- table/key are selected from closed literals above
             "SELECT period_end, fetched_at FROM documents WHERE id = ?",
             (source_doc_id,),
         ).fetchone()
@@ -80,10 +80,16 @@ def _fiscal_year_of_document(
 
 def _parse_dt(raw: object) -> datetime | None:
     if isinstance(raw, datetime):
-        return raw
+        return raw.astimezone(UTC).replace(tzinfo=None) if raw.tzinfo is not None else raw
     if not isinstance(raw, str):
         return None
     s = raw.strip()
+    try:
+        parsed = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        return parsed.astimezone(UTC).replace(tzinfo=None) if parsed.tzinfo is not None else parsed
     for fmt in (
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M:%S.%f",
@@ -130,7 +136,7 @@ def is_later_filing(
     new_year, new_fetched = _fiscal_year_of_document(conn, new_source_doc_id)
     inc_year, inc_fetched = _fiscal_year_of_document(conn, incumbent_source_doc_id)
     if new_year is None or inc_year is None:
-        return False
+        return new_fetched is not None and inc_fetched is not None and new_fetched > inc_fetched
     if new_year > inc_year:
         return True
     if new_year < inc_year:
@@ -159,25 +165,22 @@ def find_incumbent(
     chained (A <- B <- C), `find_incumbent` returns C — the head of the
     chain — so the new row D supersedes C, preserving the linked list.
     """
-    if table == "financial_facts":
-        key_col = "line_item"
-    elif table == "kpi_facts":
-        key_col = "kpi_definition_id"
-    else:
-        raise ValueError(f"Unsupported table for restatement detection: {table!r}")
     try:
-        row = conn.execute(
-            f"""
-            SELECT id FROM {table}
-            WHERE ticker = ?
-              AND period_end = ?
-              AND fiscal_period_type = ?
-              AND {key_col} = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (ticker.upper(), period_end, fiscal_period_type, line_item),
-        ).fetchone()
+        if table == "financial_facts":
+            row = conn.execute(
+                "SELECT id FROM financial_facts WHERE ticker = ? AND period_end = ? "
+                "AND fiscal_period_type = ? AND line_item = ? ORDER BY id DESC LIMIT 1",
+                (ticker.upper(), period_end, fiscal_period_type, line_item),
+            ).fetchone()
+        elif table == "kpi_facts":
+            row = conn.execute(
+                "SELECT id FROM kpi_facts WHERE ticker = ? AND period_end = ? "
+                "AND fiscal_period_type = ? AND kpi_definition_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (ticker.upper(), period_end, fiscal_period_type, line_item),
+            ).fetchone()
+        else:
+            raise ValueError(f"Unsupported table for restatement detection: {table!r}")
     except sqlite3.Error as exc:
         log.warning(
             {
@@ -334,8 +337,13 @@ def _validate_financial_fact_plausibility(line_item: str, value: Decimal, unit: 
     except (TypeError, ValueError):
         return
     item_lower = line_item.lower()
-    if item_lower in ("revenue", "net_income", "total_assets", "operating_income") and abs(val_float) > 1e14:
-        log.error("implausible_magnitude_rejected line_item=%s value=%s unit=%s", line_item, value, unit)
+    if (
+        item_lower in ("revenue", "net_income", "total_assets", "operating_income")
+        and abs(val_float) > 1e14
+    ):
+        log.error(
+            "implausible_magnitude_rejected line_item=%s value=%s unit=%s", line_item, value, unit
+        )
         raise ValueError(f"Implausible financial fact magnitude for {line_item}: {value} {unit}")
     if "shares" in item_lower and val_float < 0:
         log.error("implausible_negative_shares_rejected line_item=%s value=%s", line_item, value)
@@ -699,10 +707,16 @@ def latest_in_chain(
             break
         seen.add(current)
         try:
-            row = conn.execute(
-                f"SELECT id FROM {table} WHERE supersedes_id = ?",
-                (current,),
-            ).fetchone()
+            if table == "financial_facts":
+                row = conn.execute(
+                    "SELECT id FROM financial_facts WHERE supersedes_id = ?", (current,)
+                ).fetchone()
+            elif table == "kpi_facts":
+                row = conn.execute(
+                    "SELECT id FROM kpi_facts WHERE supersedes_id = ?", (current,)
+                ).fetchone()
+            else:
+                raise ValueError(f"Unsupported table for restatement chain: {table!r}")
         except sqlite3.Error:
             break
         if row is None:
