@@ -7,11 +7,8 @@
    header is set to the request's Origin iff it is in
    `COMMENTS_SERVER_CORS_WHITELIST`.
 
-2. Concurrent chat — the LLM subprocess is now dispatched to a dedicated
-   thread pool, so two concurrent `/chat/<ticker>` requests proceed in
-   parallel. We assert that with `threading.Barrier(2)`: if requests are
-   serialized, only one ever reaches the fake stream and the barrier
-   times out.
+2. Legacy report chat — all verbs fail closed with a durable-Copilot handoff,
+   leaving no second persistence or mutation authority.
 """
 
 from __future__ import annotations
@@ -19,7 +16,6 @@ from __future__ import annotations
 import logging
 import sqlite3
 import sys
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -272,71 +268,38 @@ def test_file_routes_reject_malformed_ticker(client):
         assert client.get(route.format("NU")).status_code == 404
 
 
-# --- Concurrent chat ----------------------------------------------------
+# --- Retired report chat ------------------------------------------------
 
 
-def test_chat_dispatches_to_pool_and_streams_chunks(monkeypatch, client):
-    """Smoke-test the new pool path — chunks from a fake stream_response
-    flow through the queue and into the SSE response."""
+def test_legacy_report_chat_routes_are_non_writing_migration_handoffs(
+    client: FlaskClient, app_repo: Path
+) -> None:
+    """All legacy report-chat verbs fail closed and point to durable Ask."""
+    legacy_dir = app_repo / "data" / "report_chats"
+    database = app_repo / "data" / "portfolio.db"
+    before_database = database.read_bytes()
 
-    # extra_context carries grounding evidence and the S7 NEED-protocol —
-    # armed turns always pass it, so fakes must accept it.
-    def fake_stream_response(*, repo_root, ticker, report_date, user_message, extra_context=""):
-        yield {"type": "delta", "text": f"hello {ticker}"}
-        yield {"type": "final", "text": "done"}
-
-    monkeypatch.setattr(
-        comments_server.build_chat_response,
-        "stream_response",
-        fake_stream_response,
+    responses = (
+        client.get("/chat/NU", query_string={"report_date": "2026-05-01"}),
+        client.post(
+            "/chat/NU",
+            json={"report_date": "2026-05-01", "message": "change the thesis"},
+        ),
+        client.post(
+            "/chat/NU/apply",
+            json={"report_date": "2026-05-01", "proposal": {"target_path": "/thesis"}},
+        ),
     )
-    resp = client.post(
-        "/chat/NU",
-        json={"report_date": "2026-05-01", "message": "test"},
-    )
-    body = resp.get_data(as_text=True)
-    assert resp.mimetype == "text/event-stream"
-    assert resp.headers.get("Cache-Control") == "no-cache"
-    assert "hello NU" in body
-    assert '"type": "final"' in body
-    # SSE frame format preserved
-    assert body.startswith("data: ")
-    assert "\n\n" in body
 
-
-def test_chat_surfaces_subprocess_errors_as_sse(monkeypatch, client):
-    """If stream_response raises mid-flight, the pool catches it and
-    emits an error SSE frame instead of leaving the queue stuck."""
-
-    def boom(*, repo_root, ticker, report_date, user_message, extra_context=""):
-        yield {"type": "delta", "text": "partial"}
-        raise RuntimeError("subprocess died")
-
-    monkeypatch.setattr(comments_server.build_chat_response, "stream_response", boom)
-    resp = client.post(
-        "/chat/NU",
-        json={"report_date": "2026-05-01", "message": "test"},
-    )
-    body = resp.get_data(as_text=True)
-    assert "partial" in body
-    assert "chat stream failed" in body
-    assert '"correlation_id":' in body
-    # The client gets a stable retry message, while the detailed exception is
-    # retained only in the redacted server log.
-    assert "subprocess died" not in body
-
-
-def test_chat_rejects_overlong_message_with_correlation_id(client: FlaskClient) -> None:
-    resp = client.post(
-        "/chat/NU",
-        json={"report_date": "2026-05-01", "message": "x" * 8_001},
-        headers={"X-Correlation-ID": "chat-limit-test"},
-    )
-    assert resp.status_code == 400
-    assert resp.get_json() == {
-        "error": "message exceeds the 8000 character limit",
-        "correlation_id": "chat-limit-test",
-    }
+    for response in responses:
+        assert response.status_code == 410
+        payload = response.get_json()
+        assert payload["schema_version"] == "chat_migrated.v1"
+        assert payload["status"] == "migrated"
+        assert payload["replacement_url"] == "/#screen-copilot"
+        assert payload["ticker"] == "NU"
+    assert not legacy_dir.exists()
+    assert database.read_bytes() == before_database
 
 
 def test_ask_rejects_overlong_query_with_correlation_id(client: FlaskClient) -> None:
@@ -399,130 +362,13 @@ def test_buffered_ask_error_is_generic_and_correlated(
     assert "secret-value" not in resp.get_data(as_text=True)
 
 
-def test_chat_data_question_streams_view_fragment(
-    monkeypatch: pytest.MonkeyPatch, client: FlaskClient, app_repo: Path
-) -> None:
-    """The unified engine inside /chat/<ticker>: a metric-shaped question
-    routes to the ViewSpec path and streams a fragment frame + the message
-    line as final — no narrative LLM involved (the conftest guard would
-    trip if it were)."""
-    from types import SimpleNamespace
-
-    import ask.engine as ask_engine
-    from viewspec import nl_compile
-    from viewspec.spec import ViewSpec
-
-    spec = ViewSpec.from_dict(
-        {
-            "tickers": ["NU"],
-            "metrics": ["fin:revenue"],
-            "transform": "yoy",
-            "cadence": "quarterly",
-            "periods": 8,
-        }
-    )
-
-    def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
-        return nl_compile.NLCompileResult(status="ok", spec=spec)
-
-    def fake_execute(s: ViewSpec, *, db_path: Path) -> SimpleNamespace:
-        # Faithful ViewResult shape: respond_turn summarizes via view_summary(),
-        # which reads spec + period_labels + each row's cells.
-        return SimpleNamespace(
-            spec=s,
-            period_labels=[f"P{i}" for i in range(s.periods)],
-            rows=[SimpleNamespace(cells=[])],
-        )
-
-    def fake_render(view: object, **_kw: object) -> str:
-        return "<div>FRAG</div>"
-
-    monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
-    monkeypatch.setattr(ask_engine, "execute_view", fake_execute)
-    monkeypatch.setattr(ask_engine, "render_view_fragment", fake_render)
-    resp = client.post(
-        "/chat/NU",
-        json={"report_date": "2026-05-01", "message": "NU revenue growth, last 8 quarters"},
-    )
-    body = resp.get_data(as_text=True)
-    assert resp.mimetype == "text/event-stream"
-    assert '"type": "fragment"' in body
-    assert "FRAG" in body
-    assert "1 series" in body
-    # The data turn persisted to the per-report thread (ticker pack).
-    thread_file = app_repo / "data" / "report_chats" / "NU" / "2026-05-01.json"
-    assert thread_file.exists()
-
-
-def test_chat_discovery_command_short_circuits(client: FlaskClient) -> None:
-    """/help answers deterministically through the engine's command route —
-    instant SSE reply, no LLM (conftest guard enforces it)."""
-    resp = client.post("/chat/NU", json={"report_date": "2026-05-01", "message": "/help"})
-    body = resp.get_data(as_text=True)
-    assert '"type": "final"' in body
-    assert "/discovery" in body
-
-
-def test_chat_drawer_js_carries_engine_contract() -> None:
+def test_report_chat_ui_hands_off_to_the_durable_copilot() -> None:
     """Ask v2: the drawer client understands the engine's frame vocabulary —
     stage progress on the hint line, fragment rendering, and the
     context_spec refinement round-trip (lastSpec from fragment frames)."""
     from report.renderers import workspace_chat
 
-    assert "context_spec" in workspace_chat.JS
-    assert "'fragment'" in workspace_chat.JS
-    assert "'stage'" in workspace_chat.JS
-    assert "lastSpec" in workspace_chat.JS
-
-
-def test_concurrent_chat_requests_proceed_in_parallel(monkeypatch, client):
-    """Two concurrent /chat requests must both reach the LLM call. We
-    enforce this with a 2-way Barrier: if the second request is held
-    waiting for the first, the barrier times out and the test fails.
-
-    This guards against regressions where the chat endpoint inadvertently
-    holds a lock or otherwise serializes calls.
-    """
-    barrier = threading.Barrier(2, timeout=5)
-
-    def fake_stream_response(*, repo_root, ticker, report_date, user_message, extra_context=""):
-        # Both workers must reach this point within 5s. If chat requests
-        # are serialized, only one ever does, and barrier.wait raises
-        # BrokenBarrierError after the timeout.
-        barrier.wait()
-        yield {"type": "delta", "text": f"hi {ticker}"}
-        yield {"type": "final", "text": f"done {ticker}"}
-
-    monkeypatch.setattr(
-        comments_server.build_chat_response,
-        "stream_response",
-        fake_stream_response,
-    )
-
-    results: dict[str, str] = {}
-    errors: dict[str, BaseException] = {}
-
-    def run_chat(ticker: str) -> None:
-        try:
-            resp = client.post(
-                f"/chat/{ticker}",
-                json={"report_date": "2026-05-01", "message": "test"},
-            )
-            results[ticker] = resp.get_data(as_text=True)
-        except BaseException as e:  # capture rather than crash the thread
-            errors[ticker] = e
-
-    t1 = threading.Thread(target=run_chat, args=("NU",))
-    t2 = threading.Thread(target=run_chat, args=("MELI",))
-    t1.start()
-    t2.start()
-    t1.join(timeout=15)
-    t2.join(timeout=15)
-
-    assert not t1.is_alive() and not t2.is_alive(), "chat threads stuck"
-    assert not errors, f"errors during concurrent chat: {errors}"
-    # Both completed *and* both made it past the barrier
-    assert "hi NU" in results.get("NU", ""), results
-    assert "done NU" in results.get("NU", ""), results
-    assert "hi MELI" in results.get("MELI", ""), results
-    assert "done MELI" in results.get("MELI", ""), results
+    assert "openDurableCopilot" in workspace_chat.JS
+    assert "Open in Copilot" in workspace_chat.JS
+    assert "fetch(SERVER_URL + '/chat/'" not in workspace_chat.JS
+    assert "'/apply'" not in workspace_chat.JS

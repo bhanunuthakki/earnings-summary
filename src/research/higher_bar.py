@@ -25,7 +25,9 @@ from dataclasses import dataclass
 from typing import cast
 
 # Only these kinds mutate live state on approve -> must clear the higher bar.
-MUTATING_KINDS: frozenset[str] = frozenset({"dcf", "thesis", "code"})
+MUTATING_KINDS: frozenset[str] = frozenset(
+    {"dcf", "thesis", "code", "ask_thesis_edit", "ask_kpi_edit"}
+)
 
 # Keys in an evidence item that count as a concrete doorway (Law 2).
 _DOORWAY_KEYS: tuple[str, ...] = ("source_url", "url", "fact_ref", "news_id", "note_id")

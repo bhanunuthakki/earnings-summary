@@ -50,7 +50,7 @@
   "src/redteam/brief.py": 1,
   "src/report/renderers/charts_v2.py": 13,
   "src/report/renderers/workspace_charts.py": 3,
-  "src/report/renderers/workspace_chat.py": 42,
+  "src/report/renderers/workspace_chat.py": 0,
   "src/report/renderers/workspace_comments.py": 44,
   "src/report/renderers/workspace_dcf.py": 12,
   "src/report/renderers/workspace_sections/chrome.py": 1,

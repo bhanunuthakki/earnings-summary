@@ -35,7 +35,9 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import hashlib
 import json
+import logging
 import math
 import os
 import queue
@@ -93,17 +95,35 @@ from process_report_comments import (  # noqa: E402
     preview_thesis_edits,
     process_comments_for_ticker,
 )
+from pydantic import ValidationError  # noqa: E402
 from refresh_dispatch import STEP_NAMES  # noqa: E402
 
 import comments  # noqa: E402
 import ticker_validation  # noqa: E402
-from ask.context import build_portfolio_pack, build_ticker_pack  # noqa: E402
+from ask.context import build_portfolio_pack  # noqa: E402
 from ask.engine import (  # noqa: E402
     AskTurn,
     ask_retrieval_mode,
     fold_events,
     respond_turn,
     sanitize_history,
+)
+from ask.exchange_store import (  # noqa: E402
+    BeginExchangeResult,
+    ExchangeConflictError,
+    ExchangeStateError,
+    PendingExchangeError,
+    ResearchContextV1,
+    RevisionConflictError,
+    SessionContextConflictError,
+    SessionContextV1,
+    begin_exchange,
+    get_session_context,
+    hash_request_payload,
+    list_session_exchange_artifacts,
+    orchestrate_exchange_events,
+    put_session_context,
+    replay_exchange_events,
 )
 from ask.store import (  # noqa: E402
     AskSession as _AskSession,
@@ -116,7 +136,6 @@ from ask.store import (  # noqa: E402
     load_turns,
     rename_session,
 )
-from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dashboard.inbox import (  # noqa: E402
     collect_inbox,
     render_inbox_stream,
@@ -150,6 +169,16 @@ from pipeline.ticker_command_center import (  # noqa: E402
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
+from research.proposal_approval import (  # noqa: E402
+    AskProposalDecisionV1,
+    ProposalConflictError,
+    StoredProposalError,
+    TargetDriftError,
+    bind_ask_proposal_events,
+    decide_ask_proposal,
+    get_ask_proposal_detail,
+)
+from run_lock import RunLockHeldError  # noqa: E402
 from runtime.job_runtime import portfolio_db_path  # noqa: E402
 from runtime.python_process import managed_python_argv  # noqa: E402
 from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
@@ -182,6 +211,34 @@ _MAX_USER_INPUT_CHARS = 8_000
 _STREAM_QUEUE_MAXSIZE = 64
 _CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 _BROWSER_USER_AGENT_RX = re.compile(r"(?:mozilla|chrome|chromium|safari|firefox|edg)/", re.I)
+_LOGGER = logging.getLogger(__name__)
+
+
+def _drain_durable_events(
+    events: Iterator[dict[str, object]],
+    chunks: queue.Queue[dict[str, object] | None],
+    stop: threading.Event,
+) -> None:
+    """Consume persistence-owning streams to completion after a disconnect."""
+
+    def put_if_connected(item: dict[str, object] | None) -> None:
+        while not stop.is_set():
+            try:
+                chunks.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                continue
+
+    try:
+        for item in events:
+            if stop.is_set():
+                continue
+            put_if_connected(item)
+    except Exception as exc:
+        _LOGGER.error("durable Ask stream failed: %s", redact(exc))
+        put_if_connected({"type": "error", "error": "ask failed; retry the request"})
+    finally:
+        put_if_connected(None)
 
 
 def _cors_allow_origin(origin: str, *, repo_root: Path = PROJECT_ROOT) -> str | None:
@@ -377,6 +434,30 @@ def _payload_text(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _canonical_session_context(repo_root: Path, context: SessionContextV1) -> SessionContextV1:
+    """Bind company context to the exact canonical thesis bytes, when present."""
+
+    ticker = context.company_ticker
+    canonical_ref: str | None = None
+    canonical_version: str | None = None
+    if ticker is not None:
+        relative = Path("micro_thesis") / "holdings" / f"{ticker}.json"
+        thesis_path = repo_root / relative
+        if thesis_path.is_file():
+            canonical_ref = relative.as_posix()
+            canonical_version = hashlib.sha256(thesis_path.read_bytes()).hexdigest()
+    if context.thesis_ref not in {None, canonical_ref}:
+        raise ValueError("session_context thesis_ref conflicts with the canonical thesis")
+    if context.thesis_version not in {None, canonical_version}:
+        raise ValueError("session_context thesis_version conflicts with the canonical thesis")
+    return context.model_copy(
+        update={
+            "thesis_ref": canonical_ref,
+            "thesis_version": canonical_version,
+        }
+    )
+
+
 def _parse_bbox_param(raw: str | None) -> tuple[float, float, float, float] | None:
     """``?bbox=x0,y0,x1,y1`` (PDF page coords) → tuple, or None on any
     malformed input — the highlight is enrichment, never a 400."""
@@ -504,6 +585,15 @@ def create_app(
         set_correlation_id(correlation_id)
         drain_events(events, chunks, stop)
 
+    def _drain_durable_stream(
+        events: Iterator[dict[str, object]],
+        chunks: queue.Queue[dict[str, object] | None],
+        stop: threading.Event,
+        correlation_id: str,
+    ) -> None:
+        set_correlation_id(correlation_id)
+        _drain_durable_events(events, chunks, stop)
+
     def _sse_frame(item: dict[str, object], correlation_id: str) -> str:
         if item.get("type") == "error":
             item = {
@@ -547,7 +637,12 @@ def create_app(
         )
 
     def _stream_engine_events_with_session(
-        events: Iterator[dict[str, object]], session_id: str
+        events: Iterator[dict[str, object]],
+        session_id: str,
+        *,
+        disconnect_safe: bool = False,
+        session_revision: int | None = None,
+        session_context: dict[str, object] | None = None,
     ) -> Response:
         """Like ``_stream_engine_events`` but emits a leading
         ``{type: "session", session_id: "…"}`` frame so the client always
@@ -555,11 +650,20 @@ def create_app(
         correlation_id = get_correlation_id()
         chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=_STREAM_QUEUE_MAXSIZE)
         stop = threading.Event()
-        chat_pool.submit(_drain_stream, events, chunks, stop, correlation_id)
+        drain = _drain_durable_stream if disconnect_safe else _drain_stream
+        chat_pool.submit(drain, events, chunks, stop, correlation_id)
 
         def generate():
             try:
-                yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
+                session_event: dict[str, object] = {
+                    "type": "session",
+                    "session_id": session_id,
+                }
+                if session_revision is not None:
+                    session_event["session_revision"] = session_revision
+                if session_context is not None:
+                    session_event["session_context"] = session_context
+                yield f"data: {json.dumps(session_event)}\n\n"
                 while True:
                     item = chunks.get()
                     if item is None:
@@ -1056,10 +1160,20 @@ def create_app(
         write-dispatch (no web fetch, so never a trifecta). CSRF-guarded."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from research.proposals import PROPOSAL_VERBS, act_on_proposal
+        from research.proposals import PROPOSAL_VERBS, act_on_proposal, get_proposal
 
         if verb not in PROPOSAL_VERBS:
             return ({"error": f"unknown verb {verb!r}"}, 400)
+        proposal = get_proposal(proposal_id, db_path=db_path)
+        if proposal is not None and proposal.canonical_content_json is not None:
+            return (
+                {
+                    "error": "governed Ask proposals require the revisioned decision endpoint",
+                    "detail_url": f"/api/research/proposals/{proposal_id}",
+                    "decision_url": f"/api/research/proposals/{proposal_id}/decision",
+                },
+                409,
+            )
         payload = cast("dict[str, object]", request.get_json(silent=True) or {})
         steer_text = str(payload.get("steer_text") or "").strip() or None
         _bump_activation_count(f"act:proposal:{verb}")
@@ -1096,6 +1210,115 @@ def create_app(
                 }
             )
         return response
+
+    def _ask_proposal_error(
+        code: str,
+        message: str,
+        *,
+        proposal_id: int,
+        status: int,
+        **details: object,
+    ) -> tuple[dict[str, object], int]:
+        error: dict[str, object] = {
+            "code": code,
+            "message": message,
+            "proposal_id": proposal_id,
+        }
+        error.update({key: value for key, value in details.items() if value is not None})
+        return ({"schema_version": "ask_proposal_error.v1", "error": error}, status)
+
+    @app.route("/api/research/proposals/<int:proposal_id>", methods=["GET"])
+    def ask_proposal_detail(proposal_id: int):
+        try:
+            detail = get_ask_proposal_detail(proposal_id, db_path=db_path)
+        except StoredProposalError as exc:
+            _log_redacted_failure("governed Ask proposal detail invalid", exc)
+            return _ask_proposal_error(
+                "stored_proposal_invalid",
+                "proposal data is unavailable",
+                proposal_id=proposal_id,
+                status=500,
+            )
+        if detail is None:
+            return _ask_proposal_error(
+                "proposal_not_found",
+                "governed proposal was not found",
+                proposal_id=proposal_id,
+                status=404,
+            )
+        return detail.model_dump(mode="json")
+
+    @app.route(
+        "/api/research/proposals/<int:proposal_id>/decision",
+        methods=["POST", "OPTIONS"],
+    )
+    def ask_proposal_decision(proposal_id: int):
+        if request.method == "OPTIONS":
+            return ("", 204)
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
+            return _ask_proposal_error(
+                "cross_site_rejected",
+                "cross-site proposal decisions are not allowed",
+                proposal_id=proposal_id,
+                status=403,
+            )
+        try:
+            decision = AskProposalDecisionV1.model_validate(request.get_json(silent=True))
+        except ValidationError:
+            return _ask_proposal_error(
+                "invalid_request",
+                "decision payload does not match ask_proposal_decision.v1",
+                proposal_id=proposal_id,
+                status=400,
+            )
+        if decision.proposal_id != proposal_id:
+            return _ask_proposal_error(
+                "proposal_id_mismatch",
+                "path and payload proposal_id must match",
+                proposal_id=proposal_id,
+                status=400,
+            )
+        try:
+            receipt = decide_ask_proposal(
+                decision,
+                repo_root=repo_root,
+                db_path=db_path,
+            )
+        except ProposalConflictError as exc:
+            return _ask_proposal_error(
+                exc.code,
+                str(exc),
+                proposal_id=proposal_id,
+                status=409,
+                current_proposal_revision=exc.current_proposal_revision,
+                current_status=exc.current_status,
+            )
+        except TargetDriftError as exc:
+            return _ask_proposal_error(
+                "target_drift",
+                "proposal target changed after the proposal was created",
+                proposal_id=proposal_id,
+                status=412,
+                expected_target_sha256=exc.expected_target_sha256,
+                actual_target_sha256=exc.actual_target_sha256,
+            )
+        except RunLockHeldError:
+            return _ask_proposal_error(
+                "mutation_busy",
+                "another portfolio mutation is in progress; retry the decision",
+                proposal_id=proposal_id,
+                status=409,
+            )
+        except (StoredProposalError, ValueError, OSError, sqlite3.Error) as exc:
+            _log_redacted_failure("governed Ask proposal decision failed", exc)
+            return _ask_proposal_error(
+                "decision_failed",
+                "proposal decision could not be completed",
+                proposal_id=proposal_id,
+                status=500,
+            )
+        _bump_activation_count(f"act:ask_proposal:{decision.decision}")
+        return receipt.model_dump(mode="json")
 
     @app.route("/api/reconcile/<kind>/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
     def reconcile_verdict(kind: str, item_id: int, verdict: str):
@@ -2428,21 +2651,61 @@ def create_app(
         Always 200 with a tri-state payload augmented with ``session_id``."""
         if request.method == "OPTIONS":
             return ("", 204)
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        durable = "request_id" in body
         try:
             turn, sess = _parse_ask_turn_with_session()
         except ValueError as exc:
             return _client_error(str(exc), 400)
         if turn is None:
             return ({"error": "query required"}, 400)
+        begun: BeginExchangeResult | None = None
+        if durable:
+            try:
+                turn, begun = _prepare_durable_ask(body, turn, sess)
+                if begun.disposition == "pending":
+                    raise PendingExchangeError("request_id is already pending")
+            except ValueError as exc:
+                return _client_error(str(exc), 400)
+            except (
+                ExchangeConflictError,
+                ExchangeStateError,
+                PendingExchangeError,
+                RevisionConflictError,
+                SessionContextConflictError,
+            ) as exc:
+                return _durable_conflict(exc, sess)
         pack = build_portfolio_pack(repo_root, db_path)
-        events = respond_turn(
-            turn,
-            pack,
-            db_path=db_path,
-            repo_root=repo_root,
-            registry=job_registry,
-            retrieval_mode=ask_retrieval_mode(),
-        )
+        if begun is not None and begun.disposition == "replayed":
+            events = replay_exchange_events(
+                begun.exchange,
+                db_path=db_path,
+                session_revision=begun.session_revision,
+            )
+        else:
+            raw_engine_events = respond_turn(
+                turn,
+                pack,
+                db_path=db_path,
+                repo_root=repo_root,
+                registry=job_registry,
+                retrieval_mode=ask_retrieval_mode(),
+            )
+            engine_events = (
+                bind_ask_proposal_events(
+                    raw_engine_events,
+                    repo_root=repo_root,
+                    db_path=db_path,
+                    exchange_request_id=begun.exchange.request_id,
+                )
+                if begun is not None
+                else raw_engine_events
+            )
+            events = (
+                orchestrate_exchange_events(engine_events, exchange=begun.exchange, db_path=db_path)
+                if begun is not None
+                else engine_events
+            )
         result = fold_events(events)
         # A forced /view compile is deterministic local validation, not an
         # upstream/provider exception. Its bounded message is actionable and
@@ -2453,7 +2716,7 @@ def create_app(
                 "message": "ask failed; retry the request",
                 "correlation_id": get_correlation_id(),
             }
-        result["session_id"] = sess.id if sess else turn.session_id
+        result["session_id"] = sess.id if sess else (turn.session_id or "")
         return result
 
     @app.route("/api/ask/stream", methods=["POST", "OPTIONS"])
@@ -2464,23 +2727,74 @@ def create_app(
         the id and pass it back on the next turn."""
         if request.method == "OPTIONS":
             return ("", 204)
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        durable = "request_id" in body
         try:
             turn, sess = _parse_ask_turn_with_session()
         except ValueError as exc:
             return _client_error(str(exc), 400)
         if turn is None:
             return ({"error": "query required"}, 400)
+        begun: BeginExchangeResult | None = None
+        if durable:
+            try:
+                turn, begun = _prepare_durable_ask(body, turn, sess)
+                if begun.disposition == "pending":
+                    raise PendingExchangeError("request_id is already pending")
+            except ValueError as exc:
+                return _client_error(str(exc), 400)
+            except (
+                ExchangeConflictError,
+                ExchangeStateError,
+                PendingExchangeError,
+                RevisionConflictError,
+                SessionContextConflictError,
+            ) as exc:
+                return _durable_conflict(exc, sess)
         pack = build_portfolio_pack(repo_root, db_path)
-        events = respond_turn(
-            turn,
-            pack,
-            db_path=db_path,
-            repo_root=repo_root,
-            registry=job_registry,
-            retrieval_mode=ask_retrieval_mode(),
-        )
+        if begun is not None and begun.disposition == "replayed":
+            events = replay_exchange_events(
+                begun.exchange,
+                db_path=db_path,
+                session_revision=begun.session_revision,
+            )
+        else:
+            raw_engine_events = respond_turn(
+                turn,
+                pack,
+                db_path=db_path,
+                repo_root=repo_root,
+                registry=job_registry,
+                retrieval_mode=ask_retrieval_mode(),
+            )
+            engine_events = (
+                bind_ask_proposal_events(
+                    raw_engine_events,
+                    repo_root=repo_root,
+                    db_path=db_path,
+                    exchange_request_id=begun.exchange.request_id,
+                )
+                if begun is not None
+                else raw_engine_events
+            )
+            events = (
+                orchestrate_exchange_events(engine_events, exchange=begun.exchange, db_path=db_path)
+                if begun is not None
+                else engine_events
+            )
         sid = sess.id if sess else (turn.session_id or "")
-        return _stream_engine_events_with_session(events, sid)
+        durable_context = get_session_context(sid, db_path=db_path) if begun is not None else None
+        return _stream_engine_events_with_session(
+            events,
+            sid,
+            disconnect_safe=begun is not None,
+            session_revision=begun.session_revision if begun is not None else None,
+            session_context=(
+                durable_context.context.model_dump(mode="json")
+                if durable_context is not None
+                else None
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Positioning coach (the fit-v2 positioning surface)
@@ -2873,6 +3187,7 @@ def create_app(
             payload = _session_to_json(sess)
             payload["turns"] = [
                 {
+                    "id": t.id,
                     "role": t.role,
                     "text": t.text,
                     "citations": t.citations,
@@ -2881,6 +3196,14 @@ def create_app(
                 }
                 for t in turns
             ]
+            try:
+                payload["exchange_artifacts"] = [
+                    item.model_dump(mode="json")
+                    for item in list_session_exchange_artifacts(sid, db_path=db_path)
+                ]
+            except Exception as exc:
+                _log_redacted_failure("Ask session artifact validation failed", exc)
+                payload["exchange_artifacts"] = []
             return payload
 
         if request.method == "PATCH":
@@ -3050,13 +3373,97 @@ def create_app(
         )
         return turn, sess
 
+    def _prepare_durable_ask(
+        body: dict[str, object],
+        turn: AskTurn,
+        sess: _AskSession | None,
+    ) -> tuple[AskTurn, BeginExchangeResult]:
+        raw_request_id = body.get("request_id")
+        if not isinstance(raw_request_id, str) or not raw_request_id.strip():
+            raise ValueError("request_id must be a non-empty string")
+        request_id = raw_request_id.strip()
+        raw_revision = body.get("expected_revision")
+        if not isinstance(raw_revision, int) or isinstance(raw_revision, bool):
+            raise ValueError("expected_revision must be an integer")
+        if sess is None or turn.session_id is None:
+            raise ExchangeStateError("durable Ask requires a writable portfolio session")
+        raw_session_context = body.get("session_context")
+        if not isinstance(raw_session_context, dict):
+            raise ValueError("session_context must be an object")
+        client_context = SessionContextV1.model_validate(raw_session_context)
+        stored_context = get_session_context(sess.id, db_path=db_path)
+        if stored_context is None:
+            context = _canonical_session_context(repo_root, client_context)
+            put_session_context(sess.id, context, db_path=db_path)
+        else:
+            if client_context != stored_context.context:
+                raise SessionContextConflictError(
+                    "session_context does not match the session's historical snapshot"
+                )
+            context = stored_context.context
+        raw_research_context = body.get("research_context")
+        if not isinstance(raw_research_context, dict):
+            raise ValueError("research_context must be an object")
+        research_context = ResearchContextV1.model_validate(raw_research_context)
+        research_payload = research_context.model_dump(mode="json", exclude_none=True)
+        payload_sha256 = hash_request_payload(
+            {
+                "session_id": sess.id,
+                "query": turn.text,
+                "tickers": list(turn.tickers),
+                "context_spec": turn.context_spec,
+                "session_context": context.model_dump(mode="json"),
+                "research_context": research_payload,
+            }
+        )
+        begun = begin_exchange(
+            session_id=sess.id,
+            request_id=request_id,
+            payload_sha256=payload_sha256,
+            user_text=turn.text,
+            expected_revision=raw_revision,
+            db_path=db_path,
+        )
+        turn.persistence_mode = "external_exchange"
+        turn.authoritative_user_turn_id = begun.exchange.user_turn_id
+        turn.research_context = cast("dict[str, object]", research_payload)
+        turn.history = []
+        return turn, begun
+
+    def _durable_conflict(
+        exc: object,
+        sess: _AskSession | None,
+    ) -> tuple[dict[str, object], int]:
+        payload: dict[str, object] = {
+            "error": str(exc),
+            "correlation_id": get_correlation_id(),
+        }
+        if sess is not None:
+            try:
+                context = get_session_context(sess.id, db_path=db_path)
+            except Exception:
+                context = None
+            if context is not None:
+                payload["session_revision"] = context.revision
+        return payload, 409
+
     def _session_to_json(sess: _AskSession) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "id": sess.id,
             "title": sess.title,
             "created_at": sess.created_at,
             "updated_at": sess.updated_at,
         }
+        try:
+            context = get_session_context(sess.id, db_path=db_path)
+        except Exception as exc:
+            _log_redacted_failure("Ask session context validation failed", exc)
+            context = None
+        payload["session_context"] = (
+            context.context.model_dump(mode="json") if context is not None else None
+        )
+        payload["session_revision"] = context.revision if context is not None else 0
+        return payload
 
     @app.route("/api/views", methods=["GET", "POST"])
     def views_api():
@@ -4592,6 +4999,15 @@ def create_app(
 
     # ----- CHAT (Phase 3) -----
 
+    def _legacy_chat_migrated(ticker: str) -> dict[str, object]:
+        return {
+            "schema_version": "chat_migrated.v1",
+            "status": "migrated",
+            "ticker": ticker.strip().upper(),
+            "message": "Report chat moved to Copilot Ask; no legacy history was imported.",
+            "replacement_url": "/#screen-copilot",
+        }
+
     @app.route("/chat/<ticker>", methods=["OPTIONS"])
     def chat_options(ticker: str):
         del ticker
@@ -4599,51 +5015,17 @@ def create_app(
 
     @app.route("/chat/<ticker>", methods=["GET"])
     def list_chat_endpoint(ticker: str):
-        report_date_str = request.args.get("report_date")
-        if not report_date_str:
-            return ({"error": "report_date required"}, 400)
-        report_date = _parse_date(report_date_str)
-        thread = build_chat_response.load_thread(repo_root, ticker, report_date)
-        return (
-            {
-                "ticker": ticker,
-                "report_date": report_date.isoformat(),
-                "thread": [t.model_dump(mode="json") for t in thread],
-            },
-            200,
-        )
+        return (_legacy_chat_migrated(ticker), 410)
 
     @app.route("/chat/<ticker>", methods=["POST"])
     def chat_endpoint(ticker: str):
-        body = request.get_json(silent=True) or {}
-        try:
-            report_date = _parse_date(body["report_date"])
-            user_message = str(body["message"])
-        except (KeyError, ValueError, TypeError) as e:
-            return ({"error": f"bad payload: {e}"}, 400)
-        if len(user_message) > _MAX_USER_INPUT_CHARS:
-            return _client_error(
-                f"message exceeds the {_MAX_USER_INPUT_CHARS} character limit",
-                400,
-            )
+        return (_legacy_chat_migrated(ticker), 410)
 
         # The unified ask engine with this report's TICKER context pack
         # ("one brain, two entry points" — same engine as /api/ask).
         # Deterministic commands reply instantly, metric questions render
         # live view fragments, everything else streams from the narrative
         # LLM with the report context + persisted thread.
-        raw_ctx = body.get("context_spec")
-        turn = AskTurn(
-            text=user_message,
-            context_spec=cast("dict[str, object]", raw_ctx) if isinstance(raw_ctx, dict) else None,
-        )
-        pack = build_ticker_pack(ticker, report_date)
-
-        events = respond_turn(
-            turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
-        )
-        return _stream_engine_events(events)
-
     # ----- APPLY (Phase 4) -----
 
     @app.route("/chat/<ticker>/apply", methods=["OPTIONS"])
@@ -4653,14 +5035,7 @@ def create_app(
 
     @app.route("/chat/<ticker>/apply", methods=["POST"])
     def chat_apply_endpoint(ticker: str):
-        body = cast("dict[str, object]", request.get_json(silent=True) or {})
-        try:
-            diff = cast("dict[str, object]", body["diff"])
-            report_date = _parse_date(str(body["report_date"]))
-            dry_run = bool(body.get("dry_run", False))
-        except (KeyError, TypeError, ValueError):
-            return ({"error": "diff and report_date required"}, 400)
-        return apply_chat_diff(repo_root, ticker, report_date, diff, dry_run=dry_run)
+        return (_legacy_chat_migrated(ticker), 410)
 
     return app
 

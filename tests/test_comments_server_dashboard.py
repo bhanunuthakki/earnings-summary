@@ -131,7 +131,8 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # + socratic_questions_result (GET /api/socratic/questions/<ticker>) — Step 1 became
     # a background job; +1 peek_weekly_packet (GET /api/peek/weekly-packet, the Sunday-
     # packet band's read-only doorway). +1 post-earnings readout generation action.
-    assert len(rules) == 154
+    # +2 governed Copilot proposal routes: exact detail and revisioned decision.
+    assert len(rules) == 156
     assert {
         endpoint: rules[endpoint]
         for endpoint in (
@@ -158,6 +159,8 @@ def test_extracted_routes_preserve_endpoint_contract(client):
             "latest_report_for_ticker",
             "latest_dcf_for_ticker",
             "tickers_api",
+            "ask_proposal_detail",
+            "ask_proposal_decision",
             "alerts.digest_page",
             "alerts.feed_page",
             "alerts.alerts_page",
@@ -195,6 +198,8 @@ def test_extracted_routes_preserve_endpoint_contract(client):
         "latest_report_for_ticker": "/reports/<ticker>",
         "latest_dcf_for_ticker": "/dcf/<ticker>",
         "tickers_api": "/api/tickers",
+        "ask_proposal_detail": "/api/research/proposals/<int:proposal_id>",
+        "ask_proposal_decision": "/api/research/proposals/<int:proposal_id>/decision",
         "alerts.digest_page": "/digest",
         "alerts.feed_page": "/feed",
         "alerts.alerts_page": "/alerts",

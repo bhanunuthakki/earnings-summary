@@ -1,477 +1,154 @@
-"""JS + CSS for the in-report chat drawer.
+"""Durable Work OS Copilot handoff for standalone and embedded reports.
 
-Vanilla JS. Reads boot data shared with workspace_comments (window
-`__workspaceCommentBoot`). Streams via SSE from `comments_server.py`
-endpoint `/chat/<ticker>` — the unified ask engine with this report's
-ticker context pack. Renders Markdown responses (basic — code fences +
-bold + lists), live data-view fragments (`fragment` events, when a metric
-question routes to the ViewSpec path), and an "Apply this change" button
-when the response includes a `diff_proposal` event.
-
-Grounded answers (Ask v3 / S8): deltas stream as plain text, then the
-trailing ``citations`` event re-renders the finished prose through the
-shared ``ui.cite_marks`` helper — superscript [n] chips whose popover
-carries the evidence label + S2 confidence %, hrefs made absolute against
-the research server (the report opens via file://), plus an
-"⚠ N unverified" chip when the claim audit flagged unsupported claims.
+Reports no longer own a second chat thread or proposal mutation path. The
+small report-side surface passes ticker, report date, and an optional fact
+reference to the production Copilot controller when it is available, with a
+same-origin Work OS link as the standalone fallback.
 """
 
 from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS
 
-JS = (
-    CITE_MARKS_JS
-    + r"""
-(function() {
-  // Wait until the comments module has set up boot data.
+JS = CITE_MARKS_JS + r"""
+(function () {
+  'use strict';
+
   function init() {
     var boot = window.__workspaceCommentBoot;
     if (!boot) {
-      setTimeout(init, 100);
+      window.setTimeout(init, 100);
       return;
     }
     var SERVER_URL = /^https?:$/.test(window.location.protocol)
       ? window.location.origin
       : (boot.server_url || 'http://localhost:7421');
-    var TICKER = boot.ticker;
-    var REPORT_DATE = boot.report_date;
-    var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
-
-    // The chat panel is now a push-sidebar (flex sibling of .l1-root),
-    // mirroring the comments sidebar — see _chat_drawer_shell +
-    // _comment_sidebar_shell in workspace_html.py. The floating
-    // .chat-drawer keeps only the launcher toggle; the panel content
-    // lives in .chat-sidebar and slides the document aside when open.
+    var TICKER = String(boot.ticker || '').toUpperCase();
+    var REPORT_DATE = String(boot.report_date || '');
     var sidebar = document.getElementById('chat-sidebar');
     var toggle = document.getElementById('chat-toggle');
-    if (!sidebar || !toggle) return;
+    var handoff = document.getElementById('chat-open-copilot');
+    if (!sidebar || !toggle || !handoff) return;
 
-    // De-duplicate the launcher when embedded. The command center embeds this
-    // report in a `/reports/<t>` iframe (see render_holding_fragment), and the
-    // shell already shows its own persistent "Ask" dock — the canonical Ask v5
-    // chat surface. Two launchers would then stack in the bottom-right corner.
-    // When we detect we're framed, hide THIS report's floating "⌘ Chat" pill so
-    // the shell's dock is the single entry point. The chat sidebar stays fully
-    // wired, so fact-doorway clicks (a KPI cell -> the exact series, below) still
-    // open the in-report thread. A standalone report (file:// or a top-level
-    // /reports/<t> tab) is not framed, so it keeps its launcher.
-    var embedded;
-    try { embedded = window.self !== window.top; } catch (_) { embedded = true; }
-    if (embedded) {
-      var launcher = document.getElementById('chat-drawer');
-      if (launcher) launcher.style.display = 'none';
+    var launchQuery = new URLSearchParams({
+      copilot: '1', ticker: TICKER, report_date: REPORT_DATE,
+      origin_key: 'report:' + TICKER + ':' + REPORT_DATE
+    });
+    var launchUrl = SERVER_URL + '/?' + launchQuery.toString() + '#screen-workspace';
+    handoff.href = launchUrl;
+    handoff.textContent = 'Open in Copilot';
+
+    function openDurableCopilot(context) {
+      var payload = Object.assign({
+        company_ticker: TICKER,
+        category: 'research',
+        report_date: REPORT_DATE,
+        origin_key: 'report:' + TICKER + ':' + REPORT_DATE,
+        coverage_role_at_creation: 'unknown',
+        lifecycle_at_creation: 'unknown'
+      }, context || {});
+      try {
+        if (window.parent !== window && typeof window.parent.openWorkOsCopilot === 'function') {
+          window.parent.openWorkOsCopilot(payload);
+          return true;
+        }
+      } catch (_) { /* cross-origin embeds use the clear Work OS link */ }
+      if (typeof window.openWorkOsCopilot === 'function') {
+        window.openWorkOsCopilot(payload);
+        return true;
+      }
+      return false;
     }
 
-    var threadEl = document.getElementById('chat-thread');
-    var form = document.getElementById('chat-form');
-    var hintEl = document.getElementById('chat-hint');
-    // Kept in sync with `.chat-sidebar.open { width }` in the CSS so the
-    // floating toggle (positioned via --sidebar-open-width) rides the
-    // sidebar's left edge.
-    var CHAT_WIDTH = '460px';
-
-    // Visual open/close — the push-sidebar's own .open class + width transition.
     function applyOpen(open) {
       sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
       sidebar.classList.toggle('open', open);
       toggle.classList.toggle('open', open);
-      if (open) {
-        document.documentElement.style.setProperty('--sidebar-open-width', CHAT_WIDTH);
-        form.message.focus();
-      } else {
-        document.documentElement.style.removeProperty('--sidebar-open-width');
-      }
+      if (open) document.documentElement.style.setProperty('--sidebar-open-width', 'var(--sidebar-width)');
+      else document.documentElement.style.removeProperty('--sidebar-open-width');
     }
 
-    // Dismissal (x + Esc) and one-open-at-a-time with the comments sidebar are
-    // CCOverlay's now (S4, Law 3): a push-sidebar gesture surface — scrim:false
-    // (the report stays readable beside it), motion:'none' + toggleHidden:false
-    // (its own .open class + width transition drive visuals), grouped
-    // 'report-sidebar' so opening one closes the other. This replaces the
-    // cross-document window.__close* handshake AND the per-sidebar Escape
-    // keydown — the open-surface stack now owns both.
     var chatOv = window.CCOverlay && window.CCOverlay.register(sidebar, {
       modal: true, priority: 30, scrim: false, trapFocus: false, restoreFocus: true,
       motion: 'none', toggleHidden: false, autofocus: false,
       group: 'report-sidebar', closeId: 'chat-close', wireClose: false,
-      onOpen: function() { applyOpen(true); },
-      onClose: function() { applyOpen(false); }
+      onOpen: function () { applyOpen(true); },
+      onClose: function () { applyOpen(false); }
     });
     function setOpen(open) {
-      if (!chatOv) { applyOpen(open); return; }  // degrade if the primitive is absent
+      if (!chatOv) { applyOpen(open); return; }
       if (open) chatOv.open(); else chatOv.close();
     }
 
-    toggle.addEventListener('click', function() { setOpen(sidebar.getAttribute('aria-hidden') === 'true'); });
-    sidebar.querySelector('.chat-close').addEventListener('click', function() { setOpen(false); });
+    var embedded = false;
+    try { embedded = window.self !== window.top; } catch (_) { embedded = true; }
+    if (embedded) {
+      var launcher = document.getElementById('chat-drawer');
+      if (launcher) launcher.hidden = true;
+      handoff.target = '_top';
+    }
 
-    // Cmd+Enter / Ctrl+Enter submits
-    form.message.addEventListener('keydown', function(ev) {
-      if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') form.requestSubmit();
+    toggle.addEventListener('click', function () {
+      if (!openDurableCopilot({})) setOpen(sidebar.getAttribute('aria-hidden') === 'true');
+    });
+    sidebar.querySelector('.chat-close').addEventListener('click', function () { setOpen(false); });
+    handoff.addEventListener('click', function (event) {
+      if (!openDurableCopilot({})) return;
+      event.preventDefault();
+      setOpen(false);
     });
 
-    // ----- Load existing thread -----
-    fetch(SERVER_URL + '/chat/' + TICKER + '?report_date=' + REPORT_DATE)
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        (data.thread || []).forEach(function(t) {
-          appendTurn(t.role, t.text, t.proposed_diff || null);
-        });
-      })
-      .catch(function() {
-        appendTurn('system', 'The research server is not reachable, so chat is offline.', null);
-      });
-
-    // ----- Submit handler -----
-    // lastSpec: the most recent data-view spec this drawer rendered. Sent
-    // as context_spec so short follow-ups ("now annual", "add MELI")
-    // refine the view instead of starting over — same contract as the
-    // Ask tab's thread.
-    var lastSpec = null;
-    form.addEventListener('submit', function(ev) {
-      ev.preventDefault();
-      var msg = form.message.value.trim();
-      if (!msg) return;
-      form.message.value = '';
-      appendTurn('user', msg, null);
-      var assistantEl = appendTurn('assistant', '', null);
-      var streamEl = assistantEl.querySelector('.chat-text');
-      var citations = [];
-      var claims = [];
-      hintEl.textContent = 'Working…';
-
-      // SSE via fetch + ReadableStream (EventSource doesn't support POST)
-      fetch(SERVER_URL + '/chat/' + TICKER, {
-        method: 'POST',
-        headers: MUTATION_HEADERS,
-        body: JSON.stringify({report_date: REPORT_DATE, message: msg, context_spec: lastSpec}),
-      }).then(function(resp) {
-        if (!resp.ok || !resp.body) throw new Error('chat HTTP ' + resp.status);
-        var reader = resp.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = '';
-        function pump() {
-          return reader.read().then(function(result) {
-            if (result.done) {
-              streamEl.innerHTML = renderMarkdown(streamEl.textContent);
-              if (citations.length || claims.length) {
-                streamEl.innerHTML = linkifyCites(streamEl.innerHTML, citations);
-                appendCiteRow(assistantEl, citations, claims);
-              }
-              hintEl.textContent = 'Cmd+Enter to send';
-              return;
-            }
-            buffer += decoder.decode(result.value, {stream: true});
-            var parts = buffer.split('\n\n');
-            buffer = parts.pop();
-            parts.forEach(function(frame) {
-              var line = frame.replace(/^data:\s*/, '');
-              try {
-                var ev = JSON.parse(line);
-                if (ev.type === 'stage') {
-                  // Real progress from the engine: compiling/running a
-                  // data view, or off researching in prose.
-                  hintEl.textContent =
-                    ev.stage === 'compiling' ? 'Compiling the view…'
-                    : ev.stage === 'running' ? 'Running the view…'
-                    : (ev.note || 'Researching — can take ~30s…');
-                } else if (ev.type === 'delta') {
-                  streamEl.textContent += ev.text;
-                  threadEl.scrollTop = threadEl.scrollHeight;
-                } else if (ev.type === 'fragment') {
-                  // A metric question routed to the data path: the engine
-                  // streams a rendered view fragment instead of prose.
-                  var frag = document.createElement('div');
-                  frag.className = 'chat-fragment';
-                  frag.innerHTML = ev.html || '';
-                  assistantEl.appendChild(frag);
-                  threadEl.scrollTop = threadEl.scrollHeight;
-                  if (ev.spec) lastSpec = ev.spec;
-                } else if (ev.type === 'final') {
-                  // Data turns carry no deltas — the final's message line
-                  // ("4 series · yoy · quarterly") is the turn's text.
-                  if (!streamEl.textContent) streamEl.textContent = ev.text || '';
-                } else if (ev.type === 'citations') {
-                  // Grounded narrative answers (Ask v3): numbered evidence
-                  // the answer cited — rendered as chips at stream close.
-                  citations = ev.items || [];
-                  claims = ev.claims || [];
-                } else if (ev.type === 'diff_proposal') {
-                  appendDiffButton(assistantEl, ev.diff);
-                } else if (ev.type === 'error') {
-                  streamEl.textContent += '\n\n[ERROR] ' + ev.error;
-                }
-              } catch (_) { /* ignore */ }
-            });
-            return pump();
-          });
-        }
-        return pump();
-      }).catch(function(err) {
-        streamEl.textContent = '[ERROR] ' + err.message;
-        hintEl.textContent = 'The research server is not reachable - chat is offline.';
-      });
+    document.addEventListener('click', function (event) {
+      var doorway = event.target.closest && event.target.closest('.fact-doorway');
+      if (!doorway) return;
+      var host = doorway.closest('[data-fact-ref]');
+      var factRef = host && host.getAttribute('data-fact-ref');
+      if (!factRef) return;
+      var label = (doorway.textContent || '').replace(/\s+/g, ' ').trim();
+      if (openDurableCopilot({
+        fact_ref: factRef,
+        prompt: label ? ('Review ' + label + ' with its governed evidence.') : 'Review this governed fact.'
+      })) event.preventDefault();
     });
-
-    // ----- Fact doorway (Law 2 — every datum is a doorway) -----
-    // A KPI cell rendered as a .fact-doorway carries a stable fact_ref handle
-    // (kpi:{ticker}:{def_id}) on its row. Clicking it opens this chat on the
-    // EXACT series: we submit the handle alongside the clean label, and
-    // ask.grounding's fast-path resolves it by PK (the name phrase-match is the
-    // fallback). The handle rides in the question text so resolution never
-    // depends on re-typing the metric's fragile display name.
-    document.addEventListener('click', function(ev) {
-      var dw = ev.target.closest && ev.target.closest('.fact-doorway');
-      if (!dw) return;
-      var host = dw.closest('[data-fact-ref]');
-      var ref = host && host.getAttribute('data-fact-ref');
-      if (!ref) return;
-      ev.preventDefault();
-      setOpen(true);
-      var label = (dw.textContent || '').replace(/\s+/g, ' ').trim();
-      form.message.value = label ? (label + ' — ' + ref) : ref;
-      form.requestSubmit();
-    });
-
-    function appendTurn(role, text, diff) {
-      var t = document.createElement('div');
-      t.className = 'chat-turn chat-role-' + role;
-      t.innerHTML = ''
-        + '<div class="chat-role-tag">' + role + '</div>'
-        + '<div class="chat-text">' + (text ? renderMarkdown(text) : '') + '</div>';
-      threadEl.appendChild(t);
-      threadEl.scrollTop = threadEl.scrollHeight;
-      if (diff) appendDiffButton(t, diff);
-      return t;
-    }
-
-    function appendDiffButton(turnEl, diff) {
-      var wrap = document.createElement('div');
-      wrap.className = 'chat-diff';
-      wrap.innerHTML = ''
-        + '<div class="chat-diff-summary"><strong>Proposed edit:</strong> ' + escapeHtml(diff.summary || '—') + '</div>'
-        + '<div class="chat-diff-path"><code>' + escapeHtml(diff.target_file || '') + ' · ' + escapeHtml(diff.target_path || '') + '</code></div>'
-        + '<div class="chat-diff-actions">'
-        + '  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-action="preview">Preview</button>'
-        + '  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-action="apply">Apply</button>'
-        + '</div>';
-      turnEl.appendChild(wrap);
-      wrap.querySelectorAll('button').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var dryRun = btn.getAttribute('data-action') === 'preview';
-          CCAction.busy(btn, dryRun ? 'Previewing…' : 'Applying…');
-          fetch(SERVER_URL + '/chat/' + TICKER + '/apply', {
-            method: 'POST',
-            headers: MUTATION_HEADERS,
-            body: JSON.stringify({diff: diff, report_date: REPORT_DATE, dry_run: dryRun}),
-          }).then(function(r) { return r.json(); }).then(function(res) {
-            CCAction.release(btn);
-            var msg = (res.applied ? '✓ Applied: ' : (res.dry_run ? '↗ Preview: ' : '✗ ')) +
-              (res.summary || '') + (res.error ? ' — ' + res.error : '');
-            var note = document.createElement('div');
-            note.className = 'chat-diff-note';
-            note.textContent = msg;
-            wrap.appendChild(note);
-            if (res.applied) wrap.classList.add('applied');
-          }).catch(function() { CCAction.release(btn); });
-        });
-      });
-    }
-
-    // ----- Citation chips (grounded answers, Ask v3) -----
-    // The report opens via file://, so viewer hrefs (/source/<doc_id>…)
-    // must be absolute against the research server.
-    function citeHref(c) {
-      var href = (c && (c.href || c.source_url)) || '';
-      if (!href) return '';
-      return /^https?:/.test(href) ? href : (SERVER_URL + href);
-    }
-    function linkifyCites(html, items) {
-      // Shared inline cite chips (ui.cite_marks) — hrefBase makes the
-      // /source/<doc_id> viewer links absolute against the research server.
-      if (!window.ccCiteMarks || !(items || []).length) return html;
-      return window.ccCiteMarks.linkify(html, items, {hrefBase: SERVER_URL});
-    }
-    function appendCiteRow(turnEl, items, claims) {
-      var chips = items.map(function(c) {
-        var href = citeHref(c);
-        if (!href) return '';
-        return '<a class="chat-cite" href="' + escapeHtml(href) + '" target="_blank">['
-          + escapeHtml(String(c.n)) + '] ' + escapeHtml(c.label || 'source') + '</a>';
-      }).join('');
-      var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';
-      if (!chips && !warn) return;
-      var row = document.createElement('div');
-      row.className = 'chat-cite-row';
-      row.innerHTML = chips + warn;
-      turnEl.appendChild(row);
-    }
-
-    // ----- Tiny Markdown renderer (basic) -----
-    function renderMarkdown(text) {
-      if (!text) return '';
-      var html = escapeHtml(text);
-      // code blocks
-      html = html.replace(/```([\w]*)\n([\s\S]*?)```/g, function(_, lang, body) {
-        return '<pre class="chat-code"><code>' + body + '</code></pre>';
-      });
-      // inline code
-      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-      // bold
-      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      // bullets
-      html = html.replace(/(?:^|\n)([-*])\s+(.+)/g, function(_, _bullet, body) {
-        return '\n<li>' + body + '</li>';
-      });
-      html = html.replace(/(<li>[\s\S]+?<\/li>)+/g, function(block) { return '<ul>' + block + '</ul>'; });
-      // paragraphs
-      html = html.split(/\n\n+/).map(function(p) {
-        if (/^<(pre|ul|h\d|table)/.test(p)) return p;
-        return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
-      }).join('');
-      return html;
-    }
-
-    function escapeHtml(s) {
-      if (s == null) return '';
-      return String(s).replace(/[&<>"']/g, function(ch) {
-        return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch];
-      });
-    }
   }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
 })();
 """
-)
 
-CSS = (
-    CITE_MARKS_CSS
-    + r"""
-/* ============================================================
-   Chat drawer
-   ============================================================ */
+CSS = CITE_MARKS_CSS + r"""
 .chat-drawer {
-  position: fixed; bottom: 16px;
-  right: calc(var(--sidebar-open-width, 0px) + 16px);
+  position: fixed; bottom: var(--sp-4);
+  right: calc(var(--sidebar-open-width, 0) + var(--sp-4));
   z-index: 95;
-  transition: right 0.2s ease;
 }
-/* The launcher is the kit's primary button (.k-btn.k-btn-primary, added in the
-   boot.py markup); only the pill radius, larger launcher padding, and the
-   floating drop shadow are surface-specific. */
-.chat-toggle {
-  padding: 8px 14px;
-  border-radius: var(--radius-full);
-  box-shadow: var(--shadow-pop);
-}
+.chat-toggle { border-radius: var(--radius-full); box-shadow: var(--shadow-pop); }
 .chat-toggle.open { background: var(--muted); }
 .chat-toggle-icon { font-family: var(--mono); }
-/* Push-sidebar — flex sibling to .l1-root, mirrors .cmt-sidebar so chat
-   slides the document aside instead of floating over it. The floating
-   .chat-drawer above keeps only the launcher toggle. Width matches
-   CHAT_WIDTH in the JS so the toggle rides the sidebar's left edge. */
 .chat-sidebar {
-  flex-shrink: 0;
-  width: 0;
-  height: 100vh;
-  overflow: hidden;
-  background: var(--surface);
-  border-left: 0 solid var(--hairline);
-  transition: width 0.2s ease, border-left-width 0s 0.2s;
-  display: flex; flex-direction: column;
-  position: sticky; top: 0;
+  flex-shrink: 0; width: 0; height: 100dvh; overflow: hidden;
+  background: var(--surface); border-left: 0 solid var(--hairline);
+  display: flex; flex-direction: column; position: sticky; top: 0;
 }
 .chat-sidebar.open {
-  width: 460px;
-  border-left-width: 1px;
-  transition: width 0.2s ease, border-left-width 0s;
+  width: var(--sidebar-width); border-left-width: var(--bw-thin);
   box-shadow: var(--shadow-pop);
 }
 .chat-head {
   display: flex; align-items: flex-start; justify-content: space-between;
-  padding: 12px 14px; border-bottom: 1px solid var(--hairline);
+  gap: var(--sp-2); padding: var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline);
 }
 .chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
-.chat-sub { font-size: var(--fs-caption); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
-.chat-close {
-  background: transparent; border: none; color: var(--muted);
-  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px;
+.chat-sub { font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-1); font-family: var(--mono); }
+.chat-close { margin-inline-start: auto; }
+.chat-handoff {
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: var(--sp-3); margin: var(--sp-3);
 }
-.chat-thread {
-  flex: 1; overflow-y: auto; padding: 12px 14px;
-  display: flex; flex-direction: column; gap: 10px;
+@media (max-width: 47.5rem) {
+  .chat-sidebar.open { width: 100%; }
+  .chat-sidebar .k-btn { min-block-size: var(--touch-target-size); }
 }
-.chat-turn {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 8px 10px; border-radius: var(--radius);
-  font-size: var(--fs-body); line-height: 1.55;
+@media (prefers-reduced-motion: reduce) {
+  .chat-sidebar, .chat-drawer { transition: none; animation: none; }
 }
-.chat-role-tag {
-  font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em;
-  font-weight: 600;
-}
-.chat-role-user { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }
-.chat-role-user .chat-role-tag { color: var(--accent); }
-.chat-role-assistant { background: var(--paper); border-left: 2px solid var(--hairline); }
-.chat-role-assistant .chat-role-tag { color: var(--muted); }
-.chat-role-system { background: color-mix(in srgb, var(--warn) 7%, transparent); border-left: 2px solid color-mix(in srgb, var(--warn) 50%, transparent); }
-.chat-role-system .chat-role-tag { color: var(--warn); }
-.chat-text p { margin: 0 0 6px; }
-.chat-text ul { margin: 4px 0 4px 18px; padding: 0; }
-.chat-text li { margin: 2px 0; }
-.chat-text code {
-  font-family: var(--mono); font-size: 0.93em;
-  background: color-mix(in srgb, var(--fg) 4%, transparent); padding: 1px 4px; border-radius: var(--radius);
-}
-.chat-text pre.chat-code {
-  background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--hairline);
-  border-radius: var(--radius); padding: 8px 10px; overflow-x: auto;
-  font-family: var(--mono); font-size: 0.93em; margin: 6px 0;
-}
-.chat-fragment {
-  margin-top: 8px; overflow-x: auto; max-width: 100%;
-  border-top: 1px solid var(--hairline); padding-top: 8px;
-}
-.chat-cite-row { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-.chat-cite {
-  font-size: var(--fs-caption); color: var(--accent); border: 1px solid var(--hairline);
-  border-radius: var(--radius-full); padding: 2px 9px; text-decoration: none;
-}
-.chat-cite:hover { border-color: var(--accent); }
-.chat-diff {
-  margin-top: 8px; padding: 8px 10px;
-  background: color-mix(in srgb, var(--ok) 7%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
-  border-radius: var(--radius); font-size: var(--fs-caption);
-}
-.chat-diff.applied { background: color-mix(in srgb, var(--ok) 15%, transparent); }
-.chat-diff-summary { color: var(--fg); margin-bottom: 4px; }
-.chat-diff-path code { background: transparent; padding: 0; color: var(--muted); }
-/* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm,
-   added in the JS markup); this rule keeps only the row layout + the Apply
-   button's ok-tint affordance (a positive-action hint, token-routed). */
-.chat-diff-actions { display: flex; gap: 6px; margin-top: 6px; }
-.chat-diff-actions button[data-action="apply"] {
-  background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent);
-}
-.chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--muted); }
-
-.chat-form { padding: 10px 14px; border-top: 1px solid var(--hairline); }
-.chat-form textarea {
-  width: 100%; box-sizing: border-box;
-  background: var(--paper); color: var(--fg);
-  border: 1px solid var(--hairline); border-radius: var(--radius);
-  padding: 8px 10px; font-size: var(--fs-body); font-family: var(--sans);
-  resize: vertical;
-}
-.chat-form-row {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-top: 6px;
-}
-.chat-hint { font-size: var(--fs-caption); color: var(--muted); }
-/* The Send submit button is the kit's .k-btn.k-btn-primary (added in the
-   boot.py markup) — no freehand button skin here. */
 """
-)

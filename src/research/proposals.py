@@ -340,6 +340,15 @@ class ResearchProposal:
     provenance: str
     tainted_by_proposal_id: int | None
     artifact_json: str | None = None
+    canonical_content_json: str | None = None
+    canonical_content_sha256: str | None = None
+    proposal_revision: int = 0
+    target_precondition_sha256: str | None = None
+    target_postcondition_sha256: str | None = None
+    ask_exchange_request_id: str | None = None
+    actionable_at: str | None = None
+    invalidated_at: str | None = None
+    invalidation_reason: str | None = None
     # The analyst_notes ids that seeded this proposal (the "↩ from your note"
     # backlink). Parsed from the DB's source_note_ids JSON column; empty when
     # absent or unparseable.
@@ -360,34 +369,80 @@ def create_proposal(
     provenance: str = "derived",
     tainted_by_proposal_id: int | None = None,
     artifact_json: str | None = None,
+    canonical_content_json: str | None = None,
+    canonical_content_sha256: str | None = None,
+    target_precondition_sha256: str | None = None,
+    ask_exchange_request_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> int:
     conn = open_conn(db_path)
     try:
         now = now_iso()
-        cur = conn.execute(
-            "INSERT INTO research_proposals "
-            "(task_id, kind, ticker, title, body_md, evidence_json, source_note_ids, status, "
-            " adversarial_verdict, budget_tier, provenance, tainted_by_proposal_id, "
-            " artifact_json, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)",
-            (
-                task_id,
-                kind,
-                ticker,
-                title,
-                body_md,
-                evidence_json,
-                source_note_ids,
-                adversarial_verdict,
-                budget_tier,
-                provenance,
-                tainted_by_proposal_id,
-                artifact_json,
-                now,
-                now,
-            ),
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(research_proposals)")
+        }
+        has_approval_authority = "canonical_content_json" in columns
+        governed_values = (
+            canonical_content_json,
+            canonical_content_sha256,
+            target_precondition_sha256,
+            ask_exchange_request_id,
         )
+        if not has_approval_authority and any(value is not None for value in governed_values):
+            raise RuntimeError("governed proposal approval requires database migration 0006")
+        if has_approval_authority:
+            cur = conn.execute(
+                "INSERT INTO research_proposals "
+                "(task_id, kind, ticker, title, body_md, evidence_json, source_note_ids, status, "
+                " adversarial_verdict, budget_tier, provenance, tainted_by_proposal_id, "
+                " artifact_json, canonical_content_json, canonical_content_sha256, "
+                " target_precondition_sha256, ask_exchange_request_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    task_id,
+                    kind,
+                    ticker,
+                    title,
+                    body_md,
+                    evidence_json,
+                    source_note_ids,
+                    adversarial_verdict,
+                    budget_tier,
+                    provenance,
+                    tainted_by_proposal_id,
+                    artifact_json,
+                    canonical_content_json,
+                    canonical_content_sha256,
+                    target_precondition_sha256,
+                    ask_exchange_request_id,
+                    now,
+                    now,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO research_proposals "
+                "(task_id, kind, ticker, title, body_md, evidence_json, source_note_ids, status, "
+                " adversarial_verdict, budget_tier, provenance, tainted_by_proposal_id, "
+                " artifact_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    task_id,
+                    kind,
+                    ticker,
+                    title,
+                    body_md,
+                    evidence_json,
+                    source_note_ids,
+                    adversarial_verdict,
+                    budget_tier,
+                    provenance,
+                    tainted_by_proposal_id,
+                    artifact_json,
+                    now,
+                    now,
+                ),
+            )
         conn.commit()
         return int(cur.lastrowid or 0)
     finally:
@@ -430,6 +485,49 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
             None if row["tainted_by_proposal_id"] is None else int(row["tainted_by_proposal_id"])
         ),
         artifact_json=None if row["artifact_json"] is None else str(row["artifact_json"]),
+        canonical_content_json=(
+            None
+            if "canonical_content_json" not in keys or row["canonical_content_json"] is None
+            else str(row["canonical_content_json"])
+        ),
+        canonical_content_sha256=(
+            None
+            if "canonical_content_sha256" not in keys or row["canonical_content_sha256"] is None
+            else str(row["canonical_content_sha256"])
+        ),
+        proposal_revision=(
+            int(row["proposal_revision"])
+            if "proposal_revision" in keys and row["proposal_revision"] is not None
+            else 0
+        ),
+        target_precondition_sha256=(
+            None
+            if "target_precondition_sha256" not in keys
+            or row["target_precondition_sha256"] is None
+            else str(row["target_precondition_sha256"])
+        ),
+        target_postcondition_sha256=(
+            None
+            if "target_postcondition_sha256" not in keys
+            or row["target_postcondition_sha256"] is None
+            else str(row["target_postcondition_sha256"])
+        ),
+        ask_exchange_request_id=(
+            None
+            if "ask_exchange_request_id" not in keys or row["ask_exchange_request_id"] is None
+            else str(row["ask_exchange_request_id"])
+        ),
+        actionable_at=(
+            None if "actionable_at" not in keys or row["actionable_at"] is None else str(row["actionable_at"])
+        ),
+        invalidated_at=(
+            None if "invalidated_at" not in keys or row["invalidated_at"] is None else str(row["invalidated_at"])
+        ),
+        invalidation_reason=(
+            None
+            if "invalidation_reason" not in keys or row["invalidation_reason"] is None
+            else str(row["invalidation_reason"])
+        ),
         source_note_ids=(
             _parse_note_ids(row["source_note_ids"]) if "source_note_ids" in keys else []
         ),

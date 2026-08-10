@@ -20,15 +20,26 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from research.higher_bar import MUTATING_KINDS, evaluate_higher_bar
 from research.proposals import get_proposal
 
+if TYPE_CHECKING:
+    from research.proposals import ResearchProposal
+
 # Kind -> the GATED writer, registered by Wave 3/4 (dcf, thesis, code). A mutating
 # kind absent here is "not yet wired" even once its gate clears.
-ApplierFn = Callable[..., str]
+@dataclass(frozen=True, slots=True)
+class MutationApplyResult:
+    message: str
+    applied: bool
+    target_postcondition_sha256: str | None = None
+
+
+ApplierFn = Callable[..., str | MutationApplyResult]
 _MUTATING_APPLIERS: dict[str, ApplierFn] = {}
 
 
@@ -46,7 +57,12 @@ def _load_applier(kind: str) -> ApplierFn | None:
     import importlib
 
     try:
-        importlib.import_module(f"research.{kind}_artifact")
+        module = (
+            "research.ask_proposal_artifact"
+            if kind in {"ask_thesis_edit", "ask_kpi_edit"}
+            else f"research.{kind}_artifact"
+        )
+        importlib.import_module(module)
     except Exception:
         return None
     return _MUTATING_APPLIERS.get(kind)
@@ -89,6 +105,25 @@ def apply_approved_proposal(
     returns a note and writes NOTHING. Returns a short human note to echo.
     """
     prop = get_proposal(proposal_id, db_path=db_path)
+    result = apply_governed_proposal(
+        prop,
+        proposal_id=proposal_id,
+        db_path=db_path,
+        steer_authorized=steer_authorized,
+    )
+    return result.message if isinstance(result, MutationApplyResult) else result
+
+
+def apply_governed_proposal(
+    prop: ResearchProposal | None,
+    *,
+    proposal_id: int,
+    db_path: Path | str | None = None,
+    steer_authorized: bool = False,
+    **applier_context: object,
+) -> str | MutationApplyResult:
+    """Gate and dispatch a proposal, optionally within its caller-owned transaction."""
+
     if prop is None:
         return ""
     kind = getattr(prop, "kind", "")
@@ -112,5 +147,7 @@ def apply_approved_proposal(
         applier = _MUTATING_APPLIERS.get(kind) or _load_applier(kind)
         if applier is None:
             return f"{kind}: apply not yet wired"
+        if kind in {"ask_thesis_edit", "ask_kpi_edit"}:
+            return applier(proposal_id, db_path=db_path, proposal=prop, **applier_context)
         return applier(proposal_id, db_path=db_path)
     return f"{kind}: apply not yet wired"
