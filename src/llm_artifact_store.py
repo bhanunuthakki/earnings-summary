@@ -617,14 +617,31 @@ def drain_dirty(
     now_iso = (now if now is not None else datetime.now(UTC)).isoformat()
     try:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
+        has_tracked = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracked_companies'"
+        ).fetchone()
+        membership_filter = ""
+        if has_tracked is not None:
+            membership_filter = """
+              AND (
+                ticker IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM tracked_companies tc
+                    WHERE UPPER(tc.ticker) = UPPER(llm_artifacts.ticker)
+                      AND tc.archived_at IS NULL
+                      AND tc.list_type IN ('portfolio', 'evaluation')
+                )
+              )
             """
+        rows = conn.execute(
+            f"""
             SELECT * FROM llm_artifacts
             WHERE superseded_by_id IS NULL
               AND (
                 dirty = 1
                 OR (expires_at IS NOT NULL AND expires_at < ?)
               )
+              {membership_filter}
             ORDER BY generated_at ASC
             LIMIT ?
             """,

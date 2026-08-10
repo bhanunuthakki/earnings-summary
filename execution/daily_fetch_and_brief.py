@@ -217,7 +217,7 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
     if args.all_tracked:
         cursor.execute(
             f"SELECT ticker FROM tracked_companies "
-            f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
+            f"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} "
             f"AND (archived_at IS NULL) "
             f"ORDER BY ticker"
         )
@@ -232,13 +232,15 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
         cursor.execute(
             "SELECT ticker FROM tracked_companies "
             "WHERE (brief_dirty = 1 OR UPPER(COALESCE(processing_tier, '')) = 'P1') "
+            f"AND list_type IN {db.BRIEFED_LIST_TYPES_SQL} "
             "AND (archived_at IS NULL) "
             "ORDER BY ticker"
         )
     else:
         cursor.execute(
             "SELECT ticker FROM tracked_companies "
-            "WHERE brief_dirty = 1 AND (archived_at IS NULL) "
+            f"WHERE brief_dirty = 1 AND list_type IN {db.BRIEFED_LIST_TYPES_SQL} "
+            "AND (archived_at IS NULL) "
             "ORDER BY ticker"
         )
     rows = cursor.fetchall()

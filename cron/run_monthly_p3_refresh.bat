@@ -1,8 +1,6 @@
 @echo off
-REM Monthly (1st @ 03:00) — regenerate P3-tier (index_member / etf / none) lens artifacts
-REM drifted past their cadence. The P3 lens set is minimal (five_min_reread only) so this
-REM run is bounded even with 2k+ index constituents — the run_lens cache_inputs hash
-REM means stable tickers cost nothing.
+REM Monthly (1st @ 03:00) — compatibility no-op for P3/index catalog names.
+REM P3 is deterministic-only and run_due_lenses intentionally returns an empty LLM plan.
 
 setlocal
 set PYTHONUTF8=1

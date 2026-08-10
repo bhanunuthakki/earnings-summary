@@ -288,21 +288,23 @@ def apply_reclassification(
 ) -> dict[str, int]:
     """Write the plan's promotions/demotions to ``tracked_companies``.
 
-    Only ``list_type`` is touched — every other column (name, ir_url, briefs,
-    KPIs are keyed by ticker, not list) is preserved. Commits once. Returns a
-    tally. Idempotent: an empty-diff plan writes nothing.
+    Membership, its derived processing tier, and the governed brief queue are
+    updated together. Identity and historical research remain preserved. The
+    function commits once and is idempotent on an empty plan.
     """
     promoted = demoted = 0
     for ticker, _from, _mv in plan.promotions:
         cur = es_conn.execute(
-            "UPDATE tracked_companies SET list_type = 'portfolio' "
+            "UPDATE tracked_companies SET list_type = 'portfolio', processing_tier = 'P1', "
+            "brief_dirty = 1 "
             "WHERE user_id = ? AND UPPER(ticker) = ? AND archived_at IS NULL",
             (user_id, ticker),
         )
         promoted += cur.rowcount
     for ticker, _mv in plan.demotions:
         cur = es_conn.execute(
-            "UPDATE tracked_companies SET list_type = ? "
+            "UPDATE tracked_companies SET list_type = ?, processing_tier = 'P2', "
+            "brief_dirty = 1 "
             "WHERE user_id = ? AND UPPER(ticker) = ? AND archived_at IS NULL",
             (DEMOTION_LIST_TYPE, user_id, ticker),
         )

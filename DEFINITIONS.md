@@ -4,9 +4,49 @@ Canonical terminology for this project. Use these terms verbatim in code (variab
 
 ## Research Level
 
-**Definition.** Architectural vocabulary for the depth to which source data for one company may advance: `catalog` preserves identity and raw-source availability; `screened` adds compact deterministic screening metrics; `monitored` adds company-specific scheduled refreshes without promising the complete investor-grade evidence plane; `governed` admits the company to the complete document, fact, provenance, and research-artifact contract. The proposed mapping is `portfolio -> governed`, `evaluation -> governed`, `watchlist -> monitored`, `index_member/legacy etf -> screened`, and `none -> catalog`.
-**Status.** Vocabulary only. Research Level is not a persisted field, runtime policy, routing input, or authorization to move data. Add a runtime owner only when a concrete feature requires raw-to-governed promotion or repeated acquisition/materialization coupling demonstrates a measurable benefit.
-**Not to be confused with.** `tracked_companies.list_type`, which records the owner's membership relationship to a company; `tracked_companies.processing_tier`, which controls scheduled cadence (`P1`, `P2`, `P3`); `instrument_type`, which classifies the security; or `archived_at`, which suppresses active work as a lifecycle state. In particular, evaluation and watchlist are both P2 but default to different Research Levels, while portfolio is governed P1 and evaluation is governed P2.
+**Definition.** The evidence depth authorized for an active tracked instrument. The four levels are mutually exclusive and collectively exhaustive: `catalog` preserves identity and raw-source availability; `screened` adds compact deterministic screening metrics; `monitored` adds narrow company-specific monitoring; `governed` admits the company to the complete document, fact, provenance, brief, DCF, and research-artifact contract.
+**Derivation.** Research Level is derived vocabulary, not a new database column: active `portfolio` and `evaluation` rows are governed; active `watchlist` rows are monitored; active `index_member` rows are screened; active `none` rows are catalog. An archived row has no active Research Level and authorizes no scheduled work.
+**Not to be confused with.** Coverage Role (`list_type`) records the owner's relationship to the name; Schedule Class (`processing_tier`) controls cadence; Instrument Kind (`instrument_type`) describes the security; Lifecycle (`archived_at`) controls whether any active work is allowed. Legacy `list_type='etf'` is compatibility debt; ETF is an Instrument Kind, not a Coverage Role.
+
+## Tracked Instrument State
+
+Every tracked-company row is described by four independent axes. Together they are MECE and no fifth persisted routing axis is required.
+
+- **Coverage Role:** exactly one of `portfolio`, `evaluation`, `watchlist`, `index_member`, or `none`. Legacy `etf` rows remain readable only until normalized.
+- **Lifecycle:** `active` when `archived_at IS NULL`; otherwise `archived`. Lifecycle is orthogonal to the preserved Coverage Role.
+- **Instrument Kind:** equity, ETF, or another security classification stored separately from Coverage Role.
+- **Schedule Class:** derived from Coverage Role: portfolio is `P1`; evaluation and watchlist are `P2`; index_member, none, and legacy etf are `P3`.
+
+The database row is the sole membership authority. Workbooks, research directories, thesis files, cached LLM artifacts, and WACC seeds are outputs or inputs; they never create, restore, or upgrade membership.
+
+## Coverage Role Resource Contract
+
+| Coverage Role | Research Level | Schedule | Deterministic work | LLM / deliverables |
+|---|---|---|---|---|
+| `portfolio` | governed | P1 daily and event-driven | full data and trigger processing | full brief, DCF, advisor, daily lenses; automatic pre/post-earnings |
+| `evaluation` | governed | P2 weekly and event-driven inputs | full governed data refresh | full brief, DCF, decision card, weekly lenses; pre/post-earnings only when explicitly enabled/requested |
+| `watchlist` | monitored | P2 weekly | narrow monitoring inputs | narrow weekly lenses only; no full brief, DCF, advisor candidate, or dirty-queue rebuild |
+| `index_member` | screened | P3 monthly | compact deterministic screening | no scheduled company-specific LLM work |
+| `none` | catalog | P3 metadata only | no company-specific scheduled work | none |
+| legacy `etf` | compatibility | P3 | compatibility reads only | none |
+| any archived row | none | none | none | none |
+
+Cron invariants: every selector excludes archived rows; a cadence runs only its exact tier; target ages are P1 daily, P2 seven days, and P3 thirty days. Full briefs, DCFs, dirty-artifact drains, model evaluation, and advisor candidate generation are restricted to active portfolio/evaluation rows. P3 work is deterministic and zero-token. These rules require neither a new migration nor a recurring parity checker.
+
+## Coverage Lifecycle Actions
+
+| Owner action | Result | Resource consequence |
+|---|---|---|
+| Add / Watch | active `watchlist`, P2 (except an actual portfolio holding remains portfolio) | monitored work only; no DCF or full brief |
+| Build Evaluation | active `evaluation`, P2, `brief_dirty=1` | governed build becomes eligible |
+| Position Detected | active `portfolio`, P1, `brief_dirty=1` | daily governed coverage becomes eligible |
+| Position Exited | active `evaluation`, P2, `brief_dirty=1` | daily portfolio work stops; governed evaluation coverage remains |
+| Evaluation Watch | active `watchlist`, P2, `brief_dirty=0` | full governed work stops; monitoring remains |
+| Pass / Remove | archived, prior role preserved, `brief_dirty=0` | all scheduled work stops; raw pulls, provenance, and history remain |
+| Restore | active with preserved role and derived tier | governed roles are queued; monitored/screened roles are not |
+| Hard delete | exceptional membership-row removal only | never the normal lifecycle action and never implies raw-history deletion |
+
+Precise verbs matter: **Build Evaluation** moves a watchlist, index, or catalog name to evaluation; **Position Detected** moves it to portfolio; the legacy Investment Decision Card transport verb `promote` records its decision while retaining evaluation coverage; discovery dismissal changes queue state only unless a separate coverage action is invoked.
 
 ## CANONICAL ACTIONS
 
@@ -63,7 +103,7 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 
 ### Queue / Watch / Build / Pass
 
-**Mutates.** These govern discovery and investment-decision candidates. `queue` moves a discovery candidate to the owner-approved build queue but does not build it; `watch` idempotently adds its ticker to the tracked watchlist without changing candidate status; `build` starts the bounded build pathway, whose worker alone writes `building`/`built` and artifacts; `pass` records an avoid decision with reason/revisit conditions when supplied and may dismiss the candidate. Investment Decision Cards use the same economic meanings even where the transport verb is `research_further` (queue more research) or `promote` (move to evaluation).
+**Mutates.** These govern discovery and investment-decision candidates. `queue` moves a discovery candidate to the owner-approved build queue but does not build it; `watch` idempotently adds or restores its ticker as active watchlist coverage without changing candidate status; `build` starts the bounded build pathway and upgrades the ticker to active evaluation coverage, while its worker alone writes `building`/`built` and artifacts; `pass` records an avoid decision with reason/revisit conditions when supplied and archives tracked coverage. Investment Decision Cards use the same economic meanings even where the transport verb is `research_further` (queue more research) or legacy `promote` (record the decision while retaining evaluation coverage).
 **Reversibility.** Queue is **undoable** by returning the candidate to New or Dismissed. Watch is **one-way** through this action; removal requires tracked-company governance. Build is **one-way** for that run, although later builds supersede artifacts. A reasoned Pass is **append-only** and gradeable; its queue dismissal is **undoable** by reopening, but the recorded pass remains in decision history.
 **Feedback owed.** Distinguish intent from completion: `Queued — ready for a build`, `Watching — added to watchlist`, `Building — job started` then `Built — evaluation artifacts ready`, or `Passed — avoid decision recorded`. Never show `Built` when only queue state changed.
 **Surfaces.** Research → Discovery, Investment Decision Cards, `/discovery` chat actions, and the bounded discovery-build job surface.

@@ -34,6 +34,7 @@ CREATE TABLE tracked_companies (
     name TEXT NOT NULL,
     list_type TEXT NOT NULL,
     processing_tier TEXT,
+    brief_dirty BOOLEAN DEFAULT 0,
     archived_at TIMESTAMP
 );
 CREATE TABLE discovery_candidates (
@@ -391,7 +392,7 @@ def test_watch_action_promotes_and_leaves_candidate_status_alone(
     assert still == "watchlist"
 
 
-def test_watch_action_never_downgrades_a_more_active_name(client: FlaskClient, repo: Path) -> None:
+def test_watch_action_downgrades_evaluation_to_monitored(client: FlaskClient, repo: Path) -> None:
     db = repo / "data" / "portfolio.db"
     conn = sqlite3.connect(db)
     conn.execute("UPDATE tracked_companies SET list_type = 'evaluation' WHERE ticker = 'WDC'")
@@ -405,7 +406,7 @@ def test_watch_action_never_downgrades_a_more_active_name(client: FlaskClient, r
         "SELECT list_type FROM tracked_companies WHERE ticker = 'WDC'"
     ).fetchone()[0]
     conn.close()
-    assert list_type == "evaluation"  # not downgraded to watchlist
+    assert list_type == "watchlist"  # explicit Watch is a governed-to-monitored downgrade
 
 
 def test_watch_action_unknown_candidate_404s(client: FlaskClient) -> None:

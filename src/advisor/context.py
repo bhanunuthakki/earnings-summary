@@ -55,7 +55,7 @@ from user_state.sizing import list_intents
 
 # Candidate lists eligible for the swap screen (index members are tracked but
 # unresearched — no thesis, no DCF — so they never enter).
-_CANDIDATE_LISTS = ("watchlist", "evaluation")
+_CANDIDATE_LISTS = ("evaluation",)
 
 # Plausibility ceiling on candidate DCF upside. Sweep-built watchlist DCFs
 # carry occasional unit/currency artifacts (observed 2026-06-10 on prod: TSM
@@ -135,7 +135,7 @@ def load_valuations(
     try:
         cur = conn.execute(
             "SELECT ticker, list_type FROM tracked_companies "
-            "WHERE archived_at IS NULL AND list_type IN ('portfolio', 'watchlist', 'evaluation')"
+            "WHERE archived_at IS NULL AND list_type IN ('portfolio', 'evaluation')"
         )
         lists = {str(r[0]).upper(): str(r[1]) for r in cur.fetchall()}
     except sqlite3.OperationalError:
@@ -147,7 +147,7 @@ def load_valuations(
     # definition — flag them so screens can exclude them from the pool.
     try:
         cur = conn.execute("SELECT UPPER(ticker) FROM thesis_state WHERE thesis LIKE '%STUB:%'")
-        stub_tickers = {str(r[0]) for r in cur.fetchall()}
+        stub_tickers: set[str] = {str(r[0]) for r in cur.fetchall()}
     except sqlite3.OperationalError:
         stub_tickers = set()
     holdings: dict[str, TickerValuation] = {}
@@ -360,7 +360,7 @@ def candidates_block(ctx: AdvisorContext, *, top_n: int = 8, max_dcf_age_days: i
     n_implausible = sum(
         1 for c in ctx.candidates_val.values() if c.upside_pct > IMPLAUSIBLE_UPSIDE_PCT
     )
-    lines = ["**Top external candidates by DCF upside (watchlist + evaluation, fresh runs):**"]
+    lines = ["**Top external candidates by DCF upside (evaluation, fresh runs):**"]
     for c in fresh[:top_n]:
         thesis = thesis_one_liner(ctx, c.ticker)
         lines.append(

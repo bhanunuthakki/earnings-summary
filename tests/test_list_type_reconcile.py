@@ -32,7 +32,8 @@ def _es_db() -> sqlite3.Connection:
         """
         CREATE TABLE tracked_companies (
             user_id TEXT, ticker TEXT, name TEXT, list_type TEXT,
-            ir_url TEXT, archived_at TIMESTAMP
+            ir_url TEXT, archived_at TIMESTAMP,
+            processing_tier TEXT, brief_dirty BOOLEAN DEFAULT 0
         )
         """
     )
