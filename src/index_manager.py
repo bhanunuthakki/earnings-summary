@@ -12,6 +12,8 @@ Key: {TICKER}_{YEAR}_{QUARTER}_{doc_type}
 import datetime
 import json
 import os
+import threading
+from typing import TypeAlias, cast
 
 from alias_manager import resolve_ticker
 
@@ -40,6 +42,11 @@ VALID_DOC_TYPES = {
     "event",
 }
 
+IndexEntry: TypeAlias = dict[str, object]
+DocumentIndex: TypeAlias = dict[str, IndexEntry]
+_DOCUMENT_INDEX_CACHE_LOCK = threading.Lock()
+_DOCUMENT_INDEX_READ_CACHE: tuple[str, int, int, DocumentIndex] | None = None
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -64,9 +71,41 @@ def _load(path: str) -> dict:
 
 
 def _save(path: str, data: dict) -> None:
+    global _DOCUMENT_INDEX_READ_CACHE
     _ensure_dir()
     with open(path, "w") as f:
         json.dump(data, f, indent=4)
+    if os.path.abspath(path) == os.path.abspath(DOCUMENT_INDEX_PATH):
+        with _DOCUMENT_INDEX_CACHE_LOCK:
+            _DOCUMENT_INDEX_READ_CACHE = None
+
+
+def _document_index_snapshot() -> DocumentIndex:
+    """Parse the legacy document index once per unchanged file signature.
+
+    ``categorize_ir_uploads --ticker`` asks about every canonical document for
+    that issuer.  Re-reading and JSON-decoding the multi-megabyte index for
+    every lookup made the hourly onboarding path CPU-bound for minutes.  Size
+    plus nanosecond mtime invalidates external writers; in-process saves also
+    clear the snapshot explicitly.
+    """
+    global _DOCUMENT_INDEX_READ_CACHE
+    path = DOCUMENT_INDEX_PATH
+    try:
+        stat = os.stat(path)
+        signature = (stat.st_mtime_ns, stat.st_size)
+    except FileNotFoundError:
+        signature = (-1, -1)
+    with _DOCUMENT_INDEX_CACHE_LOCK:
+        cached = _DOCUMENT_INDEX_READ_CACHE
+        if cached is not None and cached[:3] == (path, *signature):
+            return cached[3]
+
+    data = cast(DocumentIndex, _load(path))
+    stat = os.stat(path)
+    with _DOCUMENT_INDEX_CACHE_LOCK:
+        _DOCUMENT_INDEX_READ_CACHE = (path, stat.st_mtime_ns, stat.st_size, data)
+    return data
 
 
 def _transcript_key(ticker: str, year, quarter: str) -> str:
@@ -250,8 +289,10 @@ def update_local_path(
 
 def has_document(ticker: str, year, quarter: str, doc_type: str) -> dict | None:
     """Returns the metadata dict if a document exists in the index, else None."""
-    index = _load(DOCUMENT_INDEX_PATH)
-    return index.get(_doc_key(ticker, year, quarter, doc_type))
+    entry = _document_index_snapshot().get(_doc_key(ticker, year, quarter, doc_type))
+    # Do not expose the cached object to callers that may mutate the returned
+    # metadata. This preserves the old fresh-parse read semantics.
+    return dict(entry) if isinstance(entry, dict) else None
 
 
 def _register_document(

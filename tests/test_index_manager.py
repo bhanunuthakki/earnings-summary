@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import IO, cast
 
 import pytest
 
@@ -82,6 +83,46 @@ def test_register_transcript_canonicalizes_bare_filename_to_processed_dir(
     # invariant `process_ir_documents.py:process_document` relies on.
     resolved = isolated_indexes / stored
     assert resolved.exists(), f"stored local_path {stored!r} does not resolve from project root"
+
+
+def test_has_document_parses_unchanged_index_once_and_reloads_external_write(
+    isolated_indexes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index_manager.register_ir_document(
+        ticker="V",
+        year=2026,
+        quarter="Q1",
+        doc_type="presentation",
+        ir_url="https://example.test/v-q1",
+    )
+    real_json_load: Callable[[IO[str]], object] = json.load
+    loads = 0
+
+    def counting_load(source: IO[str]) -> object:
+        nonlocal loads
+        loads += 1
+        return real_json_load(source)
+
+    monkeypatch.setattr(index_manager.json, "load", counting_load)
+
+    assert index_manager.has_document("V", 2026, "Q1", "presentation") is not None
+    assert index_manager.has_document("V", 2026, "Q1", "presentation") is not None
+    assert loads == 1, "unchanged 2 MB index must not be reparsed for every document"
+
+    path = Path(index_manager.DOCUMENT_INDEX_PATH)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["V_2026_Q2_presentation"] = {
+        "ticker": "V",
+        "year": "2026",
+        "quarter": "Q2",
+        "doc_type": "presentation",
+        "processed": False,
+        "external_revision_padding": "changed",
+    }
+    path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+
+    assert index_manager.has_document("V", 2026, "Q2", "presentation") is not None
+    assert loads == 2, "external index writes must invalidate by file signature"
 
 
 def test_register_transcript_prefers_raw_over_processed_when_file_is_in_raw(
