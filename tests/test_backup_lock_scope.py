@@ -89,6 +89,7 @@ def test_scheduler_backup_requires_encrypted_receipt_before_file_gc_apply() -> N
     gc_index = lowered.index("execution\\backup_file_gc.py")
     assert backup_index < receipt_index < existence_index < gc_index
     assert ".gz.enc" in lowered[receipt_index:gc_index]
+    assert "^|" not in text, "quoted PowerShell pipelines must not receive CMD caret escapes"
 
     gc_invocation = next(
         line

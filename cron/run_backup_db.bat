@@ -36,7 +36,7 @@ REM Destructive file retention is authorized only after THIS invocation proves
 REM it produced an encrypted snapshot that still exists. A zero exit alone is
 REM insufficient because backup_db can exit successfully on an idempotent skip.
 set "BACKUP_RECEIPT="
-for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$line = Get-Content -LiteralPath '%LOG_FILE%' ^| Where-Object { $_ -like 'OK backup -> *.gz.enc*' } ^| Select-Object -Last 1; if (-not $line) { exit 1 }; $path = $line -replace '^OK backup ->\s*','' -replace '\s+\([^)]*\)\s+retained=.*$',''; if ($path -notlike '*.gz.enc' -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { exit 1 }; Write-Output $path"`) do set "BACKUP_RECEIPT=%%p"
+for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$line = Get-Content -LiteralPath '%LOG_FILE%' | Where-Object { $_ -like 'OK backup -> *.gz.enc*' } | Select-Object -Last 1; if (-not $line) { exit 1 }; $path = $line -replace '^OK backup ->\s*','' -replace '\s+\([^)]*\)\s+retained=.*$',''; if ($path -notlike '*.gz.enc' -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { exit 1 }; Write-Output $path"`) do set "BACKUP_RECEIPT=%%p"
 if not defined BACKUP_RECEIPT (
   echo ERROR: backup succeeded without a verifiable encrypted .gz.enc receipt.>> "%LOG_FILE%"
   set "RC=1"
