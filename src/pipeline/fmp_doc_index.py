@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import cast
 
 from net.client import HTTP_CLIENT, HttpCallError, JsonShape
+from provenance.evidence_backfill import ensure_legacy_document_evidence
 
 _PERIOD_SUFFIXES = ("annual", "quarterly", "ttm")
 _DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}")
@@ -446,6 +447,13 @@ def index_fmp_files_for_ticker(
     upper = ticker.upper()
     prefix = f"{upper}_"
     inserted = 0
+    capture_evidence = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'evidence_document_versions'"
+        ).fetchone()
+        is not None
+    )
 
     for path in sorted(fmp_dir.iterdir()):
         if not path.is_file() or not path.name.startswith(prefix) or path.suffix != ".json":
@@ -474,6 +482,19 @@ def index_fmp_files_for_ticker(
         )
         if cur.rowcount > 0:
             inserted += 1
+        if capture_evidence:
+            document = conn.execute(
+                "SELECT id FROM documents WHERE sha256 = ? ORDER BY id LIMIT 1",
+                (sha,),
+            ).fetchone()
+            if document is None:
+                raise RuntimeError(f"indexed FMP document disappeared for {path.name}")
+            document_id = int(document[0])
+            ensure_legacy_document_evidence(
+                conn,
+                repo_root=project_root,
+                document_id=document_id,
+            )
 
     conn.commit()
     return inserted

@@ -45,6 +45,11 @@ data/deferred_fmp/*
 # data/ + transcripts/ + micro_thesis/.
 output/
 
+# Newly generated DCF workbooks are runtime artifacts. Historical workbooks
+# already tracked by Git remain tracked; this prevents scheduled onboarding
+# from dirtying the immutable runtime checkout when it creates a new ticker.
+/dcf/*.xlsx
+
 # Auto-generated per-run thesis tracker markdowns (micro_thesis/holdings/
 # JSON schemas ARE checked in; the dated tracker outputs are not).
 micro_thesis/thesis-tracker-*-*.md
