@@ -36,7 +36,6 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\run_morning_pipeline` | daily at 04:00:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | Task Scheduler |
 | `\earnings-summary\scan_ir_transcripts` | daily at 02:15:00 | `scan_ir_transcripts.task.xml` | `run_scan_ir_transcripts.bat` | Task Scheduler |
 | `\earnings-summary\senior_partner_brief` | weekly Sunday at 09:00:00 | `senior_partner_brief.task.xml` | `run_senior_partner_brief.bat` | Task Scheduler |
-| `\earnings-summary\session_distill` | daily at 18:00:00 | `session_distill.task.xml` | `run_session_distill.bat` | Task Scheduler |
 | `\earnings-summary\submit_saydo_batch` | weekly Saturday at 02:00:00 | `submit_saydo_batch.task.xml` | `run_submit_saydo_batch.bat` | Task Scheduler |
 | `\earnings-summary\tenet_accountability` | weekly Saturday at 09:00:00 | `tenet_accountability.task.xml` | `run_tenet_accountability.bat` | Task Scheduler |
 | `\earnings-summary\thesis_collision` | weekly Saturday at 11:00:00 | `thesis_collision.task.xml` | `run_thesis_collision.bat` | Task Scheduler |

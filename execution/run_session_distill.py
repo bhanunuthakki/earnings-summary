@@ -1,4 +1,4 @@
-"""execution/run_session_distill.py — the daily 18:00 session-distill sweep (B4).
+"""Explicit maintenance CLI for governed session distillation.
 
 Reads every idle/undistilled Ask thread and every landed/undistilled bridged
 Claude-session transcript, runs each through
@@ -8,15 +8,9 @@ the aggregate tally. Belief revisions (tenet/stance) AUTO-ADOPT with a
 one-tap Telegram Revert — see the module docstring for the owner-ruling
 rationale.
 
-A SECOND leg (B6, 2026-07-19 program overhaul) rides the same 18:00 rung
-right after session distillation: ``synthesis.exit_postmortem.run_postmortem_drafts``
-drafts a FEW pending exit post-mortems per night (nightly pacing — see that
-module's docstring) for closed ``position_entries`` rows still missing their
-``exit_reason``/``lessons``/``outcome_vs_thesis``. ``--postmortem-backfill``
-runs ONLY that leg, but for EVERY pending entry in one batch with a single
-Telegram summary — the deliberate one-time exception for the pre-existing
-all-NULL closed rows (owner ruling: one burst, receipts visible, no drip
-nagging).
+``--postmortem-backfill`` is a separate, explicit one-time mode for drafting
+every pending exit post-mortem in one operator-reviewed batch. Ordinary
+session distillation never drafts post-mortems.
 
 Usage:
     python execution/run_session_distill.py
@@ -30,6 +24,10 @@ a hard stop (budget block / missing CLI — see ``llm.cli.is_hard_stop``), 3
 when EVERY candidate session deferred transient (quota rule 3: defer + tally
 + retry next run — mirrors ``execution/run_calibration_scorecard.py``'s
 exit-3 semantics).
+
+This CLI is explicit maintenance only: it is not present in the scheduler
+manifest. An ordinary run distils sessions only. Exit-postmortem drafting is
+available solely through the explicit ``--postmortem-backfill`` mode.
 """
 
 from __future__ import annotations
@@ -124,25 +122,6 @@ def main(argv: list[str] | None = None) -> int:
         raise
 
     print(f"run_session_distill: {tally}", file=sys.stderr)
-
-    # B6 second leg: a FEW pending exit post-mortems per night (nightly
-    # pacing -- see synthesis.exit_postmortem's docstring). A hard stop here
-    # exits loudly on its own, same contract as the session-distill leg above
-    # -- one systemic failure should not be swallowed just because it landed
-    # in the second leg.
-    from synthesis.exit_postmortem import run_postmortem_drafts
-
-    try:
-        pm_tally = run_postmortem_drafts(db_path, repo_root=repo_root)
-    except Exception as exc:
-        if is_hard_stop(exc):
-            log.error(
-                {"event": "postmortem_draft_hard_stop", "error": f"{type(exc).__name__}: {exc}"}
-            )
-            return 2
-        raise
-
-    print(f"run_session_distill (postmortem leg): {pm_tally}", file=sys.stderr)
 
     sessions = tally.get("sessions", 0)
     deferred = tally.get("deferred_transient", 0)

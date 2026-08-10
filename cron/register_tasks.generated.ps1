@@ -69,8 +69,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-su
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\scan_ir_transcripts' }
 & schtasks.exe /Create /TN '\earnings-summary\senior_partner_brief' /XML (Join-Path $renderDir 'senior_partner_brief.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\senior_partner_brief' }
-& schtasks.exe /Create /TN '\earnings-summary\session_distill' /XML (Join-Path $renderDir 'session_distill.task.xml') /F
-if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\session_distill' }
 & schtasks.exe /Create /TN '\earnings-summary\submit_saydo_batch' /XML (Join-Path $renderDir 'submit_saydo_batch.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\submit_saydo_batch' }
 & schtasks.exe /Create /TN '\earnings-summary\tenet_accountability' /XML (Join-Path $renderDir 'tenet_accountability.task.xml') /F
