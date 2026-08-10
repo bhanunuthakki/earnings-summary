@@ -21,7 +21,7 @@ def test_approved_latest_governed_code_deletion_is_complete_and_restorable() -> 
     catalog = _catalog()
     report = evaluate(ROOT, catalog)
 
-    assert report.valid is True
+    assert report.valid is True, report.model_dump_json(indent=2)
     assert {candidate.id for candidate in report.candidates} == {
         "latest-governed-plane",
         "legacy-full-refresh-wrapper",
