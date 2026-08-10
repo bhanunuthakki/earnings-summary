@@ -44,7 +44,7 @@ _MAX_ARTIFACT_JSON_BYTES = 100_000
 _MAX_RESEARCH_CONTEXT_BYTES = 32_000
 _ArtifactLink = Annotated[str, Field(min_length=1, max_length=512)]
 CanonicalJson: TypeAlias = (
-    None | bool | int | float | str | list["CanonicalJson"] | dict[str, "CanonicalJson"]
+    bool | int | float | str | list["CanonicalJson"] | dict[str, "CanonicalJson"] | None
 )
 
 CoverageRoleAtCreation = Literal[
@@ -123,6 +123,7 @@ class ExchangeArtifactsV1(BaseModel):
         if isinstance(value, str) and not 1 <= len(value.strip()) <= 256:
             raise ValueError("legacy proposal_ref exceeds the 256-character limit")
         return value.strip() if isinstance(value, str) else value
+
     source_links: list[_ArtifactLink] = Field(default_factory=list, max_length=100)
     fact_links: list[_ArtifactLink] = Field(default_factory=list, max_length=100)
 
