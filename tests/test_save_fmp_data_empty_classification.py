@@ -168,3 +168,48 @@ def test_run_ticker_branch_classifies_empty_as_empty(monkeypatch: pytest.MonkeyP
     assert summary["empty"] == 1
     assert summary["forbidden"] == 0
     assert summary["ok"] == 0
+
+
+def test_run_ticker_stops_remaining_endpoints_after_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_save_fmp_data()
+    jobs: list[dict[str, object]] = [
+        {
+            "path": endpoint,
+            "symbol": "V",
+            "period": "quarter",
+            "suffix": endpoint.replace("-", "_"),
+            "extra": {},
+            "file_override": None,
+        }
+        for endpoint in ("income-statement", "balance-sheet-statement")
+    ]
+    calls: list[str] = []
+
+    def fake_jobs(_symbol: str, list_type: str = "portfolio") -> list[dict[str, object]]:
+        del list_type
+        return jobs
+
+    def quota_exhausted(
+        endpoint: str, _ticker: str, _extra: dict[str, object]
+    ) -> tuple[int, None, str, str]:
+        calls.append(endpoint)
+        return (429, None, "http: quota exhausted", f"stable:{endpoint}")
+
+    def fake_list_type(_ticker: str) -> str:
+        return "evaluation"
+
+    def fake_flush(_rows: object) -> None:
+        return None
+
+    monkeypatch.setattr(mod, "per_ticker_jobs", fake_jobs)
+    monkeypatch.setattr(mod, "_list_type_for", fake_list_type)
+    monkeypatch.setattr(mod, "_flush_status_batch", fake_flush)
+    monkeypatch.setattr(mod, "fmp_call", quota_exhausted)
+
+    summary = mod.run_ticker("V")
+
+    assert calls == ["income-statement"]
+    assert summary["error"] == 1
+    assert summary["skipped"] == 1
