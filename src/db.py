@@ -613,21 +613,25 @@ def _apply_tracking_policy(
 ) -> None:
     """Keep derived scheduling fields aligned inside the membership transaction."""
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
-    assignments: list[str] = []
-    values: list[object] = []
-    if "processing_tier" in columns:
-        assignments.append("processing_tier = ?")
-        values.append(PROCESSING_TIER_BY_LIST_TYPE[list_type])
-    if "brief_dirty" in columns:
-        assignments.append("brief_dirty = ?")
-        values.append(1 if queue_brief and list_type in BRIEFED_LIST_TYPES else 0)
-    if not assignments:
-        return
-    conn.execute(
-        f"UPDATE tracked_companies SET {', '.join(assignments)} "
-        "WHERE user_id = ? AND UPPER(ticker) = ?",
-        (*values, user_id, ticker.upper()),
-    )
+    tier = PROCESSING_TIER_BY_LIST_TYPE[list_type]
+    dirty = 1 if queue_brief and list_type in BRIEFED_LIST_TYPES else 0
+    if "processing_tier" in columns and "brief_dirty" in columns:
+        conn.execute(
+            "UPDATE tracked_companies SET processing_tier = ?, brief_dirty = ? "
+            "WHERE user_id = ? AND UPPER(ticker) = ?",
+            (tier, dirty, user_id, ticker.upper()),
+        )
+    elif "processing_tier" in columns:
+        conn.execute(
+            "UPDATE tracked_companies SET processing_tier = ? "
+            "WHERE user_id = ? AND UPPER(ticker) = ?",
+            (tier, user_id, ticker.upper()),
+        )
+    elif "brief_dirty" in columns:
+        conn.execute(
+            "UPDATE tracked_companies SET brief_dirty = ? WHERE user_id = ? AND UPPER(ticker) = ?",
+            (dirty, user_id, ticker.upper()),
+        )
 
 
 def track_company(ticker: str, name: str, list_type: str, user_id: str = DEFAULT_USER_ID) -> None:
@@ -721,12 +725,17 @@ def archive_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     columns = {str(row[1]) for row in cursor.execute("PRAGMA table_info(tracked_companies)")}
-    dirty_reset = ", brief_dirty = 0" if "brief_dirty" in columns else ""
-    cursor.execute(
-        f"UPDATE tracked_companies SET archived_at = ?{dirty_reset} "
-        "WHERE user_id = ? AND ticker = ?",
-        (datetime.datetime.now(), user_id, ticker.upper()),
-    )
+    if "brief_dirty" in columns:
+        cursor.execute(
+            "UPDATE tracked_companies SET archived_at = ?, brief_dirty = 0 "
+            "WHERE user_id = ? AND ticker = ?",
+            (datetime.datetime.now(), user_id, ticker.upper()),
+        )
+    else:
+        cursor.execute(
+            "UPDATE tracked_companies SET archived_at = ? WHERE user_id = ? AND ticker = ?",
+            (datetime.datetime.now(), user_id, ticker.upper()),
+        )
     archived = cursor.rowcount > 0
     conn.commit()
     conn.close()

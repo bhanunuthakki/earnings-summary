@@ -39,7 +39,6 @@ def dcf_universe(repo_root: Path) -> list[str]:
     db_path = Path(repo_root) / "data" / "portfolio.db"
     if not db_path.exists():
         return []
-    placeholders = ", ".join("?" for _ in BRIEFED_LIST_TYPES)
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
@@ -48,28 +47,35 @@ def dcf_universe(repo_root: Path) -> list[str]:
     # (directives/etf_data.md) — an FCFF DCF over a fund's non-existent income
     # statement is nonsense, so they are excluded at the universe. The
     # column-less retry keeps pre-0044 substrates (older test DBs) working.
-    query = (
-        "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
-        f"WHERE list_type IN ({placeholders}) "
-        "AND archived_at IS NULL "
-        "AND (instrument_type IS NULL OR LOWER(instrument_type) <> 'etf')"
-    )
     try:
-        try:
-            rows = conn.execute(query, BRIEFED_LIST_TYPES).fetchall()
-        except sqlite3.OperationalError:
-            try:
-                rows = conn.execute(
-                    "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
-                    f"WHERE list_type IN ({placeholders}) AND archived_at IS NULL",
-                    BRIEFED_LIST_TYPES,
-                ).fetchall()
-            except sqlite3.OperationalError:
-                rows = conn.execute(
-                    "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
-                    f"WHERE list_type IN ({placeholders})",
-                    BRIEFED_LIST_TYPES,
-                ).fetchall()
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+        has_archived = "archived_at" in columns
+        has_instrument_type = "instrument_type" in columns
+        if has_archived and has_instrument_type:
+            rows = conn.execute(
+                "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+                "WHERE list_type IN (?, ?) AND archived_at IS NULL "
+                "AND (instrument_type IS NULL OR LOWER(instrument_type) <> 'etf')",
+                BRIEFED_LIST_TYPES,
+            ).fetchall()
+        elif has_instrument_type:
+            rows = conn.execute(
+                "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+                "WHERE list_type IN (?, ?) "
+                "AND (instrument_type IS NULL OR LOWER(instrument_type) <> 'etf')",
+                BRIEFED_LIST_TYPES,
+            ).fetchall()
+        elif has_archived:
+            rows = conn.execute(
+                "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+                "WHERE list_type IN (?, ?) AND archived_at IS NULL",
+                BRIEFED_LIST_TYPES,
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT UPPER(ticker) FROM tracked_companies WHERE list_type IN (?, ?)",
+                BRIEFED_LIST_TYPES,
+            ).fetchall()
     except sqlite3.Error:
         return []
     finally:
