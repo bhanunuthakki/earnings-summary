@@ -32,6 +32,12 @@ call "%PROJECT_ROOT%\cron\run_python.bat" "backup_db" "db-backup" cron\backup_db
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto done
 
+REM A completed same-day invocation is an intentional idempotent no-op. It
+REM emitted no new snapshot, so file GC remains unauthorized, but Scheduler
+REM must retain the successful exit instead of reporting a false failure.
+powershell -NoProfile -Command "if (Select-String -LiteralPath '%LOG_FILE%' -Pattern 'status.+already_done' -Quiet) { exit 0 } else { exit 1 }"
+if not errorlevel 1 goto done
+
 REM Destructive file retention is authorized only after THIS invocation proves
 REM it produced an encrypted snapshot that still exists. A zero exit alone is
 REM insufficient because backup_db can exit successfully on an idempotent skip.

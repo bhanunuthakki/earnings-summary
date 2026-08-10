@@ -99,3 +99,21 @@ def test_scheduler_backup_requires_encrypted_receipt_before_file_gc_apply() -> N
     assert '"backup-file-gc"' in gc_invocation
     assert "--apply" in gc_invocation
     assert text.rstrip().endswith("endlocal & exit /b %RC%")
+
+
+def test_scheduler_backup_treats_completed_idempotent_retry_as_successful_noop() -> None:
+    """A completed same-day invocation is healthy, but must not trigger GC.
+
+    ``backup_db.py`` emits a stable ``already_done`` JSON receipt and exits
+    zero when run accounting deduplicates a completed backup.  Task Scheduler
+    retries must preserve that success without pretending a new snapshot was
+    created or authorizing destructive file retention.
+    """
+    text = BACKUP_WRAPPER.read_text(encoding="utf-8", errors="replace").lower()
+
+    backup_index = text.index("cron\\backup_db.py")
+    already_done_index = text.index("already_done")
+    receipt_index = text.index("ok backup ->")
+    gc_index = text.index("execution\\backup_file_gc.py")
+    assert backup_index < already_done_index < receipt_index < gc_index
+    assert "if not errorlevel 1 goto done" in text[already_done_index:receipt_index]
