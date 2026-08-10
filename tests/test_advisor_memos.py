@@ -287,13 +287,14 @@ def test_load_valuations_flags_stub_thesis_names(tmp_path) -> None:
     )
     for ticker, list_type, thesis in (
         ("NU", "portfolio", "Real thesis."),
-        ("STB", "watchlist", "STUB: needs user-authored thesis"),
+        ("STB", "evaluation", "STUB: needs user-authored thesis"),
         # Wave B: prod carries EMBEDDED markers too (live example: ROP) — the
         # flag must match the STUB: token as a substring, never a prefix.
-        ("EMB", "watchlist", "Diversified industrial software. STUB: needs user-authored thesis"),
+        ("EMB", "evaluation", "Diversified industrial software. STUB: needs user-authored thesis"),
         # …while innocent prose containing stub-ish words stays a real thesis
         # (the marker is the literal `STUB:` token, colon included).
-        ("SBRN", "watchlist", "A stubbornly durable moat; the STUBHUB comp is irrelevant."),
+        ("SBRN", "evaluation", "A stubbornly durable moat; the STUBHUB comp is irrelevant."),
+        ("WATCH", "watchlist", "Monitored only."),
         ("OK", "evaluation", "Another real thesis."),
     ):
         conn.execute(
@@ -315,6 +316,7 @@ def test_load_valuations_flags_stub_thesis_names(tmp_path) -> None:
     assert candidates["EMB"].stub_thesis is True  # embedded marker (ROP-style)
     assert candidates["SBRN"].stub_thesis is False  # stubborn/STUBHUB ≠ STUB:
     assert candidates["OK"].stub_thesis is False
+    assert "WATCH" not in candidates
 
 
 # --------------------------------------------------------------------------- #

@@ -51,17 +51,25 @@ def dcf_universe(repo_root: Path) -> list[str]:
     query = (
         "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
         f"WHERE list_type IN ({placeholders}) "
+        "AND archived_at IS NULL "
         "AND (instrument_type IS NULL OR LOWER(instrument_type) <> 'etf')"
     )
     try:
         try:
             rows = conn.execute(query, BRIEFED_LIST_TYPES).fetchall()
         except sqlite3.OperationalError:
-            rows = conn.execute(
-                "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
-                f"WHERE list_type IN ({placeholders})",
-                BRIEFED_LIST_TYPES,
-            ).fetchall()
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+                    f"WHERE list_type IN ({placeholders}) AND archived_at IS NULL",
+                    BRIEFED_LIST_TYPES,
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = conn.execute(
+                    "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+                    f"WHERE list_type IN ({placeholders})",
+                    BRIEFED_LIST_TYPES,
+                ).fetchall()
     except sqlite3.Error:
         return []
     finally:

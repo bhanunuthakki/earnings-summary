@@ -272,8 +272,8 @@ def promote_to_watchlist(
     lightweight "keep an eye on this", not a full onboard) with one addition:
     a raw Discovery name that has never been tracked (investor-only 13F
     surface, no screen/adjacency hit) gets a minimal INSERT rather than a
-    no-op UPDATE. Already-active names (portfolio/watchlist/evaluation) pass
-    through untouched — Watch never downgrades a name already ahead of it.
+    no-op UPDATE. Evaluation coverage is downgraded to monitored watchlist;
+    a portfolio holding remains portfolio-authoritative.
     The discovery candidate's own status/lifecycle is NEVER touched here;
     the queue disposition and the tracked-universe membership are separate
     concerns. Returns False only on a missing/unreadable DB."""
@@ -284,18 +284,27 @@ def promote_to_watchlist(
         return False
     try:
         row = conn.execute(
-            "SELECT list_type FROM tracked_companies WHERE user_id = ? AND ticker = ?",
+            "SELECT list_type, archived_at FROM tracked_companies WHERE user_id = ? AND ticker = ?",
             (user_id, symbol),
         ).fetchone()
         if row is None:
             conn.execute(
-                "INSERT INTO tracked_companies (user_id, ticker, name, list_type) "
-                "VALUES (?, ?, ?, 'watchlist')",
+                "INSERT INTO tracked_companies "
+                "(user_id, ticker, name, list_type, processing_tier, brief_dirty) "
+                "VALUES (?, ?, ?, 'watchlist', 'P2', 0)",
                 (user_id, symbol, name or symbol),
             )
-        elif str(row[0]) not in ("portfolio", "watchlist", "evaluation"):
+        elif str(row[0]) != "portfolio":
             conn.execute(
-                "UPDATE tracked_companies SET list_type = 'watchlist' "
+                "UPDATE tracked_companies SET list_type = 'watchlist', "
+                "processing_tier = 'P2', brief_dirty = 0, archived_at = NULL "
+                "WHERE user_id = ? AND ticker = ?",
+                (user_id, symbol),
+            )
+        elif row[1] is not None:
+            conn.execute(
+                "UPDATE tracked_companies SET archived_at = NULL, processing_tier = 'P1', "
+                "brief_dirty = 1 "
                 "WHERE user_id = ? AND ticker = ?",
                 (user_id, symbol),
             )

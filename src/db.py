@@ -104,6 +104,14 @@ ACTIVE_LIST_TYPES: tuple[str, ...] = ("portfolio", "watchlist", "evaluation")
 ACTIVE_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in ACTIVE_LIST_TYPES) + ")"
 BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
 BRIEFED_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in BRIEFED_LIST_TYPES) + ")"
+PROCESSING_TIER_BY_LIST_TYPE: dict[str, str] = {
+    "portfolio": "P1",
+    "watchlist": "P2",
+    "evaluation": "P2",
+    "index_member": "P3",
+    "etf": "P3",
+    "none": "P3",
+}
 
 
 def get_connection() -> sqlite3.Connection:
@@ -595,6 +603,33 @@ def _sync_issuer_registry_safe(ticker: str, *, removed: bool) -> None:
         logging.getLogger(__name__).warning("issuer_registry sync failed for %s: %s", ticker, exc)
 
 
+def _apply_tracking_policy(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    user_id: str,
+    list_type: str,
+    queue_brief: bool,
+) -> None:
+    """Keep derived scheduling fields aligned inside the membership transaction."""
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+    assignments: list[str] = []
+    values: list[object] = []
+    if "processing_tier" in columns:
+        assignments.append("processing_tier = ?")
+        values.append(PROCESSING_TIER_BY_LIST_TYPE[list_type])
+    if "brief_dirty" in columns:
+        assignments.append("brief_dirty = ?")
+        values.append(1 if queue_brief and list_type in BRIEFED_LIST_TYPES else 0)
+    if not assignments:
+        return
+    conn.execute(
+        f"UPDATE tracked_companies SET {', '.join(assignments)} "
+        "WHERE user_id = ? AND UPPER(ticker) = ?",
+        (*values, user_id, ticker.upper()),
+    )
+
+
 def track_company(ticker: str, name: str, list_type: str, user_id: str = DEFAULT_USER_ID) -> None:
     """Upsert a tracked company; SEC-validate, find IR URL, sync artifacts.
 
@@ -617,11 +652,12 @@ def track_company(ticker: str, name: str, list_type: str, user_id: str = DEFAULT
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT list_type FROM tracked_companies WHERE user_id = ? AND ticker = ?",
+        "SELECT list_type, archived_at FROM tracked_companies WHERE user_id = ? AND ticker = ?",
         (user_id, ticker),
     )
     prior_row = cursor.fetchone()
     prior_list_type: str | None = prior_row[0] if prior_row is not None else None
+    was_archived = prior_row is not None and prior_row[1] is not None
     cursor.execute(
         """
         INSERT INTO tracked_companies (user_id, ticker, name, list_type, added_at, sec_validated, ir_url)
@@ -635,6 +671,13 @@ def track_company(ticker: str, name: str, list_type: str, user_id: str = DEFAULT
             archived_at   = NULL
         """,
         (user_id, ticker, final_name, list_type, datetime.datetime.now(), is_valid, ir_url),
+    )
+    _apply_tracking_policy(
+        conn,
+        ticker=ticker,
+        user_id=user_id,
+        list_type=list_type,
+        queue_brief=(prior_list_type != list_type or was_archived or prior_row is None),
     )
     conn.commit()
     conn.close()
@@ -677,8 +720,11 @@ def archive_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
     """
     conn = get_connection()
     cursor = conn.cursor()
+    columns = {str(row[1]) for row in cursor.execute("PRAGMA table_info(tracked_companies)")}
+    dirty_reset = ", brief_dirty = 0" if "brief_dirty" in columns else ""
     cursor.execute(
-        "UPDATE tracked_companies SET archived_at = ? WHERE user_id = ? AND ticker = ?",
+        f"UPDATE tracked_companies SET archived_at = ?{dirty_reset} "
+        "WHERE user_id = ? AND ticker = ?",
         (datetime.datetime.now(), user_id, ticker.upper()),
     )
     archived = cursor.rowcount > 0
@@ -697,12 +743,25 @@ def reactivate_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
     """
     conn = get_connection()
     cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT list_type FROM tracked_companies "
+        "WHERE user_id = ? AND ticker = ? AND archived_at IS NOT NULL",
+        (user_id, ticker.upper()),
+    ).fetchone()
     cursor.execute(
         "UPDATE tracked_companies SET archived_at = NULL "
         "WHERE user_id = ? AND ticker = ? AND archived_at IS NOT NULL",
         (user_id, ticker.upper()),
     )
     reactivated = cursor.rowcount > 0
+    if reactivated and row is not None:
+        _apply_tracking_policy(
+            conn,
+            ticker=ticker,
+            user_id=user_id,
+            list_type=str(row[0]),
+            queue_brief=True,
+        )
     conn.commit()
     conn.close()
     if reactivated:
