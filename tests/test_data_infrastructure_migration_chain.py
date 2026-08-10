@@ -12,13 +12,14 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0003_restore_baseline_defaults"
+HEAD = "0004_add_llm_circuit_breakers"
 RETAINED_TABLES = {
     "archive_generations",
     "canonical_resolution_operation_ledger",
     "document_processing_operation_ledger",
     "evidence_content_blobs",
     "metric_ontology_operation_ledger",
+    "llm_circuit_breakers",
     "research_snapshot_headers",
     "search_corpus_manifests",
 }
