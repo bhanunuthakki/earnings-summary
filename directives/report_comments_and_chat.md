@@ -1,6 +1,6 @@
-# Report Comments + In-Report Chatbot — design scope
+# Report Comments + Unified Work OS Copilot — design scope
 
-**Status: SHIPPED** — comments + in-report chat landed (`workspace_chat.py` / `workspace_comments.py`; S4 iframe work). The closed-under-no-fit classifier rule carries forward in interaction_paradigm S5 / design_language §10.
+**Status: SHIPPED, CHAT ARCHITECTURE SUPERSEDED 2026-08-10** — inline comments remain report-scoped. The former JSON-backed in-report chat composer and `/chat/<ticker>` mutation path are retired. `workspace_chat.py` is now a handoff into the single SQLite-backed Work OS Copilot (`/api/ask/stream`); thesis/KPI edits become governed proposals and require an exact diff plus explicit Owner approval. Legacy `/chat` routes are non-writing `410` tombstones only. The closed-under-no-fit classifier rule carries forward in interaction_paradigm S5 / design_language §10.
 
 Two new features that turn the workspace report from a one-shot artifact into a
 **conversation surface** the analyst can interrogate and steer.
@@ -155,7 +155,7 @@ clears.
 
 1. **Server or no server?** Cleanest UX needs an HTTP endpoint to POST
    new comments. Three options:
-   - (a) **Bundled Flask/FastAPI dev server** (`python execution/comments_server.py --ticker NU`) — small, ~100 LOC, runs on `localhost:7421`, the rendered HTML calls it. Best UX. Requires the user to start the server before opening the report.
+   - (a) **Bundled Flask server** (`start_comments_server.bat`) — runs on `localhost:7421`, and the rendered HTML calls it. Best UX. Requires the user to start the managed server before posting a comment.
    - (b) **Localhost file write via `fetch('file:///...')`** — blocked by most browsers' security model. Not viable.
    - (c) **Copy-to-clipboard fallback** — comment dialog gives you a one-line `claude-cli` command with the comment payload encoded; user pastes into terminal. Zero server, but two-step UX.
    Recommend (a) as the default with (c) as fallback. The server can also serve `data/report_comments/<T>.json` so the comment pane stays in sync across browser refreshes.
@@ -175,32 +175,33 @@ clears.
 
 ---
 
-## Feature 2: In-report chatbot (Claude CLI)
+## Feature 2: Unified Work OS Copilot
 
 ### User-facing flow
 
-1. Persistent chat panel docked to the bottom of every tab (collapsible).
+1. A report Chat/Open in Copilot doorway opens the one Work OS Copilot; reports never own a second composer.
 2. User asks free-form questions: "what's the GCP margin trajectory if
    capex stays at $185B?", "compare NU's NPL trajectory to MELI Credit",
    "what would Vélez say to my concern about the FGTS regulation?",
    "rewrite the thesis assuming Mexico interchange caps at 1.5%".
-3. Chat threads are persisted to `data/report_chats/<T>.json` so
-   conversations survive browser refresh and can be re-loaded later.
+3. Threads and exchange artifacts are persisted in SQLite (`ask_sessions`,
+   `ask_turns`, `ask_exchanges`) so conversations survive refresh and can be
+   reopened with their company/report context.
 4. The chatbot has full context of the rendered report (it's literally
    running with the report's `ReportSpec` as system context), can
    reference any KPI / failure mode / SayDo card by name, and can
-   propose edits the user can apply with one click ("apply this change
-   to the bear case JSON").
+   propose thesis/KPI edits as pending governed artifacts. A proposal mutates
+   canonical state only after the exact diff is reviewed and the Owner
+   explicitly approves it.
 
 ### Architecture (3 layers, reuses comment-server scaffolding)
 
-**Chat server (BE)** — extension of the `comments_server.py` from
-Feature 1. New endpoints:
-- `POST /chat/<ticker>` — appends user turn, calls Claude CLI with the
-  report context as system prompt, streams response back via SSE.
-- `GET /chat/<ticker>` — returns the persisted thread.
-- `POST /chat/<ticker>/apply` — applies a proposed edit (same diff
-  mechanism as the comment processor).
+**Ask server (BE)** — the durable Ask subsystem hosted by `comments_server.py`:
+- `POST /api/ask/stream` — begins or resumes a durable exchange and streams SSE.
+- `GET/PATCH/DELETE /api/ask/sessions[/<id>]` — manages SQLite history.
+- `GET /api/research/proposals/<id>` — returns the exact typed proposal diff.
+- `POST /api/research/proposals/<id>/decision` — idempotent, revision-checked
+  explicit approval/rejection; target drift fails closed.
 
 The Claude CLI call uses the canonical `claude_cli.py` subprocess wrapper
 (per CLAUDE.md), with:
@@ -212,11 +213,10 @@ The Claude CLI call uses the canonical `claude_cli.py` subprocess wrapper
 - Streaming via `claude -p --output-format stream-json` so the panel can
   show tokens live instead of waiting for the full response.
 
-**Frontend (FE-only)** — `src/report/renderers/workspace_chat.js`:
-- Collapsible bottom drawer (matches existing dark theme)
-- SSE-consuming text streaming
-- Markdown rendering for code blocks / lists / tables in responses
-- "Apply this change" buttons next to LLM-proposed diffs
+**Frontend (FE-only)** — `src/report/renderers/workspace_chat.py` hands company,
+report date, origin, and governed fact identity to `pipeline/work_os_copilot.py`.
+The Work OS controller owns history, SSE rendering, citations, evidence, and
+proposal review/approval.
 
 **Context budget management** — the full ReportSpec JSON is ~50-200KB.
 For each chat turn:
@@ -272,16 +272,15 @@ If both features are greenlit, recommended order:
 - Build `execution/process_report_comments.py` with the 4 intent routers
 - Smoke-test on 5 representative comments across NU + GOOG
 
-**Phase 3 — Chat panel** (~6 hours)
-- Add streaming endpoint to `comments_server.py`
-- Build `workspace_chat.js` (drawer + SSE consumer + markdown render)
-- Wire ReportSpec → system prompt assembly
-- Persist threads to `data/report_chats/<T>.json`
+**Phase 3 — Unified Copilot handoff** — shipped
+- Report-side context handoff into `pipeline/work_os_copilot.py`
+- Durable `/api/ask/stream` exchange and SQLite session history
+- Governed fact, citation, and proposal artifact hydration
 
-**Phase 4 — Apply-diff workflow** (~3 hours)
-- Diff proposer in LLM response format
-- Apply button in the FE
-- Apply handler in the BE that does the actual file edit + logs
+**Phase 4 — Governed proposal decision workflow** — shipped
+- Exact current-to-proposed thesis/KPI diff
+- Explicit Approve / Keep current actions
+- Revision, idempotency, target-drift, and audit boundaries
 
 **Total: ~17 hours** of focused work, split into 4 PR-sized chunks. Each
 phase is independently shippable — phases 1+2 alone deliver real value

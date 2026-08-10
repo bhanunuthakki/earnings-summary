@@ -9,8 +9,8 @@ The strip itself is emitted at render time by
 ``report.renderers.workspace_sections.chrome._decision_card_strip``; this
 module only wires the four ``.dc-act`` buttons it contains. No server
 connection required for read-only display (the strip renders fully from the
-cached artifact); the disposition buttons need
-``python execution/comments_server.py`` running, same as comments/chat.
+cached artifact); the disposition buttons need the managed server
+(``start_comments_server.bat`` or ``es-dashboard``), same as comments and Ask.
 """
 
 JS = r"""
@@ -58,7 +58,7 @@ JS = r"""
         }).catch(function (err) {
           actions.forEach(function (b) { if (b !== btn) b.disabled = false; });
           CCAction.release(btn);
-          if (statusEl) statusEl.textContent = 'Server unreachable — start comments_server.py.';
+          if (statusEl) statusEl.textContent = 'Server unreachable — run start_comments_server.bat.';
           console.warn(err);
         });
       });

@@ -71,7 +71,7 @@ typical window where the prior quarter's earnings have all reported.
 ### Linux
 
 ```cron
-0 6 5 * *  cd /path/to/earnings-summary && venv/bin/python execution/quarterly_refresh.py >> logs/refresh.log 2>&1
+0 6 5 * *  cd /path/to/earnings-summary && venv/bin/python execution/sqlite_bootstrap.py cron/job_runtime.py --job quarterly-refresh --write-set portfolio-db -- venv/bin/python execution/sqlite_bootstrap.py execution/quarterly_refresh.py >> logs/refresh.log 2>&1
 ```
 
 ### Windows Task Scheduler
@@ -79,7 +79,7 @@ typical window where the prior quarter's earnings have all reported.
 ```powershell
 schtasks /Create `
   /TN "EarningsRefresh" `
-  /TR "C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\venv\Scripts\python.exe C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\quarterly_refresh.py" `
+  /TR "C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\cron\run_python.bat quarterly-refresh portfolio-db execution\quarterly_refresh.py" `
   /SC MONTHLY /D 5 /ST 06:00
 ```
 

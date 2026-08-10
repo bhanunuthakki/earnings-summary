@@ -1,39 +1,31 @@
-"""The unified ask engine (src/ask/): deterministic routing, the three
-response paths (command / data / narrative), context packs (ticker vs
-portfolio), narrative fallback after a failed compile, report-thread
-persistence for data turns, and the /api/ask JSON folding.
+"""The unified ask engine: routing, durable context, and response folding.
 
 All LLM seams are monkeypatched — the suite never spends:
   viewspec.nl_compile.compile_nl_to_viewspec   (data path, lazy-imported)
-  chat_session.stream_llm_text                 (portfolio narrative)
-  chat_session.build_chat_response.stream_response  (ticker narrative)
+  ask.narrative_transport.stream_llm_text      (narrative)
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
-import chat_session
 from ask import engine as ask_engine
+from ask import narrative_transport
 from ask.context import (
     ContextPack,
     build_portfolio_pack,
-    build_ticker_pack,
     tracked_tickers,
 )
 from ask.engine import AskTurn, fold_events, respond_turn, route_turn, sanitize_history
 from ask.grounding import EvidenceItem
 from viewspec.nl_compile import NLCompileResult
 from viewspec.spec import ViewSpec
-
-RD = date(2026, 5, 1)
 
 _SPEC = ViewSpec.from_dict(
     {
@@ -296,7 +288,7 @@ def test_forced_view_surfaces_compile_error_without_fallback(
     def no_llm(prompt: str) -> object:
         raise AssertionError("narrative transport must not run on /view")
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", no_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", no_llm)
     events = list(
         respond_turn(
             AskTurn(text="/view garbage"),
@@ -339,7 +331,7 @@ def test_failed_compile_falls_back_to_narrative(
         yield {"type": "delta", "text": "prose "}
         yield {"type": "final", "text": "prose answer"}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     events = list(
         respond_turn(
             AskTurn(text="TST revenue growth, last 8 quarters"),
@@ -356,65 +348,9 @@ def test_failed_compile_falls_back_to_narrative(
     assert events[-1] == {"type": "final", "text": "prose answer", "route": "narrative"}
 
 
-def test_data_turn_persists_to_report_thread(
-    tmp_path: Path, missing_db: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """In the report drawer (ticker pack), data turns keep the per-report
-    thread continuous: user question + the message line are stored."""
-    _patch_data_path(monkeypatch, compile_result=NLCompileResult(status="ok", spec=_SPEC))
-    pack = build_ticker_pack("NU", RD)
-    events = list(
-        respond_turn(
-            AskTurn(text="/view NU revenue"),
-            pack,
-            db_path=missing_db,
-            repo_root=tmp_path,
-        )
-    )
-    assert events[-1]["type"] == "final"
-    thread = chat_session.load_thread(tmp_path, "NU", RD)
-    assert [t.role for t in thread] == ["user", "assistant"]
-    assert thread[0].text == "/view NU revenue"
-    assert "live data view" in thread[1].text
-
-
 # ----------------------------------------------------------------------------
 # respond_turn — narrative routes
 # ----------------------------------------------------------------------------
-
-
-def test_ticker_narrative_uses_chat_session_machinery(
-    tmp_path: Path, missing_db: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Ticker scope delegates to the existing report-chat session (its own
-    system prompt + persistence) — the same seam the server tests patch."""
-    seen: dict[str, object] = {}
-
-    def fake_stream_response(*, repo_root: Path, ticker: str, report_date: date, user_message: str):
-        seen.update(
-            repo_root=repo_root, ticker=ticker, report_date=report_date, message=user_message
-        )
-        yield {"type": "delta", "text": "hi"}
-        yield {"type": "final", "text": "hi"}
-
-    monkeypatch.setattr(chat_session.build_chat_response, "stream_response", fake_stream_response)
-    pack = build_ticker_pack("NU", RD)
-    events = list(
-        respond_turn(
-            AskTurn(text="why is NPL formation seasonal?"),
-            pack,
-            db_path=missing_db,
-            repo_root=tmp_path,
-        )
-    )
-    assert seen == {
-        "repo_root": tmp_path,
-        "ticker": "NU",
-        "report_date": RD,
-        "message": "why is NPL formation seasonal?",
-    }
-    assert [e["type"] for e in events] == ["stage", "delta", "final"]
-    assert events[0] == {"type": "stage", "stage": "answering", "route": "narrative"}
 
 
 def test_portfolio_narrative_composes_pack_context_and_history(
@@ -427,7 +363,7 @@ def test_portfolio_narrative_composes_pack_context_and_history(
         yield {"type": "delta", "text": "answer"}
         yield {"type": "final", "text": "answer"}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     turn = AskTurn(
         text="how concentrated is the book?",
         history=[
@@ -456,7 +392,7 @@ def test_portfolio_narrative_extracts_diff_proposal(
     def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "final", "text": answer}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     events = list(
         respond_turn(
             AskTurn(text="tell me about the thesis edit"),
@@ -477,7 +413,7 @@ def test_portfolio_narrative_transport_error_passthrough(
     def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "error", "error": "claude CLI not found in PATH"}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     events = list(
         respond_turn(
             AskTurn(text="hello"),
@@ -549,7 +485,7 @@ def test_portfolio_narrative_grounds_prompt_and_emits_pruned_citations(
         prompts.append(prompt)
         yield {"type": "final", "text": "Growth held up well [1]."}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     events = list(
         respond_turn(
             AskTurn(text="why is growth holding up?"),
@@ -588,7 +524,7 @@ def test_portfolio_narrative_unused_evidence_emits_no_citations(
     def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "final", "text": "An answer with no markers at all."}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
     events = list(
         respond_turn(
             AskTurn(text="why is growth holding up?"),
@@ -611,7 +547,7 @@ def test_portfolio_narrative_per_claim_event_reconciles_and_recovers(
     def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "final", "text": "Growth held up well [1]. Margins expanded by 300bps."}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_llm)
 
     def fake_struct(prompt: str, **kwargs: object) -> object:
         assert kwargs.get("purpose") == "ask_claim_grounding"
@@ -646,63 +582,6 @@ def test_portfolio_narrative_per_claim_event_reconciles_and_recovers(
     assert claims[0]["cites"] == [1]
     assert claims[1]["cites"] == [2]
     assert all(c["supported"] is True for c in claims)
-
-
-def test_ticker_narrative_passes_evidence_as_extra_context(
-    tmp_path: Path, missing_db: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Ticker scope threads the evidence block through stream_response's
-    extra_context kwarg — passed ONLY when evidence exists (the legacy
-    four-kwarg fakes elsewhere in this suite must keep working)."""
-    monkeypatch.setattr(ask_engine, "gather_evidence", _stub_gather(_evidence(1)))
-    seen: dict[str, object] = {}
-
-    def fake_stream_response(
-        *,
-        repo_root: Path,
-        ticker: str,
-        report_date: date,
-        user_message: str,
-        extra_context: str = "",
-    ):
-        seen["extra_context"] = extra_context
-        yield {"type": "delta", "text": "NPLs are stable [1]."}
-        yield {"type": "final", "text": "NPLs are stable [1]."}
-
-    monkeypatch.setattr(chat_session.build_chat_response, "stream_response", fake_stream_response)
-    events = list(
-        respond_turn(
-            AskTurn(text="why are NPLs stable?"),
-            build_ticker_pack("NU", RD),
-            db_path=missing_db,
-            repo_root=tmp_path,
-        )
-    )
-    assert "EVIDENCE" in str(seen["extra_context"])
-    assert "[1] TST Metric1" in str(seen["extra_context"])
-    assert [e["type"] for e in events] == ["stage", "delta", "final", "citations"]
-
-
-def test_stream_response_appends_extra_context_to_system_prompt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    prompts: list[str] = []
-
-    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
-        prompts.append(prompt)
-        yield {"type": "final", "text": "answer"}
-
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
-    events = list(
-        chat_session.stream_response(tmp_path, "NU", RD, "question", extra_context="EXTRA-MARKER")
-    )
-    assert events[-1]["type"] == "final"
-    assert "EXTRA-MARKER" in prompts[0]
-    assert prompts[0].index("EXTRA-MARKER") < prompts[0].index("PRIOR THREAD")
-    # Default call shape (no kwarg) is unchanged.
-    prompts.clear()
-    list(chat_session.stream_response(tmp_path, "NU", RD, "question"))
-    assert "EXTRA-MARKER" not in prompts[0]
 
 
 # ----------------------------------------------------------------------------
@@ -794,16 +673,6 @@ def test_fold_events_command_and_errors() -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_build_ticker_pack_shape() -> None:
-    pack = build_ticker_pack("nu", RD)
-    assert pack.scope == "ticker"
-    assert pack.ticker == "NU"
-    assert pack.report_date == RD
-    assert pack.default_tickers == ["NU"]
-    assert pack.persist is True
-    assert pack.system_context is None  # chat_session owns the ticker prompt
-
-
 def test_build_portfolio_pack_grounds_universe_and_theses(tmp_path: Path, tracked_db: Path) -> None:
     holdings = tmp_path / "micro_thesis" / "holdings"
     holdings.mkdir(parents=True)
@@ -813,7 +682,6 @@ def test_build_portfolio_pack_grounds_universe_and_theses(tmp_path: Path, tracke
     )
     pack = build_portfolio_pack(tmp_path, tracked_db)
     assert pack.scope == "portfolio"
-    assert pack.persist is False
     assert pack.default_tickers == ["TST"]
     ctx = pack.system_context or ""
     assert "portfolio: TST" in ctx

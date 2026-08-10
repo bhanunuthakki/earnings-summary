@@ -158,7 +158,7 @@ Buttons — three intents, no other treatments:
 | `.k-btn-quiet`   | outline, muted → fg on hover      | Everything else                                  |
 | `.k-btn-danger`  | red ink, red border on hover      | Destructive only (delete, dismiss-forever)       |
 
-Chips & Suggestion Prompts: `.k-chip` (+ `-ok/-warn/-bad/-accent`, `-mono`, `.is-on` for filter toggles). Pre-populated Copilot suggestion chips (`⚡ Analyze NU Q2 beat`, `📊 Compare NU vs MELI`, `⚠️ Check NPL 90+ status`, `📈 Run DCF sensitivity`) populate input fields and stream grounded AI citations (`doc:bcb_jun26_p4`).
+Chips & Suggestion Prompts: `.k-chip` (+ `-ok/-warn/-bad/-accent`, `-mono`, `.is-on` for filter toggles). Pre-populated Copilot suggestion chips submit through the unified Ask controller, inherit the active company and research context, and render governed evidence through the same durable exchange as a typed question. Chips never call a template-local fake response function.
 
 Interactive Handles & Doorways:
 - `.drill-handle`: Dotted bottom border (`--bw-thin`) in `--accent`, launching slide drawers (`openDrillDrawer('financials')`).
@@ -267,8 +267,11 @@ owning module or route, required identity/context fields, write boundary, and
 remaining backend work. Visible controls must never imply that an unbuilt
 backend mutation already exists.
 
-- **Chat is read-only.** Reuse the company-scoped Ask seam, prefill the card
-  prompt, and pass durable item/fact identifiers through `context_spec`.
+- **Discussion is read-only.** Reuse the company-scoped Ask seam, prefill the
+  card prompt, and pass durable item/fact identifiers through `context_spec`.
+  Ask may create governed thesis and KPI proposal cards, but a proposal is not
+  a mutation: render the exact current-to-proposed diff and require explicit Owner
+  approval before the owning domain module applies it.
 - **Edit is a proposed mutation.** Load the current revision, preview a diff,
   validate through the module that owns the domain object, require Owner
   approval, and persist with an idempotency key plus audit event. Never turn an

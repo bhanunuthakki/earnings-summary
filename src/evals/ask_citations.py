@@ -27,7 +27,7 @@ set — live stores can't pin what "supports" means):
   the production prompt contract. The grader composes the same prompt shape
   the engine's portfolio scope sends (``build_evidence_block`` + question),
   generates one answer through the production transport
-  (``chat_session.stream_llm_text``), then grades three components:
+  (``ask.narrative_transport.stream_llm_text``), then grades three components:
 
       unsupported-claim rate — an eval_judge call (rubric-judge pattern:
           structured verdict, fail-closed parse, hard stops abort) lists
@@ -415,10 +415,10 @@ def compose_answer_prompt(case: CitationCase) -> str:
 def production_generate(prompt: str) -> str:
     """One answer through the production narrative transport. Raises on any
     non-final outcome — the grader's call/abort semantics take over."""
-    import chat_session
+    from ask.narrative_transport import stream_llm_text
 
     final: str | None = None
-    for event in chat_session.stream_llm_text(prompt):
+    for event in stream_llm_text(prompt):
         kind = event.get("type")
         if kind == "final":
             final = cast("str", event.get("text"))

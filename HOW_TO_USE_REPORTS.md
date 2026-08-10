@@ -207,26 +207,27 @@ Comment status colors on the report:
 - **Green underline** / green pin = addressed
 - No marker = no comments
 
-### 5. Chat with Claude about the report
+### 5. Continue the report in Copilot
 
-Click the **Chat** button in the bottom-right corner. The drawer opens
-with a Claude chat session backed by the unified ask engine (model
-chosen by the engine; Sonnet by default) that has the full report
-context loaded:
+Click **Chat** or **Open in Copilot** from the report. Embedded reports hand
+the active ticker, report date, origin, and any selected governed fact to the
+one Work OS Copilot; standalone reports open that same workspace at
+`/?copilot=1&ticker=<T>#screen-workspace`.
 
 - Your thesis, tier-1 KPIs, business-model rules
 - Bear-case failure modes + most-underweighted callout
 - Valuation multiple + rationale
 - Company description elevator pitch
-- Read-only filesystem access to `data/`, `micro_thesis/`, `.tmp/`,
-  `transcripts/` (so it can pull a verbatim transcript quote, look up
-  segment numbers from FMP, etc.)
+- Governed facts, source citations, and report/research context retained with
+  the durable SQLite exchange
 
-Type a question, press `Cmd+Enter` (or `Ctrl+Enter`) to send.
+Type a question and submit it in Copilot. History is stored in SQLite and can
+be reopened by company, research context, and session title.
 
-If you ask for an edit ("rewrite the thesis assuming Mexico interchange
-caps at 1.5%"), the response includes a **Preview** / **Apply** button —
-click Apply to write the change to disk.
+If you ask for a thesis or KPI edit, Copilot creates a pending governed
+proposal. Review the exact current-to-proposed diff in the Ask window, then
+explicitly **Approve** or **Keep current**. The model response alone never
+writes canonical state.
 
 ### 6. Process comments
 
@@ -294,7 +295,7 @@ a file already exists.
 If you have PDFs from IR (presentations, press releases, transcripts)
 that aren't on the aggregators, **drop them into `_inbox/`** and run:
 ```cmd
-python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\intake_documents.py --process
+python execution/sqlite_bootstrap.py execution/intake_documents.py --process
 ```
 The intake classifier files them into `ir_documents/<T>/<period>/` and
 chains into the LLM summarizer.
@@ -303,7 +304,7 @@ chains into the LLM summarizer.
 
 After step 2 (or after dropping PDFs in `_inbox`), run:
 ```cmd
-python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\process_ir_documents.py --ticker NU
+python execution/sqlite_bootstrap.py execution/process_ir_documents.py --ticker NU
 ```
 Reads each unprocessed document, runs the LLM summarizer with the
 thesis + bear-case anchor block, writes:
@@ -316,7 +317,7 @@ These feed the Earnings tab and the bear case.
 ### 4. KPI extraction (populate the Thesis tab's tracked KPIs)
 
 ```cmd
-python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
+python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
 ```
 
 Reads the `.tmp/<T>_*_summary.txt` files, asks Haiku to extract values
@@ -330,7 +331,7 @@ hasn't run yet.
 ### 5. SayDo pairwise rebuild
 
 ```cmd
-python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\build_saydo_pairs.py --ticker NU --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
+python execution/sqlite_bootstrap.py execution/build_saydo_pairs.py --ticker NU --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
 ```
 
 Walks the per-quarter summaries chronologically and generates one
@@ -447,7 +448,7 @@ Add `--help` to any script for its full flag list.
 | File / directory | What it is |
 |---|---|
 | `data/report_comments/<T>/<DATE>.json` | Comment store (one per ticker+date) |
-| `data/report_chats/<T>/<DATE>.json` | Chat thread store |
+| SQLite `ask_sessions` / `ask_turns` / exchange artifacts | Durable Copilot history, context, governed evidence, and proposal references |
 | `data/bear_case/<T>.json` | Cached bear case from last `--enable-llm` build |
 | `data/valuation_basis/<T>.json` | Cached Opus-picked valuation multiple |
 | `data/company_description/<T>.json` | Cached company narrative |
@@ -548,7 +549,7 @@ through**:
    is good for a profitable platform).
 2. Add the ticker to `tracked_companies`:
    ```cmd
-   python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\onboard_ticker.py --ticker <NEW_TICKER> --list-type portfolio
+   python execution/sqlite_bootstrap.py execution/onboard_ticker.py --ticker <NEW_TICKER> --list-type portfolio
    ```
    (Or `--list-type watchlist` / `evaluation` / `archived`.)
 3. Pull FMP data: `refresh_fmp.bat <NEW_TICKER> 20`
@@ -571,7 +572,7 @@ Two paths:
 **(a) Auto-classify from `_inbox/`** — drop the PDF in
 `<REPO>/_inbox/` then:
 ```cmd
-python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\intake_documents.py --process
+python execution/sqlite_bootstrap.py execution/intake_documents.py --process
 ```
 The intake classifier identifies ticker + period + doc-type, files into
 `ir_documents/<T>/<period>/`, registers in `document_index.json`, and
@@ -649,7 +650,7 @@ anchor it lives under, or look in `data/report_comments/<T>/<DATE>.json`.
 **Tracked KPIs are empty in the report**
 Run the KPI extractor first:
 ```cmd
-python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
+python execution/sqlite_bootstrap.py execution/extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
 ```
 
 The single canonical procedure lives under

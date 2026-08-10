@@ -705,7 +705,7 @@ LLM_MODELS: dict[str, str] = {
     "ask_claim_grounding": FAST_CLASSIFIER_MODEL,
     # Ask conversational answer (close_the_loops L3): the PRIMARY pass-1
     # narrative answer of the ask path — both the report-drawer chat and the
-    # Ask tab's portfolio scope stream through chat_session.stream_llm_text.
+    # Ask's narrative path streams through ask.narrative_transport.stream_llm_text.
     # It is the most expensive + highest-stakes LLM call in the repo, yet it
     # historically rode the bare `claude -p` CLI default: no purpose, no
     # budget, no ledger row, invisible to the model-downgrade loop. Pinned here

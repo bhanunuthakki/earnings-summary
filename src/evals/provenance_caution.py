@@ -20,7 +20,7 @@ prompt path (the real ``build_evidence_block`` assembles the evidence + the
 discount rule, so both are under test), grade deterministically (no judge — a
 hedge is a hedge), version the golden set, abort (not score 0) on a hard stop.
 The default runner composes the answer prompt and streams it through the live
-``chat_session.stream_llm_text`` transport (the same bare-CLI path production
+``ask.narrative_transport.stream_llm_text`` transport (the same governed path production
 answers ride); tests inject a fake runner, so the suite is hermetic and only
 the live proof run spends.
 
@@ -236,10 +236,10 @@ def build_answer_prompt(case: CautionCase) -> str:
 def _run_answer(case: CautionCase) -> str:
     """Stream the answer through the live transport (the bare-CLI path
     production answers ride) and return the final text."""
-    import chat_session
+    from ask.narrative_transport import stream_llm_text
 
     final = ""
-    for ev in chat_session.stream_llm_text(build_answer_prompt(case)):
+    for ev in stream_llm_text(build_answer_prompt(case)):
         kind = ev.get("type")
         if kind == "final":
             final = str(ev.get("text") or "")

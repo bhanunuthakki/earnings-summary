@@ -27,7 +27,6 @@ sys.path.insert(0, str(SRC))
 
 from ui.controls import (  # noqa: E402
     controls_css,
-    copilot_prompt_chip,
     icon_svg,
     k_empty,
     panel_section_title,
@@ -47,12 +46,11 @@ from ui.tokens import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def test_copilot_prompt_chip_renders_interactive_chip() -> None:
-    html = copilot_prompt_chip("Analyze NU Q2 beat", citation="doc:bcb_jun26_p4")
-    assert "k-chip-copilot" in html
-    assert "k-chip-btn" in html
-    assert 'data-citation="doc:bcb_jun26_p4"' in html
-    assert "Analyze NU Q2 beat" in html
+def test_no_legacy_copilot_prompt_execution_primitive() -> None:
+    source = (SRC / "ui" / "controls.py").read_text(encoding="utf-8")
+    assert "copilot_prompt_chip" not in source
+    assert "populateCopilotPrompt" not in source
+    assert "k-chip-copilot" not in source
 
 
 def test_dark_mode_pins_dark_scheme_and_chevron() -> None:

@@ -85,6 +85,18 @@ def test_managed_launchers_enable_preimport_bootstrap() -> None:
     assert "sqlite_bootstrap.py" in comments_launcher
 
 
+def test_long_running_service_directive_uses_managed_runtime() -> None:
+    directive = (PROJECT_ROOT / "directives" / "self_host_phase1_laptop.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Get-Command python" not in directive
+    assert "runtime\\earnings-summary" in directive
+    assert directive.count("execution\\sqlite_bootstrap.py") == 1
+    assert directive.count('AppParameters "-u `"$bootstrap`"') == 2
+    assert directive.count("--repo-root") >= 2
+
+
 def test_root_convenience_wrappers_supply_job_and_write_set() -> None:
     wrappers = (
         "build_report.bat",

@@ -202,14 +202,13 @@ def _active_positioning_block(db_path: Path, target: TargetContext) -> str:
 def build_positioning_pack(repo_root: Path, db_path: Path) -> ContextPack:
     """The coach's ContextPack: portfolio scope (routing), positioning
     instructions + grounding as the narrative system context, history via the
-    caller-supplied session id (``persist=False`` — ask_turns is the thread
-    store, same as the Ask tab), billed under ``positioning_coach_turn``."""
+    caller-supplied session id (``ask_turns`` is the thread store, same as the
+    Ask tab), billed under ``positioning_coach_turn``."""
     system_context = _INSTRUCTIONS + "\n\n" + _grounding_block(repo_root, db_path)
     return ContextPack(
         scope="portfolio",
         default_tickers=[],
         system_context=system_context,
-        persist=False,
         narrative_purpose=COACH_PURPOSE,
     )
 

@@ -1,11 +1,10 @@
 """S7 agentic evidence loop (src/ask/followup.py + engine wiring): need-request
 parsing, period-aware targeted retrieval, the bounded follow-up rounds, the
-engine's stream gate, thread repair, and fail-closed paths.
+engine's stream gate and fail-closed paths.
 
 All LLM seams are monkeypatched — the suite never spends:
 
-  chat_session.stream_llm_text                 (portfolio pass 1)
-  chat_session.build_chat_response.stream_response  (ticker pass 1)
+  ask.narrative_transport.stream_llm_text      (portfolio pass 1)
   ask.followup.call_llm                        (follow-up rounds)
   ask.followup.should_skip_for_budget          (arming control)
 """
@@ -15,15 +14,13 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Generator
-from datetime import date
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-import chat_session
 from ask import engine as ask_engine
-from ask import followup
+from ask import followup, narrative_transport
 from ask.context import ContextPack
 from ask.followup import (
     MAX_ROUNDS,
@@ -570,7 +567,7 @@ def test_engine_portfolio_loop_end_to_end(repo: Path, monkeypatch: pytest.Monkey
         markers = sorted({int(m.group(1)) for m in re.finditer(r"^\[(\d+)\]", prompt, re.M)})
         return "Coverage was thin in Q1 2024 " + "".join(f"[{n}]" for n in markers) + "."
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_stream)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_stream)
     monkeypatch.setattr(followup, "call_llm", fake_call_llm)
     events = _narrative(repo, "did management's framing of asset quality change?")
     kinds = [e["type"] for e in events]
@@ -603,7 +600,7 @@ def test_engine_portfolio_prose_answer_streams_unchanged(
         yield {"type": "delta", "text": "answer."}
         yield {"type": "final", "text": "Plain answer."}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_stream)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_stream)
     events = _narrative(repo, "tell me about the quarter")
     kinds = [e["type"] for e in events]
     assert kinds == ["stage", "delta", "delta", "final", "grounding"]
@@ -620,7 +617,7 @@ def test_engine_portfolio_followup_failure_yields_error(
     def boom(*_a: object, **_k: object) -> str:
         raise RuntimeError("down")
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_stream)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_stream)
     monkeypatch.setattr(followup, "call_llm", boom)
     events = _narrative(repo, "did management's framing change?")
     assert events[-1]["type"] == "error"
@@ -637,7 +634,7 @@ def test_engine_unarmed_turn_has_no_protocol_and_passes_json_through(
         yield {"type": "delta", "text": _NEED_TRANSCRIPT}
         yield {"type": "final", "text": _NEED_TRANSCRIPT}
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", fake_stream)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", fake_stream)
     monkeypatch.setattr(followup, "should_skip_for_budget", _over_cap)
     events = _narrative(repo, "tell me about the quarter")
     # Disarmed = pre-S7 behavior: no protocol offered, the response (whatever
@@ -645,109 +642,6 @@ def test_engine_unarmed_turn_has_no_protocol_and_passes_json_through(
     assert "NEED MORE EVIDENCE?" not in prompts[0]
     assert [e["type"] for e in events] == ["stage", "delta", "final"]
     assert next(e for e in events if e["type"] == "final")["text"] == _NEED_TRANSCRIPT
-
-
-# ----------------------------------------------------------------------------
-# Engine wiring — ticker scope (thread repair)
-
-
-def _ticker_pack() -> ContextPack:
-    return ContextPack(
-        scope="ticker",
-        default_tickers=["TST"],
-        ticker="TST",
-        report_date=date(2026, 6, 1),
-        persist=True,
-    )
-
-
-def _fake_stream_response_returning(text: str):
-    """Mimics the real session: persists the user + assistant turns, then
-    streams. The S7 thread repair must swap the persisted need-request."""
-
-    def fake(*, repo_root: Path, ticker: str, report_date: date, user_message: str, **_k: object):
-        thread = chat_session.load_thread(repo_root, ticker, report_date)
-        thread.append(chat_session.ChatTurn(role="user", text=user_message))
-        thread.append(chat_session.ChatTurn(role="assistant", text=text))
-        chat_session.save_thread(repo_root, ticker, report_date, thread)
-        yield {"type": "delta", "text": text}
-        yield {"type": "final", "text": text}
-
-    return fake
-
-
-def _ticker_narrative(repo: Path, text: str) -> list[dict[str, object]]:
-    turn = ask_engine.AskTurn(text=text)
-    return list(
-        ask_engine._narrative_events(  # pyright: ignore[reportPrivateUsage]
-            text,
-            turn,
-            _ticker_pack(),
-            repo_root=repo,
-            db_path=_db(repo),
-            emit_stage=True,
-        )
-    )
-
-
-def test_engine_ticker_loop_repairs_thread(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    prompts: list[str] = []
-
-    def fake_call_llm(prompt: str, **_k: object) -> str:
-        prompts.append(prompt)
-        return "Underwriting tightened after Q1 2024 [1]."
-
-    monkeypatch.setattr(
-        chat_session.build_chat_response,
-        "stream_response",
-        _fake_stream_response_returning(_NEED_TRANSCRIPT),
-    )
-    monkeypatch.setattr(followup, "call_llm", fake_call_llm)
-    question = "did management's framing of asset quality change?"
-    events = _ticker_narrative(repo, question)
-
-    final = next(e for e in events if e["type"] == "final")
-    assert final["text"] == "Underwriting tightened after Q1 2024 [1]."
-    assert next(e for e in events if e["type"] == "grounding")["rounds"] == 1
-    # Pass 2 was composed from the report-drawer system prompt.
-    assert "analyst assistant for TST" in prompts[0]
-    # The persisted thread now carries the real answer, not the JSON.
-    thread = chat_session.load_thread(repo, "TST", date(2026, 6, 1))
-    assert thread[-1].role == "assistant"
-    assert thread[-1].text == "Underwriting tightened after Q1 2024 [1]."
-    assert thread[-2].role == "user" and thread[-2].text == question
-
-
-def test_engine_ticker_followup_failure_repairs_thread_with_note(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def boom(*_a: object, **_k: object) -> str:
-        raise RuntimeError("down")
-
-    monkeypatch.setattr(
-        chat_session.build_chat_response,
-        "stream_response",
-        _fake_stream_response_returning(_NEED_TRANSCRIPT),
-    )
-    monkeypatch.setattr(followup, "call_llm", boom)
-    events = _ticker_narrative(repo, "did management's framing change?")
-    assert events[-1]["type"] == "error"
-    thread = chat_session.load_thread(repo, "TST", date(2026, 6, 1))
-    assert thread[-1].role == "assistant"
-    assert "follow-up failed" in thread[-1].text
-    assert '{"need"' not in thread[-1].text
-
-
-def test_engine_ticker_prose_answer_unchanged(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        chat_session.build_chat_response,
-        "stream_response",
-        _fake_stream_response_returning("A normal grounded answer."),
-    )
-    events = _ticker_narrative(repo, "tell me about the quarter")
-    kinds = [e["type"] for e in events]
-    assert kinds == ["stage", "delta", "final", "grounding"]
-    assert next(e for e in events if e["type"] == "final")["text"] == "A normal grounded answer."
 
 
 def test_need_protocol_block_names_kinds_and_rounds() -> None:

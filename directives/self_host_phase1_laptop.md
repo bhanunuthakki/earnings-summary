@@ -4,7 +4,11 @@
 
 **Effort:** ~1 hour. Steps marked **[You]** are hands-on (installs, phone enrollment, web consoles); the rest are copy-paste PowerShell (Admin).
 
-Repo root below is `C:\Users\bhanu\.gemini\antigravity\scratch\earnings-summary` (MAIN, not a worktree).
+The long-running service executes code from the clean runtime checkout at
+`C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary` and points
+`--repo-root` at the canonical data checkout
+`C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary`. Never launch a
+service from a task worktree or resolve an arbitrary `python` from `PATH`.
 
 ---
 
@@ -29,18 +33,30 @@ NSSM fixes the two supervision gaps: the dashboard has no supervisor today, and 
 **[You]** Download NSSM (`nssm.exe`) from nssm.cc and put it on PATH (e.g. `C:\Windows\System32`).
 
 ```powershell
-$py   = (Get-Command python).Source
-$root = "C:\Users\bhanu\.gemini\antigravity\scratch\earnings-summary"
+$appRoot  = "C:\Users\Bhanu\.gemini\antigravity\runtime\earnings-summary"
+$dataRoot = "C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary"
+$py       = "$appRoot\venv\Scripts\python.exe"
+$bootstrap = "$appRoot\execution\sqlite_bootstrap.py"
+
+if (-not (Test-Path -LiteralPath $py)) {
+  $py = "$appRoot\.venv\Scripts\python.exe"
+}
+if (-not (Test-Path -LiteralPath $py)) {
+  throw "Managed runtime Python was not found under $appRoot"
+}
+& $py $bootstrap --check
 
 # --- dashboard: stays bound to 127.0.0.1; Tailscale proxies to it (Step 3) ---
-nssm install es-dashboard "$py" "$root\execution\comments_server.py --port 7421 --repo-root `"$root`""
-nssm set es-dashboard AppDirectory "$root"
+nssm install es-dashboard "$py"
+nssm set es-dashboard AppParameters "-u `"$bootstrap`" `"$appRoot\execution\comments_server.py`" --port 7421 --repo-root `"$dataRoot`""
+nssm set es-dashboard AppDirectory "$appRoot"
 nssm set es-dashboard AppExit Default Restart
 nssm set es-dashboard Start SERVICE_AUTO_START
 
 # --- Telegram poller: single instance, restart on any exit ---
-nssm install es-poller "$py" "$root\execution\capture_poller.py"
-nssm set es-poller AppDirectory "$root"
+nssm install es-poller "$py"
+nssm set es-poller AppParameters "-u `"$bootstrap`" `"$appRoot\execution\capture_poller.py`" --repo-root `"$dataRoot`""
+nssm set es-poller AppDirectory "$appRoot"
 nssm set es-poller AppEnvironmentExtra CAPTURE_WHISPER_MODEL=small.en
 nssm set es-poller AppExit Default Restart
 nssm set es-poller Start SERVICE_AUTO_START

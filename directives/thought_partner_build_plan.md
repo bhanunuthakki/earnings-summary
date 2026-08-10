@@ -28,7 +28,7 @@ On My Mind **absorbs the Wondering flag** (it becomes one signal — a badge —
 | Provenance | existing `source_note_ids` (the musing/reading ids that formed the Tenet) + the citation-validation gate from `theme_synth.py` | No |
 | Tension / contradiction | deterministic **overlap check at distill time** (same `scope_key` slug) surfaced for reconcile; recorded in `meta_json.tensions` | No (no background drift engine in v1) |
 | Dedup / staging | existing `raw_capture_sessions` (channel, external_ref) | No |
-| Socratic "discuss" thread | existing `chat_session` (`data/report_chats/<T>/<date>.json`) for ticker scope; `ask_turns` for portfolio scope | No |
+| Socratic "discuss" thread | unified SQLite Ask history (`ask_sessions`, `ask_turns`, and durable exchange artifacts) with ticker/context identity | No |
 
 **Migrations (after head `0126`):** exactly **one required** — `0127` retires the influence kind (backfill `influence` rows → `observation` **before** narrowing the CHECK, because `0125`'s downgrade only narrows when zero influence rows remain). A second optional `0128` seeds the `tenet_distill` LLM-budget row (mirrors `0119`). Pick numbers/`down_revision` at rebase time on the then-current head (parallel-session collision risk — this already bit once: head moved 0125→0126 mid-plan).
 
@@ -44,7 +44,7 @@ A reading's fetched body (PDF/URL text) *does* reach the LLM in the **discuss/di
 
 ### Fate of PR #701
 
-**Keep** the plumbing (Telegram document download to `capture/docs/`, `external_ref` dedup, `_extract_url`, the `Update` document fields) — it's transport, reused as the capture mechanism for readings. **Drop** the classification: `ingest_influence` → `ingest_reading` (lands `kind='observation'`, LLM-free, **now with the PII scrub** the reading path is currently missing); remove `load_investor_influences_anchor` + header/cap and its lone `chat_session` consumer (atomic swap — leave chat without the influences block; the Worldview anchor arrives in P3). **Backfill** existing `influence` rows → `observation` in `0127`.
+**Keep** the plumbing (Telegram document download to `capture/docs/`, `external_ref` dedup, `_extract_url`, the `Update` document fields) — it's transport, reused as the capture mechanism for readings. **Drop** the classification: `ingest_influence` → `ingest_reading` (lands `kind='observation'`, LLM-free, **now with the PII scrub** the reading path is currently missing); remove `load_investor_influences_anchor` + header/cap and its lone legacy report-chat consumer (atomic swap — leave chat without the influences block; the Worldview anchor arrives in P3). **Backfill** existing `influence` rows → `observation` in `0127`.
 
 ## 3. Phased plan
 
@@ -52,7 +52,7 @@ One PR per phase; each independently shippable; P1–P2 need no migration and re
 
 | Phase | Goal | PR scope | Migration | Flag |
 |---|---|---|---|---|
-| **P0 — Retire #701** | Stop building on the rejected ingest-time classification. | Backfill `influence`→`observation`; narrow the CHECK; `ingest_influence`→`ingest_reading` (+PII scrub); drop the influence anchor atomically with its `chat_session` consumer. Tree stays green, vocabulary retired. | **`0127`** (backfill-then-narrow) | none |
+| **P0 — Retire #701** | Stop building on the rejected ingest-time classification. | Backfill `influence`→`observation`; narrow the CHECK; `ingest_influence`→`ingest_reading` (+PII scrub); drop the influence anchor atomically with its legacy report-chat consumer. Tree stays green, vocabulary retired. | **`0127`** (backfill-then-narrow) | none |
 | **P1 — On My Mind feed + action ladder** | The front-of-funnel: one reverse-chron feed (thoughts + readings) with the 4-rung ladder, web + Telegram. Absorb the Wondering flag as an inline badge. | `src/onmymind/feed.py` (keyset-paginated read model, `source='capture'` filter, **batched** wondering-task lookup), feed renderer folded into `ledger_panel.py` (relabel Ledger → "On My Mind", keep `panel_id='musings'`), action routes in `comments_server.py`, `om:` Telegram callbacks in `research_notify.py`. Incorporate reuses the tap's task **idempotently per `note_id`**. Aware of #709 `decision_capture` (which already links decisions back to musings). | none | `LEDGER_ONMYMIND` |
 | **P2 — Tenet store + review** | The durable Worldview (not yet injected). Owner-typed Tenets are `current` immediately; machine-distilled ones land `proposed` for one-tap approval. Belief revision via supersede chain; tension = distill-time overlap surfaced for reconcile. | `src/synthesis/tenets.py` (CRUD over `insight_notes` kind=`tenet`), `worldview_panel.py` review tab, `/api/tenets` routes, `tenet_distill` distill job behind the $0 triage. | `0128` (budget seed) | `LEDGER_WORLDVIEW` |
 | **P3 — Worldview injection** | Close the loop: `load_worldview_anchor` (only `actionable` Tenets) rides into the decision-point prompts as subtle, dated, spotlight-wrapped considerations. | `load_worldview_anchor` in `anchors.py`; wire `compose_anchor_block`'s renamed 5th slot at the decision-point sites first (chat / socratic / workspace), expand later. Tight char cap (~1200), deterministic rendering to preserve the prompt cache. | none | `LEDGER_WORLDVIEW_ANCHOR` |

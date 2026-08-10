@@ -333,18 +333,6 @@ button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs
 button.k-chip:hover, .k-chip-btn:hover { color: var(--fg); border-color: var(--border-2); }
 button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var(--accent); }
 
-/* ---- copilot suggestion prompt chips (Ask Dock & Work OS side-drawers) ---- */
-.k-chip-copilot {
-  cursor: pointer; font: inherit; font-size: var(--fs-caption); font-weight: 500;
-  background: var(--paper); border: var(--bw-thin) solid var(--border);
-  color: var(--fg-soft); border-radius: var(--radius-full); padding: 3px 10px;
-  display: inline-flex; align-items: center; gap: 6px; text-transform: none;
-  transition: border-color var(--transition), color var(--transition), transform var(--transition);
-}
-.k-chip-copilot:hover {
-  border-color: var(--accent); color: var(--fg); transform: translateY(var(--lift-sm));
-}
-
 /* ---- chip-tab: the section-nav / pane-switcher variant of a clickable chip
    (owner directive 2026-08-02 — sticky nav bands must never change height
    between active and inactive chips). Same pill shape as any other chip;
@@ -1122,18 +1110,3 @@ def fact_anchor_attrs(
     if ask_q:
         attrs.append(f'data-ask-q="{escape(ask_q, quote=True)}"')
     return " ".join(attrs)
-
-
-def copilot_prompt_chip(prompt: str, *, citation: str | None = None) -> str:
-    """Canonical Copilot prompt suggestion chip HTML.
-
-    Renders a interactive prompt chip (`.k-chip .k-chip-btn .k-chip-copilot`) that populates the
-    Copilot query input and triggers grounded AI execution with citation annotations.
-    """
-    from html import escape
-
-    cite_attr = f' data-citation="{escape(citation, quote=True)}"' if citation else ""
-    return (
-        f'<button type="button" class="k-chip k-chip-btn k-chip-copilot"{cite_attr} '
-        f'onclick="populateCopilotPrompt(this)">{escape(prompt)}</button>'
-    )

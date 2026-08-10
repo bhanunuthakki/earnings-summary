@@ -63,7 +63,7 @@ def test_pack_grounds_in_live_book(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     pack = coach_pack.build_positioning_pack(tmp_path, tmp_path / "missing.db")
     ctx = pack.system_context or ""
     assert pack.narrative_purpose == "positioning_coach_turn"
-    assert pack.scope == "portfolio" and pack.persist is False
+    assert pack.scope == "portfolio"
     # Socratic posture + never-claims-saved rule are in the instructions.
     assert "PUSH BACK" in ctx
     assert "NEVER save anything" in ctx

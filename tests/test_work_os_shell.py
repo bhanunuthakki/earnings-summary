@@ -174,6 +174,20 @@ def test_legacy_search_ask_drawer_and_non_durable_runtime_are_removed() -> None:
     assert 'role="alert"' in html
 
 
+def test_prototype_template_has_no_dead_copilot_runtime_to_strip() -> None:
+    prototype = (
+        Path(__file__).resolve().parents[1]
+        / "mockups"
+        / "harvey_sidebar_flow.html"
+    ).read_text(encoding="utf-8")
+
+    assert "openDrillDrawer('ask-copilot')" not in prototype
+    assert "type === 'ask-copilot'" not in prototype
+    assert "populateCopilotPrompt" not in prototype
+    assert "executeCopilotQuery" not in prototype
+    assert prototype.count("openWorkOsCopilot()") == 2
+
+
 def test_company_drawers_and_full_brief_use_live_report_artifacts() -> None:
     html = render_work_os_shell()
     assert "workOsReportFrame" in html
@@ -218,6 +232,9 @@ def test_design_directive_records_the_simplification_boundary() -> None:
     assert "These eight destinations are the complete primary IA" in directive
     assert "Cockpit is the only inbox" in directive
     assert "No trade-execution surface" in directive
+    assert "Ask may create governed thesis and KPI proposal cards" in directive
+    assert "explicit Owner" in directive
+    assert "approval before the owning domain module applies it" in directive
     assert "Diet destination and general-purpose feed are retired" in directive
     assert "Discovery has no primary navigation" in directive
     assert "One responsive product" in directive

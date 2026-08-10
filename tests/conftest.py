@@ -364,17 +364,15 @@ def _no_real_chat_llm_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     (The ask engine's narrative route makes this reachable from plain
     endpoint tests — e.g. an unrecognized query falls through to narrative.)
     Tests that exercise these paths monkeypatch the seams themselves."""
-    import chat_session
+    from ask import narrative_transport
 
     def _blocked(*_a: object, **_k: object) -> object:
         raise AssertionError(
-            "real chat-LLM transport invoked in a test — monkeypatch "
-            "chat_session.stream_llm_text or "
-            "chat_session.build_chat_response.stream_response"
+            "real Ask narrative transport invoked in a test — monkeypatch "
+            "ask.narrative_transport.stream_llm_text"
         )
 
-    monkeypatch.setattr(chat_session, "stream_llm_text", _blocked)
-    monkeypatch.setattr(chat_session.build_chat_response, "stream_response", _blocked)
+    monkeypatch.setattr(narrative_transport, "stream_llm_text", _blocked)
 
 
 @pytest.fixture(autouse=True)

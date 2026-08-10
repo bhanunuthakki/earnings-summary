@@ -3,9 +3,9 @@ pulls the streamed conversational answer into the model-downgrade /
 Gemini-promotion loop, plus its budget migration (0104).
 
 The conftest autouse fixture (``_no_real_chat_llm_transport``) rebinds
-``chat_session.stream_llm_text`` to a blocker so stray tests can't spend. This
+``ask.narrative_transport.stream_llm_text`` to a blocker so stray tests can't spend. This
 module captures the REAL function at import time (before the fixture runs) via
-``from chat_session import stream_llm_text``, then drives it with a fake
+``from ask.narrative_transport import stream_llm_text``, then drives it with a fake
 subprocess / fake call_llm — no real spend, but the genuine resolution + budget
 + ledger logic runs.
 """
@@ -28,7 +28,7 @@ from alembic.config import Config
 import llm.cli as llm_cli
 import llm_call_ledger
 from alembic import command
-from chat_session import stream_llm_text as real_stream_llm_text
+from ask.narrative_transport import stream_llm_text as real_stream_llm_text
 from llm.cli import DEFAULT_MODEL, LLM_MODELS, LLMBudgetExceeded
 from llm_call_ledger import LlmCallRecord
 

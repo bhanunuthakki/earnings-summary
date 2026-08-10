@@ -24,7 +24,7 @@ For an interactive process without Tailscale Serve, start the server from the
 repository root:
 
 ```powershell
-python execution/comments_server.py --tailscale
+python execution/sqlite_bootstrap.py execution/comments_server.py --tailscale
 ```
 
 The server asks the local Tailscale client for its IPv4 address and binds only

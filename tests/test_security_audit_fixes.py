@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
-from pathlib import Path
-
 import pytest
 
-from chat_session import _chat_path
 from research.artifact import ArtifactFetchError, fetch_url_text, is_safe_url
 from server_runtime.access import is_allowed_origin
 from ui.cite_marks import linkify
@@ -21,11 +17,6 @@ def test_h1_ssrf_url_guard():
 
     with pytest.raises(ArtifactFetchError):
         fetch_url_text("http://127.0.0.1:8080/admin")
-
-
-def test_h2_chat_session_path_traversal(tmp_path: Path):
-    with pytest.raises(ValueError, match="invalid ticker"):
-        _chat_path(tmp_path, "..\\..\\etc\\passwd", date(2026, 8, 3))
 
 
 def test_m3_cors_null_origin():

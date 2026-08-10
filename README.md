@@ -76,7 +76,7 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 
 | Path | Purpose |
 |---|---|
-| `src/db.py`, `src/parser.py`, `src/intake.py`, `src/ir_uploads.py`, `src/comments.py`, `src/chat_session.py` | Core utilities — DB session, document parsing, _inbox intake, IR upload registry, comments/chat persistence |
+| `src/db.py`, `src/parser.py`, `src/intake.py`, `src/ir_uploads.py`, `src/comments.py`, `src/ask/` | Core utilities — DB session, document parsing, _inbox intake, IR upload registry, comments, and durable Ask sessions |
 | `src/llm/` | LLM wiring: `cli.py` (backend dispatch — model-first: the resolved model id picks the backend — over the Claude CLI subprocess wrapper), `anchors.py` (reusable thesis + bear-case context blocks), `gemini_backend.py` (consumer-subscription Gemini CLI — a second backend, model-first family dispatch), `model_ladder.py` (real-API-price cost ranking — the total order behind "cheaper"), `model_eval.py` + `model_overrides.py` (the cheapest-at-parity eval loop + DB-backed pin overrides), `fallback.py` (API-billed emergency path when a Claude call fails), `ledger.py` (call accounting). Gemini is now a **primary** backend for selected cheap-at-parity purposes — not merely a failure fallback. |
 | `src/report/` | Report generator. `builder.py` produces a typed `ReportSpec`; `models.py` defines the section schemas; `sections/` builds each section; `renderers/` emits HTML/Markdown/JSON/Excel + the workspace tabbed renderer + the chat/comments overlay |
 | `src/report/renderers/workspace_*.py` | The analyst workspace renderer — splits into `workspace_html.py` (tab layout), `workspace_styles.py`, `workspace_script.py`, `workspace_data.py` (data hand-off to JS), `workspace_charts.py`, `workspace_comments.py`, `workspace_chat.py` |
@@ -99,8 +99,8 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | `data/historical/fmp/` | FMP JSON cache (per ticker × endpoint) — gitignored, reproducible |
 | `data/sec/` | SEC XBRL cache |
 | `data/bear_case/`, `data/valuation_basis/`, `data/company_description/`, `data/qa_topics/` | LLM-output caches (SHA256-keyed; rebuilt on input change) |
-| `data/surprise/`, `data/report_comments/`, `data/report_chats/` | Surprise ledger + per-report comment/chat stores |
-| `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments. Migrations in `alembic/versions/` (run `alembic heads` for the current revision) |
+| `data/surprise/`, `data/report_comments/` | Surprise ledger + per-report comment stores |
+| `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments, durable Ask sessions/exchanges, and governed proposal decisions. Migrations in `alembic/versions/` (run `alembic heads` for the current revision) |
 | `cron/` | Canonical `task_manifest.json`, generated registration/inventory artifacts, and the 44 Windows Task Scheduler XML + `.bat` pairs |
 | `tests/` | Pytest suite — compute modules + pipeline contracts |
 | `evals/` | LLM eval harness — rubrics, goldens, weekly rung configs (see `directives/model_eval_loop.md`) |
@@ -177,7 +177,7 @@ Open `output/research/<TICKER>/<YYYY-MM-DD>_workspace.html` in any browser (doub
 
 **Inline commenting** lights up when the comments server is running (see §2). Until then, the report is read-only with no overlay.
 
-### 2. Comments + chat server (Flask, localhost:7421)
+### 2. Comments + Ask server (Flask, localhost:7421)
 
 Start it with `start_comments_server.bat` (or `python execution/sqlite_bootstrap.py execution/comments_server.py`). Endpoints under `localhost:7421`:
 
@@ -187,14 +187,16 @@ Start it with `start_comments_server.bat` (or `python execution/sqlite_bootstrap
 - `GET /comments?ticker=&report_date=` — List comments.
 - `PATCH /comments/<id>` — Update status / resolution / intent.
 - `DELETE /comments/<id>` — Hard delete.
-- `POST /chat/<ticker>` — Streaming chat (SSE): a Claude chat session backed by the unified ask engine (model chosen by the engine; Sonnet by default), loaded with thesis + bear case + valuation + company description context, plus read-only filesystem access to `data/`, `micro_thesis/`, `.tmp/`, `transcripts/`.
-- `POST /chat/<ticker>/apply` — Apply a chatbot-proposed diff to disk.
+- `POST /api/ask` and `POST /api/ask/stream` — Durable Ask turns, including governed fact/research artifacts and SSE progress.
+- `GET/PATCH/DELETE /api/ask/sessions[/<id>]` — List, load, rename, or delete SQLite-backed Ask history.
+- `GET /api/research/proposals/<id>` and `POST /api/research/proposals/<id>/decision` — Review an exact thesis/KPI diff and explicitly approve or reject it with revision and idempotency checks.
+- `/chat/<ticker>` and `/chat/<ticker>/apply` — Retired compatibility tombstones (`410`) that point to the unified Work OS Copilot.
 - `POST /actions/refresh` — Trigger an on-demand per-ticker refresh dispatcher (`stale` or `full` mode; SSE-streamed line-by-line).
 - `GET /healthz` — Health check.
 
-This is the comment + chat subset; the server also hosts the dashboard, Ask, discovery, viewspec, peek, and per-ticker/source/DCF pages — see the `@app.route` decorators in [execution/comments_server.py](execution/comments_server.py) (or [HOW_TO_USE_REPORTS.md §What's where](HOW_TO_USE_REPORTS.md)) for the full surface.
+This is the comment + Ask subset; the server also hosts the dashboard, discovery, viewspec, peek, and per-ticker/source/DCF pages — see the `@app.route` decorators in [execution/comments_server.py](execution/comments_server.py) (or [HOW_TO_USE_REPORTS.md §What's where](HOW_TO_USE_REPORTS.md)) for the full surface.
 
-Comments persist to `data/report_comments/<T>/<YYYY-MM-DD>.json`; chat threads to `data/report_chats/<T>/<YYYY-MM-DD>.json`. Posting / chat needs the server running; viewing existing comments + highlights works offline.
+Comments persist to `data/report_comments/<T>/<YYYY-MM-DD>.json`; Ask history persists in SQLite (`ask_sessions`, `ask_turns`, `ask_exchanges`, and typed exchange artifacts). Posting comments or using Ask needs the server running; viewing existing comments + highlights works offline.
 
 **Slash-keyword intents** (see [HOW_TO_USE_REPORTS.md §Slash-keywords](HOW_TO_USE_REPORTS.md#slash-keyword-shortcuts-fastest-path--skip-the-dropdown) for the full table):
 
@@ -571,4 +573,4 @@ Strict typing is enforced (`pyright` strict + `basedpyright` all). No `Any`, no 
 - `.env`, `credentials.json`, `token.json`, and any `*.pem` are gitignored and must never be logged or echoed.
 - API keys pass via environment variables only — never CLI args (they leak into shell history + process lists).
 - FMP fetchers route exception strings through [`src/log_redact.py`](src/log_redact.py) before logging, since `requests.HTTPError.__str__` embeds the full URL (with `apikey=...`). Every new integration that talks to a credentialed HTTP endpoint should import the same helper.
-- The chat server's filesystem access is read-only and scoped to `data/`, `micro_thesis/`, `.tmp/`, `transcripts/`. The chatbot can propose diffs but only writes to disk via the explicit `/chat/<ticker>/apply` endpoint after the analyst clicks Apply.
+- Ask discussion and evidence retrieval are read-only. A thesis or KPI change is stored as a governed proposal and can mutate canonical state only after the analyst reviews the exact diff and explicitly approves it through the revision-checked, idempotent proposal decision endpoint.

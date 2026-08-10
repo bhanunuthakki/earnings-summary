@@ -26,7 +26,7 @@ import db  # noqa: E402
 
 # A POST route that returns a clean 400 on an empty body — lets a test assert
 # "the guard let it through" (status != 403) without depending on handler internals.
-_POST_ROUTE = "/chat/NU/apply"
+_POST_ROUTE = "/api/ask"
 
 
 @pytest.fixture

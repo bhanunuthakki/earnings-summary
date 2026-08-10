@@ -1331,7 +1331,7 @@ def gather_evidence(
     ungrounded question exactly as before.
 
     ``cache_key`` opts this call into the per-thread retrieval memo (L14): when
-    set (a session id, or ``ticker:report_date``) and an identical retrieval —
+    set (a session id) and an identical retrieval —
     same thread, scope, normalized question, and DB mtime — recurs within the
     short memo TTL, the whole body is skipped, so the pack-router round-trip and
     every DB/file scan are avoided. ``None`` (the default) disables the memo, so
@@ -1362,8 +1362,8 @@ def gather_evidence(
         question_squashed = _squash(q)
 
         # Portfolio packs lead the numbering. Focus = the tickers the
-        # question literally names; a small scope (the report drawer's one
-        # ticker, an explicit ask-box universe) also focuses, while a wide
+        # question literally names; a small explicit ask-box universe also
+        # focuses, while a wide
         # scope (the whole portfolio) means portfolio-wide pack views. The
         # channel is isolated so a pack bug can never cost document evidence.
         raw: list[dict[str, object]] = []

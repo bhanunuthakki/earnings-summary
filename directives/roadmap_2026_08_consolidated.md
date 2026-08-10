@@ -59,7 +59,7 @@ the guard as part of these fixes.
 | # | Finding | Where | Fix intent |
 |---|---|---|---|
 | H1 | Unauthenticated SSRF: Telegram → artifact fetch (only fully-unauthenticated-remote hole — do first) | `src/research/artifact.py:150,212`, `src/capture/poller.py:513` | Route fetch through `ir_pipeline/_net`; sender/chat allowlist in `poll_once` |
-| H2 | Path-traversal write `/chat/<ticker>` (Windows `..%5C`) | `src/chat_session.py:65` | `safe_ticker` at helper + route, like DCF/comments routes |
+| H2 | Retired report-chat path traversal | legacy `/chat/<ticker>` surface | Resolved by removing JSON persistence and retaining typed 410 tombstones |
 | H3 | Stored XSS: comment `status`/`intent` bypass `Literal` enum → `innerHTML` | `src/comments.py:196`, PATCH route, `workspace_comments.py:443` | `validate_assignment=True`, validate PATCH body, escape fields |
 | H4 | Path-traversal write: EDGAR `accessionNumber` | `src/etf_sources/nport.py:369,385` | Validate accession shape (reuse `download.py` sanitizer) |
 | M1 | Gemini redaction gap: raw `str(exc)` | `src/llm/cli.py:1716`, `gemini_backend.py:355,361` | `redact()` one-liners |

@@ -2125,7 +2125,7 @@ ${r?'Expression: "'+r+`"
         }).catch(function (err) {
           actions.forEach(function (b) { if (b !== btn) b.disabled = false; });
           CCAction.release(btn);
-          if (statusEl) statusEl.textContent = 'Server unreachable — start comments_server.py.';
+          if (statusEl) statusEl.textContent = 'Server unreachable — run start_comments_server.bat.';
           console.warn(err);
         });
       });

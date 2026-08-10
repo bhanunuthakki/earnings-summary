@@ -20,7 +20,7 @@ This catalog is the front-end-to-backend contract for the company research mocku
 | `research.open_questions.chat` | **Open questions** card or question row → Chat starts a scoped tangent without converting it into an approved conclusion. | Ready now | Ask dock and `/api/ask/stream`. | Include `note_id` when available plus the question text, ticker, and card context. A chat response may suggest follow-up work but must not resolve or supersede the note. |
 | `research.open_questions.edit` | **Open questions** card or question row → Edit previews revised wording or routing. | Adapter needed | Journal routes expose `/api/notes/<note_id>/supersede`; `src/user_state/notes.py` owns `supersede_note`. | Render durable `note_id` and current revision on each question. Save as a superseding revision, not an in-place overwrite; show the diff and require Owner approval before the call. |
 | `research.catalysts.chat` | **Catalyst calendar** card → Chat prepares the event, expected evidence, and action rule. | Ready now | Ask dock and `/api/ask/stream`. | Pass event identity, date, linked decision condition, and ticker in the scoped prompt. Add a durable event ID later if calendar rows are hydrated from more than one source. |
-| `research.latest_brief.chat` | **Latest research artifact** card → Chat discusses the current brief in company context. | Ready now | Unified Ask endpoint plus the existing report route `POST /chat/<ticker>`; report changes already use an apply boundary. | Prefer the unified Ask dock for discussion. If a response proposes a report edit, route it into the existing diff/apply workflow rather than mutating the artifact from Chat. |
+| `research.latest_brief.chat` | **Latest research artifact** card → Chat discusses the current brief in company context. | Ready now | Unified Ask endpoint `/api/ask/stream` with the report/company context carried in the durable exchange. | Use the unified Ask workspace for discussion. If a response proposes a thesis or KPI change, render the exact diff and require explicit Owner approval through the governed proposal decision route. |
 | `research.capability_catalog.review` | **Interaction review** navigation item → opens an aggregate readiness view of all proposed research actions. | Ready now | Front-end-only catalog view backed by this document. | When hydrated, expose capability status, owner, last verification, blocked dependency, and target release from a small registry rather than duplicating labels in templates. |
 
 ## Shared action envelope
@@ -38,7 +38,7 @@ Every interactive research control should carry a stable `data-capability` and s
 }
 ```
 
-Chat is read-only and can open immediately. Edit is a proposed mutation: load the current revision, preview a diff, validate through the owning module, require Owner approval, then persist with an idempotency key and audit event. Stale revisions must fail closed and ask the user to refresh.
+Discussion is read-only and can open immediately. Ask may create a governed thesis or KPI proposal, but it remains pending until the exact current-to-proposed diff is reviewed and the Owner explicitly approves it. Edit follows the same proposed-mutation boundary: load the current revision, preview a diff, validate through the owning module, require Owner approval, then persist with an idempotency key and audit event. Stale revisions must fail closed and ask the user to refresh.
 
 ## Aggregate review queue
 

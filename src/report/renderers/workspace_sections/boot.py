@@ -29,7 +29,8 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
       render on first paint without a server fetch.
 
     No server connection required for read-only display (pins + side panel).
-    POSTing new comments + chat needs the server (`python execution/comments_server.py`)."""
+    POSTing new comments and opening Copilot needs the managed server
+    (`start_comments_server.bat`)."""
     import json as _json
 
     from comments import load_store, to_json_payload

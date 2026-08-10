@@ -296,7 +296,7 @@ def test_legacy_report_chat_routes_are_non_writing_migration_handoffs(
         payload = response.get_json()
         assert payload["schema_version"] == "chat_migrated.v1"
         assert payload["status"] == "migrated"
-        assert payload["replacement_url"] == "/#screen-copilot"
+        assert payload["replacement_url"] == "/?copilot=1&ticker=NU#screen-workspace"
         assert payload["ticker"] == "NU"
     assert not legacy_dir.exists()
     assert database.read_bytes() == before_database

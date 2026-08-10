@@ -2,7 +2,7 @@
 
 WHY THIS EXISTS — the architecture verification (close_the_loops L14, 2026-06-13).
 The conversational transport is a COLD ``claude -p`` subprocess (``src/llm/cli.py``
-+ ``chat_session.stream_llm_text``) that re-encodes the entire thread + evidence
++ ``ask.narrative_transport.stream_llm_text``) that re-encodes the entire thread + evidence
 into a fresh prompt every turn. We verified what caching that envelope supports:
 
   * There is NO CLI mechanism to inject Anthropic prompt-cache breakpoints
@@ -221,8 +221,8 @@ def gather_key(
     norm_question: str,
     db_token: SQLiteFileToken | int,
 ) -> tuple[object, ...]:
-    """The full-retrieval memo key. ``cache_key`` scopes it to one thread (a
-    session id, or ticker:report_date) so two conversations never share a memo;
+    """The full-retrieval memo key. ``cache_key`` scopes it to one session so
+    two conversations never share a memo;
     ``db_token`` is the DB mtime so any write busts every entry."""
     scope = tuple(sorted({t.strip().upper() for t in scope_tickers if t.strip()}))
     return (cache_key, str(repo_root), scope, norm_question, db_token)
