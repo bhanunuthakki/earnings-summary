@@ -112,9 +112,7 @@ def fetch_russell2000() -> list[tuple[str, str]]:
     return out
 
 
-def _existing_tickers_by_list_type(
-    conn: sqlite3.Connection, user_id: str
-) -> dict[str, str]:
+def _existing_tickers_by_list_type(conn: sqlite3.Connection, user_id: str) -> dict[str, str]:
     """Map ticker -> list_type for one owner's tracked-company rows."""
     cur = conn.cursor()
     cur.execute(
