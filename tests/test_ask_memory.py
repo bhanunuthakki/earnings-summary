@@ -262,9 +262,7 @@ class TestEngineSessionPersistence:
     def test_first_turn_creates_user_and_asst_rows(
         self, monkeypatch: pytest.MonkeyPatch, full_db: Path, tmp_path: Path
     ) -> None:
-        monkeypatch.setattr(
-            narrative_transport, "stream_llm_text", _make_fake_stream("answer1")
-        )
+        monkeypatch.setattr(narrative_transport, "stream_llm_text", _make_fake_stream("answer1"))
         monkeypatch.setattr(ask_engine, "gather_evidence", _no_evidence)
         monkeypatch.setattr(ask_engine, "build_evidence_block", _empty_evidence_block)
 
@@ -345,9 +343,7 @@ class TestEngineSessionPersistence:
         self, monkeypatch: pytest.MonkeyPatch, full_db: Path, tmp_path: Path
     ) -> None:
         """fold_events output from a session-backed turn still has status/kind/text."""
-        monkeypatch.setattr(
-            narrative_transport, "stream_llm_text", _make_fake_stream("the answer")
-        )
+        monkeypatch.setattr(narrative_transport, "stream_llm_text", _make_fake_stream("the answer"))
         monkeypatch.setattr(ask_engine, "gather_evidence", _no_evidence)
         monkeypatch.setattr(ask_engine, "build_evidence_block", _empty_evidence_block)
 

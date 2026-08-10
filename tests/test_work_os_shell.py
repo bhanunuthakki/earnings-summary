@@ -176,9 +176,7 @@ def test_legacy_search_ask_drawer_and_non_durable_runtime_are_removed() -> None:
 
 def test_prototype_template_has_no_dead_copilot_runtime_to_strip() -> None:
     prototype = (
-        Path(__file__).resolve().parents[1]
-        / "mockups"
-        / "harvey_sidebar_flow.html"
+        Path(__file__).resolve().parents[1] / "mockups" / "harvey_sidebar_flow.html"
     ).read_text(encoding="utf-8")
 
     assert "openDrillDrawer('ask-copilot')" not in prototype

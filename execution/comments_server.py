@@ -5001,9 +5001,7 @@ def create_app(
             "status": "migrated",
             "ticker": ticker.strip().upper(),
             "message": "Report chat moved to Copilot Ask; no legacy history was imported.",
-            "replacement_url": (
-                f"/?copilot=1&ticker={ticker.strip().upper()}#screen-workspace"
-            ),
+            "replacement_url": (f"/?copilot=1&ticker={ticker.strip().upper()}#screen-workspace"),
         }
 
     @app.route("/chat/<ticker>", methods=["OPTIONS"])
@@ -5019,11 +5017,6 @@ def create_app(
     def chat_endpoint(ticker: str):
         return (_legacy_chat_migrated(ticker), 410)
 
-        # The unified ask engine with this report's TICKER context pack
-        # ("one brain, two entry points" — same engine as /api/ask).
-        # Deterministic commands reply instantly, metric questions render
-        # live view fragments, everything else streams from the narrative
-        # LLM with the report context + persisted thread.
     # ----- APPLY (Phase 4) -----
 
     @app.route("/chat/<ticker>/apply", methods=["OPTIONS"])
