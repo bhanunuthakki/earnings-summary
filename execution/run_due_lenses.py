@@ -10,13 +10,11 @@ Per-tier lens scope (the fresh-review memo's tier matrix):
 
     P1 (portfolio)            → all ticker-scoped lenses + portfolio lens
     P2 (watchlist+evaluation) → five_min_reread + thesis_drift_qoq
-    P3 (index_member, etc.)   → five_min_reread
+    P3 (index_member, etc.)   → no scheduled LLM lenses
 
-Cadence → tier matrix (which tiers actually fire on this tick):
-
-    daily   P1 always; P2/P3 catch-up only if drifted past their cadence
-    weekly  P1 weekly lens regen; P2 monthly catch-up; P3 quarterly catch-up
-    monthly P1 monthly; P2 quarterly; P3 annual
+Cadence selects exactly one tier: daily → P1, weekly → P2, monthly → P3.
+The monthly P3 plan is intentionally empty because screened/catalog names do
+not receive scheduled LLM work.
 
 The script is idempotent: `run_lens` dedups via the artifact-store
 cache_inputs hash, so a re-run on identical inputs is free. `--dry-run`
@@ -37,8 +35,10 @@ import json
 import logging
 import sqlite3
 import sys
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -54,6 +54,8 @@ def _sync_db_path(repo_root: Path) -> None:
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
 
 
+from llm.cli import is_hard_stop  # noqa: E402
+from log_redact import redact  # noqa: E402
 from pipeline.tier_runner import tickers_due_for_lens_regen  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from synthesis_lenses import (  # noqa: E402
@@ -75,8 +77,11 @@ Cadence = Literal["daily", "weekly", "monthly"]
 _LENS_SET_BY_TIER: dict[str, list[str]] = {
     "P1": [],  # populated at runtime from list_lenses_for_ticker()
     "P2": ["five_min_reread", "thesis_drift_qoq"],
-    "P3": ["five_min_reread"],
+    "P3": [],
 }
+
+_PROTECTED_TIME_ZONE = ZoneInfo("America/Los_Angeles")
+_DEFERRED_EXIT = 75
 
 
 def _tier_lens_set(tier: str) -> list[str]:
@@ -100,6 +105,17 @@ def main() -> int:
     plan = _build_plan(repo_root, cadence)
 
     log.info({"event": "plan_built", "cadence": cadence, "n_runs": len(plan)})
+
+    if args.max_plan_pairs > 0 and len(plan) > args.max_plan_pairs:
+        log.error(
+            {
+                "event": "plan_too_large",
+                "cadence": cadence,
+                "n_runs": len(plan),
+                "max_plan_pairs": args.max_plan_pairs,
+            }
+        )
+        return 2
 
     if args.dry_run:
         # Compact dry-run output: counts per tier + first ~25 pairs as preview
@@ -125,21 +141,67 @@ def main() -> int:
     if args.limit > 0:
         plan = plan[: args.limit]
 
+    stop_deadline = None
+    if args.stop_before_local:
+        if not args.window_opens_local:
+            raise ValueError("--stop-before-local requires --window-opens-local")
+        stop_deadline = _scheduled_window_deadline(
+            datetime.now(_PROTECTED_TIME_ZONE),
+            opens_at=args.window_opens_local,
+            stops_at=args.stop_before_local,
+        )
     n_fresh = 0
     n_cache_hits = 0
     n_skipped = 0
-    for tier, ticker, lens_name in plan:
+    n_deferred = 0
+    n_deferred_transient = 0
+    for pair_index, (tier, ticker, lens_name) in enumerate(plan):
+        if stop_deadline is not None and datetime.now(_PROTECTED_TIME_ZONE) >= stop_deadline:
+            n_deferred = len(plan) - pair_index
+            log.warning(
+                {
+                    "event": "quota_window_deferred",
+                    "cadence": cadence,
+                    "deferred": n_deferred,
+                    "stop_before_local": args.stop_before_local,
+                }
+            )
+            break
         lens = LENSES.get(lens_name)
         if lens is None:
             log.warning({"event": "lens_not_found", "lens": lens_name})
             n_skipped += 1
             continue
-        result = run_lens(
-            lens,
-            ticker=ticker if lens.scope == "ticker" else None,
-            repo_root=repo_root,
-            force=False,
-        )
+        try:
+            result = run_lens(
+                lens,
+                ticker=ticker if lens.scope == "ticker" else None,
+                repo_root=repo_root,
+                force=False,
+            )
+        except Exception as exc:
+            if is_hard_stop(exc):
+                log.error(
+                    {
+                        "event": "lens_hard_stop",
+                        "tier": tier,
+                        "ticker": ticker,
+                        "lens": lens_name,
+                        "error": redact(f"{type(exc).__name__}: {exc}"),
+                    }
+                )
+                return 2
+            n_deferred_transient += 1
+            log.warning(
+                {
+                    "event": "lens_deferred_transient",
+                    "tier": tier,
+                    "ticker": ticker,
+                    "lens": lens_name,
+                    "error": redact(f"{type(exc).__name__}: {exc}"),
+                }
+            )
+            continue
         if result is None:
             n_skipped += 1
             log.info(
@@ -172,12 +234,14 @@ def main() -> int:
                 "total_pairs": len(plan),
                 "produced": n_fresh,
                 "skipped": n_skipped,
+                "deferred": n_deferred,
+                "deferred_transient": n_deferred_transient,
                 "cache_hits_subset_of_produced": n_cache_hits,
             },
             indent=2,
         )
     )
-    return 0
+    return _DEFERRED_EXIT if n_deferred or n_deferred_transient else 0
 
 
 def _build_plan(repo_root: Path, cadence: Cadence) -> list[tuple[str, str, str]]:
@@ -204,30 +268,48 @@ def _build_plan(repo_root: Path, cadence: Cadence) -> list[tuple[str, str, str]]
                 ).fetchall()
                 tier_by_ticker = {r["ticker"]: (r["processing_tier"] or "P3").upper() for r in rows}
 
+    target_tier = {"daily": "P1", "weekly": "P2", "monthly": "P3"}[cadence]
     plan: list[tuple[str, str, str]] = []
-    # Collect unique lens slugs across tiers (P1 = full set; P2/P3 are subsets).
-    seen_lenses: set[str] = set()
-    for tier in ("P1", "P2", "P3"):
-        for lens_name in _tier_lens_set(tier):
-            seen_lenses.add(lens_name)
-
-    for lens_name in sorted(seen_lenses):
+    for lens_name in sorted(_tier_lens_set(target_tier)):
         due = set(tickers_due_for_lens_regen(repo_root, lens_name, cadence))
         for ticker in sorted(due):
             tier = tier_by_ticker.get(ticker.upper(), "P3")
-            applicable_lenses = _tier_lens_set(tier)
-            if lens_name not in applicable_lenses:
+            if tier != target_tier:
                 continue
             plan.append((tier, ticker.upper(), lens_name))
 
     # Portfolio-scoped lens — only P1 cadence applies and only on the daily +
     # weekly ticks. Treat the portfolio lens as having a single sentinel
     # "ticker" for plan-tracking purposes.
-    if cadence in ("daily", "weekly") and _portfolio_synthesis_is_due(repo_root, cadence):
+    if target_tier == "P1" and _portfolio_synthesis_is_due(repo_root, cadence):
         for portfolio_lens in list_portfolio_lenses():
             plan.append(("P1", "__PORTFOLIO__", portfolio_lens))
 
     return plan
+
+
+def _scheduled_window_deadline(datetime_now: datetime, *, opens_at: str, stops_at: str) -> datetime:
+    """Return this cross-midnight window's stop, or now when outside it."""
+    opens = time.fromisoformat(opens_at)
+    stops = time.fromisoformat(stops_at)
+    if opens <= stops:
+        raise ValueError("scheduled quota window must cross midnight")
+    current = datetime_now.timetz().replace(tzinfo=None)
+    if current >= opens:
+        stop_day = datetime_now.date() + timedelta(days=1)
+    elif current < stops:
+        stop_day = datetime_now.date()
+    else:
+        return datetime_now
+    return datetime_now.replace(
+        year=stop_day.year,
+        month=stop_day.month,
+        day=stop_day.day,
+        hour=stops.hour,
+        minute=stops.minute,
+        second=stops.second,
+        microsecond=0,
+    )
 
 
 def _portfolio_synthesis_is_due(repo_root: Path, cadence: Cadence) -> bool:
@@ -300,6 +382,22 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="If > 0, cap the number of (ticker, lens) pairs run this cadence tick.",
+    )
+    p.add_argument(
+        "--max-plan-pairs",
+        type=int,
+        default=0,
+        help="Fail closed before dispatch when the full plan exceeds this size (0 = disabled).",
+    )
+    p.add_argument(
+        "--stop-before-local",
+        default="",
+        help="Defer remaining pairs before this America/Los_Angeles HH:MM boundary.",
+    )
+    p.add_argument(
+        "--window-opens-local",
+        default="",
+        help="Only dispatch inside the cross-midnight window beginning at this local HH:MM.",
     )
     p.add_argument(
         "--repo-root",
