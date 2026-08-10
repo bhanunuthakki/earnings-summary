@@ -135,10 +135,10 @@ def recent_fiscal_quarters(fye_month: int, today: date, n: int) -> list[tuple[in
 class TickerBackfillResult:
     ticker: str
     fye_month: int
-    fetched: list[str] = field(default_factory=list)
-    skipped_existing: list[str] = field(default_factory=list)
-    aggregator_misses: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
+    fetched: list[str] = field(default_factory=list[str])
+    skipped_existing: list[str] = field(default_factory=list[str])
+    aggregator_misses: list[str] = field(default_factory=list[str])
+    errors: list[str] = field(default_factory=list[str])
 
 
 def _qlabel(year: int, quarter: int) -> str:
@@ -312,6 +312,20 @@ def _ticker_has_transcripts(ticker: str) -> bool:
         conn.close()
 
 
+def _newly_ingested_tickers(
+    results: list[TickerBackfillResult], ingest_rc: int | None
+) -> list[str]:
+    """Return tickers whose newly fetched transcripts were ingested successfully.
+
+    The daily backfill is an acquisition job, not an all-universe commitment
+    rebuild.  Restricting the LLM phase to this run's new inputs keeps the job
+    bounded and prevents overlap with the 02:15 scan and 03:00 protected window.
+    """
+    if ingest_rc != 0:
+        return []
+    return [result.ticker for result in results if result.fetched]
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -400,10 +414,12 @@ def main() -> int:
     else:
         print("[backfill_transcripts] no new fetches; skipping ingest", file=sys.stderr)
 
-    # Extract commitments only for tickers that now have transcripts.
+    # Extract commitments only for tickers whose transcripts were newly fetched
+    # and successfully ingested during this invocation. Existing transcripts are
+    # handled idempotently when first acquired, not rescanned every morning.
     extract_results: list[dict[str, object]] = []
     if not args.skip_extract and not args.dry_run:
-        for ticker, _ in tickers:
+        for ticker in _newly_ingested_tickers(per_ticker, ingest_rc):
             if not _ticker_has_transcripts(ticker):
                 continue
             print(f"[backfill_transcripts] extracting commitments for {ticker}", file=sys.stderr)

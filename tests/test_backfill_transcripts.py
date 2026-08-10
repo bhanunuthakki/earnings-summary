@@ -105,3 +105,26 @@ def test_run_extract_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(mod.subprocess, "run", boom)
     assert mod._run_extract(Path("/nonexistent"), "AAPL", dry_run=True) == 0
+
+
+def test_commitment_extraction_is_limited_to_newly_ingested_tickers() -> None:
+    mod = _load_module()
+    results = [
+        mod.TickerBackfillResult("AAPL", 9, fetched=["Q2_2026"]),
+        mod.TickerBackfillResult("MSFT", 6, skipped_existing=["Q2_2026"]),
+        mod.TickerBackfillResult("NVDA", 1, aggregator_misses=["Q2_2026"]),
+    ]
+
+    assert mod._newly_ingested_tickers(results, ingest_rc=0) == ["AAPL"]
+    assert mod._newly_ingested_tickers(results, ingest_rc=None) == []
+    assert mod._newly_ingested_tickers(results, ingest_rc=1) == []
+
+
+def test_no_new_fetches_produce_no_commitment_extraction_scope() -> None:
+    mod = _load_module()
+    results = [
+        mod.TickerBackfillResult("AAPL", 9, skipped_existing=["Q2_2026"]),
+        mod.TickerBackfillResult("MSFT", 6, aggregator_misses=["Q2_2026"]),
+    ]
+
+    assert mod._newly_ingested_tickers(results, ingest_rc=None) == []
