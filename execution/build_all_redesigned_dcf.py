@@ -46,17 +46,9 @@ from runtime.python_process import managed_python_prefix  # noqa: E402
 
 def default_tickers(repo: Path = REPO) -> list[str]:
     """The maintained DCF universe: every briefed-list ticker (portfolio +
-    evaluation) from the DB, unioned with any existing ``dcf/<T>.xlsx`` workbook
-    (minus helper/sample files). Pulling the briefed lists — not just the names
-    that already have a workbook — makes evaluation-list names first-class: they
-    get built even before their first workbook exists."""
-    out: set[str] = set(dcf_universe(repo))
-    for p in sorted((repo / "dcf").glob("*.xlsx")):
-        name = p.stem
-        if name.startswith("_") or name.endswith("_redesign"):
-            continue
-        out.add(name)
-    return sorted(out)
+    evaluation) from active DB membership only. An existing workbook is an output,
+    never membership authority, so stale files cannot resurrect archived names."""
+    return dcf_universe(repo)
 
 
 def _run(script: str, ticker: str, dest: Path | None = None) -> tuple[str, str, int]:

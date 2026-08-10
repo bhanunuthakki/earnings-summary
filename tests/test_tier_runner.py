@@ -219,8 +219,8 @@ def test_archived_excluded(repo_root: Path, now: datetime) -> None:
     assert "OLDIE" not in tickers_due_for_refresh(repo_root, "daily", now=now)
 
 
-def test_weekly_cadence_p2_threshold_30d(repo_root: Path, now: datetime) -> None:
-    """Weekly cron tick: P2 threshold is 30d (monthly catch-up), not 7d."""
+def test_weekly_cadence_p2_threshold_7d(repo_root: Path, now: datetime) -> None:
+    """Weekly cron tick: P2 is due after its seven-day service interval."""
     fifteen_days = (now - timedelta(days=15)).isoformat(timespec="seconds")
     _seed_ticker(
         repo_root / "data" / "portfolio.db",
@@ -229,7 +229,7 @@ def test_weekly_cadence_p2_threshold_30d(repo_root: Path, now: datetime) -> None
         last_built_at=fifteen_days,
     )
     # Within 30d → skipped on weekly cadence (even though 15d > daily's 7d).
-    assert "ABNB" not in tickers_due_for_refresh(repo_root, "weekly", now=now)
+    assert "ABNB" in tickers_due_for_refresh(repo_root, "weekly", now=now)
 
 
 def test_weekly_cadence_p1_threshold_7d(repo_root: Path, now: datetime) -> None:
@@ -243,8 +243,8 @@ def test_weekly_cadence_p1_threshold_7d(repo_root: Path, now: datetime) -> None:
     assert "META" in due
 
 
-def test_monthly_cadence_p3_threshold_365d(repo_root: Path, now: datetime) -> None:
-    """Monthly cron: P3 threshold 365d. A 100-day-old P3 is NOT due."""
+def test_monthly_cadence_p3_threshold_30d(repo_root: Path, now: datetime) -> None:
+    """Monthly cron: P3 is due after its thirty-day service interval."""
     hundred_days = (now - timedelta(days=100)).isoformat(timespec="seconds")
     _seed_ticker(
         repo_root / "data" / "portfolio.db",
@@ -252,7 +252,7 @@ def test_monthly_cadence_p3_threshold_365d(repo_root: Path, now: datetime) -> No
         "P3",
         last_built_at=hundred_days,
     )
-    assert "MSFT" not in tickers_due_for_refresh(repo_root, "monthly", now=now)
+    assert "MSFT" in tickers_due_for_refresh(repo_root, "monthly", now=now)
 
 
 # --- tickers_due_for_lens_regen: joins llm_artifacts -------------------------
@@ -285,6 +285,30 @@ def test_lens_regen_skipped_when_recent(repo_root: Path, now: datetime) -> None:
     )
     due = tickers_due_for_lens_regen(repo_root, "five_min_reread", "weekly", now=now)
     assert "ABNB" not in due
+
+
+def test_p2_due_on_weekly_after_seven_days(repo_root: Path, now: datetime) -> None:
+    eight_days = (now - timedelta(days=8)).isoformat(timespec="seconds")
+    _seed_ticker(
+        repo_root / "data" / "portfolio.db",
+        "ABNB",
+        "P2",
+        last_built_at=eight_days,
+        list_type="evaluation",
+    )
+    assert "ABNB" in tickers_due_for_refresh(repo_root, "weekly", now=now)
+
+
+def test_p3_due_on_monthly_after_thirty_days(repo_root: Path, now: datetime) -> None:
+    thirty_one_days = (now - timedelta(days=31)).isoformat(timespec="seconds")
+    _seed_ticker(
+        repo_root / "data" / "portfolio.db",
+        "SPY",
+        "P3",
+        last_built_at=thirty_one_days,
+        list_type="index_member",
+    )
+    assert "SPY" in tickers_due_for_refresh(repo_root, "monthly", now=now)
 
 
 def test_lens_regen_ignores_superseded(repo_root: Path, now: datetime) -> None:

@@ -33,6 +33,8 @@ CREATE TABLE tracked_companies (
     user_id TEXT NOT NULL,
     ticker TEXT NOT NULL,
     list_type TEXT NOT NULL,
+    processing_tier TEXT,
+    brief_dirty BOOLEAN DEFAULT 0,
     archived_at TEXT
 );
 CREATE TABLE llm_artifacts (

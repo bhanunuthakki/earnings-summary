@@ -294,6 +294,29 @@ def test_resolve_tickers_skips_archived_p1(repo_root: Path) -> None:
     assert tickers == []
 
 
+def test_resolve_tickers_excludes_dirty_watchlist(repo_root: Path) -> None:
+    _seed(repo_root, "WATCH", "watchlist", brief_dirty=1, processing_tier="P2")
+    conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        assert _resolve_tickers(conn, _queue_args()) == []
+    finally:
+        conn.close()
+
+
+def test_all_tracked_means_active_briefed_roles(repo_root: Path) -> None:
+    _seed(repo_root, "PORT", "portfolio")
+    _seed(repo_root, "EVAL", "evaluation")
+    _seed(repo_root, "WATCH", "watchlist")
+    args = argparse.Namespace(ticker=None, all_tracked=True, limit=0)
+    conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        assert _resolve_tickers(conn, args) == ["EVAL", "PORT"]
+    finally:
+        conn.close()
+
+
 def test_resolve_tickers_dirty_only_without_tier_column(tmp_path: Path) -> None:
     """Pre-0054 schema (no processing_tier column) falls back to dirty-only."""
     db_path = tmp_path / "data" / "portfolio.db"

@@ -71,8 +71,7 @@ def _candidate_id(db_path: Path, user_id: str, ticker: str) -> int | None:
 
 
 def _promote_to_evaluation(db_path: Path, user_id: str, ticker: str) -> bool:
-    """index_member/none → evaluation (P2 tier). Already-active names pass
-    through untouched — building an existing watchlist name is fine."""
+    """Restore and enter evaluation/P2, except an existing portfolio stays P1."""
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         row = conn.execute(
@@ -81,10 +80,17 @@ def _promote_to_evaluation(db_path: Path, user_id: str, ticker: str) -> bool:
         ).fetchone()
         if row is None:
             return False
-        if str(row[0]) in ("portfolio", "watchlist", "evaluation"):
+        if str(row[0]) == "portfolio":
+            conn.execute(
+                "UPDATE tracked_companies SET archived_at = NULL, processing_tier = 'P1', "
+                "brief_dirty = 1 WHERE user_id = ? AND ticker = ?",
+                (user_id, ticker),
+            )
+            conn.commit()
             return True
         conn.execute(
-            "UPDATE tracked_companies SET list_type = 'evaluation', processing_tier = 'P2' "
+            "UPDATE tracked_companies SET list_type = 'evaluation', processing_tier = 'P2', "
+            "brief_dirty = 1, archived_at = NULL "
             "WHERE user_id = ? AND ticker = ?",
             (user_id, ticker),
         )

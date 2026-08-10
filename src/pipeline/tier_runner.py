@@ -31,11 +31,11 @@ Cadence rule (per tier, applied uniformly to either refresh or lens regen):
                         P2: due if last_event > 7d ago
                         P3: due if last_event > 30d ago
     cadence='weekly'    P1: due if last_event > 7d ago
-                        P2: due if last_event > 30d ago     (monthly)
+                        P2: due if last_event > 7d ago
                         P3: due if last_event > 90d ago     (quarterly)
     cadence='monthly'   P1: due if last_event > 30d ago
                         P2: due if last_event > 90d ago
-                        P3: due if last_event > 365d ago
+                        P3: due if last_event > 30d ago
 
 "daily / weekly / monthly" here names *which cron tick* is calling. The
 function returns the universe of tickers that SHOULD be touched by that
@@ -60,8 +60,8 @@ Cadence = Literal["daily", "weekly", "monthly"]
 # (P1 + daily cron — no last_built_at age check).
 _DUE_THRESHOLDS_DAYS: dict[Cadence, dict[str, int | None]] = {
     "daily": {"P1": None, "P2": 7, "P3": 30},
-    "weekly": {"P1": 7, "P2": 30, "P3": 90},
-    "monthly": {"P1": 30, "P2": 90, "P3": 365},
+    "weekly": {"P1": 7, "P2": 7, "P3": 30},
+    "monthly": {"P1": 30, "P2": 30, "P3": 30},
 }
 
 

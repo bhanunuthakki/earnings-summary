@@ -1083,13 +1083,14 @@ def act_on_card(
         now = datetime.now(UTC).replace(tzinfo=None).isoformat()
         if verb == "pass":
             conn.execute(
-                "UPDATE tracked_companies SET archived_at = ? "
+                "UPDATE tracked_companies SET archived_at = ?, brief_dirty = 0 "
                 "WHERE user_id = ? AND UPPER(ticker) = ? AND archived_at IS NULL",
                 (now, DEFAULT_USER_ID, ticker),
             )
         elif verb == "watch":
             conn.execute(
-                "UPDATE tracked_companies SET list_type = ? "
+                "UPDATE tracked_companies SET list_type = ?, processing_tier = 'P2', "
+                "brief_dirty = 0 "
                 "WHERE user_id = ? AND UPPER(ticker) = ? AND archived_at IS NULL",
                 (ListType.WATCHLIST.value, DEFAULT_USER_ID, ticker),
             )

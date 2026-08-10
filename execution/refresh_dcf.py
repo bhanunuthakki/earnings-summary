@@ -257,8 +257,7 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument(
         "--all-named",
         action="store_true",
-        help="Refresh every DCF-maintained name: portfolio + evaluation tracked "
-        "companies (plus any legacy holdings JSON carrying a `wacc`)",
+        help="Refresh every active DCF-maintained name: portfolio + evaluation",
     )
     p.add_argument(
         "--repo-root",
@@ -291,29 +290,11 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
 
 def dcf_maintained_universe(repo_root: Path) -> list[str]:
     """The names a DCF is maintained for (what ``--all-named`` resolves to): every
-    briefed-list ticker (portfolio + evaluation) from the DB, unioned with any
-    legacy holdings JSON that still carries a hand-seeded ``wacc``. The redesigned
-    builder computes its own WACC, so evaluation-list names qualify without a
-    seeded ``wacc`` — first-class alongside portfolio names. Non-applicable
+    active briefed-list ticker (portfolio + evaluation) from the DB. Files and
+    legacy WACC seeds are inputs, never membership authority. Non-applicable
     financials self-skip in ``refresh_one``.
     """
-    names = set(universe_mod.dcf_universe(repo_root))
-    names.update(_named_holdings_with_wacc(repo_root))
-    return sorted(names)
-
-
-def _named_holdings_with_wacc(repo_root: Path) -> list[str]:
-    """Return tickers whose holdings JSON has a non-null `wacc` (seeded names)."""
-    out: list[str] = []
-    holdings_dir = repo_root / "micro_thesis" / "holdings"
-    for path in sorted(holdings_dir.glob("*.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(data.get("wacc"), (int, float)):
-            out.append(path.stem.upper())
-    return out
+    return universe_mod.dcf_universe(repo_root)
 
 
 def refresh_one(
