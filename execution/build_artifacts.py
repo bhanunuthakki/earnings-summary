@@ -492,9 +492,7 @@ def _build_one(
             report_conn.close()
 
     report_body = render_report_body(spec)
-    workspace_html_path.write_text(
-        render_standalone_report(spec, report_body), encoding="utf-8"
-    )
+    workspace_html_path.write_text(render_standalone_report(spec, report_body), encoding="utf-8")
     _emit(
         "wrote_workspace_html",
         {"ticker": ticker, "path": str(workspace_html_path)},

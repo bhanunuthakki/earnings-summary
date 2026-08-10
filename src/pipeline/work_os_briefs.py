@@ -59,13 +59,9 @@ def _item(repo_root: Path, artifact: ReportArtifactRef) -> BriefLibraryItem:
         reader_mode=artifact.reader_mode,
         status=status,
         body_url=(
-            f"/api/work-os/briefs/{artifact.artifact_id}/body"
-            if status == "available"
-            else None
+            f"/api/work-os/briefs/{artifact.artifact_id}/body" if status == "available" else None
         ),
-        standalone_url=(
-            f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}"
-        ),
+        standalone_url=(f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}"),
         section_count=len(artifact.section_ids),
     )
 

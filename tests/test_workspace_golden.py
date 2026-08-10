@@ -1827,9 +1827,7 @@ def test_standalone_workspace_wraps_the_shared_report_body(tmp_path: Path) -> No
 
     assert body.body_html in document
     assert body.body_sha256 == hashlib.sha256(body.body_html.encode("utf-8")).hexdigest()
-    assert body.artifact_id.startswith(
-        f"report_{spec.ticker}_{spec.generation_date.isoformat()}_"
-    )
+    assert body.artifact_id.startswith(f"report_{spec.ticker}_{spec.generation_date.isoformat()}_")
     assert {section.section_id for section in body.sections} >= {
         "company",
         "financials",

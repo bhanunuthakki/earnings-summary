@@ -174,9 +174,7 @@ def load_report_artifact_index(repo_root: Path) -> ReportArtifactIndex:
     """Read the compact index and exclude entries whose deliverable is gone."""
 
     index = _read_index(repo_root)
-    existing = tuple(
-        item for item in index.items if (repo_root / item.standalone_path).is_file()
-    )
+    existing = tuple(item for item in index.items if (repo_root / item.standalone_path).is_file())
     return ReportArtifactIndex(generated_at=index.generated_at, items=existing)
 
 
@@ -209,21 +207,12 @@ def persist_report_artifact(
 
     if not standalone_path.is_file():
         raise FileNotFoundError(standalone_path)
-    artifact_dir = (
-        repo_root
-        / "output"
-        / "research"
-        / body.ticker
-        / "artifacts"
-        / body.artifact_id
-    )
+    artifact_dir = repo_root / "output" / "research" / body.ticker / "artifacts" / body.artifact_id
     standalone_snapshot_path = artifact_dir / "standalone.html"
     body_path = artifact_dir / "body.html"
     manifest_path = artifact_dir / "manifest.json"
     if manifest_path.is_file():
-        existing = ReportArtifactRef.model_validate_json(
-            manifest_path.read_text(encoding="utf-8")
-        )
+        existing = ReportArtifactRef.model_validate_json(manifest_path.read_text(encoding="utf-8"))
         existing_body = repo_root / (existing.body_path or "")
         existing_standalone = repo_root / existing.standalone_path
         if not existing_body.is_file() or not existing_standalone.is_file():
@@ -236,9 +225,7 @@ def persist_report_artifact(
         ):
             raise ValueError("persisted standalone report checksum mismatch")
         prior = _read_index(repo_root)
-        retained = tuple(
-            item for item in prior.items if item.artifact_id != existing.artifact_id
-        )
+        retained = tuple(item for item in prior.items if item.artifact_id != existing.artifact_id)
         _write_index(repo_root, (existing, *retained))
         return existing
     _atomic_write_text(

@@ -490,10 +490,14 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
 
     @app.route("/api/tickers", methods=["GET"])
     def tickers_api():
-        rows = context.get_read_db().execute(
-            "SELECT ticker, name, list_type FROM tracked_companies "
-            "WHERE archived_at IS NULL ORDER BY list_type, ticker"
-        ).fetchall()
+        rows = (
+            context.get_read_db()
+            .execute(
+                "SELECT ticker, name, list_type FROM tracked_companies "
+                "WHERE archived_at IS NULL ORDER BY list_type, ticker"
+            )
+            .fetchall()
+        )
         return {
             "tickers": [
                 {

@@ -130,12 +130,12 @@ _PIPELINE_SIMULATION_RE = re.compile(
 )
 _COMPANY_DESK_SECTION_RE = re.compile(
     r'<section id="screen-workspace".*?</section>\s*'
-    r'(?=<!-- =+\s*BRIEF LIBRARY PERSISTENT DESTINATION)',
+    r"(?=<!-- =+\s*BRIEF LIBRARY PERSISTENT DESTINATION)",
     re.DOTALL,
 )
 _BRIEF_LIBRARY_SECTION_RE = re.compile(
     r'<section id="screen-brief-library".*?</section>\s*'
-    r'(?=<!-- =+\s*SURFACE: EXTRACTED FACT & METRIC)',
+    r"(?=<!-- =+\s*SURFACE: EXTRACTED FACT & METRIC)",
     re.DOTALL,
 )
 

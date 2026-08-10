@@ -49,11 +49,7 @@ def _persist_shared_brief(repo_root: Path, ticker: str = "NU") -> RenderedReport
         interaction_manifest=ReportInteractionManifest(),
     )
     workspace = (
-        repo_root
-        / "output"
-        / "research"
-        / ticker
-        / f"{report_date.isoformat()}_workspace.html"
+        repo_root / "output" / "research" / ticker / f"{report_date.isoformat()}_workspace.html"
     )
     workspace.parent.mkdir(parents=True, exist_ok=True)
     workspace.write_text(f"<html>{body.body_html}</html>", encoding="utf-8")
@@ -116,9 +112,7 @@ def test_report_body_route_serves_complete_persisted_fragment(
 def test_legacy_brief_returns_structured_standalone_fallback(
     work_os_client: FlaskClient, work_os_app_repo: Path
 ) -> None:
-    workspace = (
-        work_os_app_repo / "output" / "research" / "NU" / "2026-07-01_workspace.html"
-    )
+    workspace = work_os_app_repo / "output" / "research" / "NU" / "2026-07-01_workspace.html"
     workspace.parent.mkdir(parents=True, exist_ok=True)
     workspace.write_text("<html>legacy brief</html>", encoding="utf-8")
     reconcile_legacy_workspace_reports(work_os_app_repo)

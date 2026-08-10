@@ -140,18 +140,14 @@ def _decision(
         if optional in columns:
             selected.append(optional)
     try:
-        base_query = (
-            f"SELECT {', '.join(selected)} FROM decisions WHERE UPPER(ticker) = ?"
-        )
+        base_query = f"SELECT {', '.join(selected)} FROM decisions WHERE UPPER(ticker) = ?"
         if "decided_by" in columns:
             owner_row = conn.execute(
-                base_query
-                + " AND decided_by = 'owner' ORDER BY made_at DESC, id DESC LIMIT 1",
+                base_query + " AND decided_by = 'owner' ORDER BY made_at DESC, id DESC LIMIT 1",
                 (ticker,),
             ).fetchone()
             model_row = conn.execute(
-                base_query
-                + " AND decided_by != 'owner' ORDER BY made_at DESC, id DESC LIMIT 1",
+                base_query + " AND decided_by != 'owner' ORDER BY made_at DESC, id DESC LIMIT 1",
                 (ticker,),
             ).fetchone()
         else:
@@ -171,16 +167,8 @@ def _decision(
     warnings: list[str] = []
     if "decided_by" not in columns:
         warnings.append("decision_owner_provenance_unavailable")
-    owner_state = (
-        str(owner_row["recommendation_kind"])
-        if owner_row is not None
-        else None
-    )
-    model_recommendation = (
-        str(model_row["recommendation_kind"])
-        if model_row is not None
-        else None
-    )
+    owner_state = str(owner_row["recommendation_kind"]) if owner_row is not None else None
+    model_recommendation = str(model_row["recommendation_kind"]) if model_row is not None else None
     raw_value = values.get("recommendation_value")
     target = float(raw_value) if isinstance(raw_value, (int, float)) else None
     if target is not None and abs(target) <= 1:
@@ -239,9 +227,7 @@ def _questions(conn: sqlite3.Connection, ticker: str) -> tuple[list[DeskQuestion
             note_id=int(note["id"]),
             revision=str(note["updated_at"]),
             body=str(note["body"]),
-            owner=(
-                "owner" if str(note["source"]) in {"manual", "capture", "comment"} else "model"
-            ),
+            owner=("owner" if str(note["source"]) in {"manual", "capture", "comment"} else "model"),
             evidence_ref=(str(note["evidence_ref"]) if note["evidence_ref"] is not None else None),
         )
         for note in notes

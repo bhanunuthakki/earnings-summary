@@ -79,8 +79,10 @@ def _seed_company_state(repo_root: Path) -> None:
         "INSERT INTO decisions VALUES "
         "(7, 'NU', 'hold', 0.125, 'high', '2026-08-07T12:00:00Z', NULL, ?, NULL, "
         "'senior_partner', 'owner')",
-        ('[{"metric":"NPL 90+","metric_source":"financial",'
-         '"op":"gt","threshold":5.6,"unit":"percent","for_periods":2,"note":"Trim trigger"}]',),
+        (
+            '[{"metric":"NPL 90+","metric_source":"financial",'
+            '"op":"gt","threshold":5.6,"unit":"percent","for_periods":2,"note":"Trim trigger"}]',
+        ),
     )
     conn.execute(
         "INSERT INTO decisions VALUES "

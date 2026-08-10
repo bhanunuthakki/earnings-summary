@@ -51,9 +51,7 @@ def main() -> int:
     )
     print(result.model_dump_json())
     print(
-        json.dumps(
-            {"event": "report_artifacts_reconciled", **result.model_dump()}, sort_keys=True
-        ),
+        json.dumps({"event": "report_artifacts_reconciled", **result.model_dump()}, sort_keys=True),
         file=sys.stderr,
     )
     return 0
