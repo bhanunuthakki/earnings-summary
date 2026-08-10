@@ -60,3 +60,10 @@ bulk fetch or a second database.
 
 No live database was queried or changed for this decision. No migration, data
 move, FMP request, scheduled job, or application routing change was made.
+
+This decision rejects a new persisted `research_level` axis; it does not permit
+existing Coverage Role, Lifecycle, or artifact-membership selectors to drift.
+The canonical derived contract now lives in `DEFINITIONS.md`: portfolio and
+evaluation are governed, watchlist is monitored, index_member is screened, and
+none is catalog. Archived rows authorize no work, and outputs never establish
+membership.

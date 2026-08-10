@@ -41,6 +41,7 @@ import requests
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from db import DEFAULT_USER_ID  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -111,10 +112,13 @@ def fetch_russell2000() -> list[tuple[str, str]]:
     return out
 
 
-def _existing_tickers_by_list_type(conn: sqlite3.Connection) -> dict[str, str]:
-    """Map ticker -> list_type for every row in tracked_companies."""
+def _existing_tickers_by_list_type(conn: sqlite3.Connection, user_id: str) -> dict[str, str]:
+    """Map ticker -> list_type for one owner's tracked-company rows."""
     cur = conn.cursor()
-    cur.execute("SELECT ticker, list_type FROM tracked_companies")
+    cur.execute(
+        "SELECT ticker, list_type FROM tracked_companies WHERE user_id = ?",
+        (user_id,),
+    )
     return {row[0]: row[1] for row in cur.fetchall()}
 
 
@@ -123,9 +127,10 @@ def upsert_index_members(
     rows: list[tuple[str, str]],
     *,
     dry_run: bool,
+    user_id: str = DEFAULT_USER_ID,
 ) -> dict[str, int]:
     """Upsert (ticker, name) as list_type='index_member'; never downgrade analyzed lists."""
-    existing = _existing_tickers_by_list_type(conn)
+    existing = _existing_tickers_by_list_type(conn, user_id)
     protected = {ListType.PORTFOLIO.value, ListType.WATCHLIST.value, ListType.EVALUATION.value}
     stats = {"inserted": 0, "updated": 0, "skipped_protected": 0}
     cur = conn.cursor()
@@ -136,14 +141,17 @@ def upsert_index_members(
         if ticker in existing:
             if not dry_run:
                 cur.execute(
-                    "UPDATE tracked_companies SET name = ?, list_type = ? "
-                    "WHERE ticker = ? AND list_type NOT IN (?, ?)",
+                    "UPDATE tracked_companies SET name = ?, list_type = ?, "
+                    "processing_tier = 'P3', brief_dirty = 0 "
+                    "WHERE user_id = ? AND ticker = ? AND list_type NOT IN (?, ?, ?)",
                     (
                         name,
                         ListType.INDEX_MEMBER.value,
+                        user_id,
                         ticker,
                         ListType.PORTFOLIO.value,
                         ListType.WATCHLIST.value,
+                        ListType.EVALUATION.value,
                     ),
                 )
             stats["updated"] += 1
@@ -151,9 +159,10 @@ def upsert_index_members(
             if not dry_run:
                 cur.execute(
                     "INSERT INTO tracked_companies "
-                    "(user_id, ticker, name, list_type, added_at) "
-                    "VALUES (1, ?, ?, ?, ?)",
+                    "(user_id, ticker, name, list_type, processing_tier, brief_dirty, added_at) "
+                    "VALUES (?, ?, ?, ?, 'P3', 0, ?)",
                     (
+                        user_id,
                         ticker,
                         name,
                         ListType.INDEX_MEMBER.value,

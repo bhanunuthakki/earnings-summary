@@ -10,13 +10,11 @@ Per-tier lens scope (the fresh-review memo's tier matrix):
 
     P1 (portfolio)            → all ticker-scoped lenses + portfolio lens
     P2 (watchlist+evaluation) → five_min_reread + thesis_drift_qoq
-    P3 (index_member, etc.)   → five_min_reread
+    P3 (index_member, etc.)   → no LLM lenses
 
-Cadence → tier matrix (which tiers actually fire on this tick):
-
-    daily   P1 always; P2/P3 catch-up only if drifted past their cadence
-    weekly  P1 weekly lens regen; P2 monthly catch-up; P3 quarterly catch-up
-    monthly P1 monthly; P2 quarterly; P3 annual
+Cadence selects exactly one tier: daily → P1, weekly → P2, monthly → P3.
+The monthly P3 plan is intentionally empty because screened/catalog names do
+not receive scheduled LLM work.
 
 The script is idempotent: `run_lens` dedups via the artifact-store
 cache_inputs hash, so a re-run on identical inputs is free. `--dry-run`
@@ -75,7 +73,7 @@ Cadence = Literal["daily", "weekly", "monthly"]
 _LENS_SET_BY_TIER: dict[str, list[str]] = {
     "P1": [],  # populated at runtime from list_lenses_for_ticker()
     "P2": ["five_min_reread", "thesis_drift_qoq"],
-    "P3": ["five_min_reread"],
+    "P3": [],
 }
 
 
@@ -204,26 +202,20 @@ def _build_plan(repo_root: Path, cadence: Cadence) -> list[tuple[str, str, str]]
                 ).fetchall()
                 tier_by_ticker = {r["ticker"]: (r["processing_tier"] or "P3").upper() for r in rows}
 
+    target_tier = {"daily": "P1", "weekly": "P2", "monthly": "P3"}[cadence]
     plan: list[tuple[str, str, str]] = []
-    # Collect unique lens slugs across tiers (P1 = full set; P2/P3 are subsets).
-    seen_lenses: set[str] = set()
-    for tier in ("P1", "P2", "P3"):
-        for lens_name in _tier_lens_set(tier):
-            seen_lenses.add(lens_name)
-
-    for lens_name in sorted(seen_lenses):
+    for lens_name in sorted(_tier_lens_set(target_tier)):
         due = set(tickers_due_for_lens_regen(repo_root, lens_name, cadence))
         for ticker in sorted(due):
             tier = tier_by_ticker.get(ticker.upper(), "P3")
-            applicable_lenses = _tier_lens_set(tier)
-            if lens_name not in applicable_lenses:
+            if tier != target_tier:
                 continue
             plan.append((tier, ticker.upper(), lens_name))
 
     # Portfolio-scoped lens — only P1 cadence applies and only on the daily +
     # weekly ticks. Treat the portfolio lens as having a single sentinel
     # "ticker" for plan-tracking purposes.
-    if cadence in ("daily", "weekly") and _portfolio_synthesis_is_due(repo_root, cadence):
+    if target_tier == "P1" and _portfolio_synthesis_is_due(repo_root, cadence):
         for portfolio_lens in list_portfolio_lenses():
             plan.append(("P1", "__PORTFOLIO__", portfolio_lens))
 

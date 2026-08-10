@@ -107,7 +107,9 @@ def _tracked_tickers(repo_root: Path) -> list[str]:
             if "tracked_companies" not in tables:
                 return []
             rows = conn.execute(
-                "SELECT DISTINCT ticker FROM tracked_companies ORDER BY ticker"
+                "SELECT DISTINCT ticker FROM tracked_companies "
+                "WHERE archived_at IS NULL "
+                "AND list_type IN ('portfolio', 'evaluation') ORDER BY ticker"
             ).fetchall()
         finally:
             conn.close()
