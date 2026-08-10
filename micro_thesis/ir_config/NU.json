@@ -9,28 +9,1926 @@
       "sheet": "Managerial indicators",
       "row_label": "Average Revenue per Active Customer",
       "unit": "usd",
-      "scale": 1.0
+      "scale": 1.0,
+      "origin": "analyst",
+      "exact_label": false
     },
     {
       "kpi_name": "Risk-adjusted NIM (NIM minus cost of risk)",
       "sheet": "Managerial indicators",
       "row_label": "Risk-adjusted NIM (%)",
       "unit": "percent",
-      "scale": 100.0
+      "scale": 100.0,
+      "origin": "analyst",
+      "exact_label": false
     },
     {
       "kpi_name": "NPL 15-90d",
       "sheet": "NPLs",
       "row_label": "15-90 days NPL",
       "unit": "percent",
-      "scale": 100.0
+      "scale": 100.0,
+      "origin": "analyst",
+      "exact_label": false
     },
     {
       "kpi_name": "NPL 90d+",
       "sheet": "NPLs",
       "row_label": "90+ NPL",
       "unit": "percent",
-      "scale": 100.0
+      "scale": 100.0,
+      "origin": "analyst",
+      "exact_label": false
+    },
+    {
+      "kpi_name": "Total Revenue",
+      "sheet": "Managerial P&L ",
+      "row_label": "Total Revenue",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit Income",
+      "sheet": "Managerial P&L ",
+      "row_label": "Credit Income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Float Income",
+      "sheet": "Managerial P&L ",
+      "row_label": "Float Income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Fee Revenue",
+      "sheet": "Managerial P&L ",
+      "row_label": "Fee Revenue",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total Direct Costs",
+      "sheet": "Managerial P&L ",
+      "row_label": "Total Direct Costs",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Funding Cost",
+      "sheet": "Managerial P&L ",
+      "row_label": "Funding Cost",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Cost of Credit",
+      "sheet": "Managerial P&L ",
+      "row_label": "Cost of Credit",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Transaction Cost",
+      "sheet": "Managerial P&L ",
+      "row_label": "Transaction Cost",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Revenue-Based Taxes",
+      "sheet": "Managerial P&L ",
+      "row_label": "Revenue-Based Taxes",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Operating Expenses",
+      "sheet": "Managerial P&L ",
+      "row_label": "Operating Expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Customer Support and Operations",
+      "sheet": "Managerial P&L ",
+      "row_label": "Customer Support and Operations",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "G&A Expenses",
+      "sheet": "Managerial P&L ",
+      "row_label": "G&A Expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Marketing Expenses",
+      "sheet": "Managerial P&L ",
+      "row_label": "Marketing Expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other Operating Expenses",
+      "sheet": "Managerial P&L ",
+      "row_label": "Other Operating Expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Share of Results From Associates",
+      "sheet": "Managerial P&L ",
+      "row_label": "Share of Results From Associates",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "EBT",
+      "sheet": "Managerial P&L ",
+      "row_label": "EBT",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Income Taxes",
+      "sheet": "Managerial P&L ",
+      "row_label": "Income Taxes",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Cost to Serve per Active Customer - US$",
+      "sheet": "Managerial indicators",
+      "row_label": "Cost to Serve per Active Customer - US$",
+      "unit": "usd",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit Card non-IEP",
+      "sheet": "Managerial indicators",
+      "row_label": "Credit Card non-IEP",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit Card IEP",
+      "sheet": "Managerial indicators",
+      "row_label": "Credit Card IEP",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Loans to customers",
+      "sheet": "Managerial indicators",
+      "row_label": "Loans to customers",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total Interest Earning Portfolio (IEP)",
+      "sheet": "Managerial indicators",
+      "row_label": "Total Interest Earning Portfolio (IEP)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Cash and cash equivalents",
+      "sheet": "Managerial indicators",
+      "row_label": "Cash and cash equivalents",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Securities - Financial assets at fair value through profit or loss",
+      "sheet": "Managerial indicators",
+      "row_label": "Securities - Financial assets at fair value through profit or loss",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Securities - Financial assets at fair value through OCI",
+      "sheet": "Managerial indicators",
+      "row_label": "Securities - Financial assets at fair value through OCI",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Securities - Financial assets at amortized cost",
+      "sheet": "Managerial indicators",
+      "row_label": "Securities - Financial assets at amortized cost",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Compulsory and other deposits at central banks",
+      "sheet": "Managerial indicators",
+      "row_label": "Compulsory and other deposits at central banks",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other receivables",
+      "sheet": "Managerial indicators",
+      "row_label": "Other receivables",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other financial assets",
+      "sheet": "Managerial indicators",
+      "row_label": "Other financial assets",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Derivatives",
+      "sheet": "Managerial indicators",
+      "row_label": "Derivatives",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Collateral for credit card operations",
+      "sheet": "Managerial indicators",
+      "row_label": "Collateral for credit card operations",
+      "unit": "ratio",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total Interest Earning Assets (IEA)",
+      "sheet": "Managerial indicators",
+      "row_label": "Total Interest Earning Assets (IEA)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "NII",
+      "sheet": "Managerial indicators",
+      "row_label": "NII",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Risk-adjusted NII",
+      "sheet": "Managerial indicators",
+      "row_label": "Risk-adjusted NII",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Efficiency Ratio (%)",
+      "sheet": "Managerial indicators",
+      "row_label": "Efficiency Ratio (%)",
+      "unit": "percent",
+      "scale": 100.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit Card Receivables (Gross)",
+      "sheet": "Managerial indicators",
+      "row_label": "Credit Card Receivables (Gross)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Loan to Customers (Gross)",
+      "sheet": "Managerial indicators",
+      "row_label": "Loan to Customers (Gross)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Payables to network",
+      "sheet": "Managerial indicators",
+      "row_label": "Payables to network",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Net Credit Portfolio",
+      "sheet": "Managerial indicators",
+      "row_label": "Net Credit Portfolio",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Deposits",
+      "sheet": "Managerial indicators",
+      "row_label": "Deposits",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Financial Bills",
+      "sheet": "Managerial indicators",
+      "row_label": "Financial Bills",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Compulsory Deposits",
+      "sheet": "Managerial indicators",
+      "row_label": "Compulsory Deposits",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total Available Funding",
+      "sheet": "Managerial indicators",
+      "row_label": "Total Available Funding",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Net Credit Portfolio / Available Funding",
+      "sheet": "Managerial indicators",
+      "row_label": "Net Credit Portfolio / Available Funding",
+      "unit": "ratio",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Brazil",
+      "sheet": "Operating figures",
+      "row_label": "Brazil",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Individual",
+      "sheet": "Operating figures",
+      "row_label": "Individual",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "SME",
+      "sheet": "Operating figures",
+      "row_label": "SME",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Mexico",
+      "sheet": "Operating figures",
+      "row_label": "Mexico",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Colombia",
+      "sheet": "Operating figures",
+      "row_label": "Colombia",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total",
+      "sheet": "Operating figures",
+      "row_label": "Total",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit Card (Consumer + SME)",
+      "sheet": "Operating figures",
+      "row_label": "Credit Card (Consumer + SME)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Unsecured Lending (Consumer + SME)",
+      "sheet": "Operating figures",
+      "row_label": "Unsecured Lending (Consumer + SME)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total PV",
+      "sheet": "Operating figures",
+      "row_label": "Total PV",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit Card",
+      "sheet": "Operating figures",
+      "row_label": "Credit Card",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Debit Card",
+      "sheet": "Operating figures",
+      "row_label": "Debit Card",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "BRL/USD Average",
+      "sheet": "FX Rates",
+      "row_label": "BRL/USD Average",
+      "unit": "usd",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "BRL/USD End of the Period",
+      "sheet": "FX Rates",
+      "row_label": "BRL/USD End of the Period",
+      "unit": "usd",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest income and gains net of losses on financial instruments",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Interest income and gains net of losses on financial instruments",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Fee and commission income",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Fee and commission income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest and other financial expenses",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Interest and other financial expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Transactional expenses",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Transactional expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Expected credit loss",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Expected credit loss",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total cost of financial and transactional services provided",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Total cost of financial and transactional services provided",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "General and administrative expenses (G&A)",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "General and administrative expenses (G&A)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "G&A - Contingent share award (CSA) termination",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "G&A - Contingent share award (CSA) termination",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "G&A - Other",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "G&A - Other",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other expenses",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Other expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other income",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Other income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total operating (expenses) income",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Total operating (expenses) income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Share of loss in associates",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Share of loss in associates",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Results with convertible instruments",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Results with convertible instruments",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Profit (loss) before income taxes",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Profit (loss) before income taxes",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Net income (loss) for the period",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Net income (loss) for the period",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Net income (loss) attributable to shareholders of the parent company",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Net income (loss) attributable to shareholders of the parent company",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Net income (loss) attributable to non-controlling interests",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Net income (loss) attributable to non-controlling interests",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Earnings (loss) per share \u2013 Basic",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Earnings (loss) per share \u2013 Basic",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Earnings (loss) per share \u2013 Diluted",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Earnings (loss) per share \u2013 Diluted",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Weighted average number of outstanding shares \u2013 Basic (in thousands of shares)",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Weighted average number of outstanding shares \u2013 Basic (in thousands of shares)",
+      "unit": "count",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Weighted average number of outstanding shares \u2013 Diluted (in thousands of shares)",
+      "sheet": "IFRS - Statement of Income",
+      "row_label": "Weighted average number of outstanding shares \u2013 Diluted (in thousands of shares)",
+      "unit": "count",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Financial assets at fair value through profit or loss",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Financial assets at fair value through profit or loss",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Securities",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Securities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Financial assets at fair value through other comprehensive income",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Financial assets at fair value through other comprehensive income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Financial assets at amortized cost",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Financial assets at amortized cost",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit card receivables",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Credit card receivables",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interbank transactions",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Interbank transactions",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other assets",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Other assets",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Deferred tax assets",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Deferred tax assets",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Investments in associates",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Investments in associates",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Right-of-use assets",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Right-of-use assets",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Property, plant and equipment",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Property, plant and equipment",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Intangible assets",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Intangible assets",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Goodwill",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Goodwill",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total assets",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Total assets",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Financial liabilities at fair value through profit or loss",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Financial liabilities at fair value through profit or loss",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Obligations for quotas of investment funds",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Obligations for quotas of investment funds",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Instruments eligible as capital",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Instruments eligible as capital",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Financial liabilities at amortized cost",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Financial liabilities at amortized cost",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Borrowings and financing",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Borrowings and financing",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Repurchase agreements",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Repurchase agreements",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Securitized borrowings",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Securitized borrowings",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Senior preferred shares",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Senior preferred shares",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Salaries, allowances and social security contributions",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Salaries, allowances and social security contributions",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Tax liabilities",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Tax liabilities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Lease liabilities",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Lease liabilities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Provisions and contingent liabilities",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Provisions and contingent liabilities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Deferred income",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Deferred income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Deferred tax liabilities",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Deferred tax liabilities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other liabilities",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Other liabilities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total liabilities",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Total liabilities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Share capital",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Share capital",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Share premium reserve",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Share premium reserve",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Retained earnings",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Retained earnings",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other comprehensive income (loss)",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Other comprehensive income (loss)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Equity attributable to shareholders of the parent company",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Equity attributable to shareholders of the parent company",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Equity attributable to non-controlling interests",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Equity attributable to non-controlling interests",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total equity",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Total equity",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total liabilities and equity",
+      "sheet": "IFRS - Balance Sheet",
+      "row_label": "Total liabilities and equity",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Profit (Loss) for the period/year",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Profit (Loss) for the period/year",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Depreciation and amortization",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Depreciation and amortization",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Deferred income taxes",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Deferred income taxes",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Customer program",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Customer program",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Unrealized (gains) losses on financial instruments",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Unrealized (gains) losses on financial instruments",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest accrued",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Interest accrued",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Share-based payments - Contingency share award (CSA) - termination",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Share-based payments - Contingency share award (CSA) - termination",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Share-based compensation",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Share-based compensation",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Unrealized losses on other investments",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Unrealized losses on other investments",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Income of share of profit or (loss) in associates",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Income of share of profit or (loss) in associates",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Others",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Others",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Compulsory deposits and others at central banks",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Compulsory deposits and others at central banks",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest paid",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Interest paid",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Income tax paid",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Income tax paid",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest received",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Interest received",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Cash flows (used in) generated from operating activities",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Cash flows (used in) generated from operating activities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Acquisition of property, plant and equipment",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Acquisition of property, plant and equipment",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Acquisition and development of intangible assets",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Acquisition and development of intangible assets",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Investment in associates",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Investment in associates",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Acquisition of subsidiary, net of cash acquired",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Acquisition of subsidiary, net of cash acquired",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Financial instruments derivatives",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Financial instruments derivatives",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Acquisition of securities - equity instruments",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Acquisition of securities - equity instruments",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Cash flow (used in) generated from investing activities",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Cash flow (used in) generated from investing activities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Proceeds from senior preferred shares",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Proceeds from senior preferred shares",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Issuance of preferred shares",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Issuance of preferred shares",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Issuance of shares under IPO",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Issuance of shares under IPO",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Transactions costs from IPO",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Transactions costs from IPO",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Issuance of shares for over-allotment in IPO",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Issuance of shares for over-allotment in IPO",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Transactions costs for over-allotment in IPO",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Transactions costs for over-allotment in IPO",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Proceeds from securitized borrowings",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Proceeds from securitized borrowings",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Payments of securitized borrowings",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Payments of securitized borrowings",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Proceeds from borrowings and financing",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Proceeds from borrowings and financing",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Payments of borrowings and financing",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Payments of borrowings and financing",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Proceeds from debt instruments eligible as capital",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Proceeds from debt instruments eligible as capital",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Lease payments",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Lease payments",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Exercise of stock options",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Exercise of stock options",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Shares repurchased",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Shares repurchased",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Shares withheld for employee\u2019s taxes",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Shares withheld for employee\u2019s taxes",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Cash flows (used in) generated from financing activities",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Cash flows (used in) generated from financing activities",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Change in cash and cash equivalents",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Change in cash and cash equivalents",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Cash and cash equivalents - beginning of the period/year",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Cash and cash equivalents - beginning of the period/year",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Foreign exchange rate changes on cash and cash equivalents",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Foreign exchange rate changes on cash and cash equivalents",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Cash and cash equivalents - end of the period/year",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Cash and cash equivalents - end of the period/year",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Increase (decrease) in cash and cash equivalents",
+      "sheet": "IFRS - Cash Flow",
+      "row_label": "Increase (decrease) in cash and cash equivalents",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest income \u2013 credit card",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Interest income \u2013 credit card",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest income \u2013 loan",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Interest income \u2013 loan",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest income \u2013 other assets at amortized cost",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Interest income \u2013 other assets at amortized cost",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest income \u2013 other receivables",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Interest income \u2013 other receivables",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest income and gains net of losses - financial instruments at fair value",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Interest income and gains net of losses - financial instruments at fair value",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other income at fair value",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Other income at fair value",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total interest income and gains net of losses on financial instruments",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Total interest income and gains net of losses on financial instruments",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit and debit card income",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Credit and debit card income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Late fees",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Late fees",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Insurance commission",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Insurance commission",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other fee and commission income",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Other fee and commission income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Customer Program (\"NuS\u00f3cios\")",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Customer Program (\"NuS\u00f3cios\")",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total fee and commission income",
+      "sheet": "IFRS - Revenue breakdown ",
+      "row_label": "Total fee and commission income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest expense on deposits",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Interest expense on deposits",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Interest expense on debt instruments and financing",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Interest expense on debt instruments and financing",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other interest and similar expenses",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Other interest and similar expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total interest and other financial expenses",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Total interest and other financial expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Payments and network costs",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Payments and network costs",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Rewards expenses",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Rewards expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Financial system expenses",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Financial system expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other transactional expenses",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Other transactional expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total transactional expenses",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Total transactional expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Infrastructure and data processing costs",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Infrastructure and data processing costs",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit analysis and collection costs",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Credit analysis and collection costs",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Customer services",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Customer services",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Salaries and associated benefits",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Salaries and associated benefits",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit and debit card issuance costs",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Credit and debit card issuance costs",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Specialized services expenses",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Specialized services expenses",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other personnel costs",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Other personnel costs",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Advertising and marketing",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Advertising and marketing",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Taxes on financial income",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Taxes on financial income",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Share-based compensation - contingent share award termination (note 10b)) (i)",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Share-based compensation - contingent share award termination (note 10b)) (i)",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Branding and advertising",
+      "sheet": "IFRS - Expenses breakdown",
+      "row_label": "Branding and advertising",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total receivables",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Total receivables",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Fair value adjustment - portfolio hedge",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Fair value adjustment - portfolio hedge",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Presented as deduction of receivables",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Presented as deduction of receivables",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Presented as \"Other liabilities\"",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Presented as \"Other liabilities\"",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total credit card expected credit loss",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Total credit card expected credit loss",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Receivables, net",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Receivables, net",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total receivables presented as assets",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Total receivables presented as assets",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Loans to individuals",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Loans to individuals",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Loans to companies",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Loans to companies",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total loans",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Total loans",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Loan expected credit loss",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Loan expected credit loss",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Other receivables - ECL",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Other receivables - ECL",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Credit card portfolio",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Credit card portfolio",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Lending portfolio",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Lending portfolio",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total write-offs",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Total write-offs",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
+    },
+    {
+      "kpi_name": "Total Recoveries",
+      "sheet": "IFRS - Credit operations",
+      "row_label": "Total Recoveries",
+      "unit": "actual",
+      "scale": 1.0,
+      "origin": "capture",
+      "exact_label": true
     }
   ]
 }
