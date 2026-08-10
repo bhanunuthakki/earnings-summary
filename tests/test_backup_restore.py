@@ -129,6 +129,27 @@ def test_backup_then_restore_end_to_end(tmp_path: Path, monkeypatch: pytest.Monk
     assert not list(backup_dir.glob("portfolio.db.*.gz"))
 
 
+def test_backup_continues_when_accounting_writer_is_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Telemetry cannot turn the online reader-safe snapshot into a writer job."""
+    live = tmp_path / "live.db"
+    _make_db(live, "busy-accounting")
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(backup_db, "SRC_DB", live)
+    monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
+    monkeypatch.setenv("EARNINGS_SUMMARY_SECRETS_DIR", str(tmp_path / "secrets"))
+
+    def accounting_busy(*_args: object) -> tuple[sqlite3.Connection, str]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(backup_db, "_start_accounting", accounting_busy)
+
+    assert backup_db.main() == 0
+    assert restore_db.list_snapshots(backup_dir)
+    assert "backup accounting unavailable" in capsys.readouterr().err
+
+
 def test_encrypt_stages_in_the_destination_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -170,6 +170,50 @@ def test_attach_qualitative_conditions_stamps_separately(
     assert [c.phrase for c in stored] == ["the CEO departs"]
 
 
+def test_attach_qualitative_releases_writer_before_next_llm_call(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _conn(db)
+    try:
+        conn.execute("CREATE TABLE ledger_probe (id INTEGER PRIMARY KEY)")
+        for artifact_id, ticker in ((1, "NU"), (2, "MELI")):
+            conn.execute(
+                "INSERT INTO llm_artifacts (id, content_md) VALUES (?, ?)",
+                (artifact_id, _WWCMM),
+            )
+            conn.execute(
+                "INSERT INTO decisions "
+                "(ticker, recommendation_kind, source_artifact_id, made_at) "
+                "VALUES (?, 'add', ?, ?)",
+                (ticker, artifact_id, f"2026-05-0{artifact_id}"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    calls = 0
+
+    def fake_extract(*_args: object, **_kwargs: object) -> list[dc.QualitativeCondition]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            ledger = sqlite3.connect(str(db), timeout=0.1)
+            try:
+                ledger.execute("INSERT INTO ledger_probe DEFAULT VALUES")
+                ledger.commit()
+            finally:
+                ledger.close()
+        return []
+
+    monkeypatch.setattr(dc, "extract_qualitative_conditions", fake_extract)
+    tally = dc.attach_qualitative_conditions(db_path=db)
+
+    assert calls == 2
+    assert tally["deferred_transient"] == 0
+    conn = _conn(db)
+    assert conn.execute("SELECT COUNT(*) FROM ledger_probe").fetchone()[0] == 1
+    conn.close()
+
+
 def test_attach_qualitative_no_section_stamps_empty(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

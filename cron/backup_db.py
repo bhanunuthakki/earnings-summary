@@ -32,6 +32,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from log_redact import redact  # noqa: E402
 from models.runs import StageStatus  # noqa: E402
 from pipeline.run_accounting import (  # noqa: E402
     PipelineRunSuppressedError,
@@ -125,19 +126,27 @@ def _start_accounting(dest_dir: Path, retain: int) -> tuple[sqlite3.Connection, 
 
 
 def _finish_accounting(
-    accounting: tuple[sqlite3.Connection, str],
+    accounting: tuple[sqlite3.Connection, str] | None,
     *,
     success: bool,
     error_msg: str | None = None,
 ) -> None:
+    if accounting is None:
+        return
     conn, run_id = accounting
     try:
-        end_run(
-            conn,
-            run_id,
-            StageStatus.OK if success else StageStatus.FAILED,
-            error_msg,
-        )
+        try:
+            end_run(
+                conn,
+                run_id,
+                StageStatus.OK if success else StageStatus.FAILED,
+                error_msg,
+            )
+        except Exception as exc:
+            print(
+                f"WARN: backup accounting completion unavailable: {redact(exc)}",
+                file=sys.stderr,
+            )
     finally:
         conn.close()
 
@@ -157,8 +166,13 @@ def _run_backup() -> int:
         print(json.dumps(suppression_payload(exc)))
         return 0
     except Exception as exc:
-        print(f"ERROR: backup accounting unavailable: {exc}", file=sys.stderr)
-        return 1
+        # The online snapshot is deliberately reader-safe and may overlap a
+        # writer. Accounting is observability, not a backup prerequisite.
+        print(
+            f"WARN: backup accounting unavailable; snapshot proceeding: {redact(exc)}",
+            file=sys.stderr,
+        )
+        accounting = None
 
     # Refuse up front rather than half-write onto a full volume. Staging holds the raw
     # snapshot AND its gzip before either is released, so the true cost is ~2x the DB
