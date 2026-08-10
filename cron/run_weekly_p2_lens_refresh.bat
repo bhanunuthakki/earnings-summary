@@ -1,5 +1,5 @@
 @echo off
-REM Weekly (Sunday 02:00) — regenerate narrow P2 monitoring lenses only.
+REM Weekly (Friday 22:00) — regenerate narrow P2 monitoring lenses only.
 REM See execution/run_due_lenses.py for the per-tier lens set + cadence rules.
 REM Companion to run_daily_fetch_and_brief.bat (which handles P1 daily refresh +
 REM the brief_dirty queue) and run_monthly_p3_refresh.bat (P3 monthly).
@@ -17,7 +17,7 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\weekly_p2_lens_refresh_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-p2-lens-refresh" "portfolio-db" execution\run_due_lenses.py --cadence weekly > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-p2-lens-refresh" "portfolio-db" execution\run_due_lenses.py --cadence weekly --max-plan-pairs 128 --window-opens-local 21:30 --stop-before-local 01:35 > "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 
 REM Propagate the job's exit code. Without this the script ended on

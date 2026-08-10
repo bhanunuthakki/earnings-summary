@@ -22,8 +22,8 @@ REM logged and the next ticker still runs. A ticker with no resolvable IR URL is
 REM SKIPPED (not a failure). Process exit code = count of FAILED tickers.
 REM
 REM Runs Sunday 01:30 — just after refresh_ir_kpis (01:00) and before
-REM weekly_p2_lens_refresh (02:00) — so freshly-registered IR docs precede the
-REM lens/synthesis reads. Edit discover_ir_documents.task.xml to change cadence.
+REM Sunday synthesis reads. The separate P2 lens sweep runs Friday 22:00.
+REM Edit discover_ir_documents.task.xml to change cadence.
 REM
 REM PREREQUISITE: the optional `ir` extra (headless browser) must be installed in
 REM the Python that `python` resolves to:
