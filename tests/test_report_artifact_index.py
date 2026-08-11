@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from report import artifacts as artifacts_module
 from report.artifacts import (
     RenderedReportBody,
     ReportArtifactRef,
@@ -209,3 +212,12 @@ def test_persist_report_artifact_supports_governed_output_junction(tmp_path: Pat
     assert ref.standalone_path.startswith("output/research/NU/artifacts/")
     assert (repo_root / ref.standalone_path).is_file()
     assert load_report_artifact_index(repo_root).items == (ref,)
+
+
+def test_repo_relative_rejects_lexical_parent_traversal(tmp_path: Path) -> None:
+    relative_path = cast(Callable[[Path, Path], str], getattr(artifacts_module, "_repo_relative"))
+
+    with pytest.raises(ValueError, match="remain inside"):
+        relative_path(tmp_path, tmp_path / "output" / ".." / "secret.txt")
+    with pytest.raises(ValueError, match="remain inside"):
+        relative_path(tmp_path, tmp_path / "other" / ".." / "output" / "secret.txt")

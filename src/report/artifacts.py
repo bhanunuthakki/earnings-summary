@@ -189,6 +189,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
 def _repo_relative(repo_root: Path, path: Path) -> str:
     """Return a stable logical path while admitting the governed output junction."""
 
+    if ".." in path.parts:
+        raise ValueError("report artifacts must remain inside the repository")
     lexical_root = Path(os.path.abspath(repo_root))
     lexical_path = Path(os.path.abspath(path))
     try:
