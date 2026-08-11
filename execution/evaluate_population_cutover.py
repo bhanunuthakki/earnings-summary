@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--knowledge-cutoff", type=datetime.fromisoformat, required=True)
     parser.add_argument("--observed-through", type=datetime.fromisoformat, required=True)
     parser.add_argument("--policy-config-sha256", required=True)
-    parser.add_argument("--source-snapshot-sha256", required=True)
+    parser.add_argument("--source-snapshot-sha256")
     parser.add_argument("--evaluated-at", type=datetime.fromisoformat, required=True)
     parser.add_argument("--sealed-at", type=datetime.fromisoformat, required=True)
     parser.add_argument("--parity-page-size", type=int, default=1_000)

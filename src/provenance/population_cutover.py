@@ -6,7 +6,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Self, cast
 
@@ -32,6 +32,7 @@ from provenance.population_canonical_resolution import (
 from provenance.population_completeness import (
     _CUTOVER_WRITE_AUTHORITY,
     REQUIRED_CUTOVER_AUDIT_GATES,
+    REQUIRED_POPULATION_PLANES,
     PopulationAuditReceipt,
     PopulationCompletenessLedger,
     PopulationCutoverReceipt,
@@ -59,6 +60,46 @@ _POLICY_VERSION = "1"
 _AUDIT_VERIFIER_NAME = "population-cutover-readiness-auditor"
 _AUDIT_VERIFIER_VERSION = "2"
 _PARITY_POLICY = "full-universe-legacy-canonical-parity.v1"
+_MAX_CLOCK_SKEW = timedelta(minutes=5)
+_CANDIDATE_SNAPSHOT_VERSION = "population-candidate-snapshot.v1"
+_VERIFIER_CLOSURE_FILES = tuple(
+    sorted(
+        {
+            "ask/grounded_retrieval.py",
+            "provenance/canonical_fact_resolution.py",
+            "provenance/document_processing_evidence.py",
+            "provenance/fact_plane_v2.py",
+            "provenance/filing_xbrl_extraction_ledger.py",
+            "provenance/immutable_artifact.py",
+            "provenance/integrity_audit.py",
+            "provenance/legacy_canonical_parity.py",
+            "provenance/metric_ontology.py",
+            "provenance/population_canonical_resolution.py",
+            "provenance/population_completeness.py",
+            "provenance/population_cutover.py",
+            "provenance/population_document_processing.py",
+            "provenance/population_identity.py",
+            "provenance/population_research_snapshots.py",
+            "provenance/population_retrieval_runtime.py",
+            "provenance/population_source_facts.py",
+            "provenance/reporting_entity_registry.py",
+            "provenance/research_snapshot.py",
+            "provenance/search_index_lineage.py",
+            "provenance/source_fact_publication.py",
+            "provenance/source_fact_repository.py",
+            "provenance/source_fact_stream.py",
+            "provenance/source_inventory_seal.py",
+            "provenance/verifier_identity.py",
+            "search/canonical_fact_projection.py",
+            "search/corpus_builder.py",
+            "search/embedding_promotion.py",
+            "search/exact_semantic.py",
+            "search/grounded.py",
+            "search/heterogeneous_retrieval.py",
+            "sqlite_runtime.py",
+        }
+    )
+)
 _CURRENT_STATE_CTE = """
 WITH RECURSIVE lineage(generation_id,parent_generation_id,depth) AS (
  SELECT generation_id,parent_generation_id,0
@@ -105,7 +146,7 @@ def _timestamp(value: datetime) -> str:
 class PopulationCutoverEvaluationRequest(_FrozenModel):
     temporal_scope: PopulationTemporalScope
     policy_config_sha256: str
-    source_snapshot_sha256: str
+    source_snapshot_sha256: str | None = None
     evaluated_at: datetime
     sealed_at: datetime
     apply: bool = False
@@ -116,7 +157,11 @@ class PopulationCutoverEvaluationRequest(_FrozenModel):
     audit_fetch_size: int = Field(default=250, ge=1, le=1_000)
 
     _policy_sha = field_validator("policy_config_sha256")(_sha256)
-    _source_sha = field_validator("source_snapshot_sha256")(_sha256)
+
+    @field_validator("source_snapshot_sha256")
+    @classmethod
+    def _source_sha(cls, value: str | None) -> str | None:
+        return None if value is None else _sha256(value)
 
     @model_validator(mode="after")
     def _ordered_clocks(self) -> Self:
@@ -181,120 +226,261 @@ _PLANE_VERIFIERS: tuple[tuple[PopulationPlaneName, PlaneVerifier, str], ...] = (
 def evaluate_population_cutover(
     conn: sqlite3.Connection,
     request: PopulationCutoverEvaluationRequest,
+    *,
+    trusted_now: datetime | None = None,
 ) -> PopulationCutoverEvaluation:
-    """Recompute every gate and atomically append the exact seal when authorized."""
+    """Evaluate one immutable SQLite snapshot and atomically seal its receipts."""
 
-    run_id = population_run_identity(
-        request.policy_config_sha256,
-        request.source_snapshot_sha256,
-        request.temporal_scope,
+    _validate_trusted_clocks(request, trusted_now=trusted_now)
+    if request.apply and request.source_snapshot_sha256 is None:
+        raise PopulationCutoverBlockedError(
+            "source_snapshot",
+            "apply requires a verified source snapshot from an equivalent dry run",
+        )
+    verifier_names = tuple(item[0] for item in _PLANE_VERIFIERS)
+    if verifier_names != REQUIRED_POPULATION_PLANES:
+        raise PopulationCutoverBlockedError(
+            "planes", "verifier manifest is not exactly the seven required planes"
+        )
+    unknown_sources = tuple(
+        source_name
+        for _, _, source_name in _PLANE_VERIFIERS
+        if source_name not in _VERIFIER_CLOSURE_FILES
     )
-    run = PopulationRun(
-        population_run_id=run_id,
-        idempotency_key=run_id,
-        policy_name=_POLICY_NAME,
-        policy_version=_POLICY_VERSION,
-        policy_config_sha256=request.policy_config_sha256,
-        source_snapshot_sha256=request.source_snapshot_sha256,
-        temporal_scope=request.temporal_scope,
-        verified_at=request.evaluated_at,
-    )
-    plane_receipts = tuple(
-        _plane_receipt(
+    if unknown_sources:
+        raise PopulationCutoverBlockedError(
+            "planes", "verifier sources are outside the explicit closure manifest"
+        )
+    verifier_code_sha256 = _verifier_closure_sha256()
+
+    with _evaluation_transaction(conn, apply=request.apply):
+        schema_sha256 = _schema_manifest_sha256(conn)
+        verifications = tuple(
+            verifier(conn, request.temporal_scope) for _, verifier, _ in _PLANE_VERIFIERS
+        )
+        for (expected_name, _, _), verification in zip(
+            _PLANE_VERIFIERS, verifications, strict=True
+        ):
+            if verification.plane_name != expected_name:
+                raise PopulationCutoverBlockedError(
+                    "planes", f"{expected_name} verifier returned {verification.plane_name}"
+                )
+        blocked_planes = tuple(
+            item.plane_name
+            for item in verifications
+            if item.failed_count != 0 or item.materialized_count == 0
+        )
+        if blocked_planes:
+            raise PopulationCutoverBlockedError(
+                "planes", "blocked plane receipts: " + ",".join(blocked_planes)
+            )
+        plane_results = tuple(
+            _verification_result(conn, expected_name, verification, request.temporal_scope)
+            for (expected_name, _, _), verification in zip(
+                _PLANE_VERIFIERS, verifications, strict=True
+            )
+        )
+        provisional_parity = verify_full_universe_legacy_parity(
             conn,
-            run_id,
-            expected_name,
-            verifier(conn, request.temporal_scope),
-            source_name=source_name,
+            population_run_id="candidate-snapshot",
+            scope=request.temporal_scope,
             verified_at=request.evaluated_at,
+            page_size=request.parity_page_size,
+            max_pages=request.parity_max_pages,
+            max_rows_per_issuer=request.parity_max_rows_per_issuer,
+        )
+        if provisional_parity.status == "blocked":
+            raise PopulationCutoverBlockedError("parity", "full-universe legacy parity failed")
+        audit_summary = audit_cutover_readiness(
+            conn,
+            CutoverAuditOptions(
+                knowledge_cutoff=request.temporal_scope.knowledge_cutoff,
+                observed_through=request.temporal_scope.observed_through,
+                sample_limit=request.audit_sample_limit,
+                fetch_size=request.audit_fetch_size,
+            ),
+        )
+        source_snapshot_sha256 = _candidate_source_snapshot_sha256(
+            schema_sha256=schema_sha256,
+            verifier_code_sha256=verifier_code_sha256,
+            verifier_assignments=tuple(
+                (plane_name, source_name) for plane_name, _, source_name in _PLANE_VERIFIERS
+            ),
+            plane_results=plane_results,
+            parity=provisional_parity,
+            audit_summary=audit_summary,
             scope=request.temporal_scope,
         )
-        for expected_name, verifier, source_name in _PLANE_VERIFIERS
-    )
-    blocked_planes = tuple(item.plane_name for item in plane_receipts if item.status == "blocked")
-    if blocked_planes:
-        raise PopulationCutoverBlockedError(
-            "planes", "blocked plane receipts: " + ",".join(blocked_planes)
+        if (
+            request.source_snapshot_sha256 is not None
+            and request.source_snapshot_sha256 != source_snapshot_sha256
+        ):
+            raise PopulationCutoverBlockedError(
+                "source_snapshot",
+                "supplied source snapshot differs from the evaluated database baseline",
+            )
+
+        run_id = population_run_identity(
+            request.policy_config_sha256,
+            source_snapshot_sha256,
+            request.temporal_scope,
         )
-    parity = verify_full_universe_legacy_parity(
-        conn,
-        population_run_id=run_id,
-        scope=request.temporal_scope,
-        verified_at=request.evaluated_at,
-        page_size=request.parity_page_size,
-        max_pages=request.parity_max_pages,
-        max_rows_per_issuer=request.parity_max_rows_per_issuer,
-    )
-    if parity.status == "blocked":
-        raise PopulationCutoverBlockedError("parity", "full-universe legacy parity failed")
-    audit_summary = audit_cutover_readiness(
-        conn,
-        CutoverAuditOptions(
-            knowledge_cutoff=request.temporal_scope.knowledge_cutoff,
-            observed_through=request.temporal_scope.observed_through,
-            sample_limit=request.audit_sample_limit,
-            fetch_size=request.audit_fetch_size,
-        ),
-    )
-    audit = build_population_audit_receipt(
-        audit_summary,
-        population_run_id=run_id,
-        verified_at=request.evaluated_at,
-    )
-    cutover: PopulationCutoverReceipt | None = None
-    if request.apply:
-        ledger = PopulationCompletenessLedger(conn)
-        with _savepoint(conn, "evaluate_population_cutover"):
-            cutover = ledger._record_verified_cutover(
-                run=run,
-                planes=plane_receipts,
-                parity=parity,
-                audit=audit,
-                sealed_at=request.sealed_at,
-                authority=_CUTOVER_WRITE_AUTHORITY,
+        run = PopulationRun(
+            population_run_id=run_id,
+            idempotency_key=run_id,
+            policy_name=_POLICY_NAME,
+            policy_version=_POLICY_VERSION,
+            policy_config_sha256=request.policy_config_sha256,
+            source_snapshot_sha256=source_snapshot_sha256,
+            temporal_scope=request.temporal_scope,
+            verified_at=request.evaluated_at,
+        )
+        plane_receipts = tuple(
+            _plane_receipt(
+                run_id,
+                expected_name,
+                verification,
+                result=result,
+                verifier_code_sha256=verifier_code_sha256,
+                verified_at=request.evaluated_at,
+                scope=request.temporal_scope,
             )
-            replay = ledger._verify_fresh_cutover(
-                run=run,
-                planes=plane_receipts,
-                parity=parity,
-                audit=audit,
-                authority=_CUTOVER_WRITE_AUTHORITY,
+            for (expected_name, _, _), verification, result in zip(
+                _PLANE_VERIFIERS,
+                verifications,
+                plane_results,
+                strict=True,
             )
-            if replay != cutover:
-                raise RuntimeError("fresh population replay differs from its new cutover seal")
+        )
+        parity_payload = provisional_parity.model_dump(mode="python")
+        parity_payload["population_run_id"] = run_id
+        parity = PopulationParityReceipt.model_validate(parity_payload)
+        audit = build_population_audit_receipt(
+            audit_summary,
+            population_run_id=run_id,
+            verified_at=request.evaluated_at,
+            verifier_code_sha256=verifier_code_sha256,
+        )
+        cutover: PopulationCutoverReceipt | None = None
+        if request.apply:
+            ledger = PopulationCompletenessLedger(conn)
+            with _savepoint(conn, "evaluate_population_cutover"):
+                cutover = ledger._record_verified_cutover(
+                    run=run,
+                    planes=plane_receipts,
+                    parity=parity,
+                    audit=audit,
+                    sealed_at=request.sealed_at,
+                    authority=_CUTOVER_WRITE_AUTHORITY,
+                )
+                replay = ledger._verify_fresh_cutover(
+                    run=run,
+                    planes=plane_receipts,
+                    parity=parity,
+                    audit=audit,
+                    authority=_CUTOVER_WRITE_AUTHORITY,
+                )
+                if replay != cutover:
+                    raise RuntimeError("fresh population replay differs from its new cutover seal")
+        material = {
+            "audit_receipt_sha256": audit.receipt_sha256,
+            "cutover_receipt_sha256": None if cutover is None else cutover.receipt_set_sha256,
+            "parity_report_sha256": parity.report_sha256,
+            "plane_details_sha256": [item.details_sha256 for item in plane_receipts],
+            "population_run_id": run_id,
+            "status": "ready" if cutover is None else "sealed",
+        }
+        return PopulationCutoverEvaluation(
+            status="ready" if cutover is None else "sealed",
+            run=run,
+            planes=plane_receipts,
+            parity=parity,
+            audit=audit,
+            cutover=cutover,
+            evaluation_sha256=digest_text(canonical_json(material)),
+        )
+
+
+def _validate_trusted_clocks(
+    request: PopulationCutoverEvaluationRequest,
+    *,
+    trusted_now: datetime | None,
+) -> None:
+    now = _utc(datetime.now(UTC) if trusted_now is None else trusted_now)
+    latest_allowed = now + _MAX_CLOCK_SKEW
+    if _utc(request.evaluated_at) > latest_allowed or _utc(request.sealed_at) > latest_allowed:
+        raise PopulationCutoverBlockedError(
+            "clock",
+            "evaluation or seal time exceeds the trusted clock skew bound",
+        )
+
+
+@contextmanager
+def _evaluation_transaction(conn: sqlite3.Connection, *, apply: bool):
+    if conn.in_transaction:
+        raise PopulationCutoverBlockedError(
+            "transaction",
+            "population evaluation requires an idle connection",
+        )
+    conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
+    try:
+        yield
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        if apply:
+            conn.commit()
+        else:
+            conn.rollback()
+
+
+def _verifier_closure_sha256() -> str:
+    return verifier_source_artifact_sha256(
+        {logical_name: _SOURCE_ROOT / logical_name for logical_name in _VERIFIER_CLOSURE_FILES}
+    )
+
+
+def _schema_manifest_sha256(conn: sqlite3.Connection) -> str:
+    rows = conn.execute(
+        "SELECT type,name,tbl_name,COALESCE(sql,'') FROM sqlite_master "
+        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name,tbl_name"
+    ).fetchall()
+    schema_members = [
+        {
+            "name": str(row[1]),
+            "sql": str(row[3]),
+            "table": str(row[2]),
+            "type": str(row[0]),
+        }
+        for row in rows
+    ]
+    table_names = {str(row[1]) for row in rows if str(row[0]) == "table"}
+    revisions = (
+        [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT version_num FROM alembic_version ORDER BY version_num"
+            ).fetchall()
+        ]
+        if "alembic_version" in table_names
+        else []
+    )
     material = {
-        "audit_receipt_sha256": audit.receipt_sha256,
-        "cutover_receipt_sha256": None if cutover is None else cutover.receipt_set_sha256,
-        "parity_report_sha256": parity.report_sha256,
-        "plane_details_sha256": [item.details_sha256 for item in plane_receipts],
-        "population_run_id": run_id,
-        "status": "ready" if cutover is None else "sealed",
+        "alembic_revisions": revisions,
+        "application_id": int(conn.execute("PRAGMA application_id").fetchone()[0]),
+        "schema_members": schema_members,
+        "user_version": int(conn.execute("PRAGMA user_version").fetchone()[0]),
     }
-    return PopulationCutoverEvaluation(
-        status="ready" if cutover is None else "sealed",
-        run=run,
-        planes=plane_receipts,
-        parity=parity,
-        audit=audit,
-        cutover=cutover,
-        evaluation_sha256=digest_text(canonical_json(material)),
-    )
+    return digest_text(canonical_json(material))
 
 
-def _plane_receipt(
+def _verification_result(
     conn: sqlite3.Connection,
-    population_run_id: str,
     expected_name: PopulationPlaneName,
     verification: PopulationPlaneVerification,
-    *,
-    source_name: str,
-    verified_at: datetime,
     scope: PopulationTemporalScope,
-) -> PopulationPlaneReceipt:
-    if verification.plane_name != expected_name:
-        raise PopulationCutoverBlockedError(
-            "planes", f"{expected_name} verifier returned {verification.plane_name}"
-        )
+) -> dict[str, JsonValue]:
     result = cast(dict[str, JsonValue], verification.model_dump(mode="json"))
     if expected_name == "retrieval_runtime":
         supplied = verification.details.get("governance")
@@ -303,7 +489,50 @@ def _plane_receipt(
             if isinstance(supplied, dict)
             else cast(JsonValue, _retrieval_governance(conn, scope))
         )
-    code_sha = verifier_source_artifact_sha256({source_name: _SOURCE_ROOT / source_name})
+    return result
+
+
+def _candidate_source_snapshot_sha256(
+    *,
+    schema_sha256: str,
+    verifier_code_sha256: str,
+    verifier_assignments: tuple[tuple[PopulationPlaneName, str], ...],
+    plane_results: tuple[dict[str, JsonValue], ...],
+    parity: PopulationParityReceipt,
+    audit_summary: CutoverReadinessSummary,
+    scope: PopulationTemporalScope,
+) -> str:
+    parity_material = parity.model_dump(
+        mode="json",
+        exclude={"population_run_id", "verified_at"},
+    )
+    audit_material = audit_summary.model_dump(mode="json", exclude={"generated_at"})
+    material = {
+        "audit": audit_material,
+        "parity": parity_material,
+        "planes": list(plane_results),
+        "schema_sha256": schema_sha256,
+        "temporal_scope": scope.model_dump(mode="json"),
+        "verifier_assignments": [
+            {"plane_name": plane_name, "source_name": source_name}
+            for plane_name, source_name in verifier_assignments
+        ],
+        "verifier_closure_sha256": verifier_code_sha256,
+        "version": _CANDIDATE_SNAPSHOT_VERSION,
+    }
+    return digest_text(canonical_json(material))
+
+
+def _plane_receipt(
+    population_run_id: str,
+    expected_name: PopulationPlaneName,
+    verification: PopulationPlaneVerification,
+    *,
+    result: dict[str, JsonValue],
+    verifier_code_sha256: str,
+    verified_at: datetime,
+    scope: PopulationTemporalScope,
+) -> PopulationPlaneReceipt:
     return PopulationPlaneReceipt(
         population_run_id=population_run_id,
         plane_name=expected_name,
@@ -327,7 +556,7 @@ def _plane_receipt(
             "result": result,
             "temporal_scope": cast(JsonValue, scope.model_dump(mode="json")),
             "verifier": {
-                "code_sha256": code_sha,
+                "code_sha256": verifier_code_sha256,
                 "name": f"population.{expected_name}.verify",
                 "result_sha256": digest_text(canonical_json(result)),
                 "version": "1",
@@ -343,6 +572,7 @@ def build_population_audit_receipt(
     *,
     population_run_id: str,
     verified_at: datetime,
+    verifier_code_sha256: str | None = None,
 ) -> PopulationAuditReceipt:
     """Convert the exact 13-gate summary into its ledger-enforced receipt."""
 
@@ -398,8 +628,10 @@ def build_population_audit_receipt(
         population_run_id=population_run_id,
         verifier_name=_AUDIT_VERIFIER_NAME,
         verifier_version=_AUDIT_VERIFIER_VERSION,
-        verifier_code_sha256=verifier_source_artifact_sha256(
-            {"provenance/integrity_audit.py": _SOURCE_ROOT / "provenance/integrity_audit.py"}
+        verifier_code_sha256=(
+            _verifier_closure_sha256()
+            if verifier_code_sha256 is None
+            else _sha256(verifier_code_sha256)
         ),
         verifier_config_sha256=digest_text(canonical_json(options_material)),
         temporal_scope=summary.temporal_scope,
