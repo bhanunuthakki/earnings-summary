@@ -52,6 +52,16 @@ class _ProcessQueryKernel32(Protocol):
     def CloseHandle(self, handle: int) -> int: ...  # noqa: N802
 
 
+def _load_process_query_kernel32() -> _ProcessQueryKernel32:
+    import ctypes
+
+    load_windows_dll = cast(
+        "Callable[..., _ProcessQueryKernel32]",
+        getattr(ctypes, "WinDLL"),  # noqa: B009
+    )
+    return load_windows_dll("kernel32", use_last_error=True)
+
+
 @contextmanager
 def allow_nested_job_locks() -> Generator[None, None, None]:
     """Permit synchronous inner owners to borrow the current exact write sets."""
@@ -68,11 +78,7 @@ def _pid_is_alive(pid: int) -> bool:
         import ctypes
 
         process_query_limited_information = 0x1000
-        load_windows_dll = cast(
-            "Callable[..., _ProcessQueryKernel32]",
-            getattr(ctypes, "WinDLL"),  # noqa: B009
-        )
-        kernel32 = load_windows_dll("kernel32", use_last_error=True)
+        kernel32 = _load_process_query_kernel32()
         handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
         if handle:
             kernel32.CloseHandle(handle)
@@ -269,10 +275,9 @@ class _WindowsKillOnCloseJob:
     def close(self) -> None:
         if self._handle == 0:
             return
-        import ctypes
 
         handle, self._handle = self._handle, 0
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _load_process_query_kernel32()
         kernel32.CloseHandle(handle)
 
 
