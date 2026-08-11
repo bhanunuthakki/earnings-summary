@@ -42,9 +42,10 @@ JS = r"""
 
   // Navigation links must follow the server that delivered an HTTP report
   // (including a Tailscale address), while standalone file:// reports retain
-  // the configured localhost fallback.
-  document.querySelectorAll('a[data-server-path]').forEach(function(link) {
-    var path = link.getAttribute('data-server-path');
+  // the configured localhost fallback. All root-relative links share this
+  // contract, so a renderer cannot accidentally leave one pointing at file://.
+  document.querySelectorAll('a[href^="/"]:not([href^="//"])').forEach(function(link) {
+    var path = link.getAttribute('href');
     if (path && path.charAt(0) === '/') link.href = SERVER_URL + path;
   });
 
