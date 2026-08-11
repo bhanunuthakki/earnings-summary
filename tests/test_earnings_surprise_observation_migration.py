@@ -128,12 +128,7 @@ def test_upgrade_creates_immutable_ledgers_and_projection_lineage(
 def test_upgrade_backfills_and_links_existing_projection_deterministically(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    paths = [
-        migrated_db(tmp_path / f"legacy-{n}.db", target="0006_add_ask_proposal_approval")
-        for n in range(2)
-    ]
-    ids: list[str] = []
-    for path in paths:
+    def seed_legacy_projection(path: Path) -> None:
         with sqlite3.connect(path) as connection:
             connection.execute(
                 """
@@ -161,8 +156,18 @@ def test_upgrade_backfills_and_links_existing_projection_deterministically(
                     "2026-08-06T20:01:00+00:00",
                 ),
             )
-            connection.commit()
-        command.upgrade(_config(path), REVISION)
+
+    paths = [
+        migrated_db(
+            tmp_path / f"legacy-{n}.db",
+            upgrade_from="0006_add_ask_proposal_approval",
+            before_upgrade=seed_legacy_projection,
+            target=REVISION,
+        )
+        for n in range(2)
+    ]
+    ids: list[str] = []
+    for path in paths:
         with sqlite3.connect(path) as connection:
             row = connection.execute(
                 """

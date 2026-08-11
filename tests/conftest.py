@@ -501,7 +501,19 @@ def migrated_db(
         target: str = "head",
         archived: bool = False,
         reanchor_to_active_head: bool = False,
+        upgrade_from: str | None = None,
+        before_upgrade: Callable[[Path], None] | None = None,
     ) -> Path:
+        if (upgrade_from is None) != (before_upgrade is None):
+            raise ValueError("upgrade_from and before_upgrade must be provided together")
+        if upgrade_from is not None and archived:
+            raise ValueError("seeded upgrades are supported only on the active graph")
+        if upgrade_from is not None:
+            build(dest, target=upgrade_from)
+            assert before_upgrade is not None
+            before_upgrade(dest)
+            command.upgrade(_config(dest, archived=False), target)
+            return dest
         if reanchor_to_active_head and not archived:
             raise ValueError("only an archived migration graph can be re-anchored")
         graph = "archived" if archived else "active"
