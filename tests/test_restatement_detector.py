@@ -216,6 +216,61 @@ def test_is_later_filing_compares_fiscal_year(fixture_db: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_financial_fact_sqlite_invariant_failure_aborts_batch(
+    fixture_db: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    attempted: list[str] = []
+    try:
+        doc = _insert_document(
+            conn,
+            ticker="V",
+            source_type="fmp",
+            doc_type="fmp_income_statement",
+            period_end="2026-06-30 00:00:00",
+            fetched_at="2026-07-25 12:00:00",
+            sha256="a" * 64,
+        )
+        conn.execute(
+            "CREATE TRIGGER reject_unanchored_fact AFTER INSERT ON financial_facts "
+            "BEGIN SELECT RAISE(ABORT, "
+            "'fact write requires an evidence-backed source document'); END"
+        )
+        conn.commit()
+
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="fact write requires an evidence-backed source document",
+        ):
+            for line_item in ("revenue", "gross_profit"):
+                attempted.append(line_item)
+                insert_with_restatement_detection(
+                    conn,
+                    ticker="V",
+                    period_end=datetime.fromisoformat("2026-06-30"),
+                    fiscal_period_type="Q2",
+                    line_item=line_item,
+                    value=Decimal("100"),
+                    currency="USD",
+                    unit="millions",
+                    source_doc_id=doc,
+                    extracted_by="fmp",
+                )
+
+        assert attempted == ["revenue"]
+        assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
+        failure_events = [
+            record
+            for record in caplog.records
+            if "restatement_insert_failed" in record.getMessage()
+        ]
+        assert len(failure_events) == 1
+    finally:
+        conn.close()
+
+
 def test_restatement_chain_two_rows_with_supersedes_link(fixture_db: Path) -> None:
     """The brief's example: AMZN Q1 2023 revenue from FMP first (Q-filing),
     then from FMP again (FY-filing restated value). Both rows survive;

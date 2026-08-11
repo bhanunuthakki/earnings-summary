@@ -491,15 +491,17 @@ def insert_with_restatement_detection(
                 ),
             )
     except sqlite3.Error as exc:
-        log.warning(
+        log.error(
             {
                 "event": "restatement_insert_failed",
+                "outcome": "raised",
                 "ticker": ticker,
                 "line_item": line_item,
+                "error_type": type(exc).__name__,
                 "error": str(exc),
             }
         )
-        return (None, supersedes_id)
+        raise
 
     if cur.rowcount == 0:
         # UNIQUE conflict on (ticker, period_end, fiscal_period_type,
