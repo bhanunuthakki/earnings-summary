@@ -126,36 +126,34 @@ def _decision(
     conn: sqlite3.Connection, ticker: str
 ) -> tuple[DeskDecision | None, list[DeskCondition], list[str]]:
     columns = _table_columns(conn, "decisions")
-    required = {"id", "ticker", "recommendation_kind", "made_at"}
-    if not required <= columns:
-        return None, [], ["decision_store_unavailable"]
-    selected = ["id", "recommendation_kind", "made_at"]
-    for optional in (
+    required = {
+        "id",
+        "ticker",
+        "recommendation_kind",
         "recommendation_value",
         "conviction",
         "source_lens",
         "decided_by",
         "decision_conditions",
-    ):
-        if optional in columns:
-            selected.append(optional)
+        "made_at",
+    }
+    if not required <= columns:
+        return None, [], ["decision_store_unavailable"]
     try:
-        base_query = f"SELECT {', '.join(selected)} FROM decisions WHERE UPPER(ticker) = ?"
-        if "decided_by" in columns:
-            owner_row = conn.execute(
-                base_query + " AND decided_by = 'owner' ORDER BY made_at DESC, id DESC LIMIT 1",
-                (ticker,),
-            ).fetchone()
-            model_row = conn.execute(
-                base_query + " AND decided_by != 'owner' ORDER BY made_at DESC, id DESC LIMIT 1",
-                (ticker,),
-            ).fetchone()
-        else:
-            owner_row = None
-            model_row = conn.execute(
-                base_query + " ORDER BY made_at DESC, id DESC LIMIT 1",
-                (ticker,),
-            ).fetchone()
+        owner_row = conn.execute(
+            "SELECT id, recommendation_kind, recommendation_value, conviction, "
+            "source_lens, decided_by, decision_conditions, made_at FROM decisions "
+            "WHERE UPPER(ticker) = ? AND decided_by = 'owner' "
+            "ORDER BY made_at DESC, id DESC LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        model_row = conn.execute(
+            "SELECT id, recommendation_kind, recommendation_value, conviction, "
+            "source_lens, decided_by, decision_conditions, made_at FROM decisions "
+            "WHERE UPPER(ticker) = ? AND decided_by != 'owner' "
+            "ORDER BY made_at DESC, id DESC LIMIT 1",
+            (ticker,),
+        ).fetchone()
     except sqlite3.Error:
         return None, [], ["decision_store_unavailable"]
     row = owner_row or model_row
@@ -165,8 +163,6 @@ def _decision(
     decision_id = int(values["id"])
     made_at = str(values["made_at"])
     warnings: list[str] = []
-    if "decided_by" not in columns:
-        warnings.append("decision_owner_provenance_unavailable")
     owner_state = str(owner_row["recommendation_kind"]) if owner_row is not None else None
     model_recommendation = str(model_row["recommendation_kind"]) if model_row is not None else None
     raw_value = values.get("recommendation_value")
@@ -205,16 +201,24 @@ def _decision(
 
 def _questions(conn: sqlite3.Connection, ticker: str) -> tuple[list[DeskQuestion], list[str]]:
     columns = _table_columns(conn, "analyst_notes")
-    required = {"id", "ticker", "kind", "status", "body", "source", "updated_at"}
+    required = {
+        "id",
+        "ticker",
+        "kind",
+        "status",
+        "body",
+        "source",
+        "source_ref",
+        "fact_ref",
+        "created_at",
+        "updated_at",
+    }
     if not required <= columns:
         return [], ["analyst_notes_unavailable"]
     try:
-        optional_ref = (
-            "COALESCE(fact_ref, source_ref)" if {"fact_ref", "source_ref"} <= columns else "NULL"
-        )
         notes = conn.execute(
             "SELECT id, body, source, updated_at, "
-            f"{optional_ref} AS evidence_ref FROM analyst_notes "
+            "COALESCE(fact_ref, source_ref) AS evidence_ref FROM analyst_notes "
             "WHERE UPPER(ticker) = ? AND kind = 'question' AND status = 'open' "
             "ORDER BY created_at DESC, id DESC LIMIT 20",
             (ticker,),
