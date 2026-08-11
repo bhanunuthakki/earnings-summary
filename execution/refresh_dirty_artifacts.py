@@ -39,6 +39,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm_artifact_store import Artifact, drain_dirty  # noqa: E402
+from runtime.python_process import managed_python_argv  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("refresh_dirty_artifacts")
@@ -240,11 +241,18 @@ def _build_pending_jobs(
     return jobs
 
 
+def _managed_job_argv(job: _PendingJob, cwd: Path) -> list[str]:
+    """Route an internal Python regenerator through the verified SQLite bootstrap."""
+    if len(job.argv) < 2 or job.argv[0].casefold() not in {"python", "python.exe"}:
+        raise ValueError("dirty-artifact regenerators must be repository Python scripts")
+    return managed_python_argv(cwd, job.argv[1], *job.argv[2:])
+
+
 def _run_subprocess(job: _PendingJob, cwd: Path) -> dict[str, object]:
     """Invoke one regenerator. Captures exit + tail stderr; never raises."""
     try:
         proc = subprocess.run(
-            job.argv,
+            _managed_job_argv(job, cwd),
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -360,7 +368,7 @@ def _execute_jobs(
                 "event": "drain_invoke",
                 "ticker": job.ticker,
                 "purpose": job.purpose,
-                "argv": job.argv,
+                "argv": _managed_job_argv(job, repo_root),
                 "accrued_cost_usd": round(accrued, 4),
             }
         )
