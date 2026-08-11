@@ -607,7 +607,7 @@ def test_cli_emits_one_redacted_terminal_receipt_and_ends_run_once(
 ) -> None:
     from execution import quarterly_refresh as cli
 
-    secret = "supersecretvalue"
+    leak_sentinel = "supersecretvalue"
     ticker_report = TickerRefreshReport(
         ticker="NU",
         stages=()
@@ -617,7 +617,7 @@ def test_cli_emits_one_redacted_terminal_receipt_and_ends_run_once(
                 name=StageName.DERIVE_FMP_KPIS,
                 status=StageStatus.FAILED,
                 rows_processed=0,
-                notes=f"provider failed api_key={secret}",
+                notes=f"provider failed api_key={leak_sentinel}",
             ),
         ),
         breach_status=None,
@@ -638,7 +638,7 @@ def test_cli_emits_one_redacted_terminal_receipt_and_ends_run_once(
                     if failure_kind == "exception"
                     else TickerExecutionStatus.COMPLETED
                 ),
-                error=(f"RuntimeError: api_key={secret}" if failure_kind == "exception" else None),
+                error=(f"RuntimeError: api_key={leak_sentinel}" if failure_kind == "exception" else None),
             ),
         ),
     )
@@ -667,7 +667,7 @@ def test_cli_emits_one_redacted_terminal_receipt_and_ends_run_once(
     assert cli.main(["--ticker", "NU", "--json", "--db", "unused.db"]) == 1
     output = capsys.readouterr().out
     assert output.count('"receipt"') == 1
-    assert secret not in output
+    assert leak_sentinel not in output
     parsed = json.loads(output)
     assert parsed["receipt"]["status"] == "failed"
     assert len(parsed["receipt"]["failed"]) == 1
@@ -680,7 +680,7 @@ def test_cli_human_output_redacts_all_stage_notes(
 ) -> None:
     from execution import quarterly_refresh as cli
 
-    secret = "supersecretvalue"
+    leak_sentinel = "supersecretvalue"
     stage_results = tuple(
         StageResult(
             name=name,
@@ -689,7 +689,7 @@ def test_cli_human_output_redacts_all_stage_notes(
             ),
             rows_processed=0,
             notes=(
-                f"provider failed api_key={secret}"
+                f"provider failed api_key={leak_sentinel}"
                 if name in {StageName.VALIDATE_SEGMENT_CACHE, StageName.EVALUATE_THESIS}
                 else "ok"
             ),
@@ -748,5 +748,5 @@ def test_cli_human_output_redacts_all_stage_notes(
     assert cli.main(["--ticker", "NU", "--db", "unused.db"]) == 1
     output = capsys.readouterr().out
     assert output.count('"receipt"') == 1
-    assert secret not in output
+    assert leak_sentinel not in output
     assert output.count("api_key=***") >= 3
