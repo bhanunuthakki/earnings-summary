@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def test_portfolio_tickers_are_loaded_from_active_governed_roster(tmp_path: Path) -> None:
-    from execution.run_lens import _portfolio_tickers
+    from execution.run_lens import portfolio_tickers
 
     data = tmp_path / "data"
     data.mkdir()
@@ -27,4 +27,4 @@ def test_portfolio_tickers_are_loaded_from_active_governed_roster(tmp_path: Path
     finally:
         conn.close()
 
-    assert _portfolio_tickers(tmp_path) == ["BKNG", "UBER"]
+    assert portfolio_tickers(tmp_path) == ["BKNG", "UBER"]

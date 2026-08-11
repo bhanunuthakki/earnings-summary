@@ -65,6 +65,7 @@ def test_windows_child_is_assigned_while_suspended_before_resume(
         events.append("resume")
         process.resumed = True
 
+    monkeypatch.setattr(job_runtime.os, "name", "nt")
     monkeypatch.setattr(job_runtime.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(job_runtime, "_create_process_tree_job", assign)
     monkeypatch.setattr(job_runtime, "_resume_process_threads", resume)
@@ -130,7 +131,6 @@ def test_scheduler_wrapper_tracks_its_direct_cmd_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     observed: list[tuple[int, str | None] | None] = []
-    parent_pid = os.getppid()
 
     def start_identity(pid: int) -> str:
         return f"start:{pid}"
@@ -158,7 +158,7 @@ def test_scheduler_wrapper_tracks_its_direct_cmd_parent(
     )
 
     assert code == 0
-    expected = (parent_pid, f"start:{parent_pid}") if os.name == "nt" else None
+    expected = (os.getppid(), f"start:{os.getppid()}") if os.name == "nt" else None
     assert observed == [expected]
 
 

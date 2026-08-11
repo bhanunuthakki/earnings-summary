@@ -44,6 +44,7 @@ def _sync_db_path(repo_root: Path) -> None:
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
 
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from synthesis_lenses import (  # noqa: E402
     LENSES,
     list_lenses_for_ticker,
@@ -53,10 +54,11 @@ from synthesis_lenses import (  # noqa: E402
 
 log = logging.getLogger("run_lens")
 
-def _portfolio_tickers(repo_root: Path) -> list[str]:
+
+def portfolio_tickers(repo_root: Path) -> list[str]:
     """Return the current active portfolio universe from the governed DB."""
 
-    conn = sqlite3.connect(repo_root / "data" / "portfolio.db")
+    conn = connect_sqlite(repo_root / "data" / "portfolio.db", role=SQLiteConnectionRole.READ_ONLY)
     try:
         rows = conn.execute(
             "SELECT ticker FROM tracked_companies "
@@ -115,7 +117,7 @@ def main() -> int:
 
     elif args.portfolio:
         try:
-            tickers = _portfolio_tickers(args.repo_root.resolve())
+            tickers = portfolio_tickers(args.repo_root.resolve())
         except sqlite3.Error as exc:
             log.error(
                 {

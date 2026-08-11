@@ -14,13 +14,13 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 from uuid import uuid4
 
 from runtime.python_process import ensure_managed_python_argv
@@ -46,6 +46,12 @@ _SCHEDULER_OWNER: tuple[int, str | None] | None = None
 _CREATE_SUSPENDED = getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
 
 
+class _ProcessQueryKernel32(Protocol):
+    def OpenProcess(self, desired_access: int, inherit_handle: bool, pid: int) -> int: ...  # noqa: N802
+
+    def CloseHandle(self, handle: int) -> int: ...  # noqa: N802
+
+
 @contextmanager
 def allow_nested_job_locks() -> Generator[None, None, None]:
     """Permit synchronous inner owners to borrow the current exact write sets."""
@@ -62,7 +68,11 @@ def _pid_is_alive(pid: int) -> bool:
         import ctypes
 
         process_query_limited_information = 0x1000
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        load_windows_dll = cast(
+            "Callable[..., _ProcessQueryKernel32]",
+            getattr(ctypes, "WinDLL"),  # noqa: B009
+        )
+        kernel32 = load_windows_dll("kernel32", use_last_error=True)
         handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
         if handle:
             kernel32.CloseHandle(handle)
