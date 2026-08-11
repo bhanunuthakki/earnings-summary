@@ -300,6 +300,42 @@ def test_status_well_kit_is_block_soft_fill() -> None:
         assert f"color-mix(in srgb, var({tok}) 16%, transparent)" in css
 
 
+def test_card_kit_owns_compact_geometry_and_explicit_type_roles() -> None:
+    """Cards and their ordinary titles have one shared, responsive contract.
+
+    Metric cards keep the separate ``stat-*`` vocabulary; these primitives
+    prevent ordinary research/action headings from borrowing metric type.
+    """
+    css = controls_css("dark")
+    card = css.split(".k-card {", 1)[1].split("}", 1)[0]
+    assert "background: var(--surface)" in card
+    assert "border: var(--bw-thin) solid var(--border)" in card
+    assert "border-radius: var(--radius-card)" in card
+    assert "padding: var(--sp-3)" in card
+    assert "min-width: 0" in card
+    assert "height:" not in card
+    assert "min-height:" not in card
+    assert "max-height:" not in card
+
+    dense = css.split(".k-card-dense {", 1)[1].split("}", 1)[0]
+    assert "padding: var(--sp-2) var(--sp-3)" in dense
+    stack = css.split(".k-card-stack {", 1)[1].split("}", 1)[0]
+    assert "flex-direction: column" in stack
+    assert "gap: var(--sp-3)" in stack
+
+    title = css.split(".k-card-title {", 1)[1].split("}", 1)[0]
+    assert "font-size: var(--fs-title)" in title
+    assert "color: var(--fg)" in title
+    row_title = css.split(".k-card-row-title {", 1)[1].split("}", 1)[0]
+    assert "font-size: var(--fs-body)" in row_title
+    meta = css.split(".k-card-meta {", 1)[1].split("}", 1)[0]
+    assert "font-size: var(--fs-caption)" in meta
+    assert "color: var(--muted)" in meta
+
+    assert ".stat-heading {" in css
+    assert ".stat-number {" in css
+
+
 def test_status_dot_kit_is_currentcolor_circle_over_tokens() -> None:
     """``.k-dot`` is the one filled circular status dot — a full-radius circle
     filled with ``currentColor`` so a tone modifier only sets ``color`` (the

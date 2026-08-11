@@ -25,6 +25,7 @@ from pipeline.work_os_research import (
     render_company_desk_shell,
 )
 from ui.controls import controls_css
+from ui.tokens import palette_css
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,7 +179,6 @@ def _production_runtime(generated_at: datetime) -> str:
   .research-list {{ display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }}
   .research-row {{ display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3); }}
   .research-library-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }}
-  .research-library-card {{ display: flex; flex-direction: column; gap: var(--sp-3); }}
   @media (max-width: 47.5rem) {{
     body {{ display: flex; min-width: 0; }}
     .app-sidebar,
@@ -488,7 +488,7 @@ def _production_runtime(generated_at: datetime) -> str:
       const items = Array.isArray(payload.items) ? payload.items : [];
       target.innerHTML = items.length ? items.map(function (item) {{
         const statusClass = item.status === 'available' ? 'k-pill k-pill-ok' : 'k-pill k-pill-warn';
-        return '<article class="k-card research-library-card" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(item.ticker) + '</span><span class="' + statusClass + '">' + escapeWorkOsHtml(item.status) + '</span></div><div><div class="stat-heading">' + escapeWorkOsHtml(item.artifact_kind.replaceAll('_', ' ')) + '</div><h3>' + escapeWorkOsHtml(item.title) + '</h3><div class="stat-subtext">' + escapeWorkOsHtml(item.report_date) + ' · ' + escapeWorkOsHtml(item.coverage_role) + ' · ' + escapeWorkOsHtml(item.reader_mode) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-open-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">Read complete brief →</button></article>';
+        return '<article class="k-card k-card-stack research-library-card" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(item.ticker) + '</span><span class="' + statusClass + '">' + escapeWorkOsHtml(item.status) + '</span></div><div><div class="k-card-meta">' + escapeWorkOsHtml(item.artifact_kind.replaceAll('_', ' ')) + '</div><h3 class="k-card-title">' + escapeWorkOsHtml(item.title) + '</h3><div class="k-card-meta">' + escapeWorkOsHtml(item.report_date) + ' · ' + escapeWorkOsHtml(item.coverage_role) + ' · ' + escapeWorkOsHtml(item.reader_mode) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-open-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">Read complete brief →</button></article>';
       }}).join('') : '<div class="k-well">No persisted research artifacts match these filters.</div>';
       target.querySelectorAll('[data-open-artifact]').forEach(function (button) {{
         const artifact = items.find(function (item) {{ return item.artifact_id === button.dataset.openArtifact; }});
@@ -533,9 +533,9 @@ def _production_runtime(generated_at: datetime) -> str:
     const actionQueue = document.getElementById('workOsActionQueue');
     if (actionQueue) {{
       actionQueue.innerHTML = payload.actions.length ? payload.actions.map(function (action) {{
-        return '<div class="k-card k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
-          '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><div class="stat-heading">' + escapeWorkOsHtml(action.headline) + '</div>' +
-          '<div class="stat-subtext">' + escapeWorkOsHtml(action.detail) + '</div></div></div>' +
+        return '<div class="k-card k-card-dense k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
+          '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><div class="k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</div>' +
+          '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div></div></div>' +
           '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company &rarr;</button></div></div>';
       }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
     }}
@@ -828,7 +828,9 @@ def _add_production_contract(html: str, generated_at: datetime) -> str:
     runtime = _production_runtime(generated_at)
     copilot = render_work_os_copilot()
     reader = render_brief_reader_shell()
-    controls = f'<style id="work-os-controls-css">{controls_css("dark")}</style>'
+    controls = (
+        f'<style id="work-os-controls-css">{palette_css("dark")}{controls_css("dark")}</style>'
+    )
     return html.replace(
         "</body>", controls + "\n" + reader + "\n" + copilot + "\n" + runtime + "\n</body>", 1
     )
