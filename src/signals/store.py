@@ -67,11 +67,13 @@ __all__ = [
     "SIGNAL_INVESTOR_DAY",
     "SIGNAL_MEDIA_APPEARANCE",
     "SIGNAL_TYPES",
+    "ForwardAgendaResult",
     "SignalRow",
     "is_diet_only",
     "is_news_mirrored",
     "load_diet_signals",
     "load_forward_agenda",
+    "load_forward_agenda_result",
     "record_investor_day",
     "record_media_appearance",
     "sync_news_to_signals",
@@ -235,6 +237,14 @@ class SignalRow:
     quality_score: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ForwardAgendaResult:
+    """Typed result so a missing store never masquerades as an empty calendar."""
+
+    rows: tuple[SignalRow, ...]
+    unavailable: bool = False
+
+
 _SELECT_COLS = (
     "id, ticker, signal_type, title, published_at, weight, cadence, "
     "body, url, firm, event_date, source_feed, news_id"
@@ -349,6 +359,16 @@ def load_forward_agenda(
     on_or_after: date,
     limit: int = 40,
 ) -> list[SignalRow]:
+    """Compatibility reader returning only rows; use the typed result in UI."""
+    return list(load_forward_agenda_result(db_path, on_or_after=on_or_after, limit=limit).rows)
+
+
+def load_forward_agenda_result(
+    db_path: Path | str | None,
+    *,
+    on_or_after: date,
+    limit: int = 40,
+) -> ForwardAgendaResult:
     """The forward agenda: upcoming forward-dated signals (investor days),
     soonest first.
 
@@ -358,19 +378,19 @@ def load_forward_agenda(
     decay of ``now``."""
     conn = _open_ro(db_path)
     if conn is None:
-        return []
+        return ForwardAgendaResult((), unavailable=True)
     try:
         rows = conn.execute(
             f"SELECT {_SELECT_COLS} FROM signals "
-            "WHERE event_date IS NOT NULL AND event_date >= ? "
+            "WHERE signal_type = ? AND event_date IS NOT NULL AND event_date >= ? "
             "ORDER BY event_date ASC, weight DESC, id ASC LIMIT ?",
-            (on_or_after.isoformat(), int(limit)),
+            (SIGNAL_INVESTOR_DAY, on_or_after.isoformat(), int(limit)),
         ).fetchall()
     except sqlite3.Error:
-        return []
+        return ForwardAgendaResult((), unavailable=True)
     finally:
         conn.close()
-    return [_row_to_signal(r) for r in rows]
+    return ForwardAgendaResult(tuple(_row_to_signal(r) for r in rows))
 
 
 # ---------------------------------------------------------------------------

@@ -143,6 +143,25 @@ def test_forward_agenda_event_date_ascending_and_excludes_past(db_with_news: Pat
         record_investor_day(conn, "META", date(2026, 9, 18), "Analyst Day", firm="Meta IR")
         record_investor_day(conn, "NU", date(2026, 7, 1), "Investor Day", firm="Nu IR")
         record_investor_day(conn, "NU", date(2026, 1, 1), "Old day")  # past
+        # A future-dated row from another typed lane is not a general-calendar
+        # event. The reader must filter by stored identity, not merely by the
+        # presence of an event_date.
+        conn.execute(
+            "INSERT INTO signals "
+            "(ticker, signal_type, title, event_date, published_at, weight, cadence, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "NU",
+                "estimate_revision",
+                "Not a calendar event",
+                "2026-07-02",
+                "2026-06-13 00:00:00",
+                0.75,
+                "event",
+                "2026-06-13 00:00:00",
+            ),
+        )
+        conn.commit()
     finally:
         conn.close()
     agenda = load_forward_agenda(db_with_news, on_or_after=date(2026, 6, 13))
