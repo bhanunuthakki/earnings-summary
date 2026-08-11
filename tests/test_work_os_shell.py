@@ -328,6 +328,41 @@ def test_company_desk_renders_governed_valuation_provenance() -> None:
     assert "workOsMoney(position.fair_value, position.currency)" in html
 
 
+def test_company_desk_earnings_doorway_matches_full_brief_canvas_interaction() -> None:
+    html = render_work_os_shell()
+
+    assert 'id="workOsEarningsDoorway"' in html
+    assert 'class="k-chip is-active" type="button" data-peek-url="' in html
+    assert "escapeWorkOsHtml(doorway.route)" in html
+    assert "escapeWorkOsHtml(doorway.label)" in html
+    assert "Post-earnings readout — ' + ticker" in html
+    assert "Earnings prep — ' + ticker" in html
+    assert "desk.earnings_doorway || null" in html
+    assert "Pre-earnings brief pending" not in html
+    assert "Post-earnings readout pending" not in html
+    doorway_runtime = html.split("function workOsRenderEarningsDoorway", 1)[1].split(
+        "function workOsCompanyByTicker", 1
+    )[0]
+    assert "data-work-os-full-brief" not in doorway_runtime
+    assert "data-peek-url" in doorway_runtime
+    assert "if (doorway && doorway.status === 'available' && doorway.route)" in doorway_runtime
+    assert "if (doorway && doorway.status === 'pending')" in doorway_runtime
+    unavailable = doorway_runtime.split("Earnings artifact unavailable", 1)[0]
+    assert "data-peek-url" in unavailable
+
+
+def test_earnings_doorway_route_uses_the_document_level_peek_delegate() -> None:
+    html = render_work_os_shell()
+
+    assert "event.target.closest('[data-peek-url]')" in html
+    assert "route.startsWith('/api/peek/')" in html
+    assert "workOsOpenPeekRoute(route" in html
+    assert "fetch(route, { headers: { Accept: 'text/html' } })" in html
+    assert "body.innerHTML = await response.text()" in html
+    assert "peekOverlay.open()" in html
+    assert "The persisted earnings artifact is unavailable." in html
+
+
 def test_nvo_action_queue_open_company_uses_the_canonical_desk_handoff() -> None:
     html = render_work_os_shell()
 

@@ -8,14 +8,22 @@ directories, or invokes an LLM while a screen is loading.
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from calendar_clock import calendar_today
 from dcf.latest import latest_dcf_row
 from decision_conditions import conditions_from_json
+from pipeline.earnings_doorway import (
+    POST_EARNINGS_WINDOW_DAYS,
+    PRE_EARNINGS_WINDOW_DAYS,
+    EarningsDoorway,
+    resolve_earnings_doorway,
+)
+from provenance.selection import selected_transcripts_relation
 from report.artifacts import ReportArtifactRef, load_report_artifact_index
 
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
@@ -94,7 +102,151 @@ class CompanyDeskResponse(BaseModel):
     conditions: list[DeskCondition]
     open_questions: list[DeskQuestion]
     latest_brief: ReportArtifactRef | None
+    earnings_doorway: EarningsDoorway
     warnings: list[str]
+
+
+_PRE_EARNINGS_PURPOSE = "pre_earnings_brief"
+_POST_EARNINGS_PURPOSE = "post_earnings_readout"
+
+
+def _parse_date(value: object) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _calendar_event_date(conn: sqlite3.Connection, ticker: str, today: date) -> date | None:
+    try:
+        rows = conn.execute(
+            "SELECT expected_date FROM expected_earnings WHERE UPPER(ticker) = ?",
+            (ticker,),
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    candidates = [parsed for row in rows if (parsed := _parse_date(row[0])) is not None]
+    eligible = [
+        candidate
+        for candidate in candidates
+        if -POST_EARNINGS_WINDOW_DAYS <= (today - candidate).days <= PRE_EARNINGS_WINDOW_DAYS
+    ]
+    return min(eligible, key=lambda candidate: abs((today - candidate).days)) if eligible else None
+
+
+def _release_for_period(conn: sqlite3.Connection, ticker: str, period_end: date) -> date | None:
+    try:
+        rows = conn.execute(
+            "SELECT release_date FROM earnings_surprises WHERE UPPER(ticker) = ?",
+            (ticker,),
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    releases = [parsed for row in rows if (parsed := _parse_date(row[0])) is not None]
+    in_quarter_window = [release for release in releases if 0 <= (release - period_end).days <= 120]
+    return min(in_quarter_window) if in_quarter_window else None
+
+
+def _latest_reported_period(
+    conn: sqlite3.Connection, ticker: str
+) -> tuple[str, date | None] | None:
+    try:
+        relation = selected_transcripts_relation(conn)
+        row = conn.execute(
+            f"SELECT period_end, call_date FROM {relation.sql} "  # nosec B608 -- trusted selected-relation shape; ticker remains bound
+            "WHERE UPPER(ticker) = ? AND period_end IS NOT NULL "
+            "AND (UPPER(COALESCE(fiscal_period_type, '')) GLOB 'Q[1-4]*' "
+            "OR UPPER(COALESCE(fiscal_period_type, '')) = 'QUARTER') "
+            "ORDER BY period_end DESC, id DESC LIMIT 1",
+            (ticker,),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    period_end = _parse_date(row[0])
+    if period_end is None:
+        return None
+    event_date = _release_for_period(conn, ticker, period_end) or _parse_date(row[1])
+    return period_end.isoformat(), event_date
+
+
+def _actual_event_date(conn: sqlite3.Connection, ticker: str, today: date) -> date | None:
+    candidates: list[date] = []
+    try:
+        rows = conn.execute(
+            "SELECT release_date FROM earnings_surprises WHERE UPPER(ticker) = ?",
+            (ticker,),
+        ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    candidates.extend(parsed for row in rows if (parsed := _parse_date(row[0])) is not None)
+    latest_period = _latest_reported_period(conn, ticker)
+    if latest_period is not None and latest_period[1] is not None:
+        candidates.append(latest_period[1])
+    eligible = [
+        candidate
+        for candidate in candidates
+        if 0 <= (today - candidate).days <= POST_EARNINGS_WINDOW_DAYS
+    ]
+    return max(eligible) if eligible else None
+
+
+def _artifact_exists(
+    conn: sqlite3.Connection,
+    ticker: str,
+    purpose: str,
+    fiscal_period: str,
+) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM llm_artifacts "
+            "WHERE UPPER(COALESCE(ticker, '')) = ? AND scope = 'ticker' "
+            "AND purpose = ? AND fiscal_period = ? AND superseded_by_id IS NULL "
+            "AND TRIM(COALESCE(content_md, '')) != '' LIMIT 1",
+            (ticker, purpose, fiscal_period),
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def build_earnings_doorway(
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    today: date,
+) -> EarningsDoorway:
+    """Resolve one artifact-backed doorway from persisted event evidence."""
+
+    event_date = _actual_event_date(conn, ticker, today) or _calendar_event_date(
+        conn, ticker, today
+    )
+    pre_route = None
+    post_route = None
+    if event_date is not None and _artifact_exists(
+        conn,
+        ticker,
+        _PRE_EARNINGS_PURPOSE,
+        event_date.isoformat(),
+    ):
+        pre_route = f"/api/peek/earnings-prep?ticker={ticker}"
+    latest_period = _latest_reported_period(conn, ticker)
+    if (
+        event_date is not None
+        and latest_period is not None
+        and latest_period[1] == event_date
+        and _artifact_exists(conn, ticker, _POST_EARNINGS_PURPOSE, latest_period[0])
+    ):
+        post_route = f"/api/peek/earnings-readout?ticker={ticker}"
+    return resolve_earnings_doorway(
+        today=today,
+        event_date=event_date,
+        pre_route=pre_route,
+        post_route=post_route,
+    )
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -270,6 +422,7 @@ def build_company_desk(
     ticker: str,
     *,
     generated_at: datetime | None = None,
+    today: date | None = None,
 ) -> CompanyDeskResponse:
     """Build one cheap Desk snapshot from an existing request connection."""
 
@@ -280,6 +433,11 @@ def build_company_desk(
     decision, conditions, decision_warnings = _decision(conn, normalized)
     questions, question_warnings = _questions(conn, normalized)
     latest_brief = _latest_brief(repo_root, normalized)
+    earnings_doorway = build_earnings_doorway(
+        conn,
+        normalized,
+        today=today or calendar_today(generated_at),
+    )
     position = _position_snapshot(conn, normalized)
     warnings = [*decision_warnings, *question_warnings]
     if position.price is None and position.fair_value is None:
@@ -296,8 +454,9 @@ def build_company_desk(
         conditions=conditions,
         open_questions=questions,
         latest_brief=latest_brief,
+        earnings_doorway=earnings_doorway,
         warnings=warnings,
     )
 
 
-__all__ = ["CompanyDeskResponse", "build_company_desk"]
+__all__ = ["CompanyDeskResponse", "build_company_desk", "build_earnings_doorway"]
