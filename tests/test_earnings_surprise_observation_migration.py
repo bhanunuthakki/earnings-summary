@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -49,10 +50,10 @@ def _observation_values() -> tuple[object, ...]:
     )
 
 
-def test_upgrade_creates_immutable_ledgers_and_projection_lineage(tmp_path: Path) -> None:
-    path = tmp_path / "earnings-observations.db"
-    config = _config(path)
-    command.upgrade(config, "head")
+def test_upgrade_creates_immutable_ledgers_and_projection_lineage(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "earnings-observations.db", target="head")
 
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
@@ -110,10 +111,11 @@ def test_upgrade_creates_immutable_ledgers_and_projection_lineage(tmp_path: Path
             connection.execute("UPDATE earnings_surprises SET source_observation_id=?", ("d" * 64,))
 
 
-def test_downgrade_removes_only_earnings_governance_surface(tmp_path: Path) -> None:
-    path = tmp_path / "earnings-observations-downgrade.db"
+def test_downgrade_removes_only_earnings_governance_surface(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "earnings-observations-downgrade.db", target="head")
     config = _config(path)
-    command.upgrade(config, "head")
     command.downgrade(config, "0006_add_ask_proposal_approval")
 
     with sqlite3.connect(path) as connection:

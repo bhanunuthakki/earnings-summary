@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0006_add_ask_proposal_approval"
+_ACTIVE_HEAD = "0007_add_earnings_surprise_observations"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

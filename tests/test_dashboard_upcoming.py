@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from dashboard.upcoming import UPCOMING_CSS, render_upcoming_strip, upcoming_earnings
+from earnings_surprise_store import EarningsSurpriseRecordV1, append_observation
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 TODAY = date(2026, 5, 27)
@@ -50,27 +51,36 @@ def _seed_calendar(db_path: Path) -> None:
         # NU: last release 80d before TODAY -> est +91 = TODAY+11 (within 14d) -> shown.
         # ORCL: last release 5d before TODAY -> est +91 ~ TODAY+86 (beyond horizon) -> hidden.
         # ZZ: within horizon but a watchlist name -> hidden.
-        conn.executemany(
-            "INSERT INTO earnings_surprises "
-            "(ticker, release_date, source_name, fetched_at) VALUES (?, ?, 'test', ?)",
-            [
+        releases = [
+            ("NU", TODAY - timedelta(days=80)),
+            ("ORCL", TODAY - timedelta(days=5)),
+            ("ZZ", TODAY - timedelta(days=80)),
+        ]
+        for ordinal, (ticker, release_date) in enumerate(releases):
+            record = EarningsSurpriseRecordV1(
+                ticker=ticker,
+                release_date=release_date,
+                source_name="test",
+                fetched_at=f"{TODAY.isoformat()}T00:00:00+00:00",
+            )
+            observation_id, _ = append_observation(
+                conn,
+                record=record,
+                raw_payload=record.model_dump(mode="json"),
+                cache_path="test/dashboard_upcoming",
+                record_ordinal=ordinal,
+            )
+            conn.execute(
+                "INSERT INTO earnings_surprises "
+                "(ticker, release_date, source_name, fetched_at, source_observation_id) "
+                "VALUES (?, ?, 'test', ?, ?)",
                 (
-                    "NU",
-                    (TODAY - timedelta(days=80)).isoformat(),
-                    TODAY.isoformat(),
+                    ticker,
+                    release_date.isoformat(),
+                    record.fetched_at.isoformat(),
+                    observation_id,
                 ),
-                (
-                    "ORCL",
-                    (TODAY - timedelta(days=5)).isoformat(),
-                    TODAY.isoformat(),
-                ),
-                (
-                    "ZZ",
-                    (TODAY - timedelta(days=80)).isoformat(),
-                    TODAY.isoformat(),
-                ),
-            ],
-        )
+            )
         conn.commit()
     finally:
         conn.close()

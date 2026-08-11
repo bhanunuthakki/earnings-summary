@@ -24,7 +24,7 @@ def _config(path: Path) -> Config:
 def test_upgrade_adds_authority_and_downgrade_preserves_proposals(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    path = migrated_db(tmp_path / "proposal-approval.db", target="head")
+    path = migrated_db(tmp_path / "proposal-approval.db", target=REVISION)
     config = _config(path)
 
     with sqlite3.connect(path) as connection:
