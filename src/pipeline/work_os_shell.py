@@ -411,6 +411,50 @@ def _production_runtime(generated_at: datetime) -> str:
     return 'k-pill k-pill-ok';
   }}
 
+  function workOsRenderEarningsDoorway(doorway, ticker) {{
+    const target = document.getElementById('workOsEarningsDoorway');
+    if (!target) return;
+    if (doorway && doorway.status === 'available' && doorway.route) {{
+      const title = doorway.phase === 'post'
+        ? 'Post-earnings readout — ' + ticker
+        : 'Earnings prep — ' + ticker;
+      target.innerHTML = '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(doorway.route) + '" data-peek-title="' + escapeWorkOsHtml(title) + '">' + escapeWorkOsHtml(doorway.label) + '</button>';
+      return;
+    }}
+    if (doorway && doorway.status === 'pending') {{
+      target.innerHTML = '<span class="k-chip">' + escapeWorkOsHtml(doorway.label) + '</span>';
+      return;
+    }}
+    target.innerHTML = '<span class="k-card-meta">Earnings artifact unavailable</span>';
+  }}
+
+  async function workOsOpenPeekRoute(route, title) {{
+    const ref = document.getElementById('peekRefKey');
+    const body = document.getElementById('peekProse');
+    if (!ref || !body || !peekOverlay) return;
+    ref.textContent = title || 'Research detail';
+    body.innerHTML = '<div class="k-well" role="status">Loading persisted research artifact…</div>';
+    peekOverlay.open();
+    try {{
+      const response = await fetch(route, {{ headers: {{ Accept: 'text/html' }} }});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      body.innerHTML = await response.text();
+    }} catch (error) {{
+      body.innerHTML = '<div class="k-well" role="alert">The persisted earnings artifact is unavailable.</div>';
+    }}
+  }}
+
+  document.addEventListener('click', function (event) {{
+    const trigger = event.target instanceof Element
+      ? event.target.closest('[data-peek-url]') : null;
+    if (!trigger) return;
+    const route = trigger.getAttribute('data-peek-url') || '';
+    if (!route.startsWith('/api/peek/')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    workOsOpenPeekRoute(route, trigger.getAttribute('data-peek-title') || 'Research detail');
+  }});
+
   function workOsCompanyByTicker(ticker) {{
     const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
       ? workOsPortfolioHydration.companies : [];
@@ -567,6 +611,7 @@ def _production_runtime(generated_at: datetime) -> str:
         briefButton.disabled = !brief;
         briefButton.onclick = brief ? function () {{ openWorkOsBriefReader(brief); }} : null;
       }}
+      workOsRenderEarningsDoorway(desk.earnings_doorway || null, normalized);
       const conditions = Array.isArray(desk.conditions) ? desk.conditions : [];
       document.getElementById('deskConditions').innerHTML = conditions.length ? conditions.map(function (condition) {{
         return '<div class="k-well research-row" data-stable-id="' + escapeWorkOsHtml(condition.stable_id) + '"><div><strong>' + escapeWorkOsHtml(condition.metric) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(condition.note || 'Governed decision condition') + '</div></div><span class="k-chip k-chip-mono">' + escapeWorkOsHtml(condition.operator) + ' ' + escapeWorkOsHtml(condition.threshold) + ' ' + escapeWorkOsHtml(condition.unit) + '</span></div>';

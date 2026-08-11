@@ -51,6 +51,7 @@ def render_company_desk_shell() -> str:
       </div>
       <div class="research-actions">
         <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="company">Ask Copilot</button>
+        <span id="workOsEarningsDoorway"><span class="k-card-meta">Earnings artifact unavailable</span></span>
         <button class="k-btn k-btn-primary k-btn-sm" id="workOsFullBriefButton" type="button" disabled>Read full brief →</button>
       </div>
     </div>

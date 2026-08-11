@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,45 @@ def _seed_company_state(repo_root: Path) -> None:
         "(11, 'bhanu', 'NU', 'question', 'open', 'Is Mexico deposit growth rate-led?', "
         "'ticker', 'NU', 'manual', NULL, NULL, NULL, NULL, "
         "'2026-08-08T10:00:00Z', '2026-08-08T10:00:00Z', NULL, 7, NULL, 0, NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_earnings_store(repo_root: Path) -> None:
+    conn = sqlite3.connect(repo_root / "data" / "portfolio.db")
+    conn.executescript(
+        """
+        CREATE TABLE expected_earnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            expected_date TEXT NOT NULL
+        );
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT,
+            scope TEXT NOT NULL DEFAULT 'ticker',
+            purpose TEXT NOT NULL,
+            fiscal_period TEXT,
+            content_md TEXT,
+            superseded_by_id INTEGER
+        );
+        CREATE TABLE earnings_surprises (
+            ticker TEXT NOT NULL,
+            release_date TEXT
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def _insert_artifact(repo_root: Path, *, purpose: str, fiscal_period: str) -> None:
+    conn = sqlite3.connect(repo_root / "data" / "portfolio.db")
+    conn.execute(
+        "INSERT INTO llm_artifacts "
+        "(ticker, purpose, fiscal_period, content_md) VALUES ('NU', ?, ?, 'persisted')",
+        (purpose, fiscal_period),
     )
     conn.commit()
     conn.close()
@@ -254,3 +294,135 @@ def test_company_desk_exposes_latest_governed_dcf_snapshot(
             assert "position_snapshot_unavailable" not in desk.warnings
     finally:
         conn.close()
+
+
+def test_company_desk_exposes_real_pre_earnings_artifact_route(work_os_app_repo: Path) -> None:
+    _seed_earnings_store(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "INSERT INTO expected_earnings (ticker, expected_date) VALUES ('NU', '2026-08-11')"
+    )
+    conn.commit()
+    conn.close()
+    _insert_artifact(work_os_app_repo, purpose="pre_earnings_brief", fiscal_period="2026-08-11")
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(work_os_app_repo, conn, "NU", today=date(2026, 8, 4))
+    finally:
+        conn.close()
+    assert desk.earnings_doorway.status == "available"
+    assert desk.earnings_doorway.phase == "pre"
+    assert desk.earnings_doorway.label == "Pre-earnings brief →"
+    assert desk.earnings_doorway.route == "/api/peek/earnings-prep?ticker=NU"
+
+
+def test_company_desk_t0_switches_only_when_matching_post_artifact_exists(
+    work_os_app_repo: Path,
+) -> None:
+    _seed_earnings_store(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "INSERT INTO expected_earnings (ticker, expected_date) VALUES ('NU', '2026-08-11')"
+    )
+    conn.execute(
+        "INSERT INTO earnings_surprises (ticker, release_date) VALUES ('NU', '2026-08-11')"
+    )
+    conn.execute(
+        "INSERT INTO transcripts (document_id, ticker, call_date, fiscal_period_type, period_end) VALUES (77, 'NU', '2026-08-11', 'Q2', '2026-06-30')"
+    )
+    conn.commit()
+    conn.close()
+    _insert_artifact(work_os_app_repo, purpose="pre_earnings_brief", fiscal_period="2026-08-11")
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        before = build_company_desk(work_os_app_repo, conn, "NU", today=date(2026, 8, 11))
+    finally:
+        conn.close()
+    assert before.earnings_doorway.phase == "pre"
+    _insert_artifact(work_os_app_repo, purpose="post_earnings_readout", fiscal_period="2026-06-30")
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        after = build_company_desk(work_os_app_repo, conn, "NU", today=date(2026, 8, 11))
+    finally:
+        conn.close()
+    assert after.earnings_doorway.status == "available"
+    assert after.earnings_doorway.phase == "post"
+    assert after.earnings_doorway.label == "Post-earnings readout →"
+    assert after.earnings_doorway.route == "/api/peek/earnings-readout?ticker=NU"
+
+
+def test_company_desk_prefers_actual_release_date_over_transcript_call_date(
+    work_os_app_repo: Path,
+) -> None:
+    _seed_earnings_store(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "INSERT INTO expected_earnings (ticker, expected_date) VALUES ('NU', '2026-08-11')"
+    )
+    conn.execute(
+        "INSERT INTO earnings_surprises (ticker, release_date) VALUES ('NU', '2026-08-11')"
+    )
+    conn.execute(
+        "INSERT INTO transcripts "
+        "(document_id, ticker, call_date, fiscal_period_type, period_end) "
+        "VALUES (77, 'NU', '2026-08-12', 'Q2', '2026-06-30')"
+    )
+    conn.commit()
+    conn.close()
+    _insert_artifact(
+        work_os_app_repo,
+        purpose="post_earnings_readout",
+        fiscal_period="2026-06-30",
+    )
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(work_os_app_repo, conn, "NU", today=date(2026, 8, 11))
+    finally:
+        conn.close()
+
+    assert desk.earnings_doorway.event_date == date(2026, 8, 11)
+    assert desk.earnings_doorway.phase == "post"
+    assert desk.earnings_doorway.route == "/api/peek/earnings-readout?ticker=NU"
+
+
+def test_company_desk_post_window_without_artifact_is_honestly_pending(
+    work_os_app_repo: Path,
+) -> None:
+    _seed_earnings_store(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "INSERT INTO expected_earnings (ticker, expected_date) VALUES ('NU', '2026-08-11')"
+    )
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(work_os_app_repo, conn, "NU", today=date(2026, 8, 12))
+    finally:
+        conn.close()
+    assert desk.earnings_doorway.status == "pending"
+    assert desk.earnings_doorway.label == "Post-earnings readout pending"
+    assert desk.earnings_doorway.route is None
+
+
+@pytest.mark.parametrize("stored_date", [None, "not-a-date"])
+def test_company_desk_missing_or_unparseable_calendar_has_no_dead_link(
+    work_os_app_repo: Path, stored_date: str | None
+) -> None:
+    _seed_earnings_store(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    if stored_date is not None:
+        conn.execute(
+            "INSERT INTO expected_earnings (ticker, expected_date) VALUES ('NU', ?)", (stored_date,)
+        )
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(work_os_app_repo, conn, "NU", today=date(2026, 8, 11))
+    finally:
+        conn.close()
+    assert desk.earnings_doorway.status == "unavailable"
+    assert desk.earnings_doorway.route is None
