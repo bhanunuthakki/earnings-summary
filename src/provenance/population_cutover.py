@@ -525,9 +525,10 @@ class _SqliteProjectionReader(ProjectionCoordinateReader):
             chunk = canonical_metric_cell_ids[start : start + 400]
             if not chunk:
                 continue
+            # Values are DB-bound; construction only fixes placeholder arity.
             rows = self._conn.execute(
                 _CURRENT_STATE_CTE
-                + " SELECT * FROM current_state WHERE canonical_metric_cell_id IN ("
+                + " SELECT * FROM current_state WHERE canonical_metric_cell_id IN ("  # nosec B608
                 + ",".join("?" for _ in chunk)
                 + ") ORDER BY canonical_metric_cell_id",
                 (generation_id, *chunk),
@@ -547,8 +548,9 @@ class _SqliteProjectionReader(ProjectionCoordinateReader):
     ) -> Sequence[ProjectionCoordinate]:
         del cutoff_at
         self._require_generation(generation_id)
+        # Query text is fixed and every comparison value remains DB-bound.
         rows = self._conn.execute(
-            _CURRENT_STATE_CTE + " SELECT * FROM current_state "
+            _CURRENT_STATE_CTE + " SELECT * FROM current_state "  # nosec B608
             "WHERE (? IS NULL OR canonical_metric_cell_id>?) "
             "ORDER BY canonical_metric_cell_id LIMIT ?",
             (generation_id, after_coordinate, after_coordinate, limit),
