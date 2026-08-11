@@ -42,8 +42,13 @@ from filing_text_fetcher import (  # noqa: E402
     split_risk_factors,
 )
 from llm.cli import is_hard_stop  # noqa: E402
+from llm.contracts import (  # noqa: E402
+    RISK_FACTOR_CATEGORIES_SCHEMA,
+    RISK_FACTOR_DIFF_SCHEMA,
+    RiskFactorCategory,
+    RiskFactorDiffPayload,
+)
 from llm.structured import call_llm_structured  # noqa: E402
-from llm_client import call_llm  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_risk_factors")
@@ -143,7 +148,16 @@ Risks (JSON):
 
 Return ONLY a JSON object {{"<id>": "<category>", ...}}.
 Use "other" only when no category fits."""
-    from llm.contracts import RISK_FACTOR_CATEGORIES_SCHEMA
+    expected_ids = frozenset(str(i) for i in range(len(risks)))
+
+    def exact_id_guard(value: object) -> tuple[bool, str]:
+        if not isinstance(value, dict):  # pragma: no cover - schema runs first
+            return (False, "classification result is not an object")
+        value_map = cast("dict[object, object]", value)
+        actual_ids = frozenset(str(key) for key in value_map)
+        if actual_ids != expected_ids:
+            return (False, f"expected ids {sorted(expected_ids)}; got {sorted(actual_ids)}")
+        return (True, "")
 
     decoded = call_llm_structured(
         prompt,
@@ -151,14 +165,11 @@ Use "other" only when no category fits."""
         ticker=ticker,
         expect="object",
         schema=RISK_FACTOR_CATEGORIES_SCHEMA,
+        domain_guardrail=exact_id_guard,
+        max_escalation_tier=0,
     )
-    out: dict[int, str] = {}
-    for k, v in cast("dict[str, object]", decoded).items():
-        try:
-            out[int(k)] = str(v)
-        except (ValueError, TypeError):
-            continue
-    return out
+    validated = cast("dict[str, RiskFactorCategory]", decoded)
+    return {int(key): value for key, value in validated.items()}
 
 
 def _prior_year_index(
@@ -181,7 +192,7 @@ def _prior_year_index(
 
 
 def _llm_diff_one(*, ticker: str, heading: str, old: str, new: str) -> str | None:
-    """One-call diff narrative — summarizes what changed in 1-2 sentences."""
+    """Return a validated material-change summary or a legitimate no-change."""
     prompt = f"""You are summarizing how a single risk factor was reworded between
 two fiscal years of {ticker}'s 10-K.
 
@@ -199,22 +210,24 @@ In 1-3 sentences, summarize what materially changed. Focus on:
 - Removed mechanisms / risks
 - Quantitative changes (specific numbers, percentages)
 
-If the change is purely cosmetic (whitespace, capitalization, immaterial), say
-"no material rewording."
-
-Return only the summary text, no JSON."""
-    try:
-        out = call_llm(
-            prompt,
-            purpose="risk_factor_diff",
-            ticker=ticker,
-        ).strip()
-        if "no material rewording" in out.lower():
-            return None
-        return out[:1500]
-    except Exception as exc:
-        log.warning({"event": "risk_diff_failed", "ticker": ticker, "error": str(exc)})
+Return ONLY one JSON object:
+{{"outcome": "material_change", "summary": "<1-3 sentence grounded summary>"}}
+or, for purely cosmetic changes:
+{{"outcome": "no_material_change", "summary": null}}
+Do not use any other outcome label."""
+    decoded = call_llm_structured(
+        prompt,
+        purpose="risk_factor_diff",
+        ticker=ticker,
+        expect="object",
+        schema=RISK_FACTOR_DIFF_SCHEMA,
+        max_escalation_tier=0,
+    )
+    if not isinstance(decoded, RiskFactorDiffPayload):  # pragma: no cover
+        raise TypeError("risk_factor_diff schema returned an unexpected value")
+    if decoded.outcome == "no_material_change":
         return None
+    return decoded.summary
 
 
 def extract_for_ticker(
@@ -314,12 +327,28 @@ def extract_for_ticker(
                 else:
                     vs_prior = "reworded"
                     if do_diff:
-                        reword_diff = _llm_diff_one(
-                            ticker=ticker,
-                            heading=heading,
-                            old=str(prior[heading_key].get("body_md") or ""),
-                            new=body,
-                        )
+                        try:
+                            reword_diff = _llm_diff_one(
+                                ticker=ticker,
+                                heading=heading,
+                                old=str(prior[heading_key].get("body_md") or ""),
+                                new=body,
+                            )
+                        except Exception as exc:
+                            if is_hard_stop(exc):
+                                raise
+                            log.warning(
+                                {
+                                    "event": "risk_diff_deferred",
+                                    "ticker": ticker,
+                                    "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                                }
+                            )
+                            return {
+                                "ticker": ticker,
+                                "status": "diff_deferred",
+                                "n": 0,
+                            }
             try:
                 conn.execute(
                     """
@@ -451,7 +480,10 @@ def main() -> int:
             do_diff=not args.no_diff,
         )
         log.info(outcome)
-        total_inserted += int(outcome.get("n_inserted", 0))
+        inserted = outcome.get("n_inserted", 0)
+        if not isinstance(inserted, int) or isinstance(inserted, bool):
+            raise TypeError("extract_for_ticker returned a non-integer n_inserted")
+        total_inserted += inserted
     print(f"\nDone · {total_inserted} risk factor rows inserted across {len(tickers)} ticker(s).")
     return 0
 

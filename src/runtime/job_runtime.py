@@ -43,6 +43,7 @@ _CONTEXT_LOCK_CLAIMS: ContextVar[dict[str, tuple[str, int]] | None] = ContextVar
 )
 _ALLOW_NESTED_LOCKS: ContextVar[bool] = ContextVar("allow_nested_job_locks", default=False)
 _SCHEDULER_OWNER: tuple[int, str | None] | None = None
+_CREATE_SUSPENDED = getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
 
 
 @contextmanager
@@ -112,49 +113,231 @@ def _process_start_identity(pid: int) -> str | None:
     return f"proc:{fields[21]}" if len(fields) > 21 else None
 
 
-def _parent_pid(pid: int) -> int | None:
-    """Return a Windows process's parent PID without spawning a helper process."""
-    if os.name != "nt":
-        return None
-    import ctypes
-
-    class _ProcessBasicInformation(ctypes.Structure):
-        _fields_ = [
-            ("reserved1", ctypes.c_void_p),
-            ("peb_base_address", ctypes.c_void_p),
-            ("reserved2", ctypes.c_void_p * 2),
-            ("unique_process_id", ctypes.c_size_t),
-            ("inherited_from_unique_process_id", ctypes.c_size_t),
-        ]
-
-    process_query_limited_information = 0x1000
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
-    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
-    if not handle:
-        return None
-    info = _ProcessBasicInformation()
-    try:
-        status = ntdll.NtQueryInformationProcess(
-            handle,
-            0,
-            ctypes.byref(info),
-            ctypes.sizeof(info),
-            None,
-        )
-        if status != 0:
-            return None
-        parent = int(info.inherited_from_unique_process_id)
-        return parent if parent > 0 else None
-    finally:
-        kernel32.CloseHandle(handle)
-
-
 def _process_identity_is_alive(identity: tuple[int, str | None]) -> bool:
     pid, expected_start = identity
     if not _pid_is_alive(pid):
         return False
     return expected_start is None or _process_start_identity(pid) == expected_start
+
+
+def _process_is_in_job(pid: int) -> bool:
+    """Return whether *pid* belongs to any Windows Job Object."""
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.IsProcessInJob.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    process_handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not process_handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    in_job = wintypes.BOOL()
+    try:
+        if not kernel32.IsProcessInJob(process_handle, None, ctypes.byref(in_job)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return bool(in_job.value)
+    finally:
+        kernel32.CloseHandle(process_handle)
+
+
+class _WindowsKillOnCloseJob:
+    """Own a Windows process tree through ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE``.
+
+    Children inherit the job after the root is assigned. Windows 8 and newer
+    permit this job to nest beneath Task Scheduler's own job. Assignment fails
+    loudly on an incompatible parent job instead of silently losing tree
+    ownership.
+    """
+
+    def __init__(self, handle: int) -> None:
+        self._handle = handle
+
+    @classmethod
+    def create_for_process(cls, pid: int) -> _WindowsKillOnCloseJob:
+        if os.name != "nt":
+            raise OSError("Windows Job Objects are unavailable on this platform")
+        import ctypes
+        from ctypes import wintypes
+
+        class _BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("per_process_user_time_limit", ctypes.c_longlong),
+                ("per_job_user_time_limit", ctypes.c_longlong),
+                ("limit_flags", wintypes.DWORD),
+                ("minimum_working_set_size", ctypes.c_size_t),
+                ("maximum_working_set_size", ctypes.c_size_t),
+                ("active_process_limit", wintypes.DWORD),
+                ("affinity", ctypes.c_size_t),
+                ("priority_class", wintypes.DWORD),
+                ("scheduling_class", wintypes.DWORD),
+            ]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("read_operation_count", ctypes.c_ulonglong),
+                ("write_operation_count", ctypes.c_ulonglong),
+                ("other_operation_count", ctypes.c_ulonglong),
+                ("read_transfer_count", ctypes.c_ulonglong),
+                ("write_transfer_count", ctypes.c_ulonglong),
+                ("other_transfer_count", ctypes.c_ulonglong),
+            ]
+
+        class _ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("basic_limit_information", _BasicLimitInformation),
+                ("io_info", _IoCounters),
+                ("process_memory_limit", ctypes.c_size_t),
+                ("job_memory_limit", ctypes.c_size_t),
+                ("peak_process_memory_used", ctypes.c_size_t),
+                ("peak_job_memory_used", ctypes.c_size_t),
+            ]
+
+        job_object_extended_limit_information = 9
+        job_object_limit_kill_on_job_close = 0x00002000
+        process_set_quota = 0x0100
+        process_terminate = 0x0001
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        job_handle = kernel32.CreateJobObjectW(None, None)
+        if not job_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        process_handle: int | None = None
+        try:
+            limits = _ExtendedLimitInformation()
+            limits.basic_limit_information.limit_flags = job_object_limit_kill_on_job_close
+            if not kernel32.SetInformationJobObject(
+                job_handle,
+                job_object_extended_limit_information,
+                ctypes.byref(limits),
+                ctypes.sizeof(limits),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            process_handle = kernel32.OpenProcess(
+                process_set_quota | process_terminate,
+                False,
+                pid,
+            )
+            if not process_handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            nested = _process_is_in_job(pid)
+            if not kernel32.AssignProcessToJobObject(job_handle, process_handle):
+                error = ctypes.get_last_error()
+                kernel32.TerminateProcess(process_handle, 1)
+                raise ctypes.WinError(
+                    error,
+                    f"AssignProcessToJobObject failed (already_in_parent_job={nested})",
+                )
+            return cls(int(job_handle))
+        except Exception:
+            kernel32.CloseHandle(job_handle)
+            raise
+        finally:
+            if process_handle:
+                kernel32.CloseHandle(process_handle)
+
+    def close(self) -> None:
+        if self._handle == 0:
+            return
+        import ctypes
+
+        handle, self._handle = self._handle, 0
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle(handle)
+
+
+def _resume_process_threads(pid: int) -> None:
+    """Resume every thread in a newly created suspended Windows process."""
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    class _ThreadEntry32(ctypes.Structure):
+        _fields_ = [
+            ("size", wintypes.DWORD),
+            ("usage", wintypes.DWORD),
+            ("thread_id", wintypes.DWORD),
+            ("owner_process_id", wintypes.DWORD),
+            ("base_priority", wintypes.LONG),
+            ("delta_priority", wintypes.LONG),
+            ("flags", wintypes.DWORD),
+        ]
+
+    th32cs_snapthread = 0x00000004
+    thread_suspend_resume = 0x0002
+    invalid_handle_value = ctypes.c_void_p(-1).value
+    resume_failed = 0xFFFFFFFF
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.Thread32First.restype = wintypes.BOOL
+    kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.Thread32Next.restype = wintypes.BOOL
+    kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenThread.restype = wintypes.HANDLE
+    kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+    kernel32.ResumeThread.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(th32cs_snapthread, 0)
+    if int(snapshot) == invalid_handle_value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    resumed = 0
+    entry = _ThreadEntry32()
+    entry.size = ctypes.sizeof(entry)
+    try:
+        has_entry = bool(kernel32.Thread32First(snapshot, ctypes.byref(entry)))
+        while has_entry:
+            if int(entry.owner_process_id) == pid:
+                thread_handle = kernel32.OpenThread(
+                    thread_suspend_resume,
+                    False,
+                    entry.thread_id,
+                )
+                if not thread_handle:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                try:
+                    if kernel32.ResumeThread(thread_handle) == resume_failed:
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    resumed += 1
+                finally:
+                    kernel32.CloseHandle(thread_handle)
+            entry.size = ctypes.sizeof(entry)
+            has_entry = bool(kernel32.Thread32Next(snapshot, ctypes.byref(entry)))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    if resumed == 0:
+        raise OSError(f"no suspended thread found for process {pid}")
+
+
+def _create_process_tree_job(
+    process: subprocess.Popen[bytes],
+) -> _WindowsKillOnCloseJob | None:
+    if os.name != "nt" or not hasattr(process, "_handle"):
+        return None
+    return _WindowsKillOnCloseJob.create_for_process(process.pid)
 
 
 def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
@@ -177,23 +360,50 @@ def _run_managed_child(
     env: dict[str, str],
     scheduler_owner: tuple[int, str | None] | None,
 ) -> int:
-    """Run a job and tear down its tree if Task Scheduler kills the wrapper."""
+    """Run a job and tear down its tree if Task Scheduler kills the wrapper.
+
+    Windows creates the root with ``CREATE_SUSPENDED`` before assigning its
+    Job Object. During that narrow create-to-assign interval an inert process
+    exists, but no user code can run or spawn an escaping descendant. Any
+    assignment or resume failure terminates that root before returning.
+    """
     if scheduler_owner is None:
         return subprocess.run(command, cwd=cwd, check=False, env=env).returncode
 
-    process = subprocess.Popen(command, cwd=cwd, env=env)
-    while True:
-        returncode = process.poll()
-        if returncode is not None:
-            return returncode
-        if not _process_identity_is_alive(scheduler_owner):
-            _terminate_process_tree(process)
-            try:
-                return process.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                return process.wait(timeout=5)
-        time.sleep(0.5)
+    creationflags = _CREATE_SUSPENDED if os.name == "nt" else 0
+    process = subprocess.Popen(command, cwd=cwd, env=env, creationflags=creationflags)
+    process_tree_job: _WindowsKillOnCloseJob | None = None
+    try:
+        process_tree_job = _create_process_tree_job(process)
+        if process_tree_job is not None and creationflags:
+            _resume_process_threads(process.pid)
+    except Exception:
+        if process_tree_job is not None:
+            process_tree_job.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        raise
+    try:
+        while True:
+            returncode = process.poll()
+            if returncode is not None:
+                return returncode
+            if not _process_identity_is_alive(scheduler_owner):
+                if process_tree_job is not None:
+                    process_tree_job.close()
+                    process_tree_job = None
+                else:
+                    _terminate_process_tree(process)
+                try:
+                    return process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    return process.wait(timeout=5)
+            time.sleep(0.5)
+    finally:
+        if process_tree_job is not None:
+            process_tree_job.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -686,11 +896,10 @@ def main(argv: list[str] | None = None) -> int:
         write_sets = args.write_set or ["portfolio-db"]
     previous_owner = _SCHEDULER_OWNER
     if args.scheduler_wrapper and os.name == "nt":
-        # sqlite_bootstrap is the direct parent; its parent is the cmd.exe that
-        # Task Scheduler owns and kills on Stop-ScheduledTask.
-        owner_pid = _parent_pid(os.getppid())
-        if owner_pid is not None:
-            _SCHEDULER_OWNER = (owner_pid, _process_start_identity(owner_pid))
+        # sqlite_bootstrap runpy-executes this module in the same process. Its
+        # direct parent is therefore the batch cmd.exe owned by Task Scheduler.
+        owner_pid = os.getppid()
+        _SCHEDULER_OWNER = (owner_pid, _process_start_identity(owner_pid))
     try:
         return run_job(
             repo_root=args.repo_root.resolve(),

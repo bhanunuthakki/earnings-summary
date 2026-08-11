@@ -49,6 +49,7 @@ from compute.thesis_evaluator import (
 from compute.transcript_ingest import (
     ingest_existing_ir_transcript,
 )
+from log_redact import redact
 from models.kpis import BreachStatus
 from pipeline.sec_xbrl import CIK_MAP
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
@@ -144,6 +145,19 @@ class TickerRefreshReport:
     pending_work: tuple[PendingWorkItem, ...]
 
 
+class TickerExecutionStatus(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    UNATTEMPTED = "unattempted"
+
+
+@dataclass(frozen=True)
+class TickerExecutionReceipt:
+    ticker: str
+    status: TickerExecutionStatus
+    error: str | None = None
+
+
 @dataclass(frozen=True)
 class RefreshReport:
     """Top-level cron output."""
@@ -152,6 +166,8 @@ class RefreshReport:
     started_at: datetime
     ended_at: datetime
     tickers: tuple[TickerRefreshReport, ...]
+
+    execution: tuple[TickerExecutionReceipt, ...]
 
 
 def _safe_extract(
@@ -644,22 +660,43 @@ def refresh_portfolio(
     run_id: str,
     fetch_sec: bool = False,
 ) -> RefreshReport:
-    """Run refresh_ticker across the requested ticker scope."""
+    """Run in order and return terminal accounting even on an exception."""
     started_at = datetime.now()
-    reports = [
-        refresh_ticker(
-            conn,
-            ticker=t,
-            project_root=project_root,
-            holdings_dir=holdings_dir,
-            run_id=run_id,
-            fetch_sec=fetch_sec,
+    reports: list[TickerRefreshReport] = []
+    execution: list[TickerExecutionReceipt] = []
+    for index, ticker in enumerate(tickers):
+        try:
+            ticker_report = refresh_ticker(
+                conn,
+                ticker=ticker,
+                project_root=project_root,
+                holdings_dir=holdings_dir,
+                run_id=run_id,
+                fetch_sec=fetch_sec,
+            )
+        except Exception as exc:
+            execution.append(
+                TickerExecutionReceipt(
+                    ticker=ticker.upper(),
+                    status=TickerExecutionStatus.FAILED,
+                    error=redact(f"{type(exc).__name__}: {exc}")[:500],
+                )
+            )
+            execution.extend(
+                TickerExecutionReceipt(
+                    ticker=remaining.upper(), status=TickerExecutionStatus.UNATTEMPTED
+                )
+                for remaining in tickers[index + 1 :]
+            )
+            break
+        reports.append(ticker_report)
+        execution.append(
+            TickerExecutionReceipt(ticker=ticker.upper(), status=TickerExecutionStatus.COMPLETED)
         )
-        for t in tickers
-    ]
     return RefreshReport(
         run_id=run_id,
         started_at=started_at,
         ended_at=datetime.now(),
         tickers=tuple(reports),
+        execution=tuple(execution),
     )

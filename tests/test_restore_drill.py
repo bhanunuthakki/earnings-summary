@@ -32,6 +32,7 @@ def _make_snapshot(
     populated: bool = True,
     version: str = "0113_x",
     name: str = "portfolio.db.20260715T090000Z.gz.enc",
+    foreign_key_violation: bool = False,
 ) -> Path:
     """Write a gzipped SQLite snapshot restore_db.list_snapshots will discover."""
     raw = backup_dir / "_raw.db"
@@ -43,6 +44,17 @@ def _make_snapshot(
     if populated:
         conn.execute("INSERT INTO tracked_companies VALUES ('NU')")
         conn.execute("INSERT INTO financial_facts VALUES (1)")
+    if foreign_key_violation:
+        conn.executescript(
+            """
+            CREATE TABLE parent (id INTEGER PRIMARY KEY);
+            CREATE TABLE child (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER NOT NULL REFERENCES parent(id)
+            );
+            INSERT INTO child VALUES (1, 999);
+            """
+        )
     conn.commit()
     conn.close()
     plain = backup_dir / "_snapshot.gz"
@@ -65,6 +77,10 @@ def test_drill_passes_on_healthy_snapshot(tmp_path: Path) -> None:
     assert ok is True
     assert summary["status"] == "ok"
     assert summary["row_counts"] == {"tracked_companies": 1, "financial_facts": 1}
+    assert summary["integrity_check"] == "ok"
+    assert summary["quick_check"] == "ok"
+    assert summary["foreign_key_violation_count"] == 0
+    assert summary["schema_policy"] == "versioned"
     assert summary["schema_match"] is True  # live absent → soft check passes
 
 
@@ -102,9 +118,8 @@ def test_corrupt_snapshot_fails(tmp_path: Path) -> None:
     assert summary["status"] == "restore_failed"
 
 
-def test_schema_mismatch_warns_but_passes(tmp_path: Path) -> None:
-    """A snapshot whose schema differs from the live DB warns (a migration after
-    the last backup is legitimate) but does not fail the drill."""
+def test_schema_mismatch_fails_closed(tmp_path: Path) -> None:
+    """A snapshot whose schema differs from the live DB fails the drill closed."""
     bdir = tmp_path / "backups"
     bdir.mkdir()
     _make_snapshot(bdir, version="0100_old")
@@ -118,9 +133,22 @@ def test_schema_mismatch_warns_but_passes(tmp_path: Path) -> None:
 
     ok, summary = restore_drill.run_drill(bdir, live)
 
-    assert ok is True
+    assert ok is False
+    assert summary["status"] == "schema_incompatible"
     assert summary["schema_match"] is False
-    assert "warning" in summary
+    assert summary["schema_policy"] == "exact"
+
+
+def test_drill_rejects_foreign_key_violations(tmp_path: Path) -> None:
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    _make_snapshot(bdir, foreign_key_violation=True)
+
+    ok, summary = restore_drill.run_drill(bdir, tmp_path / "absent.db")
+
+    assert ok is False
+    assert summary["status"] == "restore_failed"
+    assert "foreign_key_check" in str(summary["error"])
 
 
 def test_temp_restore_is_cleaned_up(tmp_path: Path) -> None:

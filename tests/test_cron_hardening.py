@@ -129,21 +129,14 @@ def test_comp_metrics_wrapper_preserves_the_first_failed_step() -> None:
     assert lines[-1].strip() == "endlocal & exit /b %RC%"
 
 
-def test_weekly_synthesis_uses_live_portfolio_and_stops_on_failed_step() -> None:
+def test_weekly_synthesis_has_one_outer_portfolio_lock_and_entrypoint() -> None:
     text = (CRON / "run_weekly_synthesis.bat").read_text(encoding="utf-8")
-    assert "execution\\run_lens.py --portfolio --all" in text
-    assert "--tickers " not in text
     lines = text.splitlines()
-    calls = [
-        index
-        for index, line in enumerate(lines)
-        if line.strip().lower().startswith("call ")
-    ]
-    assert len(calls) == 4
-    assert all(
-        lines[index + 1].strip().lower() == "if errorlevel 1 goto :fail"
-        for index in calls[:3]
-    )
+    calls = [index for index, line in enumerate(lines) if line.strip().lower().startswith("call ")]
+    assert len(calls) == 1
+    invocation = lines[calls[0]].lower()
+    assert '"weekly-synthesis" "portfolio-db"' in invocation
+    assert "execution\\run_weekly_synthesis.py" in invocation
     assert lines[-1].strip() == "endlocal & exit /b %RC%"
 
 
