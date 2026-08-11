@@ -45,7 +45,9 @@ def test_persist_report_artifact_writes_manifest_body_and_compact_index(tmp_path
     assert ref.reader_mode == "shared_body"
     assert ref.provenance_ref == 42
     assert ref.body_path is not None
-    assert (tmp_path / ref.body_path).read_text(encoding="utf-8") == _body().body_html
+    reader_html = (tmp_path / ref.body_path).read_text(encoding="utf-8")
+    assert "NU" in reader_html
+    assert "<script" not in reader_html
     manifest_path = tmp_path / ref.manifest_path
     assert ReportArtifactRef.model_validate_json(manifest_path.read_text(encoding="utf-8")) == ref
     assert (tmp_path / ref.standalone_path).read_text(encoding="utf-8") == (
@@ -135,8 +137,8 @@ def test_same_day_regeneration_preserves_both_immutable_artifacts(tmp_path: Path
     assert (tmp_path / second.standalone_path).read_text(encoding="utf-8") == (
         "<html>second standalone</html>"
     )
-    assert (tmp_path / first.body_path).read_text(encoding="utf-8") == first_body.body_html
-    assert (tmp_path / second.body_path).read_text(encoding="utf-8") == second_body.body_html
+    assert "overview" in (tmp_path / first.body_path).read_text(encoding="utf-8")
+    assert "second" in (tmp_path / second.body_path).read_text(encoding="utf-8")
     assert load_report_artifact_index(tmp_path).items == (second, first)
 
 

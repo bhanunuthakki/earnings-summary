@@ -198,7 +198,13 @@ def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> Non
     assert "navigateTo('screen-full-brief')" not in html
     assert "workOsLoadBriefArtifact" in html
     assert "artifact.body_url" in html
-    assert 'class="work-os-report-frame"' in html
+    assert "attachShadow" in html
+    assert "report_reader_payload.v1" in html
+    assert "content.innerHTML = payload.body_html" in html
+    brief_loader = html.split("async function workOsLoadBriefArtifact", 1)[1].split(
+        "window.openWorkOsBriefReader", 1
+    )[0]
+    assert "<iframe" not in brief_loader
     assert "legacy brief has not been migrated" in html
 
 

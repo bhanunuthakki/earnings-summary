@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from report.legacy_body import ReaderExtractionReceipt, extract_legacy_reader_body
+
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
 ReaderMode = Literal["shared_body", "legacy_standalone"]
 
@@ -127,6 +129,30 @@ class ReconcileResult(BaseModel):
     skipped: int
 
 
+class LegacyBodyMigrationItem(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    artifact_id: str
+    ticker: str
+    status: Literal["eligible", "migrated", "failed"]
+    body_sha256: str | None = None
+    warnings: tuple[str, ...] = ()
+    error: str | None = None
+
+
+class LegacyBodyMigrationResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["legacy_body_migration.v1"] = "legacy_body_migration.v1"
+    apply: bool
+    candidates: int
+    eligible: int
+    migrated: int
+    failed: int
+    skipped_shared: int
+    items: tuple[LegacyBodyMigrationItem, ...]
+
+
 def report_artifact_index_path(repo_root: Path) -> Path:
     return repo_root / "output" / "research" / "report_artifacts.v1.json"
 
@@ -207,6 +233,7 @@ def persist_report_artifact(
 
     if not standalone_path.is_file():
         raise FileNotFoundError(standalone_path)
+    reader_body = extract_legacy_reader_body(body.body_html, artifact_id=body.artifact_id)
     artifact_dir = repo_root / "output" / "research" / body.ticker / "artifacts" / body.artifact_id
     standalone_snapshot_path = artifact_dir / "standalone.html"
     body_path = artifact_dir / "body.html"
@@ -232,7 +259,7 @@ def persist_report_artifact(
         standalone_snapshot_path,
         standalone_path.read_text(encoding="utf-8"),
     )
-    _atomic_write_text(body_path, body.body_html)
+    _atomic_write_text(body_path, reader_body.body_html)
     ref = ReportArtifactRef(
         artifact_id=body.artifact_id,
         ticker=body.ticker,
@@ -245,7 +272,7 @@ def persist_report_artifact(
         body_path=_repo_relative(repo_root, body_path),
         manifest_path=_repo_relative(repo_root, manifest_path),
         workspace_sha256=hashlib.sha256(standalone_snapshot_path.read_bytes()).hexdigest(),
-        body_sha256=body.body_sha256,
+        body_sha256=reader_body.body_sha256,
         section_ids=tuple(section.section_id for section in body.sections),
         provenance_ref=provenance_ref,
     )
@@ -308,8 +335,122 @@ def reconcile_legacy_workspace_reports(
     return ReconcileResult(added=added, skipped=skipped)
 
 
+def migrate_legacy_report_bodies(
+    repo_root: Path,
+    *,
+    tickers: set[str] | None = None,
+    apply: bool = False,
+) -> LegacyBodyMigrationResult:
+    """Derive inert shared-reader bodies while keeping standalone artifacts immutable."""
+
+    normalized_tickers = None if tickers is None else {value.strip().upper() for value in tickers}
+    prior = _read_index(repo_root)
+    selected = [
+        artifact
+        for artifact in prior.items
+        if normalized_tickers is None or artifact.ticker in normalized_tickers
+    ]
+    candidates = [artifact for artifact in selected if artifact.reader_mode == "legacy_standalone"]
+    skipped_shared = len(selected) - len(candidates)
+    replacements: dict[str, ReportArtifactRef] = {}
+    results: list[LegacyBodyMigrationItem] = []
+    eligible = 0
+    migrated = 0
+    failed = 0
+    for artifact in candidates:
+        try:
+            source_path = repo_root / artifact.standalone_path
+            if not source_path.is_file():
+                raise FileNotFoundError(source_path)
+            source_bytes = source_path.read_bytes()
+            source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+            if source_sha256 != artifact.workspace_sha256:
+                raise ValueError("standalone report checksum mismatch")
+            extracted = extract_legacy_reader_body(
+                source_bytes.decode("utf-8"), artifact_id=artifact.artifact_id
+            )
+            eligible += 1
+            status: Literal["eligible", "migrated", "failed"] = "eligible"
+            if apply:
+                artifact_dir = (
+                    repo_root
+                    / "output"
+                    / "research"
+                    / artifact.ticker
+                    / "artifacts"
+                    / artifact.artifact_id
+                )
+                body_path = artifact_dir / "body.html"
+                receipt_path = artifact_dir / "reader_extraction.v1.json"
+                body_relative = _repo_relative(repo_root, body_path)
+                migrated_ref = artifact.model_copy(
+                    update={
+                        "reader_mode": "shared_body",
+                        "body_path": body_relative,
+                        "body_sha256": extracted.body_sha256,
+                        "section_ids": extracted.section_ids,
+                    }
+                )
+                receipt = ReaderExtractionReceipt(
+                    artifact_id=artifact.artifact_id,
+                    source_path=artifact.standalone_path,
+                    source_sha256=source_sha256,
+                    body_path=body_relative,
+                    body_sha256=extracted.body_sha256,
+                    text_sha256=extracted.text_sha256,
+                    section_ids=extracted.section_ids,
+                    id_map=extracted.id_map,
+                    heading_count=extracted.heading_count,
+                    table_count=extracted.table_count,
+                    link_count=extracted.link_count,
+                    source_link_count=extracted.source_link_count,
+                    warnings=extracted.warnings,
+                )
+                _atomic_write_text(body_path, extracted.body_html)
+                if hashlib.sha256(body_path.read_bytes()).hexdigest() != extracted.body_sha256:
+                    raise ValueError("derived reader body checksum mismatch")
+                _atomic_write_text(receipt_path, receipt.model_dump_json(indent=2) + "\n")
+                _write_manifest(repo_root, migrated_ref)
+                replacements[artifact.artifact_id] = migrated_ref
+                migrated += 1
+                status = "migrated"
+            results.append(
+                LegacyBodyMigrationItem(
+                    artifact_id=artifact.artifact_id,
+                    ticker=artifact.ticker,
+                    status=status,
+                    body_sha256=extracted.body_sha256,
+                    warnings=extracted.warnings,
+                )
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            failed += 1
+            results.append(
+                LegacyBodyMigrationItem(
+                    artifact_id=artifact.artifact_id,
+                    ticker=artifact.ticker,
+                    status="failed",
+                    error=str(exc),
+                )
+            )
+    if apply and replacements:
+        updated = tuple(replacements.get(item.artifact_id, item) for item in prior.items)
+        _write_index(repo_root, updated)
+    return LegacyBodyMigrationResult(
+        apply=apply,
+        candidates=len(candidates),
+        eligible=eligible,
+        migrated=migrated,
+        failed=failed,
+        skipped_shared=skipped_shared,
+        items=tuple(results),
+    )
+
+
 __all__ = [
     "CoverageRole",
+    "LegacyBodyMigrationItem",
+    "LegacyBodyMigrationResult",
     "ReaderMode",
     "ReconcileResult",
     "RenderedReportBody",
@@ -318,6 +459,7 @@ __all__ = [
     "ReportInteractionManifest",
     "ReportSectionRef",
     "load_report_artifact_index",
+    "migrate_legacy_report_bodies",
     "persist_report_artifact",
     "reconcile_legacy_workspace_reports",
     "report_artifact_index_path",

@@ -162,6 +162,7 @@ def _production_runtime(generated_at: datetime) -> str:
   .k-scrim[hidden], .drawer-scrim {{ display: none !important; }}
   .work-os-live-status {{ position: absolute; inline-size: var(--bw-thin); block-size: var(--bw-thin); overflow: hidden; clip: rect(0 0 0 0); }}
   .work-os-report-frame {{ width: 100%; min-height: calc(100dvh - var(--header-height) - var(--sp-6)); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); }}
+  .work-os-report-host {{ display: block; min-height: 100%; border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); overflow: hidden; }}
   .work-os-reader {{ position: fixed; inset: 0; z-index: var(--z-modal); display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; padding: var(--sp-4); background: var(--bg); overflow: hidden; }}
   .work-os-reader[hidden] {{ display: none !important; }}
   .work-os-reader-header {{ display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3); }}
@@ -293,7 +294,7 @@ def _production_runtime(generated_at: datetime) -> str:
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }}
 
-  function workOsLoadBriefArtifact(artifact) {{
+  async function workOsLoadBriefArtifact(artifact) {{
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
     if (title) title.textContent = artifact.ticker + ' · ' + artifact.title;
@@ -302,12 +303,35 @@ def _production_runtime(generated_at: datetime) -> str:
       if (body) body.innerHTML = '<div class="k-well">This legacy brief has not been migrated to the shared reader body. <a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(artifact.standalone_url) + '">Open persisted standalone brief →</a></div>';
       return;
     }}
-    if (body) body.innerHTML = '<iframe class="work-os-report-frame" src="' + escapeWorkOsHtml(artifact.body_url) + '" title="' + escapeWorkOsHtml(artifact.ticker + ' complete research brief') + '" loading="eager"></iframe>';
+    if (!body) return;
+    body.innerHTML = '<div class="k-well" role="status">Loading complete persisted brief…</div>';
+    try {{
+      const response = await fetch(artifact.body_url, {{ headers: {{ Accept: 'application/json' }} }});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if (!payload || payload.schema_version !== 'report_reader_payload.v1' || !payload.body_html || !payload.style_url) throw new Error('invalid reader payload');
+      const host = document.createElement('div');
+      host.className = 'work-os-report-host';
+      host.setAttribute('role', 'document');
+      host.setAttribute('aria-label', artifact.ticker + ' complete research brief');
+      host.tabIndex = 0;
+      const root = host.attachShadow({{ mode: 'open' }});
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = payload.style_url;
+      const content = document.createElement('div');
+      content.className = 'work-os-report-content';
+      content.innerHTML = payload.body_html;
+      root.append(stylesheet, content);
+      body.replaceChildren(host);
+    }} catch (error) {{
+      body.innerHTML = '<div class="k-well" role="alert">The complete reader body is unavailable. <a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(artifact.standalone_url) + '">Open persisted standalone brief →</a></div>';
+    }}
   }}
 
   window.openWorkOsBriefReader = async function (tickerOrArtifact) {{
     if (tickerOrArtifact && typeof tickerOrArtifact === 'object' && tickerOrArtifact.artifact_id) {{
-      workOsLoadBriefArtifact(tickerOrArtifact);
+      await workOsLoadBriefArtifact(tickerOrArtifact);
       return;
     }}
     window.workOsActiveTicker = String(tickerOrArtifact || window.workOsActiveTicker || 'NU').toUpperCase();
@@ -321,7 +345,7 @@ def _production_runtime(generated_at: datetime) -> str:
       if (briefReaderOverlay) briefReaderOverlay.open();
       return;
     }}
-    workOsLoadBriefArtifact(payload.items[0]);
+    await workOsLoadBriefArtifact(payload.items[0]);
   }};
   window.openFullBriefCanvas = window.openWorkOsBriefReader;
 
