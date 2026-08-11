@@ -226,15 +226,17 @@ def test_execute_invokes_correct_subprocess(
 
     argvs = {tuple(c) for c in fake_run.calls}
     expected_bear = (
-        "python",
-        "execution/build_artifacts.py",
+        sys.executable,
+        str(repo_root / "execution" / "sqlite_bootstrap.py"),
+        str(repo_root / "execution" / "build_artifacts.py"),
         "--ticker",
         "GOOG",
         "--enable-llm",
     )
     expected_desc = (
-        "python",
-        "execution/extract_company_description.py",
+        sys.executable,
+        str(repo_root / "execution" / "sqlite_bootstrap.py"),
+        str(repo_root / "execution" / "extract_company_description.py"),
         "--ticker",
         "META",
         "--refresh",
@@ -279,8 +281,9 @@ def test_execute_dedupes_shared_cli_for_one_ticker(
     assert rc == 0
     assert len(fake_run.calls) == 1
     assert fake_run.calls[0] == [
-        "python",
-        "execution/build_artifacts.py",
+        sys.executable,
+        str(repo_root / "execution" / "sqlite_bootstrap.py"),
+        str(repo_root / "execution" / "build_artifacts.py"),
         "--ticker",
         "NU",
         "--enable-llm",
@@ -494,8 +497,9 @@ def test_unmapped_purpose_logs_warning_and_skips(
         "the mapped artifact (META bear_case) should still be processed"
     )
     assert fake_run.calls[0] == [
-        "python",
-        "execution/build_artifacts.py",
+        sys.executable,
+        str(repo_root / "execution" / "sqlite_bootstrap.py"),
+        str(repo_root / "execution" / "build_artifacts.py"),
         "--ticker",
         "META",
         "--enable-llm",
