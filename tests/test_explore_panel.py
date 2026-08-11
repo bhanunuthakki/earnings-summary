@@ -138,10 +138,8 @@ def test_explore_panel_renders_with_default_universe(db_path: Path) -> None:
     assert "Save view" in html_out
 
 
-def test_explore_panel_is_ask_first(db_path: Path) -> None:
-    """PR5: the thread + input lead the panel; the full builder survives
-    untouched (same ids, same JS contract) — since Ask v4 as a DIY popover
-    instead of a bottom fold."""
+def test_explore_panel_is_copilot_handoff_first(db_path: Path) -> None:
+    """Prompt controls lead into Copilot; the deterministic builder remains."""
     html_out = render_explore_panel(db_path)
     assert 'id="ask-thread"' in html_out
     assert 'id="ask-q"' in html_out
@@ -151,37 +149,29 @@ def test_explore_panel_is_ask_first(db_path: Path) -> None:
         assert f'id="{builder_id}"' in html_out
 
 
-def test_pin_as_view_never_uses_window_prompt() -> None:
-    """Red-team wave B: "Pin as view" used to block on window.prompt() for the
-    view name — a single-line, unstyled OS modal that hides the answer card
-    being pinned. Replaced with the in-card editor idiom (ledger_panel.
-    beginRewrite / journal_panel.beginEdit): the button row swaps its own
-    content for a name input + kit Save/Cancel, restoring the buttons after
-    save or cancel."""
+def test_explore_panel_removes_legacy_answer_card_editor() -> None:
+    """Fact Playground has no second conversation or answer-card actions."""
     import inspect
 
     from pipeline import explore_panel
 
     src = inspect.getsource(explore_panel)
     assert "window.prompt(" not in src
-    assert "data-view-save" in src and "data-view-cancel" in src
-    assert "beginSaveView" in src
+    assert "beginSaveView" not in src
+    assert "data-ask-act" not in src
 
 
 def test_explore_panel_builder_is_a_diy_popover(db_path: Path) -> None:
-    """Ask v4: the builder opens from the DIY button (hidden by default,
-    closable), 'Open in builder' routes through the same popover, and the
-    answer-card actions carry the scored-peers injector."""
+    """The deterministic builder opens from DIY and retains scored peers."""
     html_out = render_explore_panel(db_path)
     assert 'id="ask-diy"' in html_out
     assert 'id="ask-pop-close"' in html_out
     assert 'id="ask-advanced" hidden' in html_out
     assert "<details" not in html_out  # the fold is gone
     assert "function openBuilder()" in html_out
-    assert 'data-ask-act="peers"' in html_out  # card action (askActionsHtml)
     assert 'id="vx-peers"' in html_out  # builder action
     assert "/api/peers/" in html_out
-    assert "function addPeersToCard" in html_out
+    assert "function addPeersToCard" not in html_out
 
 
 def test_builder_popover_uses_ccoverlay_not_a_bespoke_escape_listener(
@@ -235,12 +225,10 @@ def test_saved_view_handoff_actually_opens_the_builder(db_path: Path) -> None:
 def test_explore_panel_action_buttons_adopt_ccaction(db_path: Path) -> None:
     """CCAction.busy/release/receipt (PR #1092) replaces every bare
     `.disabled = true` / manual textContent-swap action button in this panel:
-    compile, run, +Peers (both the toolbar button and the in-card injector),
-    inject-to-DCF, add-as-reference, and save/pin-as-view."""
+    compile, run, builder +Peers, inject-to-DCF, add-as-reference, and save."""
     html_out = render_explore_panel(db_path)
-    assert html_out.count("CCAction.busy") >= 8
+    assert html_out.count("CCAction.busy") >= 6
     assert "CCAction.release" in html_out
-    assert "CCAction.receipt(btn, 'no new peers')" in html_out
 
 
 def test_explore_panel_picker_options_carry_definition_titles(db_path: Path) -> None:
@@ -266,13 +254,11 @@ def test_explore_panel_pickers_carry_type_ahead_search(db_path: Path) -> None:
     assert "sel._selected" in html_out  # the map is the source of truth
 
 
-def test_explore_panel_consumes_dock_thread_handoff(db_path: Path) -> None:
-    """Ask v4 Home dock: the panel replays a stashed dock thread at wire-up
-    (store key askThread via window.CCState, same event as the palette
-    handoff; the legacy cc-ask-thread name lives in cc_state's migration)."""
+def test_explore_panel_removes_legacy_dock_thread_handoff(db_path: Path) -> None:
+    """The retired dock cannot recreate a second conversation in Explore."""
     html_out = render_explore_panel(db_path)
-    assert "CCState.getJSON('askThread')" in html_out
-    assert "function consumeDockThread()" in html_out
+    assert "CCState.getJSON('askThread')" not in html_out
+    assert "function consumeDockThread()" not in html_out
 
 
 def test_explore_panel_route_and_views_fragment(client: FlaskClient) -> None:

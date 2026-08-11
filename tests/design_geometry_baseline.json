@@ -21,7 +21,7 @@
   "src/pipeline/discovery_panel.py": 3,
   "src/pipeline/etf_workup.py": 9,
   "src/pipeline/evals_panel.py": 12,
-  "src/pipeline/explore_panel.py": 54,
+  "src/pipeline/explore_panel.py": 41,
   "src/pipeline/ir_coverage_panel.py": 5,
   "src/pipeline/journal_panel.py": 41,
   "src/pipeline/ledger_panel.py": 10,
