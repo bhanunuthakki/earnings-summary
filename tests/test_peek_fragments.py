@@ -994,7 +994,9 @@ def test_ticker_badge_carries_hover_attr(db_path: Path) -> None:
     alert, _qa = _seed_alert_with_action(db_path)
     out = StringIO()
     render_alert_card(out, alert, actions=[], show_status_badge=True)
-    assert 'data-peek-ticker="NU"' in out.getvalue()
+    html = out.getvalue()
+    assert 'class="alert-card k-card k-card-stack"' in html
+    assert 'data-peek-ticker="NU"' in html
 
 
 def test_cockpit_score_chip_peeks_breakdown() -> None:
