@@ -129,6 +129,24 @@ def test_comp_metrics_wrapper_preserves_the_first_failed_step() -> None:
     assert lines[-1].strip() == "endlocal & exit /b %RC%"
 
 
+def test_weekly_synthesis_uses_live_portfolio_and_stops_on_failed_step() -> None:
+    text = (CRON / "run_weekly_synthesis.bat").read_text(encoding="utf-8")
+    assert "execution\\run_lens.py --portfolio --all" in text
+    assert "--tickers " not in text
+    lines = text.splitlines()
+    calls = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip().lower().startswith("call ")
+    ]
+    assert len(calls) == 4
+    assert all(
+        lines[index + 1].strip().lower() == "if errorlevel 1 goto :fail"
+        for index in calls[:3]
+    )
+    assert lines[-1].strip() == "endlocal & exit /b %RC%"
+
+
 def test_shared_runtime_forwards_original_arguments_without_shift() -> None:
     """SHIFT does not alter ``%*``; the runtime must slice wrapper args itself."""
     text = (CRON / "run_python.bat").read_text(encoding="utf-8").lower()
