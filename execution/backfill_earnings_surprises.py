@@ -41,6 +41,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from earnings_surprise_store import cache_generation_identity  # noqa: E402
 from surprise_sources import (  # noqa: E402
     SurpriseHit,
     SurpriseSource,
@@ -125,6 +126,7 @@ def _write_ticker_cache(
         "record_count": len(hits),
         "records": [h.to_json() for h in hits],
     }
+    payload["cache_generation_id"] = cache_generation_identity(payload, cache_path=str(out))
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     tmp.replace(out)
@@ -215,6 +217,7 @@ def main() -> int:
         "tickers_scanned": len(tickers),
         "lookback_quarters": args.lookback_quarters,
         "dry_run": args.dry_run,
+        "terminal_status": "partial_failure" if any(r.error for r in results) else "completed",
         "per_ticker": [asdict(r) for r in results],
         "totals": {
             "hits_written": sum(r.hits_written for r in results),
@@ -222,7 +225,7 @@ def main() -> int:
         },
     }
     print(json.dumps(summary, indent=2))
-    return 0
+    return 2 if any(r.error for r in results) else 0
 
 
 if __name__ == "__main__":
