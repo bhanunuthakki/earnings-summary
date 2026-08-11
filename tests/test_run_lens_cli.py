@@ -12,8 +12,7 @@ def test_portfolio_tickers_are_loaded_from_active_governed_roster(tmp_path: Path
     conn = sqlite3.connect(data / "portfolio.db")
     try:
         conn.execute(
-            "CREATE TABLE tracked_companies "
-            "(ticker TEXT, list_type TEXT, archived_at TEXT)"
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)"
         )
         conn.executemany(
             "INSERT INTO tracked_companies VALUES (?, ?, ?)",
