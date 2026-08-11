@@ -2068,21 +2068,20 @@ a.peer:hover { background: var(--paper); }
 }
 
 /* ============================================================
-   Thesis lede prominence (top of report, below identity)
+   Thesis lede (top of report, below identity)
    ============================================================ */
 .l1-thesis {
-  /* Align side margins to the shell's standard inset so the thesis card
-     spans the full content width (matched edges with the KPI strip / tabs
-     below it) instead of inset further. */
+  /* Keep the lede in the document flow instead of presenting it as a
+     colored status card. */
   margin: 0 var(--pad-x) var(--sp-2);
-  padding: var(--sp-3) var(--sp-4);
-  background: var(--surface);
-  border-left: 3px solid var(--accent, var(--ok));
-  border-radius: var(--radius);
+  padding: var(--sp-3) 0 var(--sp-4);
+  background: transparent;
+  border-bottom: var(--bw-thin) solid var(--border);
+  border-radius: 0;
 }
 .l1-thesis .thesis-label {
   font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--accent, var(--ok)); font-weight: 600; margin-right: var(--sp-2);
+  color: var(--muted); font-weight: 600; margin-right: var(--sp-2);
 }
 .l1-thesis p {
   margin: var(--sp-1) 0 0; font-family: var(--sans);
@@ -2096,20 +2095,19 @@ a.peer:hover { background: var(--paper); }
 /* ============================================================
    "What changed" hoist (five_min_reread lens lede)
    ============================================================ */
-/* Mirrors .l1-thesis's card treatment (same inset, same density) with a
-   distinct accent so the two ledes read as separate registers — the
-   thesis is the standing read, this is the latest delta. */
+/* Mirror the thesis lede's neutral document treatment: the standing read
+   and the latest delta are separate registers, not competing alerts. */
 .l1-reread {
   display: flex; gap: var(--sp-5); align-items: baseline;
   margin: 0 var(--pad-x) var(--sp-2);
-  padding: var(--sp-3) var(--sp-4);
-  background: var(--surface);
-  border-left: 3px solid var(--warn);
-  border-radius: var(--radius);
+  padding: var(--sp-3) 0 var(--sp-4);
+  background: transparent;
+  border-bottom: var(--bw-thin) solid var(--border);
+  border-radius: 0;
 }
 .l1-reread .reread-label {
   font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--warn); font-weight: 600; flex-shrink: 0;
+  color: var(--muted); font-weight: 600; flex-shrink: 0;
 }
 .l1-reread p {
   margin: 0; flex: 1; font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft);
