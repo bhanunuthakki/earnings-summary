@@ -222,7 +222,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     }
 
 
-def test_replaced_compatibility_routes_are_absent(client) -> None:
+def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:
     assert client.post("/api/ask", json={"query": "legacy"}).status_code == 404
     assert client.get("/api/cockpit").status_code == 404
     assert client.get("/api/cron-health").status_code == 404
@@ -381,7 +381,7 @@ def test_reports_route_uppercases_ticker(client, app_repo):
     assert resp.status_code == 200
 
 
-def test_ticker_page_redirects_to_ticker_aware_company_desk(client):
+def test_ticker_page_redirects_to_ticker_aware_company_desk(client: FlaskClient) -> None:
     response = client.get("/ticker/nu")
 
     assert response.status_code == 302

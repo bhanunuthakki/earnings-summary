@@ -14,6 +14,7 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 from alembic.config import Config
@@ -426,9 +427,15 @@ def test_ask_endpoint_compiles_runs_and_renders(
     assert body["kind"] == "view"
     assert seen["query"] == "TST revenue"
     assert seen["context_spec"] == {"tickers": ["TST"]}
-    assert "vx-matrix" in body["fragment"]
-    assert body["spec"]["tickers"] == ["TST"]
-    assert "series" in body["message"]
+    fragment = body["fragment"]
+    assert isinstance(fragment, str)
+    assert "vx-matrix" in fragment
+    spec = body["spec"]
+    assert isinstance(spec, dict)
+    assert cast("dict[str, object]", spec)["tickers"] == ["TST"]
+    message = body["message"]
+    assert isinstance(message, str)
+    assert "series" in message
 
 
 def test_ask_stream_redacts_forced_view_compile_failure(
@@ -504,7 +511,9 @@ def test_ask_endpoint_data_question_falls_back_to_narrative(
     assert body["status"] == "ok"
     assert body["kind"] == "narrative"
     assert body["text"] == "prose fallback"
-    assert "prose" in body["note"]
+    note = body["note"]
+    assert isinstance(note, str)
+    assert "prose" in note
 
 
 def test_ask_endpoint_runs_commands(client: FlaskClient) -> None:
@@ -514,7 +523,9 @@ def test_ask_endpoint_runs_commands(client: FlaskClient) -> None:
     body = fold_sse_response(res.get_data(as_text=True))
     assert body["status"] == "ok"
     assert body["kind"] == "command"
-    assert "/discovery" in body["text"]
+    text = body["text"]
+    assert isinstance(text, str)
+    assert "/discovery" in text
 
 
 def test_ask_endpoint_requires_query(client: FlaskClient) -> None:
