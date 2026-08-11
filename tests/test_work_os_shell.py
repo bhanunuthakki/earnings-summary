@@ -147,6 +147,16 @@ def test_work_os_search_and_command_k_open_the_one_copilot_workspace() -> None:
     assert html.count('class="screen-view') == len(SCREEN_SPECS)
 
 
+def test_work_os_copilot_is_not_a_top_right_header_action() -> None:
+    html = render_work_os_shell()
+    prototype = (
+        Path(__file__).resolve().parents[1] / "mockups" / "harvey_sidebar_flow.html"
+    ).read_text(encoding="utf-8")
+    assert "Ask Copilot" not in prototype
+    assert prototype.count("openWorkOsCopilot()") == 1
+    assert html.count('id="workOsCopilotLauncher"') == 1
+
+
 def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
     html = render_work_os_shell()
 
@@ -205,7 +215,7 @@ def test_prototype_template_has_no_dead_copilot_runtime_to_strip() -> None:
     assert "type === 'ask-copilot'" not in prototype
     assert "populateCopilotPrompt" not in prototype
     assert "executeCopilotQuery" not in prototype
-    assert prototype.count("openWorkOsCopilot()") == 2
+    assert prototype.count("openWorkOsCopilot()") == 1
 
 
 def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> None:

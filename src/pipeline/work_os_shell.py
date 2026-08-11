@@ -832,7 +832,7 @@ def _add_production_contract(html: str, generated_at: datetime) -> str:
         f'<style id="work-os-controls-css">{palette_css("dark")}{controls_css("dark")}</style>'
     )
     return html.replace(
-        "</body>", controls + "\n" + reader + "\n" + copilot + "\n" + runtime + "\n</body>", 1
+        "</body>", controls + "\n" + reader + "\n" + runtime + "\n" + copilot + "\n</body>", 1
     )
 
 
