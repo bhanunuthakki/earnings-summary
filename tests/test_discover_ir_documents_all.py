@@ -253,6 +253,24 @@ def test_checkpoint_resumes_after_fetch_failure_without_repeating_discovery(
     assert not checkpoint.exists()
 
 
+def test_checkpoint_retries_failed_discovery_on_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = _RecordingRun(discover_rc={"NU": 3})
+    _install(monkeypatch, first, ["NU"])
+    assert batch.main(_argv(tmp_path)) == 1
+    checkpoint = tmp_path / ".tmp" / "ir_document_discovery_all" / "state.json"
+    assert checkpoint.is_file()
+
+    second = _RecordingRun(downloaded={"NU": 2})
+    monkeypatch.setattr("execution.discover_ir_documents_all.subprocess.run", second)
+
+    assert batch.main(_argv(tmp_path)) == 0
+    assert second.stages == [("NU", "discover"), ("NU", "fetch")]
+    assert not checkpoint.exists()
+
+
 def test_skip_download_runs_discover_only(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:

@@ -13,16 +13,17 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import cast
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 FMP = REPO / "data" / "historical" / "fmp"
 sys.path.insert(0, str(REPO / "src"))
 from compute.segment_cache import apply_overrides  # noqa: E402
-from llm.cli import call_llm  # noqa: E402
+from llm.contracts import DCF_ASSUMPTIONS_SCHEMA, DcfAssumptionsPayload  # noqa: E402
+from llm.structured import call_llm_structured  # noqa: E402
 
 T = os.environ.get("DCF_TICKER", "AMZN")
 
@@ -197,61 +198,84 @@ below are only USED when valuation_model="fcff_dcf"; still fill them best-effort
 
 Return ONLY a JSON object (no prose, no markdown fences) with EXACTLY these keys:
 {{
-  "dcf_applicable": true | false,   // false for banks/insurers/asset-managers where an FCFF DCF is the wrong tool
-  "business_model": "operating | bank | insurer | asset_manager | royalty | reit | other",
-  "valuation_model": "fcff_dcf | bank_excess_return | holdco_sotp | new",
-  "valuation_model_suggestion": "",  // when "new": <archetype name> - <one-sentence spec>; else ""
-  "segments": {{ {", ".join(f'"{s}": {{"near_term_growth": <0-1 decimal>, "terminal_growth": <0-1 decimal>}}' for s in SEG_KEYS)} }},
-  "near_term_op_margin": <0-1 decimal>,    // operating margin in the next 1-3 years
-  "terminal_op_margin": <0-1 decimal>,     // mature operating margin by year 10
-  "tax_rate": <0-1 decimal>,
-  "capex_pct_revenue_2026": <0-1 decimal>, // 2026 capex as a fraction of 2026 revenue
-  "terminal_capex_da": <number ~1.0-1.2>,  // capex/D&A in the terminal year
-  "terminal_method": "Exit multiple | Perpetuity",
-  "exit_basis": "EV/EBITDA | EV/Sales | EV/EBIT | EV/FCF",
-  "exit_multiple": <number>,               // a defensible MATURE multiple for the chosen basis
-  "terminal_growth_g": <0-1 decimal>,      // ~risk-free rate; <= 0.05
-  "narrative": "<2-3 sentence valuation story>",
-  "reasoning": "<2-3 sentences on the key judgement calls>"
+  "dcf_applicable": true,
+  "business_model": "operating",
+  "valuation_model": "fcff_dcf",
+  "valuation_model_suggestion": "",
+  "segments": {{ {", ".join(f'"{s}": {{"near_term_growth": 0.10, "terminal_growth": 0.03}}' for s in SEG_KEYS)} }},
+  "near_term_op_margin": 0.20,
+  "terminal_op_margin": 0.25,
+  "tax_rate": 0.21,
+  "capex_pct_revenue_2026": 0.05,
+  "terminal_capex_da": 1.05,
+  "terminal_method": "Exit multiple",
+  "exit_basis": "EV/EBITDA",
+  "exit_multiple": 15.0,
+  "terminal_growth_g": 0.03,
+  "narrative": "Margins expand as growth fades toward maturity.",
+  "reasoning": "The path anchors to actual margins and a mature multiple."
 }}
 Growth must fade (near-term > terminal). For software/SaaS prefer EV/Sales or EV/EBITDA; for \
 mature cash generators EV/FCF or EV/EBIT; pick the basis the market actually uses for {T}. \
 Be conservative: anchor near-term to consensus where shown."""
 
 
-def parse_json(text):
-    t = text.strip()
-    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.MULTILINE).strip()
-    a, b = t.find("{"), t.rfind("}")
-    if a >= 0 and b > a:
-        return json.loads(t[a : b + 1])
-    raise ValueError("no JSON object found")
+def _segment_guard(value: object) -> tuple[bool, str]:
+    if not isinstance(value, DcfAssumptionsPayload):  # pragma: no cover - schema runs first
+        return (False, "DCF assumptions are not the expected schema")
+    expected = frozenset(SEG_KEYS)
+    actual = frozenset(value.segments)
+    if actual != expected:
+        return (False, f"expected segments {sorted(expected)}; got {sorted(actual)}")
+    return (True, "")
 
 
-resp = call_llm(PROMPT, purpose="dcf_assumptions", ticker=T, scope="dcf_assumptions_redesign")
-data = parse_json(resp)
-data["_segment_keys"] = SEG_KEYS
+def _call_dcf_assumptions() -> DcfAssumptionsPayload:
+    decoded = call_llm_structured(
+        PROMPT,
+        purpose="dcf_assumptions",
+        ticker=T,
+        scope="dcf_assumptions_redesign",
+        expect="object",
+        schema=DCF_ASSUMPTIONS_SCHEMA,
+        domain_guardrail=_segment_guard,
+        max_escalation_tier=0,
+    )
+    if not isinstance(decoded, DcfAssumptionsPayload):  # pragma: no cover
+        raise TypeError("dcf_assumptions schema returned an unexpected value")
+    return decoded
 
-cache_path = REPO / "data" / "dcf_assumptions" / f"{T}.json"
-existing = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
-existing["redesign"] = data
-if data.get("narrative"):
-    existing.setdefault("narrative", data["narrative"])
-# Provenance: snapshot the fresh Opus values as the immutable baseline the
-# Assumptions sheet classifies against (refresh syncs workbook edits into
-# "redesign", which would otherwise erase what Opus originally said), and
-# reset the override ledger — overrides are relative to a baseline, and this
-# is a new one.
-from dcf.assumptions_doc import baseline_from_opus_pass  # noqa: E402
 
-existing["opus_baseline"] = baseline_from_opus_pass(data)
-existing.pop("assumption_overrides", None)
-cache_path.parent.mkdir(parents=True, exist_ok=True)
-cache_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-_vm = data.get("valuation_model") or ("fcff_dcf" if data.get("dcf_applicable") else "?")
-_sugg = data.get("valuation_model_suggestion")
-print(
-    f"OK\t{T}\tvaluation_model={_vm}\tbusiness={data.get('business_model')}\t"
-    f"basis={data.get('exit_basis')}@{data.get('exit_multiple')}\tterm_margin={data.get('terminal_op_margin')}"
-    + (f"\tSUGGESTS: {_sugg}" if _vm == "new" and _sugg else "")
-)
+def main() -> int:
+    result = _call_dcf_assumptions()
+    data = cast("dict[str, object]", result.model_dump(mode="json"))
+    data["_segment_keys"] = SEG_KEYS
+
+    cache_path = REPO / "data" / "dcf_assumptions" / f"{T}.json"
+    existing_raw: object = (
+        json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
+    )
+    if not isinstance(existing_raw, dict):
+        raise ValueError(f"{cache_path} must contain a JSON object")
+    existing = cast("dict[str, object]", existing_raw)
+    existing["redesign"] = data
+    existing.setdefault("narrative", result.narrative)
+
+    from dcf.assumptions_doc import baseline_from_opus_pass
+
+    existing["opus_baseline"] = baseline_from_opus_pass(data)
+    existing.pop("assumption_overrides", None)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    suggestion = result.valuation_model_suggestion
+    print(
+        f"OK\t{T}\tvaluation_model={result.valuation_model}\t"
+        f"business={result.business_model}\tbasis={result.exit_basis}@{result.exit_multiple}\t"
+        f"term_margin={result.terminal_op_margin}"
+        + (f"\tSUGGESTS: {suggestion}" if result.valuation_model == "new" else "")
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -16,14 +16,15 @@ Usage:
     # Portfolio-scoped lenses (no ticker)
     python execution/run_lens.py --lens cross_portfolio_synthesis
 
-    # All portfolio + a list of tickers
-    python execution/run_lens.py --tickers GOOG,META,AMZN --all
+    # All active portfolio tickers + portfolio-scoped lenses
+    python execution/run_lens.py --portfolio --all
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -43,6 +44,7 @@ def _sync_db_path(repo_root: Path) -> None:
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
 
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from synthesis_lenses import (  # noqa: E402
     LENSES,
     list_lenses_for_ticker,
@@ -53,11 +55,31 @@ from synthesis_lenses import (  # noqa: E402
 log = logging.getLogger("run_lens")
 
 
+def portfolio_tickers(repo_root: Path) -> list[str]:
+    """Return the current active portfolio universe from the governed DB."""
+
+    conn = connect_sqlite(repo_root / "data" / "portfolio.db", role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        rows = conn.execute(
+            "SELECT ticker FROM tracked_companies "
+            "WHERE archived_at IS NULL AND list_type = 'portfolio' "
+            "ORDER BY UPPER(ticker)"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [str(row[0]).strip().upper() for row in rows if row and str(row[0]).strip()]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     g = parser.add_mutually_exclusive_group(required=False)
     g.add_argument("--ticker", help="Single ticker to run lenses for.")
     g.add_argument("--tickers", help="Comma-separated tickers.")
+    g.add_argument(
+        "--portfolio",
+        action="store_true",
+        help="Run ticker-scoped lenses for the active portfolio universe from the DB.",
+    )
     parser.add_argument(
         "--lens",
         choices=sorted(LENSES.keys()),
@@ -93,6 +115,20 @@ def main() -> int:
     elif args.tickers:
         tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
 
+    elif args.portfolio:
+        try:
+            tickers = portfolio_tickers(args.repo_root.resolve())
+        except sqlite3.Error as exc:
+            log.error(
+                {
+                    "event": "portfolio_universe_load_failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            return 2
+        if not tickers:
+            log.error({"event": "portfolio_universe_empty"})
+            return 2
     # Build the run plan: (ticker, lens_name) pairs
     plan: list[tuple[str | None, str]] = []
     if tickers:
@@ -103,8 +139,8 @@ def main() -> int:
             for t in tickers:
                 for ln in list_lenses_for_ticker():
                     plan.append((t, ln))
-            # Also include portfolio lenses if --all and --tickers
-            if args.tickers and not args.ticker:
+            # Multi-name runs also include portfolio-scoped lenses.
+            if (args.tickers or args.portfolio) and not args.ticker:
                 for ln in list_portfolio_lenses():
                     plan.append((None, ln))
         else:

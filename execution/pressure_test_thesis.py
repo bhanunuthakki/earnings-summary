@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sqlite3
 import sys
 from datetime import UTC, date, datetime
@@ -36,10 +35,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-from llm_client import call_llm  # noqa: E402
+from llm.contracts import PRESSURE_TEST_SCHEMA, PressureTestPayload  # noqa: E402
+from llm.structured import call_llm_structured  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-
-_JSON_FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,8 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     context_md = _assemble_corpus_md(ticker, repo_root, db_path)
-    result_md = _call_pressure_test(ticker, thesis, context_md)
-    result = _parse_response(result_md)
+    result = _call_pressure_test(ticker, thesis, context_md)
 
     audit_path = _write_audit(repo_root, ticker, thesis, result)
     diligence_path = _append_to_diligence(repo_root, ticker, thesis, result)
@@ -82,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
                 "ticker": ticker,
                 "audit_path": str(audit_path),
                 "diligence_path": str(diligence_path) if diligence_path else None,
-                "conviction_rating": result.get("conviction_rating"),
+                "conviction_rating": result.conviction_rating,
             },
             indent=2,
         )
@@ -291,8 +288,8 @@ def _load_recent_transcripts(repo_root: Path, ticker: str, n: int) -> list[tuple
     return out
 
 
-def _call_pressure_test(ticker: str, thesis: str, context_md: str) -> str:
-    """One Claude call returning a structured JSON pressure-test."""
+def _call_pressure_test(ticker: str, thesis: str, context_md: str) -> PressureTestPayload:
+    """Return a validated pressure-test; provider/repair failures remain exceptions."""
     prompt = f"""You are a senior buy-side analyst stress-testing an investment thesis BEFORE
 a portfolio initiation. Your job is to find the weak points, not to agree.
 
@@ -309,38 +306,36 @@ earnings-call summaries):
 Return strictly a JSON object with these exact keys (no markdown, no commentary):
 
 {{
-  "strongest_counter": "One sentence: the most credible bear argument against the thesis. Specific, quantified, grounded in the corpus above.",
+  "strongest_counter": "Consensus demand assumptions exceed evidence in FY2025 results.",
   "contradicting_evidence": [
-    "Verbatim or near-verbatim data points from the corpus that contradict or weaken the thesis. Quote numbers. Cite the year or quarter."
+    "FY2025 revenue growth slowed to 3%."
   ],
-  "mgmt_credibility_check": "One paragraph: pattern of management Say-vs-Do across the recent calls / 10-K. Have they delivered on prior commitments? Are there words-vs-actions gaps?",
+  "evidence_gap": null,
+  "mgmt_credibility_check": "Management missed its prior margin commitment.",
   "thesis_assumptions": [
-    "Implicit assumptions the thesis depends on (e.g. 'TAM expansion continues at >15%', 'Pricing power holds despite peer entry'). Frame these as testable propositions, not platitudes."
+    "Revenue growth reaccelerates above 10%."
   ],
-  "conviction_rating": "high | medium | low",
-  "conviction_reasoning": "One sentence: why that rating, given the strongest counter and the contradicting evidence weight."
+  "conviction_rating": "low",
+  "conviction_reasoning": "The evidence directly contradicts the growth premise."
 }}
 
 Be specific. Avoid generic risks like 'macro deteriorates'. Every claim should cite
 something in the CORPUS or admit it's not yet supported by the data.
 """
-    raw = call_llm(prompt, purpose="pressure_test_thesis").strip()
-    if raw.startswith("```"):
-        raw = _JSON_FENCE_RX.sub("", raw).strip()
-    return raw
+    decoded = call_llm_structured(
+        prompt,
+        purpose="pressure_test_thesis",
+        ticker=ticker,
+        expect="object",
+        schema=PRESSURE_TEST_SCHEMA,
+        max_escalation_tier=0,
+    )
+    if not isinstance(decoded, PressureTestPayload):  # pragma: no cover - schema invariant
+        raise TypeError("pressure_test_thesis schema returned an unexpected value")
+    return decoded
 
 
-def _parse_response(text: str) -> dict[str, object]:
-    try:
-        payload: object = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"pressure-test response is not valid JSON: {e}") from e
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"pressure-test response is not a JSON object: {type(payload).__name__}")
-    return cast("dict[str, object]", payload)
-
-
-def _write_audit(repo_root: Path, ticker: str, thesis: str, result: dict[str, object]) -> Path:
+def _write_audit(repo_root: Path, ticker: str, thesis: str, result: PressureTestPayload) -> Path:
     """Persist a dated JSON snapshot for audit/replay."""
     audit_dir = repo_root / ".tmp" / "pressure_tests"
     audit_dir.mkdir(parents=True, exist_ok=True)
@@ -348,7 +343,12 @@ def _write_audit(repo_root: Path, ticker: str, thesis: str, result: dict[str, ob
     path = audit_dir / f"{ticker}_{run_date}.json"
     path.write_text(
         json.dumps(
-            {"ticker": ticker, "tested_at": run_date, "thesis": thesis, "result": result},
+            {
+                "ticker": ticker,
+                "tested_at": run_date,
+                "thesis": thesis,
+                "result": result.model_dump(mode="json"),
+            },
             indent=2,
         ),
         encoding="utf-8",
@@ -357,7 +357,7 @@ def _write_audit(repo_root: Path, ticker: str, thesis: str, result: dict[str, ob
 
 
 def _append_to_diligence(
-    repo_root: Path, ticker: str, thesis: str, result: dict[str, object]
+    repo_root: Path, ticker: str, thesis: str, result: PressureTestPayload
 ) -> Path | None:
     """Append a §7 Thesis pressure-test section to the diligence markdown.
 
@@ -374,28 +374,20 @@ def _append_to_diligence(
     body.write("\n---\n\n## §7 Thesis pressure-test\n\n")
     body.write(f"_Tested {date.today().isoformat()}._\n\n")
     body.write(f"**Thesis under test:**\n\n> {thesis}\n\n")
-    body.write(
-        f"**Conviction:** {result.get('conviction_rating', '—')} — "
-        f"{result.get('conviction_reasoning', '')}\n\n"
-    )
-    counter = result.get("strongest_counter")
-    if counter:
-        body.write(f"**Strongest counter:** {counter}\n\n")
-    contradicting = result.get("contradicting_evidence")
-    if isinstance(contradicting, list) and contradicting:
+    body.write(f"**Conviction:** {result.conviction_rating} — {result.conviction_reasoning}\n\n")
+    body.write(f"**Strongest counter:** {result.strongest_counter}\n\n")
+    if result.contradicting_evidence:
         body.write("**Contradicting evidence:**\n\n")
-        for item in cast("list[object]", contradicting):
+        for item in result.contradicting_evidence:
             body.write(f"- {item}\n")
         body.write("\n")
-    mgmt = result.get("mgmt_credibility_check")
-    if mgmt:
-        body.write(f"**Management credibility:** {mgmt}\n\n")
-    assumptions = result.get("thesis_assumptions")
-    if isinstance(assumptions, list) and assumptions:
-        body.write("**Thesis assumptions to monitor:**\n\n")
-        for item in cast("list[object]", assumptions):
-            body.write(f"- {item}\n")
-        body.write("\n")
+    if result.evidence_gap:
+        body.write(f"**Evidence gap:** {result.evidence_gap}\n\n")
+    body.write(f"**Management credibility:** {result.mgmt_credibility_check}\n\n")
+    body.write("**Thesis assumptions to monitor:**\n\n")
+    for item in result.thesis_assumptions:
+        body.write(f"- {item}\n")
+    body.write("\n")
     with open(path, "a", encoding="utf-8") as f:
         f.write(body.getvalue())
     return path

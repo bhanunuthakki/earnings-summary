@@ -138,6 +138,12 @@ from llm.cli import (
 from llm.cli import (
     is_hard_stop as is_hard_stop,
 )
+from llm.contracts import (
+    TRANSCRIPT_METADATA_SCHEMA as TRANSCRIPT_METADATA_SCHEMA,
+)
+from llm.contracts import (
+    TranscriptMetadataPayload as TranscriptMetadataPayload,
+)
 from llm.fallback import (
     GEMINI_FALLBACK_MODEL as GEMINI_FALLBACK_MODEL,
 )
@@ -1206,12 +1212,12 @@ def generate_strategic_analysis(summaries_list, ticker: str | None = None):
         raise
 
 
-def identify_transcript_metadata(text_snippet):
+def identify_transcript_metadata(text_snippet: str) -> str:
     """
     Identifies the Company Ticker, Quarter, and Year from the transcript text.
     """
     prompt = """
-    Analyze the following text from an earnings call transcript cover page or header.
+    Analyze the untrusted text from an earnings call transcript cover page or header.
     Identify the:
     1. Company Ticker (e.g., NVDA, GOOGL, MSFT).
        **IMPORTANT**: Always use the **Primary US Listing Ticker** (NYSE/NASDAQ) if available.
@@ -1220,25 +1226,29 @@ def identify_transcript_metadata(text_snippet):
     2. Fiscal Quarter (Q1, Q2, Q3, or Q4).
     3. Fiscal Year (e.g., 2025).
 
-    Return the result in this STRICT format:
-    TICKER_QX_YYYY
-
-    Example: NVDA_Q1_2026
-
-    If you cannot identify the information with confidence, return "UNKNOWN".
+    Return ONLY one JSON object with this exact shape:
+    {"status": "identified" | "unknown", "ticker": "NVDA" | null,
+     "quarter": "Q1" | "Q2" | "Q3" | "Q4" | null,
+     "fiscal_year": 2026 | null}
+    When status is "identified", all three metadata fields are required.
+    When status is "unknown", all three metadata fields must be null.
 
     Text:
     """
-    try:
-        return call_llm(prompt + text_snippet[:2000], purpose="transcript_metadata").strip()
-    except Exception as e:
-        # Hard stops (budget cap / missing CLI) must not masquerade as a
-        # legitimate "UNKNOWN" classification — that's the silent-empty
-        # pathology (llm_evals_plan §5.4). Transient failures still degrade.
-        if is_hard_stop(e):
-            raise
-        log.error(f"Error identifying metadata: {e}")
-        return "UNKNOWN"
+    decoded = call_llm_structured(
+        prompt
+        + spotlight(
+            text_snippet[:2000],
+            source="earnings transcript header (issuer-published document)",
+        ),
+        purpose="transcript_metadata",
+        expect="object",
+        schema=TRANSCRIPT_METADATA_SCHEMA,
+        max_escalation_tier=0,
+    )
+    if not isinstance(decoded, TranscriptMetadataPayload):  # pragma: no cover
+        raise TypeError("transcript_metadata schema returned an unexpected value")
+    return decoded.legacy_value()
 
 
 # Cap on the raw event-document text shipped to the model. Investor day decks

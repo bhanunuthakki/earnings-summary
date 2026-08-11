@@ -22,9 +22,8 @@ Checks (all on the temp copy):
   2. row-count sanity — core tables (``tracked_companies``, ``financial_facts``)
      are non-empty, catching a truncated/empty snapshot that still passes the
      integrity check.
-  3. schema match — the restored snapshot's ``alembic_version`` matches the live
-     DB's. A soft check: a mismatch warns (a migration run after the last backup
-     is legitimate) but does not fail the drill.
+  3. schema match — fail closed unless the restored snapshot's
+     ``alembic_version`` matches the live DB's exactly.
 
 Exit code:
   0  drill passed (restore + integrity + non-empty core tables)
@@ -133,8 +132,8 @@ def run_drill(
     """Restore the newest snapshot to a temp file and verify it.
 
     Returns ``(ok, summary)``. Never mutates *live_db*. ``ok`` is False on a
-    missing snapshot, a failed restore/integrity check, or an empty core table;
-    a schema-version mismatch only adds a warning (still ``ok``).
+    missing snapshot, a failed restore/integrity check, an empty core table,
+    or a schema-version mismatch.
     """
     if isinstance(snapshot, _AutoSnapshot):
         snapshot = _latest_snapshot(backup_dir)
@@ -144,21 +143,46 @@ def run_drill(
     tmpdir = Path(tempfile.mkdtemp(prefix="restore_drill."))
     target = tmpdir / "drill.db"
     try:
+        live_ver = _alembic_version(live_db) if live_db.exists() else None
+        schema_policy = (
+            restore_db.SchemaCompatibilityPolicy.EXACT
+            if live_ver is not None
+            else restore_db.SchemaCompatibilityPolicy.VERSIONED
+        )
         try:
-            restore_db.restore_snapshot(snapshot, target, force=False)
+            validation = restore_db.restore_snapshot(
+                snapshot,
+                target,
+                force=False,
+                schema_policy=schema_policy,
+                expected_schema=live_ver,
+            )
         except (OSError, RuntimeError) as exc:
+            failed = exc.validation if isinstance(exc, restore_db.RestoreValidationError) else None
+            schema_failed = (
+                failed is not None
+                and failed.schema_policy is restore_db.SchemaCompatibilityPolicy.EXACT
+                and failed.schema_revision != failed.expected_schema
+            )
             return False, {
-                "status": "restore_failed",
+                "status": "schema_incompatible" if schema_failed else "restore_failed",
                 "snapshot": snapshot.name,
                 "error": str(exc),
+                "integrity_check": failed.integrity_check if failed else None,
+                "quick_check": failed.quick_check if failed else None,
+                "foreign_key_violation_count": (
+                    failed.foreign_key_violation_count if failed else None
+                ),
+                "snapshot_schema": failed.schema_revision if failed else None,
+                "live_schema": live_ver,
+                "schema_match": False,
+                "schema_policy": schema_policy.value,
             }
 
         counts = _row_counts(target, _CORE_TABLES)
         empty = [t for t, n in counts.items() if n <= 0]
 
-        snap_ver = _alembic_version(target)
-        live_ver = _alembic_version(live_db) if live_db.exists() else None
-        schema_match = live_ver is None or snap_ver == live_ver
+        schema_match = live_ver is None or validation.schema_revision == live_ver
 
         ok = not empty
         summary: dict[str, object] = {
@@ -166,15 +190,14 @@ def run_drill(
             "snapshot": snapshot.name,
             "snapshot_bytes": target.stat().st_size,
             "row_counts": counts,
-            "snapshot_schema": snap_ver,
+            "integrity_check": validation.integrity_check,
+            "quick_check": validation.quick_check,
+            "foreign_key_violation_count": validation.foreign_key_violation_count,
+            "snapshot_schema": validation.schema_revision,
             "live_schema": live_ver,
             "schema_match": schema_match,
+            "schema_policy": validation.schema_policy.value,
         }
-        if not schema_match:
-            summary["warning"] = (
-                f"schema drift: snapshot at {snap_ver}, live DB at {live_ver} "
-                "(a migration run after the last backup is the benign case)"
-            )
         return ok, summary
     finally:
         if not keep:

@@ -129,6 +129,17 @@ def test_comp_metrics_wrapper_preserves_the_first_failed_step() -> None:
     assert lines[-1].strip() == "endlocal & exit /b %RC%"
 
 
+def test_weekly_synthesis_has_one_outer_portfolio_lock_and_entrypoint() -> None:
+    text = (CRON / "run_weekly_synthesis.bat").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    calls = [index for index, line in enumerate(lines) if line.strip().lower().startswith("call ")]
+    assert len(calls) == 1
+    invocation = lines[calls[0]].lower()
+    assert '"weekly-synthesis" "portfolio-db"' in invocation
+    assert "execution\\run_weekly_synthesis.py" in invocation
+    assert lines[-1].strip() == "endlocal & exit /b %RC%"
+
+
 def test_shared_runtime_forwards_original_arguments_without_shift() -> None:
     """SHIFT does not alter ``%*``; the runtime must slice wrapper args itself."""
     text = (CRON / "run_python.bat").read_text(encoding="utf-8").lower()

@@ -765,7 +765,11 @@ def _load_checkpoint(
     if isinstance(raw_discoveries, dict):
         for ticker, value in cast("dict[str, object]", raw_discoveries).items():
             parsed = _discovery_from_checkpoint(value)
-            if parsed is not None and parsed.ticker == ticker:
+            if (
+                parsed is not None
+                and parsed.ticker == ticker
+                and parsed.status is not TickerStatus.FAILED
+            ):
                 discoveries[ticker] = parsed
     results: dict[str, TickerResult] = {}
     raw_results = state.get("results")

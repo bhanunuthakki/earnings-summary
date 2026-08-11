@@ -11,8 +11,14 @@ import pytest
 
 from models.kpis import BreachStatus
 from pipeline.quarterly_refresh import (
+    RefreshReport,
     StageName,
+    StageResult,
     StageStatus,
+    TickerExecutionReceipt,
+    TickerExecutionStatus,
+    TickerRefreshReport,
+    refresh_portfolio,
     refresh_ticker,
 )
 
@@ -543,3 +549,208 @@ def test_refresh_ticker_handles_missing_holdings_gracefully(
     eval_stage = next(s for s in report.stages if s.name == StageName.EVALUATE_THESIS)
     assert eval_stage.status == StageStatus.SKIPPED
     assert report.breach_status is None
+
+
+def test_refresh_portfolio_marks_failed_and_unattempted_after_exception(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline import quarterly_refresh as module
+
+    attempted: list[str] = []
+
+    def _fake_refresh(
+        _conn: sqlite3.Connection,
+        *,
+        ticker: str,
+        project_root: Path,
+        holdings_dir: Path,
+        run_id: str,
+        fetch_sec: bool,
+    ) -> TickerRefreshReport:
+        del project_root, holdings_dir, run_id, fetch_sec
+        attempted.append(ticker)
+        if ticker == "MELI":
+            raise RuntimeError("provider exploded")
+        return TickerRefreshReport(
+            ticker=ticker,
+            stages=(),
+            breach_status=None,
+            breach_status_changed=False,
+            pending_work=(),
+        )
+
+    monkeypatch.setattr(module, "refresh_ticker", _fake_refresh)
+    report = refresh_portfolio(
+        conn,
+        tickers=["NU", "MELI", "ORCL"],
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="run-1",
+    )
+
+    assert attempted == ["NU", "MELI"]
+    assert [(item.ticker, item.status) for item in report.execution] == [
+        ("NU", TickerExecutionStatus.COMPLETED),
+        ("MELI", TickerExecutionStatus.FAILED),
+        ("ORCL", TickerExecutionStatus.UNATTEMPTED),
+    ]
+    assert report.execution[1].error == "RuntimeError: provider exploded"
+
+
+@pytest.mark.parametrize("failure_kind", ["stage", "exception"])
+def test_cli_emits_one_redacted_terminal_receipt_and_ends_run_once(
+    failure_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import quarterly_refresh as cli
+
+    leak_sentinel = "supersecretvalue"
+    ticker_report = TickerRefreshReport(
+        ticker="NU",
+        stages=()
+        if failure_kind == "exception"
+        else (
+            StageResult(
+                name=StageName.DERIVE_FMP_KPIS,
+                status=StageStatus.FAILED,
+                rows_processed=0,
+                notes=f"provider failed api_key={leak_sentinel}",
+            ),
+        ),
+        breach_status=None,
+        breach_status_changed=False,
+        pending_work=(),
+    )
+    now = datetime.now()
+    report = RefreshReport(
+        run_id="run-1",
+        started_at=now,
+        ended_at=now,
+        tickers=() if failure_kind == "exception" else (ticker_report,),
+        execution=(
+            TickerExecutionReceipt(
+                ticker="NU",
+                status=(
+                    TickerExecutionStatus.FAILED
+                    if failure_kind == "exception"
+                    else TickerExecutionStatus.COMPLETED
+                ),
+                error=(
+                    f"RuntimeError: api_key={leak_sentinel}"
+                    if failure_kind == "exception"
+                    else None
+                ),
+            ),
+        ),
+    )
+
+    conn = sqlite3.connect(":memory:")
+    ended: list[tuple[object, ...]] = []
+
+    def fake_open_db(_path: str | Path) -> sqlite3.Connection:
+        return conn
+
+    def fake_start_run(*_args: object, **_kwargs: object) -> str:
+        return "run-1"
+
+    def fake_refresh_portfolio(*_args: object, **_kwargs: object) -> RefreshReport:
+        return report
+
+    monkeypatch.setattr(cli, "open_db", fake_open_db)
+    monkeypatch.setattr(cli, "start_run", fake_start_run)
+    monkeypatch.setattr(cli, "refresh_portfolio", fake_refresh_portfolio)
+
+    def record_end(*args: object, **kwargs: object) -> None:
+        ended.append((*args, kwargs))
+
+    monkeypatch.setattr(cli, "end_run", record_end)
+
+    assert cli.main(["--ticker", "NU", "--json", "--db", "unused.db"]) == 1
+    output = capsys.readouterr().out
+    assert output.count('"receipt"') == 1
+    assert leak_sentinel not in output
+    parsed = json.loads(output)
+    assert parsed["receipt"]["status"] == "failed"
+    assert len(parsed["receipt"]["failed"]) == 1
+    assert len(ended) == 1
+
+
+def test_cli_human_output_redacts_all_stage_notes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from execution import quarterly_refresh as cli
+
+    leak_sentinel = "supersecretvalue"
+    stage_results = tuple(
+        StageResult(
+            name=name,
+            status=(
+                StageStatus.FAILED if name is StageName.VALIDATE_SEGMENT_CACHE else StageStatus.OK
+            ),
+            rows_processed=0,
+            notes=(
+                f"provider failed api_key={leak_sentinel}"
+                if name in {StageName.VALIDATE_SEGMENT_CACHE, StageName.EVALUATE_THESIS}
+                else "ok"
+            ),
+        )
+        for name in (
+            StageName.VALIDATE_SEGMENT_CACHE,
+            StageName.EXTRACT_FMP_FACTS,
+            StageName.INGEST_IR_TRANSCRIPTS,
+            StageName.DERIVE_FMP_KPIS,
+            StageName.MATCH_COMMITMENTS,
+            StageName.EVALUATE_THESIS,
+            StageName.PERSIST_TIMESERIES_SIGNALS,
+            StageName.SURFACE_PENDING_LLM,
+        )
+    )
+    now = datetime.now()
+    report = RefreshReport(
+        run_id="run-1",
+        started_at=now,
+        ended_at=now,
+        tickers=(
+            TickerRefreshReport(
+                ticker="NU",
+                stages=stage_results,
+                breach_status=BreachStatus.BREACH,
+                breach_status_changed=True,
+                pending_work=(),
+            ),
+        ),
+        execution=(
+            TickerExecutionReceipt(
+                ticker="NU",
+                status=TickerExecutionStatus.COMPLETED,
+            ),
+        ),
+    )
+    conn = sqlite3.connect(":memory:")
+
+    def fake_open_db(_path: str | Path) -> sqlite3.Connection:
+        return conn
+
+    def fake_start_run(*_args: object, **_kwargs: object) -> str:
+        return "run-1"
+
+    def fake_refresh_portfolio(*_args: object, **_kwargs: object) -> RefreshReport:
+        return report
+
+    def fake_end_run(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(cli, "open_db", fake_open_db)
+    monkeypatch.setattr(cli, "start_run", fake_start_run)
+    monkeypatch.setattr(cli, "refresh_portfolio", fake_refresh_portfolio)
+    monkeypatch.setattr(cli, "end_run", fake_end_run)
+
+    assert cli.main(["--ticker", "NU", "--db", "unused.db"]) == 1
+    output = capsys.readouterr().out
+    assert output.count('"receipt"') == 1
+    assert leak_sentinel not in output
+    assert output.count("api_key=***") >= 3

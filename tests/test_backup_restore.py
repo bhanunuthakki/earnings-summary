@@ -36,6 +36,8 @@ from runtime.backup_crypto import (  # noqa: E402
 def _make_db(path: Path, value: str) -> None:
     conn = sqlite3.connect(str(path))
     try:
+        conn.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
+        conn.execute("INSERT INTO alembic_version VALUES ('test_revision')")
         conn.execute("CREATE TABLE t (k TEXT, v TEXT)")
         conn.execute("INSERT INTO t VALUES ('key', ?)", (value,))
         conn.commit()
@@ -63,9 +65,18 @@ def test_restore_round_trip(tmp_path: Path) -> None:
     snap = tmp_path / "portfolio.db.20260101_000000.gz"
     _gzip_file(src, snap)
     target = tmp_path / "restored.db"
-    restore_db.restore_snapshot(snap, target, force=False, allow_legacy=True)
+    validation = restore_db.restore_snapshot(
+        snap,
+        target,
+        force=False,
+        allow_legacy=True,
+        schema_policy=restore_db.SchemaCompatibilityPolicy.VERSIONED,
+    )
     assert target.exists()
     assert restore_db.integrity_ok(target)
+    assert validation.integrity_check == "ok"
+    assert validation.quick_check == "ok"
+    assert validation.foreign_key_violation_count == 0
     assert _read_value(target) == "hello"
 
 
@@ -102,6 +113,63 @@ def test_restore_rejects_corrupt_snapshot(tmp_path: Path) -> None:
     assert not target.exists()  # the corrupt restore is discarded, target untouched
 
 
+def test_restore_rejects_foreign_key_violations(tmp_path: Path) -> None:
+    src = tmp_path / "src.db"
+    conn = sqlite3.connect(src)
+    conn.executescript(
+        """
+        CREATE TABLE alembic_version (version_num TEXT NOT NULL);
+        INSERT INTO alembic_version VALUES ('test_revision');
+        CREATE TABLE parent (id INTEGER PRIMARY KEY);
+        CREATE TABLE child (
+            id INTEGER PRIMARY KEY,
+            parent_id INTEGER NOT NULL REFERENCES parent(id)
+        );
+        INSERT INTO child VALUES (1, 999);
+        """
+    )
+    conn.commit()
+    conn.close()
+    snap = tmp_path / "broken-fk.gz"
+    _gzip_file(src, snap)
+    target = tmp_path / "restored.db"
+    target.write_bytes(b"existing-target-sentinel")
+    original = target.read_bytes()
+
+    with pytest.raises(RuntimeError, match="foreign_key_check"):
+        restore_db.restore_snapshot(
+            snap,
+            target,
+            force=True,
+            allow_legacy=True,
+            schema_policy=restore_db.SchemaCompatibilityPolicy.VERSIONED,
+        )
+
+    assert target.read_bytes() == original
+
+
+def test_restore_exact_schema_policy_rejects_mismatch(tmp_path: Path) -> None:
+    src = tmp_path / "src.db"
+    _make_db(src, "x")
+    snap = tmp_path / "schema-mismatch.gz"
+    _gzip_file(src, snap)
+    target = tmp_path / "restored.db"
+    target.write_bytes(b"existing-target-sentinel")
+    original = target.read_bytes()
+
+    with pytest.raises(RuntimeError, match="schema compatibility"):
+        restore_db.restore_snapshot(
+            snap,
+            target,
+            force=True,
+            allow_legacy=True,
+            schema_policy=restore_db.SchemaCompatibilityPolicy.EXACT,
+            expected_schema="different_revision",
+        )
+
+    assert target.read_bytes() == original
+
+
 def test_backup_then_restore_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     live = tmp_path / "live.db"
     _make_db(live, "e2e")
@@ -111,18 +179,37 @@ def test_backup_then_restore_end_to_end(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
     monkeypatch.setenv("EARNINGS_SUMMARY_SECRETS_DIR", str(tmp_path / "secrets"))
     accounting = (sqlite3.connect(":memory:"), "backup-test")
-    monkeypatch.setattr(backup_db, "_start_accounting", lambda *_args: accounting)
-    monkeypatch.setattr(
-        backup_db,
-        "_finish_accounting",
-        lambda _accounting, *, success, error_msg=None: _accounting[0].close(),
-    )
+
+    def fake_start_accounting(*_args: object) -> tuple[sqlite3.Connection, str]:
+        return accounting
+
+    def fake_finish_accounting(
+        active_accounting: tuple[sqlite3.Connection, str],
+        *,
+        success: bool,
+        error_msg: str | None = None,
+    ) -> None:
+        del success, error_msg
+        active_accounting[0].close()
+
+    monkeypatch.setattr(backup_db, "_start_accounting", fake_start_accounting)
+    monkeypatch.setattr(backup_db, "_finish_accounting", fake_finish_accounting)
     assert backup_db.main() == 0
 
     snaps = restore_db.list_snapshots(backup_dir)
     assert snaps, "backup_db wrote no snapshot"
     target = tmp_path / "recovered.db"
-    rc = restore_db.main(["--latest", "--backup-dir", str(backup_dir), "--to", str(target)])
+    rc = restore_db.main(
+        [
+            "--latest",
+            "--backup-dir",
+            str(backup_dir),
+            "--to",
+            str(target),
+            "--schema-policy",
+            "versioned",
+        ]
+    )
     assert rc == 0
     assert _read_value(target) == "e2e"
     assert snaps[-1].name.endswith(".gz.enc")
@@ -361,7 +448,12 @@ def test_backup_captures_archive_sidecar(tmp_path: Path, monkeypatch: pytest.Mon
     assert len(archive_snaps) == 1, "archive sidecar was not backed up"
     # It decrypts + gunzips back to a valid, non-empty archive DB.
     recovered = tmp_path / "recovered_archive.db"
-    restore_db.restore_snapshot(archive_snaps[-1], recovered, force=False)
+    restore_db.restore_snapshot(
+        archive_snaps[-1],
+        recovered,
+        force=False,
+        schema_policy=restore_db.SchemaCompatibilityPolicy.IGNORE,
+    )
     conn = sqlite3.connect(str(recovered))
     try:
         assert conn.execute("SELECT rows_archived FROM gc_manifest").fetchone()[0] == 5

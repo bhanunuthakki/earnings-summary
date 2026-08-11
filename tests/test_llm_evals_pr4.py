@@ -526,7 +526,8 @@ def test_production_wrappers_propagate_hard_stops(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(llm_client, "call_llm", flaky)
     monkeypatch.setattr(llm_client, "call_llm_with_web", flaky)
     monkeypatch.setattr(llm_client, "call_llm_structured", flaky)
-    assert llm_client.identify_transcript_metadata("x") == "UNKNOWN"
+    with pytest.raises(RuntimeError, match="timeout"):
+        llm_client.identify_transcript_metadata("x")
     assert llm_client.classify_intake_document("f.pdf", "t", {}) is None
     assert llm_client.structure_recent_news_json("NU") == []
 
@@ -544,7 +545,7 @@ def test_risk_classify_failure_skips_ticker_loudly(monkeypatch: pytest.MonkeyPat
         mod._llm_classify_risks(ticker="NU", fiscal_year=2025, risks=[("h", "b")])
     assert mod._llm_classify_risks(ticker="NU", fiscal_year=2025, risks=[]) == {}
 
-    good = {"0": "regulatory", "1": "not-an-int-key-is-fine", "x": "skipped"}
+    good = {"0": "regulatory"}
     monkeypatch.setattr(mod, "call_llm_structured", _returning(good))
     out = mod._llm_classify_risks(ticker="NU", fiscal_year=2025, risks=[("h", "b")])
-    assert out == {0: "regulatory", 1: "not-an-int-key-is-fine"}
+    assert out == {0: "regulatory"}

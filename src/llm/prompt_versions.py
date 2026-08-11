@@ -149,7 +149,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # structure_recent_news_json is materially rewritten, then re-run
     # `run_llm_evals.py --purpose <p> --min-score ...` per the prompt-change
     # workflow in directives/llm_calls.md.
-    "transcript_metadata": "v1",
+    "transcript_metadata": "v2",
     "intake_classifier": "v1",
     # news_structuring v2 (2026-06-12, S9): UNTRUSTED WEB CONTENT priority
     # rule added; thesis anchor spotlighted at the fetch_news_websearch call
@@ -402,7 +402,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "bear_case_grading": "v1",
     "canonicalize_segments": "v1",
     "customer_concentration_extraction": "v1",
-    "dcf_assumptions": "v1",
+    "dcf_assumptions": "v2",
     "decision_extraction": "v1",
     "exec_comp_alignment": "v1",
     "exec_comp_extraction": "v1",
@@ -412,9 +412,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "kpi_registry_auto_proposal": "v1",
     "market_signals": "v1",
     "patent_timeline": "v1",
-    "pressure_test_thesis": "v1",
-    "risk_factor_classify": "v1",
-    "risk_factor_diff": "v1",
+    "pressure_test_thesis": "v2",
+    "risk_factor_classify": "v2",
+    "risk_factor_diff": "v2",
     "saydo_importance": "v1",
     "strategic_analysis": "v1",
     "thesis_pass_a": "v1",

@@ -29,9 +29,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from log_redact import redact  # noqa: E402
 from models.runs import StageStatus as RunStageStatus  # noqa: E402
 from pipeline.quarterly_refresh import (  # noqa: E402
     RefreshReport,
+    TickerExecutionStatus,
     TickerRefreshReport,
     refresh_portfolio,
 )
@@ -60,6 +62,50 @@ def _report_to_dict(report: RefreshReport) -> dict[str, object]:
         "started_at": report.started_at.isoformat(),
         "ended_at": report.ended_at.isoformat(),
         "tickers": [_ticker_to_dict(t) for t in report.tickers],
+        "receipt": _terminal_receipt(report),
+    }
+
+
+def _report_failed(report: RefreshReport) -> bool:
+    return any(item.status is TickerExecutionStatus.FAILED for item in report.execution) or any(
+        stage.status is RefreshStageStatus.FAILED
+        for ticker in report.tickers
+        for stage in ticker.stages
+    )
+
+
+def _terminal_receipt(report: RefreshReport) -> dict[str, object]:
+    return {
+        "run_id": report.run_id,
+        "status": "failed" if _report_failed(report) else "ok",
+        "completed": [
+            item.ticker
+            for item in report.execution
+            if item.status is TickerExecutionStatus.COMPLETED
+        ],
+        "failed": [
+            {"ticker": item.ticker, "kind": "exception", "error": redact(item.error or "")}
+            for item in report.execution
+            if item.status is TickerExecutionStatus.FAILED
+        ]
+        + [
+            {
+                "ticker": ticker.ticker,
+                "kind": "stage",
+                "stages": [
+                    {"name": stage.name.value, "error": redact(stage.notes)}
+                    for stage in ticker.stages
+                    if stage.status is RefreshStageStatus.FAILED
+                ],
+            }
+            for ticker in report.tickers
+            if any(stage.status is RefreshStageStatus.FAILED for stage in ticker.stages)
+        ],
+        "unattempted": [
+            item.ticker
+            for item in report.execution
+            if item.status is TickerExecutionStatus.UNATTEMPTED
+        ],
     }
 
 
@@ -73,7 +119,7 @@ def _ticker_to_dict(t: TickerRefreshReport) -> dict[str, object]:
                 "name": s.name.value,
                 "status": s.status.value,
                 "rows_processed": s.rows_processed,
-                "notes": s.notes,
+                "notes": redact(s.notes),
             }
             for s in t.stages
         ],
@@ -84,7 +130,7 @@ def _ticker_to_dict(t: TickerRefreshReport) -> dict[str, object]:
                 "transcript_id": p.transcript_id,
                 "file_path": p.file_path,
                 "period_end": p.period_end.date().isoformat() if p.period_end else None,
-                "note": p.note,
+                "note": redact(p.note),
             }
             for p in t.pending_work
         ],
@@ -131,7 +177,7 @@ def _print_summary_table(report: RefreshReport) -> None:
                 (s.notes for s in t.stages if s.name.value == "evaluate_thesis"),
                 "",
             )
-            print(f"  {t.ticker:6}  {change_msg}")
+            print(f"  {t.ticker:6}  {redact(change_msg)}")
 
     cache_flagged = [
         t
@@ -148,7 +194,7 @@ def _print_summary_table(report: RefreshReport) -> None:
         )
         for t in cache_flagged:
             note = next((s.notes for s in t.stages if s.name.value == "validate_segment_cache"), "")
-            print(f"  {t.ticker:6}  {note}")
+            print(f"  {t.ticker:6}  {redact(note)}")
 
     total_pending = sum(len(t.pending_work) for t in report.tickers)
     if total_pending:
@@ -157,9 +203,10 @@ def _print_summary_table(report: RefreshReport) -> None:
             f"{total_pending} item(s) pending LLM follow-up "
             f"(IR PDFs + transcripts). Run with --json for details."
         )
+    print(json.dumps({"receipt": _terminal_receipt(report)}))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", help="Restrict to a single ticker")
     parser.add_argument(
@@ -182,7 +229,7 @@ def main() -> int:
         "--db",
         default=str(PROJECT_ROOT / "data" / "portfolio.db"),
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     conn = open_db(args.db)
     try:
@@ -212,14 +259,22 @@ def main() -> int:
             run_id=run_id,
             fetch_sec=args.fetch_sec,
         )
-        any_failed = any(
-            stage.status is RefreshStageStatus.FAILED for t in report.tickers for stage in t.stages
+        any_failed = _report_failed(report)
+        failed_receipt = next(
+            (item for item in report.execution if item.status is TickerExecutionStatus.FAILED),
+            None,
         )
         end_run(
             conn,
             run_id,
             RunStageStatus.OK if not any_failed else RunStageStatus.FAILED,
-            error_summary="one or more stages failed" if any_failed else None,
+            error_summary=(
+                failed_receipt.error
+                if failed_receipt is not None
+                else "one or more stages failed"
+                if any_failed
+                else None
+            ),
         )
 
         if args.json:
