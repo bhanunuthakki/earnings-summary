@@ -61,9 +61,7 @@ def _seed_calendar(db_path: Path) -> None:
                 ticker=ticker,
                 release_date=release_date,
                 source_name="test",
-                fetched_at=datetime(
-                    TODAY.year, TODAY.month, TODAY.day, tzinfo=UTC
-                ),
+                fetched_at=datetime(TODAY.year, TODAY.month, TODAY.day, tzinfo=UTC),
             )
             observation_id, _ = append_observation(
                 conn,
