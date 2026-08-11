@@ -193,7 +193,11 @@ def test_generic_new_chat_does_not_inherit_the_active_company() -> None:
     assert "var company = pendingContext.company_ticker || companySelect.value;" in html
     assert "String(window.workOsActiveTicker" not in html
     assert "company_ticker: company || null" in html
-    assert "if (pendingContext.company_ticker) companySelect.value" in html
+    assert (
+        "pendingContext.company_ticker = String(pendingContext.company_ticker).toUpperCase()"
+        in html
+    )
+    assert "companySelect.value = pendingContext.company_ticker" in html
 
 
 def test_thesis_hash_is_compact_only_at_the_display_boundary() -> None:
@@ -364,10 +368,13 @@ def test_copilot_has_resilient_states_and_keyboard_mobile_contracts() -> None:
     assert 'role="alert"' in html
     assert "Loading conversations" in html
     assert "Copilot is temporarily unavailable" in html
-    assert "ev.key === 'Escape'" in html
     assert "ev.key.toLowerCase() === 'k'" in html
-    assert "restoreFocus" in html
-    assert "trapCopilotFocus" in html
+    assert "window.CCOverlay.register" in html
+    assert "priority: window.CCOverlay.PRIORITY.DOCK" in html
+    assert "priority: window.CCOverlay.PRIORITY.PEEK" in html
+    assert "trapFocus: true" in html
+    assert "restoreFocus: true" in html
+    assert "document.addEventListener('keydown'" not in html
     assert "@media (max-width:" in html
     assert "min-block-size: var(--touch-target-size)" in html
     assert "font-size: var(--mobile-control-font-size)" in html
@@ -375,3 +382,63 @@ def test_copilot_has_resilient_states_and_keyboard_mobile_contracts() -> None:
     assert "prefers-reduced-motion: reduce" in html
     assert "#workOsCopilotFullscreen { display: none; }" in html
     assert not re.search(r"(?<![-\w])\d+(?:\.\d+)?px", html)
+
+
+def test_copilot_launcher_is_calm_fixed_and_reports_workspace_state() -> None:
+    html = render_work_os_copilot()
+    assert html.count('id="workOsCopilotLauncher"') == 1
+    assert 'class="work-os-copilot-launcher k-btn k-btn-quiet k-icon-btn"' in html
+    assert 'aria-controls="workOsCopilot"' in html
+    assert 'aria-expanded="false"' in html
+    assert 'aria-label="Open Copilot"' in html
+    assert "position: fixed" in html
+    assert "env(safe-area-inset-right" in html
+    assert "env(safe-area-inset-bottom" in html
+
+
+def test_copilot_minimize_restore_preserves_live_workspace_state() -> None:
+    html = render_work_os_copilot()
+    assert "copilotOverlay.open()" in html
+    assert "copilotOverlay.close()" in html
+    assert "launcher.setAttribute('aria-expanded', 'true')" in html
+    assert "launcher.setAttribute('aria-expanded', 'false')" in html
+    close_handler = html[
+        html.index("function closeWorkOsCopilot()") : html.index(
+            "window.openWorkOsCopilot = openWorkOsCopilot"
+        )
+    ]
+    assert "input.value = ''" not in close_handler
+    assert "thread.innerHTML" not in close_handler
+    assert "thread.scrollTop" not in close_handler
+
+
+def test_copilot_company_doorway_detaches_an_incompatible_session() -> None:
+    html = render_work_os_copilot()
+    assert "function detachIncompatibleCopilotSession(nextCompany)" in html
+    assert "currentCompany === normalizedNext" in html
+    assert "currentSessionId = null" in html
+    assert "currentSessionContext = null" in html
+    assert "detachIncompatibleCopilotSession(pendingContext.company_ticker)" in html
+    assert html.index(
+        "detachIncompatibleCopilotSession(pendingContext.company_ticker)"
+    ) < html.index("renderCopilotContext()", html.index("function openWorkOsCopilot(context)"))
+
+
+def test_busy_copilot_submission_keeps_the_composer_draft() -> None:
+    html = render_work_os_copilot()
+    submit_handler = html[
+        html.index("form.addEventListener('submit'") : html.index(
+            "input.addEventListener('keydown'"
+        )
+    ]
+    assert "if (!query || busy) return" in submit_handler
+    assert submit_handler.index("if (!query || busy) return") < submit_handler.index(
+        "input.value = ''"
+    )
+
+
+def test_fullscreen_control_exposes_pressed_state() -> None:
+    html = render_work_os_copilot()
+    assert 'id="workOsCopilotFullscreen"' in html
+    assert 'aria-pressed="false"' in html
+    assert "fullscreen.setAttribute('aria-pressed', String(isFullscreen))" in html

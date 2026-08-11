@@ -9,6 +9,15 @@ context is additive: current servers safely ignore those planned fields.
 from ui.controls import icon_svg
 
 WORK_OS_COPILOT_CSS = """
+.work-os-copilot-launcher {
+  position: fixed;
+  inset-inline-end: calc(var(--sp-4) + env(safe-area-inset-right, 0));
+  inset-block-end: calc(var(--sp-4) + env(safe-area-inset-bottom, 0));
+  z-index: 230;
+  box-shadow: var(--shadow-pop);
+  transition: opacity var(--transition);
+}
+.work-os-copilot-launcher[aria-expanded="true"] { opacity: 0; pointer-events: none; }
 .work-os-copilot {
   position: fixed; inset: 0 0 0 var(--sidebar-width); z-index: 240;
   display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 2.3fr);
@@ -154,6 +163,9 @@ WORK_OS_COPILOT_CSS = """
 
 
 _WORK_OS_COPILOT_HTML = """
+<button class="work-os-copilot-launcher k-btn k-btn-quiet k-icon-btn"
+  id="workOsCopilotLauncher" type="button" aria-label="Open Copilot"
+  aria-controls="workOsCopilot" aria-expanded="false">__ASK_ICON__</button>
 <section class="work-os-copilot" id="workOsCopilot" data-mode="canvas" role="dialog"
   aria-modal="true" aria-hidden="true" aria-labelledby="workOsCopilotTitle" hidden>
   <aside class="work-os-copilot-history" aria-label="Conversation history">
@@ -194,9 +206,9 @@ _WORK_OS_COPILOT_HTML = """
       </div>
       <div class="work-os-copilot-toolbar-actions">
         <button class="k-btn k-btn-quiet k-btn-sm" data-copilot-mode="fullscreen" id="workOsCopilotFullscreen"
-          type="button" aria-label="Toggle full screen">__FULLSCREEN_ICON__<span>Full screen</span></button>
+          type="button" aria-label="Toggle full screen" aria-pressed="false">__FULLSCREEN_ICON__<span>Full screen</span></button>
         <button class="k-btn k-btn-quiet k-btn-sm" id="workOsCopilotClose" type="button"
-          aria-label="Close Copilot">__CLOSE_ICON__</button>
+          aria-label="Minimize Copilot">__CLOSE_ICON__</button>
       </div>
     </header>
     <div class="work-os-copilot-thread" id="workOsCopilotThread" aria-live="polite">
@@ -212,7 +224,8 @@ _WORK_OS_COPILOT_HTML = """
         <button class="k-btn k-btn-primary" id="workOsCopilotSend" type="submit">__ASK_ICON__<span>Ask</span></button>
       </div>
     </form>
-    <aside class="work-os-copilot-evidence" id="workOsCopilotEvidence" aria-label="Research context and evidence" hidden>
+    <aside class="work-os-copilot-evidence" id="workOsCopilotEvidence" role="dialog"
+      aria-modal="true" aria-hidden="true" aria-label="Research context and evidence" hidden>
       <div class="work-os-copilot-evidence-head">
         <div><div class="work-os-copilot-title">Research context</div><div class="work-os-copilot-subtitle">Sources and governed facts</div></div>
         <button class="k-btn k-btn-quiet k-btn-sm" id="workOsCopilotEvidenceClose" type="button" aria-label="Close evidence">__CLOSE_ICON__</button>
@@ -233,6 +246,8 @@ WORK_OS_COPILOT_JS = r"""
   if (!root || root.dataset.controllerReady === 'true') return;
   root.dataset.controllerReady = 'true';
 
+  var launcher = document.getElementById('workOsCopilotLauncher');
+  var fullscreen = document.getElementById('workOsCopilotFullscreen');
   var historyNode = document.getElementById('workOsCopilotHistory');
   var historySearch = document.getElementById('workOsCopilotHistorySearch');
   var companySelect = document.getElementById('workOsCopilotCompany');
@@ -251,11 +266,32 @@ WORK_OS_COPILOT_JS = r"""
   var currentSessionRevision = 0;
   var activeCoverage = 'all';
   var lastSpec = null;
-  var restoreFocus = null;
   var activeCitations = [];
   var pendingContext = {};
   var busy = false;
   var sessionLoadToken = 0;
+  var copilotOverlay = window.CCOverlay.register(root, {
+    modal: true, priority: window.CCOverlay.PRIORITY.DOCK, scrim: false,
+    trapFocus: true, restoreFocus: true, motion: 'rise',
+    closeId: 'workOsCopilotClose', wireClose: true,
+    onOpen: function () {
+      root.setAttribute('aria-hidden', 'false');
+      launcher.setAttribute('aria-expanded', 'true');
+      loadCopilotSessions();
+      window.setTimeout(function () { input.focus(); }, 0);
+    },
+    onClose: function () {
+      root.setAttribute('aria-hidden', 'true');
+      launcher.setAttribute('aria-expanded', 'false');
+    }
+  });
+  var evidenceOverlay = window.CCOverlay.register(evidence, {
+    modal: true, priority: window.CCOverlay.PRIORITY.PEEK, scrim: false,
+    trapFocus: true, restoreFocus: true, motion: 'slide-right',
+    closeId: 'workOsCopilotEvidenceClose', wireClose: true,
+    onOpen: function () { evidence.setAttribute('aria-hidden', 'false'); },
+    onClose: function () { evidence.setAttribute('aria-hidden', 'true'); }
+  });
 
   function esc(value) {
     var node = document.createElement('span');
@@ -593,6 +629,23 @@ WORK_OS_COPILOT_JS = r"""
     input.focus();
   }
 
+  function detachIncompatibleCopilotSession(nextCompany) {
+    var normalizedNext = String(nextCompany || '').trim().toUpperCase();
+    var currentCompany = String(
+      (currentSessionContext && currentSessionContext.company_ticker) || ''
+    ).trim().toUpperCase();
+    if (!normalizedNext || !currentCompany || currentCompany === normalizedNext) return false;
+    sessionLoadToken += 1;
+    currentSessionId = null;
+    currentSessionContext = null;
+    currentSessionRevision = 0;
+    lastSpec = null;
+    activeCitations = [];
+    renderNewChatEmptyState();
+    status.textContent = 'Grounded research workspace';
+    return true;
+  }
+
   function humanizeCitationPart(value) {
     return String(value || '').replace(/[_-]+/g, ' ').trim();
   }
@@ -632,13 +685,12 @@ WORK_OS_COPILOT_JS = r"""
     evidenceBody.innerHTML = items.length
       ? items.map(evidenceSource).join('')
       : '<div class="k-well">No source or governed fact was attached to this turn.</div>';
-    evidence.hidden = false;
     bindEvidenceActions();
-    document.getElementById('workOsCopilotEvidenceClose').focus();
+    evidenceOverlay.open();
   }
 
   function closeCopilotEvidence() {
-    evidence.hidden = true;
+    evidenceOverlay.close();
   }
 
   function renderCitationRow(turn, citations) {
@@ -1260,25 +1312,7 @@ WORK_OS_COPILOT_JS = r"""
     });
   }
 
-  function focusableCopilotNodes() {
-    return Array.from(root.querySelectorAll('button:not([disabled]), input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'))
-      .filter(function (node) { return !node.hidden && node.offsetParent !== null; });
-  }
-
-  function trapCopilotFocus(ev) {
-    if (ev.key !== 'Tab' || root.hidden) return;
-    var nodes = focusableCopilotNodes();
-    if (!nodes.length) return;
-    var first = nodes[0];
-    var last = nodes[nodes.length - 1];
-    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
-    if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
-  }
-
   function openWorkOsCopilot(context) {
-    if (root.hidden) restoreFocus = document.activeElement;
-    root.hidden = false;
-    root.setAttribute('aria-hidden', 'false');
     var supplied = context || {};
     pendingContext = Object.assign({}, supplied);
     if (!['portfolio', 'evaluation', 'unknown'].includes(supplied.coverage_role_at_creation)) {
@@ -1287,18 +1321,20 @@ WORK_OS_COPILOT_JS = r"""
     if (!['active', 'archived', 'unknown'].includes(supplied.lifecycle_at_creation)) {
       delete pendingContext.lifecycle_at_creation;
     }
-    if (pendingContext.company_ticker) companySelect.value = String(pendingContext.company_ticker).toUpperCase();
+    if (pendingContext.company_ticker) {
+      pendingContext.company_ticker = String(pendingContext.company_ticker).toUpperCase();
+      companySelect.value = pendingContext.company_ticker;
+    }
+    var detached = detachIncompatibleCopilotSession(pendingContext.company_ticker);
+    if (detached) input.value = '';
     if (pendingContext.prompt) input.value = pendingContext.prompt;
     renderCopilotContext();
-    loadCopilotSessions();
-    window.setTimeout(function () { input.focus(); }, 0);
+    copilotOverlay.open();
   }
 
   function closeWorkOsCopilot() {
-    closeCopilotEvidence();
-    root.hidden = true;
-    root.setAttribute('aria-hidden', 'true');
-    if (restoreFocus && typeof restoreFocus.focus === 'function') restoreFocus.focus();
+    if (evidenceOverlay.isOpen()) closeCopilotEvidence();
+    copilotOverlay.close();
   }
 
   window.openWorkOsCopilot = openWorkOsCopilot;
@@ -1306,11 +1342,14 @@ WORK_OS_COPILOT_JS = r"""
   window.workOsOpenCopilot = openWorkOsCopilot;
   window.openCopilotEvidence = openCopilotEvidence;
 
-  document.getElementById('workOsCopilotClose').addEventListener('click', closeWorkOsCopilot);
-  document.getElementById('workOsCopilotEvidenceClose').addEventListener('click', closeCopilotEvidence);
+  launcher.addEventListener('click', function () { openWorkOsCopilot(); });
   document.getElementById('workOsCopilotNewChat').addEventListener('click', startNewCopilotSession);
-  document.getElementById('workOsCopilotFullscreen').addEventListener('click', function () {
+  fullscreen.addEventListener('click', function () {
     root.dataset.mode = root.dataset.mode === 'fullscreen' ? 'canvas' : 'fullscreen';
+    var isFullscreen = root.dataset.mode === 'fullscreen';
+    fullscreen.setAttribute('aria-pressed', String(isFullscreen));
+    var label = fullscreen.querySelector('span');
+    if (label) label.textContent = isFullscreen ? 'Exit full screen' : 'Full screen';
   });
   historySearch.addEventListener('input', filterCopilotSessions);
   companySelect.addEventListener('change', filterCopilotSessions);
@@ -1327,25 +1366,18 @@ WORK_OS_COPILOT_JS = r"""
   form.addEventListener('submit', function (ev) {
     ev.preventDefault();
     var query = input.value.trim();
-    if (!query) return;
-    input.value = '';
+    if (!query || busy) return;
     submitCopilotQuestion(query);
+    input.value = '';
   });
   input.addEventListener('keydown', function (ev) {
     if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') { ev.preventDefault(); form.requestSubmit(); }
   });
-  document.addEventListener('keydown', function (ev) {
+  window.addEventListener('keydown', function (ev) {
     if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') {
       ev.preventDefault();
       openWorkOsCopilot();
-      return;
     }
-    if (ev.key === 'Escape' && !root.hidden) {
-      ev.preventDefault();
-      if (!evidence.hidden) closeCopilotEvidence(); else closeWorkOsCopilot();
-      return;
-    }
-    trapCopilotFocus(ev);
   });
   renderNewChatEmptyState();
   renderCopilotContext();

@@ -181,3 +181,13 @@ def test_iframe_close_controls_exist_in_the_shells() -> None:
     assert "closeId: 'chat-close'" in CHAT_JS
     assert 'id="cmt-close"' in cmt.getvalue()
     assert "closeId: 'cmt-close'" in COMMENTS_JS
+
+
+def test_work_os_copilot_uses_the_shared_priority_stack() -> None:
+    from pipeline.work_os_copilot import WORK_OS_COPILOT_JS
+
+    assert WORK_OS_COPILOT_JS.count("window.CCOverlay.register") == 2
+    assert "priority: window.CCOverlay.PRIORITY.DOCK" in WORK_OS_COPILOT_JS
+    assert "priority: window.CCOverlay.PRIORITY.PEEK" in WORK_OS_COPILOT_JS
+    assert WORK_OS_COPILOT_JS.count("document.addEventListener('keydown'") == 0
+    assert "trapCopilotFocus" not in WORK_OS_COPILOT_JS
