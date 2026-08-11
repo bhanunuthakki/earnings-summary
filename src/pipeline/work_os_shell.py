@@ -171,6 +171,20 @@ def _production_runtime(generated_at: datetime) -> str:
   .work-os-company-desk {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
   .work-os-company-toolbar {{ display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }}
   .work-os-company-picker {{ display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }}
+  .company-identity-switcher {{ position: relative; min-width: 0; border-radius: var(--radius); }}
+  .company-identity-row {{ display: flex; align-items: center; gap: var(--sp-2); min-block-size: var(--touch-target-size); }}
+  .company-picker-trigger {{ opacity: 0; transform: translateX(var(--lift-sm)); transition: opacity var(--transition), transform var(--transition); }}
+  .company-identity-switcher:hover .company-picker-trigger,
+  .company-identity-switcher:focus-within .company-picker-trigger {{ opacity: 1; transform: translateX(0); }}
+  .company-picker-popover {{ position: absolute; inset-block-start: calc(100% + var(--sp-1)); inset-inline-start: 0; z-index: 220; inline-size: var(--grid-card-md); max-inline-size: calc(100vw - var(--sp-6)); box-shadow: var(--shadow-pop); }}
+  .company-picker-popover[hidden] {{ display: none !important; }}
+  .company-picker-popover input[type="search"] {{ inline-size: 100%; min-block-size: var(--touch-target-size); }}
+  .company-picker-list {{ max-block-size: var(--grid-card-sm); overflow-y: auto; }}
+  .company-picker-list [role="option"] {{ display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); }}
+  .company-picker-list [aria-selected="true"] {{ background: var(--paper); color: var(--accent); }}
+  @media (hover: none) {{
+    .company-picker-trigger {{ min-block-size: var(--touch-target-size); opacity: 1; transform: none; }}
+  }}
   .work-os-action-copy {{ display: flex; align-items: center; gap: var(--sp-3); flex: 1; }}
   .research-screen {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
   .research-toolbar, .research-panel-head, .research-actions {{ display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }}
@@ -209,6 +223,7 @@ def _production_runtime(generated_at: datetime) -> str:
     .k-action-row {{ flex-wrap: wrap; gap: var(--sp-2); }}
     .screen-view [style*="grid-template-columns"] {{ grid-template-columns: 1fr !important; }}
     .research-decision-band, .research-grid, .research-library-grid {{ grid-template-columns: 1fr; }}
+    .company-picker-trigger {{ min-block-size: var(--touch-target-size); opacity: 1; transform: none; }}
     .drill-drawer {{ width: 100%; max-width: 100%; border-radius: 0; }}
     input, select, textarea {{ font-size: var(--mobile-control-font-size) !important; }}
   }}
@@ -227,6 +242,10 @@ def _production_runtime(generated_at: datetime) -> str:
   window.workOsActiveTicker = 'NU';
   let workOsPortfolioHydration = null;
   let workOsResearchCompanies = null;
+  let workOsCompanyRequestSequence = 0;
+  let workOsCompanyRequestController = null;
+  let companyPickerMatches = [];
+  let companyPickerActiveIndex = -1;
   const workOsLaunchParams = new URLSearchParams(window.location.search);
   const workOsRequestedScreen = workOsLaunchParams.get('screen');
   const workOsRequestedTicker = String(workOsLaunchParams.get('ticker') || '').toUpperCase();
@@ -237,6 +256,12 @@ def _production_runtime(generated_at: datetime) -> str:
   const drillDrawer = document.getElementById('drillDrawer');
   const peekDrawer = document.getElementById('peekDrawer');
   const briefReader = document.getElementById('workOsBriefReader');
+  const companyPickerRoot = document.getElementById('companyPickerRoot');
+  const companyPickerTrigger = document.getElementById('companyPickerTrigger');
+  const companyPickerPopover = document.getElementById('companyPickerPopover');
+  const companyPickerSearch = document.getElementById('companyPickerSearch');
+  const companyPickerList = document.getElementById('companyPickerList');
+  const companyPickerStatus = document.getElementById('companyPickerStatus');
   const drillOverlay = drillDrawer && window.CCOverlay.register(drillDrawer, {{
     modal: true, priority: window.CCOverlay.PRIORITY.DRAWER, scrim: true,
     trapFocus: true, restoreFocus: true, motion: 'slide-right',
@@ -257,6 +282,25 @@ def _production_runtime(generated_at: datetime) -> str:
     group: 'work-os-reader', closeId: 'workOsBriefReaderClose', wireClose: true,
     onOpen: function () {{ briefReader.hidden = false; briefReader.setAttribute('aria-hidden', 'false'); }},
     onClose: function () {{ briefReader.hidden = true; briefReader.setAttribute('aria-hidden', 'true'); }}
+  }});
+  const companyPickerOverlay = companyPickerPopover && window.CCOverlay.register(companyPickerPopover, {{
+    priority: 0, scrim: false, trapFocus: false, restoreFocus: true,
+    autofocus: false, motion: 'rise', group: 'work-os-company-picker',
+    onOpen: function () {{
+      if (companyPickerTrigger) companyPickerTrigger.setAttribute('aria-expanded', 'true');
+      if (companyPickerSearch) {{
+        companyPickerSearch.setAttribute('aria-expanded', 'true');
+        companyPickerSearch.focus();
+      }}
+    }},
+    onClose: function () {{
+      if (companyPickerTrigger) companyPickerTrigger.setAttribute('aria-expanded', 'false');
+      if (companyPickerSearch) {{
+        companyPickerSearch.setAttribute('aria-expanded', 'false');
+        companyPickerSearch.removeAttribute('aria-activedescendant');
+        companyPickerSearch.value = '';
+      }}
+    }}
   }});
 
   window.openDrillDrawer = function (type) {{
@@ -334,13 +378,13 @@ def _production_runtime(generated_at: datetime) -> str:
       await workOsLoadBriefArtifact(tickerOrArtifact);
       return;
     }}
-    window.workOsActiveTicker = String(tickerOrArtifact || window.workOsActiveTicker || 'NU').toUpperCase();
-    const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(window.workOsActiveTicker) + '&limit=1', {{ headers: {{ Accept: 'application/json' }} }});
+    const requestedTicker = String(tickerOrArtifact || window.workOsActiveTicker || 'NU').toUpperCase();
+    const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&limit=1', {{ headers: {{ Accept: 'application/json' }} }});
     const payload = response.ok ? await response.json() : null;
     if (!payload || !payload.items || !payload.items.length) {{
       const title = document.getElementById('workOsBriefReaderTitle');
       const body = document.getElementById('workOsBriefReaderBody');
-      if (title) title.textContent = window.workOsActiveTicker + ' Full Research Brief';
+      if (title) title.textContent = requestedTicker + ' Full Research Brief';
       if (body) body.innerHTML = '<div class="k-well" role="alert">No persisted research brief is indexed for this company.</div>';
       if (briefReaderOverlay) briefReaderOverlay.open();
       return;
@@ -374,6 +418,91 @@ def _production_runtime(generated_at: datetime) -> str:
     return portfolioCompanies.concat(researchCompanies).find(function (company) {{ return company.ticker === ticker; }}) || null;
   }}
 
+  function workOsCompanyPickerCompanies() {{
+    const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
+      ? workOsPortfolioHydration.companies : [];
+    const seenTickers = new Set();
+    return portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (company) {{
+      const ticker = String(company.ticker || '').toUpperCase();
+      if (!ticker || seenTickers.has(ticker)) return false;
+      seenTickers.add(ticker);
+      return true;
+    }});
+  }}
+
+  function workOsRenderCompanyPickerOptions(query, resetSelection) {{
+    if (!companyPickerList || !companyPickerSearch) return;
+    const normalizedQuery = String(query || '').trim().toLowerCase();
+    companyPickerMatches = workOsCompanyPickerCompanies().filter(function (company) {{
+      return String(company.ticker || '').toLowerCase().includes(normalizedQuery)
+        || String(company.name || '').toLowerCase().includes(normalizedQuery);
+    }}).sort(function (left, right) {{
+      const leftRank = left.coverage_role === 'portfolio' ? 0 : 1;
+      const rightRank = right.coverage_role === 'portfolio' ? 0 : 1;
+      return leftRank - rightRank || String(left.ticker).localeCompare(String(right.ticker));
+    }}).slice(0, 12);
+    if (resetSelection) companyPickerActiveIndex = companyPickerMatches.length ? 0 : -1;
+    else if (companyPickerActiveIndex >= companyPickerMatches.length) companyPickerActiveIndex = companyPickerMatches.length - 1;
+    companyPickerList.innerHTML = companyPickerMatches.length ? companyPickerMatches.map(function (company, index) {{
+      const selected = index === companyPickerActiveIndex;
+      return '<li role="option" id="companyPickerOption-' + index + '" aria-selected="' + (selected ? 'true' : 'false') + '" data-company-picker-ticker="' + escapeWorkOsHtml(company.ticker) + '"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name || company.ticker) + '</span></li>';
+    }}).join('') : '<li class="k-card-meta">No matching companies</li>';
+    if (companyPickerActiveIndex >= 0) companyPickerSearch.setAttribute('aria-activedescendant', 'companyPickerOption-' + companyPickerActiveIndex);
+    else companyPickerSearch.removeAttribute('aria-activedescendant');
+  }}
+
+  async function workOsOpenCompanyPicker() {{
+    if (!companyPickerOverlay || companyPickerOverlay.isOpen()) return;
+    companyPickerActiveIndex = -1;
+    if (companyPickerStatus) companyPickerStatus.textContent = 'Loading company list';
+    companyPickerOverlay.open();
+    try {{ await workOsEnsureResearchCompanies(); }} catch (error) {{ workOsResearchCompanies = []; }}
+    workOsRenderCompanyPickerOptions('', true);
+    if (companyPickerStatus) companyPickerStatus.textContent = companyPickerMatches.length + ' companies available';
+  }}
+
+  function workOsChooseCompany(ticker) {{
+    if (companyPickerOverlay) companyPickerOverlay.close();
+    window.switchCompanyWorkspace(ticker);
+  }}
+
+  if (companyPickerTrigger) {{
+    companyPickerTrigger.addEventListener('click', function () {{
+      if (companyPickerOverlay && companyPickerOverlay.isOpen()) companyPickerOverlay.close();
+      else workOsOpenCompanyPicker();
+    }});
+    companyPickerTrigger.addEventListener('keydown', function (ev) {{
+      if (ev.key === 'ArrowDown') {{ ev.preventDefault(); workOsOpenCompanyPicker(); }}
+    }});
+  }}
+  if (companyPickerSearch) {{
+    companyPickerSearch.addEventListener('input', function () {{ workOsRenderCompanyPickerOptions(companyPickerSearch.value, true); }});
+    companyPickerSearch.addEventListener('keydown', function (ev) {{
+      if (ev.key === 'ArrowDown') {{
+        ev.preventDefault();
+        if (companyPickerMatches.length) companyPickerActiveIndex = Math.min(companyPickerActiveIndex + 1, companyPickerMatches.length - 1);
+      }} else if (ev.key === 'ArrowUp') {{
+        ev.preventDefault();
+        if (companyPickerMatches.length) companyPickerActiveIndex = Math.max(companyPickerActiveIndex - 1, 0);
+      }} else if (ev.key === 'Enter') {{
+        ev.preventDefault();
+        if (companyPickerActiveIndex >= 0 && companyPickerMatches[companyPickerActiveIndex]) workOsChooseCompany(companyPickerMatches[companyPickerActiveIndex].ticker);
+        return;
+      }} else {{ return; }}
+      workOsRenderCompanyPickerOptions(companyPickerSearch.value, false);
+    }});
+  }}
+  if (companyPickerList) companyPickerList.addEventListener('click', function (event) {{
+    const option = event.target instanceof Element ? event.target.closest('[data-company-picker-ticker]') : null;
+    if (option) workOsChooseCompany(option.getAttribute('data-company-picker-ticker'));
+  }});
+  document.addEventListener('click', function (event) {{
+    if (companyPickerOverlay && companyPickerOverlay.isOpen() && companyPickerRoot
+        && event.target instanceof Node && !companyPickerRoot.contains(event.target)) {{
+      companyPickerOverlay.close();
+    }}
+  }});
+
   async function workOsEnsureResearchCompanies() {{
     if (Array.isArray(workOsResearchCompanies)) return workOsResearchCompanies;
     const response = await fetch('/api/tickers', {{ headers: {{ Accept: 'application/json' }} }});
@@ -389,30 +518,28 @@ def _production_runtime(generated_at: datetime) -> str:
 
   async function workOsRenderCompanyDesk(ticker) {{
     const normalized = String(ticker || window.workOsActiveTicker || '').toUpperCase();
-    try {{ await workOsEnsureResearchCompanies(); }} catch (error) {{ workOsResearchCompanies = []; }}
-    const company = workOsCompanyByTicker(normalized);
+    const previousTicker = window.workOsActiveTicker;
     const screen = document.getElementById('screen-workspace');
-    if (!company || !screen) return;
-    window.workOsActiveTicker = normalized;
-    const picker = document.getElementById('companyPickerSelect');
-    if (picker && !picker.dataset.bound) {{
-      const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies) ? workOsPortfolioHydration.companies : [];
-      const seenTickers = new Set();
-      const companies = portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (item) {{
-        if (!item.ticker || seenTickers.has(item.ticker)) return false;
-        seenTickers.add(item.ticker); return true;
-      }});
-      companies.forEach(function (item) {{ picker.add(new Option(item.ticker + ' · ' + item.name, item.ticker)); }});
-      picker.addEventListener('change', function () {{ workOsRenderCompanyDesk(picker.value); }});
-      picker.dataset.bound = '1';
-    }}
-    if (picker) picker.value = normalized;
+    if (!normalized || !screen) return false;
+    const requestSequence = ++workOsCompanyRequestSequence;
+    if (workOsCompanyRequestController) workOsCompanyRequestController.abort();
+    const controller = new AbortController();
+    workOsCompanyRequestController = controller;
+    if (companyPickerStatus) companyPickerStatus.textContent = 'Loading ' + normalized + ' company desk';
     screen.setAttribute('aria-busy', 'true');
     try {{
-      const response = await fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk', {{ headers: {{ Accept: 'application/json' }} }});
+      try {{ await workOsEnsureResearchCompanies(); }} catch (error) {{ workOsResearchCompanies = []; }}
+      if (requestSequence !== workOsCompanyRequestSequence) return false;
+      const company = workOsCompanyByTicker(normalized);
+      if (!company) throw new Error('Unknown company ' + normalized);
+      const response = await fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk', {{ signal: controller.signal, headers: {{ Accept: 'application/json' }} }});
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const desk = await response.json();
+      if (requestSequence !== workOsCompanyRequestSequence) return false;
       const identity = desk.company || {{}};
+      const identityTicker = String(identity.ticker || normalized).toUpperCase();
+      if (identityTicker !== normalized) throw new Error('Company response mismatch');
+      window.workOsActiveTicker = normalized;
       const breadcrumb = document.getElementById('breadcrumb-title');
       if (breadcrumb) breadcrumb.textContent = 'Company Desk (' + (identity.ticker || normalized) + ')';
       document.getElementById('deskTicker').textContent = identity.ticker || normalized;
@@ -451,11 +578,20 @@ def _production_runtime(generated_at: datetime) -> str:
       const warnings = Array.isArray(desk.warnings) ? desk.warnings : [];
       const warningBox = document.getElementById('deskWarnings');
       if (warningBox) {{ warningBox.hidden = !warnings.length; warningBox.textContent = warnings.length ? 'Unavailable: ' + warnings.join(', ') : ''; }}
+      if (companyPickerStatus) companyPickerStatus.textContent = identityTicker + ' company desk loaded';
+      return true;
     }} catch (error) {{
+      if ((error && error.name === 'AbortError') || requestSequence !== workOsCompanyRequestSequence) return false;
+      window.workOsActiveTicker = previousTicker;
       const warningBox = document.getElementById('deskWarnings');
-      if (warningBox) {{ warningBox.hidden = false; warningBox.textContent = 'Company Desk data is temporarily unavailable.'; }}
+      if (warningBox) {{ warningBox.hidden = false; warningBox.textContent = 'Unable to switch company desks. The prior company remains open.'; }}
+      if (companyPickerStatus) companyPickerStatus.textContent = normalized + ' could not be loaded; ' + previousTicker + ' remains open';
+      return false;
     }} finally {{
-      screen.removeAttribute('aria-busy');
+      if (requestSequence === workOsCompanyRequestSequence) {{
+        screen.removeAttribute('aria-busy');
+        if (workOsCompanyRequestController === controller) workOsCompanyRequestController = null;
+      }}
     }}
   }}
 
@@ -501,13 +637,26 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
-  window.switchCompanyWorkspace = function (ticker) {{
+  function workOsCompanyDeskUrl(ticker) {{
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    params.set('ticker', ticker);
+    params.set('screen', 'company-desk');
+    url.hash = 'screen-workspace';
+    return url.pathname + url.search + url.hash;
+  }}
+
+  window.switchCompanyWorkspace = async function (ticker, options) {{
     const requested = String(ticker || window.workOsActiveTicker || '').toUpperCase();
-    if (!workOsCompanyByTicker(requested)) return;
-    workOsRenderCompanyDesk(requested);
-    window.navigateTo('screen-workspace');
+    const committed = await workOsRenderCompanyDesk(requested);
+    if (!committed) return false;
+    window.navigateTo('screen-workspace', {{ fromHistory: true, companyReady: true }});
     const breadcrumb = document.getElementById('breadcrumb-title');
     if (breadcrumb) breadcrumb.textContent = 'Company Desk (' + requested + ')';
+    if (!(options && options.fromHistory)) {{
+      window.history.pushState({{ screenId: 'screen-workspace', ticker: requested }}, '', workOsCompanyDeskUrl(requested));
+    }}
+    return true;
   }};
 
   function workOsRenderPortfolio(payload) {{
@@ -553,16 +702,17 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
     document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function () {{ switchCompanyWorkspace(node.dataset.workOsTicker); }}); }});
     document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
-    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); window.workOsActiveTicker = node.dataset.workOsThresholds; openDrillDrawer('thresholds'); }}); }});
+    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
+      event.stopPropagation();
+      window.switchCompanyWorkspace(node.dataset.workOsThresholds).then(function (committed) {{
+        if (committed) openDrillDrawer('thresholds');
+      }});
+    }}); }});
   }}
 
-  function workOsApplyRequestedResearchState() {{
-    if (workOsRequestedTicker) {{
-      window.workOsActiveTicker = workOsRequestedTicker;
-    }}
+  async function workOsApplyRequestedResearchState() {{
     if (workOsRequestedScreen === 'company-desk') {{
-      workOsRenderCompanyDesk(window.workOsActiveTicker);
-      window.navigateTo('screen-workspace', {{ fromHistory: true }});
+      await window.switchCompanyWorkspace(workOsRequestedTicker || window.workOsActiveTicker, {{ fromHistory: true }});
     }} else if (workOsRequestedScreen === 'brief-library') {{
       window.navigateTo('screen-brief-library', {{ fromHistory: true }});
       workOsRenderBriefLibrary();
@@ -599,8 +749,10 @@ def _production_runtime(generated_at: datetime) -> str:
 
   window.navigateTo = function (screenId, options) {{
     const target = WORK_OS_ENDPOINTS[screenId] ? screenId : 'screen-cockpit';
-    if (target === 'screen-workspace' && workOsPortfolioHydration) {{
-      workOsRenderCompanyDesk(window.workOsActiveTicker);
+    if (target === 'screen-workspace' && workOsPortfolioHydration && !(options && options.companyReady)) {{
+      const locationParams = new URLSearchParams(window.location.search);
+      const locationTicker = locationParams.get('screen') === 'company-desk' ? String(locationParams.get('ticker') || '').toUpperCase() : '';
+      workOsRenderCompanyDesk(locationTicker || window.workOsActiveTicker);
     }}
     if (target === 'screen-brief-library') workOsRenderBriefLibrary();
     originalNavigateTo(target);
@@ -618,6 +770,7 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   window.addEventListener('hashchange', function () {{ workOsApplyHash(false); }});
+  window.addEventListener('popstate', function () {{ workOsApplyHash(false); }});
   workOsApplyHash(true);
   workOsHydratePortfolio();
   document.addEventListener('click', function (event) {{

@@ -30,14 +30,26 @@ def render_company_desk_shell() -> str:
 <section id="screen-workspace" class="screen-view" data-layout="decision-workbench">
   <div class="research-screen" id="workOsCompanyDesk" aria-live="polite">
     <div class="k-card research-toolbar">
-      <div>
-        <div class="k-card-meta">Company Desk</div>
-        <div class="k-ticker"><span class="k-ticker-symbol t-mono" id="deskTicker">—</span><span class="k-ticker-name" id="deskCompanyName">Choose a portfolio company</span></div>
+      <div class="company-identity-switcher" id="companyPickerRoot">
+        <div class="k-card-meta" id="companyPickerLabel">Company Desk</div>
+        <div class="company-identity-row">
+          <div class="k-ticker"><span class="k-ticker-symbol t-mono" id="deskTicker">—</span><span class="k-ticker-name" id="deskCompanyName">Choose a portfolio company</span></div>
+          <button class="company-picker-trigger k-btn k-btn-quiet k-btn-sm" id="companyPickerTrigger"
+                  type="button" aria-haspopup="listbox" aria-controls="companyPickerPopover"
+                  aria-expanded="false" aria-label="Switch company desk">Switch</button>
+        </div>
         <div class="k-card-meta" id="deskCoverageRole">Governed company research</div>
+        <div class="company-picker-popover k-card k-card-stack" id="companyPickerPopover" hidden>
+          <label class="k-card-meta" for="companyPickerSearch">Find a company</label>
+          <input id="companyPickerSearch" type="search" role="combobox"
+                 aria-expanded="false" aria-autocomplete="list"
+                 aria-controls="companyPickerList" autocomplete="off"
+                 placeholder="Search ticker or company" spellcheck="false">
+          <ul class="k-menu company-picker-list" id="companyPickerList" role="listbox"></ul>
+        </div>
+        <span class="work-os-live-status" id="companyPickerStatus" aria-live="polite"></span>
       </div>
       <div class="research-actions">
-        <label class="k-card-meta" for="companyPickerSelect">Company</label>
-        <select class="k-select" id="companyPickerSelect"></select>
         <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="company">Ask Copilot</button>
         <button class="k-btn k-btn-primary k-btn-sm" id="workOsFullBriefButton" type="button" disabled>Read full brief →</button>
       </div>
