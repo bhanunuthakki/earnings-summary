@@ -334,6 +334,10 @@ def test_om_chat_hands_research_questions_to_work_os_copilot() -> None:
 
     assert "openWorkOsCopilot" in _OM_CHAT_JS
     assert "/api/ask/stream" not in _OM_CHAT_JS
+    assert "about:blank" not in _OM_CHAT_JS
+    assert "getReader()" not in _OM_CHAT_JS
+    assert "cardState" not in _OM_CHAT_JS
+    assert "session_id" not in _OM_CHAT_JS
 
 
 def test_onmymind_js_dropped_popup_branch() -> None:

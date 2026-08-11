@@ -1250,21 +1250,9 @@ _ONMYMIND_JS = """<script>(function(){
 _OM_CHAT_JS = """<script>(function(){
   if(window.__omChatWired){ return; }
   window.__omChatWired = true;
-  var states={};
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function bubble(role, text){
     return '<div class="om-chat-msg om-chat-'+role+'">'+esc(text).replace(/\\n/g,'<br>')+'</div>';
-  }
-  function cardState(card){
-    var id=card.getAttribute('data-om-id');
-    if(!states[id]){
-      var bodyEl=card.querySelector('.om-body');
-      var ansEl=card.querySelector('.om-answer');
-      var seededQ=bodyEl?(bodyEl.textContent||'').trim():'';
-      var seededA=ansEl?(ansEl.textContent||'').replace(/^\\s*Answer\\s*/,'').trim():'';
-      states[id]={ session_id:null, history:(seededA?[{role:'user',text:seededQ},{role:'assistant',text:seededA}]:[]) };
-    }
-    return states[id];
   }
   function ensureThread(card){
     var thread=card.querySelector('.om-chat-thread');
@@ -1282,62 +1270,7 @@ _OM_CHAT_JS = """<script>(function(){
         category:'research',origin_key:'work-os:decision-audit',
         coverage_role_at_creation:'unknown',lifecycle_at_creation:'unknown',prompt:q});
     }else{ window.location.assign('/?copilot=1&origin_key=decision-audit'); }
-    pend.remove(); done(); return;
-    var state=cardState(card);
-    var thread=ensureThread(card);
-    var ticker=card.getAttribute('data-om-ticker')||'';
-    var payload={ query:q };
-    if(ticker){ payload.tickers=[ticker]; }
-    if(state.session_id){ payload.session_id=state.session_id; }
-    else if(state.history.length){ payload.history=state.history; }
-    var acc=''; var finalText=null; var errText=null;
-    function handle(ev){
-      if(!ev || !ev.type){ return; }
-      if(ev.type==='session'){ if(ev.session_id){ state.session_id=ev.session_id; state.history=[]; } return; }
-      if(ev.type==='stage'){ if(!acc){ pend.textContent=(ev.stage||'working')+'...'; } return; }
-      if(ev.type==='delta' && ev.text){
-        acc+=ev.text;
-        pend.classList.remove('om-chat-pending');
-        pend.innerHTML=esc(acc).replace(/\\n/g,'<br>');
-        return;
-      }
-      if(ev.type==='final'){ finalText=(ev.text||ev.message||acc); return; }
-      if(ev.type==='error'){ errText=ev.error||'Something went wrong.'; return; }
-    }
-    function finish(){
-      var out=errText || finalText || acc || 'No answer came back.';
-      pend.remove();
-      thread.insertAdjacentHTML('beforeend', bubble('assistant', out));
-      done();
-    }
-    fetch('about:blank',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-      .then(function(r){
-        if(!r.ok || !r.body){ throw new Error('bad response'); }
-        var reader=r.body.getReader();
-        var dec=new TextDecoder();
-        var buf='';
-        function pump(){
-          return reader.read().then(function(step){
-            if(step.done){ finish(); return; }
-            buf+=dec.decode(step.value,{stream:true});
-            var idx;
-            while((idx=buf.indexOf('\\n\\n'))!==-1){
-              var frame=buf.slice(0,idx); buf=buf.slice(idx+2);
-              if(frame.indexOf('data: ')!==0){ continue; }
-              var ev=null;
-              try{ ev=JSON.parse(frame.slice(6)); }catch(err){ ev=null; }
-              if(ev){ handle(ev); }
-            }
-            return pump();
-          });
-        }
-        return pump();
-      })
-      .catch(function(){
-        pend.remove();
-        thread.insertAdjacentHTML('beforeend', bubble('assistant','Could not reach the server - try again.'));
-        done();
-      });
+    pend.remove(); done();
   }
   function sendReply(card){
     var input=card.querySelector('.om-reply-input');
@@ -1353,8 +1286,6 @@ _OM_CHAT_JS = """<script>(function(){
     pend.className='om-chat-msg om-chat-assistant om-chat-pending';
     pend.textContent='...'; thread.appendChild(pend);
     function done(){ if(btn){ btn.disabled=false; } input.focus(); }
-    var state=cardState(card);
-    if(state.session_id){ streamTurn(card, q, pend, done); return; }
     var id=card.getAttribute('data-om-id');
     fetch('/api/onmymind/'+id+'/reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:q})})
       .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
