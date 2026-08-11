@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Self
 
@@ -122,6 +122,38 @@ def observation_identity(record: EarningsSurpriseRecordV1) -> str:
     return _sha256(_canonical_json(_record_payload(record)))
 
 
+def cache_generation_identity(raw_payload: object, *, cache_path: str) -> str:
+    """Return a stable identity for the exact cache generation being consumed."""
+    payload = {"cache_path": cache_path, "raw_payload": raw_payload}
+    return f"cache:{_sha256(_canonical_json(payload))}"
+
+
+def observation_clock_error(
+    record: EarningsSurpriseRecordV1,
+    *,
+    recorded_at: datetime,
+    wall_clock: datetime | None = None,
+    future_skew: timedelta = timedelta(minutes=5),
+) -> dict[str, str] | None:
+    """Reject source clocks that could poison latest-state ordering."""
+    recorded = recorded_at.astimezone(UTC)
+    fetched = record.fetched_at.astimezone(UTC)
+    observed_now = (wall_clock or datetime.now(UTC)).astimezone(UTC)
+    if fetched > recorded:
+        return {
+            "error": "fetched_at is after recorded_at",
+            "fetched_at": fetched.isoformat(),
+            "recorded_at": recorded.isoformat(),
+        }
+    if fetched > observed_now + future_skew:
+        return {
+            "error": "fetched_at is implausibly ahead of the wall clock",
+            "fetched_at": fetched.isoformat(),
+            "wall_clock": observed_now.isoformat(),
+        }
+    return None
+
+
 def append_observation(
     conn: sqlite3.Connection,
     *,
@@ -130,14 +162,25 @@ def append_observation(
     cache_path: str,
     record_ordinal: int,
     recorded_at: datetime | None = None,
+    ingestion_run_id: str | None = None,
+    cache_generation_id: str | None = None,
+    provenance_status: str = "source_observed",
 ) -> tuple[str, bool]:
     """Append one immutable observation; return ``(observation_id, inserted)``."""
     canonical_json = _canonical_json(_record_payload(record))
     canonical_sha = _sha256(canonical_json)
     raw_json = _canonical_json(raw_payload)
     raw_sha = _sha256(raw_json)
+    generation_id = cache_generation_id or cache_generation_identity(
+        raw_payload, cache_path=cache_path
+    )
     observation_id = canonical_sha
-    timestamp = (recorded_at or datetime.now(UTC)).isoformat()
+    recorded_timestamp = recorded_at or datetime.now(UTC)
+    clock_error = observation_clock_error(record, recorded_at=recorded_timestamp)
+    run_id = ingestion_run_id or f"direct:{recorded_timestamp.isoformat()}"
+    if clock_error is not None:
+        raise ValueError(clock_error["error"])
+    timestamp = recorded_timestamp.isoformat()
     values = (
         observation_id,
         f"earnings-surprise-observation:{observation_id}",
@@ -165,6 +208,9 @@ def append_observation(
         raw_sha,
         canonical_json,
         canonical_sha,
+        provenance_status,
+        run_id,
+        generation_id,
         timestamp,
     )
     cursor = conn.execute(
@@ -175,8 +221,9 @@ def append_observation(
             eps_surprise_pct,revenue_surprise_pct,num_analysts_eps,
             num_analysts_revenue,source_name,source_url,fetched_at,
             cache_path,record_ordinal,raw_payload_json,raw_payload_sha256,
-            canonical_payload_json,canonical_payload_sha256,recorded_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            canonical_payload_json,canonical_payload_sha256,provenance_status,
+            ingestion_run_id,cache_generation_id,recorded_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         values,
     )
@@ -193,14 +240,22 @@ def quarantine_payload(
     reason_code: str,
     reason_details: dict[str, str],
     recorded_at: datetime | None = None,
+    ingestion_run_id: str | None = None,
+    cache_generation_id: str | None = None,
 ) -> tuple[str, bool]:
     """Append one immutable quarantine disposition, idempotently."""
     raw_json = _canonical_json(raw_payload)
     raw_sha = _sha256(raw_json)
+    generation_id = cache_generation_id or cache_generation_identity(
+        raw_payload, cache_path=cache_path
+    )
     details_json = _canonical_json(reason_details)
+    recorded_timestamp = recorded_at or datetime.now(UTC)
+    run_id = ingestion_run_id or f"direct:{recorded_timestamp.isoformat()}"
     details_sha = _sha256(details_json)
     identity_payload = {
         "cache_path": cache_path,
+        "cache_generation_id": generation_id,
         "raw_payload_sha256": raw_sha,
         "reason_code": reason_code,
         "reason_details_sha256": details_sha,
@@ -213,8 +268,8 @@ def quarantine_payload(
         INSERT OR IGNORE INTO earnings_surprise_quarantine (
             quarantine_id,idempotency_key,ticker_hint,cache_path,record_ordinal,
             raw_payload_json,raw_payload_sha256,reason_code,reason_details_json,
-            reason_details_sha256,recorded_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            reason_details_sha256,ingestion_run_id,cache_generation_id,recorded_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             quarantine_id,
@@ -227,7 +282,9 @@ def quarantine_payload(
             reason_code,
             details_json,
             details_sha,
-            (recorded_at or datetime.now(UTC)).isoformat(),
+            run_id,
+            generation_id,
+            recorded_timestamp.isoformat(),
         ),
     )
     return quarantine_id, cursor.rowcount == 1

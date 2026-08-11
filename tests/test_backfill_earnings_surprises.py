@@ -165,6 +165,8 @@ def test_write_ticker_cache_writes_valid_json(tmp_path: Path) -> None:
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["ticker"] == "WIX"
     assert payload["record_count"] == 2
+    assert isinstance(payload["cache_generation_id"], str)
+    assert payload["cache_generation_id"].startswith("cache:")
     assert len(payload["records"]) == 2
     assert payload["records"][0]["release_date"] == "2024-03-01"
     # Decimals serialize as strings (precision preserved)

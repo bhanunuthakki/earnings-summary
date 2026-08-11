@@ -13,6 +13,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -71,7 +72,9 @@ def _seed_schema(db_path: Path) -> sqlite3.Connection:
             record_ordinal INTEGER NOT NULL,
             raw_payload_json TEXT NOT NULL, raw_payload_sha256 TEXT NOT NULL,
             canonical_payload_json TEXT NOT NULL,
-            canonical_payload_sha256 TEXT NOT NULL, recorded_at TEXT NOT NULL
+            canonical_payload_sha256 TEXT NOT NULL, provenance_status TEXT NOT NULL,
+            ingestion_run_id TEXT NOT NULL, cache_generation_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
         );
         CREATE TABLE earnings_surprise_quarantine (
             quarantine_id TEXT PRIMARY KEY,
@@ -80,7 +83,8 @@ def _seed_schema(db_path: Path) -> sqlite3.Connection:
             record_ordinal INTEGER NOT NULL,
             raw_payload_json TEXT NOT NULL, raw_payload_sha256 TEXT NOT NULL,
             reason_code TEXT NOT NULL, reason_details_json TEXT NOT NULL,
-            reason_details_sha256 TEXT NOT NULL, recorded_at TEXT NOT NULL
+            reason_details_sha256 TEXT NOT NULL, ingestion_run_id TEXT NOT NULL,
+            cache_generation_id TEXT NOT NULL, recorded_at TEXT NOT NULL
         );
         CREATE UNIQUE INDEX ux_earnings_surprises_ticker_release
             ON earnings_surprises(ticker, release_date);
@@ -443,12 +447,14 @@ def test_ingest_unique_index_enforces_release_date(tmp_path: Path) -> None:
     conn.commit()
     n = conn.execute("SELECT COUNT(*) AS n FROM earnings_surprises").fetchone()["n"]
     assert n == 1
-    # Second record's value wins (last-write-wins on conflict)
-    row = conn.execute("SELECT eps_actual FROM earnings_surprises").fetchone()
-    assert str(row["eps_actual"]) == "2.29"
-    # The first was insert, second was update (within the same ingest pass)
+    row = conn.execute("SELECT eps_actual,source_observation_id FROM earnings_surprises").fetchone()
+    winner = conn.execute(
+        "SELECT eps_actual,observation_id FROM earnings_surprise_observations "
+        "ORDER BY observation_id DESC LIMIT 1"
+    ).fetchone()
+    assert tuple(row) == tuple(winner)
     assert result.inserted == 1
-    assert result.updated == 1
+    assert result.updated + result.unchanged == 1
     assert result.observations_inserted == 2
 
 
@@ -520,6 +526,94 @@ def test_older_observation_does_not_replace_newer_projection(tmp_path: Path) -> 
     assert conn.execute("SELECT COUNT(*) FROM earnings_surprise_observations").fetchone()[0] == 2
 
 
+def test_fetched_after_recorded_at_is_quarantined_before_append_or_projection(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    conn = _seed_schema(tmp_path / "db.sqlite")
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [_record(fetched_at="2026-08-11T12:00:01+00:00")],
+    )
+    result = mod.ingest_one_ticker(
+        conn,
+        cache,
+        dry_run=False,
+        recorded_at=datetime(2026, 8, 11, 12, 0, tzinfo=UTC),
+        wall_clock=datetime(2026, 8, 11, 12, 0, tzinfo=UTC),
+        ingestion_run_id="run:test-clock",
+    )
+    conn.commit()
+    assert result.skipped_malformed == 1
+    assert conn.execute("SELECT COUNT(*) FROM earnings_surprise_observations").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM earnings_surprises").fetchone()[0] == 0
+    row = conn.execute(
+        "SELECT reason_code,ingestion_run_id,cache_generation_id FROM earnings_surprise_quarantine"
+    ).fetchone()
+    assert tuple(row[:2]) == ("invalid_observation_clock", "run:test-clock")
+    assert row[2]
+
+
+def test_implausible_future_clock_is_quarantined_with_future_recorded_at(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    conn = _seed_schema(tmp_path / "db.sqlite")
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [_record(fetched_at="2027-08-11T12:00:00+00:00")],
+    )
+    result = mod.ingest_one_ticker(
+        conn,
+        cache,
+        dry_run=False,
+        recorded_at=datetime(2027, 8, 11, 12, 1, tzinfo=UTC),
+        wall_clock=datetime(2026, 8, 11, 12, 0, tzinfo=UTC),
+        ingestion_run_id="run:test-future",
+    )
+    conn.commit()
+    assert result.skipped_malformed == 1
+    reason = conn.execute("SELECT reason_code FROM earnings_surprise_quarantine").fetchone()[0]
+    assert reason == "invalid_observation_clock"
+
+
+def test_equal_fetched_at_conflicts_resolve_independently_of_input_order(tmp_path: Path) -> None:
+    mod = _load_module()
+    records = [_record(eps_actual="2.28"), _record(eps_actual="2.29")]
+    winners: list[tuple[object, object]] = []
+    for ordinal, ordered in enumerate((records, list(reversed(records)))):
+        conn = _seed_schema(tmp_path / f"order-{ordinal}.sqlite")
+        cache = _write_cache(tmp_path / f"surprise-{ordinal}", "WIX", ordered)
+        mod.ingest_one_ticker(conn, cache, dry_run=False)
+        conn.commit()
+        row = conn.execute(
+            "SELECT eps_actual,source_observation_id FROM earnings_surprises"
+        ).fetchone()
+        winners.append((row["eps_actual"], row["source_observation_id"]))
+    assert winners[0] == winners[1]
+
+
+def test_observation_and_quarantine_record_run_and_cache_generation_identity(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    conn = _seed_schema(tmp_path / "db.sqlite")
+    cache = _write_cache(tmp_path / "surprise", "WIX", [_record(), {"ticker": "WIX"}])
+    mod.ingest_one_ticker(conn, cache, dry_run=False, ingestion_run_id="run:test-identity")
+    conn.commit()
+    observed = conn.execute(
+        "SELECT ingestion_run_id,cache_generation_id FROM earnings_surprise_observations"
+    ).fetchone()
+    quarantined = conn.execute(
+        "SELECT ingestion_run_id,cache_generation_id FROM earnings_surprise_quarantine"
+    ).fetchone()
+    assert observed[0] == quarantined[0] == "run:test-identity"
+    assert observed[1] == quarantined[1]
+    assert observed[1]
+
+
 def test_malformed_cache_file_gets_quarantine_disposition(tmp_path: Path) -> None:
     mod = _load_module()
     conn = _seed_schema(tmp_path / "db.sqlite")
@@ -559,3 +653,39 @@ def test_main_exits_nonzero_when_any_record_is_quarantined(
         assert (
             verify.execute("SELECT COUNT(*) FROM earnings_surprise_quarantine").fetchone()[0] == 1
         )
+
+
+def test_main_emits_one_redacted_terminal_receipt_on_unexpected_database_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mod = _load_module()
+    surprise_dir = tmp_path / "data" / "surprise"
+    _write_cache(surprise_dir, "WIX", [_record()])
+
+    def retarget(_root: Path) -> Path:
+        return surprise_dir
+
+    monkeypatch.setattr(mod, "_retarget_paths", retarget)
+    monkeypatch.setattr(
+        mod.db,
+        "get_connection",
+        lambda: (_ for _ in ()).throw(
+            sqlite3.OperationalError("write failed?api_key=super-secret-value")
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ingest_earnings_surprises.py", "--repo-root", str(tmp_path)],
+    )
+
+    assert mod.main() != 0
+    stdout = capsys.readouterr().out
+    assert stdout.count("\n") == 1
+    receipt = json.loads(stdout)
+    assert receipt["terminal_status"] == "failed"
+    assert receipt["error_type"] == "OperationalError"
+    assert "super-secret-value" not in stdout
+    assert "api_key=***" in receipt["error"]

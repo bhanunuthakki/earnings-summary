@@ -41,6 +41,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from earnings_surprise_store import cache_generation_identity  # noqa: E402
 from surprise_sources import (  # noqa: E402
     SurpriseHit,
     SurpriseSource,
@@ -125,6 +126,7 @@ def _write_ticker_cache(
         "record_count": len(hits),
         "records": [h.to_json() for h in hits],
     }
+    payload["cache_generation_id"] = cache_generation_identity(payload, cache_path=str(out))
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     tmp.replace(out)

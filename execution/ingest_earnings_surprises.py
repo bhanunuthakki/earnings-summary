@@ -12,6 +12,7 @@ import argparse
 import json
 import sqlite3
 import sys
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -25,10 +26,13 @@ import db  # noqa: E402
 from earnings_surprise_store import (  # noqa: E402
     EarningsSurpriseRecordV1,
     append_observation,
+    cache_generation_identity,
+    observation_clock_error,
     observation_identity,
     quarantine_payload,
     validate_source_record,
 )
+from log_redact import redact  # noqa: E402
 
 _SURPRISE_DIR = PROJECT_ROOT / "data" / "surprise"
 
@@ -163,12 +167,19 @@ def _as_utc(value: str) -> datetime:
 
 def _should_project(conn: sqlite3.Connection, parsed: dict[str, object]) -> bool:
     row = conn.execute(
-        "SELECT fetched_at FROM earnings_surprises WHERE ticker = ? AND release_date = ?",
+        "SELECT fetched_at,source_observation_id FROM earnings_surprises "
+        "WHERE ticker = ? AND release_date = ?",
         (parsed["ticker"], parsed["release_date"]),
     ).fetchone()
     if row is None:
         return True
-    return _as_utc(str(parsed["fetched_at"])) >= _as_utc(str(row["fetched_at"]))
+    incoming_fetched = _as_utc(str(parsed["fetched_at"]))
+    existing_fetched = _as_utc(str(row["fetched_at"]))
+    if incoming_fetched != existing_fetched:
+        return incoming_fetched > existing_fetched
+    incoming_id = str(parsed["source_observation_id"])
+    existing_id = row["source_observation_id"]
+    return existing_id is None or incoming_id > str(existing_id)
 
 
 def _quarantine_cache_failure(
@@ -195,9 +206,18 @@ def _quarantine_cache_failure(
 
 
 def ingest_one_ticker(
-    conn: sqlite3.Connection, cache_path: Path, *, dry_run: bool
+    conn: sqlite3.Connection,
+    cache_path: Path,
+    *,
+    dry_run: bool,
+    recorded_at: datetime | None = None,
+    wall_clock: datetime | None = None,
+    ingestion_run_id: str | None = None,
 ) -> TickerIngestResult:
     """Ingest one cache atomically within the caller-owned transaction."""
+    timestamp = recorded_at or datetime.now(UTC)
+    observed_wall = wall_clock or datetime.now(UTC)
+    run_id = ingestion_run_id or f"direct:{timestamp.isoformat()}"
     ticker = cache_path.stem.replace("_surprises", "").upper()
     result = TickerIngestResult(ticker=ticker, cache_path=str(cache_path))
     try:
@@ -244,6 +264,12 @@ def ingest_one_ticker(
         result.errors.append(error)
         return result
     payload = cast("dict[str, object]", payload_raw)
+    explicit_generation = payload.get("cache_generation_id")
+    generation_id = (
+        explicit_generation
+        if isinstance(explicit_generation, str) and explicit_generation
+        else cache_generation_identity(payload, cache_path=str(cache_path))
+    )
     records = payload.get("records")
     if not isinstance(records, list):
         error = "payload.records is missing or not a list"
@@ -274,6 +300,29 @@ def ingest_one_ticker(
                     record_ordinal=ordinal,
                     reason_code=disposition.reason_code or "schema_validation_failed",
                     reason_details=disposition.reason_details,
+                    recorded_at=timestamp,
+                    ingestion_run_id=run_id,
+                    cache_generation_id=generation_id,
+                )
+            continue
+
+        clock_error = observation_clock_error(
+            record, recorded_at=timestamp, wall_clock=observed_wall
+        )
+        if clock_error is not None:
+            result.skipped_malformed += 1
+            if not dry_run:
+                quarantine_payload(
+                    conn,
+                    raw_payload=rec_raw,
+                    ticker_hint=ticker,
+                    cache_path=str(cache_path),
+                    record_ordinal=ordinal,
+                    reason_code="invalid_observation_clock",
+                    reason_details=clock_error,
+                    recorded_at=timestamp,
+                    ingestion_run_id=run_id,
+                    cache_generation_id=generation_id,
                 )
             continue
 
@@ -285,6 +334,9 @@ def ingest_one_ticker(
                 raw_payload=rec_raw,
                 cache_path=str(cache_path),
                 record_ordinal=ordinal,
+                recorded_at=timestamp,
+                ingestion_run_id=run_id,
+                cache_generation_id=generation_id,
             )
             if observation_inserted:
                 result.observations_inserted += 1
@@ -344,27 +396,39 @@ def main() -> int:
         print(json.dumps({"event": "no_caches", "surprise_dir": str(surprise_dir)}))
         return 0
 
-    conn = db.get_connection()
+    run_recorded_at = datetime.now(UTC)
+    run_id = f"earnings-surprise-ingest:{run_recorded_at.isoformat()}"
+    conn: sqlite3.Connection | None = None
+    results: list[TickerIngestResult] = []
     try:
-        results: list[TickerIngestResult] = []
+        conn = db.get_connection()
         print(
             json.dumps(
                 {
                     "event": "earnings_surprise_ingest_started",
                     "caches": len(caches),
                     "dry_run": args.dry_run,
+                    "ingestion_run_id": run_id,
                     "surprise_dir": str(surprise_dir),
                 }
             ),
             file=sys.stderr,
         )
         for cache in caches:
-            result = ingest_one_ticker(conn, cache, dry_run=args.dry_run)
+            result = ingest_one_ticker(
+                conn,
+                cache,
+                dry_run=args.dry_run,
+                recorded_at=run_recorded_at,
+                wall_clock=run_recorded_at,
+                ingestion_run_id=run_id,
+            )
             results.append(result)
             print(
                 json.dumps(
                     {
                         "event": "earnings_surprise_cache_processed",
+                        "ingestion_run_id": run_id,
                         **asdict(result),
                     }
                 ),
@@ -372,8 +436,27 @@ def main() -> int:
             )
         if not args.dry_run:
             conn.commit()
-    finally:
         conn.close()
+        conn = None
+    except Exception as exc:
+        if conn is not None:
+            with suppress(Exception):
+                conn.rollback()
+            with suppress(Exception):
+                conn.close()
+        print(
+            json.dumps(
+                {
+                    "caches_scanned": len(caches),
+                    "dry_run": args.dry_run,
+                    "error": redact(exc)[:1000],
+                    "error_type": type(exc).__name__,
+                    "ingestion_run_id": run_id,
+                    "terminal_status": "failed",
+                }
+            )
+        )
+        return 3
 
     partial = any(result.errors or result.skipped_malformed for result in results)
     summary = {
