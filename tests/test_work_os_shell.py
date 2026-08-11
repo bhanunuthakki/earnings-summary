@@ -37,6 +37,74 @@ def test_work_os_shell_preserves_the_prototype_navigation_and_layers() -> None:
     )
 
 
+def test_counterread_brand_is_the_accessible_home_control() -> None:
+    html = render_work_os_shell(generated_at=datetime(2026, 8, 7, tzinfo=UTC))
+
+    assert "<title>Counterread</title>" in html
+    assert html.count(">Counterread</span>") == 1
+    assert 'class="sidebar-home k-btn k-btn-quiet"' in html
+    assert 'aria-label="Counterread home"' in html
+    assert 'onclick="goCounterreadHome()"' in html
+    assert 'class="counterread-mark"' in html
+    assert 'aria-hidden="true"' in html
+    assert 'data-counterread-observation="true"' in html
+    assert 'stroke="currentColor"' in html
+    assert 'fill="currentColor"' in html
+    assert "EQUITY</span> OS" not in html
+    assert "Equity Research OS" not in html
+    assert html.count('<link rel="icon"') == 1
+
+
+def test_counterread_home_uses_canonical_cockpit_history_without_losing_company_context() -> None:
+    html = render_work_os_shell()
+
+    assert "function workOsScreenUrl(screenId)" in html
+    assert "params.delete('screen');" in html
+    assert "url.hash = screenId;" in html
+    assert (
+        "const currentUrl = window.location.pathname + window.location.search + window.location.hash;"
+        in html
+    )
+    assert "currentUrl !== workOsScreenUrl(target)" in html
+    assert "window.history.pushState({ screenId: target }, '', workOsScreenUrl(target));" in html
+    assert "window.goCounterreadHome = function ()" in html
+    assert "window.navigateTo('screen-cockpit')" in html
+    screen_url = html.split("function workOsScreenUrl(screenId)", 1)[1].split(
+        "window.navigateTo = function", 1
+    )[0]
+    assert "params.delete('ticker')" not in screen_url
+
+
+def test_counterread_home_survives_collapsed_and_mobile_sidebar_rules() -> None:
+    html = render_work_os_shell()
+
+    assert ".app-sidebar.is-collapsed .sidebar-logo" in html
+    assert ".app-sidebar.is-collapsed .sidebar-brand" in html
+    assert "flex-direction: column" in html
+    assert ".sidebar-collapse-toggle, .nav-layer-title" in html
+    assert ".sidebar-brand button, .nav-layer-title" not in html
+    assert ".sidebar-home" in html
+    assert "min-block-size: var(--touch-target-size)" in html
+    assert "min-inline-size: var(--touch-target-size)" in html
+    assert ".counterread-mark" in html
+    assert "inline-size: var(--icon-size)" in html
+    assert "block-size: var(--icon-size)" in html
+
+
+def test_counterread_home_closes_transient_research_surfaces_before_navigation() -> None:
+    html = render_work_os_shell()
+    home_runtime = html.split("window.goCounterreadHome = function ()", 1)[1].split(
+        "function workOsApplyHash", 1
+    )[0]
+
+    assert "briefReaderOverlay.close()" in home_runtime
+    assert "drillOverlay.close()" in home_runtime
+    assert "peekOverlay.close()" in home_runtime
+    assert home_runtime.index("briefReaderOverlay.close()") < home_runtime.index(
+        "window.navigateTo('screen-cockpit')"
+    )
+
+
 def test_work_os_shell_retires_standalone_legacy_frontend_destinations() -> None:
     html = render_work_os_shell()
     for retired in (

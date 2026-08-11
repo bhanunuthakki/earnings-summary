@@ -196,6 +196,11 @@ def test_favicon_is_a_brace_free_data_uri_link() -> None:
     # Spliced into str.format templates — a literal brace would crash them.
     assert "{" not in FAVICON_LINK
     assert "}" not in FAVICON_LINK
+    assert "%23f4f3ef" in FAVICON_LINK
+    assert "circle" in FAVICON_LINK
+    assert "polyline" in FAVICON_LINK
+    assert "%234ade80" not in FAVICON_LINK
+    assert "%238aa8ff" not in FAVICON_LINK
 
 
 def test_page_title_joins_with_middle_dots_and_drops_empties() -> None:

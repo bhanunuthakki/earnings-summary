@@ -157,6 +157,7 @@ _CHECK_DARK = _CHECK_TEMPLATE.format(ink=_glyph_ink(PALETTE_DARK["accent-contras
 # caller supplies the accessible name on the surrounding button/link; icons
 # are decorative and therefore always hidden from assistive technology.
 _ICON_PATHS: dict[str, str] = {
+    "counterread": '<polyline points="9 4 5 4 5 20 9 20"/><circle data-counterread-observation="true" cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><polyline points="15 4 19 4 19 20 15 20"/>',
     "cockpit": '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
     "portfolio": '<path d="M3 18l5-5 4 3 8-10"/><path d="M14 6h6v6"/>',
     "company": '<path d="M3 21h18"/><path d="M6 21V5l6-3 6 3v16"/><path d="M9 9h1M9 13h1M14 9h1M14 13h1M11 21v-4h2v4"/>',

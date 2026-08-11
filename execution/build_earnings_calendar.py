@@ -338,7 +338,7 @@ def _render_html(
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Earnings Calendar — {today.isoformat()}</title>
+<title>Counterread — Earnings Calendar — {today.isoformat()}</title>
 {FAVICON_LINK}
 <style>
 {palette_css("dark")}
@@ -350,7 +350,8 @@ body {{ margin: 0; background: var(--bg); color: var(--fg); font-family: var(--s
 .calendar-sidebar {{ position: sticky; top: 0; height: 100dvh; padding: var(--sp-4) var(--sp-3);
   display: flex; flex-direction: column; gap: var(--sp-4); }}
 .calendar-brand {{ min-height: var(--header-height); display: flex; align-items: center;
-  padding: 0 var(--sp-2); font-size: var(--fs-title); font-weight: 600; }}
+  width: 100%; justify-content: flex-start; padding: 0 var(--sp-2); }}
+.calendar-brand:hover {{ text-decoration: none; }}
 .calendar-layer {{ display: flex; flex-direction: column; gap: var(--sp-half); }}
 .calendar-layer-title {{ padding: 0 var(--sp-2); color: var(--muted);
   font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; }}
@@ -377,7 +378,10 @@ details .calendar-table {{ margin-top: var(--sp-2); }}
 @media (max-width: 900px) {{
   .calendar-shell {{ grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr); }}
   .calendar-sidebar {{ width: var(--sidebar-collapsed-width); padding: var(--sp-3) var(--sp-2); }}
-  .calendar-brand, .calendar-layer-title, .calendar-sidebar .k-nav-item span {{ display: none; }}
+  .calendar-brand-label, .calendar-layer-title, .calendar-sidebar .k-nav-item span {{ display: none; }}
+  .calendar-brand {{ width: var(--touch-target-size); min-width: var(--touch-target-size);
+    min-height: var(--touch-target-size); padding: 0;
+    justify-content: center; align-self: center; }}
   .calendar-sidebar .k-nav-item {{ width: var(--touch-target-size);
     min-height: var(--touch-target-size); padding: 0;
     justify-content: center; align-self: center; }}
@@ -387,7 +391,9 @@ details .calendar-table {{ margin-top: var(--sp-2); }}
 <body>
 <div class="calendar-shell">
 <aside class="calendar-sidebar k-sidebar">
-  <div class="calendar-brand">Earnings OS</div>
+  <a class="calendar-brand k-btn k-btn-quiet" href="http://127.0.0.1:7421/"
+    aria-label="Counterread home" title="Counterread home">
+    {icon_svg("counterread", classes="counterread-mark")}<span class="calendar-brand-label">Counterread</span></a>
   <section class="calendar-layer">
     <div class="calendar-layer-title">L1 · Portfolio Intelligence</div>
     <a class="k-btn k-nav-item active" href="earnings_calendar.html"

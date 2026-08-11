@@ -236,7 +236,8 @@ def test_dashboard_page_returns_shell(client):
     assert resp.status_code == 200
     assert resp.mimetype == "text/html"
     body = resp.get_data(as_text=True)
-    assert "<title>Equity Research OS — Harvey/Legora Masterwork Edition</title>" in body
+    assert "<title>Counterread</title>" in body
+    assert 'aria-label="Counterread home"' in body
     assert 'class="app-sidebar"' in body
     for screen_id in (
         "screen-cockpit",

@@ -158,6 +158,16 @@ def test_icon_svg_rejects_unknown_names() -> None:
         icon_svg("made-up")
 
 
+def test_counterread_icon_is_the_canonical_monochrome_observation_mark() -> None:
+    icon = icon_svg("counterread", classes="counterread-mark")
+
+    assert icon.startswith('<svg class="k-icon counterread-mark"')
+    assert icon.count("<polyline") == 2
+    assert 'data-counterread-observation="true"' in icon
+    assert 'fill="currentColor"' in icon
+    assert 'stroke="currentColor"' in icon
+
+
 def test_standalone_earnings_calendar_composes_the_design_system() -> None:
     """Execution-generated HTML is a product surface too; keep it inside the
     design-sync boundary instead of letting the src-only discovery miss it."""
@@ -180,6 +190,23 @@ def test_standalone_earnings_calendar_composes_the_design_system() -> None:
     assert "h2 {{" not in source
     assert source.count('class="calendar-table-wrap"') == 3
     assert "overflow-x: auto" in source
+
+
+def test_standalone_earnings_calendar_uses_counterread_home_brand() -> None:
+    source = (PROJECT_ROOT / "execution" / "build_earnings_calendar.py").read_text(encoding="utf-8")
+
+    assert "<title>Counterread — Earnings Calendar — {today.isoformat()}</title>" in source
+    assert 'class="calendar-brand k-btn k-btn-quiet"' in source
+    assert 'href="http://127.0.0.1:7421/"' in source
+    assert 'aria-label="Counterread home"' in source
+    assert '{icon_svg("counterread", classes="counterread-mark")}' in source
+    assert '<span class="calendar-brand-label">Counterread</span>' in source
+    assert ".calendar-brand-label, .calendar-layer-title" in source
+    assert ".calendar-brand, .calendar-layer-title" not in source
+    assert ".calendar-brand {{ width: var(--touch-target-size);" in source
+    assert "min-height: var(--touch-target-size)" in source
+    assert "min-width: var(--touch-target-size)" in source
+    assert "Earnings OS" not in source
 
 
 def test_dashboard_alert_cards_only_add_layout_to_card_kit() -> None:

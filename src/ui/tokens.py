@@ -319,14 +319,16 @@ def palette_css(default: str = "paper") -> str:
 # Branding: favicon + title convention.
 # ---------------------------------------------------------------------------
 
-# Sparkline-on-dark mark, inlined as a data URI so every surface stays a
-# self-contained HTML file (no asset fetches — the workspace opens file://).
+# Counterread's opposing brackets frame one observation. The monochrome mark is
+# inlined so every surface stays self-contained (the workspace opens file://).
 _FAVICON_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
     "<rect width='32' height='32' rx='7' fill='%23090a0c'/>"
-    "<path d='M6 22l6-7 4.5 3.5L24 9' stroke='%234ade80' stroke-width='2.6' "
+    "<polyline points='12 7 7 7 7 25 12 25' stroke='%23f4f3ef' stroke-width='2.4' "
     "fill='none' stroke-linecap='round' stroke-linejoin='round'/>"
-    "<circle cx='25.5' cy='8' r='2.2' fill='%238aa8ff'/>"
+    "<circle cx='16' cy='16' r='2.2' fill='%23f4f3ef'/>"
+    "<polyline points='20 7 25 7 25 25 20 25' stroke='%23f4f3ef' stroke-width='2.4' "
+    "fill='none' stroke-linecap='round' stroke-linejoin='round'/>"
     "</svg>"
 )
 
