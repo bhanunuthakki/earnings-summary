@@ -36,5 +36,5 @@ def test_http_reports_use_the_serving_tailscale_origin() -> None:
 
 
 def test_server_navigation_links_follow_the_serving_origin() -> None:
-    assert "a[data-server-path]" in COMMENTS_JS
+    assert 'a[href^="/"]:not([href^="//"])' in COMMENTS_JS
     assert "link.href = SERVER_URL + path" in COMMENTS_JS
