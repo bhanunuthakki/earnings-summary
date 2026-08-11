@@ -45,7 +45,9 @@ def render_company_desk_shell() -> str:
     <div class="research-decision-band" id="deskDecisionBand">
       <div class="k-card"><div class="stat-heading">Owner posture</div><div class="stat-number" id="deskOwnerState">—</div><div class="stat-subtext" id="deskOwnerRevision">No owner decision recorded</div></div>
       <div class="k-card"><div class="stat-heading">Model recommendation</div><div class="stat-number" id="deskModelState">—</div><div class="stat-subtext">Advisory state, never owner state</div></div>
-      <div class="k-card"><div class="stat-heading">Position</div><div class="stat-number" id="deskPositionWeight">—</div><div class="stat-subtext" id="deskPositionSource">Current snapshot unavailable</div></div>
+      <div class="k-card"><div class="stat-heading">Position weight</div><div class="stat-number" id="deskPositionWeight">Weight unavailable</div><div class="stat-subtext" id="deskPositionSource">Tracker snapshot unavailable</div></div>
+      <div class="k-card"><div class="stat-heading">DCF input price</div><div class="stat-number" id="deskInputPrice">—</div><div class="stat-subtext" id="deskInputPriceSource">No governed input price</div></div>
+      <div class="k-card"><div class="stat-heading">DCF fair value</div><div class="stat-number" id="deskFairValue">—</div><div class="stat-subtext" id="deskFairValueSource">No governed fair value</div></div>
       <div class="k-card"><div class="stat-heading">Latest brief</div><div class="stat-number" id="deskBriefDate">—</div><div class="stat-subtext" id="deskBriefStatus">No indexed artifact</div></div>
     </div>
     <div class="research-grid">

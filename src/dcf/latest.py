@@ -61,6 +61,7 @@ _OPTIONAL_COLUMNS = (
     "valuation_date",
     "npv_per_share",
     "live_price",
+    "currency",
     "live_price_at",
     "over_under_pct",
     "sanity_flag",
@@ -80,6 +81,7 @@ class LatestDcfRow:
     valuation_date: str | None
     npv_per_share: float | None
     live_price: float | None
+    currency: str | None
     live_price_at: str | None
     over_under_pct: float | None
     sanity_flag: str | None
@@ -113,6 +115,7 @@ def _row_from(r: sqlite3.Row) -> LatestDcfRow:
         valuation_date=str(r["valuation_date"]) if r["valuation_date"] is not None else None,
         npv_per_share=float(r["npv_per_share"]) if r["npv_per_share"] is not None else None,
         live_price=float(r["live_price"]) if r["live_price"] is not None else None,
+        currency=str(r["currency"]) if r["currency"] is not None else None,
         live_price_at=str(r["live_price_at"]) if r["live_price_at"] is not None else None,
         over_under_pct=float(r["over_under_pct"]) if r["over_under_pct"] is not None else None,
         sanity_flag=str(r["sanity_flag"]) if r["sanity_flag"] is not None else None,
