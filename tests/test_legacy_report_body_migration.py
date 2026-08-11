@@ -31,7 +31,14 @@ def _legacy_workspace() -> str:
       <a href="https://example.com/source">External source</a>
       <a href="javascript:window.evil()">Unsafe link</a>
       <img src="//tracker.example/pixel.png" srcset="https://tracker.example/2x.png 2x" alt="Unsafe remote image">
-      <svg><use href="https://tracker.example/icon.svg"></use></svg>
+      <svg>
+        <defs><linearGradient id="safe-gradient"><stop offset="0" stop-color="currentColor"></stop></linearGradient></defs>
+        <path d="M0,0 L1,1" fill="url(#safe-gradient)"></path>
+        <path d="M0,1 L1,0" fill="url(https://tracker.example/paint.svg)"></path>
+        <animate attributeName="href" values="javascript:window.evil()"></animate>
+        <set attributeName="fill" to="url(https://tracker.example/set.svg)"></set>
+        <use href="https://tracker.example/icon.svg"></use>
+      </svg>
       <table><tr><th>Metric</th><td>Value</td></tr></table>
       <button x-data="{}" @click="window.evil()">Legacy action</button>
       <script>window.evil()</script>
@@ -68,6 +75,9 @@ def test_extractor_preserves_content_and_removes_executable_legacy_markup() -> N
     assert "x-data=" not in extracted.body_html
     assert "javascript:" not in extracted.body_html
     assert "//tracker.example" not in extracted.body_html
+    assert "<animate" not in extracted.body_html
+    assert "<set" not in extracted.body_html
+    assert "url(#reader-" in extracted.body_html
     assert "srcset=" not in extracted.body_html
     assert " ping=" not in extracted.body_html
     assert 'href="https://example.com/source"' in extracted.body_html

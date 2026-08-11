@@ -38,6 +38,84 @@ _FETCH_ATTRS = (
     "xlink:href",
 )
 _SAFE_ID = re.compile(r"[^A-Za-z0-9_-]+")
+_SVG_STATIC_TAGS = {
+    "a",
+    "circle",
+    "clippath",
+    "defs",
+    "desc",
+    "ellipse",
+    "g",
+    "lineargradient",
+    "line",
+    "mask",
+    "path",
+    "polygon",
+    "polyline",
+    "radialgradient",
+    "rect",
+    "stop",
+    "svg",
+    "text",
+    "title",
+    "tspan",
+    "use",
+}
+_SVG_STATIC_ATTRS = {
+    "aria-hidden",
+    "aria-label",
+    "class",
+    "clip-path",
+    "color",
+    "cx",
+    "cy",
+    "d",
+    "dx",
+    "dy",
+    "fill",
+    "fill-opacity",
+    "font-size",
+    "font-weight",
+    "height",
+    "href",
+    "id",
+    "mask",
+    "offset",
+    "opacity",
+    "pathlength",
+    "points",
+    "preserveaspectratio",
+    "r",
+    "rel",
+    "role",
+    "rx",
+    "ry",
+    "stop-color",
+    "stop-opacity",
+    "stroke",
+    "stroke-dasharray",
+    "stroke-dashoffset",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-miterlimit",
+    "stroke-opacity",
+    "stroke-width",
+    "target",
+    "text-anchor",
+    "transform",
+    "viewbox",
+    "width",
+    "x",
+    "x1",
+    "x2",
+    "xlink:href",
+    "xmlns",
+    "y",
+    "y1",
+    "y2",
+}
+_SVG_URL_REFERENCE_ATTRS = {"clip-path", "fill", "mask", "stroke"}
+_SVG_URL_REFERENCE = re.compile(r"url\(\s*(['\"]?)(#[A-Za-z0-9_.:-]+)\1\s*\)", re.I)
 
 
 class ReaderContentMetrics(BaseModel):
@@ -191,6 +269,32 @@ def _accepted_source_metrics(root: Tag) -> ReaderContentMetrics:
     return _content_metrics(accepted)
 
 
+def _sanitize_static_svg(root: Tag, warnings: Counter[str]) -> None:
+    for svg in list(root.find_all("svg")):
+        for node in [svg, *svg.find_all(True)]:
+            if node.parent is None:
+                continue
+            if str(node.name).lower() not in _SVG_STATIC_TAGS:
+                warnings["svg_element_removed"] += 1
+                node.decompose()
+                continue
+            for raw_name in list(node.attrs):
+                name = str(raw_name).lower()
+                if name not in _SVG_STATIC_ATTRS:
+                    warnings["svg_attribute_removed"] += 1
+                    del node.attrs[raw_name]
+                    continue
+                if name in _SVG_URL_REFERENCE_ATTRS:
+                    value = str(node.get(raw_name, ""))
+                    matches = tuple(_SVG_URL_REFERENCE.finditer(value))
+                    if "url(" in value.lower() and (
+                        not matches
+                        or "".join(match.group(0) for match in matches).strip() != value.strip()
+                    ):
+                        warnings["svg_external_url_removed"] += 1
+                        del node.attrs[raw_name]
+
+
 def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyReaderBody:
     """Extract one complete workspace content subtree and strip executable ownership.
 
@@ -216,6 +320,7 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
         warnings["form_unwrapped"] += 1
         form.unwrap()
 
+    _sanitize_static_svg(root, warnings)
     all_tags = [root, *root.find_all(True)]
     for tag in all_tags:
         for raw_name in list(tag.attrs):
@@ -238,6 +343,8 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
                 keep = _anchor_href_is_safe(rendered)
             elif tag.name == "img" and name == "src":
                 keep = _image_src_is_safe(rendered)
+            elif tag.name == "use" and name in ("href", "xlink:href"):
+                keep = rendered.startswith("#")
             if not keep:
                 warnings[f"fetch_{name}_removed"] += 1
                 del tag.attrs[name]
@@ -295,11 +402,20 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
             values = raw if isinstance(raw, list) else str(raw).split()
             rewritten = [id_map.get(str(value), str(value)) for value in values]
             tag[name] = " ".join(rewritten)
-        href = tag.get("href")
-        if isinstance(href, str) and href.startswith("#"):
-            target = href[1:]
-            if target in id_map:
-                tag["href"] = f"#{id_map[target]}"
+        for link_name in ("href", "xlink:href"):
+            href = tag.get(link_name)
+            if isinstance(href, str) and href.startswith("#"):
+                target = href[1:]
+                if target in id_map:
+                    tag[link_name] = f"#{id_map[target]}"
+        for name in _SVG_URL_REFERENCE_ATTRS:
+            value = tag.get(name)
+            if not isinstance(value, str):
+                continue
+            tag[name] = _SVG_URL_REFERENCE.sub(
+                lambda match: f"url(#{id_map.get(match.group(2)[1:], match.group(2)[1:])})",
+                value,
+            )
 
     section_ids = tuple(
         dict.fromkeys(
