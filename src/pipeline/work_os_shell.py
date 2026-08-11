@@ -25,7 +25,7 @@ from pipeline.work_os_research import (
     render_company_desk_shell,
 )
 from ui.controls import controls_css
-from ui.tokens import palette_css
+from ui.tokens import FAVICON_LINK, palette_css
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +182,7 @@ def _production_runtime(generated_at: datetime) -> str:
   .company-picker-list {{ max-block-size: var(--grid-card-sm); overflow-y: auto; }}
   .company-picker-list [role="option"] {{ display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); }}
   .company-picker-list [aria-selected="true"] {{ background: var(--paper); color: var(--accent); }}
+  .sidebar-home {{ min-block-size: var(--icon-button-size); }}
   @media (hover: none) {{
     .company-picker-trigger {{ min-block-size: var(--touch-target-size); opacity: 1; transform: none; }}
   }}
@@ -208,7 +209,12 @@ def _production_runtime(generated_at: datetime) -> str:
       gap: var(--sp-1); width: 100%;
     }}
     .sidebar-brand {{ align-items: center; padding: var(--sp-2) 0; margin: 0; }}
-    .sidebar-brand button, .nav-layer-title, .sidebar-cmd-text, .nav-text {{ display: none !important; }}
+    .sidebar-collapse-toggle, .nav-layer-title, .sidebar-cmd-text, .nav-text {{ display: none !important; }}
+    .sidebar-home {{
+      width: 100%; min-block-size: var(--touch-target-size); min-inline-size: var(--touch-target-size);
+      justify-content: center; padding: var(--sp-2);
+    }}
+    .sidebar-logo {{ display: none; }}
     .sidebar-cmd, .app-sidebar .nav-item, .app-sidebar.is-collapsed .nav-item {{
       flex: 0 0 auto; justify-content: center;
       min-block-size: var(--touch-target-size); min-inline-size: var(--touch-target-size);
@@ -792,6 +798,14 @@ def _production_runtime(generated_at: datetime) -> str:
     return WORK_OS_LEGACY_HASHES[raw] || 'screen-cockpit';
   }}
 
+  function workOsScreenUrl(screenId) {{
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    params.delete('screen');
+    url.hash = screenId;
+    return url.pathname + url.search + url.hash;
+  }}
+
   window.navigateTo = function (screenId, options) {{
     const target = WORK_OS_ENDPOINTS[screenId] ? screenId : 'screen-cockpit';
     if (target === 'screen-workspace' && workOsPortfolioHydration && !(options && options.companyReady)) {{
@@ -801,9 +815,17 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
     if (target === 'screen-brief-library') workOsRenderBriefLibrary();
     originalNavigateTo(target);
-    if (!(options && options.fromHistory) && window.location.hash !== '#' + target) {{
-      window.history.pushState({{ screenId: target }}, '', '#' + target);
+    const currentUrl = window.location.pathname + window.location.search + window.location.hash;
+    if (!(options && options.fromHistory) && currentUrl !== workOsScreenUrl(target)) {{
+      window.history.pushState({{ screenId: target }}, '', workOsScreenUrl(target));
     }}
+  }};
+
+  window.goCounterreadHome = function () {{
+    if (briefReaderOverlay) briefReaderOverlay.close();
+    if (drillOverlay) drillOverlay.close();
+    if (peekOverlay) peekOverlay.close();
+    window.navigateTo('screen-cockpit');
   }};
 
   function workOsApplyHash(replaceLegacy) {{
@@ -958,6 +980,7 @@ def _make_allocation_language_honest(html: str) -> str:
 
 
 def _add_production_contract(html: str, generated_at: datetime) -> str:
+    html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
     html = html.replace(
