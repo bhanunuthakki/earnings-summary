@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -132,6 +133,23 @@ def _insert_llm_call(conn: sqlite3.Connection, *, called_at: datetime, cost_usd:
     conn.commit()
 
 
+def _clear_all_obligations(db_path: Path) -> None:
+    """Model a successful regenerator by clearing every current queued row."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            UPDATE llm_artifacts
+            SET dirty = 0, expires_at = ?
+            WHERE superseded_by_id IS NULL
+            """,
+            ((datetime.now(UTC) + timedelta(days=30)).isoformat(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 class _FakeCompleted:
     """Stand-in for subprocess.CompletedProcess. Only the fields the executor
     actually reads (returncode, stderr) are populated."""
@@ -145,14 +163,30 @@ class _FakeCompleted:
 class _CapturingFakeRun:
     """Records subprocess.run calls; returns a configurable CompletedProcess."""
 
-    def __init__(self, returncode: int = 0, stderr: str = "") -> None:
+    def __init__(
+        self,
+        returncode: int = 0,
+        stderr: str = "",
+        on_run: Callable[[], None] | None = None,
+    ) -> None:
         self.calls: list[list[str]] = []
         self._returncode = returncode
         self._stderr = stderr
+        self._on_run = on_run
 
     def __call__(self, argv: list[str], **kwargs: object) -> _FakeCompleted:
         self.calls.append(list(argv))
+        if self._on_run is not None:
+            self._on_run()
         return _FakeCompleted(returncode=self._returncode, stderr=self._stderr)
+
+
+def _dict_log_events(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    for record in caplog.records:
+        if isinstance(record.msg, dict):
+            events.append(cast("dict[str, object]", record.msg))
+    return events
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +239,7 @@ def test_execute_invokes_correct_subprocess(
     finally:
         conn.close()
 
-    fake_run = _CapturingFakeRun(returncode=0)
+    fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
     monkeypatch.setattr(
         sys,
@@ -232,6 +266,7 @@ def test_execute_invokes_correct_subprocess(
         "--ticker",
         "GOOG",
         "--enable-llm",
+        "--force-refresh",
     )
     expected_desc = (
         sys.executable,
@@ -249,20 +284,20 @@ def test_execute_dedupes_shared_cli_for_one_ticker(
     executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Multiple dirty purposes for the same ticker that map to the SAME CLI
-    (e.g. bear_case + qa_topics both go through build_artifacts --enable-llm)
+    (e.g. qa_topics + saydo_filter both go through build_artifacts --enable-llm)
     should invoke that subprocess exactly once."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
     conn = _make_portfolio_db(db_path)
     try:
-        _insert_dirty(conn, ticker="NU", purpose="bear_case")
+        _insert_dirty(conn, ticker="NU", purpose="valuation_basis")
         _insert_dirty(conn, ticker="NU", purpose="qa_topics")
         _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
     finally:
         conn.close()
 
-    fake_run = _CapturingFakeRun(returncode=0)
+    fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
     monkeypatch.setattr(
         sys,
@@ -295,6 +330,224 @@ def test_execute_dedupes_shared_cli_for_one_ticker(
 # ---------------------------------------------------------------------------
 
 
+def test_bear_case_regenerator_bypasses_the_on_disk_cache(executor: Any) -> None:
+    """Dirty bear-case work must force the canonical builder past its file cache."""
+    argv = executor._PURPOSE_TO_REGENERATOR["bear_case"]
+    assert argv[-1] == "--force-refresh"
+
+
+def test_zero_exit_without_clearing_obligation_fails_closed(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A child process exit code is not proof that the dirty row was refreshed."""
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
+    finally:
+        conn.close()
+
+    fake_run = _CapturingFakeRun(returncode=0)
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    with caplog.at_level("WARNING", logger="refresh_dirty_artifacts"):
+        rc = executor.main()
+
+    assert rc == 1
+    receipt = capsys.readouterr().out
+    assert '"status": "partial_failure"' in receipt
+    assert '"failed": 1' in receipt
+    assert '"no_progress": 1' in receipt
+    events = _dict_log_events(caplog)
+    assert any(event.get("event") == "drain_no_progress" for event in events)
+
+
+@pytest.mark.parametrize("failure_mode", ["stderr", "exception"])
+def test_child_failure_text_is_redacted_before_structured_logging(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_mode: str,
+) -> None:
+    """API keys, bearer tokens, and signed URLs never survive child failures."""
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
+    finally:
+        conn.close()
+
+    secret_text = (
+        "https://example.test/report?apikey=plain-secret&X-Amz-Signature=signed-secret "
+        "Authorization: Bearer bearer-secret"
+    )
+    if failure_mode == "stderr":
+        runner: object = _CapturingFakeRun(returncode=1, stderr=secret_text)
+    else:
+
+        def _raise_spawn_error(argv: list[str], **kwargs: object) -> _FakeCompleted:
+            del argv, kwargs
+            raise OSError(secret_text)
+
+        runner = _raise_spawn_error
+    monkeypatch.setattr(executor.subprocess, "run", runner)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    with caplog.at_level("WARNING", logger="refresh_dirty_artifacts"):
+        rc = executor.main()
+
+    assert rc == 1
+    serialized_events = str(_dict_log_events(caplog))
+    assert "plain-secret" not in serialized_events
+    assert "signed-secret" not in serialized_events
+    assert "bearer-secret" not in serialized_events
+    assert "example.test" in serialized_events
+
+
+def test_cost_ledger_error_halts_before_child_and_is_redacted(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Spend cannot fail open when the ledger query is unavailable."""
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
+    finally:
+        conn.close()
+
+    secret_text = (
+        "https://ledger.test/query?api_key=ledger-secret&X-Amz-Signature=signed-secret "
+        "Bearer ledger-bearer"
+    )
+
+    def _raise_ledger_error(*args: object, **kwargs: object) -> sqlite3.Connection:
+        del args, kwargs
+        raise sqlite3.OperationalError(secret_text)
+
+    fake_run = _CapturingFakeRun(returncode=0)
+    monkeypatch.setattr(executor, "connect_sqlite", _raise_ledger_error)
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    with caplog.at_level("WARNING", logger="refresh_dirty_artifacts"):
+        rc = executor.main()
+
+    captured = capsys.readouterr().out
+    serialized = captured + str(_dict_log_events(caplog))
+    assert rc == 1
+    assert fake_run.calls == []
+    assert '"status": "blocked_cost_ledger"' in captured
+    assert "ledger-secret" not in serialized
+    assert "signed-secret" not in serialized
+    assert "ledger-bearer" not in serialized
+    assert "ledger.test" in serialized
+
+
+def test_deduped_job_requires_every_original_obligation_to_progress(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One shared child cannot hide a second purpose that remained dirty."""
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="NU", purpose="qa_topics")
+        _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
+        unresolved_id = int(
+            conn.execute("SELECT id FROM llm_artifacts WHERE purpose = 'saydo_filter'").fetchone()[
+                0
+            ]
+        )
+    finally:
+        conn.close()
+
+    def _clear_only_qa_topics() -> None:
+        update_conn = sqlite3.connect(str(db_path))
+        try:
+            update_conn.execute("UPDATE llm_artifacts SET dirty = 0 WHERE purpose = 'qa_topics'")
+            update_conn.commit()
+        finally:
+            update_conn.close()
+
+    fake_run = _CapturingFakeRun(returncode=0, on_run=_clear_only_qa_topics)
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    with caplog.at_level("WARNING", logger="refresh_dirty_artifacts"):
+        rc = executor.main()
+
+    assert rc == 1
+    assert len(fake_run.calls) == 1
+    events = _dict_log_events(caplog)
+    no_progress = [event for event in events if event.get("event") == "drain_no_progress"]
+    assert len(no_progress) == 1
+    assert no_progress[0]["unresolved_artifact_ids"] == [unresolved_id]
+
+
 def test_execute_halts_at_cost_cap(
     executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -315,8 +568,9 @@ def test_execute_halts_at_cost_cap(
 
     # Pretend the ledger already shows $10 of spend in this run window — well
     # over the $5 cap. The first cost check should fire, see 10 >= 5, halt.
-    def _always_over(db_path: Path, since: datetime) -> float:
-        return 10.0
+    def _always_over(db_path: Path, since: datetime) -> object:
+        del db_path, since
+        return executor._CostAvailable(10.0)
 
     monkeypatch.setattr(executor, "_accrued_cost_usd", _always_over)
 
@@ -357,7 +611,9 @@ def test_accrued_cost_usd_sums_ledger_rows_since_window(executor: Any, tmp_path:
     finally:
         conn.close()
 
-    assert executor._accrued_cost_usd(db_path, since=cutoff) == pytest.approx(2.00)
+    result = executor._accrued_cost_usd(db_path, since=cutoff)
+    assert isinstance(result, executor._CostAvailable)
+    assert result.cost_usd == pytest.approx(2.00)
 
 
 def test_cost_check_runs_before_each_job(
@@ -382,12 +638,13 @@ def test_cost_check_runs_before_each_job(
 
     cost_returns = iter([0.0, 6.0, 6.0])
 
-    def _next_cost(db_path: Path, since: datetime) -> float:
-        return next(cost_returns)
+    def _next_cost(db_path: Path, since: datetime) -> object:
+        del db_path, since
+        return executor._CostAvailable(next(cost_returns))
 
     monkeypatch.setattr(executor, "_accrued_cost_usd", _next_cost)
 
-    fake_run = _CapturingFakeRun(returncode=0)
+    fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
     monkeypatch.setattr(
         sys,
@@ -474,7 +731,7 @@ def test_unmapped_purpose_logs_warning_and_skips(
     finally:
         conn.close()
 
-    fake_run = _CapturingFakeRun(returncode=0)
+    fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
     monkeypatch.setattr(
         sys,
@@ -503,6 +760,7 @@ def test_unmapped_purpose_logs_warning_and_skips(
         "--ticker",
         "META",
         "--enable-llm",
+        "--force-refresh",
     ]
     no_regen_warnings = [
         r
@@ -582,7 +840,7 @@ def test_expired_artifact_drives_execute_path(
     finally:
         conn.close()
 
-    fake_run = _CapturingFakeRun(returncode=0)
+    fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
     monkeypatch.setattr(
         sys,
@@ -606,6 +864,44 @@ def test_expired_artifact_drives_execute_path(
 # ---------------------------------------------------------------------------
 # Subprocess failure does not abort the drain
 # ---------------------------------------------------------------------------
+
+
+def test_expiry_equal_to_progress_check_time_remains_unresolved(
+    executor: Any,
+    tmp_path: Path,
+) -> None:
+    """An expiry must be strictly later than the check time to prove refresh."""
+    db_path = tmp_path / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    queued_at = datetime(2026, 8, 11, 12, 0, tzinfo=UTC)
+    checked_at = queued_at + timedelta(minutes=1)
+    try:
+        _insert_dirty(
+            conn,
+            ticker="WIX",
+            purpose="bear_case",
+            dirty=0,
+            expires_at=(queued_at - timedelta(days=1)).isoformat(),
+        )
+        artifact_id = int(conn.execute("SELECT id FROM llm_artifacts").fetchone()[0])
+    finally:
+        conn.close()
+
+    artifacts = executor.drain_dirty(db_path=db_path, now=queued_at)
+    jobs = executor._build_pending_jobs(artifacts, queued_at=queued_at)
+    update_conn = sqlite3.connect(str(db_path))
+    try:
+        update_conn.execute(
+            "UPDATE llm_artifacts SET expires_at = ? WHERE id = ?",
+            (checked_at.isoformat(), artifact_id),
+        )
+        update_conn.commit()
+    finally:
+        update_conn.close()
+
+    progress = executor._check_job_progress(jobs[0], db_path=db_path, checked_at=checked_at)
+    assert progress.satisfied is False
+    assert progress.unresolved_artifact_ids == (artifact_id,)
 
 
 def test_subprocess_failure_continues_drain(

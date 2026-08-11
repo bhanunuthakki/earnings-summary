@@ -39,6 +39,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm_artifact_store import Artifact, drain_dirty  # noqa: E402
+from log_redact import redact  # noqa: E402
 from runtime.python_process import managed_python_argv  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -67,6 +68,7 @@ _PURPOSE_TO_REGENERATOR: dict[str, list[str]] = {
         "--ticker",
         "{ticker}",
         "--enable-llm",
+        "--force-refresh",
     ],
     "qa_topics": [
         "python",
@@ -153,12 +155,22 @@ _DAILY_SCAN_PURPOSES: frozenset[str] = frozenset(
 _SUBPROCESS_TIMEOUT_S = 300
 
 
+@dataclass(frozen=True, slots=True)
+class _ArtifactObligation:
+    """One exact dirty/expired row a regenerator must resolve."""
+
+    artifact_id: int
+    purpose: str
+    was_expired: bool
+
+
 @dataclass(slots=True)
 class _PendingJob:
-    """One subprocess invocation to be run during --execute mode."""
+    """One subprocess invocation and every queued row it is expected to resolve."""
 
     ticker: str
-    purpose: str
+    purposes: list[str]
+    obligations: list[_ArtifactObligation]
     argv: list[str]
 
 
@@ -179,65 +191,94 @@ def _aggregate_breakdown(
     return [(ticker, purpose, count) for (ticker, purpose), count in sorted(counts.items())]
 
 
-def _accrued_cost_usd(db_path: Path, since: datetime) -> float:
-    """Sum of llm_calls.cost_estimate_usd for rows since `since`.
+@dataclass(frozen=True, slots=True)
+class _CostAvailable:
+    cost_usd: float
 
-    Best-effort — returns 0.0 if the DB or table is missing. Matches the
-    column / window pattern in execution/show_llm_spend.py so the cap and
-    the dashboard always read the same number.
-    """
+
+@dataclass(frozen=True, slots=True)
+class _CostUnavailable:
+    error: str
+
+
+_CostQueryResult = _CostAvailable | _CostUnavailable
+
+
+def _accrued_cost_usd(db_path: Path, since: datetime) -> _CostQueryResult:
+    """Read spend since `since`; unavailability is explicit and never zero-valued."""
     if not db_path.exists():
-        return 0.0
+        return _CostUnavailable("portfolio database is missing")
     try:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             tables = {
-                r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                str(row[0])
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
             if "llm_calls" not in tables:
-                return 0.0
+                return _CostUnavailable("llm_calls cost ledger is missing")
             row = conn.execute(
                 "SELECT COALESCE(SUM(cost_estimate_usd), 0.0) FROM llm_calls WHERE called_at >= ?",
                 (since.isoformat(),),
             ).fetchone()
-            return float(row[0]) if row and row[0] is not None else 0.0
+            return _CostAvailable(float(row[0]) if row and row[0] is not None else 0.0)
         finally:
             conn.close()
-    except sqlite3.Error as exc:
-        log.warning({"event": "cost_query_failed", "error": str(exc)})
-        return 0.0
+    except (OSError, TypeError, ValueError, sqlite3.Error) as exc:
+        return _CostUnavailable(redact(f"{type(exc).__name__}: {exc}"))
 
 
 def _build_pending_jobs(
-    breakdown: list[tuple[str, str, int]],
+    artifacts: list[Artifact],
+    *,
+    queued_at: datetime,
 ) -> list[_PendingJob]:
-    """Dedupe (ticker, argv) pairs from the dirty breakdown.
-
-    One build_artifacts run regenerates multiple purposes for a ticker, so
-    we collapse duplicates to avoid invoking the same subprocess twice in
-    one drain. Unmapped purposes are logged + skipped here (the manifest
-    print already warned, but skip is the load-bearing behavior).
-    """
-    seen: set[tuple[str, tuple[str, ...]]] = set()
+    """Dedupe subprocesses while retaining every exact row they must refresh."""
     jobs: list[_PendingJob] = []
-    for ticker, purpose, _count in breakdown:
+    job_indexes: dict[tuple[str, tuple[str, ...]], int] = {}
+    classified_without_job: set[tuple[str, str]] = set()
+    for art in sorted(artifacts, key=lambda item: (item.ticker or "", item.purpose, item.id)):
+        ticker = art.ticker
         if not ticker:
             continue
+        purpose = art.purpose
         template = _PURPOSE_TO_REGENERATOR.get(purpose)
         if template is None:
+            classification_key = (ticker, purpose)
+            if classification_key in classified_without_job:
+                continue
+            classified_without_job.add(classification_key)
             if purpose in _DAILY_SCAN_PURPOSES:
-                # Expected: recomputed by the daily trigger scan / news fetch,
-                # not the drain. Informational, not a missing-config warning.
                 log.info({"event": "refreshed_by_daily_scan", "purpose": purpose, "ticker": ticker})
             else:
                 log.warning({"event": "no_regenerator", "purpose": purpose, "ticker": ticker})
             continue
         argv = [tok.replace("{ticker}", ticker) for tok in template]
         key = (ticker, tuple(argv))
-        if key in seen:
+        expires_at = art.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        obligation = _ArtifactObligation(
+            artifact_id=art.id,
+            purpose=purpose,
+            was_expired=expires_at is not None and expires_at < queued_at,
+        )
+        existing_index = job_indexes.get(key)
+        if existing_index is not None:
+            existing = jobs[existing_index]
+            if purpose not in existing.purposes:
+                existing.purposes.append(purpose)
+            existing.obligations.append(obligation)
             continue
-        seen.add(key)
-        jobs.append(_PendingJob(ticker=ticker, purpose=purpose, argv=argv))
+        job_indexes[key] = len(jobs)
+        jobs.append(
+            _PendingJob(
+                ticker=ticker,
+                purposes=[purpose],
+                obligations=[obligation],
+                argv=argv,
+            )
+        )
     return jobs
 
 
@@ -264,26 +305,108 @@ def _run_subprocess(job: _PendingJob, cwd: Path) -> dict[str, object]:
     except subprocess.TimeoutExpired:
         return {
             "ticker": job.ticker,
-            "purpose": job.purpose,
+            "purpose": job.purposes[0],
+            "purposes": job.purposes,
             "exit_code": -1,
             "error": f"timeout after {_SUBPROCESS_TIMEOUT_S}s",
         }
     except OSError as exc:
         return {
             "ticker": job.ticker,
-            "purpose": job.purpose,
+            "purpose": job.purposes[0],
+            "purposes": job.purposes,
             "exit_code": -1,
-            "error": f"spawn failed: {exc}",
+            "error": redact(f"spawn failed: {exc}"),
         }
     stderr_tail = ""
     if proc.returncode != 0 and proc.stderr:
-        stderr_tail = proc.stderr[-400:]
+        stderr_tail = redact(proc.stderr)[-400:]
     return {
         "ticker": job.ticker,
-        "purpose": job.purpose,
+        "purpose": job.purposes[0],
+        "purposes": job.purposes,
         "exit_code": proc.returncode,
         "stderr_tail": stderr_tail,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class _ProgressCheck:
+    """Result of verifying exact queued rows after a child exits zero."""
+
+    satisfied: bool
+    unresolved_artifact_ids: tuple[int, ...]
+    error: str | None = None
+
+
+def _check_job_progress(
+    job: _PendingJob,
+    *,
+    db_path: Path,
+    checked_at: datetime,
+) -> _ProgressCheck:
+    """Fail closed unless every exact queued row was cleared or superseded."""
+    obligation_by_id = {item.artifact_id: item for item in job.obligations}
+    if not obligation_by_id:
+        return _ProgressCheck(False, (), "job has no artifact obligations")
+    try:
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = [
+                row
+                for artifact_id in sorted(obligation_by_id)
+                if (
+                    row := conn.execute(
+                        """
+                        SELECT id, superseded_by_id, dirty, expires_at
+                        FROM llm_artifacts
+                        WHERE id = ?
+                        """,
+                        (artifact_id,),
+                    ).fetchone()
+                )
+                is not None
+            ]
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        return _ProgressCheck(
+            False,
+            tuple(sorted(obligation_by_id)),
+            redact(f"{type(exc).__name__}: {exc}"),
+        )
+
+    row_by_id = {int(row["id"]): row for row in rows}
+    unresolved: list[int] = []
+    for artifact_id, obligation in sorted(obligation_by_id.items()):
+        row = row_by_id.get(artifact_id)
+        if row is None:
+            unresolved.append(artifact_id)
+            continue
+        if row["superseded_by_id"] is not None:
+            continue
+        if bool(row["dirty"]):
+            unresolved.append(artifact_id)
+            continue
+        if not obligation.was_expired:
+            continue
+        raw_expires_at = row["expires_at"]
+        if raw_expires_at is None:
+            unresolved.append(artifact_id)
+            continue
+        try:
+            expires_at = datetime.fromisoformat(str(raw_expires_at))
+        except ValueError:
+            unresolved.append(artifact_id)
+            continue
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at <= checked_at:
+            unresolved.append(artifact_id)
+
+    unresolved_ids = tuple(unresolved)
+    return _ProgressCheck(not unresolved_ids, unresolved_ids)
 
 
 def _print_manifest(breakdown: list[tuple[str, str, int]], total: int) -> None:
@@ -314,6 +437,38 @@ def _print_manifest(breakdown: list[tuple[str, str, int]], total: int) -> None:
         print()
 
 
+def _halt_for_unavailable_cost_ledger(
+    unavailable: _CostUnavailable,
+    *,
+    ran: int,
+    failed: int,
+    no_progress: int,
+    deferred: int,
+    cap_usd: float,
+) -> int:
+    """Emit one redacted failure receipt when spend enforcement is unavailable."""
+    safe_error = redact(unavailable.error)
+    log.warning({"event": "drain_cost_ledger_unavailable", "error": safe_error})
+    print("halted: cost ledger unavailable; no further regenerators were started")
+    print(
+        "drain receipt: "
+        + json.dumps(
+            {
+                "status": "partial_failure_cost_ledger" if failed else "blocked_cost_ledger",
+                "run": ran,
+                "failed": failed,
+                "no_progress": no_progress,
+                "deferred": deferred,
+                "accrued_cost_usd": None,
+                "cap_usd": cap_usd,
+                "error": safe_error,
+            },
+            sort_keys=True,
+        )
+    )
+    return 1
+
+
 def _execute_jobs(
     jobs: list[_PendingJob],
     *,
@@ -322,19 +477,22 @@ def _execute_jobs(
     max_cost_usd: float,
     run_started_at: datetime,
 ) -> int:
-    """Drain `jobs` serially, halting if accrued cost crosses the cap.
-
-    Exit semantics:
-      * Cap hit: print "halted" line, return 0 (graceful — cron isn't
-        supposed to alarm on this).
-      * Job failures: logged, NOT raised. The drain continues so a single
-        broken regenerator doesn't poison the rest of the queue.
-      * All jobs complete: print summary, return 0.
-    """
+    """Drain jobs serially; queue progress and spend accounting both fail closed."""
     ran = 0
     failed = 0
+    no_progress = 0
     for idx, job in enumerate(jobs):
-        accrued = _accrued_cost_usd(db_path, since=run_started_at)
+        cost_result = _accrued_cost_usd(db_path, since=run_started_at)
+        if isinstance(cost_result, _CostUnavailable):
+            return _halt_for_unavailable_cost_ledger(
+                cost_result,
+                ran=ran,
+                failed=failed,
+                no_progress=no_progress,
+                deferred=len(jobs) - idx,
+                cap_usd=max_cost_usd,
+            )
+        accrued = cost_result.cost_usd
         if accrued >= max_cost_usd:
             remaining = len(jobs) - idx
             print(
@@ -352,9 +510,10 @@ def _execute_jobs(
                 "drain receipt: "
                 + json.dumps(
                     {
-                        "status": "deferred_cost_cap",
+                        "status": ("partial_failure_cost_cap" if failed else "deferred_cost_cap"),
                         "run": ran,
                         "failed": failed,
+                        "no_progress": no_progress,
                         "deferred": remaining,
                         "accrued_cost_usd": round(accrued, 4),
                         "cap_usd": max_cost_usd,
@@ -362,12 +521,13 @@ def _execute_jobs(
                     sort_keys=True,
                 )
             )
-            return 0
+            return 1 if failed else 0
         log.info(
             {
                 "event": "drain_invoke",
                 "ticker": job.ticker,
-                "purpose": job.purpose,
+                "purpose": job.purposes[0],
+                "purposes": job.purposes,
                 "argv": _managed_job_argv(job, repo_root),
                 "accrued_cost_usd": round(accrued, 4),
             }
@@ -378,10 +538,38 @@ def _execute_jobs(
             failed += 1
             log.warning({"event": "drain_subprocess_failed", **result})
         else:
-            log.info({"event": "drain_subprocess_ok", **result})
+            progress = _check_job_progress(
+                job,
+                db_path=db_path,
+                checked_at=datetime.now(UTC),
+            )
+            if not progress.satisfied:
+                failed += 1
+                no_progress += 1
+                log.warning(
+                    {
+                        "event": "drain_no_progress",
+                        **result,
+                        "obligation_ids": [item.artifact_id for item in job.obligations],
+                        "unresolved_artifact_ids": list(progress.unresolved_artifact_ids),
+                        "verification_error": progress.error,
+                    }
+                )
+            else:
+                log.info({"event": "drain_subprocess_ok", **result})
         ran += 1
 
-    final_cost = _accrued_cost_usd(db_path, since=run_started_at)
+    final_cost_result = _accrued_cost_usd(db_path, since=run_started_at)
+    if isinstance(final_cost_result, _CostUnavailable):
+        return _halt_for_unavailable_cost_ledger(
+            final_cost_result,
+            ran=ran,
+            failed=failed,
+            no_progress=no_progress,
+            deferred=0,
+            cap_usd=max_cost_usd,
+        )
+    final_cost = final_cost_result.cost_usd
     print(
         f"drain complete: {ran} job(s) run ({failed} failed); "
         f"accrued ${final_cost:.2f} (cap ${max_cost_usd:.2f})"
@@ -394,6 +582,7 @@ def _execute_jobs(
                 "status": status,
                 "run": ran,
                 "failed": failed,
+                "no_progress": no_progress,
                 "deferred": 0,
                 "accrued_cost_usd": round(final_cost, 4),
                 "cap_usd": max_cost_usd,
@@ -451,8 +640,9 @@ def main() -> int:
     )
 
     db_path = args.repo_root / "data" / "portfolio.db"
+    queue_checked_at = datetime.now(UTC)
 
-    artifacts = drain_dirty(limit=args.limit, db_path=db_path)
+    artifacts = drain_dirty(limit=args.limit, db_path=db_path, now=queue_checked_at)
     breakdown = _aggregate_breakdown(artifacts)
     total = sum(count for _t, _p, count in breakdown)
     if total == 0:
@@ -468,7 +658,7 @@ def main() -> int:
         print("# Re-run with --execute to fire the regenerators. Manifest-only run.")
         return 0
 
-    jobs = _build_pending_jobs(breakdown)
+    jobs = _build_pending_jobs(artifacts, queued_at=queue_checked_at)
     if not jobs:
         print("# No mappable jobs (every purpose was unmapped). Manifest-only effect.")
         return 0
