@@ -32,11 +32,17 @@ REACT_CONTROLS = PROJECT_ROOT / "design-system" / "src" / "styles" / "controls.c
 GEOMETRY_BASELINE = PROJECT_ROOT / "tests" / "design_geometry_baseline.json"
 WORK_OS_PROTOTYPE = PROJECT_ROOT / "mockups" / "harvey_sidebar_flow.html"
 WORK_OS_RENDERER = SRC / "pipeline" / "work_os_shell.py"
-REQUIRED_CHROME_SELECTORS: tuple[str, ...] = (
+REQUIRED_CONTROL_SELECTORS: tuple[str, ...] = (
     ".k-sidebar {",
     ".k-icon {",
     ".k-icon-btn {",
     ".k-nav-item {",
+    ".k-card {",
+    ".k-card-dense {",
+    ".k-card-stack {",
+    ".k-card-title {",
+    ".k-card-row-title {",
+    ".k-card-meta {",
 )
 DOCUMENT_MARKERS: tuple[str, ...] = ("<!doctype html>", "<!DOCTYPE html>")
 _RAW_HEX = re.compile(r"(?<![\w-])#[0-9a-fA-F]{3,8}\b")
@@ -109,7 +115,7 @@ def control_parity_failures() -> list[str]:
     canonical = controls_css("paper")
     react = REACT_CONTROLS.read_text(encoding="utf-8")
     failures: list[str] = []
-    for selector in REQUIRED_CHROME_SELECTORS:
+    for selector in REQUIRED_CONTROL_SELECTORS:
         canonical_body = _rule_body(canonical, selector)
         react_body = _rule_body(react, selector)
         if canonical_body is None:
@@ -154,6 +160,8 @@ def work_os_contract_failures(
     for required in (
         '"mockups" / "harvey_sidebar_flow.html"',
         "_prototype_html()",
+        'palette_css("dark")',
+        'controls_css("dark")',
         "font-size: var(--mobile-control-font-size) !important",
         "width: var(--sidebar-collapsed-width)",
         "min-width: var(--sidebar-collapsed-width)",
@@ -161,6 +169,22 @@ def work_os_contract_failures(
     ):
         if required not in renderer:
             failures.append(f"Work OS renderer missing production design contract {required!r}")
+    static_action_markers = (
+        'class="k-card k-card-dense k-card-interactive"',
+        'class="k-card-row-title"',
+        'class="k-card-meta"',
+    )
+    for marker in static_action_markers:
+        if marker not in mockup:
+            failures.append(f"Work OS static Action Queue missing {marker!r}")
+    hydrated_action_markers = (
+        'class="k-card k-card-dense k-card-interactive"',
+        'class="k-card-row-title"',
+        'class="k-card-meta"',
+    )
+    for marker in hydrated_action_markers:
+        if marker not in renderer:
+            failures.append(f"Work OS hydrated Action Queue missing {marker!r}")
     return failures
 
 

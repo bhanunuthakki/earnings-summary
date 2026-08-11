@@ -15,12 +15,8 @@ def test_control_parity_rejects_matching_selectors_with_different_rules(
     react = tmp_path / "controls.css"
     react.write_text(
         "\n".join(
-            (
-                ".k-sidebar { width: 1px; }",
-                ".k-icon { width: 1px; }",
-                ".k-icon-btn { width: 1px; }",
-                ".k-nav-item { width: 1px; }",
-            )
+            f"{selector} width: 1px; }}"
+            for selector in check_design_sync.REQUIRED_CONTROL_SELECTORS
         ),
         encoding="utf-8",
     )
@@ -30,6 +26,17 @@ def test_control_parity_rejects_matching_selectors_with_different_rules(
 
     assert failures
     assert all("declarations drifted" in failure for failure in failures)
+
+
+def test_control_parity_covers_card_geometry_and_type_roles() -> None:
+    assert {
+        ".k-card {",
+        ".k-card-dense {",
+        ".k-card-stack {",
+        ".k-card-title {",
+        ".k-card-row-title {",
+        ".k-card-meta {",
+    }.issubset(check_design_sync.REQUIRED_CONTROL_SELECTORS)
 
 
 def test_design_sync_gate_is_wired_into_hosted_ci() -> None:
@@ -70,3 +77,7 @@ def test_work_os_contract_checks_the_runtime_prototype_and_mobile_rail() -> None
     failures = check_design_sync.work_os_contract_failures(renderer_source=regressed)
     assert "Work OS renderer missing production design contract " in failures[-1]
     assert "mobile-control-font-size" in failures[-1]
+
+    regressed = renderer.replace("k-card-row-title", "stat-heading", 1)
+    failures = check_design_sync.work_os_contract_failures(renderer_source=regressed)
+    assert any("hydrated Action Queue" in failure for failure in failures)

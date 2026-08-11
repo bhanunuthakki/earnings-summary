@@ -151,6 +151,7 @@ def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
     html = render_work_os_shell()
 
     assert '<style id="work-os-controls-css">' in html
+    assert "--bg: #090a0c" in html
     assert ":root { color-scheme: dark;" in html
     assert 'input[type="search"]' in html
     assert "select, textarea" in html
@@ -158,6 +159,25 @@ def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
     assert "border: 1px solid var(--border)" in html
     assert "border-radius: var(--radius)" in html
     assert html.index('id="work-os-controls-css"') < html.index('id="work-os-copilot-css"')
+
+
+def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hydration() -> None:
+    html = render_work_os_shell()
+
+    # The three static placeholders and the hydrated template share the same
+    # compact card geometry instead of visibly jumping after the API response.
+    assert html.count('class="k-card k-card-dense k-card-interactive"') >= 4
+    assert 'class="k-card k-card-interactive" style="padding:' not in html
+    assert html.count('class="k-card-row-title"') >= 4
+    assert html.count('class="k-card-meta"') >= 4
+
+    # Ordinary research headings use explicit title roles; metric cards retain
+    # their separate stat label/number semantics.
+    assert '<h2 class="k-card-title" id="workOsBriefReaderTitle">' in html
+    assert '<h2 class="k-card-title">Brief Library</h2>' in html
+    assert '<h3 class="k-card-title">' in html
+    assert 'class="k-card k-card-stack"><div class="stat-heading">Owner posture</div>' in html
+    assert 'class="stat-number" id="deskOwnerState"' in html
 
 
 def test_legacy_search_ask_drawer_and_non_durable_runtime_are_removed() -> None:

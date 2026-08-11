@@ -39,6 +39,10 @@ Composition contract — ``controls_css(default)`` rides immediately after
   (``.k-chip`` is the *outline* tag/filter chip; ``.k-pill`` is the *filled*
   status pill — a neutral pill is just ``.k-pill`` with no tone modifier, so the
   old ``.p-pill`` was folded in.)
+* ``.k-card`` (+ ``-dense`` / ``-stack``) and ``.k-card-title`` /
+  ``.k-card-row-title`` / ``.k-card-meta`` — the one responsive card geometry
+  and ordinary content hierarchy. Metric cards keep the separate ``stat-*``
+  roles; cards never set a fixed height.
 * ``.k-well`` (+ ``-ok/-warn/-bad/-accent``) — the soft-filled BLOCK sibling of
   ``.k-pill`` for KPI cards / callouts / tone rows: same ``color-mix`` family,
   box radius.
@@ -672,6 +676,18 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
   border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0;
   white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
 
+/* ---- card surface + compact content roles: one geometry, no fixed height ---- */
+.k-card {
+  min-width: 0; padding: var(--sp-3); overflow: hidden; user-select: text;
+  background: var(--surface); border: var(--bw-thin) solid var(--border);
+  border-radius: var(--radius-card); box-shadow: var(--shadow-card);
+}
+.k-card-dense { padding: var(--sp-2) var(--sp-3); }
+.k-card-stack { display: flex; flex-direction: column; gap: var(--sp-3); }
+.k-card-dense.k-card-stack { gap: var(--sp-2); }
+.k-card-title { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
+.k-card-row-title { margin: 0; font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
+.k-card-meta { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
 /* ---- Work OS Card Animations & Zero-Layout-Pop Dismissal ---- */
 .k-card-interactive {
   transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms ease;
