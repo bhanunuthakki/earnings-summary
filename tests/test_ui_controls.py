@@ -603,6 +603,7 @@ REGISTERED: frozenset[str] = frozenset(
         "report/renderers/workspace_sections/chrome.py",
         "report/renderers/workspace_sections/company.py",
         "report/renderers/workspace_sections/thesis_risk.py",
+        "report/renderers/workspace_reader_assets.py",
         "report/renderers/workspace_styles.py",
         "ui/cite_marks.py",
         "ui/controls.py",

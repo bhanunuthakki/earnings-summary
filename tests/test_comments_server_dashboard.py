@@ -132,8 +132,8 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # a background job; +1 peek_weekly_packet (GET /api/peek/weekly-packet, the Sunday-
     # packet band's read-only doorway). +1 post-earnings readout generation action.
     # +2 governed Copilot proposal routes; -3 retired compatibility routes
-    # (/api/ask, /api/cockpit, /api/cron-health).
-    assert len(rules) == 156
+    # (/api/ask, /api/cockpit, /api/cron-health). +1 lazy shared-reader stylesheet.
+    assert len(rules) == 157
     assert {
         endpoint: rules[endpoint]
         for endpoint in (
@@ -160,6 +160,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
             "latest_report_for_ticker",
             "brief_library_api",
             "brief_body_api",
+            "report_reader_css",
             "company_desk_api",
             "latest_dcf_for_ticker",
             "tickers_api",
@@ -202,6 +203,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
         "latest_report_for_ticker": "/reports/<ticker>",
         "brief_library_api": "/api/work-os/briefs",
         "brief_body_api": "/api/work-os/briefs/<artifact_id>/body",
+        "report_reader_css": "/api/work-os/report-reader.css",
         "company_desk_api": "/api/work-os/companies/<ticker>/desk",
         "latest_dcf_for_ticker": "/dcf/<ticker>",
         "tickers_api": "/api/tickers",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Literal
 
@@ -38,6 +39,19 @@ class BriefLibraryResponse(BaseModel):
     inventory_revision: str
     items: tuple[BriefLibraryItem, ...]
     next_cursor: str | None
+
+
+class ReportReaderPayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["report_reader_payload.v1"] = "report_reader_payload.v1"
+    artifact_id: str
+    ticker: str
+    title: str
+    body_html: str
+    body_sha256: str
+    section_ids: tuple[str, ...]
+    style_url: Literal["/api/work-os/report-reader.css"] = "/api/work-os/report-reader.css"
 
 
 def _status(repo_root: Path, artifact: ReportArtifactRef) -> BriefStatus:
@@ -113,10 +127,37 @@ def resolve_report_artifact(repo_root: Path, artifact_id: str) -> ReportArtifact
     )
 
 
+def load_report_reader_payload(repo_root: Path, artifact_id: str) -> ReportReaderPayload:
+    """Load one checksum-verified inert body; never parse a standalone at request time."""
+
+    artifact = resolve_report_artifact(repo_root, artifact_id)
+    if artifact is None:
+        raise LookupError(artifact_id)
+    if artifact.reader_mode != "shared_body" or artifact.body_path is None:
+        raise ValueError("legacy_standalone")
+    body_path = repo_root / artifact.body_path
+    if not body_path.is_file():
+        raise FileNotFoundError(body_path)
+    body_html = body_path.read_text(encoding="utf-8")
+    body_sha256 = hashlib.sha256(body_html.encode("utf-8")).hexdigest()
+    if artifact.body_sha256 is None or body_sha256 != artifact.body_sha256:
+        raise ValueError("body_checksum_mismatch")
+    return ReportReaderPayload(
+        artifact_id=artifact.artifact_id,
+        ticker=artifact.ticker,
+        title=artifact.title,
+        body_html=body_html,
+        body_sha256=body_sha256,
+        section_ids=artifact.section_ids,
+    )
+
+
 __all__ = [
     "BriefLibraryItem",
     "BriefLibraryResponse",
     "BriefStatus",
+    "ReportReaderPayload",
     "build_brief_library",
+    "load_report_reader_payload",
     "resolve_report_artifact",
 ]

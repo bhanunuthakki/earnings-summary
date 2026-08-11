@@ -103,10 +103,27 @@ def test_report_body_route_serves_complete_persisted_fragment(
     response = work_os_client.get(f"/api/work-os/briefs/{body.artifact_id}/body")
 
     assert response.status_code == 200
-    assert response.mimetype == "text/html"
-    assert response.get_data(as_text=True) == f"<html>{body.body_html}</html>"
+    assert response.mimetype == "application/json"
+    payload = response.get_json()
+    assert payload["schema_version"] == "report_reader_payload.v1"
+    assert payload["artifact_id"] == body.artifact_id
+    assert payload["ticker"] == "NU"
+    assert "NU complete brief" in payload["body_html"]
+    assert payload["style_url"] == "/api/work-os/report-reader.css"
     assert response.headers["X-Report-Artifact-ID"] == body.artifact_id
-    assert response.headers["X-Report-Body-SHA256"] == body.body_sha256
+    assert response.headers["X-Report-Body-SHA256"] == payload["body_sha256"]
+
+
+def test_report_reader_css_is_lazy_current_shell_owned_asset(
+    work_os_client: FlaskClient,
+) -> None:
+    response = work_os_client.get("/api/work-os/report-reader.css")
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/css"
+    css = response.get_data(as_text=True)
+    assert "Keep the lede in the document flow" in css
+    assert ".reader-group-title" in css
 
 
 def test_legacy_brief_returns_structured_standalone_fallback(

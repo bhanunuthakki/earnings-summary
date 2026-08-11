@@ -16,7 +16,11 @@ from typing import Protocol
 
 from flask import Flask, Response, abort, redirect, request, send_file
 
-from pipeline.work_os_briefs import build_brief_library, resolve_report_artifact
+from pipeline.work_os_briefs import (
+    build_brief_library,
+    load_report_reader_payload,
+    resolve_report_artifact,
+)
 from pipeline.work_os_company import build_company_desk
 
 
@@ -448,8 +452,9 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
                 },
                 409,
             )
-        body_path = repo_root / artifact.body_path
-        if not body_path.is_file():
+        try:
+            payload = load_report_reader_payload(repo_root, artifact_id)
+        except FileNotFoundError:
             return (
                 {
                     "schema_version": "report_body_unavailable.v1",
@@ -459,15 +464,29 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
                 },
                 409,
             )
-        standalone_path = repo_root / artifact.standalone_path
-        if not standalone_path.is_file():
-            abort(404)
-        response = send_file(standalone_path)
+        except ValueError as exc:
+            return (
+                {
+                    "schema_version": "report_body_unavailable.v1",
+                    "artifact_id": artifact.artifact_id,
+                    "status": str(exc),
+                    "standalone_url": standalone_url,
+                },
+                409,
+            )
+        response = Response(payload.model_dump_json(), mimetype="application/json")
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Report-Artifact-ID"] = artifact.artifact_id
-        if artifact.body_sha256 is not None:
-            response.headers["X-Report-Body-SHA256"] = artifact.body_sha256
-        response.set_etag(artifact.workspace_sha256, weak=False)
+        response.headers["X-Report-Body-SHA256"] = payload.body_sha256
+        response.set_etag(payload.body_sha256, weak=False)
+        return response
+
+    @app.route("/api/work-os/report-reader.css", methods=["GET"])
+    def report_reader_css():
+        from report.renderers.workspace_reader_assets import READER_CSS
+
+        response = Response(READER_CSS, mimetype="text/css")
+        response.headers["Cache-Control"] = "private, max-age=3600"
         return response
 
     @app.route("/dcf/<ticker>", methods=["GET"])
