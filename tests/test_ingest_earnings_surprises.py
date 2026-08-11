@@ -13,8 +13,11 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -51,7 +54,33 @@ def _seed_schema(db_path: Path) -> sqlite3.Connection:
             source_name TEXT NOT NULL,
             source_url TEXT,
             fetched_at TEXT NOT NULL,
-            ingested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ingested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            source_observation_id TEXT
+        );
+        CREATE TABLE earnings_surprise_observations (
+            observation_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            ticker TEXT NOT NULL,
+            release_date TEXT NOT NULL,
+            eps_estimate NUMERIC, eps_actual NUMERIC,
+            revenue_estimate NUMERIC, revenue_actual NUMERIC,
+            eps_surprise_pct NUMERIC, revenue_surprise_pct NUMERIC,
+            num_analysts_eps INTEGER, num_analysts_revenue INTEGER,
+            source_name TEXT NOT NULL, source_url TEXT,
+            fetched_at TEXT NOT NULL, cache_path TEXT NOT NULL,
+            record_ordinal INTEGER NOT NULL,
+            raw_payload_json TEXT NOT NULL, raw_payload_sha256 TEXT NOT NULL,
+            canonical_payload_json TEXT NOT NULL,
+            canonical_payload_sha256 TEXT NOT NULL, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE earnings_surprise_quarantine (
+            quarantine_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            ticker_hint TEXT, cache_path TEXT NOT NULL,
+            record_ordinal INTEGER NOT NULL,
+            raw_payload_json TEXT NOT NULL, raw_payload_sha256 TEXT NOT NULL,
+            reason_code TEXT NOT NULL, reason_details_json TEXT NOT NULL,
+            reason_details_sha256 TEXT NOT NULL, recorded_at TEXT NOT NULL
         );
         CREATE UNIQUE INDEX ux_earnings_surprises_ticker_release
             ON earnings_surprises(ticker, release_date);
@@ -135,7 +164,7 @@ def test_parse_record_normalizes_ticker_uppercase() -> None:
         }
     )
     assert parsed is not None
-    assert parsed["ticker"] == "WIX"
+    assert parsed.ticker == "WIX"
 
 
 def test_parse_record_keeps_string_decimals() -> None:
@@ -144,8 +173,8 @@ def test_parse_record_keeps_string_decimals() -> None:
     mod = _load_module()
     parsed = mod._parse_record(_record(eps_actual="2.28"))
     assert parsed is not None
-    assert parsed["eps_actual"] == "2.28"
-    assert isinstance(parsed["eps_actual"], str)
+    assert str(parsed.eps_actual) == "2.28"
+    assert isinstance(parsed.eps_actual, Decimal)
 
 
 def test_parse_record_treats_non_string_decimal_as_none() -> None:
@@ -153,24 +182,22 @@ def test_parse_record_treats_non_string_decimal_as_none() -> None:
     The source layer always emits strings, so non-strings indicate schema drift."""
     mod = _load_module()
     parsed = mod._parse_record(_record(eps_actual=2.28))  # type: ignore[arg-type]
-    assert parsed is not None
-    assert parsed["eps_actual"] is None
+    assert parsed is None
 
 
 def test_parse_record_analyst_counts_typed() -> None:
     mod = _load_module()
     parsed = mod._parse_record(_record(num_analysts_eps=12, num_analysts_revenue=8))
     assert parsed is not None
-    assert parsed["num_analysts_eps"] == 12
-    assert parsed["num_analysts_revenue"] == 8
+    assert parsed.num_analysts_eps == 12
+    assert parsed.num_analysts_revenue == 8
 
 
 def test_parse_record_rejects_bool_for_analyst_count() -> None:
     """bool is an int subclass; must not slip into an integer column."""
     mod = _load_module()
     parsed = mod._parse_record(_record(num_analysts_eps=True))  # type: ignore[arg-type]
-    assert parsed is not None
-    assert parsed["num_analysts_eps"] is None
+    assert parsed is None
 
 
 # --- _candidate_caches discovery --------------------------------------------
@@ -395,7 +422,7 @@ def test_ingest_ignores_fetched_at_drift(tmp_path: Path) -> None:
     assert result.updated == 0
     # The new fetched_at IS written to the row (we just don't count it as a change)
     row = conn.execute("SELECT fetched_at FROM earnings_surprises").fetchone()
-    assert row["fetched_at"] == "2026-05-14T12:00:00"
+    assert row["fetched_at"] == "2026-05-14T12:00:00Z"
 
 
 def test_ingest_unique_index_enforces_release_date(tmp_path: Path) -> None:
@@ -422,3 +449,113 @@ def test_ingest_unique_index_enforces_release_date(tmp_path: Path) -> None:
     # The first was insert, second was update (within the same ingest pass)
     assert result.inserted == 1
     assert result.updated == 1
+    assert result.observations_inserted == 2
+
+
+def test_ingest_appends_observation_and_exact_rerun_is_idempotent(tmp_path: Path) -> None:
+    mod = _load_module()
+    conn = _seed_schema(tmp_path / "db.sqlite")
+    cache = _write_cache(tmp_path / "surprise", "WIX", [_record()])
+    first = mod.ingest_one_ticker(conn, cache, dry_run=False)
+    second = mod.ingest_one_ticker(conn, cache, dry_run=False)
+    conn.commit()
+    assert first.observations_inserted == 1
+    assert second.observation_duplicates == 1
+    assert conn.execute("SELECT COUNT(*) FROM earnings_surprise_observations").fetchone()[0] == 1
+    projection = conn.execute("SELECT source_observation_id FROM earnings_surprises").fetchone()[0]
+    observation = conn.execute(
+        "SELECT observation_id FROM earnings_surprise_observations"
+    ).fetchone()[0]
+    assert projection == observation
+
+
+def test_missing_fetched_at_is_quarantined_not_synthesized(tmp_path: Path) -> None:
+    mod = _load_module()
+    conn = _seed_schema(tmp_path / "db.sqlite")
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [_record(fetched_at=None)],  # type: ignore[arg-type]
+    )
+    result = mod.ingest_one_ticker(conn, cache, dry_run=False)
+    conn.commit()
+    assert result.skipped_malformed == 1
+    assert conn.execute("SELECT COUNT(*) FROM earnings_surprises").fetchone()[0] == 0
+    reason = conn.execute("SELECT reason_code FROM earnings_surprise_quarantine").fetchone()[0]
+    assert reason == "schema_validation_failed"
+
+
+def test_malformed_records_are_quarantined_idempotently(tmp_path: Path) -> None:
+    mod = _load_module()
+    conn = _seed_schema(tmp_path / "db.sqlite")
+    cache = _write_cache(tmp_path / "surprise", "WIX", [{"ticker": "WIX"}])
+    mod.ingest_one_ticker(conn, cache, dry_run=False)
+    mod.ingest_one_ticker(conn, cache, dry_run=False)
+    conn.commit()
+    row = conn.execute(
+        "SELECT reason_code, record_ordinal FROM earnings_surprise_quarantine"
+    ).fetchone()
+    assert tuple(row) == ("schema_validation_failed", 0)
+    assert conn.execute("SELECT COUNT(*) FROM earnings_surprise_quarantine").fetchone()[0] == 1
+
+
+def test_older_observation_does_not_replace_newer_projection(tmp_path: Path) -> None:
+    mod = _load_module()
+    conn = _seed_schema(tmp_path / "db.sqlite")
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [_record(eps_actual="2.50", fetched_at="2026-05-14T12:00:00+00:00")],
+    )
+    mod.ingest_one_ticker(conn, cache, dry_run=False)
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [_record(eps_actual="1.00", fetched_at="2026-05-13T12:00:00+00:00")],
+    )
+    result = mod.ingest_one_ticker(conn, cache, dry_run=False)
+    conn.commit()
+    assert result.unchanged == 1
+    assert str(conn.execute("SELECT eps_actual FROM earnings_surprises").fetchone()[0]) == "2.5"
+    assert conn.execute("SELECT COUNT(*) FROM earnings_surprise_observations").fetchone()[0] == 2
+
+
+def test_malformed_cache_file_gets_quarantine_disposition(tmp_path: Path) -> None:
+    mod = _load_module()
+    conn = _seed_schema(tmp_path / "db.sqlite")
+    cache = tmp_path / "BAD_surprises.json"
+    cache.write_text("{not json", encoding="utf-8")
+    mod.ingest_one_ticker(conn, cache, dry_run=False)
+    conn.commit()
+
+
+def test_main_exits_nonzero_when_any_record_is_quarantined(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mod = _load_module()
+    surprise_dir = tmp_path / "data" / "surprise"
+    _write_cache(surprise_dir, "WIX", [{"ticker": "WIX"}])
+    db_path = tmp_path / "portfolio.db"
+    connection = _seed_schema(db_path)
+
+    def retarget(_root: Path) -> Path:
+        return surprise_dir
+
+    monkeypatch.setattr(mod, "_retarget_paths", retarget)
+    monkeypatch.setattr(mod.db, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ingest_earnings_surprises.py", "--repo-root", str(tmp_path)],
+    )
+
+    assert mod.main() == 2
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["terminal_status"] == "partial_failure"
+    assert receipt["totals"]["quarantined"] == 1
+    with sqlite3.connect(db_path) as verify:
+        assert (
+            verify.execute("SELECT COUNT(*) FROM earnings_surprise_quarantine").fetchone()[0] == 1
+        )

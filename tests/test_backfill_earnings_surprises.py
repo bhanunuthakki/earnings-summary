@@ -281,3 +281,33 @@ def test_backfill_one_attribution_across_sources(tmp_path: Path) -> None:
     )
     assert result.hits_written == 3
     assert result.sources_per_hit == {"fmp_calendar": 2, "yfinance": 1}
+
+
+def test_main_exits_nonzero_on_partial_backfill_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mod = _load_module()
+
+    def resolve(_ticker: str | None) -> list[str]:
+        return ["WIX", "NU"]
+
+    def no_sources(**_kwargs: object) -> list[SurpriseSource]:
+        return []
+
+    monkeypatch.setattr(mod, "_resolve_tickers", resolve)
+    monkeypatch.setattr(mod, "default_sources", no_sources)
+
+    def result_for(ticker: str, *_args: object) -> object:
+        return mod.TickerBackfillResult(
+            ticker=ticker,
+            error="RuntimeError: source unavailable" if ticker == "WIX" else None,
+        )
+
+    monkeypatch.setattr(mod, "_backfill_one", result_for)
+    monkeypatch.setattr(sys, "argv", ["backfill_earnings_surprises.py"])
+
+    assert mod.main() == 2
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["terminal_status"] == "partial_failure"
+    assert receipt["totals"]["errors"] == 1

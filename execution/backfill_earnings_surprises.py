@@ -215,6 +215,7 @@ def main() -> int:
         "tickers_scanned": len(tickers),
         "lookback_quarters": args.lookback_quarters,
         "dry_run": args.dry_run,
+        "terminal_status": "partial_failure" if any(r.error for r in results) else "completed",
         "per_ticker": [asdict(r) for r in results],
         "totals": {
             "hits_written": sum(r.hits_written for r in results),
@@ -222,7 +223,7 @@ def main() -> int:
         },
     }
     print(json.dumps(summary, indent=2))
-    return 0
+    return 2 if any(r.error for r in results) else 0
 
 
 if __name__ == "__main__":
