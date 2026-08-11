@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -61,7 +61,9 @@ def _seed_calendar(db_path: Path) -> None:
                 ticker=ticker,
                 release_date=release_date,
                 source_name="test",
-                fetched_at=f"{TODAY.isoformat()}T00:00:00+00:00",
+                fetched_at=datetime(
+                    TODAY.year, TODAY.month, TODAY.day, tzinfo=UTC
+                ),
             )
             observation_id, _ = append_observation(
                 conn,
