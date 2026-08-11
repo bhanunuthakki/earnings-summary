@@ -187,12 +187,28 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 
 def _repo_relative(repo_root: Path, path: Path) -> str:
-    root = repo_root.resolve()
-    resolved = path.resolve()
+    """Return a stable logical path while admitting the governed output junction."""
+
+    lexical_root = Path(os.path.abspath(repo_root))
+    lexical_path = Path(os.path.abspath(path))
     try:
-        return resolved.relative_to(root).as_posix()
+        relative = lexical_path.relative_to(lexical_root)
     except ValueError as exc:
         raise ValueError("report artifacts must remain inside the repository") from exc
+
+    resolved_path = path.resolve()
+    resolved_root = repo_root.resolve()
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError as root_exc:
+        if not relative.parts or relative.parts[0] != "output":
+            raise ValueError("report artifacts must remain inside the repository") from root_exc
+        resolved_output = (lexical_root / "output").resolve()
+        try:
+            resolved_path.relative_to(resolved_output)
+        except ValueError as exc:
+            raise ValueError("report artifacts must remain inside the repository") from exc
+    return relative.as_posix()
 
 
 def _read_index(repo_root: Path) -> ReportArtifactIndex:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -169,3 +170,38 @@ def test_same_content_rerun_does_not_mutate_existing_artifact(tmp_path: Path) ->
     assert (tmp_path / repeated.standalone_path).read_text(encoding="utf-8") == (
         "<html>first wrapper</html>"
     )
+
+
+def test_persist_report_artifact_supports_governed_output_junction(tmp_path: Path) -> None:
+    repo_root = tmp_path / "runtime"
+    output_target = tmp_path / "canonical-output"
+    repo_root.mkdir()
+    output_target.mkdir()
+    output_link = repo_root / "output"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(output_link), str(output_target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        import pytest
+
+        pytest.skip("Windows junction creation is unavailable")
+
+    workspace = output_link / "research" / "NU" / "2026-08-10_workspace.html"
+    workspace.parent.mkdir(parents=True)
+    workspace.write_text("<html>standalone</html>", encoding="utf-8")
+
+    ref = persist_report_artifact(
+        repo_root=repo_root,
+        body=_body(),
+        standalone_path=workspace,
+        generated_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+        coverage_role="portfolio",
+        title="NU Full Research Brief",
+    )
+
+    assert ref.standalone_path.startswith("output/research/NU/artifacts/")
+    assert (repo_root / ref.standalone_path).is_file()
+    assert load_report_artifact_index(repo_root).items == (ref,)
