@@ -23,8 +23,36 @@ _TOKEN_REFERENCE_ATTRS = (
     "headers",
     "list",
 )
-_URL_ATTRS = ("href", "src", "action", "formaction", "poster", "xlink:href")
+_FETCH_ATTRS = (
+    "action",
+    "background",
+    "cite",
+    "data",
+    "formaction",
+    "href",
+    "manifest",
+    "ping",
+    "poster",
+    "src",
+    "srcset",
+    "xlink:href",
+)
 _SAFE_ID = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+class ReaderContentMetrics(BaseModel):
+    """Stable proof that governed content survived sanitization."""
+
+    model_config = ConfigDict(frozen=True)
+
+    normalized_text_sha256: str
+    heading_count: int
+    table_count: int
+    table_cell_count: int
+    link_count: int
+    source_link_count: int
+    image_count: int
+    image_alt_sha256: str
 
 
 class LegacyReaderBody(BaseModel):
@@ -39,6 +67,8 @@ class LegacyReaderBody(BaseModel):
     text_sha256: str
     section_ids: tuple[str, ...]
     id_map: dict[str, str]
+    source_metrics: ReaderContentMetrics
+    preserved_metrics: ReaderContentMetrics
     heading_count: int
     table_count: int
     link_count: int
@@ -57,11 +87,14 @@ class ReaderExtractionReceipt(BaseModel):
     artifact_id: str
     source_path: str
     source_sha256: str
+    legacy_manifest_path: str
     body_path: str
     body_sha256: str
     text_sha256: str
     section_ids: tuple[str, ...]
     id_map: dict[str, str]
+    source_metrics: ReaderContentMetrics
+    preserved_metrics: ReaderContentMetrics
     heading_count: int
     table_count: int
     link_count: int
@@ -89,17 +122,29 @@ def _is_executable_attr(name: str) -> bool:
     )
 
 
-def _url_is_safe(name: str, value: str) -> bool:
+def _anchor_href_is_safe(value: str) -> bool:
     candidate = value.strip()
     if not candidate:
         return True
     if candidate.startswith("#") or (candidate.startswith("/") and not candidate.startswith("//")):
         return True
     parsed = urlsplit(candidate)
-    scheme = parsed.scheme.lower()
-    if name in ("src", "poster"):
-        return scheme == "data" and candidate.lower().startswith("data:image/")
-    return scheme in ("http", "https", "mailto")
+    return parsed.scheme.lower() in ("http", "https", "mailto")
+
+
+def _image_src_is_safe(value: str) -> bool:
+    candidate = value.strip()
+    lowered = candidate.lower()
+    if lowered.startswith(
+        (
+            "data:image/png;",
+            "data:image/jpeg;",
+            "data:image/gif;",
+            "data:image/webp;",
+        )
+    ):
+        return True
+    return candidate.startswith("/source/") and not candidate.startswith("//")
 
 
 def _classes(tag: Tag) -> list[str]:
@@ -109,6 +154,41 @@ def _classes(tag: Tag) -> list[str]:
     if isinstance(raw, str):
         return raw.split()
     return [str(value) for value in raw]
+
+
+def _content_metrics(root: Tag) -> ReaderContentMetrics:
+    normalized_text = _normalized_text(root)
+    image_alt_text = "\n".join(str(image.get("alt", "")) for image in root.find_all("img"))
+    return ReaderContentMetrics(
+        normalized_text_sha256=hashlib.sha256(normalized_text.encode("utf-8")).hexdigest(),
+        heading_count=len(root.find_all(re.compile(r"^h[1-6]$"))),
+        table_count=len(root.find_all("table")),
+        table_cell_count=len(root.find_all(("th", "td"))),
+        link_count=len(root.find_all("a")),
+        source_link_count=len(
+            [
+                link
+                for link in root.find_all("a", href=True)
+                if str(link.get("href", "")).startswith("/source/")
+            ]
+        ),
+        image_count=len(root.find_all("img")),
+        image_alt_sha256=hashlib.sha256(image_alt_text.encode("utf-8")).hexdigest(),
+    )
+
+
+def _accepted_source_metrics(root: Tag) -> ReaderContentMetrics:
+    parsed = BeautifulSoup(str(root), "html.parser")
+    accepted = parsed.select_one(".l1-root")
+    if accepted is None:
+        accepted = parsed.select_one('[data-report-body="v1"]')
+    if accepted is None:
+        raise ValueError("accepted reader body disappeared during source normalization")
+    for tag in list(accepted.find_all(_DISALLOWED_TAGS)):
+        tag.decompose()
+    for form in list(accepted.find_all("form")):
+        form.unwrap()
+    return _content_metrics(accepted)
 
 
 def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyReaderBody:
@@ -125,6 +205,7 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
     if len(roots) != 1:
         raise ValueError("workspace must contain exactly one .l1-root or data-report-body=v1 root")
     root = roots[0]
+    source_metrics = _accepted_source_metrics(root)
     warnings: Counter[str] = Counter()
 
     for tag in list(root.find_all(_DISALLOWED_TAGS)):
@@ -139,21 +220,33 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
     for tag in all_tags:
         for raw_name in list(tag.attrs):
             name = str(raw_name)
-            if _is_executable_attr(name):
+            if name.lower() == "style":
+                warnings["inline_style_removed"] += 1
+                del tag.attrs[raw_name]
+            elif _is_executable_attr(name):
                 warnings["executable_attribute_removed"] += 1
                 del tag.attrs[raw_name]
-        for name in _URL_ATTRS:
+        for name in _FETCH_ATTRS:
             value = tag.get(name)
             if value is None:
                 continue
             rendered = (
                 " ".join(str(part) for part in value) if isinstance(value, list) else str(value)
             )
-            if not _url_is_safe(name, rendered):
-                warnings[f"unsafe_{name}_removed"] += 1
+            keep = False
+            if tag.name == "a" and name == "href":
+                keep = _anchor_href_is_safe(rendered)
+            elif tag.name == "img" and name == "src":
+                keep = _image_src_is_safe(rendered)
+            if not keep:
+                warnings[f"fetch_{name}_removed"] += 1
                 del tag.attrs[name]
         if tag.name == "a" and str(tag.get("target", "")).lower() == "_blank":
             tag["rel"] = "noopener noreferrer"
+
+    preserved_metrics = _content_metrics(root)
+    if preserved_metrics != source_metrics:
+        raise ValueError("governed content metrics changed during sanitization")
 
     for group in root.select(".tab-group-pane[data-tab-group]"):
         label = str(group.get("data-tab-group", "Research")).replace("_", " ").strip()
@@ -223,6 +316,16 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
         reparsed_root = reparsed.select_one('[data-report-body="v1"]')
     if reparsed_root is None or _normalized_text(reparsed_root) != normalized_text:
         raise ValueError("legacy workspace text changed during serialization")
+    preserved_reparsed = BeautifulSoup(str(reparsed_root), "html.parser")
+    preserved_root = preserved_reparsed.select_one(".l1-root")
+    if preserved_root is None:
+        preserved_root = preserved_reparsed.select_one('[data-report-body="v1"]')
+    if preserved_root is None:
+        raise ValueError("reader body disappeared during fidelity verification")
+    for heading in list(preserved_root.select(".reader-group-title")):
+        heading.decompose()
+    if _content_metrics(preserved_root) != source_metrics:
+        raise ValueError("governed content metrics changed during serialization")
     body_sha256 = hashlib.sha256(body_html.encode("utf-8")).hexdigest()
     text_sha256 = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
     warning_labels = tuple(
@@ -234,6 +337,8 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
         text_sha256=text_sha256,
         section_ids=section_ids,
         id_map=id_map,
+        source_metrics=source_metrics,
+        preserved_metrics=preserved_metrics,
         heading_count=len(root.find_all(re.compile(r"^h[1-6]$"))),
         table_count=len(root.find_all("table")),
         link_count=len(root.find_all("a")),
@@ -251,6 +356,7 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
 __all__ = [
     "PARSER_VERSION",
     "LegacyReaderBody",
+    "ReaderContentMetrics",
     "ReaderExtractionReceipt",
     "extract_legacy_reader_body",
 ]

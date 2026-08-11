@@ -12,6 +12,7 @@ from report.artifacts import (
     load_report_artifact_index,
     migrate_legacy_report_bodies,
     reconcile_legacy_workspace_reports,
+    rollback_legacy_report_bodies,
 )
 from report.legacy_body import extract_legacy_reader_body
 
@@ -20,15 +21,17 @@ def _legacy_workspace() -> str:
     return """<!doctype html>
 <html data-theme="dark"><head><style>.old { color: red; }</style></head><body>
 <nav id="document-chrome">Legacy document chrome</nav>
-<div class="l1-root" id="report-root" onclick="window.evil()">
+<div class="l1-root" id="report-root" style="color:red" onclick="window.evil()">
   <div class="tab-group-pane" data-tab-group="overview">
     <div class="tab-pane subtab-pane" data-tab="company" aria-labelledby="company-title">
       <h2 id="company-title">Company and moat</h2>
       <p>Complete governed argument.</p>
       <a href="#company-title">Jump to company</a>
-      <a href="/source/42">Source 42</a>
+      <a href="/source/42" ping="https://tracker.example">Source 42</a>
+      <a href="https://example.com/source">External source</a>
       <a href="javascript:window.evil()">Unsafe link</a>
-      <img src="//tracker.example/pixel.png" alt="Unsafe remote image">
+      <img src="//tracker.example/pixel.png" srcset="https://tracker.example/2x.png 2x" alt="Unsafe remote image">
+      <svg><use href="https://tracker.example/icon.svg"></use></svg>
       <table><tr><th>Metric</th><td>Value</td></tr></table>
       <button x-data="{}" @click="window.evil()">Legacy action</button>
       <script>window.evil()</script>
@@ -60,10 +63,14 @@ def test_extractor_preserves_content_and_removes_executable_legacy_markup() -> N
     assert "<script" not in extracted.body_html
     assert "<iframe" not in extracted.body_html
     assert "onclick=" not in extracted.body_html
+    assert "style=" not in extracted.body_html
     assert "@click=" not in extracted.body_html
     assert "x-data=" not in extracted.body_html
     assert "javascript:" not in extracted.body_html
     assert "//tracker.example" not in extracted.body_html
+    assert "srcset=" not in extracted.body_html
+    assert " ping=" not in extracted.body_html
+    assert 'href="https://example.com/source"' in extracted.body_html
     assert 'class="tab-group-pane active"' in extracted.body_html
     assert 'class="tab-pane subtab-pane active"' in extracted.body_html
     assert 'id="reader-' in extracted.body_html
@@ -73,8 +80,10 @@ def test_extractor_preserves_content_and_removes_executable_legacy_markup() -> N
     assert extracted.heading_count == 3
     assert extracted.table_count == 1
     assert extracted.source_link_count == 1
+    assert extracted.source_metrics == extracted.preserved_metrics
     assert extracted.body_sha256 == hashlib.sha256(extracted.body_html.encode("utf-8")).hexdigest()
-    assert "unsafe_href_removed" in extracted.warnings
+    assert any(warning.startswith("fetch_href_removed") for warning in extracted.warnings)
+    assert "inline_style_removed" in extracted.warnings
     parsed = BeautifulSoup(extracted.body_html, "html.parser")
     ids = [str(tag.get("id")) for tag in parsed.find_all(id=True)]
     assert len(ids) == len(set(ids))
@@ -86,6 +95,9 @@ def test_migration_dry_run_is_read_only_then_apply_is_atomic_and_idempotent(
     workspace = _write_legacy_workspace(tmp_path)
     source_bytes = workspace.read_bytes()
     reconcile_legacy_workspace_reports(tmp_path)
+    legacy_ref = load_report_artifact_index(tmp_path).items[0]
+    legacy_manifest_path = tmp_path / legacy_ref.manifest_path
+    legacy_manifest_bytes = legacy_manifest_path.read_bytes()
 
     dry_run = migrate_legacy_report_bodies(tmp_path, tickers={"NU"}, apply=False)
 
@@ -116,14 +128,27 @@ def test_migration_dry_run_is_read_only_then_apply_is_atomic_and_idempotent(
     assert receipt["parser_version"] == "legacy_workspace_reader.v1"
     assert receipt["source_sha256"] == legacy_ref.workspace_sha256
     assert receipt["body_sha256"] == migrated_ref.body_sha256
+    assert receipt["legacy_manifest_path"] == legacy_ref.manifest_path
+    assert receipt["source_metrics"] == receipt["preserved_metrics"]
     assert receipt["id_map"]
     assert receipt["id_map"]["company-title"].startswith("reader-")
     assert workspace.read_bytes() == source_bytes
+    assert legacy_manifest_path.read_bytes() == legacy_manifest_bytes
+    assert migrated_ref.manifest_path.endswith("/reader_manifest.v1.json")
 
     repeated = migrate_legacy_report_bodies(tmp_path, tickers={"NU"}, apply=True)
     assert repeated.candidates == 0
     assert repeated.migrated == 0
     assert repeated.skipped_shared == 1
+    assert workspace.read_bytes() == source_bytes
+
+    rolled_back = rollback_legacy_report_bodies(tmp_path, tickers={"NU"})
+    assert rolled_back.rolled_back == 1
+    restored_ref = load_report_artifact_index(tmp_path).items[0]
+    assert restored_ref == legacy_ref
+    assert not body_path.exists()
+    assert not receipt_path.exists()
+    assert legacy_manifest_path.read_bytes() == legacy_manifest_bytes
     assert workspace.read_bytes() == source_bytes
 
 
@@ -142,3 +167,27 @@ def test_unknown_legacy_structure_fails_closed_without_index_activation(tmp_path
     assert ref.reader_mode == "legacy_standalone"
     assert ref.body_path is None
     assert workspace.read_bytes() == source_bytes
+
+
+def test_batch_failure_does_not_activate_or_overwrite_any_legacy_manifest(
+    tmp_path: Path,
+) -> None:
+    nu_workspace = _write_legacy_workspace(tmp_path)
+    wix_workspace = tmp_path / "output" / "research" / "WIX" / "2026-07-01_workspace.html"
+    wix_workspace.parent.mkdir(parents=True)
+    wix_workspace.write_text("<html><body>unknown report</body></html>", encoding="utf-8")
+    reconcile_legacy_workspace_reports(tmp_path)
+    original_index = load_report_artifact_index(tmp_path)
+    original_manifests = {
+        ref.artifact_id: (tmp_path / ref.manifest_path).read_bytes() for ref in original_index.items
+    }
+
+    result = migrate_legacy_report_bodies(tmp_path, apply=True)
+
+    assert result.failed == 1
+    assert result.migrated == 0
+    assert load_report_artifact_index(tmp_path).items == original_index.items
+    for ref in original_index.items:
+        assert (tmp_path / ref.manifest_path).read_bytes() == original_manifests[ref.artifact_id]
+    assert not list(tmp_path.glob("output/research/*/artifacts/*/body.html"))
+    assert nu_workspace.is_file()
