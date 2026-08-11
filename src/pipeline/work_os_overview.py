@@ -19,6 +19,7 @@ def render_overview_panel(
 ) -> str:
     """Compose existing deterministic overview renderers once per request."""
 
+    from dashboard.inbox import INBOX_JS
     from pipeline.analytical_dashboard_html import render_tier_coverage_strip
     from pipeline.research_cockpit import render_research_cockpit
 
@@ -36,8 +37,9 @@ def render_overview_panel(
         return main
     rail = (
         '<aside class="cc-home-rail"><div class="cc-home-rail-head">'
-        '<h2>Inbox</h2><span class="cc-home-rail-links"><a href="/feed">full feed</a></span>'
-        f"</div>{inbox_html}</aside>"
+        '<h2>Inbox<span class="ix-badge" data-ix-badge="home" hidden></span></h2>'
+        '<span class="cc-home-rail-links"><a href="/feed">full feed</a></span>'
+        f"</div>{inbox_html}<script>{INBOX_JS}</script></aside>"
     )
     return f'<div class="cc-home-grid"><div class="cc-home-main">{main}</div>{rail}</div>'
 
