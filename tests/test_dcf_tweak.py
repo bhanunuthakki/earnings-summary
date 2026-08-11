@@ -16,6 +16,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from alembic.config import Config
@@ -26,6 +27,7 @@ from dcf.fact_drivers import DRIVER_FIELDS_BY_KEY, apply_to_inputs
 from research.dcf_artifact import apply_dcf_proposal, draft_dcf_proposal
 from research.dcf_tweak import (
     DcfTweakCall,
+    default_recompute,
     draft_dcf_tweak_proposal,
     extract_dcf_tweak,
     recompute_row_from_inputs,
@@ -62,6 +64,25 @@ _BASE = redesign.RedesignInputs(
     diluted_shares_m=100.0,
     fx_to_usd=1.0,
 )
+
+
+def _with_test_provenance(row: dict[str, object]) -> dict[str, object]:
+    row["provenance"] = {
+        "input_sha256": "a" * 64,
+        "workbook_sha256": "b" * 64,
+        "engine_version": "test_dcf_v1",
+        "inputs_as_of": "2026-06-30T08:00:00+00:00",
+        "detail": {
+            "sources": [
+                {
+                    "role": "effective_assumptions",
+                    "locator": "inline://dcf/NU/test",
+                    "sha256": "c" * 64,
+                }
+            ]
+        },
+    }
+    return row
 
 
 def _fixed(result: dict[str, object]) -> DcfTweakCall:
@@ -204,6 +225,8 @@ def test_tweak_recompute_flows_through_apply_to_a_real_dcf_runs(db_path: Path) -
         tweaked, "NU", live_price=12.29, live_price_at=datetime(2026, 6, 30, 8, 0, 0)
     )
 
+    row = _with_test_provenance(row)
+
     pid = draft_dcf_proposal(ticker="NU", proposed_row=row, db_path=db_path)
     assert pid is not None
     note = apply_dcf_proposal(pid, db_path=db_path)  # direct applier + real _default_persist
@@ -222,6 +245,38 @@ def test_tweak_recompute_flows_through_apply_to_a_real_dcf_runs(db_path: Path) -
     )
 
 
+def testdefault_recompute_attaches_workbook_and_effective_input_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workbook = tmp_path / "dcf" / "NU.xlsx"
+    workbook.parent.mkdir(parents=True)
+    workbook.write_bytes(b"test-workbook")
+
+    def fake_read_inputs(_path: Path) -> redesign.RedesignInputs:
+        return _BASE
+
+    def fake_side_inputs(_root: Path, _ticker: str) -> tuple[float, datetime, float]:
+        return 12.29, datetime(2026, 6, 30, 8, 0, 0), 0.25
+
+    monkeypatch.setattr(redesign, "read_inputs", fake_read_inputs)
+    monkeypatch.setattr("research.dcf_tweak._side_inputs", fake_side_inputs)
+
+    row = default_recompute("NU", "tax_rate", 0.21, repo_root=tmp_path)
+
+    assert row is not None
+    provenance_obj = row["provenance"]
+    assert isinstance(provenance_obj, dict)
+    provenance = cast("dict[str, object]", provenance_obj)
+    assert provenance["engine_version"] == "redesign_assumption_tweak_v1"
+    assert provenance["workbook_sha256"]
+    detail_obj = provenance["detail"]
+    assert isinstance(detail_obj, dict)
+    detail = cast("dict[str, object]", detail_obj)
+    sources = detail["sources"]
+    assert isinstance(sources, list)
+    assert len(cast("list[object]", sources)) >= 2
+
+
 # --------------------------------------------------------------------------- #
 # 4. the orchestrator (extract -> recompute -> draft)
 # --------------------------------------------------------------------------- #
@@ -229,7 +284,9 @@ def test_tweak_recompute_flows_through_apply_to_a_real_dcf_runs(db_path: Path) -
 
 def _valid_row() -> dict[str, object]:
     tweaked = apply_to_inputs(_BASE, DRIVER_FIELDS_BY_KEY["tax_rate"], 0.21)
-    return recompute_row_from_inputs(tweaked, "NU", tweak={"param": "tax_rate", "new_value": 0.21})
+    return _with_test_provenance(
+        recompute_row_from_inputs(tweaked, "NU", tweak={"param": "tax_rate", "new_value": 0.21})
+    )
 
 
 def test_orchestrator_extracts_recomputes_and_drafts(db_path: Path) -> None:

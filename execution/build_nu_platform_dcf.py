@@ -52,6 +52,7 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 sys.path.insert(0, str(REPO / "src"))
 
 
+from dcf.provenance import build_effective_provenance  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort -- the workbook builds without a DB
@@ -717,6 +718,18 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (customer-driven platform DCF)",
+        provenance=build_effective_provenance(
+            ticker=T,
+            repo_root=REPO,
+            workbook_path=DEST,
+            assumption_snapshot_json=snap,
+            engine_version="nu_customer_platform_fcfe_v1",
+            source_paths=(
+                ("assumption_overrides", REPO / "data" / "bank_assumptions" / f"{T}_platform.json"),
+                ("company_profile", REPO / "data" / "historical" / "fmp" / f"{T}_profile.json"),
+                ("thesis_holdings", REPO / "micro_thesis" / "holdings" / f"{T}.json"),
+            ),
+        ),
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         persist_mod.upsert(conn, row)

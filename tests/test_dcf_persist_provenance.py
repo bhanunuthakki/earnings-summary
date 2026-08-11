@@ -165,14 +165,42 @@ def test_reused_hash_cannot_hide_a_changed_calculation() -> None:
     assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 4
 
 
-def test_provenance_none_keeps_existing_callers_working() -> None:
+def test_current_schema_rejects_latest_run_without_provenance() -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
 
-    assert upsert(conn, dataclasses.replace(_row(), provenance=None)) is True
+    with pytest.raises(ValueError, match="latest DCF requires input provenance"):
+        upsert(conn, dataclasses.replace(_row(), provenance=None))
 
-    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 0
+
+
+def test_current_schema_rejects_missing_workbook_hash() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    provenance = _row().provenance
+    assert provenance is not None
+
+    with pytest.raises(ValueError, match="workbook SHA-256"):
+        upsert(
+            conn,
+            dataclasses.replace(
+                _row(), provenance=dataclasses.replace(provenance, workbook_sha256=None)
+            ),
+        )
+
+
+def test_current_schema_rejects_empty_input_ledger() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    provenance = _row().provenance
+    assert provenance is not None
+
+    with pytest.raises(ValueError, match="input ledger"):
+        upsert(
+            conn, dataclasses.replace(_row(), provenance=dataclasses.replace(provenance, detail={}))
+        )
 
 
 def test_invalid_source_rolls_back_with_the_parent_transaction() -> None:

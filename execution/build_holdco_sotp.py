@@ -65,6 +65,7 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 sys.path.insert(0, str(REPO / "src"))
 
 
+from dcf.provenance import build_effective_provenance  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort — the workbook builds without a DB
@@ -192,6 +193,7 @@ def persist_dcf_run(
             mos = json.loads(holdings.read_text(encoding="utf-8")).get("mos_bar")
         except (OSError, json.JSONDecodeError):
             mos = None
+    snapshot_json = json.dumps({**snapshot, "workbook": str(DEST)}, indent=2)
     row = persist_mod.DcfRunRow(
         ticker=T,
         valuation_date=date.today(),
@@ -204,8 +206,28 @@ def persist_dcf_run(
         live_price=price or None,
         live_price_at=None,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
-        assumption_snapshot_json=json.dumps({**snapshot, "workbook": str(DEST)}, indent=2),
+        assumption_snapshot_json=snapshot_json,
         notes=f"workbook={DEST.name} ({snapshot.get('model', 'holdco SOTP')})",
+        provenance=build_effective_provenance(
+            ticker=T,
+            repo_root=REPO,
+            workbook_path=DEST,
+            assumption_snapshot_json=snapshot_json,
+            engine_version="holdco_sotp_v1",
+            source_paths=(
+                ("assumption_overrides", _sotp_json_path(T)),
+                ("company_profile", REPO / "data" / "historical" / "fmp" / f"{T}_profile.json"),
+                (
+                    "income_statement",
+                    REPO / "data" / "historical" / "fmp" / f"{T}_income_statement_annual.json",
+                ),
+                (
+                    "balance_sheet",
+                    REPO / "data" / "historical" / "fmp" / f"{T}_balance_sheet_annual.json",
+                ),
+                ("thesis_holdings", holdings),
+            ),
+        ),
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         persist_mod.upsert(conn, row)

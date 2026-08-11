@@ -103,6 +103,21 @@ def _proposed_row(
         "assumption_snapshot_json": '{"g": 0.4}',
         "notes": None,
         "run_id": None,
+        "provenance": {
+            "input_sha256": "a" * 64,
+            "workbook_sha256": "b" * 64,
+            "engine_version": "test_dcf_v1",
+            "inputs_as_of": "2026-06-30T08:00:00+00:00",
+            "detail": {
+                "sources": [
+                    {
+                        "role": "effective_assumptions",
+                        "locator": "inline://dcf/NU/test",
+                        "sha256": "c" * 64,
+                    }
+                ]
+            },
+        },
     }
 
 

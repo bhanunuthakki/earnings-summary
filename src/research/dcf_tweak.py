@@ -21,11 +21,13 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, cast
 
 from dcf.fact_drivers import DRIVER_FIELDS, DRIVER_FIELDS_BY_KEY
+from dcf.provenance import build_effective_provenance
 
 # The injected structured caller (tests): wondering -> raw extracted dict.
 DcfTweakCall = Callable[[str], "dict[str, object]"]
@@ -178,6 +180,9 @@ def recompute_row_from_inputs(
         "terminal_method": rv.terminal_method,
         "terminal_basis": rv.terminal_basis,
         "exit_multiple": rv.exit_multiple,
+        "live_price": live_price,
+        "live_price_at": live_price_at.isoformat() if live_price_at else None,
+        "mos_bar_used": mos_bar,
     }
     return {
         "ticker": ticker.strip().upper(),
@@ -227,7 +232,7 @@ def _side_inputs(
     return live_price, live_at, mos_bar
 
 
-def _default_recompute(
+def default_recompute(
     ticker: str, param: str, new_value: float, *, repo_root: Path | None = None
 ) -> dict[str, object] | None:
     """The real wiring: load the ticker's redesign workbook, apply the bounded tweak,
@@ -251,7 +256,7 @@ def _default_recompute(
     tweaked = apply_to_inputs(inp, field, new_value)
     live_price, live_at, mos_bar = _side_inputs(Path(repo_root), ticker)
     try:
-        return recompute_row_from_inputs(
+        row = recompute_row_from_inputs(
             tweaked,
             ticker,
             tweak={"param": param, "new_value": new_value},
@@ -259,6 +264,23 @@ def _default_recompute(
             live_price_at=live_at,
             mos_bar=mos_bar,
         )
+        snapshot_json = str(row["assumption_snapshot_json"])
+        row["provenance"] = asdict(
+            build_effective_provenance(
+                ticker=ticker,
+                repo_root=Path(repo_root),
+                workbook_path=workbook,
+                assumption_snapshot_json=snapshot_json,
+                engine_version="redesign_assumption_tweak_v1",
+                source_paths=(
+                    (
+                        "thesis_holdings",
+                        Path(repo_root) / "micro_thesis" / "holdings" / f"{ticker.upper()}.json",
+                    ),
+                ),
+            )
+        )
+        return row
     except redesign.RedesignError:
         return None  # un-valuable assumption set (e.g. WACC <= terminal g)
 
@@ -293,7 +315,7 @@ def draft_dcf_tweak_proposal(
     new_value = _finite(tweak["new_value"])
     if new_value is None:
         return None
-    recompute = recompute_fn or _default_recompute
+    recompute = recompute_fn or default_recompute
     proposed_row = recompute(ticker, param, new_value, repo_root=repo_root)
     if not isinstance(proposed_row, dict):
         return None

@@ -20,7 +20,24 @@ from research.dcf_artifact import (
     draft_dcf_proposal,
 )
 
-_PROPOSED = {
+_PROVENANCE: dict[str, object] = {
+    "input_sha256": "a" * 64,
+    "workbook_sha256": "b" * 64,
+    "engine_version": "test_dcf_v1",
+    "inputs_as_of": "2026-06-30T08:00:00+00:00",
+    "detail": {
+        "sources": [
+            {
+                "role": "effective_assumptions",
+                "locator": "inline://dcf/NU/test",
+                "sha256": "c" * 64,
+            }
+        ]
+    },
+}
+
+
+_PROPOSED: dict[str, object] = {
     "ticker": "NU",
     "valuation_date": "2026-06-30",
     "horizon_years": 10,
@@ -35,6 +52,7 @@ _PROPOSED = {
     "assumption_snapshot_json": '{"g": 0.4}',
     "notes": None,
     "run_id": None,
+    "provenance": _PROVENANCE,
 }
 
 
@@ -71,6 +89,17 @@ def test_draft_rejects_a_non_positive_or_missing_fair_value() -> None:
         draft_dcf_proposal(ticker="", proposed_row=dict(_PROPOSED), create_fn=lambda **_k: 1)
         is None
     )
+
+
+def _create_one(**_kwargs: object) -> int:
+    return 1
+
+
+def test_draft_rejects_missing_provenance() -> None:
+    row = dict(_PROPOSED)
+    row.pop("provenance")
+    with pytest.raises(ValueError, match="provenance"):
+        draft_dcf_proposal(ticker="NU", proposed_row=row, create_fn=_create_one)
 
 
 def test_draft_coerces_date_objects_so_json_survives() -> None:
@@ -130,3 +159,5 @@ def test_reconstruct_row_roundtrips_to_a_valid_dcf_run_row() -> None:
     assert row.horizon_years == 10
     assert row.wacc == 0.11
     assert row.currency == "USD"
+    assert row.provenance is not None
+    assert row.provenance.input_sha256 == "a" * 64

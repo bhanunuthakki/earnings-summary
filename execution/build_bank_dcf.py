@@ -47,6 +47,7 @@ FMP = REPO / "data" / "historical" / "fmp"
 sys.path.insert(0, str(REPO / "src"))
 
 
+from dcf.provenance import build_effective_provenance  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort — the workbook builds without a DB
@@ -962,6 +963,23 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (bank credit model)",
+        provenance=build_effective_provenance(
+            ticker=T,
+            repo_root=REPO,
+            workbook_path=DEST,
+            assumption_snapshot_json=snap,
+            engine_version="bank_credit_residual_income_v1",
+            source_paths=(
+                ("assumption_overrides", REPO / "data" / "bank_assumptions" / f"{T}.json"),
+                ("income_statement", FMP / f"{T}_income_statement_annual.json"),
+                ("balance_sheet", FMP / f"{T}_balance_sheet_annual.json"),
+                ("company_profile", FMP / f"{T}_profile.json"),
+                (
+                    "thesis_holdings",
+                    REPO / "micro_thesis" / "holdings" / f"{T}.json",
+                ),
+            ),
+        ),
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         persist_mod.upsert(conn, row)

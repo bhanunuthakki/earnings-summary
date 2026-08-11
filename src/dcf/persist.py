@@ -306,17 +306,37 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
             "run `alembic upgrade head` (migration 0091) before refreshing"
         )
     has_provenance = _has_provenance_columns(conn)
+    has_versioning = _has_versioning_columns(conn)
+    has_input_ledger = _has_input_ledger(conn)
+    governed_latest = has_versioning and has_provenance and has_input_ledger
+    if governed_latest and row.provenance is None:
+        raise ValueError("latest DCF requires input provenance on the current schema")
     if row.provenance is not None:
         require_current_for_write(conn)
     if row.provenance is not None and not has_provenance:
         raise sqlite3.OperationalError(
             "dcf_runs is missing DCF provenance columns — run `alembic upgrade head` before refreshing"
         )
+    if row.provenance is not None:
+        if _SHA256_RE.fullmatch(row.provenance.input_sha256) is None:
+            raise ValueError("latest DCF requires a valid input SHA-256")
+        if (
+            row.provenance.workbook_sha256 is None
+            or _SHA256_RE.fullmatch(row.provenance.workbook_sha256) is None
+        ):
+            raise ValueError("latest DCF requires a valid workbook SHA-256")
     input_ledger_rows = (
         _input_ledger_rows(row.provenance)
-        if row.provenance is not None and _has_input_ledger(conn)
+        if row.provenance is not None and has_input_ledger
         else []
     )
+    if governed_latest and not input_ledger_rows:
+        raise ValueError("latest DCF requires a non-empty input ledger")
+    if governed_latest and not any(
+        source.get("sha256") is not None for source in input_ledger_rows
+    ):
+        raise ValueError("latest DCF input ledger requires at least one hashed source")
+
     sync_cols = ", assumptions_sync_status, assumptions_synced_at" if has_sync else ""
     sync_vals = ", :assumptions_sync_status, :assumptions_synced_at" if has_sync else ""
     has_sanity = _has_sanity_column(conn)
@@ -392,16 +412,12 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
             }
         )
 
-    if (
-        _has_versioning_columns(conn)
-        and has_provenance
-        and _same_current_version(conn, row, params)
-    ):
+    if has_versioning and has_provenance and _same_current_version(conn, row, params):
         return False
 
     conn.execute("SAVEPOINT dcf_run_upsert")
     try:
-        if _has_versioning_columns(conn):
+        if has_versioning:
             # Supersede the prior current run for this ticker (unsegmented — the
             # Phase 3 write leaves segment_name NULL), then insert its successor.
             superseded = supersede_current(

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -44,6 +45,7 @@ _ROW_KEYS: tuple[str, ...] = (
     "assumption_snapshot_json",
     "notes",
     "run_id",
+    "provenance",
 )
 
 
@@ -62,6 +64,14 @@ def _as_float(value: object) -> float | None:
 
 def _jsonable(value: object) -> object:
     """Coerce date/datetime to ISO strings so the proposed row survives json.dumps."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return _jsonable(cast(object, asdict(value)))
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        return {str(key): _jsonable(item) for key, item in mapping.items()}
+    if isinstance(value, (list, tuple)):
+        items = cast("list[object] | tuple[object, ...]", value)
+        return [_jsonable(item) for item in items]
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return value
@@ -90,6 +100,9 @@ def draft_dcf_proposal(
     proposed_npv = _as_float(proposed_row.get("npv_per_share"))
     if not ticker or proposed_npv is None or proposed_npv <= 0:
         return None  # #291: no valid fair value -> nothing to propose
+    from dcf.provenance import provenance_from_payload
+
+    provenance = provenance_from_payload(proposed_row.get("provenance"))
     old = _as_float(old_npv_per_share)
     tail = ""
     if old and old > 0:
@@ -99,7 +112,10 @@ def draft_dcf_proposal(
         "Recomputed in Python from the tweaked assumptions; approve to make it live."
     )
     artifact = {
-        "proposed_row": {k: _jsonable(proposed_row.get(k)) for k in _ROW_KEYS},
+        "proposed_row": {
+            **{k: _jsonable(proposed_row.get(k)) for k in _ROW_KEYS},
+            "provenance": _jsonable(provenance),
+        },
         "old_npv_per_share": old,
         "oracle_ok": True,
     }
@@ -123,6 +139,7 @@ def draft_dcf_proposal(
 def _reconstruct_row(row: dict[str, object]) -> Any:
     """Rebuild a ``dcf.persist.DcfRunRow`` from its round-tripped dict form."""
     from dcf.persist import DcfRunRow
+    from dcf.provenance import provenance_from_payload
 
     def _opt_date(v: object) -> date | None:
         return date.fromisoformat(str(v)) if v else None
@@ -145,6 +162,7 @@ def _reconstruct_row(row: dict[str, object]) -> Any:
         assumption_snapshot_json=str(row.get("assumption_snapshot_json") or "{}"),
         notes=(str(row["notes"]) if row.get("notes") else None),
         run_id=(str(row["run_id"]) if row.get("run_id") else None),
+        provenance=provenance_from_payload(row.get("provenance")),
     )
 
 
