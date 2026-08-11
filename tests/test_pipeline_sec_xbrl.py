@@ -76,7 +76,7 @@ _TRACKED_UNIVERSE_2026_07 = {
     # portfolio
     "BKNG", "BN", "MELI", "META", "NOW", "NU", "NVO", "RBRK", "UBER", "VEEV", "WIX",
     # evaluation
-    "ABNB", "AMZN", "AVGO", "BHP", "CDNS", "CGEH", "CRWV", "DHR", "DLO", "FCX",
+    "ABNB", "AMZN", "AVGO", "BHP", "CDNS", "CGEH", "CRWV", "DHR", "DLO", "DUOL", "FCX",
     "FIGR", "FNV", "FRVO", "GOOG", "LLY", "MDB", "NBIS", "NSP", "NTDOY", "NTRA",
     "NVDA", "ORCL", "RGEN", "SNOW", "SNPS", "SOFI", "TECH", "TEM", "TMO", "V", "WGS",
     # watchlist
