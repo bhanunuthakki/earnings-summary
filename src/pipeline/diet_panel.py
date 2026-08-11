@@ -36,7 +36,9 @@ import sqlite3
 from datetime import UTC, date, datetime
 from html import escape
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from calendar_clock import calendar_today
 from expected_earnings import last_reported_by_ticker, upcoming_by_ticker
 from signals.store import (
     SIGNAL_CONSENSUS_RATING,
@@ -44,7 +46,7 @@ from signals.store import (
     SIGNAL_MEDIA_APPEARANCE,
     SignalRow,
     load_diet_signals,
-    load_forward_agenda,
+    load_forward_agenda_result,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
@@ -136,13 +138,13 @@ _TYPE_PILL: dict[str, tuple[str, str]] = {
 }
 
 
-def render_diet_panel(db_path: Path) -> str:
+def render_diet_panel(db_path: Path, *, today: date | None = None) -> str:
     """The Diet tab fragment: the ingest stream + the forward agenda + the
-    disclosed fast-follow note. Pure read over the `signals` substrate; degrades
-    to a quiet empty state on a pre-0095 DB (no `signals` table)."""
-    today = datetime.now(UTC).date()
+    disclosed fast-follow note. Pure read over the `signals` substrate; a
+    missing or pre-0095 store renders an explicit unavailable state."""
+    today = today or calendar_today()
     stream = _drop_headline_news(load_diet_signals(db_path, types=_STREAM_TYPES, limit=80))
-    agenda = load_forward_agenda(db_path, on_or_after=today, limit=40)
+    agenda = load_forward_agenda_result(db_path, on_or_after=today, limit=40)
     list_types = _load_list_types(db_path)
     # Stable sort (recency preserved within tier): book names float to the top.
     stream.sort(key=lambda r: _BOOK_PRIORITY.get(list_types.get(r.ticker, ""), 9))
@@ -156,7 +158,7 @@ def render_diet_panel(db_path: Path) -> str:
             "Information diet</h2>",
             _readouts_section(db_path, list_types, today),
             _stream_section(stream, list_types),
-            _agenda_section(agenda, today),
+            _agenda_section(list(agenda.rows), today, unavailable=agenda.unavailable),
             _scaffold_note(),
             "</section>",
         ]
@@ -598,15 +600,21 @@ def _stream_row(r: SignalRow, list_type: str = "") -> str:
     )
 
 
-def _agenda_section(rows: list[SignalRow], today: date) -> str:
+def _agenda_section(rows: list[SignalRow], today: date, *, unavailable: bool = False) -> str:
     head = (
         '<div class="diet-sec"><h3 class="diet-sec-h" title="Upcoming investor + analyst '
         'days, soonest first — extends the earnings calendar.">Forward agenda</h3>'
     )
+    if unavailable:
+        return (
+            head + '<p class="diet-empty" role="alert" data-calendar-state="unavailable">'
+            "Calendar unavailable. The event store could not be read.</p></div>"
+        )
     if not rows:
         return (
-            head + '<p class="diet-empty">No investor days on the calendar — these land '
-            "as the IR-events feed records them.</p></div>"
+            head + '<p class="diet-empty" role="status" data-calendar-state="empty">'
+            "No investor days on the calendar. No upcoming events are currently stored."
+            "</p></div>"
         )
     body = "".join(_agenda_row(r, today) for r in rows)
     table = (
@@ -624,13 +632,24 @@ def _agenda_section(rows: list[SignalRow], today: date) -> str:
     return head + table + "</div>"
 
 
+def _safe_event_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None
+    return value
+
+
 def _agenda_row(r: SignalRow, today: date) -> str:
     in_days = _days_until(r.event_date, today)
     title = escape(r.title)
+    event_url = _safe_event_url(r.url)
     sig_cell = (
-        f'<a href="{escape(r.url, quote=True)}" target="_blank" rel="noopener">{title}</a>'
-        if r.url
-        else title
+        f'<a href="{escape(event_url, quote=True)}" target="_blank" '
+        f'rel="noopener noreferrer external">{title}</a>'
+        if event_url
+        else f'<span class="muted">{title} · Source unavailable</span>'
     )
     firm = f'<span class="diet-firm">{escape(r.firm)}</span>' if r.firm else "—"
     data = (

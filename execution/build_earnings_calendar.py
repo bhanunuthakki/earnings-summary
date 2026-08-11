@@ -32,6 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from calendar_clock import calendar_today  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from ui.controls import controls_css, icon_svg, ticker_label  # noqa: E402
 from ui.tokens import FAVICON_LINK, palette_css  # noqa: E402
@@ -62,14 +63,14 @@ def main() -> int:
     repo_root = args.repo_root.resolve()
 
     rows = _load_tracked(repo_root)
-    today = date.today()
+    today = calendar_today()
 
     upcoming: list[CalendarRow] = []
     recent: list[CalendarRow] = []
     no_data: list[CalendarRow] = []
 
     for ticker, name, list_type in rows:
-        events = _read_calendar(repo_root, ticker)
+        events = read_calendar_events(repo_root, ticker)
         latest_report = _latest_report(repo_root, ticker)
         base = CalendarRow(ticker, name, list_type, latest_report)
         if not events:
@@ -135,7 +136,7 @@ def _load_tracked(repo_root: Path) -> list[tuple[str, str, str]]:
     return rows
 
 
-def _read_calendar(repo_root: Path, ticker: str) -> list[CalendarEvent]:
+def read_calendar_events(repo_root: Path, ticker: str) -> list[CalendarEvent]:
     path = repo_root / "data" / "historical" / "fmp" / f"{ticker}_earnings_calendar.json"
     if not path.exists():
         return []
@@ -153,6 +154,14 @@ def _read_calendar(repo_root: Path, ticker: str) -> list[CalendarEvent]:
         if not isinstance(raw_row, dict):
             continue
         row = cast("dict[str, object]", raw_row)
+        # A cache file is named for the tracked ticker, but the payload is an
+        # external boundary. If the provider supplies identity, require it to
+        # agree so a crossed/stale cache cannot put another issuer's event on
+        # this company's calendar. Older cache shapes without identity remain
+        # supported.
+        raw_ticker = row.get("symbol") or row.get("ticker")
+        if isinstance(raw_ticker, str) and raw_ticker.strip().upper() != ticker.upper():
+            continue
         raw_date = row.get("date") or row.get("reportDate") or row.get("earnings_date")
         if not isinstance(raw_date, str) or not raw_date:
             continue
@@ -245,7 +254,7 @@ def _event_date(row: CalendarRow) -> date:
     return row.event.date
 
 
-def _render_row(row: CalendarRow, today: date, *, kind: str) -> str:
+def render_calendar_row(row: CalendarRow, today: date, *, kind: str) -> str:
     event = row.event
     if event is None:
         raise ValueError(f"calendar row for {row.ticker} has no event")
@@ -263,7 +272,9 @@ def _render_row(row: CalendarRow, today: date, *, kind: str) -> str:
         rep_date, rep_rel = row.latest_report
         report_cell = f'<a href="{escape(rep_rel, quote=True)}">{escape(rep_date)}</a>'
     else:
-        report_cell = '<span class="muted">—</span>'
+        report_cell = (
+            '<span class="muted" aria-label="No report available">No report available</span>'
+        )
 
     company = ticker_label(row.ticker, row.name)
 
@@ -286,7 +297,9 @@ def _render_no_data_row(row: CalendarRow) -> str:
         rep_date, rep_rel = row.latest_report
         report_cell = f'<a href="{escape(rep_rel, quote=True)}">{escape(rep_date)}</a>'
     else:
-        report_cell = '<span class="muted">—</span>'
+        report_cell = (
+            '<span class="muted" aria-label="No report available">No report available</span>'
+        )
     company = ticker_label(row.ticker, row.name)
     return (
         f'<tr class="calendar-row {escape(list_class)}">'
@@ -305,11 +318,11 @@ def _render_html(
     no_data: list[CalendarRow],
 ) -> str:
     upcoming_rows = (
-        "\n".join(_render_row(r, today, kind="upcoming") for r in upcoming)
+        "\n".join(render_calendar_row(r, today, kind="upcoming") for r in upcoming)
         or '<tr><td colspan="5" class="muted">No upcoming earnings in the next 90 days.</td></tr>'
     )
     recent_rows = (
-        "\n".join(_render_row(r, today, kind="recent") for r in recent)
+        "\n".join(render_calendar_row(r, today, kind="recent") for r in recent)
         or '<tr><td colspan="5" class="muted">No earnings in the last 45 days.</td></tr>'
     )
     no_data_rows = (
