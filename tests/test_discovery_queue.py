@@ -15,8 +15,8 @@ import pytest
 from flask.testing import FlaskClient
 
 from discovery.store import list_candidates, upsert_candidate
-from pipeline.command_center_shell import render_shell
 from pipeline.discovery_panel import render_discovery_list, render_discovery_panel
+from tests.ask_stream_support import fold_sse_response
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -194,12 +194,6 @@ def test_panel_route_and_fragment(client: FlaskClient) -> None:
     assert b"WDC" in frag.data
     assert b"EVR" not in frag.data  # min_score filter applies
     assert b"dq-root" not in frag.data  # fragment is just the table
-
-
-def test_shell_carries_discovery_tab() -> None:
-    html_out = render_shell(overview_html="<div>x</div>")
-    assert 'data-tab-target="discovery"' in html_out
-    assert 'data-endpoint="/api/panel/discovery"' in html_out
 
 
 def test_panel_is_one_band_on_the_kit(repo: Path) -> None:
@@ -507,9 +501,9 @@ def test_discovery_build_validation(client: FlaskClient) -> None:
 
 
 def _ask(client: FlaskClient, message: str) -> str:
-    res = client.post("/api/ask", json={"query": message, "tickers": ["WDC"]})
+    res = client.post("/api/ask/stream", json={"query": message, "tickers": ["WDC"]})
     assert res.status_code == 200
-    body = res.get_json()
+    body = fold_sse_response(res.get_data(as_text=True))
     assert body["status"] == "ok"
     assert body["kind"] == "command"
     return str(body["text"])

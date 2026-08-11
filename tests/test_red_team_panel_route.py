@@ -118,15 +118,11 @@ def test_red_team_aliases_into_ask(client) -> None:
     not a standing console section — the old #red_team deep-link lands on the
     Ask panel. The builder's own /api/panel/red_team route stays live for
     direct fetch (see the route tests above)."""
-    from pipeline.command_center_shell import (
-        _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]
-    )
     from pipeline.work_os_shell import _LEGACY_HASHES  # pyright: ignore[reportPrivateUsage]
 
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    # Both shells keep the old id as an alias to the on-demand Ask surface.
-    assert _LEGACY_PANEL_REDIRECTS["red_team"] == "explore"
+    # Work OS keeps the old id as an alias to the on-demand research surface.
     assert _LEGACY_HASHES["red_team"] == "screen-analytics-playground"
     assert '"red_team": "screen-analytics-playground"' in body

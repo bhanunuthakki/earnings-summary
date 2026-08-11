@@ -24,25 +24,18 @@ from __future__ import annotations
 
 import inspect
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS  # noqa: E402
-from pipeline.command_center_shell import render_shell  # noqa: E402
 from report.renderers import workspace_html  # noqa: E402
 from ui.controls import controls_css  # noqa: E402
 
-SHELL_HTML = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
 
-
-def test_primitive_is_inlined_in_both_documents() -> None:
-    # Shell: JS before the panel fragments, CSS in the page style.
-    assert CC_ACTION_JS in SHELL_HTML
-    assert CC_ACTION_CSS.strip() in SHELL_HTML
-    # Report: a separate document — the template must inline both explicitly.
+def test_primitive_is_inlined_in_report_document() -> None:
+    # The standalone report is a separate document and owns the primitive.
     src = inspect.getsource(workspace_html)
     assert "{CC_ACTION_JS}" in src and "{CC_ACTION_CSS}" in src
 

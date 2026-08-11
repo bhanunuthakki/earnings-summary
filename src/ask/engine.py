@@ -1,7 +1,7 @@
 """The unified Ask engine behind durable Work OS Copilot.
 
-Every production conversational turn (``POST /api/ask`` or
-``POST /api/ask/stream``) goes through :func:`respond_turn`, which routes it to
+Every production conversational turn (``POST /api/ask/stream``) goes through
+:func:`respond_turn`, which routes it to
 one of three paths and yields a single event-stream vocabulary:
 
   command    — deterministic slash commands (``ask.commands``): no LLM,
@@ -1454,7 +1454,7 @@ def _narrative_events(
 
 def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
     """Collapse an event stream into the Ask tab's single-round-trip JSON
-    payload — back-compatible with the pre-merge /api/ask contract
+    payload for internal non-streaming consumers
     (status/spec/fragment/message for views) plus ``kind``/``text`` for
     narrative and command answers."""
     fragment: dict[str, object] | None = None

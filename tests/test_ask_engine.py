@@ -585,7 +585,7 @@ def test_portfolio_narrative_per_claim_event_reconciles_and_recovers(
 
 
 # ----------------------------------------------------------------------------
-# fold_events — the /api/ask JSON contract
+# fold_events — internal non-streaming consumer contract
 # ----------------------------------------------------------------------------
 
 

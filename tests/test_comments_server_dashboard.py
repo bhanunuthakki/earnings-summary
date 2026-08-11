@@ -22,7 +22,7 @@ import comments_server  # noqa: E402
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition  # noqa: E402
 
 
-def _create_schema(conn: sqlite3.Connection) -> None:
+def create_dashboard_test_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE tracked_companies (
@@ -86,7 +86,7 @@ def app_repo(tmp_path: Path):
     data_dir.mkdir()
     db_path = data_dir / "portfolio.db"
     conn = sqlite3.connect(str(db_path))
-    _create_schema(conn)
+    create_dashboard_test_schema(conn)
     conn.execute(
         "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
         "VALUES ('NU', 'Nu Holdings', 'portfolio', 'equity')"
@@ -131,7 +131,8 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # + socratic_questions_result (GET /api/socratic/questions/<ticker>) — Step 1 became
     # a background job; +1 peek_weekly_packet (GET /api/peek/weekly-packet, the Sunday-
     # packet band's read-only doorway). +1 post-earnings readout generation action.
-    # +2 governed Copilot proposal routes: exact detail and revisioned decision.
+    # +2 governed Copilot proposal routes; -3 retired compatibility routes
+    # (/api/ask, /api/cockpit, /api/cron-health).
     assert len(rules) == 156
     assert {
         endpoint: rules[endpoint]
@@ -157,6 +158,9 @@ def test_extracted_routes_preserve_endpoint_contract(client):
             "ticker_api",
             "ticker_page",
             "latest_report_for_ticker",
+            "brief_library_api",
+            "brief_body_api",
+            "company_desk_api",
             "latest_dcf_for_ticker",
             "tickers_api",
             "ask_proposal_detail",
@@ -196,6 +200,9 @@ def test_extracted_routes_preserve_endpoint_contract(client):
         "ticker_api": "/api/ticker/<ticker>",
         "ticker_page": "/ticker/<ticker>",
         "latest_report_for_ticker": "/reports/<ticker>",
+        "brief_library_api": "/api/work-os/briefs",
+        "brief_body_api": "/api/work-os/briefs/<artifact_id>/body",
+        "company_desk_api": "/api/work-os/companies/<ticker>/desk",
         "latest_dcf_for_ticker": "/dcf/<ticker>",
         "tickers_api": "/api/tickers",
         "ask_proposal_detail": "/api/research/proposals/<int:proposal_id>",
@@ -215,6 +222,12 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     }
 
 
+def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:
+    assert client.post("/api/ask", json={"query": "legacy"}).status_code == 404
+    assert client.get("/api/cockpit").status_code == 404
+    assert client.get("/api/cron-health").status_code == 404
+
+
 def test_dashboard_page_returns_shell(client):
     """GET / serves the eight-screen Work OS while panel APIs stay live."""
     resp = client.get("/")
@@ -228,7 +241,7 @@ def test_dashboard_page_returns_shell(client):
         "screen-performance",
         "screen-allocation",
         "screen-workspace",
-        "screen-full-brief",
+        "screen-brief-library",
         "screen-analytics-playground",
         "screen-audit-log",
         "screen-execution-queue",
@@ -366,6 +379,13 @@ def test_reports_route_uppercases_ticker(client, app_repo):
 
     resp = client.get("/reports/nu")  # lowercase request
     assert resp.status_code == 200
+
+
+def test_ticker_page_redirects_to_ticker_aware_company_desk(client: FlaskClient) -> None:
+    response = client.get("/ticker/nu")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/?screen=company-desk&ticker=NU"
 
 
 def test_healthz_still_works(client):

@@ -873,9 +873,9 @@
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span class="nav-text">Company Desk</span>
       </a>
-      <a onclick="openFullBriefCanvas(activeCompanyTicker)" class="nav-item" id="nav-full-brief" data-tooltip="Full Research Brief Canvas" title="Full Research Brief Canvas">
+      <a onclick="navigateTo('screen-brief-library')" class="nav-item" id="nav-brief-library" data-tooltip="Brief Library" title="Brief Library">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        <span class="nav-text">Full Research Brief</span>
+        <span class="nav-text">Brief Library</span>
       </a>
       <a onclick="navigateTo('screen-analytics-playground')" class="nav-item" id="nav-analytics-playground" data-tooltip="Fact & Metric Analytics Playground" title="Fact & Metric Analytics Playground">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
@@ -1835,10 +1835,10 @@
       </section>
 
       <!-- ==========================================================================
-           FULL RESEARCH BRIEF MAIN CANVAS SURFACE (#screen-full-brief)
+           BRIEF LIBRARY PERSISTENT DESTINATION (#screen-brief-library)
            FULL-WIDTH INSTITUTIONAL EQUITY RESEARCH REPORT (EXHAUSTIVE CONTENT)
            ========================================================================== -->
-      <section id="screen-full-brief" class="screen-view">
+      <section id="screen-brief-library" class="screen-view">
         <!-- TOP NAVIGATION ACTION BAR -->
         <div style="display: flex; justify-content: space-between; align-items: center; background: var(--paper); border: var(--bw-thin) solid var(--border); padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-card);">
           <div style="display: flex; align-items: center; gap: var(--sp-3);">
@@ -2601,7 +2601,7 @@
       `;
     }
 
-    // OPEN FULL RESEARCH BRIEF CANVAS SURFACE (#screen-full-brief)
+    // OPEN FULL RESEARCH BRIEF READER
     function openFullBriefCanvas(ticker) {
       if (ticker) activeCompanyTicker = ticker;
       const data = COMPANY_DATA[activeCompanyTicker] || COMPANY_DATA.NU;
@@ -2966,7 +2966,7 @@
       `;
 
       switchBriefTab('overview');
-      navigateTo('screen-full-brief');
+      navigateTo('screen-brief-library');
     }
 
     function updateBriefDCF() {

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 import sys
 from collections.abc import Callable, Iterator
@@ -27,6 +26,7 @@ from ask.exchange_store import (  # noqa: E402
     put_session_context,
 )
 from ask.store import ensure_session  # noqa: E402
+from tests.ask_stream_support import fold_sse_response, parse_sse_events  # noqa: E402
 
 _JSON_OBJECT = TypeAdapter(dict[str, object])
 _JSON_ARRAY = TypeAdapter(list[object])
@@ -82,14 +82,6 @@ def _payload(*, request_id: str = "request-1", revision: int = 0) -> dict[str, o
     }
 
 
-def _sse_events(response_text: str) -> list[dict[str, object]]:
-    return [
-        json.loads(line.removeprefix("data: "))
-        for line in response_text.splitlines()
-        if line.startswith("data: ")
-    ]
-
-
 def test_durable_stream_orders_terminal_final_and_replays_without_engine(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -111,7 +103,7 @@ def test_durable_stream_orders_terminal_final_and_replays_without_engine(
     monkeypatch.setattr(comments_server, "ask_retrieval_mode", _legacy_mode)
 
     first = client.post("/api/ask/stream", json=_payload())
-    first_events = _sse_events(first.get_data(as_text=True))
+    first_events = parse_sse_events(first.get_data(as_text=True))
     session_id = str(first_events[0]["session_id"])
 
     assert [event["type"] for event in first_events] == [
@@ -138,7 +130,7 @@ def test_durable_stream_orders_terminal_final_and_replays_without_engine(
     replay_payload = _payload(revision=2)
     replay_payload["session_id"] = session_id
     replay = client.post("/api/ask/stream", json=replay_payload)
-    replay_events = _sse_events(replay.get_data(as_text=True))
+    replay_events = parse_sse_events(replay.get_data(as_text=True))
     assert [event["type"] for event in replay_events] == [
         "session",
         "artifacts",
@@ -171,15 +163,15 @@ def test_durable_request_conflicts_are_409(
     monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
     monkeypatch.setattr(comments_server, "respond_turn", _answer_events)
     monkeypatch.setattr(comments_server, "ask_retrieval_mode", _legacy_mode)
-    first = client.post("/api/ask", json=_payload())
+    first = client.post("/api/ask/stream", json=_payload())
     assert first.status_code == 200
-    first_payload = _json_object(first.get_json())
+    first_payload = fold_sse_response(first.get_data(as_text=True))
     session_id = str(first_payload["session_id"])
     conflict = _payload(revision=2)
     conflict["session_id"] = session_id
     conflict.update(mutation)
 
-    response = client.post("/api/ask", json=conflict)
+    response = client.post("/api/ask/stream", json=conflict)
 
     assert response.status_code == expected_status
     response_payload = _json_object(response.get_json())
@@ -202,7 +194,7 @@ def test_legacy_request_without_request_id_keeps_engine_owned_path(
         yield {"type": "final", "text": "legacy"}
 
     monkeypatch.setattr(comments_server, "respond_turn", _respond)
-    response = client.post("/api/ask", json={"query": "legacy"})
+    response = client.post("/api/ask/stream", json={"query": "legacy"})
 
     assert response.status_code == 200
     assert captured[0].persistence_mode == "engine"
@@ -238,7 +230,7 @@ def test_pending_durable_request_is_409_with_current_revision(
     payload = _payload(request_id="request-2", revision=1)
     payload["session_id"] = session.id
 
-    response = client.post("/api/ask", json=payload)
+    response = client.post("/api/ask/stream", json=payload)
 
     assert response.status_code == 409
     response_payload = _json_object(response.get_json())
@@ -259,7 +251,8 @@ def test_session_context_uses_historical_thesis_hash_not_live_recomputation(
     monkeypatch.setattr(comments_server, "respond_turn", _answer_events)
     monkeypatch.setattr(comments_server, "ask_retrieval_mode", _legacy_mode)
 
-    first = _json_object(client.post("/api/ask", json=_payload()).get_json())
+    first_response = client.post("/api/ask/stream", json=_payload())
+    first = fold_sse_response(first_response.get_data(as_text=True))
     first_sid = str(first["session_id"])
     stored_payload = _json_object(client.get(f"/api/ask/sessions/{first_sid}").get_json())
     stored_a = _json_object(stored_payload["session_context"])
@@ -272,14 +265,15 @@ def test_session_context_uses_historical_thesis_hash_not_live_recomputation(
     second["session_id"] = first_sid
     second["query"] = "Second turn"
     second["session_context"] = stored_a
-    assert client.post("/api/ask", json=second).status_code == 200
+    assert client.post("/api/ask/stream", json=second).status_code == 200
     updated_payload = _json_object(client.get(f"/api/ask/sessions/{first_sid}").get_json())
     updated_context = _json_object(updated_payload["session_context"])
     assert updated_context["thesis_version"] == hash_a
 
     new_thread = _payload(request_id="request-3", revision=0)
     new_thread["query"] = "New thread"
-    new_result = _json_object(client.post("/api/ask", json=new_thread).get_json())
+    new_response = client.post("/api/ask/stream", json=new_thread)
+    new_result = fold_sse_response(new_response.get_data(as_text=True))
     new_detail = _json_object(
         client.get(f"/api/ask/sessions/{new_result['session_id']}").get_json()
     )

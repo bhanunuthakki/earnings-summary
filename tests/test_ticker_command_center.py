@@ -602,4 +602,4 @@ def test_ticker_page_redirects_to_shell(client) -> None:
     Holding drill-down deep link (ticker uppercased)."""
     resp = client.get("/ticker/nu")  # lowercase in → uppercased in the deep link
     assert resp.status_code == 302
-    assert resp.headers["Location"] == "/#holding=NU"
+    assert resp.headers["Location"] == "/?screen=company-desk&ticker=NU"

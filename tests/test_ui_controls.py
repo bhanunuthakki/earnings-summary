@@ -263,17 +263,15 @@ def test_ticker_label_escapes_and_caps() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_shell_and_dashboard_and_workspace_compose_the_kit() -> None:
+def test_dashboard_and_workspace_compose_the_kit() -> None:
     from dashboard._styles import CSS as DASH_CSS
-    from pipeline.command_center_shell import SHELL_CSS
     from report.renderers.workspace_styles import CSS as WS_CSS
 
-    for css in (SHELL_CSS, DASH_CSS, WS_CSS):
+    for css in (DASH_CSS, WS_CSS):
         assert ".k-btn-primary" in css
         assert "--k-chevron" in css
     # The workspace is the theme-switching surface: paper variant.
     assert "color-scheme: light" in WS_CSS
-    assert "color-scheme: dark" in SHELL_CSS
 
 
 # ---------------------------------------------------------------------------
@@ -554,12 +552,10 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/allocation_decisions_panel.py",
         "pipeline/allocation_recommendation_panel.py",
         "pipeline/analytical_dashboard_html.py",
-        "pipeline/ask_dock.py",
         "pipeline/attribution_panel.py",
         "pipeline/calibration_scorecard_panel.py",
         "pipeline/cc_action.py",
         "pipeline/cc_overlay.py",
-        "pipeline/command_center_shell.py",
         "pipeline/credibility_panel.py",
         "pipeline/cron_health_panel.py",
         "pipeline/dashboard_html.py",
@@ -1147,14 +1143,10 @@ def test_workspace_local_css_standardizes_primitives() -> None:
     assert "font-size: 8.5px" not in local
 
 
-def test_palette_rows_and_combobox_render_two_part_ticker_labels() -> None:
-    """The 'one long label' kill (PR2): the shell palette renders ticker rows
-    as .k-tick spans, and the holding combobox never bakes 'T · Name' into its
-    input value (ticker value + .cc-combo-name overlay instead)."""
-    from pipeline.command_center_shell import SHELL_JS
+def test_combobox_renders_two_part_ticker_labels() -> None:
+    """The holding combobox keeps ticker value and company label separate."""
     from pipeline.ticker_command_center import _combobox  # pyright: ignore[reportPrivateUsage]
 
-    assert "k-tick-sym" in SHELL_JS
     combo = _combobox("NU", "Nu Holdings Ltd.")
     assert 'value="NU"' in combo
     assert '<span class="cc-combo-name"' in combo
@@ -1203,50 +1195,6 @@ def test_no_font_size_on_inputrow_controls() -> None:
     assert not offenders, (
         "a *-inputrow control pins a font-size — drop it so the control inherits "
         f"the kit baseline (--fs-body, matching the .k-btn buttons): {offenders}"
-    )
-
-
-def test_single_sub_tab_panels_do_not_reprint_their_section_title() -> None:
-    """Guard #1 (scoped NARROWLY): a panel that is the single sub-tab of an
-    already-labeled nav section must not re-print its own section/tab name as a
-    top-level <h2> — the nav owns the title (design_language §6.1; Law 3). Only
-    an <h2> whose text EQUALS the section label is forbidden, NOT every <h2>: a
-    panel's internal section headings stay legal, and multi-sub-tab sections
-    (whose visible sub-tab row IS the title) are not checked at all. The
-    ``len(subs) <= 1`` discriminator is the shell's own (see _render_subnav_rows
-    / _render_panels)."""
-    from pipeline.command_center_shell import _THEMES  # pyright: ignore[reportPrivateUsage]
-
-    # The module backing each single-sub-tab pid's /api/panel/<pid> render. The
-    # equality assertion below fails loudly if a new single-sub section appears
-    # without a source mapping here.
-    panel_source = {
-        "overview": "pipeline/command_center_shell.py",  # render_overview_panel (inlined)
-        "explore": "pipeline/explore_panel.py",
-        "provenance": "pipeline/provenance_panel.py",
-        # Phase-5 IA: Review collapsed to the single Ledger console (reuses the
-        # `musings` pid); its default render is the composite scaffold.
-        "musings": "pipeline/ledger_console_panel.py",
-    }
-    single_sub = {
-        pid: {tlabel, label}
-        for _tid, tlabel, subs in _THEMES
-        if len(subs) <= 1
-        for pid, label, *_rest in subs
-    }
-    assert set(single_sub) == set(panel_source), (
-        "single-sub-tab sections changed — map each pid to its panel source: "
-        f"{sorted(set(single_sub) ^ set(panel_source))}"
-    )
-    offenders: dict[str, list[str]] = {}
-    for pid, labels in single_sub.items():
-        text = _css_text(SRC / panel_source[pid])
-        for lbl in labels:
-            if re.search(rf"<h2[^>]*>\s*{re.escape(lbl)}\s*</h2>", text):
-                offenders.setdefault(pid, []).append(lbl)
-    assert not offenders, (
-        "single-sub-tab panel re-prints its section name as <h2> — delete it; "
-        f"the nav owns the title (design_language §6.1): {offenders}"
     )
 
 
@@ -1684,7 +1632,6 @@ _CCACTION_PINNED: frozenset[str] = frozenset(
         "pipeline/advisor_memos_panel.py",
         "pipeline/allocation_decisions_panel.py",
         "pipeline/allocation_recommendation_panel.py",
-        "pipeline/ask_dock.py",
         "pipeline/cc_action.py",
         "pipeline/dcf_globals_panel.py",
         "pipeline/decision_journal_panel.py",
@@ -1741,11 +1688,11 @@ def test_ccaction_ratchet_fires_on_regression_but_never_forces_adoption() -> Non
     fire for a file outside the pinned set that never adopted CCAction at
     all (no forced adoption; this is a floor, not a mandate)."""
     texts = {
-        "pipeline/ask_dock.py": "// CCAction.busy(el) still wired here",
+        "pipeline/discovery_panel.py": "// CCAction.busy(el) still wired here",
         "pipeline/journal_panel.py": "// regressed: bare el.disabled = true now",
         "pipeline/some_new_panel.py": "// never adopted CCAction at all",
     }
-    pinned = frozenset({"pipeline/ask_dock.py", "pipeline/journal_panel.py"})
+    pinned = frozenset({"pipeline/discovery_panel.py", "pipeline/journal_panel.py"})
     offenders = _ccaction_regressions(pinned, lambda rel: texts[rel])
     assert offenders == ["pipeline/journal_panel.py"]
     assert "pipeline/some_new_panel.py" not in offenders

@@ -1,10 +1,14 @@
 """Build the unified research artifacts for a ticker.
 
-Emits three files under output/research/{TICKER}/{DATE}_*:
+Emits three canonical files under output/research/{TICKER}/{DATE}_*:
   - {DATE}_workspace.html     tabbed workspace report (HTML, primary deliverable;
                               self-contained — opens via file:// or /reports/<ticker>)
   - {DATE}_report.md          markdown source (diff-friendly)
   - {DATE}_sections.json      frontend section payloads (consumed by /api/research/<ticker>)
+
+It also snapshots the standalone document, shared body, and manifest under
+output/research/{TICKER}/artifacts/{ARTIFACT_ID}/ so deep links remain immutable
+when a same-day report is regenerated.
 
 The DCF workbook is referenced, not re-rendered: the canonical copy lives at
 dcf/{TICKER}.xlsx (refreshed by execution/refresh_dcf.py).
@@ -25,7 +29,7 @@ import json
 import sqlite3
 import subprocess
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -44,12 +48,16 @@ from compute.segment_definitions import (  # noqa: E402
 )
 from instrument_store import get_instrument_kind  # noqa: E402
 from models.companies import InstrumentType  # noqa: E402
+from report.artifacts import persist_report_artifact  # noqa: E402
 from report.builder import build_report  # noqa: E402
 from report.models import ReportFlavor  # noqa: E402
 from report.renderers.etf_markdown import render as render_etf_markdown  # noqa: E402
 from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
-from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
+from report.renderers.workspace_html import (  # noqa: E402
+    render_report_body,
+    render_standalone_report,
+)
 from report.sections import financials as financials_section_mod  # noqa: E402
 from report.sections import snapshot as snapshot_section_mod  # noqa: E402
 from report.sections.etf_holdings import build_etf_brief  # noqa: E402
@@ -483,7 +491,8 @@ def _build_one(
         if report_conn is not None:
             report_conn.close()
 
-    workspace_html_path.write_text(render_workspace_html(spec), encoding="utf-8")
+    report_body = render_report_body(spec)
+    workspace_html_path.write_text(render_standalone_report(spec, report_body), encoding="utf-8")
     _emit(
         "wrote_workspace_html",
         {"ticker": ticker, "path": str(workspace_html_path)},
@@ -511,7 +520,7 @@ def _build_one(
     # Provenance rows always point at the workspace HTML — the only rendered
     # report — so audit consumers can deep-link.
     canonical_artifact = workspace_html_path
-    _log_brief_provenance(
+    provenance_ref = _log_brief_provenance(
         repo_root=repo_root,
         ticker=ticker,
         generation_date=today,
@@ -520,12 +529,32 @@ def _build_one(
         trigger=trigger,
         artifact_path=canonical_artifact,
     )
+    artifact_ref = persist_report_artifact(
+        repo_root=repo_root,
+        body=report_body,
+        standalone_path=workspace_html_path,
+        generated_at=datetime.now(UTC),
+        coverage_role=("evaluation" if spec.flavor is ReportFlavor.EVALUATION else "portfolio"),
+        title=f"{ticker} Full Research Brief",
+        provenance_ref=provenance_ref,
+    )
+    _emit(
+        "wrote_report_manifest",
+        {
+            "ticker": ticker,
+            "artifact_id": artifact_ref.artifact_id,
+            "manifest_path": artifact_ref.manifest_path,
+            "body_path": artifact_ref.body_path,
+        },
+    )
 
     return {
         "ticker": ticker,
         "workspace_html": str(workspace_html_path),
         "report_md": str(md_path),
         "sections_json": str(json_path),
+        "report_body": str(repo_root / (artifact_ref.body_path or "")),
+        "report_manifest": str(repo_root / artifact_ref.manifest_path),
         "dcf_xlsx": str(canonical_dcf),
         "section_status": sections_status,
     }
@@ -560,7 +589,7 @@ def _log_brief_provenance(
     trigger: str,
     artifact_path: Path,
     per_metric: dict[str, dict[str, object]] | None = None,
-) -> None:
+) -> int | None:
     """Append a `brief_provenance_log` row for the render.
 
     `sources_used` is a JSON envelope with two keys:
@@ -580,7 +609,7 @@ def _log_brief_provenance(
     """
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
-        return
+        return None
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         table_present = conn.execute(
@@ -588,7 +617,7 @@ def _log_brief_provenance(
             "WHERE type='table' AND name='brief_provenance_log' LIMIT 1"
         ).fetchone()
         if table_present is None:
-            return
+            return None
         try:
             rel_artifact = str(artifact_path.relative_to(repo_root))
         except ValueError:
@@ -596,7 +625,7 @@ def _log_brief_provenance(
         sources_used: dict[str, object] = {"sections": sections_status}
         if per_metric:
             sources_used["per_metric"] = per_metric
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO brief_provenance_log "
             "(ticker, generation_date, sources_used, sections_status, "
             " trigger, artifact_path) "
@@ -611,6 +640,7 @@ def _log_brief_provenance(
             ),
         )
         conn.commit()
+        provenance_ref = int(cursor.lastrowid) if cursor.lastrowid is not None else None
         _emit(
             "wrote_provenance_log",
             {
@@ -620,11 +650,13 @@ def _log_brief_provenance(
                 "per_metric_count": len(per_metric or {}),
             },
         )
+        return provenance_ref
     except sqlite3.Error as exc:
         _emit(
             "provenance_log_failed",
             {"ticker": ticker, "error": f"{type(exc).__name__}: {exc}"},
         )
+        return None
     finally:
         conn.close()
 

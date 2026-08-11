@@ -583,21 +583,6 @@
    }
   },
   {
-   "task_name": "\\earnings-summary\\session_distill",
-   "xml": "session_distill.task.xml",
-   "wrapper": "run_session_distill.bat",
-   "schedule": {
-    "trigger": "CalendarTrigger",
-    "start_boundary": "2026-07-23T18:00:00",
-    "repetition_interval": null,
-    "days_interval": 1,
-    "weeks_interval": null,
-    "days_of_week": [],
-    "days_of_month": [],
-    "months": []
-   }
-  },
-  {
    "task_name": "\\earnings-summary\\submit_saydo_batch",
    "xml": "submit_saydo_batch.task.xml",
    "wrapper": "run_submit_saydo_batch.bat",

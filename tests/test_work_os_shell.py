@@ -9,13 +9,13 @@ from pathlib import Path
 from pipeline.work_os_shell import SCREEN_SPECS, render_work_os_shell
 
 
-def test_work_os_has_only_the_eight_prototype_destinations() -> None:
+def test_work_os_has_only_the_eight_persistent_destinations() -> None:
     assert [screen.screen_id for screen in SCREEN_SPECS] == [
         "screen-cockpit",
         "screen-performance",
         "screen-allocation",
         "screen-workspace",
-        "screen-full-brief",
+        "screen-brief-library",
         "screen-analytics-playground",
         "screen-audit-log",
         "screen-execution-queue",
@@ -89,7 +89,7 @@ def test_work_os_shell_uses_live_backend_mounts_without_removing_old_endpoints()
         "screen-performance": "/api/panel/portfolio_allocation",
         "screen-allocation": "/api/panel/portfolio_health",
         "screen-workspace": "/api/panel/holding",
-        "screen-full-brief": "/api/panel/holding",
+        "screen-brief-library": "/api/work-os/briefs",
         "screen-analytics-playground": "/api/panel/explore",
         "screen-audit-log": "/api/panel/portfolio_record",
         "screen-execution-queue": "/api/panel/provenance",
@@ -106,6 +106,7 @@ def test_work_os_deep_links_old_surfaces_into_the_eight_screen_ia() -> None:
     for old_hash, screen_id in {
         "overview": "screen-cockpit",
         "holding": "screen-workspace",
+        "screen-full-brief": "screen-brief-library",
         "diet": "screen-workspace",
         "portfolio_risk": "screen-allocation",
         "musings": "screen-audit-log",
@@ -167,6 +168,7 @@ def test_legacy_search_ask_drawer_and_non_durable_runtime_are_removed() -> None:
     assert "copilotInput" not in html
     assert "copilotResponse" not in html
     assert "fetch('/api/ask'," not in html
+    assert html.count("fetch('/api/ask/stream'") == 1
     assert "work-os:ask-session" not in html
     assert "AI COPILOT ANALYSIS" not in html
     assert "Grounded Citations: doc:bcb_jun26_p4" not in html
@@ -186,20 +188,42 @@ def test_prototype_template_has_no_dead_copilot_runtime_to_strip() -> None:
     assert prototype.count("openWorkOsCopilot()") == 2
 
 
-def test_company_drawers_and_full_brief_use_live_report_artifacts() -> None:
+def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> None:
     html = render_work_os_shell()
-    assert "workOsReportFrame" in html
-    assert 'src="/reports/' in html
-    assert "#tab=" in html
-    assert "financials: 'financials'" in html
-    assert "saydo: 'saydo'" in html
-    assert "peers: 'comps'" in html
-    assert "falsifier: 'bear'" in html
-    assert "work-os-brief-frame" in html
-    assert "onclick=\"navigateTo(\\'screen-workspace\\')\"" in html
+    assert 'id="nav-brief-library"' in html
+    assert 'id="nav-full-brief"' not in html
+    assert 'id="workOsBriefReader"' in html
+    assert 'aria-modal="true"' in html
+    assert "openWorkOsBriefReader" in html
+    assert "navigateTo('screen-full-brief')" not in html
+    assert "workOsLoadBriefArtifact" in html
+    assert "artifact.body_url" in html
+    assert 'class="work-os-report-frame"' in html
+    assert "legacy brief has not been migrated" in html
 
 
-def test_cockpit_and_company_desk_hydrate_the_portfolio_only_contract() -> None:
+def test_company_desk_and_library_use_production_read_models_not_demo_facts() -> None:
+    html = render_work_os_shell()
+
+    assert 'data-layout="decision-workbench"' in html
+    assert 'data-layout="report-library"' in html
+    assert "/api/work-os/companies/" in html
+    assert "workOsRenderBriefLibrary" in html
+    assert html.count("async function workOsRenderCompanyDesk") == 1
+    assert html.count("window.openWorkOsBriefReader = async function") == 1
+    assert 'id="deskOwnerState"' in html
+    assert 'id="deskModelState"' in html
+    assert 'id="workOsBriefLibrary"' in html
+    assert "Mexico deposits crossed" not in html
+    assert "Structural Compounder in Latin American" not in html
+    assert "data-research-chat" in html
+    assert "openWorkOsCopilot" in html
+    assert "item.list_type === 'portfolio' || item.list_type === 'evaluation'" in html
+    assert "Company Desk (' + (identity.ticker || normalized) + ')'" in html
+    assert "try { await workOsEnsureResearchCompanies(); }" in html
+
+
+def test_cockpit_hydration_does_not_construct_company_desk() -> None:
     html = render_work_os_shell()
     assert "fetch('/api/work-os/portfolio'" in html
     assert 'id="workOsPortfolioStats"' in html
@@ -207,6 +231,22 @@ def test_cockpit_and_company_desk_hydrate_the_portfolio_only_contract() -> None:
     assert 'id="workOsPortfolioRows"' in html
     assert "workOsHydratePortfolio" in html
     assert "workOsRenderCompanyDesk" in html
+    portfolio_match = re.search(
+        r"function workOsRenderPortfolio\(payload\).*?\n  \}\n\n  function "
+        r"workOsApplyRequestedResearchState",
+        html,
+        re.DOTALL,
+    )
+    assert portfolio_match is not None
+    portfolio_runtime = portfolio_match.group(0)
+    assert "workOsRenderCompanyDesk(" not in portfolio_runtime
+    assert "/api/tickers" not in portfolio_runtime
+    assert "workOsApplyRequestedResearchState" in html
+    assert html.rfind("workOsApplyRequestedResearchState();") > html.find(
+        "Portfolio companies could not be loaded"
+    )
+    assert "workOsLaunchParams.get('ticker')" in html
+    assert "workOsLaunchParams.get('screen')" in html
     assert "originalSwitchCompanyWorkspace" not in html
 
 

@@ -21,7 +21,7 @@ Per the repository's 3-Layer Architecture (`AGENTS.md`):
 | **Information Diet Panel** | `src/pipeline/diet_panel.py`, `src/signals/` | Merged into company workspaces. | **100% PRESERVED**. The `signals` table (alembic 0095) and non-decaying ingest store (`src/signals/store.py`) continue pulling IR drops, rating upgrades, and news feeds, serving each stock's `Updates & Signals` tab. |
 | **Review Panels (`musings`, `triage`, `journal`)** | `src/pipeline/musings_panel.py`, `triage_panel.py` | Re-parented into Home Cockpit & Telegram bot. | **100% PRESERVED**. Telegram push packet builder (`directives/navigation_ia.md`), `analyst_notes` store, decision outcome grader, and `triage` queue remain active. |
 | **Portfolio Synthesis Consoles** | `src/pipeline/portfolio_console_panel.py` | Re-parented into Home Cockpit Hero. | **100% PRESERVED**. Governed Next-Dollar allocation engine (`next_dollar_model.py`), risk budget calculator, and restatement detection stay active as core compute primitives. |
-| **Command Center Shell Router** | `src/pipeline/command_center_shell.py` | Retrenched top-nav tabs (2 handles). | **100% PRESERVED**. Redirect aliases (`_LEGACY_PANEL_REDIRECTS`) maintain backward compatibility so deep links (e.g. `#explore`, `#portfolio`, `#review`) resolve smoothly. |
+| **Command Center Shell Router** | retired 2026-08-10 | Replaced by the Work OS shell. | **DELETED**. Only contract-matching Work OS deep-link aliases remain; the duplicate shell runtime and its warmup/polling behavior were removed. |
 
 ---
 

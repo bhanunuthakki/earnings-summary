@@ -1,15 +1,9 @@
-"""Ask panel (UX redesign PR5 over master build P5.1/P5.2).
+"""Fact Playground panel with deterministic views and Copilot handoff.
 
-Conversational-first: a chat thread over the unified ask engine
-(``POST /api/ask`` → ``src/ask/engine.py`` with the PORTFOLIO context
-pack). Data questions compile to a validated ViewSpec, execute, and render
-inline as a matrix/chart card; narrative questions stream through the same
-claude-CLI path as the report drawer's chat and render as prose; /discovery
-and /help reply instantly. Follow-ups send the previous spec as context so
-"now annual" / "add MELI" refine instead of starting over, plus the thread
-tail for narrative continuity; every view card offers "Open in builder" and
-"Pin as view". The full ViewSpec builder survives untouched inside the
-"Advanced builder" fold below the thread.
+Research prompts open the sole Work OS Copilot conversation surface.  This
+panel never calls an LLM or renders a second chat thread.  Its local builder
+remains deterministic: users can compile or assemble a validated ViewSpec,
+execute it, inspect provenance, and save the resulting view.
 
 Original P5.1 builder notes:
 
@@ -43,7 +37,6 @@ from pathlib import Path
 from dcf.fact_drivers import driver_field_options
 from identity import DEFAULT_USER_ID
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-from ui.cite_marks import CITE_MARKS_SNIPPET
 from user_state.saved_views import SavedViewRow, list_views
 from viewspec.engine import metric_catalog
 from viewspec.spec import CADENCES, TRANSFORMS
@@ -88,41 +81,17 @@ _PANEL_STYLE = """<style>
 .vx-nl input[name="nl_query"] { flex:1; min-width:280px; }
 .vx-nl-msg { color:var(--muted); font-size:var(--fs-caption); }
 
-/* ---- Ask thread (UX redesign PR5) ---- */
+/* ---- Copilot prompt handoff + deterministic builder ---- */
 .ask-thread { display:flex; flex-direction:column; gap:12px; margin:4px 0 14px; }
 .ask-hello { color:var(--muted); font-size:var(--fs-body); line-height:1.5; border:1px dashed var(--border);
   border-radius:var(--radius); padding:14px 16px; }
 .ask-chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-.ask-turn-user { align-self:flex-end; max-width:70%; background:var(--accent-soft); border:1px solid var(--accent);
-  color:var(--fg); border-radius:var(--radius); padding:8px 14px; font-size:var(--fs-body); }
-.ask-turn-assistant { align-self:stretch; border:1px solid var(--border); background:var(--surface);
-  border-radius:var(--radius); padding:12px 14px; }
-.ask-meta { color:var(--muted); font-size:var(--fs-caption); margin-bottom:8px; display:flex; gap:10px;
-  align-items:baseline; flex-wrap:wrap; }
-.ask-meta .ask-err { color:var(--bad); }
-.ask-actions { margin-top:8px; display:flex; gap:10px; align-items:baseline;
-  justify-content:space-between; flex-wrap:wrap; }
-.ask-actions-sum { color:var(--muted); font-size:var(--fs-caption); }
-.ask-actions-btns { display:flex; gap:8px; align-items:center; }
-/* In-card "Pin as view" name editor (replaces window.prompt — the ledger's
-   PR9 idiom: ledger_panel.beginRewrite / journal_panel.beginEdit). Swaps the
-   button row's own content for a name input + kit Save/Cancel, restoring the
-   buttons on cancel or failure. */
-.ask-view-name { flex:1; min-width:120px; padding:5px 9px; }
-.ask-busy { color:var(--muted); font-size:var(--fs-body); }
-.ask-busy .dots::after { content:'…'; animation: askdots 1.2s steps(4, end) infinite; }
-.ask-cite-row { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
-@keyframes askdots { 0% { content:''; } 25% { content:'.'; } 50% { content:'..'; } 75% { content:'...'; } }
-.ask-cmd { font-family:var(--mono); font-size:var(--fs-caption); white-space:pre-wrap;
-  color:var(--fg); margin:0; }
 .ask-inputrow { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
 /* No font-size here: the input inherits the kit baseline (--fs-body, 13px) so it
    matches the .k-btn buttons beside it, and the mobile 16px floor (controls.py)
    is no longer overridden. The Ask/DIY buttons are .k-btn (primary/quiet) — no
    bespoke .ask-inputrow button rule. */
 .ask-inputrow input { flex:1; padding:9px 13px; }
-.ask-ctx { color:var(--muted); font-size:var(--fs-caption); }
-.ask-ctx a { color:var(--accent); cursor:pointer; }
 .ask-builder-pop { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface);
   padding:0 14px 12px; margin-top:10px; box-shadow:var(--shadow-pop); }
 .ask-pop-head { display:flex; justify-content:space-between; align-items:center; padding:10px 0;
@@ -143,6 +112,9 @@ _PANEL_JS = """
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
   function el(id) { return document.getElementById(id); }
+  function escapeHtml(value) {
+    return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
   function tickers() {
     return el('vx-tickers').value.split(',').map(function (s) {
       return s.trim().toUpperCase();
@@ -462,39 +434,6 @@ _PANEL_JS = """
       loadCatalog(selectedTokens());
     });
   });
-  function addPeersToCard(btn, card, spec) {
-    var base = (spec.tickers && spec.tickers[0]) || tickers()[0];
-    if (!base || !card) return;
-    CCAction.busy(btn, 'adding peers…');
-    fetchPeers(base, function (peers) {
-      var current = spec.tickers || [];
-      var merged = current.slice();
-      peers.forEach(function (p) { if (merged.indexOf(p) === -1) merged.push(p); });
-      merged = merged.slice(0, 16);
-      if (merged.length === current.length) {
-        CCAction.receipt(btn, 'no new peers');
-        return;
-      }
-      var newSpec = JSON.parse(JSON.stringify(spec));
-      newSpec.tickers = merged;
-      fetch('/api/viewspec/run', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({spec: newSpec, summary: false})
-      }).then(function (r) {
-        if (!r.ok) throw new Error('run failed');
-        return r.text();
-      }).then(function (h) {
-        lastSpec = newSpec;
-        setCtx(true);
-        var added = merged.filter(function (t) { return current.indexOf(t) === -1; });
-        card.innerHTML = h + askActionsHtml(base + ' + scored peers: ' + added.join(', '));
-        card.setAttribute('data-ask-spec', JSON.stringify(newSpec));
-        askScroll();
-      }).catch(function () {
-        CCAction.release(btn);
-      });
-    });
-  }
   el('vx-save').addEventListener('click', function () {
     var name = el('vx-view-name').value.trim();
     if (!name) { showError('Name the view before saving.'); return; }
@@ -533,13 +472,13 @@ _PANEL_JS = """
     var wacc = res.wacc;
     var rawUnit = inj.raw_unit ? (' ' + inj.raw_unit) : '';
     var conv = inj.conversion ? (' \\u00b7 ' + inj.conversion) : '';
-    var html = '<div class="vx-inject-ok"><strong>Injected into ' + askEsc(inj.ticker)
-      + ' DCF.</strong> ' + askEsc(inj.metric_label) + ' = ' + fmtNum(inj.raw_value) + rawUnit
-      + ' \\u2192 ' + askEsc(inj.field_label) + ' = ' + fmtNum(inj.applied_value) + conv + '<br>'
+    var html = '<div class="vx-inject-ok"><strong>Injected into ' + escapeHtml(inj.ticker)
+      + ' DCF.</strong> ' + escapeHtml(inj.metric_label) + ' = ' + fmtNum(inj.raw_value) + rawUnit
+      + ' \\u2192 ' + escapeHtml(inj.field_label) + ' = ' + fmtNum(inj.applied_value) + conv + '<br>'
       + 'Repriced: fair value ' + (fv !== null && fv !== undefined ? '$' + fmtNum(fv) : 'n/a')
       + (wacc !== null && wacc !== undefined ? ' \\u00b7 WACC ' + (wacc * 100).toFixed(1) + '%' : '')
       + (inj.fact_id !== null && inj.fact_id !== undefined ? ' \\u00b7 from fact #' + inj.fact_id : '')
-      + (inj.period_end ? ' \\u00b7 as of ' + askEsc(inj.period_end) : '')
+      + (inj.period_end ? ' \\u00b7 as of ' + escapeHtml(inj.period_end) : '')
       + '</div>';
     el('vx-result').innerHTML = html;
   }
@@ -579,10 +518,10 @@ _PANEL_JS = """
     var f = res.fact || {};
     var unit = f.unit ? (' ' + f.unit) : '';
     var verb = res.action === 'updated' ? 'Updated on' : 'Added to';
-    var html = '<div class="vx-inject-ok"><strong>' + verb + ' ' + askEsc(res.ticker)
-      + ' DCF reference sheet.</strong> ' + askEsc(f.label) + ' = ' + fmtNum(f.value) + unit
-      + (f.period_end ? ' \\u00b7 as of ' + askEsc(f.period_end) : '')
-      + (f.source ? ' \\u00b7 ' + askEsc(f.source) : '')
+    var html = '<div class="vx-inject-ok"><strong>' + verb + ' ' + escapeHtml(res.ticker)
+      + ' DCF reference sheet.</strong> ' + escapeHtml(f.label) + ' = ' + fmtNum(f.value) + unit
+      + (f.period_end ? ' \\u00b7 as of ' + escapeHtml(f.period_end) : '')
+      + (f.source ? ' \\u00b7 ' + escapeHtml(f.source) : '')
       + (f.fact_id !== null && f.fact_id !== undefined ? ' \\u00b7 fact #' + f.fact_id : '')
       + '<br>' + res.count + (res.count === 1 ? ' fact' : ' facts') + ' on the sheet \\u00b7 '
       + 'survives DCF refresh (separate workbook)</div>';
@@ -631,288 +570,41 @@ _PANEL_JS = """
     applySpec(spec);
   });
 
-  // ---- Ask thread: one conversational engine (src/ask/engine.py) behind
-  // POST /api/ask. Data questions come back as view fragments; narrative
-  // questions as prose; /discovery + /help as instant command replies.
-  // Follow-ups send the previous spec (view refinement) AND the thread
-  // tail (narrative continuity — the server keeps no Ask-tab state). ----
+  // ---- Research prompt handoff: Work OS Copilot is the sole conversation
+  // surface.  Fact Playground keeps only prompt entry and deterministic DIY
+  // view controls; it never executes a research model itself. ----
   var askThread = el('ask-thread');
   var askInput = el('ask-q');
   var askGo = el('ask-go');
-  var askCtx = el('ask-ctx');
-  var lastSpec = null;
-  var askBusy = false;
-  var askHistory = [];
 
-  function askEsc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-  function askMd(text) {
-    var html = askEsc(text);
-    html = html.replace(/```[\\w]*\\n([\\s\\S]*?)```/g, function (_m, body) {
-      return '<pre class="ask-code">' + body + '</pre>';
-    });
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-    html = html.replace(/(?:^|\\n)[-*]\\s+(.+)/g, '\\n<li>$1</li>');
-    html = html.replace(/(<li>[\\s\\S]+?<\\/li>)+/g, function (b) { return '<ul>' + b + '</ul>'; });
-    return html.split(/\\n\\n+/).map(function (p) {
-      if (/^<(pre|ul)/.test(p)) return p;
-      return '<p>' + p.replace(/\\n/g, '<br>') + '</p>';
-    }).join('');
-  }
-  function askCiteHref(c) {
-    return (c && (c.href || c.source_url)) || '';
-  }
-  // Inline superscript cite chips (S8): the shared ui.cite_marks helper
-  // upgrades the finished prose; popovers carry label + S2 confidence %.
-  function askLinkifyCites(html, items) {
-    if (!window.ccCiteMarks || !(items || []).length) return html;
-    return window.ccCiteMarks.linkify(html, items);
-  }
-  function askCiteRowHtml(items, claims) {
-    var chips = (items || []).map(function (c) {
-      var href = askCiteHref(c);
-      if (!href) return '';
-      return '<a class="k-chip k-chip-accent" href="' + askEsc(href) + '" target="_blank">['
-        + askEsc(String(c.n)) + '] ' + askEsc(c.label || c.kind || 'source') + '</a>';
-    }).join('');
-    var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';
-    return (chips || warn) ? '<div class="ask-cite-row">' + chips + warn + '</div>' : '';
-  }
-  function askActionsHtml(summary) {
-    var sum = summary ? '<span class="ask-actions-sum">' + askEsc(summary) + '</span>' : '';
-    return '<div class="ask-actions">' + sum
-      + '<span class="ask-actions-btns">'
-      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-ask-act="builder">Open in builder</button>'
-      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-ask-act="peers">+ Peers</button>'
-      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-ask-act="pin">Pin as view</button>'
-      + '</span></div>';
-  }
-  function askRemember(role, text) {
-    askHistory.push({role: role, text: String(text || '').slice(0, 1200)});
-    if (askHistory.length > 12) askHistory = askHistory.slice(-12);
-  }
-  function askScroll() { askThread.scrollTop = askThread.scrollHeight; }
-  function clearHello() {
-    var hello = askThread.querySelector('.ask-hello');
-    if (hello) hello.remove();
-  }
-  function setCtx(on) {
-    lastSpec = on ? lastSpec : null;
-    if (askCtx) askCtx.hidden = !on;
-  }
-
-  // Ask v2: consume the SSE stream (POST /api/ask/stream) so progress is
-  // real — stage frames drive the busy line, narrative deltas render as
-  // they arrive, fragment/final assemble the answer card at the end.
+  // Research questions hand off to the one Work OS Copilot surface.
   function submitAsk(q) {
-    if (askBusy) return;
     var query = (q || askInput.value).trim();
     if (!query) { askInput.focus(); return; }
-    askBusy = true;
     askInput.value = '';
-    // After the first question the example placeholder is stale — every later
-    // turn refines the last answer, so prompt for a follow-up (mirrors ask_dock).
-    askInput.placeholder = 'Ask a follow-up…';
-    clearHello();
-    var user = document.createElement('div');
-    user.className = 'ask-turn-user';
-    user.textContent = query;
-    askThread.appendChild(user);
-    var card = document.createElement('div');
-    card.className = 'ask-turn-assistant';
-    card.innerHTML = '<div class="ask-busy">working<span class="dots"></span></div>';
-    askThread.appendChild(card);
-    askScroll();
-    askRemember('user', query);
-
-    var prose = null;
-    var proseText = '';
-    var frag = null;
-    var note = '';
-    var finalEv = null;
-    var citations = [];
-    var claims = [];
-    var errored = false;
-
-    function busyLine(text) {
-      var busy = card.querySelector('.ask-busy');
-      if (busy) busy.innerHTML = askEsc(text) + '<span class="dots"></span>';
+    if (window.openWorkOsCopilot) {
+      window.openWorkOsCopilot({
+        company_ticker: tickers()[0] || null,
+        category: 'research',
+        origin_key: 'work-os:fact-playground',
+        coverage_role_at_creation: 'unknown',
+        lifecycle_at_creation: 'unknown',
+        prompt: query
+      });
+    } else {
+      window.location.assign('/?copilot=1&origin_key=fact-playground');
     }
-    function ensureProse() {
-      if (prose) return;
-      var busy = card.querySelector('.ask-busy');
-      if (busy) busy.remove();
-      prose = document.createElement('div');
-      prose.className = 'prose';
-      card.appendChild(prose);
-    }
-    function handleEvent(ev) {
-      if (ev.type === 'stage') {
-        if (ev.note) note = ev.note;
-        if (ev.stage === 'compiling') busyLine('compiling the view');
-        else if (ev.stage === 'running') busyLine('running the view');
-        else busyLine(ev.note || 'researching — prose answers can take ~30s');
-      } else if (ev.type === 'delta') {
-        ensureProse();
-        proseText += ev.text || '';
-        prose.textContent = proseText;
-        askScroll();
-      } else if (ev.type === 'fragment') {
-        frag = ev;
-      } else if (ev.type === 'final') {
-        finalEv = ev;
-      } else if (ev.type === 'citations') {
-        citations = ev.items || [];
-        claims = ev.claims || [];
-      } else if (ev.type === 'error') {
-        errored = true;
-        card.innerHTML = '<div class="ask-meta"><span class="ask-err">'
-          + askEsc(ev.error || 'Could not answer that — try the advanced builder.')
-          + '</span></div>';
-      }
-    }
-    function finish() {
-      askBusy = false;
-      if (errored) { askScroll(); return; }
-      if (frag) {
-        lastSpec = frag.spec || lastSpec;
-        setCtx(true);
-        var msg = (finalEv && finalEv.text) || 'done';
-        // The reconciled summary rides the actions row (no separate caption
-        // band); the fragment was rendered with include_summary=false.
-        card.innerHTML = (frag.html || '') + askActionsHtml(msg);
-        card.setAttribute('data-ask-spec', JSON.stringify(frag.spec || {}));
-        askRemember('assistant', msg);
-      } else if (finalEv) {
-        var text = finalEv.text || proseText || '';
-        if (finalEv.route === 'command') {
-          card.innerHTML = '<pre class="ask-cmd">' + askEsc(text) + '</pre>';
-        } else {
-          var noteHtml = note ? '<div class="ask-meta">' + askEsc(note) + '</div>' : '';
-          card.innerHTML = noteHtml
-            + '<div class="prose">' + askLinkifyCites(askMd(text), citations) + '</div>'
-            + askCiteRowHtml(citations, claims);
-        }
-        askRemember('assistant', text);
-      } else {
-        card.innerHTML = '<div class="ask-meta"><span class="ask-err">no answer — try again</span></div>';
-      }
-      askScroll();
-    }
-
-    fetch('/api/ask/stream', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({query: query, tickers: tickers(), context_spec: lastSpec,
-                            history: askHistory.slice(0, -1)})
-    }).then(function (r) {
-      if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
-      var reader = r.body.getReader();
-      var decoder = new TextDecoder();
-      var buffer = '';
-      function pump() {
-        return reader.read().then(function (res) {
-          if (res.done) { finish(); return; }
-          buffer += decoder.decode(res.value, {stream: true});
-          var parts = buffer.split('\\n\\n');
-          buffer = parts.pop();
-          parts.forEach(function (frame) {
-            var line = frame.replace(/^data:\\s*/, '');
-            if (!line) return;
-            try { handleEvent(JSON.parse(line)); } catch (e) {}
-          });
-          return pump();
-        });
-      }
-      return pump();
-    }).catch(function () {
-      askBusy = false;
-      card.innerHTML = '<div class="ask-meta"><span class="ask-err">network error — try again</span></div>';
-      askScroll();
-    });
   }
 
   if (askGo) askGo.addEventListener('click', function () { submitAsk(); });
   if (askInput) askInput.addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter') { ev.preventDefault(); submitAsk(); }
   });
-  var ctxClear = el('ask-ctx-clear');
-  if (ctxClear) ctxClear.addEventListener('click', function () { setCtx(false); });
 
   if (askThread) askThread.addEventListener('click', function (ev) {
     var chip = ev.target.closest('.k-chip');
-    if (chip) { submitAsk(chip.getAttribute('data-ask-q') || chip.textContent); return; }
-    var act = ev.target.closest('button[data-ask-act]');
-    if (!act) return;
-    var holder = act.closest('[data-ask-spec]');
-    var spec = {};
-    try { spec = JSON.parse(holder ? holder.getAttribute('data-ask-spec') : '{}'); } catch (e) {}
-    if (act.getAttribute('data-ask-act') === 'builder') {
-      openBuilder();
-      applySpec(spec);
-    } else if (act.getAttribute('data-ask-act') === 'peers') {
-      addPeersToCard(act, holder, spec);
-    } else {
-      beginSaveView(act, spec);
-    }
+    if (chip) submitAsk(chip.getAttribute('data-ask-q') || chip.textContent);
   });
-  function beginSaveView(btn, spec) {
-    var row = btn.closest('.ask-actions-btns');
-    if (!row || row.getAttribute('data-editing') === '1') return;
-    row.setAttribute('data-editing', '1');
-    var original = row.innerHTML;
-    row.innerHTML =
-      '<input type="text" class="ask-view-name" placeholder="Name this view…">'
-      + '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-view-save>Save</button>'
-      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-view-cancel>Cancel</button>';
-    var input = row.querySelector('.ask-view-name');
-    if (input) input.focus();
-    function restore() {
-      row.innerHTML = original;
-      row.removeAttribute('data-editing');
-    }
-    row.querySelector('[data-view-cancel]').addEventListener('click', restore);
-    row.querySelector('[data-view-save]').addEventListener('click', function () {
-      var name = (input && input.value || '').trim();
-      if (!name) { if (input) input.focus(); return; }
-      CCAction.busy(this);
-      fetch('/api/views', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name: name, spec: spec})
-      }).then(function (r) { if (r.ok) refreshSaved(); restore(); }).catch(restore);
-    });
-  }
-
-  // Home-dock handoff (Ask v4): the dock stashes its thread when popping
-  // out to this tab (store key askThread — legacy cc-ask-thread migrates);
-  // replay it as text turns + seed the narrative history. Registered BEFORE
-  // the palette consumer so a pending question lands after the replayed
-  // thread. This fragment only ever runs inside the shell, where CCState is
-  // inlined first — the guard covers a bare fragment render.
-  function consumeDockThread() {
-    if (!window.CCState) return;
-    var turns = window.CCState.getJSON('askThread') || [];
-    window.CCState.del('askThread');
-    if (!turns.length) return;
-    clearHello();
-    turns.forEach(function (t) {
-      if (!t || !t.text) return;
-      askRemember(t.role, t.text);
-      var div = document.createElement('div');
-      if (t.role === 'user') {
-        div.className = 'ask-turn-user';
-        div.textContent = t.text;
-      } else {
-        div.className = 'ask-turn-assistant';
-        div.innerHTML = '<div class="prose">' + askMd(t.text) + '</div>';
-      }
-      askThread.appendChild(div);
-    });
-    askScroll();
-  }
-  window.addEventListener('cc-ask-q', consumeDockThread);
-  consumeDockThread();
 
   // Ctrl/Cmd+K handoff: the shell palette stashes the typed query in the
   // store (key askQ — legacy cc-ask-q migrates; the EVENT name stays
@@ -921,7 +613,7 @@ _PANEL_JS = """
   function consumePaletteQuery() {
     if (!window.CCState) return;
     var q = window.CCState.get('askQ');
-    if (!q || askBusy) return;
+    if (!q) return;
     window.CCState.del('askQ');
     submitAsk(q);
   }
@@ -1079,21 +771,14 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     saved = render_saved_views_list(db_path, user_id=user_id)
     first = tickers[0] if tickers else "NU"
     second = tickers[1] if len(tickers) > 1 else "MELI"
-    # No <h2>Ask</h2>: this panel is the single sub-tab of an already-labeled
-    # nav section, so the nav owns the title (design_language §6.1 — single-sub-
-    # tab sections suppress their own section name; the shell hides the sub-tab
-    # row via data-single and never re-injects the title). Re-printing it here
-    # was the redundant horizontal "Ask" bar.
+    # Research prompts are doorway controls into Work OS Copilot.  The panel
+    # itself owns only deterministic ViewSpec compilation and execution.
     return f"""{_PANEL_STYLE}
-{CITE_MARKS_SNIPPET}
 <div id="vx-root">
 <div class="ask-thread" id="ask-thread">
-  <div class="ask-hello">Ask anything across the tracked universe. Metric questions
- come back as live tables and charts with per-number source chips; narrative questions
- (&ldquo;why&rdquo;, &ldquo;what&rsquo;s the bear case&rdquo;) get a researched answer.
- Follow-ups refine the last answer (&ldquo;now annual&rdquo;, &ldquo;add {escape(second)}&rdquo;,
- &ldquo;same but as margins&rdquo;). <code>/view</code> forces a data view; <code>/help</code>
- lists commands.
+  <div class="ask-hello">Send a research question to Work OS Copilot, the single
+ conversation surface. Use DIY to build a deterministic table or chart directly from
+ governed facts without an LLM.
     <div class="ask-chips">
       <button type="button" class="k-chip"
         data-ask-q="{escape(first)} vs {escape(second)} revenue growth, last 8 quarters">
@@ -1107,12 +792,10 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
   </div>
 </div>
 <div class="ask-inputrow">
-  <input id="ask-q" placeholder="Ask — e.g. {escape(first)} vs {escape(second)} revenue growth, last 8 quarters" autocomplete="off">
-  <button type="button" id="ask-go" class="k-btn k-btn-primary">Ask</button>
+  <input id="ask-q" placeholder="Send to Copilot — e.g. {escape(first)} vs {escape(second)} revenue growth" autocomplete="off">
+  <button type="button" id="ask-go" class="k-btn k-btn-primary">Open Copilot</button>
   <button type="button" id="ask-diy" class="k-btn k-btn-quiet"
     title="Build a view by hand — tickers, metrics, transform, saved views">DIY</button>
-  <span class="ask-ctx" id="ask-ctx" hidden>refining the last view &middot;
- <a id="ask-ctx-clear">start fresh</a></span>
 </div>
 <div class="ask-advanced ask-builder-pop" id="ask-advanced" hidden>
 <div class="ask-pop-head"><span>DIY builder &middot; saved views</span>

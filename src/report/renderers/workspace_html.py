@@ -30,6 +30,11 @@ from pathlib import Path
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_JS
 from pipeline.you_said import render_you_said_strip_for_path
+from report.artifacts import (
+    RenderedReportBody,
+    ReportInteractionManifest,
+    ReportSectionRef,
+)
 from report.models import ReportFlavor, ReportSpec
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.workspace_chat import CSS as CHAT_CSS
@@ -318,10 +323,18 @@ __all__ = [
     "_ws_period_sort_key",
     "_xlink_html",
     "render",
+    "render_report_body",
+    "render_standalone_report",
 ]
 
 
 def render(spec: ReportSpec) -> str:
+    return render_standalone_report(spec, render_report_body(spec))
+
+
+def render_report_body(spec: ReportSpec) -> RenderedReportBody:
+    """Render every applicable section without document-level chrome."""
+
     body = StringIO()
     # Comments + chat boot data: inlined as JSON so the JS UI can render
     # pins without a server fetch. Server is needed for posting NEW
@@ -332,6 +345,11 @@ def render(spec: ReportSpec) -> str:
     # can own the report's top-level destinations without changing pane ids.
     p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
     groups = _tab_groups(spec, p3)
+    section_refs = tuple(
+        ReportSectionRef(section_id=sid, label=slabel, group_id=gid)
+        for gid, _glabel, sections in groups
+        for sid, slabel, _scount, _render_fn in sections
+    )
     _tabs(body, groups, ticker=spec.ticker)
     body.write('<div class="l1-root">')
     _identity(body, spec)
@@ -379,7 +397,21 @@ def render(spec: ReportSpec) -> str:
     _comment_sidebar_shell(body)
     _chat_drawer_shell(body, spec.ticker, spec.generation_date.isoformat())
 
-    return _document(spec, body.getvalue())
+    return RenderedReportBody.from_html(
+        ticker=spec.ticker,
+        report_date=spec.generation_date,
+        body_html=body.getvalue(),
+        sections=section_refs,
+        interaction_manifest=ReportInteractionManifest(),
+    )
+
+
+def render_standalone_report(spec: ReportSpec, body: RenderedReportBody) -> str:
+    """Wrap a shared report body in the standalone document assets."""
+
+    if body.ticker != spec.ticker.upper() or body.report_date != spec.generation_date:
+        raise ValueError("report body identity does not match ReportSpec")
+    return _document(spec, body.body_html)
 
 
 def _document(spec: ReportSpec, body: str) -> str:

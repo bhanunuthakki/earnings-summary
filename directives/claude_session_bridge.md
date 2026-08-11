@@ -3,8 +3,7 @@
 **Why this exists.** Research home splits by depth (owner ruling #9): thin
 in-app Ask for quick pulls, deep research in a Claude Code session for
 anything that needs a real pass — filings, cross-quarter threads, thesis
-work. Both feed the SAME distillation tap (B4's daily 18:00
-`session_distill` sweep) so a belief formed in a Claude session and a belief
+work. Both feed the SAME persisted raw-session boundary so a belief formed in a Claude session and a belief
 formed in Ask end up in the one Worldview, not two disconnected corpora.
 This is the contract between the platform and a Claude session: what each
 side owes the other.
@@ -64,20 +63,29 @@ channel (Telegram, the coach, the poller) already follows.
 
 ## What happens after landing (B4, not this session's job)
 
-The daily 18:00 `session_distill` sweep (`execution/run_session_distill.py`)
-reads landed transcripts and idle Ask threads, runs the ONE LLM pass per
-session, and auto-adopts grounded outcomes (new/revised Tenets, resolved
-questions, stance revisions) with an owner-facing Revert path
-(`synthesis.tenets.revert_tenet`) — never a silent, unrecoverable write. A
-session never distills its own transcript; it only lands the raw material.
+`execution/run_session_distill.py` is an explicit, operator-reviewed
+maintenance command. It reads landed transcripts and idle Ask threads, runs
+one LLM pass per eligible session, and auto-adopts grounded outcomes
+(new/revised Tenets, resolved questions, stance revisions) with an
+owner-facing Revert path (`synthesis.tenets.revert_tenet`) — never a silent,
+unrecoverable write. It is not scheduled while the eligible corpus and useful
+adoption rate are effectively zero. A session never distills its own
+transcript; it only lands the raw material.
+
+Postmortem drafting is intentionally separate. It runs only when an operator
+explicitly supplies `--postmortem-backfill`; an ordinary distillation run must
+not spend a second LLM call on postmortems. Scheduling may return only after
+bounded dry-runs demonstrate a non-zero representative candidate corpus and
+useful adopted outcomes, the owner approves the spend, and the collision-free
+window plus generated Scheduler artifacts are restored in the same change.
 
 ## Quota rule
 
 Interactive Claude Code sessions are bursts under the global ≥6–7h spacing
 rule (`directives/llm_quota_scheduling.md`) and share ONE subscription quota
 with the scheduled fleet. A session that fired its own distillation LLM
-call at close would be exactly the kind of ad-hoc burn that rule exists to
-prevent, on top of duplicating the 18:00 sweep's job. `land_session_notes.py`
+call at close would be unreviewed ad-hoc burn and could duplicate a later
+operator-run maintenance pass. `land_session_notes.py`
 enforces this structurally (it has no LLM-firing code path at all, not just
 a convention) — the constraint lives in the tool, not in discipline.
 
@@ -90,5 +98,5 @@ a convention) — the constraint lives in the tool, not in discipline.
   platform promises").
 - `execution/land_session_notes.py` — the write half (this doc's "what a
   session owes back").
-- `directives/llm_quota_scheduling.md` — the quota registry `session_distill`
-  rides (daily 18:00).
+- `directives/llm_quota_scheduling.md` — the quota registry and the explicit
+  criteria for re-enabling scheduled `session_distill` work.

@@ -138,9 +138,7 @@ _CAPTURE_JS = """<script>(function(){
     return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
   // Plain-text challenge/receipt render: escape, then newlines -> <br> only
-  // (no markdown). DUPLICATED (not shared) in command_center_shell.py SHELL_JS
-  // trayRenderCoach() per the repo's duplicate-simple-shared-logic preference
-  // — see feedback_duplicate_simple_shared_logic.md.
+  // (no markdown). Keep this deterministic receipt renderer local to Ledger.
   function renderCoach(res){
     if(!coach){ return; }
     if(res && res.pledge_challenge){
@@ -1248,9 +1246,7 @@ _ONMYMIND_JS = """<script>(function(){
 # The universal reply box (Phase B): every card carries ONE input. The first
 # send classifies via /api/onmymind/<id>/reply (FAST tier): an action intent
 # executes through the same act_on_feed_item core the old buttons used and
-# paints a receipt bubble; 'question' streams a real Ask turn in-card
-# (/api/ask/stream — stage/delta frames, never a frozen '...'); once a chat
-# session is live on a card, later sends stream directly (no re-classify).
+# paints a receipt bubble; research questions hand off to Work OS Copilot.
 _OM_CHAT_JS = """<script>(function(){
   if(window.__omChatWired){ return; }
   window.__omChatWired = true;
@@ -1281,6 +1277,12 @@ _OM_CHAT_JS = """<script>(function(){
     return thread;
   }
   function streamTurn(card, q, pend, done){
+    if(window.openWorkOsCopilot){
+      window.openWorkOsCopilot({company_ticker:card.getAttribute('data-om-ticker')||null,
+        category:'research',origin_key:'work-os:decision-audit',
+        coverage_role_at_creation:'unknown',lifecycle_at_creation:'unknown',prompt:q});
+    }else{ window.location.assign('/?copilot=1&origin_key=decision-audit'); }
+    pend.remove(); done(); return;
     var state=cardState(card);
     var thread=ensureThread(card);
     var ticker=card.getAttribute('data-om-ticker')||'';
@@ -1308,7 +1310,7 @@ _OM_CHAT_JS = """<script>(function(){
       thread.insertAdjacentHTML('beforeend', bubble('assistant', out));
       done();
     }
-    fetch('/api/ask/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    fetch('about:blank',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
       .then(function(r){
         if(!r.ok || !r.body){ throw new Error('bad response'); }
         var reader=r.body.getReader();

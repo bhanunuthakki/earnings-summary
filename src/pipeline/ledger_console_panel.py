@@ -8,7 +8,7 @@ three builders behind an anchor-nav band — the S10 Provenance-console pattern
 
 The composite REUSES the ``musings`` panel id (the Ledger feed leads, so the
 landing keeps its id); ``triage`` / ``journal`` alias to it via
-``command_center_shell._LEGACY_PANEL_REDIRECTS``. Each builder's own
+the Work OS deep-link map. Each builder's own
 ``/api/panel/<id>`` route stays live — the composite's own ``?fragment=…``
 sub-routes (list / onmymind / research / reconcile / worldview) keep flowing
 through the ``musings`` route to the Ledger builder, and the Journal/Triage

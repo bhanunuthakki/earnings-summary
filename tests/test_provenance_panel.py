@@ -20,11 +20,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
-from pipeline.command_center_shell import (  # noqa: E402
-    _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]
-    _SKELETON_KINDS,  # pyright: ignore[reportPrivateUsage]
-    _THEMES,  # pyright: ignore[reportPrivateUsage]
-)
 from pipeline.provenance_panel import render_provenance_panel  # noqa: E402
 
 _SECTIONS = (
@@ -106,35 +101,6 @@ def test_assembler_does_not_call_diagnostic_builders(
     assert "synthetic builder failure" not in html
     assert 'hx-get="/api/panel/validation"' in html
     assert 'id="prov-coverage"' in html  # the other sections survived
-
-
-# ---------------------------------------------------------------------------
-# Shell collapse: one Provenance sub-tab; old ids alias here
-# ---------------------------------------------------------------------------
-
-
-def test_system_section_has_one_provenance_subtab() -> None:
-    system = next(subs for tid, _lbl, subs in _THEMES if tid == "system")
-    assert len(system) == 1
-    assert system[0][0] == "provenance"
-    assert system[0][2] == "/api/panel/provenance"
-
-
-def test_collapsed_ids_alias_to_provenance() -> None:
-    # The 8 old System panel ids (note: console anchor "coverage" maps to the
-    # "section_coverage" panel id) all alias to the one console.
-    for panel_id in (
-        "section_coverage",
-        "ir_coverage",
-        "source_calls",
-        "cron_health",
-        "dcf_coverage",
-        "evals",
-        "validation",
-        "restatements",
-    ):
-        assert _LEGACY_PANEL_REDIRECTS[panel_id] == "provenance"
-    assert "provenance" in _SKELETON_KINDS
 
 
 # ---------------------------------------------------------------------------

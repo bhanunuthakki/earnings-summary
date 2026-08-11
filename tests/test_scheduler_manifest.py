@@ -23,7 +23,8 @@ MANIFEST_PATH = CRON_DIR / "task_manifest.json"
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 44
+    assert len(manifest.tasks) == 43
+    assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")
