@@ -268,8 +268,8 @@ def test_cockpit_hydration_does_not_construct_company_desk() -> None:
     assert "workOsHydratePortfolio" in html
     assert "workOsRenderCompanyDesk" in html
     portfolio_match = re.search(
-        r"function workOsRenderPortfolio\(payload\).*?\n  \}\n\n  function "
-        r"workOsApplyRequestedResearchState",
+        r"function workOsRenderPortfolio\(payload\).*?\n  \}\n\n  "
+        r"async function workOsApplyRequestedResearchState",
         html,
         re.DOTALL,
     )
@@ -337,3 +337,101 @@ def test_nvo_action_queue_open_company_uses_the_canonical_desk_handoff() -> None
         "const requested = String(ticker || window.workOsActiveTicker || '').toUpperCase();" in html
     )
     assert "fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk'" in html
+
+
+def test_company_switcher_is_attached_to_identity_and_accessible() -> None:
+    html = render_work_os_shell()
+
+    assert 'class="company-identity-switcher"' in html
+    assert 'id="companyPickerLabel"' in html
+    assert 'class="company-picker-trigger k-btn k-btn-quiet k-btn-sm"' in html
+    assert 'id="companyPickerTrigger"' in html
+    assert 'aria-haspopup="listbox"' in html
+    assert 'aria-controls="companyPickerPopover"' in html
+    assert 'aria-expanded="false"' in html
+    assert 'id="companyPickerPopover"' in html
+    assert 'id="companyPickerSearch"' in html
+    assert 'role="combobox"' in html
+    assert 'aria-autocomplete="list"' in html
+    assert 'aria-controls="companyPickerList"' in html
+    assert 'class="k-menu company-picker-list" id="companyPickerList" role="listbox"' in html
+    assert 'id="companyPickerStatus"' in html
+    assert ".company-identity-switcher:hover .company-picker-trigger" in html
+    assert ".company-identity-switcher:focus-within .company-picker-trigger" in html
+    assert "@media (hover: none)" in html
+    assert "min-block-size: var(--touch-target-size)" in html
+
+
+def test_company_picker_supports_search_keyboard_dismissal_and_focus_restore() -> None:
+    html = render_work_os_shell()
+
+    assert "window.CCOverlay.register(companyPickerPopover" in html
+    assert "restoreFocus: true" in html
+    assert "autofocus: false" in html
+    assert "workOsRenderCompanyPickerOptions" in html
+    assert "company.name" in html
+    assert 'role="option"' in html
+    assert "aria-activedescendant" in html
+    assert "ev.key === 'ArrowDown'" in html
+    assert "ev.key === 'ArrowUp'" in html
+    assert "ev.key === 'Enter'" in html
+    assert "companyPickerOverlay.close()" in html
+    assert "document.addEventListener('click'" in html
+    assert "!companyPickerRoot.contains(event.target)" in html
+
+
+def test_company_switch_commits_atomically_and_rejects_stale_requests() -> None:
+    html = render_work_os_shell()
+    render_desk = html.split("async function workOsRenderCompanyDesk", 1)[1].split(
+        "async function workOsRenderBriefLibrary", 1
+    )[0]
+
+    assert "let workOsCompanyRequestSequence = 0;" in html
+    assert "let workOsCompanyRequestController = null;" in html
+    assert "workOsCompanyRequestController.abort()" in render_desk
+    assert "new AbortController()" in render_desk
+    assert "signal: controller.signal" in render_desk
+    assert "if (requestSequence !== workOsCompanyRequestSequence) return false;" in render_desk
+    assert render_desk.index("const desk = await response.json();") < render_desk.index(
+        "window.workOsActiveTicker = normalized;"
+    )
+    assert "window.workOsActiveTicker = previousTicker;" in render_desk
+    assert "return false;" in render_desk
+    assert "return true;" in render_desk
+
+
+def test_company_switch_keeps_url_and_rendered_identity_in_sync() -> None:
+    html = render_work_os_shell()
+    switch_runtime = html.split("window.switchCompanyWorkspace = async function", 1)[1].split(
+        "function workOsRenderPortfolio", 1
+    )[0]
+
+    assert "function workOsCompanyDeskUrl(ticker)" in html
+    assert "params.set('ticker', ticker);" in html
+    assert "params.set('screen', 'company-desk');" in html
+    assert "window.history.pushState({ screenId: 'screen-workspace', ticker: requested }" in html
+    assert "await workOsRenderCompanyDesk(requested)" in html
+    assert "if (!committed) return false;" in html
+    assert "window.navigateTo('screen-workspace'" in switch_runtime
+    assert "breadcrumb.textContent = 'Company Desk (' + requested + ')'" in switch_runtime
+    assert switch_runtime.index("window.navigateTo('screen-workspace'") < switch_runtime.index(
+        "breadcrumb.textContent = 'Company Desk (' + requested + ')'"
+    )
+
+
+def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> None:
+    html = render_work_os_shell()
+    brief_reader = html.split("window.openWorkOsBriefReader = async function", 1)[1].split(
+        "window.openFullBriefCanvas", 1
+    )[0]
+
+    assert "window.workOsActiveTicker =" not in brief_reader
+    assert "const requestedTicker = String(tickerOrArtifact" in brief_reader
+    assert "encodeURIComponent(requestedTicker)" in brief_reader
+
+    threshold_handler = html.split("document.querySelectorAll('[data-work-os-thresholds]')", 1)[
+        1
+    ].split("function workOsApplyRequestedResearchState", 1)[0]
+    assert "window.workOsActiveTicker =" not in threshold_handler
+    assert "switchCompanyWorkspace(node.dataset.workOsThresholds).then" in threshold_handler
+    assert "if (committed) openDrillDrawer('thresholds')" in threshold_handler
