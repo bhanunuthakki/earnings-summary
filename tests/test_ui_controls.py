@@ -172,8 +172,23 @@ def test_standalone_earnings_calendar_composes_the_design_system() -> None:
     assert 'aria-label="Open command center"' in source
     assert 'aria-label="Research briefs"' in source
     assert 'href="http://127.0.0.1:7421/"' in source
+    assert source.count('class="calendar-section k-card k-card-stack"') == 2
+    assert 'class="calendar-section k-card"' in source
+    assert source.count('class="k-card-title"') == 2
+    assert 'class="calendar-meta k-card-meta"' in source
+    assert ".calendar-table {{ background:" not in source
+    assert "h2 {{" not in source
     assert source.count('class="calendar-table-wrap"') == 3
     assert "overflow-x: auto" in source
+
+
+def test_dashboard_alert_cards_only_add_layout_to_card_kit() -> None:
+    from dashboard._styles import CSS as DASHBOARD_CSS
+
+    rule = DASHBOARD_CSS.split(".alert-card {", 1)[1].split("}", 1)[0]
+    assert "margin-bottom: var(--gap)" in rule
+    for property_name in ("background:", "border:", "border-radius:", "padding:", "box-shadow:"):
+        assert property_name not in rule
 
 
 def test_mobile_controls_keep_accessible_text_and_touch_floors() -> None:

@@ -362,7 +362,7 @@ def test_holding_fragment_consolidates_notes_into_shared_drawer(repo: Path) -> N
     # (the "Recent alerts" h3 in the Ops analyses log is a different thing).
     assert 'data-tcc-panel="notes"' not in frag
     assert "Open notes" not in frag
-    assert 'class="alert-card"' not in frag  # the rich note-rail alert cards are gone
+    assert 'class="alert-card ' not in frag  # the rich note-rail alert cards are gone
     assert "Watch FX drag on ARPAC next print" not in frag  # note body not inlined
 
 
@@ -389,7 +389,7 @@ def test_shared_notes_drawer_surfaces_notes_and_alerts(repo: Path) -> None:
     assert "earnings.arpac" in frag
     assert "NIM dip: mix or rate?" not in frag  # resolved note excluded
     assert "Recent alerts" in frag
-    assert 'class="alert-card"' in frag
+    assert 'class="alert-card k-card k-card-stack"' in frag
     assert "ROE inflected down two quarters running" in frag
     assert "Tighten the ROE break rule" in frag
     assert '<details class="evidence-drawer">' in frag

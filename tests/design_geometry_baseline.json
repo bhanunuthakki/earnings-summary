@@ -1,8 +1,8 @@
 {
   "execution/build_earnings_calendar.py": 1,
-  "src/dashboard/_styles.py": 42,
+  "src/dashboard/_styles.py": 37,
   "src/dashboard/inbox.py": 27,
-  "src/dashboard/upcoming.py": 9,
+  "src/dashboard/upcoming.py": 7,
   "src/pipeline/advisor_memos_panel.py": 31,
   "src/pipeline/allocation_decisions_panel.py": 27,
   "src/pipeline/allocation_recommendation_panel.py": 30,

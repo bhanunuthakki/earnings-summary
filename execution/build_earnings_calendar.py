@@ -357,13 +357,9 @@ body {{ margin: 0; background: var(--bg); color: var(--fg); font-family: var(--s
 .calendar-content {{ min-width: 0; max-width: var(--main-max-width); width: 100%;
   margin: 0 auto; padding: var(--sp-5) var(--sp-4); }}
 .calendar-head {{ margin-bottom: var(--sp-5); }}
-h1 {{ margin: 0 0 var(--sp-1); font-size: var(--fs-display); }}
-.meta {{ color: var(--muted); font-size: var(--fs-body); margin: 0; }}
-.meta strong {{ color: var(--fg); }}
-h2 {{ font-size: var(--fs-title); margin: var(--sp-5) 0 var(--sp-2);
-  padding-bottom: var(--sp-2); border-bottom: var(--bw-thin) solid var(--border); }}
-.calendar-table {{ background: var(--surface); }}
-.calendar-table th {{ background: var(--paper); }}
+.calendar-page-title {{ margin: 0 0 var(--sp-1); font-size: var(--fs-display); }}
+.calendar-meta strong {{ color: var(--fg); }}
+.calendar-section {{ margin-top: var(--sp-4); }}
 .calendar-row.portfolio td {{ background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }}
 .calendar-row.evaluation td {{ background: color-mix(in srgb, var(--mark) 5%, var(--surface)); }}
 .calendar-kind.portfolio {{ color: var(--accent); border-color: var(--accent); }}
@@ -375,8 +371,7 @@ td.when {{ font-family: var(--mono); font-size: var(--fs-caption); color: var(--
 a {{ color: var(--accent); text-decoration: none; }}
 a:hover {{ text-decoration: underline; }}
 .muted {{ color: var(--muted); font-style: italic; }}
-details {{ margin-top: var(--sp-4); }}
-details summary {{ cursor: pointer; color: var(--muted); font-size: var(--fs-body); }}
+details summary {{ cursor: pointer; }}
 details .calendar-table {{ margin-top: var(--sp-2); }}
 .calendar-table-wrap {{ width: 100%; max-width: 100%; overflow-x: auto; }}
 @media (max-width: 900px) {{
@@ -409,11 +404,12 @@ details .calendar-table {{ margin-top: var(--sp-2); }}
 </aside>
 <main class="calendar-content">
 <header class="calendar-head">
-  <h1>Earnings Calendar</h1>
-  <p class="meta">Generated <strong>{today.isoformat()}</strong> · Upcoming next 90d: <strong>{len(upcoming)}</strong> ({portfolio_upcoming} portfolio, {evaluation_upcoming} evaluation, {watchlist_upcoming} watchlist) · Recently reported last 45d: <strong>{len(recent)}</strong> · No calendar data: <strong>{len(no_data)}</strong></p>
+  <h1 class="calendar-page-title">Earnings Calendar</h1>
+  <p class="calendar-meta k-card-meta">Generated <strong>{today.isoformat()}</strong> · Upcoming next 90d: <strong>{len(upcoming)}</strong> ({portfolio_upcoming} portfolio, {evaluation_upcoming} evaluation, {watchlist_upcoming} watchlist) · Recently reported last 45d: <strong>{len(recent)}</strong> · No calendar data: <strong>{len(no_data)}</strong></p>
 </header>
 
-<h2>Upcoming (next 90 days)</h2>
+<section class="calendar-section k-card k-card-stack" aria-labelledby="upcomingEarningsTitle">
+<h2 class="k-card-title" id="upcomingEarningsTitle">Upcoming (next 90 days)</h2>
 <div class="calendar-table-wrap" role="region" aria-label="Upcoming earnings" tabindex="0">
 <table class="p-table calendar-table">
   <thead><tr><th>Date</th><th>Company</th><th>List</th><th>When</th><th>Latest report</th></tr></thead>
@@ -422,8 +418,10 @@ details .calendar-table {{ margin-top: var(--sp-2); }}
   </tbody>
 </table>
 </div>
+</section>
 
-<h2>Recently reported (last 45 days)</h2>
+<section class="calendar-section k-card k-card-stack" aria-labelledby="recentEarningsTitle">
+<h2 class="k-card-title" id="recentEarningsTitle">Recently reported (last 45 days)</h2>
 <div class="calendar-table-wrap" role="region" aria-label="Recently reported earnings" tabindex="0">
 <table class="p-table calendar-table">
   <thead><tr><th>Date</th><th>Company</th><th>List</th><th>When</th><th>Latest report</th></tr></thead>
@@ -432,9 +430,10 @@ details .calendar-table {{ margin-top: var(--sp-2); }}
   </tbody>
 </table>
 </div>
+</section>
 
-<details>
-<summary>No calendar data ({len(no_data)} tickers)</summary>
+<details class="calendar-section k-card">
+<summary class="k-card-row-title">No calendar data ({len(no_data)} tickers)</summary>
 <div class="calendar-table-wrap" role="region" aria-label="Tickers without calendar data" tabindex="0">
 <table class="p-table calendar-table">
   <thead><tr><th>Company</th><th>List</th><th>Latest report</th></tr></thead>
