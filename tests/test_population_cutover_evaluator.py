@@ -10,10 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from pydantic import JsonValue
 
-from alembic import command
 from provenance.integrity_audit import (
     CutoverAuditOptions,
     CutoverGateCandidateCommitment,
@@ -39,26 +37,22 @@ from provenance.population_cutover import (
     evaluate_population_cutover,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 8, 11, 12, 0, tzinfo=UTC)
 SHA = hashlib.sha256(b"population-evaluator-test").hexdigest()
 SCOPE = PopulationTemporalScope(knowledge_cutoff=STAMP, observed_through=STAMP)
 
 
-def _database(tmp_path: Path) -> sqlite3.Connection:
+def _database(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> sqlite3.Connection:
     path = tmp_path / "population-evaluator.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        "CREATE TABLE financial_facts (id INTEGER PRIMARY KEY,source_doc_id INTEGER NOT NULL);"
-        "CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY,source_doc_id INTEGER NOT NULL);"
+    migrated_db(
+        path,
+        stamp="0213_decision_draft_provider_id",
+        target="0256_population_cutover_receipts",
+        archived=True,
     )
-    conn.commit()
-    conn.close()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0256_population_cutover_receipts")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
@@ -234,8 +228,9 @@ def test_audit_receipt_binds_exact_candidate_row_state() -> None:
 def test_evaluator_dry_run_is_read_only_and_apply_atomically_seals(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     _patch_green(monkeypatch)
     try:
         dry_run = evaluate_population_cutover(conn, _request(apply=False))
@@ -257,10 +252,11 @@ def test_evaluator_dry_run_is_read_only_and_apply_atomically_seals(
 def test_blocked_plane_writes_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
     import provenance.population_cutover as cutover
 
-    conn = _database(tmp_path)
+    conn = _database(tmp_path, migrated_db)
     _patch_green(monkeypatch)
     verifiers = list(cutover._PLANE_VERIFIERS)
     verifiers[3] = (

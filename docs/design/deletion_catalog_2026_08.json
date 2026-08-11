@@ -9,7 +9,6 @@
       "disposition": "delete",
       "rollback_commit": "7e8fb34a92e33023eef89b50740def28db1b9775",
       "code_targets": [
-        "execution/audit_data_cutover_readiness.py",
         "execution/audit_latest_state_candidate.py",
         "execution/audit_latest_state_candidate_coverage.py",
         "execution/audit_live_cutover_source_health.py",
@@ -32,8 +31,7 @@
         "src/provenance/latest_state_rehearsal.py",
         "src/provenance/latest_state_rehearsal_evidence.py",
         "src/provenance/latest_state_semantic_qualification.py",
-        "src/provenance/live_cutover_merge.py",
-        "src/provenance/population_cutover.py"
+        "src/provenance/live_cutover_merge.py"
       ],
       "test_targets": [
         "tests/test_compressed_candidate_clone.py",
