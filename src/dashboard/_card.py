@@ -69,7 +69,8 @@ def render_alert_card(
         fired = fired.astimezone(UTC).replace(tzinfo=None)
     cat_attr = f' data-cat="{_esc(category)}"' if category else ""
     body.write(
-        f'<div class="alert-card"{cat_attr} data-when="{fired.isoformat(timespec="seconds")}">'
+        f'<div class="alert-card k-card k-card-stack"{cat_attr} '
+        f'data-when="{fired.isoformat(timespec="seconds")}">'
     )
     body.write('<div class="alert-card-head">')
     # data-peek-ticker: in the shell, hovering the badge shows the ticker

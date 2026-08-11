@@ -24,7 +24,6 @@ CSS = (
   --pad-y: 14px;
   --gap: 14px;
   --gap-lg: 22px;
-  --card-pad: 14px;
 }
 
 * { box-sizing: border-box; }
@@ -62,21 +61,17 @@ button { transition: color var(--transition), border-color var(--transition),
 .dash-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .dash-filters .filter-value { font-family: var(--mono); }
 
-/* Alert cards — elevation (surface on bg), not border boxes. */
-.alert-card {
-  background: var(--surface);
-  border-radius: var(--radius);
-  padding: var(--card-pad);
-  margin-bottom: var(--gap);
-}
-.alert-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
+/* Alert cards compose the canonical .k-card + .k-card-stack geometry; this
+   namespace preserves the inbox JS hook and adds page-flow layout only. */
+.alert-card { margin-bottom: var(--gap); }
+.alert-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 /* Alert-card identity marks ride the shared kit (controls.py), emitted by
    src/dashboard/_card.py: the ticker is a .k-tick-sym (mono 600, no box), the
    trigger a .k-chip, the status a .k-pill + tone. Only timestamp layout is local. */
 .fired-at { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); margin-left: auto; }
 
 .alert-memo {
-  margin: 6px 0 10px 0;
+  margin: 0;
   padding: 10px 12px;
   background: var(--paper);
   border-left: 3px solid var(--border-2);
@@ -88,7 +83,7 @@ button { transition: color var(--transition), border-color var(--transition),
 .alert-memo-pending { color: var(--muted); }
 
 /* Queued actions */
-.queued-actions { margin: 10px 0 0 0; }
+.queued-actions { margin: 0; }
 .queued-actions h4 { font-size: var(--fs-caption); font-weight: 600; margin: 0 0 6px 0; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
 .queued-action {
   display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;
@@ -108,7 +103,7 @@ button { transition: color var(--transition), border-color var(--transition),
 
 /* Evidence drawer */
 .evidence-drawer {
-  margin-top: 10px;
+  margin: 0;
   background: var(--paper);
   border-radius: var(--radius);
 }

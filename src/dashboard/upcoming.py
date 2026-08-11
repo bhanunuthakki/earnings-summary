@@ -299,10 +299,10 @@ def render_upcoming_strip(
         f"Upcoming earnings · {len(upcoming)} in {horizon_days}d"
         f" — next {next_ticker} {next_when.strftime('%m-%d')}"
     )
-    out.write(f'<div class="up-strip" data-up-summary="{_esc(summary)}">')
+    out.write(f'<div class="up-strip k-card k-card-dense" data-up-summary="{_esc(summary)}">')
     out.write(
-        '<div class="up-strip-head">Upcoming earnings'
-        f'<span class="up-strip-sub">next {horizon_days}d</span></div>'
+        '<div class="up-strip-head k-card-row-title">Upcoming earnings'
+        f'<span class="up-strip-sub k-card-meta">next {horizon_days}d</span></div>'
     )
     out.write('<ul class="up-strip-list">')
     for tier in _TIER_ORDER:
@@ -343,14 +343,11 @@ def _esc(text: str) -> str:
 
 
 UPCOMING_CSS = """
-/* "Upcoming earnings" — the compact Home-rail strip above the Inbox. */
-.up-strip { background: var(--surface); border-radius: var(--radius);
-  padding: 9px 12px; margin-bottom: var(--sp-2); }
+/* "Upcoming earnings" — canonical dense card, with local rail layout only. */
+.up-strip { margin-bottom: var(--sp-2); }
 .up-strip-head { display: flex; justify-content: space-between; align-items: baseline;
-  color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px; }
-.up-strip-sub { font-weight: 400; letter-spacing: 0; text-transform: none;
-  font-family: var(--mono, monospace); }
+  margin-bottom: var(--sp-1); }
+.up-strip-sub { font-weight: 400; }
 .up-strip-list { list-style: none; margin: 0; padding: 0; }
 .up-strip-list li { padding: 3px 0; font-size: var(--fs-caption); }
 /* Tier bands (Wave 2): Portfolio > Active valuation > Evaluation. */

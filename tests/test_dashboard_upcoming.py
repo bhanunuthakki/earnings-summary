@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from dashboard.upcoming import render_upcoming_strip, upcoming_earnings
+from dashboard.upcoming import UPCOMING_CSS, render_upcoming_strip, upcoming_earnings
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 TODAY = date(2026, 5, 27)
@@ -158,7 +158,9 @@ def test_strip_renders_compact_rows(db_path: Path) -> None:
 
     html = render_upcoming_strip(db_path, TODAY)
 
-    assert 'class="up-strip"' in html
+    assert 'class="up-strip k-card k-card-dense"' in html
+    assert 'class="up-strip-head k-card-row-title"' in html
+    assert 'class="up-strip-sub k-card-meta"' in html
     assert "Upcoming earnings" in html
     # Wave B (B2): the strip root carries the informative one-line summary the
     # shell hoists into its collapsed <details> header — count in horizon +
@@ -181,6 +183,13 @@ def test_strip_renders_compact_rows(db_path: Path) -> None:
     assert html.index('data-peek-ticker="NU"') < html.index("Evaluation")
     # The watchlist name never appears.
     assert "ZZ" not in html
+
+
+def test_strip_card_css_only_adds_layout() -> None:
+    rule = UPCOMING_CSS.split(".up-strip {", 1)[1].split("}", 1)[0]
+    assert "margin-bottom: var(--sp-2)" in rule
+    for property_name in ("background:", "border:", "border-radius:", "padding:", "box-shadow:"):
+        assert property_name not in rule
 
 
 def test_strip_renders_watch_items_inline_as_ask_doorways(db_path: Path) -> None:
