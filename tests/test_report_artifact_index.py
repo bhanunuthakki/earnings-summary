@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from datetime import UTC, date, datetime
 from pathlib import Path
+
+import pytest
 
 from report.artifacts import (
     RenderedReportBody,
@@ -173,6 +176,9 @@ def test_same_content_rerun_does_not_mutate_existing_artifact(tmp_path: Path) ->
 
 
 def test_persist_report_artifact_supports_governed_output_junction(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junction regression")
+
     repo_root = tmp_path / "runtime"
     output_target = tmp_path / "canonical-output"
     repo_root.mkdir()
@@ -185,8 +191,6 @@ def test_persist_report_artifact_supports_governed_output_junction(tmp_path: Pat
         check=False,
     )
     if result.returncode != 0:
-        import pytest
-
         pytest.skip("Windows junction creation is unavailable")
 
     workspace = output_link / "research" / "NU" / "2026-08-10_workspace.html"
