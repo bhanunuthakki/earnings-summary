@@ -638,7 +638,11 @@ def test_cli_emits_one_redacted_terminal_receipt_and_ends_run_once(
                     if failure_kind == "exception"
                     else TickerExecutionStatus.COMPLETED
                 ),
-                error=(f"RuntimeError: api_key={leak_sentinel}" if failure_kind == "exception" else None),
+                error=(
+                    f"RuntimeError: api_key={leak_sentinel}"
+                    if failure_kind == "exception"
+                    else None
+                ),
             ),
         ),
     )
