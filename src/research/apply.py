@@ -30,6 +30,7 @@ from research.proposals import get_proposal
 if TYPE_CHECKING:
     from research.proposals import ResearchProposal
 
+
 # Kind -> the GATED writer, registered by Wave 3/4 (dcf, thesis, code). A mutating
 # kind absent here is "not yet wired" even once its gate clears.
 @dataclass(frozen=True, slots=True)
@@ -96,7 +97,11 @@ def _oracle_ok_of(prop: object) -> bool | None:
 
 
 def apply_approved_proposal(
-    proposal_id: int, *, db_path: Path | str | None = None, steer_authorized: bool = False
+    proposal_id: int,
+    *,
+    db_path: Path | str | None = None,
+    steer_authorized: bool = False,
+    repo_root: Path | None = None,
 ) -> str:
     """Perform the kind-specific live write for a just-approved proposal.
 
@@ -110,6 +115,7 @@ def apply_approved_proposal(
         proposal_id=proposal_id,
         db_path=db_path,
         steer_authorized=steer_authorized,
+        **({"repo_root": repo_root} if repo_root is not None else {}),
     )
     return result.message if isinstance(result, MutationApplyResult) else result
 
@@ -149,5 +155,5 @@ def apply_governed_proposal(
             return f"{kind}: apply not yet wired"
         if kind in {"ask_thesis_edit", "ask_kpi_edit"}:
             return applier(proposal_id, db_path=db_path, proposal=prop, **applier_context)
-        return applier(proposal_id, db_path=db_path)
+        return applier(proposal_id, db_path=db_path, **applier_context)
     return f"{kind}: apply not yet wired"

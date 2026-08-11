@@ -35,6 +35,7 @@ from dcf.persist import (
     derive_sanity_flag,
     upsert,
 )
+from dcf.provenance import build_effective_provenance
 from synthesis.lenses._shared import load_dcf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -69,7 +70,26 @@ def db_path(tmp_path: Path) -> Iterator[Path]:
         dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
 
 
-def _row(ticker: str, *, npv_per_share: float, live_price: float | None) -> DcfRunRow:
+def _row(
+    ticker: str,
+    *,
+    npv_per_share: float,
+    live_price: float | None,
+    repo_root: Path | None = None,
+) -> DcfRunRow:
+    snapshot = json.dumps({"fx_to_usd": 1.0})
+    provenance = None
+    if repo_root is not None:
+        workbook = repo_root / "dcf" / f"{ticker}.xlsx"
+        workbook.parent.mkdir(exist_ok=True)
+        workbook.write_bytes(f"{ticker}-workbook".encode())
+        provenance = build_effective_provenance(
+            ticker=ticker,
+            repo_root=repo_root,
+            workbook_path=workbook,
+            assumption_snapshot_json=snapshot,
+            engine_version="sanity_gate_test_v1",
+        )
     return DcfRunRow(
         ticker=ticker,
         valuation_date=date(2026, 7, 19),
@@ -82,7 +102,8 @@ def _row(ticker: str, *, npv_per_share: float, live_price: float | None) -> DcfR
         live_price=live_price,
         live_price_at=None,
         mos_bar_used=None,
-        assumption_snapshot_json=json.dumps({"fx_to_usd": 1.0}),
+        assumption_snapshot_json=snapshot,
+        provenance=provenance,
     )
 
 
@@ -108,7 +129,11 @@ def test_flag_outlier_past_the_limit_both_directions() -> None:
 def test_upsert_stamps_outlier_on_extreme_over_under(db_path: Path) -> None:
     # fair 10, live 25 -> over_under = +1.5, well past 0.6
     with sqlite3.connect(str(db_path)) as conn:
-        upsert(conn, _row("TSM", npv_per_share=10.0, live_price=25.0))
+        upsert(
+            conn,
+            _row("TSM", npv_per_share=10.0, live_price=25.0, repo_root=db_path.parent.parent),
+            repo_root=db_path.parent.parent,
+        )
         flag = conn.execute(
             "SELECT sanity_flag FROM dcf_runs WHERE ticker='TSM' AND is_latest=1"
         ).fetchone()[0]
@@ -118,7 +143,11 @@ def test_upsert_stamps_outlier_on_extreme_over_under(db_path: Path) -> None:
 def test_upsert_leaves_flag_null_within_bounds(db_path: Path) -> None:
     # fair 10, live 12 -> over_under = +0.2
     with sqlite3.connect(str(db_path)) as conn:
-        upsert(conn, _row("NU", npv_per_share=10.0, live_price=12.0))
+        upsert(
+            conn,
+            _row("NU", npv_per_share=10.0, live_price=12.0, repo_root=db_path.parent.parent),
+            repo_root=db_path.parent.parent,
+        )
         flag = conn.execute(
             "SELECT sanity_flag FROM dcf_runs WHERE ticker='NU' AND is_latest=1"
         ).fetchone()[0]
@@ -154,7 +183,11 @@ def test_upsert_still_works_on_a_pre_0182_schema(tmp_path: Path) -> None:
 
 def test_load_dcf_withholds_numbers_of_a_flagged_run(db_path: Path, tmp_path: Path) -> None:
     with sqlite3.connect(str(db_path)) as conn:
-        upsert(conn, _row("TSM", npv_per_share=10.0, live_price=25.0))
+        upsert(
+            conn,
+            _row("TSM", npv_per_share=10.0, live_price=25.0, repo_root=db_path.parent.parent),
+            repo_root=db_path.parent.parent,
+        )
     out = load_dcf("TSM", tmp_path)
     assert out is not None
     assert out["sanity_flag"] == "outlier"
@@ -165,7 +198,11 @@ def test_load_dcf_withholds_numbers_of_a_flagged_run(db_path: Path, tmp_path: Pa
 
 def test_load_dcf_passes_an_unflagged_run_through(db_path: Path, tmp_path: Path) -> None:
     with sqlite3.connect(str(db_path)) as conn:
-        upsert(conn, _row("NU", npv_per_share=10.0, live_price=12.0))
+        upsert(
+            conn,
+            _row("NU", npv_per_share=10.0, live_price=12.0, repo_root=db_path.parent.parent),
+            repo_root=db_path.parent.parent,
+        )
     out = load_dcf("NU", tmp_path)
     assert out is not None
     assert out["sanity_flag"] is None

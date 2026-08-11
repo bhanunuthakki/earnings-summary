@@ -59,7 +59,7 @@ from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
 from dcf import reverse as reverse_mod  # noqa: E402
 from dcf import universe as universe_mod  # noqa: E402
-from dcf.provenance import DcfInputProvenance  # noqa: E402
+from dcf.provenance import DcfInputProvenance, build_effective_provenance  # noqa: E402
 from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from ticker_validation import safe_ticker  # noqa: E402
@@ -139,84 +139,49 @@ def _build_dcf_provenance(
     live_price_source: str | None,
     mos_bar: float | None,
 ) -> DcfInputProvenance:
-    """Build reproducible lineage for the effective DCF input set."""
+    """Build reproducible lineage through the shared canonical contract."""
     ticker = ticker.upper()
-    source_specs: list[tuple[Path, str]] = [
-        *[
+    source_specs = tuple(
+        [
             (
-                repo_root / "data" / "historical" / "fmp" / f"{ticker}_{suffix}",
                 role,
+                repo_root / "data" / "historical" / "fmp" / f"{ticker}_{suffix}",
             )
             for suffix, role in _DCF_SOURCE_SUFFIXES
-        ],
-        (
-            repo_root / "data" / "dcf_assumptions" / f"{ticker}.json",
-            "owner_assumptions",
-        ),
-        (
-            repo_root / "micro_thesis" / "holdings" / f"{ticker}.json",
-            "holding_policy",
-        ),
-    ]
-    sources: list[dict[str, object]] = []
-    observed_times: list[datetime] = []
-    for path, role in source_specs:
-        source = _source_file(path, role=role, repo_root=repo_root)
-        if source is not None:
-            detail, observed_at = source
-            sources.append(detail)
-            observed_times.append(observed_at)
-
-    workbook_sha256 = _sha256_file(workbook_path)
-    workbook_source = _source_file(
-        workbook_path,
-        role="calculation_workbook",
+        ]
+        + [
+            (
+                "owner_assumptions",
+                repo_root / "data" / "dcf_assumptions" / f"{ticker}.json",
+            ),
+            (
+                "holding_policy",
+                repo_root / "micro_thesis" / "holdings" / f"{ticker}.json",
+            ),
+        ]
+    )
+    normalized_live_at = (
+        live_price_at.replace(tzinfo=UTC)
+        if live_price_at is not None and live_price_at.tzinfo is None
+        else live_price_at.astimezone(UTC)
+        if live_price_at is not None
+        else None
+    )
+    return build_effective_provenance(
+        ticker=ticker,
         repo_root=repo_root,
-    )
-    if workbook_source is not None:
-        workbook_detail, workbook_observed_at = workbook_source
-        sources.append(workbook_detail)
-        observed_times.append(workbook_observed_at)
-
-    normalized_live_at: datetime | None = None
-    if live_price_at is not None:
-        normalized_live_at = (
-            live_price_at.replace(tzinfo=UTC)
-            if live_price_at.tzinfo is None
-            else live_price_at.astimezone(UTC)
-        )
-        observed_times.append(normalized_live_at)
-    market_price: dict[str, object] = {
-        "price": live_price,
-        "observed_at": _iso_utc(normalized_live_at),
-        "source": live_price_source,
-    }
-    canonical_inputs: dict[str, object] = {
-        "engine_version": DCF_ENGINE_VERSION,
-        "ticker": ticker,
-        "valuation_inputs": dict(input_payload),
-        "assumption_snapshot": json.loads(assumption_snapshot_json),
-        "market_price": market_price,
-        "mos_bar": mos_bar,
-        "workbook_sha256": workbook_sha256,
-    }
-    canonical = json.dumps(
-        canonical_inputs,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
-    input_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return DcfInputProvenance(
-        input_sha256=input_sha256,
-        workbook_sha256=workbook_sha256,
+        workbook_path=workbook_path,
+        assumption_snapshot_json=assumption_snapshot_json,
         engine_version=DCF_ENGINE_VERSION,
-        inputs_as_of=max(observed_times, default=datetime.now(UTC)),
-        detail={
-            "market_price": market_price,
-            "sources": sources,
-            "ticker": ticker,
+        source_paths=source_specs,
+        additional_inputs={
+            "valuation_inputs": dict(input_payload),
+            "market_price": {
+                "price": live_price,
+                "observed_at": _iso_utc(normalized_live_at),
+                "source": live_price_source,
+            },
+            "mos_bar": mos_bar,
         },
     )
 
@@ -1036,7 +1001,7 @@ def _refresh_redesign(
         provenance=input_provenance,
     )
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        persisted = persist_mod.upsert(conn, row)
+        persisted = persist_mod.upsert(conn, row, repo_root=repo_root)
 
     return {
         "ticker": ticker,
@@ -1203,7 +1168,7 @@ def apply_edits(
         provenance=input_provenance,
     )
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        persisted = persist_mod.upsert(conn, row)
+        persisted = persist_mod.upsert(conn, row, repo_root=repo_root)
 
     return {
         "ticker": ticker,

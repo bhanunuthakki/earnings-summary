@@ -732,7 +732,7 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         ),
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        persist_mod.upsert(conn, row)
+        persist_mod.upsert(conn, row, repo_root=REPO)
     return True
 
 

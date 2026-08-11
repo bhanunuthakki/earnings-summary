@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 from typing import cast
 
-from dcf.provenance import build_effective_provenance
+import pytest
+
+from dcf.provenance import build_effective_provenance, verify_effective_provenance
 
 
 def _sha(path: Path) -> str:
@@ -71,3 +74,74 @@ def test_build_effective_provenance_is_deterministic_and_input_sensitive(
 
     assert first == replay
     assert first.input_sha256 != changed.input_sha256
+
+
+def test_logical_workbook_identity_ignores_zip_container_timestamps(
+    tmp_path: Path,
+) -> None:
+    workbook = tmp_path / "NU.xlsx"
+    members = {
+        "[Content_Types].xml": b"<Types/>",
+        "xl/workbook.xml": b"<workbook><sheet name='DCF'/></workbook>",
+    }
+
+    def write(stamp: tuple[int, int, int, int, int, int]) -> None:
+        with zipfile.ZipFile(workbook, "w") as archive:
+            for name, payload in members.items():
+                info = zipfile.ZipInfo(name, date_time=stamp)
+                archive.writestr(info, payload)
+
+    def build():
+        return build_effective_provenance(
+            ticker="NU",
+            repo_root=tmp_path,
+            workbook_path=workbook,
+            assumption_snapshot_json='{"wacc":0.12}',
+            engine_version="bank_platform_v1",
+        )
+
+    write((2026, 1, 1, 0, 0, 0))
+    first = build()
+    write((2026, 7, 1, 0, 0, 0))
+    second = build()
+
+    assert first.workbook_sha256 != second.workbook_sha256
+    assert first.input_sha256 == second.input_sha256
+
+
+def test_verification_recomputes_commitment_and_rejects_stale_workbook(
+    tmp_path: Path,
+) -> None:
+
+    workbook = tmp_path / "dcf" / "NU.xlsx"
+
+    workbook.parent.mkdir()
+
+    workbook.write_bytes(b"workbook-v1")
+
+    snapshot = '{"wacc":0.12}'
+
+    provenance = build_effective_provenance(
+        ticker="NU",
+        repo_root=tmp_path,
+        workbook_path=workbook,
+        assumption_snapshot_json=snapshot,
+        engine_version="bank_platform_v1",
+    )
+
+    verify_effective_provenance(
+        provenance,
+        ticker="NU",
+        repo_root=tmp_path,
+        assumption_snapshot_json=snapshot,
+    )
+
+    workbook.write_bytes(b"workbook-v2")
+
+    with pytest.raises(ValueError, match="current file hash"):
+        verify_effective_provenance(
+            provenance,
+            ticker="NU",
+            repo_root=tmp_path,
+            assumption_snapshot_json=snapshot,
+        )

@@ -331,4 +331,5 @@ def draft_dcf_tweak_proposal(
         note_id=note_id,
         task_id=task_id,
         db_path=db_path,
+        repo_root=repo_root,
     )

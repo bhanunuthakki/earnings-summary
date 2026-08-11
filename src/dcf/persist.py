@@ -31,10 +31,11 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 from typing import cast
 
 from dcf import valuation
-from dcf.provenance import DcfInputProvenance
+from dcf.provenance import DcfInputProvenance, verify_effective_provenance
 from model_provenance.versioning import mark_superseded_by, supersede_current
 from schema_compat import require_current_for_write
 
@@ -282,7 +283,12 @@ def _same_current_version(
     return tuple(current) == expected
 
 
-def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
+def upsert(
+    conn: sqlite3.Connection,
+    row: DcfRunRow,
+    *,
+    repo_root: Path | None = None,
+) -> bool:
     """Persist a new dcf_runs version for ``row.ticker``.
 
     On the versioned schema (migration 0137+) the prior current run for the ticker
@@ -308,6 +314,11 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
     has_provenance = _has_provenance_columns(conn)
     has_versioning = _has_versioning_columns(conn)
     has_input_ledger = _has_input_ledger(conn)
+    if has_provenance != has_input_ledger:
+        raise sqlite3.OperationalError(
+            "DCF governance schema is incomplete: provenance columns and "
+            "dcf_run_inputs must be deployed together; run `alembic upgrade head`"
+        )
     governed_latest = has_versioning and has_provenance and has_input_ledger
     if governed_latest and row.provenance is None:
         raise ValueError("latest DCF requires input provenance on the current schema")
@@ -325,6 +336,13 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
             or _SHA256_RE.fullmatch(row.provenance.workbook_sha256) is None
         ):
             raise ValueError("latest DCF requires a valid workbook SHA-256")
+    if row.provenance is not None:
+        verify_effective_provenance(
+            row.provenance,
+            ticker=row.ticker,
+            repo_root=(repo_root or Path(__file__).resolve().parents[2]),
+            assumption_snapshot_json=row.assumption_snapshot_json,
+        )
     input_ledger_rows = (
         _input_ledger_rows(row.provenance)
         if row.provenance is not None and has_input_ledger

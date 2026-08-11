@@ -11,6 +11,7 @@ except through the same real chokepoint prod uses):
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -24,6 +25,7 @@ from alembic.config import Config
 from alembic import command
 from dcf import redesign
 from dcf.fact_drivers import DRIVER_FIELDS_BY_KEY, apply_to_inputs
+from dcf.provenance import build_effective_provenance
 from research.dcf_artifact import apply_dcf_proposal, draft_dcf_proposal
 from research.dcf_tweak import (
     DcfTweakCall,
@@ -66,21 +68,21 @@ _BASE = redesign.RedesignInputs(
 )
 
 
-def _with_test_provenance(row: dict[str, object]) -> dict[str, object]:
+def _with_test_provenance(row: dict[str, object], repo_root: Path) -> dict[str, object]:
+    workbook = repo_root / "dcf" / "NU.xlsx"
+    workbook.parent.mkdir(exist_ok=True)
+    if not workbook.exists():
+        workbook.write_bytes(b"test-workbook")
+    provenance = build_effective_provenance(
+        ticker="NU",
+        repo_root=repo_root,
+        workbook_path=workbook,
+        assumption_snapshot_json=str(row["assumption_snapshot_json"]),
+        engine_version="test_dcf_v1",
+    )
     row["provenance"] = {
-        "input_sha256": "a" * 64,
-        "workbook_sha256": "b" * 64,
-        "engine_version": "test_dcf_v1",
-        "inputs_as_of": "2026-06-30T08:00:00+00:00",
-        "detail": {
-            "sources": [
-                {
-                    "role": "effective_assumptions",
-                    "locator": "inline://dcf/NU/test",
-                    "sha256": "c" * 64,
-                }
-            ]
-        },
+        **dataclasses.asdict(provenance),
+        "inputs_as_of": provenance.inputs_as_of_iso(),
     }
     return row
 
@@ -225,11 +227,15 @@ def test_tweak_recompute_flows_through_apply_to_a_real_dcf_runs(db_path: Path) -
         tweaked, "NU", live_price=12.29, live_price_at=datetime(2026, 6, 30, 8, 0, 0)
     )
 
-    row = _with_test_provenance(row)
+    row = _with_test_provenance(row, db_path.parent)
 
-    pid = draft_dcf_proposal(ticker="NU", proposed_row=row, db_path=db_path)
+    pid = draft_dcf_proposal(
+        ticker="NU", proposed_row=row, db_path=db_path, repo_root=db_path.parent
+    )
     assert pid is not None
-    note = apply_dcf_proposal(pid, db_path=db_path)  # direct applier + real _default_persist
+    note = apply_dcf_proposal(
+        pid, db_path=db_path, repo_root=db_path.parent
+    )  # direct applier + real _default_persist
     assert "live" in note
 
     with sqlite3.connect(str(db_path)) as conn:
@@ -282,10 +288,11 @@ def testdefault_recompute_attaches_workbook_and_effective_input_provenance(
 # --------------------------------------------------------------------------- #
 
 
-def _valid_row() -> dict[str, object]:
+def _valid_row(repo_root: Path) -> dict[str, object]:
     tweaked = apply_to_inputs(_BASE, DRIVER_FIELDS_BY_KEY["tax_rate"], 0.21)
     return _with_test_provenance(
-        recompute_row_from_inputs(tweaked, "NU", tweak={"param": "tax_rate", "new_value": 0.21})
+        recompute_row_from_inputs(tweaked, "NU", tweak={"param": "tax_rate", "new_value": 0.21}),
+        repo_root,
     )
 
 
@@ -296,7 +303,8 @@ def test_orchestrator_extracts_recomputes_and_drafts(db_path: Path) -> None:
     def fake_recompute(
         _ticker: str, _param: str, _new_value: float, *, repo_root: Path | None = None
     ) -> dict[str, object] | None:
-        return _valid_row()
+        assert repo_root is not None
+        return _valid_row(repo_root)
 
     pid = draft_dcf_tweak_proposal(
         wondering="what if NU's tax rate were 21%?",
@@ -304,6 +312,7 @@ def test_orchestrator_extracts_recomputes_and_drafts(db_path: Path) -> None:
         extract_fn=fake_extract,
         recompute_fn=fake_recompute,
         db_path=db_path,
+        repo_root=db_path.parent,
     )
     assert pid is not None
     with sqlite3.connect(str(db_path)) as conn:

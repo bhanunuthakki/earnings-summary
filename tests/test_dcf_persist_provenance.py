@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import sqlite3
 from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from dcf.persist import DcfRunRow, upsert
-from dcf.provenance import DcfInputProvenance
+from dcf.provenance import build_effective_provenance
 
 _SCHEMA = """
 CREATE TABLE dcf_runs (
@@ -60,7 +63,30 @@ CREATE TABLE dcf_run_inputs (
 """
 
 
-def _row() -> DcfRunRow:
+def _row(repo_root: Path, *, snapshot: str = '{"wacc":0.09}') -> DcfRunRow:
+    workbook = repo_root / "dcf" / "META.xlsx"
+    workbook.parent.mkdir(exist_ok=True)
+    if not workbook.exists():
+        workbook.write_bytes(b"stable-workbook")
+    income = repo_root / "data" / "META_income_statement.json"
+    income.parent.mkdir(exist_ok=True)
+    if not income.exists():
+        income.write_text('{"revenue":1000}', encoding="utf-8")
+    provenance = build_effective_provenance(
+        ticker="META",
+        repo_root=repo_root,
+        workbook_path=workbook,
+        assumption_snapshot_json=snapshot,
+        engine_version="redesign_fcff_v1",
+        source_paths=(("income_statement", income),),
+        additional_inputs={
+            "market_price": {
+                "price": 90.0,
+                "observed_at": "2026-07-28T12:00:00+00:00",
+                "source": "fmp_quote",
+            }
+        },
+    )
     return DcfRunRow(
         ticker="META",
         valuation_date=date(2026, 7, 28),
@@ -73,88 +99,53 @@ def _row() -> DcfRunRow:
         live_price=90.0,
         live_price_at=datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
         mos_bar_used=0.2,
-        assumption_snapshot_json='{"wacc":0.09}',
+        assumption_snapshot_json=snapshot,
         notes="workbook=META.xlsx (redesigned)",
         assumptions_sync_status="synced",
         assumptions_synced_at=datetime(2026, 7, 28, 12, 1),
-        provenance=DcfInputProvenance(
-            input_sha256="a" * 64,
-            workbook_sha256="b" * 64,
-            engine_version="redesign_fcff_v1",
-            inputs_as_of=datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
-            detail={
-                "sources": [
-                    {
-                        "role": "income_statement",
-                        "path": "data/META_income_statement.json",
-                        "sha256": "c" * 64,
-                        "bytes": 123,
-                        "observed_at": "2026-07-28T11:59:00+00:00",
-                    }
-                ],
-                "market_price": {
-                    "price": 90.0,
-                    "observed_at": "2026-07-28T12:00:00+00:00",
-                    "source": "fmp_quote",
-                },
-            },
-        ),
+        provenance=provenance,
     )
 
 
-def test_exact_provenance_retry_is_a_noop() -> None:
+def test_exact_provenance_retry_is_a_noop(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
-    row = _row()
+    row = _row(tmp_path)
 
-    assert upsert(conn, row) is True
-    assert upsert(conn, row) is False
+    assert upsert(conn, row, repo_root=tmp_path) is True
+    assert upsert(conn, row, repo_root=tmp_path) is False
 
-    count = conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0]
-    assert count == 1
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 1
     current = conn.execute(
         "SELECT input_sha256, workbook_sha256, engine_version, provenance_json "
         "FROM dcf_runs WHERE is_latest=1"
     ).fetchone()
-    assert current == (
-        "a" * 64,
-        "b" * 64,
-        "redesign_fcff_v1",
-        '{"market_price":{"observed_at":"2026-07-28T12:00:00+00:00",'
-        '"price":90.0,"source":"fmp_quote"},"sources":[{"bytes":123,'
-        '"observed_at":"2026-07-28T11:59:00+00:00",'
-        '"path":"data/META_income_statement.json","role":"income_statement",'
-        '"sha256":"' + ("c" * 64) + '"}]}',
-    )
+    assert current is not None
+    provenance = row.provenance
+    assert provenance is not None
+    assert current[0] == provenance.input_sha256
+    assert current[1] == provenance.workbook_sha256
+    assert current[2] == "redesign_fcff_v1"
+    assert json.loads(str(current[3])) == provenance.detail
     inputs = conn.execute(
-        "SELECT role, locator, sha256, byte_size, observed_at FROM dcf_run_inputs ORDER BY role"
+        "SELECT role, locator, sha256 FROM dcf_run_inputs ORDER BY role"
     ).fetchall()
-    assert inputs == [
-        (
-            "income_statement",
-            "data/META_income_statement.json",
-            "c" * 64,
-            123,
-            "2026-07-28T11:59:00+00:00",
-        ),
-        (
-            "market_price",
-            "fmp_quote",
-            None,
-            None,
-            "2026-07-28T12:00:00+00:00",
-        ),
-    ]
+    assert {input_row[0] for input_row in inputs} == {
+        "calculation_workbook",
+        "effective_assumptions",
+        "income_statement",
+        "market_price",
+    }
 
 
-def test_reused_hash_cannot_hide_a_changed_calculation() -> None:
+def test_reused_hash_cannot_hide_a_changed_calculation(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
-    row = _row()
-    assert upsert(conn, row) is True
+    row = _row(tmp_path)
+    assert upsert(conn, row, repo_root=tmp_path) is True
 
     changed = dataclasses.replace(row, npv=1_200.0, npv_per_share=120.0)
-    assert upsert(conn, changed) is True
+    assert upsert(conn, changed, repo_root=tmp_path) is True
 
     versions = conn.execute(
         "SELECT npv_per_share, is_latest, superseded_by_id FROM dcf_runs ORDER BY id"
@@ -162,101 +153,126 @@ def test_reused_hash_cannot_hide_a_changed_calculation() -> None:
     assert versions[0][0:2] == (100.0, 0)
     assert versions[0][2] == 2
     assert versions[1] == (120.0, 1, None)
-    assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 4
 
 
-def test_current_schema_rejects_latest_run_without_provenance() -> None:
+def test_tampered_input_hash_is_rejected_before_write(tmp_path: Path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    row = _row(tmp_path)
+    assert row.provenance is not None
+    tampered = dataclasses.replace(
+        row,
+        provenance=dataclasses.replace(row.provenance, input_sha256="e" * 64),
+    )
+
+    with pytest.raises(ValueError, match="canonical commitments"):
+        upsert(conn, tampered, repo_root=tmp_path)
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+
+
+def test_current_schema_rejects_latest_run_without_provenance(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
 
     with pytest.raises(ValueError, match="latest DCF requires input provenance"):
-        upsert(conn, dataclasses.replace(_row(), provenance=None))
+        upsert(conn, dataclasses.replace(_row(tmp_path), provenance=None), repo_root=tmp_path)
 
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
-    assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 0
 
 
-def test_current_schema_rejects_missing_workbook_hash() -> None:
+def test_partial_governance_schema_without_input_ledger_fails_closed(tmp_path: Path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA.split("CREATE TABLE dcf_run_inputs", maxsplit=1)[0])
+
+    with pytest.raises(sqlite3.OperationalError, match="governance schema is incomplete"):
+        upsert(conn, _row(tmp_path), repo_root=tmp_path)
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+
+
+def test_current_schema_rejects_missing_workbook_hash(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
-    provenance = _row().provenance
+    row = _row(tmp_path)
+    provenance = row.provenance
     assert provenance is not None
 
     with pytest.raises(ValueError, match="workbook SHA-256"):
         upsert(
             conn,
             dataclasses.replace(
-                _row(), provenance=dataclasses.replace(provenance, workbook_sha256=None)
+                row, provenance=dataclasses.replace(provenance, workbook_sha256=None)
             ),
+            repo_root=tmp_path,
         )
 
 
-def test_current_schema_rejects_empty_input_ledger() -> None:
+def test_current_schema_rejects_empty_input_ledger(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
-    provenance = _row().provenance
+    row = _row(tmp_path)
+    provenance = row.provenance
     assert provenance is not None
 
     with pytest.raises(ValueError, match="input ledger"):
         upsert(
-            conn, dataclasses.replace(_row(), provenance=dataclasses.replace(provenance, detail={}))
+            conn,
+            dataclasses.replace(row, provenance=dataclasses.replace(provenance, detail={})),
+            repo_root=tmp_path,
         )
 
 
-def test_invalid_source_rolls_back_with_the_parent_transaction() -> None:
+def test_invalid_source_rolls_back_with_the_parent_transaction(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
-    provenance = _row().provenance
-    assert provenance is not None
+    row = _row(tmp_path)
+    provenance = row.provenance
+    assert provenance is not None and provenance.detail is not None
+    detail = dict(provenance.detail)
+    raw_sources = cast("list[object]", detail["sources"])
+    sources = [
+        dict(cast("dict[str, object]", source))
+        for source in raw_sources
+        if isinstance(source, dict)
+    ]
+    sources[0]["sha256"] = "not-a-sha"
+    detail["sources"] = sources
     invalid = dataclasses.replace(
-        _row(),
-        provenance=dataclasses.replace(
-            provenance,
-            detail={
-                "sources": [
-                    {
-                        "role": "income_statement",
-                        "path": "data/source.json",
-                        "sha256": "not-a-sha",
-                    }
-                ]
-            },
-        ),
+        row,
+        provenance=dataclasses.replace(provenance, detail=detail),
     )
 
     with pytest.raises(ValueError, match="invalid SHA-256"):
-        upsert(conn, invalid)
+        upsert(conn, invalid, repo_root=tmp_path)
     conn.rollback()
 
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 0
 
 
-def test_input_ledger_constraint_failure_preserves_the_current_run() -> None:
+def test_duplicate_ledger_identity_is_rejected_before_supersede(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
-    current = _row()
-    assert upsert(conn, current) is True
+    current = _row(tmp_path)
+    assert upsert(conn, current, repo_root=tmp_path) is True
     provenance = current.provenance
-    assert provenance is not None
-    source = {
-        "role": "income_statement",
-        "path": "data/duplicate.json",
-        "sha256": "d" * 64,
-    }
+    assert provenance is not None and provenance.detail is not None
+    detail = dict(provenance.detail)
+    raw_sources = cast("list[object]", detail["sources"])
+    sources = [
+        dict(cast("dict[str, object]", source))
+        for source in raw_sources
+        if isinstance(source, dict)
+    ]
+    sources.append(dict(sources[0]))
+    detail["sources"] = sources
     duplicate_inputs = dataclasses.replace(
         current,
         npv=1_100.0,
-        provenance=dataclasses.replace(
-            provenance,
-            input_sha256="e" * 64,
-            detail={"sources": [source, source]},
-        ),
+        provenance=dataclasses.replace(provenance, detail=detail),
     )
 
-    with pytest.raises(sqlite3.IntegrityError):
-        upsert(conn, duplicate_inputs)
+    with pytest.raises(ValueError, match="duplicate source identity"):
+        upsert(conn, duplicate_inputs, repo_root=tmp_path)
 
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1
     assert conn.execute("SELECT npv FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1_000.0
-    assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 2

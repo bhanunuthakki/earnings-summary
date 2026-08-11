@@ -58,7 +58,8 @@ REDESIGN_SHEETS = [
 _DCF_RUNS_SCHEMA = """
 CREATE TABLE dcf_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT UNIQUE,
+    ticker TEXT NOT NULL,
+    segment_name TEXT,
     valuation_date TEXT, horizon_years INTEGER,
     wacc REAL, terminal_growth REAL,
     npv REAL, npv_per_share REAL, shares_outstanding REAL,
@@ -66,9 +67,27 @@ CREATE TABLE dcf_runs (
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
     revenue_growths_json TEXT, fcf_margin REAL,
-    assumptions_sync_status TEXT, assumptions_synced_at TEXT
-    , input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
-    inputs_as_of TEXT, provenance_json TEXT
+    assumptions_sync_status TEXT, assumptions_synced_at TEXT,
+    sanity_flag TEXT,
+    input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+    inputs_as_of TEXT, provenance_json TEXT,
+    is_latest INTEGER NOT NULL DEFAULT 1,
+    superseded_at TEXT,
+    superseded_by_id INTEGER
+);
+CREATE UNIQUE INDEX uq_dcf_runs_latest
+ON dcf_runs(ticker) WHERE is_latest = 1;
+CREATE TABLE dcf_run_inputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dcf_run_id INTEGER NOT NULL REFERENCES dcf_runs(id) ON DELETE RESTRICT,
+    role TEXT NOT NULL,
+    locator TEXT NOT NULL,
+    sha256 TEXT,
+    byte_size INTEGER,
+    observed_at TEXT,
+    detail_json TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(dcf_run_id, role, locator)
 );
 """
 
@@ -946,7 +965,7 @@ def test_refresh_redesign_seeds_then_persists(
     row = conn.execute(
         "SELECT npv_per_share, live_price, input_sha256, workbook_sha256, "
         "engine_version, inputs_as_of, provenance_json "
-        "FROM dcf_runs WHERE ticker='TESTCO'"
+        "FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
     ).fetchone()
     conn.close()
     assert row is not None and row[0] is not None
@@ -1100,7 +1119,7 @@ def test_refresh_redesign_syncs_assumptions_json(
     # The sync outcome is durable: persisted onto the dcf_runs row (0090).
     conn = sqlite3.connect(str(db))
     srow = conn.execute(
-        "SELECT assumptions_sync_status, assumptions_synced_at FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT assumptions_sync_status, assumptions_synced_at FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
     ).fetchone()
     conn.close()
     assert srow is not None and srow[0] == "synced" and srow[1]
@@ -1364,7 +1383,7 @@ def test_refresh_preserves_scenario_edits_and_recomputes_outputs(
     # dcf_runs carries the scenario range; BASE stays npv_per_share.
     conn = sqlite3.connect(str(db))
     row = conn.execute(
-        "SELECT npv_per_share, assumption_snapshot_json FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT npv_per_share, assumption_snapshot_json FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
     ).fetchone()
     conn.close()
     assert row is not None
@@ -1468,7 +1487,7 @@ def test_refresh_persists_seeded_per_name_prior_and_skews_reward(
     conn = sqlite3.connect(str(db))
     row = conn.execute(
         "SELECT npv_per_share, live_price, assumption_snapshot_json "
-        "FROM dcf_runs WHERE ticker='TESTCO'"
+        "FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
     ).fetchone()
     conn.close()
     assert row is not None
@@ -1599,7 +1618,9 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     assert base_inp is not None
     m0 = base_inp.exit_multiple
     conn = sqlite3.connect(str(db))
-    npv0 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
+    npv0 = conn.execute(
+        "SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
+    ).fetchone()[0]
     conn.close()
 
     payload = base_inp.to_dict()
@@ -1617,7 +1638,7 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     # dcf_runs re-persisted; the prior market quote was carried forward.
     conn = sqlite3.connect(str(db))
     row = conn.execute(
-        "SELECT npv_per_share, live_price FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT npv_per_share, live_price FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
     ).fetchone()
     conn.close()
     assert row is not None
@@ -1695,7 +1716,9 @@ def test_inject_fact_route_reprices_and_syncs_end_to_end(
     base_inp = redesign.read_inputs(dest)
     assert base_inp is not None
     conn = sqlite3.connect(str(db))
-    npv0 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
+    npv0 = conn.execute(
+        "SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
+    ).fetchone()[0]
     conn.close()
 
     import comments_server
@@ -1735,7 +1758,9 @@ def test_inject_fact_route_reprices_and_syncs_end_to_end(
     # dcf_runs repriced (margin 0.12 → 0.42 lifts value); never wrote over_under
     # directly — it is re-derived by persist.
     conn = sqlite3.connect(str(db))
-    npv1 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
+    npv1 = conn.execute(
+        "SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
+    ).fetchone()[0]
     conn.close()
     assert npv1 > float(npv0)
     assert body["fair_value_per_share_usd"] == pytest.approx(float(npv1))
@@ -1990,7 +2015,9 @@ def test_gsheets_reingest_carries_dashboard_edit_to_dcf_runs(
     assert (repo / "dcf" / "TESTCO.xlsx").exists()  # placed at the canonical path
 
     conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
-    row = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()
+    row = conn.execute(
+        "SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO' AND is_latest = 1"
+    ).fetchone()
     conn.close()
     assert row is not None and row[0] is not None
     # The persisted value reflects the edited (higher) terminal margin.

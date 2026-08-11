@@ -42,6 +42,7 @@ import build_holdco_sotp as holdco  # noqa: E402
 import build_nu_platform_dcf as platform_dcf  # noqa: E402
 
 from dcf import persist  # noqa: E402
+from dcf.provenance import build_effective_provenance  # noqa: E402
 
 # Mirrors the production table post-0076: the named CHECK is the migration's
 # _RATIO_CHECK verbatim, so the raw-insert test below exercises the same
@@ -49,7 +50,8 @@ from dcf import persist  # noqa: E402
 _DCF_RUNS_SCHEMA = """
 CREATE TABLE dcf_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT UNIQUE,
+    ticker TEXT,
+    segment_name TEXT,
     valuation_date TEXT, horizon_years INTEGER,
     wacc REAL, terminal_growth REAL,
     npv REAL, npv_per_share REAL, shares_outstanding REAL,
@@ -57,12 +59,32 @@ CREATE TABLE dcf_runs (
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
     revenue_growths_json TEXT, fcf_margin REAL,
+    assumptions_sync_status TEXT, assumptions_synced_at TEXT,
+    sanity_flag TEXT,
+    is_latest INTEGER NOT NULL DEFAULT 1,
+    superseded_at TEXT, superseded_by_id INTEGER,
+    input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+    inputs_as_of TEXT, provenance_json TEXT,
     CONSTRAINT ck_dcf_runs_over_under_ratio CHECK (
         over_under_pct IS NULL
         OR live_price IS NULL OR npv_per_share IS NULL
         OR live_price <= 0 OR npv_per_share <= 0
         OR ABS(over_under_pct - (1.0 * live_price / npv_per_share - 1.0)) <= 0.005
     )
+);
+CREATE UNIQUE INDEX uq_dcf_runs_latest
+ON dcf_runs(ticker) WHERE is_latest = 1;
+CREATE TABLE dcf_run_inputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dcf_run_id INTEGER NOT NULL REFERENCES dcf_runs(id) ON DELETE RESTRICT,
+    role TEXT NOT NULL,
+    locator TEXT NOT NULL,
+    sha256 TEXT,
+    byte_size INTEGER,
+    observed_at TEXT,
+    detail_json TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(dcf_run_id, role, locator)
 );
 """
 
@@ -73,7 +95,7 @@ def repo_root(tmp_path: Path) -> Path:
     db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
     with sqlite3.connect(str(db)) as conn:
-        conn.execute(_DCF_RUNS_SCHEMA)
+        conn.executescript(_DCF_RUNS_SCHEMA)
     return tmp_path
 
 
@@ -105,7 +127,23 @@ def _assert_ratio_convention(live: float, fair: float, stored: float) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _row(live_price: float | None = 10.0, npv_per_share: float = 20.0) -> persist.DcfRunRow:
+def _row(
+    repo_root: Path,
+    live_price: float | None = 10.0,
+    npv_per_share: float = 20.0,
+) -> persist.DcfRunRow:
+    snapshot = "{}"
+    workbook = repo_root / "dcf" / "ZZT.xlsx"
+    workbook.parent.mkdir(exist_ok=True)
+    if not workbook.exists():
+        workbook.write_bytes(b"ZZT-workbook")
+    provenance = build_effective_provenance(
+        ticker="ZZT",
+        repo_root=repo_root,
+        workbook_path=workbook,
+        assumption_snapshot_json=snapshot,
+        engine_version="ratio_test_v1",
+    )
     return persist.DcfRunRow(
         ticker="ZZT",
         valuation_date=date(2026, 6, 10),
@@ -118,7 +156,8 @@ def _row(live_price: float | None = 10.0, npv_per_share: float = 20.0) -> persis
         live_price=live_price,
         live_price_at=None,
         mos_bar_used=None,
-        assumption_snapshot_json="{}",
+        assumption_snapshot_json=snapshot,
+        provenance=provenance,
     )
 
 
@@ -130,7 +169,9 @@ def test_dcf_run_row_has_no_over_under_field() -> None:
 
 def test_upsert_derives_ratio_centrally(repo_root: Path) -> None:
     with sqlite3.connect(str(repo_root / "data" / "portfolio.db")) as conn:
-        persist.upsert(conn, _row(live_price=10.0, npv_per_share=20.0))
+        persist.upsert(
+            conn, _row(repo_root, live_price=10.0, npv_per_share=20.0), repo_root=repo_root
+        )
     live, fair, stored = _stored(repo_root, "ZZT")
     assert stored == pytest.approx(-0.5)
     _assert_ratio_convention(live, fair, stored)
@@ -145,7 +186,11 @@ def test_upsert_stores_null_when_over_under_undefined(
 ) -> None:
     """No live price, or a non-positive fair value (the #291 case) -> NULL."""
     with sqlite3.connect(str(repo_root / "data" / "portfolio.db")) as conn:
-        persist.upsert(conn, _row(live_price=live_price, npv_per_share=npv_per_share))
+        persist.upsert(
+            conn,
+            _row(repo_root, live_price=live_price, npv_per_share=npv_per_share),
+            repo_root=repo_root,
+        )
         row = conn.execute("SELECT over_under_pct FROM dcf_runs WHERE ticker = 'ZZT'").fetchone()
     assert row is not None
     assert row[0] is None
@@ -189,6 +234,10 @@ def test_check_constraint_rejects_percent_scale_raw_insert(repo_root: Path) -> N
 
 def test_bank_writer_stores_decimal_ratio(monkeypatch: pytest.MonkeyPatch, repo_root: Path) -> None:
     monkeypatch.setattr(bank, "REPO", repo_root)
+    workbook = repo_root / "dcf" / f"{bank.T}.xlsx"
+    workbook.parent.mkdir(exist_ok=True)
+    workbook.write_bytes(f"{bank.T}-workbook".encode())
+    monkeypatch.setattr(bank, "DEST", workbook)
     a = bank.Actuals(
         book=10000.0,
         ea=22700.0,
@@ -217,6 +266,10 @@ def test_holdco_sotp_writer_stores_decimal_ratio(
     monkeypatch: pytest.MonkeyPatch, repo_root: Path
 ) -> None:
     monkeypatch.setattr(holdco, "REPO", repo_root)
+    workbook = repo_root / "dcf" / f"{holdco.T}.xlsx"
+    workbook.parent.mkdir(exist_ok=True)
+    workbook.write_bytes(f"{holdco.T}-workbook".encode())
+    monkeypatch.setattr(holdco, "DEST", workbook)
     # eq $B, value/share $60, live price $45: trading 25% below NAV.
     assert holdco.persist_dcf_run(100.0, 60.0, 45.0, 0.08, {"model": "holdco_sotp"})
     live, fair, stored = _stored(repo_root, holdco.T)
@@ -228,6 +281,10 @@ def test_fintech_sotp_writer_stores_decimal_ratio(
     monkeypatch: pytest.MonkeyPatch, repo_root: Path
 ) -> None:
     monkeypatch.setattr(fintech, "REPO", repo_root)
+    workbook = repo_root / "dcf" / f"{fintech.T}.xlsx"
+    workbook.parent.mkdir(exist_ok=True)
+    workbook.write_bytes(f"{fintech.T}-workbook".encode())
+    monkeypatch.setattr(fintech, "DEST", workbook)
     s = fintech.Sotp(price=5.0)  # default SOTP value/share is ~$9-10: under-valued
     eq, vps = fintech.value(s)
     assert s.price < vps
@@ -243,6 +300,10 @@ def test_platform_dcf_writer_stores_decimal_ratio(
     """The literal incident shape: NU platform DCF, price ~$12 vs value/share
     ~$22, must persist a negative decimal (~ -0.44), not +79.82."""
     monkeypatch.setattr(platform_dcf, "REPO", repo_root)
+    workbook = repo_root / "dcf" / f"{platform_dcf.T}.xlsx"
+    workbook.parent.mkdir(exist_ok=True)
+    workbook.write_bytes(f"{platform_dcf.T}-workbook".encode())
+    monkeypatch.setattr(platform_dcf, "DEST", workbook)
     s = platform_dcf.Assum()
     m = platform_dcf.mirror(s)
     assert s.price < m.vps

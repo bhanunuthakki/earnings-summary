@@ -511,7 +511,7 @@ def persist_dcf_run(s: Sotp, eq: float, vps: float) -> bool:
         ),
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        persist_mod.upsert(conn, row)
+        persist_mod.upsert(conn, row, repo_root=REPO)
     return True
 
 

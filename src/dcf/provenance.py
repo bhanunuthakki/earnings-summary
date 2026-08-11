@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import zipfile
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -129,11 +130,87 @@ def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _canonical_snapshot(assumption_snapshot_json: str) -> dict[str, object]:
+    raw_snapshot = cast(object, json.loads(assumption_snapshot_json))
+    if not isinstance(raw_snapshot, dict):
+        raise ValueError("DCF assumption snapshot must be a JSON object")
+    return dict(cast("dict[str, object]", raw_snapshot))
+
+
+def _logical_workbook_sha256(path: Path) -> str:
+    """Hash XLSX member contents, independent of ZIP timestamps/compression."""
+    if not zipfile.is_zipfile(path):
+        return _sha256_bytes(path.read_bytes())
+    digest = hashlib.sha256()
+    with zipfile.ZipFile(path) as archive:
+        names = sorted(info.filename for info in archive.infolist() if not info.is_dir())
+        for name in names:
+            encoded_name = name.encode("utf-8")
+            payload = archive.read(name)
+            digest.update(len(encoded_name).to_bytes(8, "big"))
+            digest.update(encoded_name)
+            digest.update(len(payload).to_bytes(8, "big"))
+            digest.update(payload)
+    return digest.hexdigest()
+
+
+def _source_locator(source: dict[str, object]) -> str:
+    for key in ("path", "locator", "url", "source"):
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    raise ValueError("each DCF provenance source needs a role and locator")
+
+
+def _canonical_source_commitments(
+    sources: list[dict[str, object]],
+) -> list[dict[str, str]]:
+    commitments: list[dict[str, str]] = []
+    for source in sources:
+        role = source.get("role")
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("each DCF provenance source needs a role and locator")
+        digest_key = "logical_sha256" if role == "calculation_workbook" else "sha256"
+        digest = source.get(digest_key)
+        if not isinstance(digest, str) or _SHA256_RE.fullmatch(digest) is None:
+            raise ValueError(f"DCF provenance source {role!r} lacks canonical content hash")
+        commitments.append(
+            {"role": role.strip(), "locator": _source_locator(source), "sha256": digest}
+        )
+    return sorted(commitments, key=lambda item: (item["role"], item["locator"]))
+
+
+def _canonical_input_sha256(
+    *,
+    ticker: str,
+    engine_version: str,
+    snapshot: dict[str, object],
+    sources: list[dict[str, object]],
+    additional_inputs: dict[str, object] | None = None,
+) -> str:
+    canonical_inputs = json.dumps(
+        {
+            "contract_version": "dcf_input_v2",
+            "engine_version": engine_version,
+            "ticker": ticker.upper(),
+            "effective_assumptions": snapshot,
+            "additional_inputs": additional_inputs or {},
+            "sources": _canonical_source_commitments(sources),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return _sha256_bytes(canonical_inputs.encode("utf-8"))
+
+
 def _display_path(path: Path, repo_root: Path) -> str:
+    resolved = path.resolve()
     try:
-        display = path.resolve().relative_to(repo_root.resolve())
-    except ValueError:
-        display = path.resolve()
+        display = resolved.relative_to(repo_root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"DCF input file must stay under repo root: {resolved}") from exc
     return str(display).replace("\\", "/")
 
 
@@ -153,6 +230,101 @@ def _file_source(*, role: str, path: Path, repo_root: Path) -> tuple[dict[str, o
     )
 
 
+def _resolve_ledger_path(repo_root: Path, locator: str) -> Path:
+    candidate = (repo_root.resolve() / Path(locator)).resolve()
+    try:
+        candidate.relative_to(repo_root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"DCF input ledger path escapes repo root: {locator}") from exc
+    return candidate
+
+
+def verify_effective_provenance(
+    provenance: DcfInputProvenance,
+    *,
+    ticker: str,
+    repo_root: Path,
+    assumption_snapshot_json: str,
+) -> None:
+    """Recompute commitments and bind every file source to its current bytes."""
+    provenance = provenance_from_payload(provenance)
+    snapshot = _canonical_snapshot(assumption_snapshot_json)
+    detail = provenance.detail or {}
+    if detail.get("ticker") != ticker.upper():
+        raise ValueError("DCF provenance ticker does not match the proposed row")
+    raw_sources = detail.get("sources")
+    if not isinstance(raw_sources, list):
+        raise ValueError("DCF provenance requires a non-empty input ledger")
+    source_items = cast("list[object]", raw_sources)
+    sources = [
+        dict(cast("dict[str, object]", item)) for item in source_items if isinstance(item, dict)
+    ]
+    if len(sources) != len(source_items):
+        raise ValueError("each DCF provenance source must be an object")
+    identities: set[tuple[str, str]] = set()
+    workbook_sources: list[dict[str, object]] = []
+    effective_sources: list[dict[str, object]] = []
+    for source in sources:
+        role = source.get("role")
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("each DCF provenance source needs a role and locator")
+        locator = _source_locator(source)
+        identity = (role.strip(), locator)
+        if identity in identities:
+            raise ValueError("DCF provenance input ledger contains duplicate source identity")
+        identities.add(identity)
+        if role == "calculation_workbook":
+            workbook_sources.append(source)
+        if role == "effective_assumptions":
+            effective_sources.append(source)
+        path_value = source.get("path")
+        if path_value is None:
+            continue
+        if not isinstance(path_value, str) or not path_value.strip():
+            raise ValueError(f"DCF provenance source {role!r} has an invalid file path")
+        path = _resolve_ledger_path(repo_root, path_value)
+        if not path.is_file():
+            raise ValueError(f"DCF provenance source file does not exist: {path_value}")
+        current_sha = _sha256_bytes(path.read_bytes())
+        if source.get("sha256") != current_sha:
+            raise ValueError(f"DCF provenance current file hash mismatch: {path_value}")
+        if role == "calculation_workbook":
+            logical_sha = source.get("logical_sha256")
+            if not isinstance(logical_sha, str) or _SHA256_RE.fullmatch(logical_sha) is None:
+                raise ValueError("DCF calculation workbook requires a logical SHA-256")
+            if logical_sha != _logical_workbook_sha256(path):
+                raise ValueError("DCF calculation workbook logical hash mismatch")
+    if len(workbook_sources) != 1:
+        raise ValueError("DCF provenance requires exactly one calculation workbook")
+    workbook_sha = workbook_sources[0].get("sha256")
+    if workbook_sha != provenance.workbook_sha256:
+        raise ValueError("DCF provenance workbook SHA-256 does not match its input ledger")
+    if len(effective_sources) != 1:
+        raise ValueError("DCF provenance requires exactly one effective-assumptions source")
+    canonical_snapshot = json.dumps(
+        snapshot,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    if effective_sources[0].get("sha256") != _sha256_bytes(canonical_snapshot):
+        raise ValueError("DCF provenance effective-assumptions hash does not match the row")
+    raw_additional_inputs = detail.get("additional_inputs", {})
+    if not isinstance(raw_additional_inputs, dict):
+        raise ValueError("DCF provenance additional_inputs must be an object")
+    additional_inputs = dict(cast("dict[str, object]", raw_additional_inputs))
+    expected_input_sha = _canonical_input_sha256(
+        ticker=ticker,
+        engine_version=provenance.engine_version,
+        snapshot=snapshot,
+        sources=sources,
+        additional_inputs=additional_inputs,
+    )
+    if provenance.input_sha256 != expected_input_sha:
+        raise ValueError("DCF provenance input SHA-256 does not match canonical commitments")
+
+
 def build_effective_provenance(
     *,
     ticker: str,
@@ -161,20 +333,13 @@ def build_effective_provenance(
     assumption_snapshot_json: str,
     engine_version: str,
     source_paths: tuple[tuple[str, Path], ...] = (),
+    additional_inputs: dict[str, object] | None = None,
 ) -> DcfInputProvenance:
-    """Build a hashed ledger for a bespoke DCF's effective input set.
-
-    The effective snapshot is itself a first-class hashed input, so in-code
-    defaults, database-derived values, and file overrides are committed even
-    when no single upstream file contains the final values used by the model.
-    """
+    """Build a reproducible ledger with logical input and exact artifact hashes."""
     workbook_path = workbook_path.resolve()
     if not workbook_path.is_file():
         raise FileNotFoundError(f"DCF workbook does not exist: {workbook_path}")
-    raw_snapshot = cast(object, json.loads(assumption_snapshot_json))
-    if not isinstance(raw_snapshot, dict):
-        raise ValueError("DCF assumption snapshot must be a JSON object")
-    snapshot = cast("dict[str, object]", raw_snapshot)
+    snapshot = _canonical_snapshot(assumption_snapshot_json)
     canonical_snapshot = json.dumps(
         snapshot,
         sort_keys=True,
@@ -187,6 +352,7 @@ def build_effective_provenance(
         path=workbook_path,
         repo_root=repo_root,
     )
+    workbook_source["logical_sha256"] = _logical_workbook_sha256(workbook_path)
     observed_times = [workbook_observed_at]
     file_sources: list[dict[str, object]] = []
     for role, path in sorted(source_paths, key=lambda item: (item[0], str(item[1]))):
@@ -205,26 +371,33 @@ def build_effective_provenance(
         "observed_at": inputs_as_of.isoformat(),
     }
     sources = [workbook_source, effective_source, *file_sources]
-    source_commitments = [
-        {key: source.get(key) for key in ("role", "path", "locator", "sha256", "bytes")}
-        for source in sources
-    ]
-    canonical_inputs = json.dumps(
-        {
-            "engine_version": engine_version,
-            "ticker": ticker.upper(),
-            "effective_assumptions": snapshot,
-            "sources": source_commitments,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
-    return DcfInputProvenance(
-        input_sha256=_sha256_bytes(canonical_inputs.encode("utf-8")),
+    provenance = DcfInputProvenance(
+        input_sha256=_canonical_input_sha256(
+            ticker=ticker,
+            engine_version=engine_version,
+            snapshot=snapshot,
+            sources=sources,
+            additional_inputs=additional_inputs,
+        ),
         workbook_sha256=str(workbook_source["sha256"]),
         engine_version=engine_version,
         inputs_as_of=inputs_as_of,
-        detail={"sources": sources, "ticker": ticker.upper()},
+        detail={
+            "sources": sources,
+            "ticker": ticker.upper(),
+            "additional_inputs": additional_inputs or {},
+            **(
+                {"market_price": additional_inputs["market_price"]}
+                if additional_inputs is not None
+                and isinstance(additional_inputs.get("market_price"), dict)
+                else {}
+            ),
+        },
     )
+    verify_effective_provenance(
+        provenance,
+        ticker=ticker,
+        repo_root=repo_root,
+        assumption_snapshot_json=assumption_snapshot_json,
+    )
+    return provenance

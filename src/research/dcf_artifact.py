@@ -88,6 +88,7 @@ def draft_dcf_proposal(
     note_id: int | None = None,
     task_id: int | None = None,
     db_path: Path | str | None = None,
+    repo_root: Path | None = None,
     create_fn: Callable[..., int] = create_proposal,
 ) -> int | None:
     """Persist an inert ``kind='dcf'`` proposal carrying a pre-recomputed DcfRunRow.
@@ -100,9 +101,18 @@ def draft_dcf_proposal(
     proposed_npv = _as_float(proposed_row.get("npv_per_share"))
     if not ticker or proposed_npv is None or proposed_npv <= 0:
         return None  # #291: no valid fair value -> nothing to propose
-    from dcf.provenance import provenance_from_payload
+    from dcf.provenance import provenance_from_payload, verify_effective_provenance
 
+    proposed_ticker = str(proposed_row.get("ticker") or "").strip().upper()
+    if proposed_ticker != ticker:
+        raise ValueError("DCF proposed row ticker does not match proposal ticker")
     provenance = provenance_from_payload(proposed_row.get("provenance"))
+    verify_effective_provenance(
+        provenance,
+        ticker=ticker,
+        repo_root=(repo_root or Path(__file__).resolve().parents[2]),
+        assumption_snapshot_json=str(proposed_row.get("assumption_snapshot_json") or "{}"),
+    )
     old = _as_float(old_npv_per_share)
     tail = ""
     if old and old > 0:
@@ -166,7 +176,12 @@ def _reconstruct_row(row: dict[str, object]) -> Any:
     )
 
 
-def _default_persist(row: dict[str, object], *, db_path: Path | str | None = None) -> None:
+def _default_persist(
+    row: dict[str, object],
+    *,
+    db_path: Path | str | None = None,
+    repo_root: Path | None = None,
+) -> None:
     from db_paths import resolve_db_path
     from dcf.persist import upsert
 
@@ -176,7 +191,7 @@ def _default_persist(row: dict[str, object], *, db_path: Path | str | None = Non
         raise RuntimeError("no DB path available for the DCF live write")
     conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
-        upsert(conn, dcf_row)
+        upsert(conn, dcf_row, repo_root=repo_root)
         conn.commit()
     finally:
         conn.close()
@@ -186,6 +201,7 @@ def apply_dcf_proposal(
     proposal_id: int,
     *,
     db_path: Path | str | None = None,
+    repo_root: Path | None = None,
     get_fn: Callable[..., Any] = get_proposal,
     persist_fn: Callable[..., None] | None = None,
 ) -> str:
@@ -212,8 +228,21 @@ def apply_dcf_proposal(
         raise ValueError(
             f"dcf proposal {proposal_id} has no valid fair value (oracle re-check failed)"
         )
+    proposed_ticker = str(row_dict.get("ticker") or "").strip().upper()
+    proposal_ticker = str(getattr(prop, "ticker", "") or "").strip().upper()
+    if not proposed_ticker or proposed_ticker != proposal_ticker:
+        raise ValueError(f"dcf proposal {proposal_id} ticker does not match proposed row")
+    reconstructed = _reconstruct_row(row_dict)
+    from dcf.provenance import verify_effective_provenance
+
+    verify_effective_provenance(
+        reconstructed.provenance,
+        ticker=proposed_ticker,
+        repo_root=(repo_root or Path(__file__).resolve().parents[2]),
+        assumption_snapshot_json=reconstructed.assumption_snapshot_json,
+    )
     saver = persist_fn or _default_persist
-    saver(row_dict, db_path=db_path)
+    saver(row_dict, db_path=db_path, repo_root=repo_root)
     return f"DCF for {row_dict.get('ticker')} updated -> ${npv:,.2f}/sh (live)"
 
 
