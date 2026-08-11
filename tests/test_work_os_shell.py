@@ -284,3 +284,26 @@ def test_design_directive_records_the_simplification_boundary() -> None:
     assert "One responsive product" in directive
     assert "clears it for the current session" in directive
     assert "Only an explicit decision or threshold change may create durable state" in directive
+
+
+def test_company_desk_renders_governed_valuation_provenance() -> None:
+    html = render_work_os_shell()
+
+    assert 'id="deskInputPrice"' in html
+    assert 'id="deskFairValue"' in html
+    assert "Weight unavailable" in html
+    assert "position.price_as_of" in html
+    assert "position.fair_value_as_of" in html
+    assert "workOsMoney(position.price, position.currency)" in html
+    assert "workOsMoney(position.fair_value, position.currency)" in html
+
+
+def test_nvo_action_queue_open_company_uses_the_canonical_desk_handoff() -> None:
+    html = render_work_os_shell()
+
+    assert "data-work-os-ticker=\"' + escapeWorkOsHtml(action.ticker) + '\">Open Company" in html
+    assert "switchCompanyWorkspace(node.dataset.workOsTicker)" in html
+    assert (
+        "const requested = String(ticker || window.workOsActiveTicker || '').toUpperCase();" in html
+    )
+    assert "fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk'" in html

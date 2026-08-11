@@ -24,6 +24,10 @@ def _work_os_app_repo(tmp_path: Path) -> Path:
         "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
         "VALUES ('MELI', 'MercadoLibre', 'evaluation', 'equity')"
     )
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
+        "VALUES ('NVO', 'Novo Nordisk', 'portfolio', 'equity')"
+    )
     conn.commit()
     conn.close()
     return tmp_path
@@ -152,3 +156,101 @@ def test_company_desk_degrades_when_optional_tables_are_absent(
     assert desk.conditions == []
     assert desk.open_questions == []
     assert desk.status == "degraded"
+
+
+def test_company_desk_exposes_latest_governed_dcf_snapshot(
+    work_os_app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.executescript(
+        """
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, created_at TEXT NOT NULL,
+            valuation_date TEXT, npv_per_share REAL, live_price REAL, live_price_at TEXT,
+            currency TEXT, is_latest INTEGER, segment_name TEXT
+        );
+        """
+    )
+    conn.executemany(
+        "INSERT INTO dcf_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                1,
+                "NU",
+                "2026-08-01T00:00:00Z",
+                "2026-07-31",
+                22.10,
+                13.84,
+                "2026-08-10T00:25:11Z",
+                "USD",
+                1,
+                None,
+            ),
+            (
+                2,
+                "NVO",
+                "2026-08-01T00:00:00Z",
+                "2026-07-31",
+                72.69,
+                47.26,
+                "2026-08-10T00:25:12Z",
+                "USD",
+                1,
+                None,
+            ),
+            (
+                3,
+                "MELI",
+                "2026-08-01T00:00:00Z",
+                "2026-07-31",
+                2_400.0,
+                2_100.0,
+                "2026-08-10T00:25:13Z",
+                "USD",
+                1,
+                None,
+            ),
+            (
+                4,
+                "NVO",
+                "2026-08-02T00:00:00Z",
+                "2026-08-01",
+                9_999.0,
+                9_999.0,
+                "2026-08-10T00:25:14Z",
+                "USD",
+                0,
+                None,
+            ),
+            (
+                5,
+                "NU",
+                "2026-08-03T00:00:00Z",
+                "2026-08-02",
+                9_999.0,
+                9_999.0,
+                "2026-08-10T00:25:15Z",
+                "USD",
+                1,
+                "segment-a",
+            ),
+        ],
+    )
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    try:
+        for ticker, price, fair_value in (
+            ("NU", 13.84, 22.10),
+            ("NVO", 47.26, 72.69),
+            ("MELI", 2_100.0, 2_400.0),
+        ):
+            desk = build_company_desk(work_os_app_repo, conn, ticker)
+            assert desk.position.price == price
+            assert desk.position.fair_value == fair_value
+            assert desk.position.currency == "USD"
+            assert desk.position.price_as_of is not None
+            assert desk.position.fair_value_as_of == "2026-07-31"
+            assert desk.position.source == "latest_governed_dcf_run"
+            assert "position_snapshot_unavailable" not in desk.warnings
+    finally:
+        conn.close()

@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from dcf.latest import latest_dcf_row
 from decision_conditions import conditions_from_json
 from report.artifacts import ReportArtifactRef, load_report_artifact_index
 
@@ -38,6 +39,8 @@ class DeskPositionSnapshot(BaseModel):
     currency: str | None = None
     as_of: str | None = None
     source: str | None = None
+    price_as_of: str | None = None
+    fair_value_as_of: str | None = None
 
 
 class DeskDecision(BaseModel):
@@ -244,6 +247,23 @@ def _latest_brief(repo_root: Path, ticker: str) -> ReportArtifactRef | None:
     return next((item for item in index.items if item.ticker == ticker), None)
 
 
+def _position_snapshot(conn: sqlite3.Connection, ticker: str) -> DeskPositionSnapshot:
+    """Return the latest governed DCF basis without inventing a live position."""
+
+    dcf = latest_dcf_row(conn, ticker)
+    if dcf is None:
+        return DeskPositionSnapshot()
+    return DeskPositionSnapshot(
+        price=dcf.live_price,
+        fair_value=dcf.npv_per_share,
+        currency=dcf.currency,
+        as_of=dcf.live_price_at or dcf.valuation_date,
+        source="latest_governed_dcf_run",
+        price_as_of=dcf.live_price_at,
+        fair_value_as_of=dcf.valuation_date,
+    )
+
+
 def build_company_desk(
     repo_root: Path,
     conn: sqlite3.Connection,
@@ -260,11 +280,10 @@ def build_company_desk(
     decision, conditions, decision_warnings = _decision(conn, normalized)
     questions, question_warnings = _questions(conn, normalized)
     latest_brief = _latest_brief(repo_root, normalized)
-    warnings = [
-        "position_snapshot_unavailable",
-        *decision_warnings,
-        *question_warnings,
-    ]
+    position = _position_snapshot(conn, normalized)
+    warnings = [*decision_warnings, *question_warnings]
+    if position.price is None and position.fair_value is None:
+        warnings.insert(0, "position_snapshot_unavailable")
     if latest_brief is None:
         warnings.append("research_brief_unavailable")
     built_at = (generated_at or datetime.now(UTC)).astimezone(UTC)
@@ -272,7 +291,7 @@ def build_company_desk(
         status="degraded" if warnings else "ok",
         generated_at=built_at.isoformat().replace("+00:00", "Z"),
         company=company,
-        position=DeskPositionSnapshot(),
+        position=position,
         current_decision=decision,
         conditions=conditions,
         open_questions=questions,
