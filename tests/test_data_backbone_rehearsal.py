@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "execution"))
 
 import rehearse_data_backbone as cli  # noqa: E402
+from upgrade_database import ACTIVE_HEAD  # noqa: E402
 
 from provenance import data_backbone_rehearsal as rehearsal  # noqa: E402
 
@@ -549,11 +550,17 @@ def test_cli_apply_keeps_exact_sources_and_records_throwaway_rollback(
         repo_root: Path, candidate: Path, backup: Path
     ) -> rehearsal.UpgradeTerminalReceipt:
         del repo_root, backup
+        connection = sqlite3.connect(candidate)
+        try:
+            connection.execute("UPDATE alembic_version SET version_num=?", (ACTIVE_HEAD,))
+            connection.commit()
+        finally:
+            connection.close()
         return rehearsal.UpgradeTerminalReceipt(
-            status="already_current",
+            status="upgraded",
             db_path=str(candidate),
             from_revision="0008_add_fmp_recovery",
-            to_revision="0008_add_fmp_recovery",
+            to_revision=ACTIVE_HEAD,
             backup_path=None,
             completed_at="2026-08-12T12:00:00+00:00",
         )
