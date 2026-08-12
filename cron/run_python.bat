@@ -1,6 +1,8 @@
 @echo off
 REM Shared scheduler/interactive seam: requires the checkout's managed Python runtime,
-REM serializes overlapping portfolio writes, and records JSON job health.
+REM applies the runtime's closed job-to-lane single-flight policy, and records JSON
+REM job health. SQLite transactions, not this wrapper, serialize database writes for
+REM approved long-running network/browser/LLM jobs.
 setlocal EnableExtensions
 set "PROJECT_ROOT=%~dp0.."
 for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"

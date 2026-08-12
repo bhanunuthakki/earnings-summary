@@ -20,7 +20,8 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\weekly_synthesis_%TS%.log
 cd /d "%PROJECT_ROOT%"
 
-REM One owner holds portfolio-db across every checkpointed, fail-fast stage.
+REM One research-synthesis lane owner spans the checkpointed, fail-fast stages;
+REM SQLite transactions serialize each bounded database write phase.
 echo === %TIME% Running weekly synthesis === >> "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-synthesis" "portfolio-db" execution\run_weekly_synthesis.py >> "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"

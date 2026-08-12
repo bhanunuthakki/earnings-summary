@@ -1,8 +1,7 @@
 @echo off
 REM Sunday 13:00 local: expire allowlisted transient artifacts, then stale research state.
-REM Both stages write portfolio state or artifacts and therefore use portfolio-db.
-REM Limitation: this wrapper cannot hold the portfolio-db lock across the two run_python calls;
-REM each stage is individually serialized, and cleanup failure prevents state expiry.
+REM Filesystem cleanup uses its own single-flight lane; the state-expiry step is
+REM bounded DB-only work and retains portfolio-db. Cleanup failure prevents expiry.
 
 setlocal EnableExtensions
 set "PYTHONUTF8=1"

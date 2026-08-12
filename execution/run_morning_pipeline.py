@@ -104,22 +104,11 @@ from pipeline.run_accounting import (  # noqa: E402
     PipelineRunSuppressedError,
     suppression_payload,
 )
-from run_lock import RunLockHeldError, acquire_run_lock  # noqa: E402
-from runtime.job_runtime import inherited_lock_is_valid  # noqa: E402
 from runtime.python_process import managed_python_argv  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
 DEFAULT_MAX_COST_USD = 10.0
-
-# AGENTS.md concurrency rule: one process owns the portfolio.db write set at a
-# time; scheduled and interactive runs honor the SAME run lock. The
-# orchestrator holds it for the whole run so a db_gc apply (which acquires the
-# same lock, execution/db_gc.py) can never interleave its bulk deletes with
-# the morning write legs — the 2026-07-31 lock-starvation incident class. A
-# held lock is waited on briefly (a healthy db_gc batch run yields within its
-# own budget), then fails the run loudly rather than writing into contention.
-_RUN_LOCK_WAIT_S = 900.0
 
 # The typed manifest is the single source of truth for stage order and shape.
 _ALL_STAGE_KEYS = tuple(spec.key for spec in STAGE_MANIFEST)
@@ -627,35 +616,11 @@ def main(argv: list[str] | None = None) -> int:
     configured_path = configured_db_path(PROJECT_ROOT)
     db_path = args.db_path.expanduser().resolve() if args.db_path is not None else configured_path
     args.db_path = db_path
-    has_inherited_lock = db_path == configured_path and inherited_lock_is_valid(
-        PROJECT_ROOT, "portfolio-db"
-    )
-
-    # Own the portfolio write set for the whole run (see _RUN_LOCK_WAIT_S).
-    # Only taken when the DB exists — test invocations without a database have
-    # no write set to guard, and the lock file sits next to the DB so every
-    # checkout pointing at the same portfolio.db contends on one lock.
-    lock = None
-    if db_path.exists() and not has_inherited_lock:
-        try:
-            lock = acquire_run_lock(
-                db_path,
-                owner="run_morning_pipeline",
-                timeout_s=_RUN_LOCK_WAIT_S,
-                poll_s=5.0,
-            )
-        except RunLockHeldError as exc:
-            sys.stderr.write(f"\n!!! [run_lock] FAILED - {exc}\n")
-            return 1
-    try:
-        return _run_pipeline(args, db_path=db_path, t0=t0)
-    finally:
-        if lock is not None:
-            lock.release()
+    return _run_pipeline(args, db_path=db_path, t0=t0)
 
 
 def _run_pipeline(args: argparse.Namespace, *, db_path: Path, t0: float) -> int:
-    """The pipeline body proper, run while holding the portfolio run lock."""
+    """Run stages without holding a coarse database mutex across child work."""
     run_date = date.today()
     # Record the pipeline start in ingestion_runs so the dead-man post-flight
     # (verify_daily_chain.py) can confirm it ran today.

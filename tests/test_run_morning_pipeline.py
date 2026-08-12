@@ -41,7 +41,7 @@ from pipeline.morning_manifest import (
     manifest_digest,
     validate_manifest,
 )
-from runtime import job_runtime
+from run_lock import acquire_run_lock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _LOAD_COMPLETED_STAGES = cast(
@@ -405,56 +405,52 @@ def test_main_uses_configured_db_path_for_parent_and_children(
     assert getattr(parsed_args, "db_path") == configured.resolve()
 
 
-def test_scheduler_child_honors_real_inherited_portfolio_lock(
+def test_morning_orchestrator_does_not_hold_global_lock_across_slow_stage(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     db_path = tmp_path / "portfolio.db"
     db_path.touch()
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
-    monkeypatch.setenv(
-        "PYTHONPATH",
-        os.pathsep.join((str(PROJECT_ROOT), str(PROJECT_ROOT / "src"))),
-    )
-    child_script = tmp_path / "morning_pipeline_lock_child.py"
-    child_script.write_text(
-        "\n".join(
-            (
-                "from execution import run_morning_pipeline as pipeline",
-                "def fail_acquire(*args, **kwargs):",
-                "    raise AssertionError('child attempted to reacquire inherited lock')",
-                "pipeline.acquire_run_lock = fail_acquire",
-                "pipeline._run_pipeline = lambda args, *, db_path, t0: 0",
-                "raise SystemExit(pipeline.main([]))",
-            )
-        ),
-        encoding="utf-8",
-    )
-
-    def discard_health(repo_root: Path, record: object) -> Path:
-        del repo_root, record
-        return tmp_path / "discarded-health.json"
-
-    monkeypatch.setattr("runtime.job_runtime._write_health", discard_health)
-
-    assert (
-        job_runtime.main(
-            [
-                "--repo-root",
-                str(PROJECT_ROOT),
-                "--scheduler-wrapper",
-                "--allow-schema-drift",
-                "--python-executable",
-                sys.executable,
-                "--python-bootstrap",
-                str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py"),
-                "--",
-                "morning_pipeline",
-                "portfolio-db",
-                str(child_script),
-            ]
+    slow_stage = tmp_path / "slow-stage"
+    release = tmp_path / "release-stage"
+    script = "\n".join(
+        (
+            "import sys, time",
+            "from pathlib import Path",
+            "from execution import run_morning_pipeline as pipeline",
+            "slow, release = Path(sys.argv[1]), Path(sys.argv[2])",
+            "def run_slow(args, *, db_path, t0):",
+            "    slow.write_text('llm', encoding='utf-8')",
+            "    while not release.exists(): time.sleep(0.01)",
+            "    return 0",
+            "pipeline._run_pipeline = run_slow",
+            "raise SystemExit(pipeline.main([]))",
         )
-        == 0
     )
+    env = {
+        **os.environ,
+        "EARNINGS_SUMMARY_DB_PATH": str(db_path),
+        "PYTHONPATH": os.pathsep.join((str(PROJECT_ROOT), str(PROJECT_ROOT / "src"))),
+    }
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(slow_stage), str(release)],
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not slow_stage.exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert slow_stage.exists(), child.communicate(timeout=1)
+        lock = acquire_run_lock(db_path, owner="competing-writer", timeout_s=0)
+        lock.release()
+    finally:
+        release.touch()
+        stdout, stderr = child.communicate(timeout=5)
+    assert child.returncode == 0, (stdout, stderr)
 
 
 # ---------------------------------------------------------------------------
