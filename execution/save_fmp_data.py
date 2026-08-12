@@ -32,7 +32,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -42,12 +42,7 @@ from compute.split_normalization import (  # noqa: E402
     normalize_estimates,
 )
 from log_redact import redact  # noqa: E402
-from models.fmp_payloads import (  # noqa: E402
-    FmpAnalystEstimateRecord,
-    FmpBalanceSheetRecord,
-    FmpCashFlowRecord,
-    FmpIncomeStatementRecord,
-)
+from models.fmp_payloads import STABLE_FMP_RECORD_MODELS  # noqa: E402
 from net.client import (  # noqa: E402
     FMP_CLIENT,
     FMP_ORIGIN,
@@ -61,6 +56,11 @@ from pipeline.deferred_fmp import (  # noqa: E402
     DeferredFmpTask,
     default_store_path,
     log_deferred,
+)
+from pipeline.fmp_payload_validation import (  # noqa: E402
+    FmpPayloadContractError,
+    FmpPayloadCoordinate,
+    validate_fmp_prewrite_payload,
 )
 from runtime.secrets import load_project_env  # noqa: E402
 from sources import registry as source_calls_log  # noqa: E402
@@ -445,10 +445,11 @@ def fmp_call(
     symbol: str | None = None,
     extra: dict | None = None,
 ) -> tuple[int, object | None, str | None, str | None]:
-    """Try all URL variants. First 200 with non-empty body wins.
-    A 200 with an empty array stops the ladder and returns (200, None,
-    "empty-list", kind) — the endpoint is accessible, FMP just has no rows
-    yet. On only-403 results, returns 403 (true tier restriction).
+    """Try all URL variants. The first HTTP 200 response wins.
+
+    An empty list is returned unchanged so the shared pre-write contract can
+    enforce the coordinate's envelope policy. On only-403 results, returns 403
+    (true tier restriction).
     Returns (http_code, body_or_None, error_or_None, url_kind_used).
     """
     extra = extra or {}
@@ -459,14 +460,6 @@ def fmp_call(
         code, body, err = _http_get(url, params)
         last_code, last_err = code, err
         if code == 200 and body is not None:
-            if isinstance(body, list) and len(body) == 0:
-                # Accessible endpoint, but FMP has no rows yet — the common
-                # case for freshly-IPO'd tickers (e.g. /stable/income-statement
-                # returns 200 []). This is NOT a tier restriction, so stop the
-                # ladder and report it as empty. Falling through to the v3/v4
-                # fallbacks would 403 and mis-record the endpoint as forbidden
-                # (and burn 2 extra calls per empty endpoint).
-                return (200, None, "empty-list", kind)
             return (code, body, None, kind)
         if code == 403:
             saw_403 = True
@@ -483,7 +476,7 @@ def fmp_call(
 
 
 # ---------------------------------------------------------------------------
-# Pre-write validation gate (stable rungs only)
+# Shared pre-write payload validation gate
 # ---------------------------------------------------------------------------
 #
 # Ported from a now-retired v3-only statements fetcher: Pydantic-validate
@@ -499,40 +492,30 @@ _VALIDATION_DUMP_DIR = PROJECT_ROOT / ".tmp" / "fmp_validation_failures"
 # `path` (job["path"]). The cash-flow catalog path is the stable spelling
 # "cashflow-statement" (PATH_ALIASES maps it to the v3-ish "cash-flow-statement").
 # Endpoints absent from this map are not gated.
-_STABLE_VALIDATORS: dict[str, type[BaseModel]] = {
-    "income-statement": FmpIncomeStatementRecord,
-    "balance-sheet-statement": FmpBalanceSheetRecord,
-    "cashflow-statement": FmpCashFlowRecord,
-    "analyst-estimates": FmpAnalystEstimateRecord,
-}
+_STABLE_VALIDATORS = STABLE_FMP_RECORD_MODELS
 
 
 def _validate_stable_record(
-    endpoint: str, kind: str | None, body: object
-) -> ValidationError | None:
-    """Validate body[0] against the stable-shaped model for `endpoint`.
+    endpoint: str,
+    kind: str | None,
+    expected_ticker: str,
+    suffix: str,
+    body: object,
+) -> FmpPayloadContractError | None:
+    """Validate a provider payload against its shared coordinate contract.
 
-    Returns the ValidationError on schema drift, else None. Validation applies
-    ONLY when the winning rung is a `stable:` rung — the v3/v4 fallback rungs
-    return v3-shaped bodies (calendarYear, dividendsPaid, ...) that the
-    stable-shaped model would (correctly) reject; that is legacy shape, NOT
-    drift, so non-stable rungs are passed through unchecked. An empty body is a
-    200-OK no-data signal (freshly-IPO'd ticker) and passes; endpoints with no
-    model pass.
+    Returns the contract error on drift, else None. Every transport rung and
+    endpoint uses the same non-empty record-list default; endpoint-specific
+    exceptions belong in ``FmpPayloadCoordinate`` policy.
     """
-    if kind is None or not kind.startswith("stable:"):
-        return None
-    model = _STABLE_VALIDATORS.get(endpoint)
-    if model is None:
-        return None
-    if not isinstance(body, list):
-        return None
-    records = cast("list[object]", body)
-    if not records:
-        return None
+    del kind
     try:
-        model.model_validate(records[0])
-    except ValidationError as exc:
+        validate_fmp_prewrite_payload(
+            coordinate=FmpPayloadCoordinate(endpoint=endpoint, suffix=suffix),
+            expected_ticker=expected_ticker,
+            payload=body,
+        )
+    except FmpPayloadContractError as exc:
         return exc
     return None
 
@@ -543,7 +526,7 @@ def _dump_validation_failure(
     period: str,
     suffix: str,
     body: object,
-    err: ValidationError,
+    err: FmpPayloadContractError,
 ) -> Path:
     """Write the malformed stable response + error breakdown to .tmp/ for
     inspection. Returns the dump path so the status row can cite it — the dump
@@ -1094,12 +1077,10 @@ def run_ticker(
         _call_ms = int((time.monotonic() - _call_started) * 1000)
 
         if code == 200 and body is not None:
-            # Pre-write schema-drift gate: validate stable statement responses
-            # before caching. A drifted stable envelope is dumped to .tmp/ and
-            # the write is skipped (recorded as error) rather than overwriting
-            # good cached JSON. v3/v4 fallback rungs are not gated (see
-            # _validate_stable_record).
-            drift = _validate_stable_record(endpoint, kind, body)
+            # Pre-write contract gate: validate every provider envelope before
+            # caching. Invalid payloads are dumped to .tmp/ and cannot overwrite
+            # good cached JSON or emit success state.
+            drift = _validate_stable_record(endpoint, kind, ticker, suffix, body)
             if drift is not None:
                 dump_path = _dump_validation_failure(ticker, endpoint, period, suffix, body, drift)
                 rel_dump = dump_path.relative_to(PROJECT_ROOT)

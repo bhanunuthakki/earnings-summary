@@ -20,10 +20,13 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import execution.refresh_cache as refresh_cache
+from execution.save_fmp_data import TODAY, per_ticker_jobs
 from models.companies import ListType
+from pipeline.fmp_doc_index import classify_fmp_filename
 from pipeline.fmp_recovery import (
     CircuitConfig,
     CircuitState,
+    ContainmentReason,
     CredentialAvailability,
     EnqueueWorkRequest,
     ExecutionMode,
@@ -33,6 +36,7 @@ from pipeline.fmp_recovery import (
     ReceiptStatus,
     RecoverableWorkRequest,
     RecoveryAvailability,
+    RefreshReceipt,
     WorkOutcome,
     WorkSpec,
     enqueue_work,
@@ -53,14 +57,21 @@ def test_repository_clock_normalizes_pacific_time_to_naive_utc() -> None:
     assert refresh_cache._naive_utc(pacific) == datetime(2026, 8, 12, 7, 30)
 
 
-def _item(ticker: str, *, suffix: str = "income_statement_quarterly") -> refresh_cache.QueueItem:
+def _item(
+    ticker: str,
+    *,
+    suffix: str = "income_statement_quarterly",
+    endpoint: str = "income-statement",
+    period: str = "quarter",
+    endpoint_class: str = "statement",
+) -> refresh_cache.QueueItem:
     return refresh_cache.QueueItem(
         ticker=ticker,
         list_type=ListType.PORTFOLIO.value,
-        endpoint="income-statement",
-        period="quarter",
+        endpoint=endpoint,
+        period=period,
         suffix=suffix,
-        endpoint_class="statement",
+        endpoint_class=endpoint_class,
         bucket="missing",
         last_pulled=None,
         last_status=None,
@@ -136,13 +147,139 @@ def _admit_fixture_corpus(
     )
 
 
+_CATALOG_SUFFIX_DOC_TYPES = (
+    ("income_statement_annual", "fmp_income_statement"),
+    ("income_statement_quarterly", "fmp_income_statement"),
+    ("balance_sheet_annual", "fmp_balance_sheet"),
+    ("balance_sheet_quarterly", "fmp_balance_sheet"),
+    ("cash_flow_annual", "fmp_cashflow"),
+    ("cash_flow_quarterly", "fmp_cashflow"),
+    ("income_growth_annual", "fmp_financial_growth"),
+    ("income_growth_quarterly", "fmp_financial_growth"),
+    ("balance_growth_annual", "fmp_financial_growth"),
+    ("balance_growth_quarterly", "fmp_financial_growth"),
+    ("cashflow_growth_annual", "fmp_financial_growth"),
+    ("cashflow_growth_quarterly", "fmp_financial_growth"),
+    ("financial_growth_annual", "fmp_financial_growth"),
+    ("financial_growth_quarterly", "fmp_financial_growth"),
+    ("as_reported_income_annual", "fmp_as_reported_income"),
+    ("as_reported_income_quarterly", "fmp_as_reported_income"),
+    ("as_reported_balance_annual", "fmp_as_reported_balance"),
+    ("as_reported_balance_quarterly", "fmp_as_reported_balance"),
+    ("as_reported_cashflow_annual", "fmp_as_reported_cashflow"),
+    ("as_reported_cashflow_quarterly", "fmp_as_reported_cashflow"),
+    ("as_reported_financial_annual", "fmp_as_reported_financial"),
+    ("as_reported_financial_quarterly", "fmp_as_reported_financial"),
+    ("income_statement_ttm", "fmp_income_statement"),
+    ("balance_sheet_ttm", "fmp_balance_sheet"),
+    ("cash_flow_ttm", "fmp_cashflow"),
+    ("product_segments_annual", "fmp_segment_product"),
+    ("product_segments_quarterly", "fmp_segment_product"),
+    ("geo_segments_annual", "fmp_segment_geographic"),
+    ("geo_segments_quarterly", "fmp_segment_geographic"),
+    ("key_metrics_annual", "fmp_key_metrics"),
+    ("key_metrics_quarterly", "fmp_key_metrics"),
+    ("key_metrics_ttm", "fmp_key_metrics"),
+    ("financial_ratios_annual", "fmp_financial_ratios"),
+    ("financial_ratios_quarterly", "fmp_financial_ratios"),
+    ("financial_ratios_ttm", "fmp_financial_ratios"),
+    ("enterprise_values_annual", "fmp_enterprise_values"),
+    ("enterprise_values_quarterly", "fmp_enterprise_values"),
+    ("financial_scores", "fmp_other"),
+    ("owner_earnings_annual", "fmp_owner_earnings"),
+    ("financial_reports_dates", "fmp_financial_reports_dates"),
+    *((f"form_10k_{year}", "fmp_10k_json") for year in range(TODAY.year - 10, TODAY.year)),
+    ("analyst_estimates_annual", "fmp_analyst_estimates"),
+    ("analyst_estimates_quarterly", "fmp_analyst_estimates"),
+    ("historical_ratings", "fmp_grades"),
+    ("price_target_consensus", "fmp_price_target_consensus"),
+    ("price_target_summary", "fmp_price_target_consensus"),
+    ("grades_summary", "fmp_grades"),
+    ("historical_grades", "fmp_grades"),
+    ("ratings_snapshot", "fmp_grades"),
+    ("profile", "fmp_profile"),
+    ("historical_market_cap", "fmp_historical_market_cap"),
+    ("shares_float", "fmp_other"),
+    ("peers", "fmp_peers"),
+    ("company_executives", "fmp_executives"),
+    ("historical_employee_count", "fmp_historical_employees"),
+    ("dcf_basic", "fmp_dcf"),
+    ("dcf_levered", "fmp_dcf_levered"),
+    ("price_chart_10y_div_adj", "fmp_historical_price"),
+)
+
+
+def test_full_production_catalog_has_durable_doc_type_classification() -> None:
+    catalog_suffixes = tuple(str(job["suffix"]) for job in per_ticker_jobs("RBRK"))
+    expected_suffixes = tuple(suffix for suffix, _doc_type in _CATALOG_SUFFIX_DOC_TYPES)
+
+    assert len(catalog_suffixes) == 67
+    assert catalog_suffixes == expected_suffixes
+
+
+@pytest.mark.parametrize(("suffix", "expected_doc_type"), _CATALOG_SUFFIX_DOC_TYPES)
+def test_production_backlog_suffixes_map_to_exact_corpus_coordinate_and_doc_type(
+    tmp_path: Path,
+    suffix: str,
+    expected_doc_type: str,
+) -> None:
+    project_root = tmp_path / "runtime"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    item = _item("RBRK", suffix=suffix)
+    path = raw_dir / f"RBRK_{suffix}.json"
+    path.write_text('[{"date":"2026-07-31"}]', encoding="utf-8")
+
+    assert (
+        refresh_cache._corpus_path(
+            item,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+        )
+        == path
+    )
+    spec = refresh_cache._work_spec(
+        item,
+        raw_corpus_dir=raw_dir,
+        now=NOW,
+        owner_request_id="fixture",
+    )
+    assert spec.endpoint_key == suffix
+    assert spec.corpus_snapshot is not None
+    assert spec.corpus_snapshot.content_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert classify_fmp_filename(path.name) == expected_doc_type
+
+
+def test_corpus_coordinate_rejects_noncanonical_root_and_path_components(tmp_path: Path) -> None:
+    project_root = tmp_path / "runtime"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+
+    assert (
+        refresh_cache._corpus_path(
+            _item("RBRK"),
+            raw_corpus_dir=tmp_path / "other-fmp",
+            project_root=project_root,
+        )
+        is None
+    )
+    assert (
+        refresh_cache._corpus_path(
+            _item("RBRK", suffix="../income_statement_quarterly"),
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+        )
+        is None
+    )
+
+
 def test_missing_auth_uses_read_only_corpus_without_dispatch_or_freshness_advance(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
     db_path = migrated_db(tmp_path / "runtime.db", target=REVISION)
-    raw_dir = tmp_path / "fmp"
-    raw_dir.mkdir()
+    raw_dir = tmp_path / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
     items = (_item("RBRK"), _item("WIX"))
     before: dict[Path, tuple[str, int]] = {}
     for item in items:
@@ -542,6 +679,149 @@ def test_transient_threshold_stops_later_provider_calls(
         connection.close()
 
 
+def test_operator_budget_contains_rate_limited_provider_before_configured_threshold(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = migrated_db(tmp_path / "runtime.db", target=REVISION)
+    connection = _connection(db_path)
+    calls: list[str] = []
+
+    def rate_limited(
+        _conn: sqlite3.Connection,
+        item: refresh_cache.QueueItem,
+        planned: refresh_cache.PlannedWork,
+    ) -> WorkOutcome:
+        calls.append(item.ticker)
+        assert planned.lease_token is not None
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.RATE_LIMITED,
+            observed_at=NOW,
+            http_status=429,
+        )
+
+    try:
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=tuple(_item(ticker) for ticker in ("RBRK", "WIX", "META")),
+            credentials=CredentialAvailability.AVAILABLE,
+            raw_corpus_dir=tmp_path / "missing-corpus",
+            now=NOW,
+            run_id="bounded-rate-limit",
+            dispatch=rate_limited,
+            provider_call_budget=2,
+            circuit_config=CircuitConfig(rate_limit_threshold=3),
+            contain_on_budget_exhaustion=True,
+        )
+
+        assert len(calls) == 2
+        assert result.dispatch_count == 2
+        circuit = connection.execute(
+            "SELECT state,consecutive_rate_limits,last_reason_code "
+            "FROM provider_circuit_state WHERE provider='fmp'"
+        ).fetchone()
+        assert circuit is not None
+        assert tuple(circuit) == (
+            CircuitState.OPEN.value,
+            2,
+            ContainmentReason.OPERATOR_CALL_BUDGET_EXHAUSTED_AFTER_RATE_LIMIT.value,
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fmp_recovery_events WHERE event_type='circuit_contained'"
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        connection.close()
+
+
+def test_operator_budget_containment_is_atomic_with_final_429_across_restart(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = migrated_db(tmp_path / "runtime.db", target=REVISION)
+    connection = _connection(db_path)
+    calls = 0
+
+    def rate_limited(
+        _connection: sqlite3.Connection,
+        _item_value: refresh_cache.QueueItem,
+        planned: refresh_cache.PlannedWork,
+    ) -> WorkOutcome:
+        nonlocal calls
+        calls += 1
+        assert planned.lease_token is not None
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.RATE_LIMITED,
+            observed_at=NOW,
+            http_status=429,
+        )
+
+    original_record_outcomes = refresh_cache.record_outcomes
+
+    def crash_after_atomic_receipt(
+        conn: sqlite3.Connection,
+        request: refresh_cache.RecordOutcomesRequest,
+    ) -> RefreshReceipt:
+        receipt = original_record_outcomes(conn, request)
+        if request.containment_reason is not None:
+            raise RuntimeError("simulated crash after atomic final receipt")
+        return receipt
+
+    monkeypatch.setattr(refresh_cache, "record_outcomes", crash_after_atomic_receipt)
+    try:
+        with pytest.raises(RuntimeError, match="simulated crash after atomic final receipt"):
+            refresh_cache.run_recovery_batch(
+                connection,
+                items=tuple(_item(ticker) for ticker in ("RBRK", "WIX", "META")),
+                credentials=CredentialAvailability.AVAILABLE,
+                raw_corpus_dir=tmp_path / "missing-corpus",
+                now=NOW,
+                run_id="bounded-rate-limit-crash",
+                dispatch=rate_limited,
+                provider_call_budget=2,
+                circuit_config=CircuitConfig(rate_limit_threshold=3),
+                contain_on_budget_exhaustion=True,
+            )
+        assert calls == 2
+        circuit = connection.execute(
+            "SELECT state,last_reason_code FROM provider_circuit_state WHERE provider='fmp'"
+        ).fetchone()
+        assert circuit is not None
+        assert tuple(circuit) == (
+            CircuitState.OPEN.value,
+            ContainmentReason.OPERATOR_CALL_BUDGET_EXHAUSTED_AFTER_RATE_LIMIT.value,
+        )
+    finally:
+        connection.close()
+
+    monkeypatch.setattr(refresh_cache, "record_outcomes", original_record_outcomes)
+    restarted = _connection(db_path)
+    try:
+        result = refresh_cache.run_recovery_batch(
+            restarted,
+            items=tuple(_item(ticker) for ticker in ("RBRK", "WIX", "META")),
+            credentials=CredentialAvailability.AVAILABLE,
+            raw_corpus_dir=tmp_path / "missing-corpus",
+            now=NOW + timedelta(minutes=1),
+            run_id="bounded-rate-limit-restart",
+            dispatch=rate_limited,
+            provider_call_budget=2,
+            circuit_config=CircuitConfig(rate_limit_threshold=3),
+            contain_on_budget_exhaustion=True,
+        )
+        assert calls == 2
+        assert result.dispatch_count == 0
+    finally:
+        restarted.close()
+
+
 def test_due_probe_success_closes_circuit_then_drains_bounded_priority_work(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -591,6 +871,189 @@ def test_due_probe_success_closes_circuit_then_drains_bounded_priority_work(
             ).fetchone()[0]
             == "CLOSED"
         )
+    finally:
+        connection.close()
+
+
+def test_generic_corpus_endpoint_is_durably_admitted_without_facts(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "RBRK_analyst_estimates_annual.json"
+    raw_path.write_text(
+        json.dumps([{"date": "2027-01-31", "symbol": "RBRK", "revenueAvg": 1_300_000_000}]),
+        encoding="utf-8",
+    )
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=REVISION)
+    connection = _connection(db_path)
+    item = _item(
+        "RBRK",
+        endpoint="analyst-estimates",
+        period="annual",
+        suffix="analyst_estimates_annual",
+        endpoint_class="time_sensitive",
+    )
+    try:
+        first = refresh_cache.run_recovery_batch(
+            connection,
+            items=(item,),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="generic-corpus-first",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+        counts = {
+            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in ("documents", "evidence_document_versions", "financial_facts")
+        }
+        second = refresh_cache.run_recovery_batch(
+            connection,
+            items=(item,),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW + timedelta(minutes=1),
+            run_id="generic-corpus-replay",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+
+        assert first.status is ReceiptStatus.DEGRADED_CORPUS
+        assert first.corpus_count == 1
+        assert second.status is ReceiptStatus.DEGRADED_CORPUS
+        assert second.corpus_count == 1
+        assert counts == {"documents": 1, "evidence_document_versions": 1, "financial_facts": 0}
+        assert {
+            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in counts
+        } == counts
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "period", "suffix", "raw_payload"),
+    (
+        ("profile", "", "profile", "[1]"),
+        ("profile", "", "profile", "[{}]"),
+        ("profile", "", "profile", '[{"symbol":"RBRK"},1]'),
+        ("profile", "", "profile", "1"),
+        (
+            "income-statement",
+            "quarter",
+            "income_statement_quarterly",
+            '[{"date":"2026-07-31","symbol":"WIX","period":"Q2"}]',
+        ),
+        ("profile", "", "profile", "not-json"),
+    ),
+    ids=("non-object", "empty-object", "mixed", "scalar", "wrong-wix-ticker", "not-json"),
+)
+def test_corpus_contract_error_precedes_every_canonical_write_and_dumps_diagnostic(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    period: str,
+    suffix: str,
+    raw_payload: str,
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / f"RBRK_{suffix}.json").write_text(raw_payload, encoding="utf-8")
+    diagnostic_dir = project_root / ".tmp" / "fmp_validation_failures"
+    monkeypatch.setattr(refresh_cache, "FMP_VALIDATION_DUMP_DIR", diagnostic_dir)
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=REVISION)
+    connection = _connection(db_path)
+    item = _item(
+        "RBRK",
+        endpoint=endpoint,
+        period=period,
+        suffix=suffix,
+        endpoint_class="statement" if "statement" in endpoint else "time_sensitive",
+    )
+    try:
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(item,),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id=f"invalid-corpus-{suffix}",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+
+        assert result.status is ReceiptStatus.FAILED
+        assert result.corpus_count == 0
+        assert result.failed_count == 1
+        for table in ("documents", "evidence_document_versions", "financial_facts"):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT outcome_code FROM fmp_work_attempts").fetchone()[0]
+            == OutcomeCode.CLIENT_CONTRACT_ERROR.value
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fmp_endpoint_status WHERE ticker='RBRK' AND status='ok'"
+            ).fetchone()[0]
+            == 0
+        )
+        diagnostics = list(diagnostic_dir.glob("*.json"))
+        assert len(diagnostics) == 1
+        diagnostic = json.loads(diagnostics[0].read_text(encoding="utf-8"))
+        assert diagnostic["transport"] == "corpus"
+        assert diagnostic["ticker"] == "RBRK"
+        assert diagnostic["validation_errors"]
+        assert diagnostic["raw_response_text"] == raw_payload
+    finally:
+        connection.close()
+
+
+def test_corpus_admission_allows_cross_issuer_rows_for_stock_peers(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "RBRK_peers.json").write_text(
+        json.dumps([{"symbol": "WIX"}, {"ticker": "META"}]),
+        encoding="utf-8",
+    )
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=REVISION)
+    connection = _connection(db_path)
+    item = _item(
+        "RBRK",
+        endpoint="stock-peers",
+        period="",
+        suffix="peers",
+        endpoint_class="reference",
+    )
+    try:
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(item,),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="cross-issuer-peers",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+
+        assert result.status is ReceiptStatus.DEGRADED_CORPUS
+        assert result.corpus_count == 1
+        assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
     finally:
         connection.close()
 
@@ -1206,8 +1669,8 @@ def test_offline_admission_handle_denies_refresh_overwrite_and_delete(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    raw_dir = tmp_path / "fmp"
-    raw_dir.mkdir()
+    raw_dir = tmp_path / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
     raw_path = raw_dir / "RBRK_income_statement_quarterly.json"
     original = b"[]"
     raw_path.write_bytes(original)

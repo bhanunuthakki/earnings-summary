@@ -55,7 +55,16 @@ def _income_record(**overrides: object) -> dict[str, object]:
 
 def test_validator_accepts_canonical_income_statement() -> None:
     body: list[object] = [_income_record()]
-    assert sfd._validate_stable_record("income-statement", "stable:income-statement", body) is None
+    assert (
+        sfd._validate_stable_record(
+            "income-statement",
+            "stable:income-statement",
+            "GOOG",
+            "income_statement_quarterly",
+            body,
+        )
+        is None
+    )
 
 
 def test_validator_accepts_canonical_cashflow_under_stable_spelling() -> None:
@@ -66,16 +75,21 @@ def test_validator_accepts_canonical_cashflow_under_stable_spelling() -> None:
         {"date": "2025-09-30", "symbol": "GOOG", "period": "Q3", "freeCashFlow": 25_000_000_000}
     ]
     assert (
-        sfd._validate_stable_record("cashflow-statement", "stable:cashflow-statement", body) is None
+        sfd._validate_stable_record(
+            "cashflow-statement", "stable:cashflow-statement", "GOOG", "cash_flow_quarterly", body
+        )
+        is None
     )
 
 
 def test_validator_rejects_record_missing_required_date() -> None:
     """A stable response that drops `date` (required) is schema drift."""
     bad: list[object] = [{"symbol": "GOOG", "period": "Q3", "revenue": 100}]
-    err = sfd._validate_stable_record("income-statement", "stable:income-statement", bad)
+    err = sfd._validate_stable_record(
+        "income-statement", "stable:income-statement", "GOOG", "income_statement_quarterly", bad
+    )
     assert err is not None
-    assert ["date"] in [list(e["loc"]) for e in err.errors()]
+    assert ["payload", 0, "date"] in [list(e["loc"]) for e in err.errors()]
 
 
 def test_validator_skips_non_stable_rung() -> None:
@@ -84,30 +98,75 @@ def test_validator_skips_non_stable_rung() -> None:
     Even a body that would fail the stable model passes when the rung is v3."""
     v3_shaped: list[object] = [{"calendarYear": "2025", "symbol": "GOOG"}]  # no `date`
     assert (
-        sfd._validate_stable_record("income-statement", "v3-path:income-statement", v3_shaped)
-        is None
+        sfd._validate_stable_record(
+            "income-statement",
+            "v3-path:income-statement",
+            "GOOG",
+            "income_statement_quarterly",
+            v3_shaped,
+        )
+        is not None
     )
     assert (
-        sfd._validate_stable_record("income-statement", "v4-query:income-statement", v3_shaped)
-        is None
+        sfd._validate_stable_record(
+            "income-statement",
+            "v4-query:income-statement",
+            "GOOG",
+            "income_statement_quarterly",
+            v3_shaped,
+        )
+        is not None
     )
-    assert sfd._validate_stable_record("income-statement", None, v3_shaped) is None
+    assert (
+        sfd._validate_stable_record(
+            "income-statement", None, "GOOG", "income_statement_quarterly", v3_shaped
+        )
+        is not None
+    )
 
 
-def test_validator_passes_empty_body() -> None:
-    """An empty list is a 200-OK no-data signal (freshly-IPO'd ticker), not drift."""
-    assert sfd._validate_stable_record("income-statement", "stable:income-statement", []) is None
+def test_validator_rejects_empty_body_by_default() -> None:
+    """Record-list coordinates require at least one record unless policy says otherwise."""
+    err = sfd._validate_stable_record(
+        "income-statement", "stable:income-statement", "GOOG", "income_statement_quarterly", []
+    )
+    assert err is not None
+    assert {issue["type"] for issue in err.errors()} == {"too_short"}
 
 
 def test_validator_skips_endpoint_without_model() -> None:
     """key-metrics has no model in _STABLE_VALIDATORS — the gate must not block it."""
     body: list[object] = [{"anything": "goes"}]
-    assert sfd._validate_stable_record("key-metrics", "stable:key-metrics", body) is None
+    assert (
+        sfd._validate_stable_record(
+            "key-metrics", "stable:key-metrics", "GOOG", "key_metrics_quarterly", body
+        )
+        is not None
+    )
 
 
 def test_validator_tolerates_non_list_body() -> None:
     assert (
-        sfd._validate_stable_record("income-statement", "stable:income-statement", {"x": 1}) is None
+        sfd._validate_stable_record(
+            "income-statement",
+            "stable:income-statement",
+            "GOOG",
+            "income_statement_quarterly",
+            {"x": 1},
+        )
+        is not None
+    )
+
+
+def test_cross_issuer_exemption_requires_exact_stock_peers_coordinate() -> None:
+    body: list[object] = [{"symbol": "WIX"}]
+    assert (
+        sfd._validate_stable_record("stock-peers", "stable:stock-peers", "RBRK", "peers", body)
+        is None
+    )
+    assert (
+        sfd._validate_stable_record("stock-peers", "stable:stock-peers", "RBRK", "profile", body)
+        is not None
     )
 
 
@@ -123,7 +182,9 @@ def test_dump_writes_payload_for_inspection(
     monkeypatch.setattr(sfd, "_VALIDATION_DUMP_DIR", dump_dir)
 
     bad: list[object] = [{"symbol": "GOOG", "period": "Q3"}]  # missing `date`
-    err = sfd._validate_stable_record("income-statement", "stable:income-statement", bad)
+    err = sfd._validate_stable_record(
+        "income-statement", "stable:income-statement", "GOOG", "income_statement_quarterly", bad
+    )
     assert err is not None
 
     out_path = sfd._dump_validation_failure(
@@ -162,7 +223,13 @@ def _wire_single_job(
     fmp_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(sfd, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(sfd, "FMP_DIR", fmp_dir)
+    monkeypatch.setattr(sfd, "SNAP_DIR", tmp_path / "snapshots")
     monkeypatch.setattr(sfd, "_VALIDATION_DUMP_DIR", tmp_path / ".tmp" / "fmp_validation_failures")
+
+    def fake_log_calls(_rows: object) -> None:
+        return None
+
+    monkeypatch.setattr(sfd.source_calls_log, "log_calls_batch", fake_log_calls)
 
     def fake_list_type(ticker: str) -> str:
         return "evaluation"
@@ -242,7 +309,7 @@ def test_run_ticker_drift_skips_write_and_records_error(
     assert isinstance(err_msg, str) and "schema_drift" in err_msg
 
 
-def test_run_ticker_v3_fallback_written_without_stable_validation(
+def test_run_ticker_invalid_v3_fallback_is_rejected_by_shared_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Plan 7.3: a v3 fallback response (legacy tier) is written WITHOUT being run
@@ -258,9 +325,126 @@ def test_run_ticker_v3_fallback_written_without_stable_validation(
 
     summary = sfd.run_ticker("GOOG")
 
+    assert summary["ok"] == 0
+    assert summary["error"] == 1
+    assert not (tmp_path / "fmp" / "GOOG_income_statement_quarterly.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_issue_types"),
+    (
+        (
+            [
+                {
+                    "date": "2026-07-31",
+                    "symbol": "WIX",
+                    "reportedCurrency": "USD",
+                    "period": "Q2",
+                }
+            ],
+            {"ticker_mismatch"},
+        ),
+        (
+            [
+                {
+                    "date": "2026-07-31",
+                    "symbol": "WIX",
+                    "reportedCurrency": "USD",
+                    "period": "Q2",
+                },
+                1,
+            ],
+            {"ticker_mismatch", "dict_type"},
+        ),
+        (
+            {
+                "date": "2026-07-31",
+                "symbol": "WIX",
+                "reportedCurrency": "USD",
+                "period": "Q2",
+            },
+            {"list_type"},
+        ),
+    ),
+    ids=("wrong-wix-ticker-list", "mixed-record-list", "scalar-dict"),
+)
+def test_run_ticker_contract_failure_precedes_all_success_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    body: object,
+    expected_issue_types: set[str],
+) -> None:
+    flushed = _wire_single_job(tmp_path, monkeypatch)
+    monkeypatch.setattr(sfd, "TIME_SENSITIVE_ENDPOINTS", frozenset({"income-statement"}))
+
+    def fake_statement_call(
+        _endpoint: str,
+        _ticker: str,
+        _extra: dict[str, object] | None,
+    ) -> tuple[int, object, str | None, str | None]:
+        return (200, body, None, "stable:income-statement")
+
+    monkeypatch.setattr(sfd, "fmp_call", fake_statement_call)
+    receipts: list[sfd.FmpWorkReceipt] = []
+    canonical_path = tmp_path / "fmp" / "RBRK_income_statement_quarterly.json"
+    canonical_path.write_bytes(b'[{"sentinel":"raw"}]')
+    snapshot_path = tmp_path / "snapshots" / "prior" / "RBRK_income_statement_quarterly.json"
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_bytes(b'[{"sentinel":"snapshot"}]')
+    before_artifacts = {
+        canonical_path: canonical_path.read_bytes(),
+        snapshot_path: snapshot_path.read_bytes(),
+    }
+
+    summary = sfd.run_ticker(
+        "RBRK",
+        snapshot_index={},
+        force_snapshot=True,
+        work_receipts=receipts,
+    )
+
+    assert summary["ok"] == 0
+    assert summary["error"] == 1
+    assert {path: path.read_bytes() for path in before_artifacts} == before_artifacts
+    assert list((tmp_path / "snapshots").rglob("*.json")) == [snapshot_path]
+    assert not any(row[3] == "ok" for row in flushed)
+    assert [receipt.outcome for receipt in receipts] == [sfd.FmpWorkReceiptOutcome.CONTRACT_ERROR]
+    assert all(receipt.file_path is None and receipt.content_sha256 is None for receipt in receipts)
+    dump_path = next((tmp_path / ".tmp" / "fmp_validation_failures").glob("*.json"))
+    dump = json.loads(dump_path.read_text(encoding="utf-8"))
+    assert expected_issue_types <= {issue["type"] for issue in dump["validation_errors"]}
+
+
+def test_run_ticker_accepts_cross_issuer_records_only_for_peers_coordinate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flushed = _wire_single_job(
+        tmp_path,
+        monkeypatch,
+        endpoint="stock-peers",
+        suffix="peers",
+        period="",
+    )
+    body: list[object] = [{"symbol": "WIX"}, {"ticker": "META"}]
+
+    def fake_peers_call(
+        _endpoint: str,
+        _ticker: str,
+        _extra: dict[str, object] | None,
+    ) -> tuple[int, object, str | None, str | None]:
+        return (200, body, None, "stable:stock-peers")
+
+    monkeypatch.setattr(sfd, "fmp_call", fake_peers_call)
+    receipts: list[sfd.FmpWorkReceipt] = []
+
+    summary = sfd.run_ticker("RBRK", work_receipts=receipts)
+
     assert summary["ok"] == 1
     assert summary["error"] == 0
-    assert (tmp_path / "fmp" / "GOOG_income_statement_quarterly.json").exists()
+    assert (tmp_path / "fmp" / "RBRK_peers.json").exists()
+    assert [row[3] for row in flushed] == ["ok"]
+    assert [receipt.outcome for receipt in receipts] == [sfd.FmpWorkReceiptOutcome.SUCCESS]
 
 
 def test_run_ticker_403_still_forbidden_with_gate(
@@ -280,20 +464,51 @@ def test_run_ticker_403_still_forbidden_with_gate(
     assert summary["error"] == 0
 
 
-def test_run_ticker_empty_still_empty_with_gate(
+def test_run_ticker_empty_envelope_is_contract_error_before_success_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Plan 7.4 regression: a 200-empty stable probe is still classified empty."""
-    _wire_single_job(tmp_path, monkeypatch)
+    """HTTP 200 ``[]`` is invalid unless its coordinate explicitly permits it."""
+    flushed = _wire_single_job(tmp_path, monkeypatch)
+    monkeypatch.setattr(sfd, "TIME_SENSITIVE_ENDPOINTS", frozenset({"income-statement"}))
 
-    def fake_call(endpoint: str, ticker: str, extra: dict[str, object]):
-        return (200, None, "empty-list", "stable:income-statement")
+    def fake_call(
+        endpoint: str, ticker: str, extra: dict[str, object]
+    ) -> tuple[int, object, str | None, str | None]:
+        return (200, [], None, "stable:income-statement")
 
     monkeypatch.setattr(sfd, "fmp_call", fake_call)
-    summary = sfd.run_ticker("GOOG")
-    assert summary["empty"] == 1
+    receipts: list[sfd.FmpWorkReceipt] = []
+    canonical_path = tmp_path / "fmp" / "GOOG_income_statement_quarterly.json"
+    canonical_path.write_bytes(b'[{"sentinel":"raw"}]')
+    snapshot_path = tmp_path / "snapshots" / "prior" / "GOOG_income_statement_quarterly.json"
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_bytes(b'[{"sentinel":"snapshot"}]')
+    before_artifacts = {
+        canonical_path: canonical_path.read_bytes(),
+        snapshot_path: snapshot_path.read_bytes(),
+    }
+
+    summary = sfd.run_ticker(
+        "GOOG",
+        snapshot_index={},
+        force_snapshot=True,
+        work_receipts=receipts,
+    )
+
     assert summary["ok"] == 0
-    assert summary["error"] == 0
+    assert summary["empty"] == 0
+    assert summary["error"] == 1
+    assert {path: path.read_bytes() for path in before_artifacts} == before_artifacts
+    assert list((tmp_path / "snapshots").rglob("*.json")) == [snapshot_path]
+    assert [row[3] for row in flushed] == ["error"]
+    assert not any(row[3] == "ok" for row in flushed)
+    assert [receipt.outcome for receipt in receipts] == [sfd.FmpWorkReceiptOutcome.CONTRACT_ERROR]
+    assert all(receipt.file_path is None and receipt.content_sha256 is None for receipt in receipts)
+    dumps = list((tmp_path / ".tmp" / "fmp_validation_failures").glob("*.json"))
+    assert len(dumps) == 1
+    dump = json.loads(dumps[0].read_text(encoding="utf-8"))
+    assert dump["raw_response"] == []
+    assert {issue["type"] for issue in dump["validation_errors"]} == {"too_short"}
 
 
 def test_run_ticker_error_body_still_error_with_gate(

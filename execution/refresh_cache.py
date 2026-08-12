@@ -75,10 +75,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 from log_redact import redact  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from pipeline import cadence_policy as _cadence_policy  # noqa: E402
+from pipeline.fmp_doc_index import classify_fmp_filename  # noqa: E402
+from pipeline.fmp_payload_validation import (  # noqa: E402
+    FmpPayloadContractError,
+    FmpPayloadCoordinate,
+    validate_fmp_prewrite_bytes,
+)
 from pipeline.fmp_recovery import (  # noqa: E402
     SCREENING_ENDPOINT_KEYS,
     CircuitConfig,
     CircuitState,
+    ContainmentReason,
     CorpusSnapshot,
     CredentialAvailability,
     EnqueueWorkRequest,
@@ -118,6 +125,7 @@ OFFLINE_LOCK_PATH = CACHE_DIR / ".offline-corpus.lock"
 QUEUE_PATH = CACHE_DIR / "queue.json"
 HINTS_PATH = CACHE_DIR / "forced_stale.json"
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
+FMP_VALIDATION_DUMP_DIR = PROJECT_ROOT / ".tmp" / "fmp_validation_failures"
 
 
 @dataclass(frozen=True)
@@ -791,6 +799,7 @@ def _win_handle_function(library: object, name: str) -> _WinHandleFunction:
 
 def _windows_locked_fd(root: Path, path: Path) -> int:
     """Open a Windows read handle that denies concurrent writes and deletes."""
+
     class FileAttributeTagInfo(ctypes.Structure):
         _fields_ = [("file_attributes", ctypes.c_ulong), ("reparse_tag", ctypes.c_ulong)]
 
@@ -957,6 +966,59 @@ def _held_snapshot(content: bytes, stat_result: os.stat_result) -> CorpusSnapsho
     )
 
 
+def _corpus_path(
+    item: QueueItem,
+    *,
+    raw_corpus_dir: Path,
+    project_root: Path,
+) -> Path | None:
+    """Resolve one exact catalog coordinate inside the canonical corpus path."""
+    filename = f"{item.ticker}_{item.suffix}.json"
+    if Path(filename).name != filename:
+        return None
+    candidate = raw_corpus_dir / filename
+    canonical = project_root / "data" / "historical" / "fmp" / filename
+    if Path(os.path.abspath(candidate)) != Path(os.path.abspath(canonical)):
+        return None
+    try:
+        candidate.resolve().relative_to(raw_corpus_dir.resolve())
+    except (OSError, ValueError):
+        return None
+    return candidate
+
+
+def _dump_corpus_validation_failure(
+    *,
+    item: QueueItem,
+    planned: PlannedWork,
+    content: bytes,
+    error: FmpPayloadContractError,
+    observed_at: datetime,
+) -> Path:
+    """Persist exact rejected corpus bytes and typed issues outside canonical state."""
+    FMP_VALIDATION_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+    out = FMP_VALIDATION_DUMP_DIR / (
+        f"{item.ticker}_{planned.work_id[:16]}_corpus_contract_error.json"
+    )
+    diagnostic = {
+        "transport": "corpus",
+        "ticker": item.ticker,
+        "endpoint": item.endpoint,
+        "period": item.period,
+        "suffix": item.suffix,
+        "work_id": planned.work_id,
+        "observed_at": observed_at.isoformat(),
+        "validation_errors": [
+            {"loc": list(issue["loc"]), "msg": issue["msg"], "type": issue["type"]}
+            for issue in error.errors()
+        ],
+        "raw_response_text": content.decode("utf-8", errors="replace"),
+        "raw_content_sha256": hashlib.sha256(content).hexdigest(),
+    }
+    out.write_text(json.dumps(diagnostic, indent=2), encoding="utf-8")
+    return out
+
+
 def _naive_utc(value: datetime) -> datetime:
     """Normalize an aware repository clock value to the DB's naive-UTC contract."""
     if value.tzinfo is None:
@@ -992,7 +1054,19 @@ def _admit_corpus(
     if planned.lease_token is None:
         raise ValueError("corpus admission requires a typed corpus lease")
     lease_token = planned.lease_token
-    path = raw_corpus_dir / f"{item.ticker}_{item.suffix}.json"
+    unavailable = WorkOutcome(
+        work_id=planned.work_id,
+        lease_token=lease_token,
+        outcome_code=OutcomeCode.CORPUS_UNAVAILABLE,
+        observed_at=observed_at,
+    )
+    path = _corpus_path(
+        item,
+        raw_corpus_dir=raw_corpus_dir,
+        project_root=project_root,
+    )
+    if path is None:
+        return unavailable
     try:
         with _held_corpus_file(raw_corpus_dir, path) as held:
             return _admit_held_corpus(
@@ -1005,12 +1079,7 @@ def _admit_corpus(
                 held,
             )
     except (OSError, RuntimeError, ValueError):
-        return WorkOutcome(
-            work_id=planned.work_id,
-            lease_token=lease_token,
-            outcome_code=OutcomeCode.CORPUS_UNAVAILABLE,
-            observed_at=observed_at,
-        )
+        return unavailable
 
 
 def _admit_held_corpus(
@@ -1041,31 +1110,33 @@ def _admit_held_corpus(
         return unavailable
 
     corpus_snapshot = planned.corpus_snapshot
-    # Parse and classify before the short document write; the admission path is
-    # intentionally limited to statement endpoints that produce governed facts.
+    coordinate = FmpPayloadCoordinate(endpoint=item.endpoint, suffix=item.suffix)
     try:
-        payload: object = json.loads(held.content.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
-        return unavailable
-    if not isinstance(payload, list):
-        return unavailable
-    records = cast(list[object], payload)
-    doc_types = {
-        "income_statement": "fmp_income_statement",
-        "balance_sheet": "fmp_balance_sheet",
-        "cash_flow": "fmp_cashflow",
-    }
-    statement_kind = next((key for key in doc_types if item.suffix.startswith(key)), None)
-    if statement_kind is None:
-        return unavailable
-    doc_type = doc_types[statement_kind]
+        _payload, validated = validate_fmp_prewrite_bytes(
+            coordinate=coordinate,
+            expected_ticker=item.ticker,
+            content=held.content,
+        )
+    except FmpPayloadContractError as error:
+        _dump_corpus_validation_failure(
+            item=item,
+            planned=planned,
+            content=held.content,
+            error=error,
+            observed_at=observed_at,
+        )
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.CLIENT_CONTRACT_ERROR,
+            observed_at=observed_at,
+        )
+    records = validated.records
+    doc_type = classify_fmp_filename(path.name)
     dates: list[datetime] = []
     for record in records:
-        if not isinstance(record, dict):
-            continue
-        record_object = cast(dict[str, object], record)
         for key in ("date", "fillingDate"):
-            value = record_object.get(key)
+            value = record.get(key)
             if isinstance(value, str):
                 try:
                     dates.append(datetime.fromisoformat(value[:10]))
@@ -1074,10 +1145,10 @@ def _admit_held_corpus(
                 break
     dates.sort()
     period_end = dates[-1] if dates else None
-    try:
-        relative_path = str(path.resolve().relative_to(project_root.resolve())).replace("\\", "/")
-    except ValueError:
+    expected_raw_dir = project_root / "data" / "historical" / "fmp"
+    if Path(os.path.abspath(raw_corpus_dir)) != Path(os.path.abspath(expected_raw_dir)):
         return unavailable
+    relative_path = str(Path("data") / "historical" / "fmp" / path.name).replace("\\", "/")
 
     connection.execute(
         "INSERT OR IGNORE INTO documents "
@@ -1128,17 +1199,22 @@ def _admit_held_corpus(
         from compute.income_statement import extract_income_statement_facts as extractor
     elif doc_type == "fmp_balance_sheet":
         from compute.balance_sheet import extract_balance_sheet_facts as extractor
-    else:
+    elif doc_type == "fmp_cashflow":
         from compute.cashflow import extract_cashflow_facts as extractor
+    else:
+        extractor = None
+    admission_status: str | None = None
     try:
-        inserted_count = extractor(connection, document_id, project_root)
-        admission = governed_document_fact_admission(
-            connection,
-            document_id=document_id,
-            ticker=item.ticker,
-            content_sha256=corpus_snapshot.content_sha256,
-            inserted_count=inserted_count,
-        )
+        if extractor is not None:
+            inserted_count = extractor(connection, document_id, project_root)
+            admission = governed_document_fact_admission(
+                connection,
+                document_id=document_id,
+                ticker=item.ticker,
+                content_sha256=corpus_snapshot.content_sha256,
+                inserted_count=inserted_count,
+            )
+            admission_status = admission.status
     except (KeyError, OSError, ValueError, json.JSONDecodeError, sqlite3.Error):
         if connection.in_transaction:
             connection.rollback()
@@ -1159,7 +1235,7 @@ def _admit_held_corpus(
         and after_stat.st_size == before_stat.st_size
     )
     freshness_unchanged = _last_pulled(connection, item=item) == last_pulled_before
-    if admission.status == "empty" or not raw_unchanged or not freshness_unchanged:
+    if admission_status == "empty" or not raw_unchanged or not freshness_unchanged:
         return unavailable
     return WorkOutcome(
         work_id=planned.work_id,
@@ -1320,6 +1396,7 @@ def run_recovery_batch(
     circuit_config: CircuitConfig | None = None,
     restrict_to_intended: bool = False,
     backlog_item_resolver: BacklogItemResolver = _item_from_backlog_row,
+    contain_on_budget_exhaustion: bool = False,
 ) -> RecoveryRunResult:
     """Persist every authorized intent, then drain a bounded priority batch."""
     if connection.in_transaction:
@@ -1457,6 +1534,16 @@ def run_recovery_batch(
                     now=cursor_now,
                     expected_work_ids=(planned.work_id,),
                     outcomes=(outcome,),
+                    containment_reason=(
+                        ContainmentReason.OPERATOR_CALL_BUDGET_EXHAUSTED_AFTER_RATE_LIMIT
+                        if (
+                            contain_on_budget_exhaustion
+                            and mode in {ExecutionMode.LIVE, ExecutionMode.PROBE}
+                            and dispatch_count >= call_budget
+                            and outcome.outcome_code is OutcomeCode.RATE_LIMITED
+                        )
+                        else None
+                    ),
                 ),
             )
             provider_reachable_probe = mode is ExecutionMode.PROBE and outcome.outcome_code in {
@@ -2480,6 +2567,7 @@ def _run_under_lock(args: argparse.Namespace) -> int:
             dispatch=dispatch,
             max_items=500,
             provider_call_budget=max(0, budget),
+            contain_on_budget_exhaustion=args.max_calls is not None,
             owner_request_id=(f"cli:{run_id}" if explicit_tickers else None),
         )
         output = result.to_dict()
