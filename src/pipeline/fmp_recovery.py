@@ -1172,8 +1172,9 @@ def plan_run(connection: sqlite3.Connection, request: PlanRunRequest) -> RunPlan
             _upsert_work(connection, spec=spec, now=request.now)
         identifiers = tuple(make_work_id(spec) for spec in request.work)
         placeholders = ",".join("?" for _ in identifiers)
+        # Only the count of qmark placeholders is interpolated; every work ID is bound.
         rows = connection.execute(
-            f"""
+            f"""  # nosec B608
             SELECT * FROM fmp_work_backlog WHERE work_id IN ({placeholders})
             ORDER BY priority DESC,created_at,ticker,work_id
             """,
@@ -1663,8 +1664,9 @@ def _receipt(
     corpus_count = sum(code is OutcomeCode.CORPUS_SUCCESS for code in codes)
     ages = [max(0.0, (request.now - item.captured_at).total_seconds()) for item in corpus_snapshots]
     expected_placeholders = ",".join("?" for _ in request.expected_work_ids)
+    # Only the count of qmark placeholders is interpolated; every work ID is bound.
     expected_rows = connection.execute(
-        f"SELECT work_id,state FROM fmp_work_backlog WHERE work_id IN ({expected_placeholders})",
+        f"SELECT work_id,state FROM fmp_work_backlog WHERE work_id IN ({expected_placeholders})",  # nosec B608
         request.expected_work_ids,
     ).fetchall()
     if len(expected_rows) != len(request.expected_work_ids):
