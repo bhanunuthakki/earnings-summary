@@ -88,6 +88,9 @@ from pipeline.fmp_recovery import (  # noqa: E402
     recoverable_work,
 )
 from pipeline.source_policy import POLICY_VERSION, issuer_policy  # noqa: E402
+from provenance.financial_fact_resolution import (  # noqa: E402
+    governed_document_fact_admission,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
@@ -651,7 +654,14 @@ def _admit_corpus(
     else:
         from compute.cashflow import extract_cashflow_facts as extractor
     try:
-        fact_count = extractor(connection, document_id, project_root)
+        inserted_count = extractor(connection, document_id, project_root)
+        admission = governed_document_fact_admission(
+            connection,
+            document_id=document_id,
+            ticker=item.ticker,
+            content_sha256=corpus_snapshot.content_sha256,
+            inserted_count=inserted_count,
+        )
     except (KeyError, OSError, ValueError, json.JSONDecodeError, sqlite3.Error):
         if connection.in_transaction:
             connection.rollback()
@@ -670,7 +680,7 @@ def _admit_corpus(
         and after_stat.st_size == before_stat.st_size
     )
     freshness_unchanged = _last_pulled(connection, item=item) == last_pulled_before
-    if fact_count <= 0 or not raw_unchanged or not freshness_unchanged:
+    if admission.status == "empty" or not raw_unchanged or not freshness_unchanged:
         return unavailable
     return WorkOutcome(
         work_id=planned.work_id,

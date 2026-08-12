@@ -30,6 +30,7 @@ from pipeline.fmp_recovery import (
     WorkSpec,
     plan_run,
 )
+from provenance.financial_fact_resolution import governed_document_fact_admission
 
 REVISION = "0008_add_fmp_recovery"
 NOW = datetime(2026, 8, 12, 9, 0, 0)
@@ -191,7 +192,7 @@ def test_missing_auth_uses_read_only_corpus_without_dispatch_or_freshness_advanc
     assert after == before
 
 
-def test_real_corpus_admission_is_idempotent_and_preserves_raw_and_freshness(
+def test_real_corpus_admission_reclaims_crashed_lease_without_duplicate_facts(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
@@ -228,42 +229,90 @@ def test_real_corpus_admission_is_idempotent_and_preserves_raw_and_freshness(
             ("RBRK", "income-statement", "quarter", "ok", old_pulled),
         )
         connection.commit()
-        first = refresh_cache.run_recovery_batch(
-            connection,
-            items=(_item("RBRK"),),
-            credentials=CredentialAvailability.MISSING,
-            raw_corpus_dir=raw_dir,
-            project_root=project_root,
-            now=NOW,
-            run_id="real-corpus-first",
-            dispatch=_unexpected_dispatch,
-            provider_call_budget=0,
-        )
+
+        def crash_after_extractor_commit(
+            conn: sqlite3.Connection,
+            item: refresh_cache.QueueItem,
+            planned: refresh_cache.PlannedWork,
+            corpus_dir: Path,
+            root: Path,
+            observed_at: datetime,
+        ) -> WorkOutcome:
+            outcome = refresh_cache._admit_corpus(
+                conn,
+                item,
+                planned,
+                corpus_dir,
+                root,
+                observed_at,
+            )
+            assert outcome.outcome_code is OutcomeCode.CORPUS_SUCCESS
+            raise RuntimeError("simulated crash before recovery outcome recording")
+
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            refresh_cache.run_recovery_batch(
+                connection,
+                items=(_item("RBRK"),),
+                credentials=CredentialAvailability.MISSING,
+                raw_corpus_dir=raw_dir,
+                project_root=project_root,
+                now=NOW,
+                run_id="real-corpus-crash",
+                dispatch=_unexpected_dispatch,
+                corpus_admitter=crash_after_extractor_commit,
+                provider_call_budget=0,
+            )
+        leased = connection.execute(
+            "SELECT state,lease_token,lease_expires_at FROM fmp_work_backlog"
+        ).fetchone()
+        assert leased is not None
+        assert leased["state"] == "LEASED"
+        assert leased["lease_token"] is not None
         facts_after_first = int(
             connection.execute(
                 "SELECT COUNT(*) FROM financial_facts WHERE ticker='RBRK'"
             ).fetchone()[0]
         )
+        assert facts_after_first > 0
+        document = connection.execute(
+            "SELECT id,sha256 FROM documents WHERE ticker='RBRK'"
+        ).fetchone()
+        assert document is not None
+        replay_proof = governed_document_fact_admission(
+            connection,
+            document_id=int(document["id"]),
+            ticker="RBRK",
+            content_sha256=str(document["sha256"]),
+            inserted_count=0,
+        )
+        assert replay_proof.status == "idempotent_replay"
+        assert replay_proof.total_admitted_count == facts_after_first
         second = refresh_cache.run_recovery_batch(
             connection,
             items=(_item("RBRK"),),
             credentials=CredentialAvailability.MISSING,
             raw_corpus_dir=raw_dir,
             project_root=project_root,
-            now=NOW + timedelta(minutes=1),
-            run_id="real-corpus-second",
+            now=NOW + timedelta(minutes=6),
+            run_id="real-corpus-reclaim",
             dispatch=_unexpected_dispatch,
             provider_call_budget=0,
         )
-        assert first.status is ReceiptStatus.DEGRADED_CORPUS
         assert second.status is ReceiptStatus.DEGRADED_CORPUS
-        assert facts_after_first > 0
+        assert second.corpus_count == 1
         assert (
             connection.execute(
                 "SELECT COUNT(*) FROM financial_facts WHERE ticker='RBRK'"
             ).fetchone()[0]
             == facts_after_first
         )
+        reclaimed = connection.execute(
+            "SELECT state,lease_token,lease_expires_at FROM fmp_work_backlog"
+        ).fetchone()
+        assert reclaimed is not None
+        assert reclaimed["state"] == "PENDING"
+        assert reclaimed["lease_token"] is None
+        assert reclaimed["lease_expires_at"] is None
         assert (
             connection.execute(
                 "SELECT last_pulled FROM fmp_endpoint_status WHERE ticker='RBRK'"
@@ -276,6 +325,53 @@ def test_real_corpus_admission_is_idempotent_and_preserves_raw_and_freshness(
         hashlib.sha256(raw_path.read_bytes()).hexdigest(),
         raw_path.stat().st_mtime_ns,
     ) == raw_before
+
+
+def test_real_corpus_admission_keeps_exact_governed_empty_document_unavailable(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "RBRK_income_statement_quarterly.json"
+    raw_path.write_text(
+        json.dumps([{"date": "2026-07-31", "symbol": "RBRK", "period": "Q2"}]),
+        encoding="utf-8",
+    )
+    captured = NOW - timedelta(days=2)
+    os.utime(raw_path, (captured.timestamp(), captured.timestamp()))
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=REVISION)
+    connection = _connection(db_path)
+    try:
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(_item("RBRK"),),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="real-corpus-empty",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+        assert result.status is ReceiptStatus.FAILED
+        assert result.corpus_count == 0
+        document = connection.execute(
+            "SELECT id,sha256 FROM documents WHERE ticker='RBRK'"
+        ).fetchone()
+        assert document is not None
+        proof = governed_document_fact_admission(
+            connection,
+            document_id=int(document["id"]),
+            ticker="RBRK",
+            content_sha256=str(document["sha256"]),
+            inserted_count=0,
+        )
+        assert proof.status == "empty"
+        assert proof.total_admitted_count == 0
+    finally:
+        connection.close()
 
 
 def test_zero_budget_still_persists_all_intended_work_before_processing_cap(
