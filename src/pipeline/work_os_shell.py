@@ -18,6 +18,7 @@ from html import escape
 from pathlib import Path
 
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
+from pipeline.data_policy_settings_panel import render_operations_settings_shell
 from pipeline.work_os_copilot import render_work_os_copilot
 from pipeline.work_os_research import (
     render_brief_library_shell,
@@ -137,6 +138,11 @@ _COMPANY_DESK_SECTION_RE = re.compile(
 _BRIEF_LIBRARY_SECTION_RE = re.compile(
     r'<section id="screen-brief-library".*?</section>\s*'
     r"(?=<!-- =+\s*SURFACE: EXTRACTED FACT & METRIC)",
+    re.DOTALL,
+)
+_OPERATIONS_SECTION_RE = re.compile(
+    r'<section id="screen-execution-queue".*?</section>\s*'
+    r"(?=</div>\s*</main>)",
     re.DOTALL,
 )
 
@@ -268,6 +274,35 @@ def _production_runtime(generated_at: datetime) -> str:
   const companyPickerSearch = document.getElementById('companyPickerSearch');
   const companyPickerList = document.getElementById('companyPickerList');
   const companyPickerStatus = document.getElementById('companyPickerStatus');
+
+  window.switchOpsTab = function (tabId) {{
+    const selected = tabId === 'settings' ? 'settings' : 'queue';
+    const pairs = [
+      {{ button: document.getElementById('opsTabQueue'), pane: document.getElementById('opsPaneQueue'), id: 'queue' }},
+      {{ button: document.getElementById('opsTabSettings'), pane: document.getElementById('opsPaneSettings'), id: 'settings' }}
+    ];
+    pairs.forEach(function (pair) {{
+      const active = pair.id === selected;
+      if (pair.button) {{
+        pair.button.className = 'k-chip k-chip-btn k-chip-tab' + (active ? ' is-on' : '');
+        pair.button.setAttribute('aria-selected', active ? 'true' : 'false');
+        pair.button.tabIndex = active ? 0 : -1;
+      }}
+      if (pair.pane) pair.pane.hidden = !active;
+    }});
+    const status = document.getElementById('workOsLiveStatus');
+    if (status) status.textContent = selected === 'settings'
+      ? 'Data collection settings shown' : 'Operations summary shown';
+  }};
+  document.querySelectorAll('[role="tab"][aria-controls^="opsPane"]').forEach(function (tab) {{
+    tab.addEventListener('keydown', function (event) {{
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      const next = tab.id === 'opsTabQueue' ? 'settings' : 'queue';
+      window.switchOpsTab(next);
+      document.getElementById(next === 'settings' ? 'opsTabSettings' : 'opsTabQueue')?.focus();
+    }});
+  }});
   const drillOverlay = drillDrawer && window.CCOverlay.register(drillDrawer, {{
     modal: true, priority: window.CCOverlay.PRIORITY.DRAWER, scrim: true,
     trapFocus: true, restoreFocus: true, motion: 'slide-right',
@@ -983,6 +1018,9 @@ def _add_production_contract(html: str, generated_at: datetime) -> str:
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
+    html = _OPERATIONS_SECTION_RE.sub(
+        render_operations_settings_shell() + "\n      ", html, count=1
+    )
     html = html.replace(
         '<div class="card-grid-stat-4col">',
         '<div class="card-grid-stat-4col" id="workOsPortfolioStats">',
