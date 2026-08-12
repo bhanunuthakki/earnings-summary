@@ -46,7 +46,7 @@ import os
 import sqlite3
 import tempfile
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -70,6 +70,9 @@ from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import record_validation_issue
 from pipeline.restatement_detector import (
     insert_with_restatement_detection,
+)
+from provenance.financial_fact_resolution import (
+    capture_fact_row_observation,
 )
 from provenance.issuer_registry import IssuerRegistry
 from provenance.sec_companyfacts_capture import (
@@ -665,7 +668,13 @@ _AccessionRecord = CompanyFactsAccessionRecord
 _enumerate_accessions = enumerate_companyfacts_accessions
 
 
-def upsert_companyfacts_snapshot_document(
+@dataclass(frozen=True, slots=True)
+class _SnapshotDocumentRegistration:
+    document_id: int
+    created: bool
+
+
+def _register_companyfacts_snapshot_document(
     conn: sqlite3.Connection,
     *,
     ticker: str,
@@ -674,8 +683,8 @@ def upsert_companyfacts_snapshot_document(
     raw_body: bytes,
     snapshot_root: Path,
     fetched_at: datetime,
-) -> int:
-    """Return the one legacy document row for an exact aggregate snapshot.
+) -> _SnapshotDocumentRegistration:
+    """Register the one legacy document row for an exact aggregate snapshot.
 
     This compatibility anchor satisfies the legacy facts FK. It is explicitly
     typed as an aggregate snapshot and carries no accession, filing date, or
@@ -719,7 +728,7 @@ def upsert_companyfacts_snapshot_document(
                 "UPDATE documents SET file_path = ? WHERE id = ?",
                 (snapshot_file_path, document_id),
             )
-        return document_id
+        return _SnapshotDocumentRegistration(document_id=document_id, created=False)
     captured_at = fetched_at or datetime.now()
     tier = tier_for_source_type(SourceType.SEC_XBRL).value
     columns = [
@@ -768,7 +777,30 @@ def upsert_companyfacts_snapshot_document(
     )
     if cursor.lastrowid is None:
         raise RuntimeError("CompanyFacts snapshot document insert returned no identity")
-    return int(cursor.lastrowid)
+    return _SnapshotDocumentRegistration(document_id=int(cursor.lastrowid), created=True)
+
+
+def upsert_companyfacts_snapshot_document(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    digest: str,
+    normalized_cik: str,
+    raw_body: bytes,
+    snapshot_root: Path,
+    fetched_at: datetime,
+) -> int:
+    """Return the legacy document id for an exact aggregate snapshot."""
+
+    return _register_companyfacts_snapshot_document(
+        conn,
+        ticker=ticker,
+        digest=digest,
+        normalized_cik=normalized_cik,
+        raw_body=raw_body,
+        snapshot_root=snapshot_root,
+        fetched_at=fetched_at,
+    ).document_id
 
 
 def upsert_accession_documents(
@@ -1097,12 +1129,36 @@ def insert_facts_from_companyfacts(
     payload: dict[str, object],
     accession_to_doc_id: dict[str, int],
     run_id: str = "sec_xbrl_ingest",
+    snapshot_root: Path | None = None,
 ) -> int:
     """Walk TAG_LADDERS; insert financial_facts, first rung winning per period.
 
     ``run_id`` tags any ``UNIT_MISMATCH`` validation_issues the unit sanity guard
     raises (a value whose resolved unit is neither ACTUAL nor COUNT); production
     passes the ingest run's id, ad-hoc callers get a stable default."""
+    before_resolve: Callable[[int], None] | None = None
+    if snapshot_root is not None:
+        # Deferred import breaks the intentional matcher -> ladder dependency
+        # while keeping live admission at this boundary.
+        from provenance.sec_companyfacts_fact_matcher import (
+            match_companyfacts_fact_row,
+        )
+
+        def _capture_companyfacts_provenance(fact_row_id: int) -> None:
+            match_companyfacts_fact_row(
+                conn,
+                fact_row_id=fact_row_id,
+                blob_root=snapshot_root,
+            )
+            capture_fact_row_observation(
+                conn,
+                fact_table="financial_facts",
+                fact_row_id=fact_row_id,
+                recorded_at=datetime.now(UTC),
+            )
+
+        before_resolve = _capture_companyfacts_provenance
+
     facts_raw = payload.get("facts", {})
     if not isinstance(facts_raw, dict):
         return 0
@@ -1288,6 +1344,7 @@ def insert_facts_from_companyfacts(
                 ),
                 extracted_by="sec_xbrl",
                 locator=pf.locator_json,
+                before_resolve=before_resolve,
             )
             if new_id is not None:
                 inserted += 1
@@ -1430,6 +1487,10 @@ def ingest_for_ticker(
         conn,
         "legacy_document_evidence_binding_revisions",
     )
+    exact_match_ready = _has_table(
+        conn,
+        "legacy_fact_evidence_match_revisions",
+    ) and _has_table(conn, "fact_observation_match_proofs")
     post_cutover_trigger = _has_trigger(
         conn,
         "trg_financial_facts_observation_insert",
@@ -1440,7 +1501,7 @@ def ingest_for_ticker(
             "0231_legacy_document_evidence_bindings after fact cutover"
         )
     try:
-        snapshot_document_id = upsert_companyfacts_snapshot_document(
+        snapshot_registration = _register_companyfacts_snapshot_document(
             conn,
             ticker=ticker,
             digest=digest,
@@ -1449,6 +1510,7 @@ def ingest_for_ticker(
             snapshot_root=project_root / "data" / "historical" / "sec" / "snapshots",
             fetched_at=fetched.retrieved_at,
         )
+        snapshot_document_id = snapshot_registration.document_id
         accession_to_doc_id = {
             accession: snapshot_document_id for accession in sorted(supported_accessions)
         }
@@ -1487,6 +1549,11 @@ def ingest_for_ticker(
             payload=payload,
             accession_to_doc_id=accession_to_doc_id,
             run_id=run_id,
+            snapshot_root=(
+                project_root / "data" / "historical" / "sec" / "snapshots"
+                if exact_match_ready
+                else None
+            ),
         )
         conn.commit()
     except Exception:
@@ -1496,4 +1563,7 @@ def ingest_for_ticker(
         project_root / "data" / "historical" / "sec" / f"{ticker.upper()}_companyfacts.json"
     )
     _atomic_write_bytes(latest_cache, fetched.raw_body)
-    return IngestStats(accessions_inserted=len(accession_to_doc_id), facts_inserted=facts_inserted)
+    return IngestStats(
+        accessions_inserted=(len(supported_accessions) if snapshot_registration.created else 0),
+        facts_inserted=facts_inserted,
+    )

@@ -344,6 +344,58 @@ def match_legacy_companyfacts_evidence(
     )
 
 
+def match_companyfacts_fact_row(
+    conn: sqlite3.Connection,
+    *,
+    fact_row_id: int,
+    blob_root: Path,
+) -> CompanyFactsFactMatchItem:
+    """Append the exact evidence match for one newly admitted financial fact.
+
+    CompanyFacts ingestion must establish this append-only match before it can
+    capture and resolve the row's immutable observation.  Unlike the bounded
+    backfill entry point, this function never scans unrelated legacy rows and
+    never commits: the caller owns the surrounding ingestion transaction.
+    """
+
+    _require_schema(conn)
+    _register_payload_fingerprint_function(conn)
+    request = CompanyFactsFactMatcherRequest(
+        blob_root=blob_root,
+        checkpoint_root=blob_root,
+        apply=True,
+        batch_size=1,
+        task_id="companyfacts-live-admission",
+        fact_tables=("financial_facts",),
+    )
+    rows = conn.execute(
+        _target_sql("financial_facts", (fact_row_id,)),
+        (fact_row_id,),
+    ).fetchall()
+    targets = [_target_from_row(row) for row in rows]
+    if not targets:
+        raise CompanyFactsFactMatcherError(
+            f"financial_facts.id {fact_row_id} has no current CompanyFacts evidence target"
+        )
+    target = _select_blob_location(targets, request.blob_root)
+    record = _match_target(target, request.blob_root, blob_cache={})
+    if record.outcome != "accepted":
+        raise CompanyFactsFactMatcherError(
+            f"financial_facts.id {fact_row_id} CompanyFacts match rejected: {record.reason_code}"
+        )
+    persisted = LegacyFactEvidenceMatchLedger(conn).persist(record)
+    return CompanyFactsFactMatchItem(
+        fact_table=target.fact_table,
+        fact_row_id=target.fact_row_id,
+        binding_revision_id=target.binding_revision_id,
+        outcome=record.outcome,
+        reason_code=record.reason_code,
+        candidate_count=record.candidate_count or 0,
+        matched_candidate_count=record.matched_candidate_count,
+        revision_created=persisted.created,
+    )
+
+
 def _load_targets(
     conn: sqlite3.Connection,
     request: CompanyFactsFactMatcherRequest,

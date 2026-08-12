@@ -233,9 +233,9 @@ def capture_sec_companyfacts(
             evidence_node_id=document_anchor_id,
             scope_locator=LegacyDocumentScopeLocator(source_ref=request.source_url),
             scope_content_sha256=digest,
-            effective_at=request.retrieved_at,
-            knowledge_at=request.retrieved_at,
-            recorded_at=request.retrieved_at,
+            effective_at=document.recorded_at,
+            knowledge_at=document.recorded_at,
+            recorded_at=document.recorded_at,
             supersedes_binding_revision_id=None,
         )
     )
