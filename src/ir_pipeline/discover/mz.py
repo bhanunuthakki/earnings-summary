@@ -177,7 +177,7 @@ def _catalog_documents(results_center_url: str) -> dict[str, str]:
 
 
 def _visible_filemanager_hrefs(url: str, timeout_ms: int = 60000) -> list[str]:
-    from playwright.sync_api import sync_playwright  # lazy: optional `ir` extra
+    from playwright.sync_api import Response, sync_playwright  # lazy: optional `ir` extra
 
     ensure_safe_public_url(url)
     with sync_playwright() as pw:
@@ -192,7 +192,11 @@ def _visible_filemanager_hrefs(url: str, timeout_ms: int = 60000) -> list[str]:
             )
             install_public_only_playwright_routing(context, timeout_s=timeout_ms / 1000)
             page = context.new_page()
-            response = page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            response: Response | None = page.goto(
+                url,
+                wait_until="networkidle",
+                timeout=timeout_ms,
+            )
             if response is not None and response.status in {401, 403}:
                 raise IrDiscoveryAuthenticationDeniedError(response.status)
             raw = page.eval_on_selector_all("a[href*='mzfilemanager']", _VISIBLE_HREFS_JS)
