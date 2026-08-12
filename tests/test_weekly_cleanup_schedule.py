@@ -58,7 +58,8 @@ def test_weekly_cleanup_wrapper_runs_ordered_locked_stages_without_raw_deletes()
     assert "if not errorlevel 1 goto expire_research" in normalized
     assert "exit /b %exit_code%" in normalized
     assert ".tmp\\cron_logs" in normalized
-    assert "cannot hold the portfolio-db lock across the two run_python calls" in normalized
+    assert "filesystem cleanup uses its own single-flight lane" in normalized
+    assert "state-expiry step is" in normalized and "bounded db-only work" in normalized
     assert "del " not in normalized
     assert "rmdir " not in normalized
     assert "remove-item" not in normalized
