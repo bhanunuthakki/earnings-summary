@@ -1,10 +1,10 @@
-"""Immutable, accession-scoped capture of SEC CompanyFacts responses.
+"""Immutable snapshot capture of SEC CompanyFacts responses.
 
 One CompanyFacts response contains many filing accessions and changes whenever
 the SEC adds or corrects any of them.  The raw response is stored once by
-content hash.  A logical document version represents that aggregate snapshot,
-while a revisioned legacy-document binding advances only for accession scopes
-whose own canonical content changed.
+content hash. A logical document version and one legacy snapshot document
+represent that aggregate response. Filing accessions remain locators inside
+the snapshot; they are never manufactured as native filing documents.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sqlite3
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Self, cast
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -42,7 +42,6 @@ from provenance.legacy_document_evidence import (
 
 _COLLECTOR_VERSION = "sec-companyfacts-capture@1"
 _DOCUMENT_EXTRACTOR = "sec-companyfacts-document-anchor"
-_ACCESSION_EXTRACTOR = "sec-companyfacts-accession-scope"
 _DOCUMENT_CONFIG_SHA = hashlib.sha256(b"sec-companyfacts-document-anchor@1").hexdigest()
 _ACCESSION_PATTERN = r"^\d{10}-\d{2}-\d{6}$"
 _DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
@@ -109,11 +108,6 @@ class CompanyFactsPayload(_ClosedModel):
     facts: dict[str, dict[str, CompanyFactConcept]]
 
 
-class CompanyFactsAccessionDocument(_ClosedModel):
-    accession_number: str = Field(pattern=_ACCESSION_PATTERN)
-    legacy_document_id: int = Field(gt=0)
-
-
 class SecCompanyFactsCaptureRequest(_ClosedModel):
     ticker: str = Field(min_length=1, max_length=32)
     normalized_cik: str = Field(pattern=r"^\d{10}$")
@@ -121,7 +115,7 @@ class SecCompanyFactsCaptureRequest(_ClosedModel):
     source_url: str = Field(min_length=1)
     raw_body: bytes = Field(min_length=1)
     payload: CompanyFactsPayload
-    accession_documents: tuple[CompanyFactsAccessionDocument, ...]
+    snapshot_document_id: int = Field(gt=0)
     blob_root: Path
     observed_at: datetime
     retrieved_at: datetime
@@ -137,12 +131,6 @@ class SecCompanyFactsCaptureRequest(_ClosedModel):
             raise ValueError("CompanyFacts payload CIK conflicts with requested CIK")
         if _timeline(self.retrieved_at) < _timeline(self.observed_at):
             raise ValueError("retrieved_at must not precede observed_at")
-        accession_numbers = [item.accession_number for item in self.accession_documents]
-        legacy_ids = [item.legacy_document_id for item in self.accession_documents]
-        if len(accession_numbers) != len(set(accession_numbers)):
-            raise ValueError("accession documents must not repeat an accession")
-        if len(legacy_ids) != len(set(legacy_ids)):
-            raise ValueError("accession documents must not repeat a legacy document")
         return self
 
 
@@ -184,11 +172,8 @@ def capture_sec_companyfacts(
     )
     if reparsed != request.payload:
         raise ValueError("raw CompanyFacts bytes conflict with validated payload")
-    supported_accessions = set(_accession_scopes(reparsed))
-    mapped_accessions = {item.accession_number for item in request.accession_documents}
-    if supported_accessions != mapped_accessions:
-        raise ValueError("accession document map must exactly cover supported accessions")
     digest = hashlib.sha256(request.raw_body).hexdigest()
+    _validate_snapshot_document(conn, request, digest)
     storage_path = request.blob_root.resolve() / digest[:2] / f"{digest}.json"
     _write_verified_blob(storage_path, request.raw_body, digest)
     storage_uri = storage_path.as_uri()
@@ -223,7 +208,7 @@ def capture_sec_companyfacts(
     )
     created, replayed = _account(link_ledger.persist_link(link).created, created, replayed)
 
-    document_anchor_created = _ensure_document_anchor(
+    document_anchor_id, document_anchor_created = _ensure_document_anchor(
         conn,
         ledger,
         request=request,
@@ -233,45 +218,35 @@ def capture_sec_companyfacts(
     created += document_anchor_created
     replayed += 2 - document_anchor_created
 
-    scopes = _accession_scopes(request.payload)
-    document_ids = {
-        item.accession_number: item.legacy_document_id for item in request.accession_documents
-    }
-    bindings_created = 0
-    bindings_unchanged = 0
-    for accession in sorted(scopes):
-        scope_bytes = scopes[accession]
-        scope_sha = hashlib.sha256(scope_bytes).hexdigest()
-        current = conn.execute(
-            "SELECT binding_revision_id, revision, evidence_node_id, scope_content_sha256 "
-            "FROM v_legacy_document_evidence_bindings_current "
-            "WHERE legacy_document_id = ?",
-            (document_ids[accession],),
-        ).fetchone()
-        if current is not None and str(current[3]) == scope_sha:
-            bindings_unchanged += 1
-            continue
-        accession_records = _persist_accession_scope(
-            conn,
-            ledger,
-            binding_ledger,
-            request=request,
-            document=document,
-            accession=accession,
-            legacy_document_id=document_ids[accession],
-            scope_bytes=scope_bytes,
-            scope_sha=scope_sha,
-            current=current,
+    binding_identity = _stable_digest(
+        str(request.snapshot_document_id),
+        document.document_version_id,
+        digest,
+    )
+    binding = binding_ledger.persist(
+        LegacyDocumentEvidenceBindingRevision(
+            binding_revision_id=f"sec-companyfacts-binding:{binding_identity}",
+            idempotency_key=f"sec-companyfacts-binding:{binding_identity}",
+            legacy_document_id=request.snapshot_document_id,
+            revision=1,
+            document_version_id=document.document_version_id,
+            evidence_node_id=document_anchor_id,
+            scope_locator=LegacyDocumentScopeLocator(source_ref=request.source_url),
+            scope_content_sha256=digest,
+            effective_at=request.retrieved_at,
+            knowledge_at=request.retrieved_at,
+            recorded_at=request.retrieved_at,
+            supersedes_binding_revision_id=None,
         )
-        bindings_created += 1
-        created += accession_records
+    )
+    created, replayed = _account(binding.created, created, replayed)
 
     return SecCompanyFactsCaptureResult(
         blob_sha256=digest,
         document_version_id=document.document_version_id,
         document_version_created=document_created,
-        bindings_created=bindings_created,
-        bindings_unchanged=bindings_unchanged,
+        bindings_created=int(binding.created),
+        bindings_unchanged=int(not binding.created),
         records_created=created,
         records_replayed=replayed,
     )
@@ -432,7 +407,7 @@ def _ensure_document_anchor(
     request: SecCompanyFactsCaptureRequest,
     document: DocumentVersion,
     digest: str,
-) -> int:
+) -> tuple[str, int]:
     existing = conn.execute(
         "SELECT node.node_id FROM evidence_nodes AS node "
         "JOIN evidence_extraction_runs AS run USING (extraction_run_id) "
@@ -440,7 +415,7 @@ def _ensure_document_anchor(
         (document.document_version_id,),
     ).fetchone()
     if existing is not None:
-        return 0
+        return str(existing[0]), 0
     identity = _stable_digest(document.document_version_id, _DOCUMENT_EXTRACTOR)
     node_text = (
         f"SEC CompanyFacts snapshot for {request.ticker} "
@@ -474,93 +449,31 @@ def _ensure_document_anchor(
         recorded_at=request.retrieved_at,
     )
     ledger.persist(node)
-    return 2
+    return node.node_id, 2
 
 
-def _persist_accession_scope(
+def _validate_snapshot_document(
     conn: sqlite3.Connection,
-    ledger: EvidenceLedger,
-    binding_ledger: LegacyDocumentEvidenceBindingLedger,
-    *,
     request: SecCompanyFactsCaptureRequest,
-    document: DocumentVersion,
-    accession: str,
-    legacy_document_id: int,
-    scope_bytes: bytes,
-    scope_sha: str,
-    current: sqlite3.Row | tuple[object, ...] | None,
-) -> int:
-    if current is None:
-        prior_binding_id = None
-        prior_revision = 0
-        prior_node_id = None
-    else:
-        revision_raw = current[1]
-        if not isinstance(revision_raw, int):
-            raise TypeError("legacy evidence binding revision is not an integer")
-        prior_binding_id = str(current[0])
-        prior_revision = revision_raw
-        prior_node_id = str(current[2])
-    revision = prior_revision + 1
-    config_sha = _stable_digest(_ACCESSION_EXTRACTOR, accession)
-    identity = _stable_digest(document.document_version_id, accession, scope_sha)
-    run = ExtractionRun(
-        extraction_run_id=f"sec-companyfacts-accession-run:{identity}",
-        idempotency_key=f"sec-companyfacts-accession-run:{identity}",
-        document_version_id=document.document_version_id,
-        input_sha256=document.blob_sha256,
-        extractor_name=_ACCESSION_EXTRACTOR,
-        extractor_config_sha256=config_sha,
-        extractor_code_version=_COLLECTOR_VERSION,
-        output_sha256=scope_sha,
-        started_at=request.retrieved_at,
-        completed_at=request.retrieved_at,
-        outcome="succeeded",
+    digest: str,
+) -> None:
+    row = conn.execute(
+        "SELECT ticker, source_type, doc_type, file_path, sha256, accession_number "
+        "FROM documents WHERE id = ?",
+        (request.snapshot_document_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("CompanyFacts snapshot document does not exist")
+    expected = (
+        request.ticker,
+        "sec_xbrl",
+        "sec_companyfacts_snapshot",
+        str((request.blob_root.resolve() / digest[:2] / f"{digest}.json").resolve()),
+        digest,
+        None,
     )
-    ledger.persist(run)
-    node = EvidenceNode(
-        node_id=f"sec-companyfacts-accession-node:{identity}",
-        evidence_key=f"{request.issuer_id}:sec-companyfacts:{accession}",
-        revision=revision,
-        extraction_run_id=run.extraction_run_id,
-        parent_node_id=None,
-        supersedes_node_id=prior_node_id,
-        node_kind="section",
-        text=(
-            f"SEC CompanyFacts accession {accession}: "
-            f"{_scope_entry_count(scope_bytes)} reported fact observations."
-        ),
-        locator=EvidenceLocator(source_ref=f"{request.source_url}#accession={accession}"),
-        recorded_at=request.retrieved_at,
-    )
-    ledger.persist(node)
-    scope_locator = LegacyDocumentScopeLocator(
-        source_ref=request.source_url,
-        accession_number=accession,
-    )
-    binding_identity = _stable_digest(
-        str(legacy_document_id),
-        str(revision),
-        document.document_version_id,
-        scope_sha,
-    )
-    binding_ledger.persist(
-        LegacyDocumentEvidenceBindingRevision(
-            binding_revision_id=f"sec-companyfacts-binding:{binding_identity}",
-            idempotency_key=f"sec-companyfacts-binding:{binding_identity}",
-            legacy_document_id=legacy_document_id,
-            revision=revision,
-            document_version_id=document.document_version_id,
-            evidence_node_id=node.node_id,
-            scope_locator=scope_locator,
-            scope_content_sha256=scope_sha,
-            effective_at=request.retrieved_at,
-            knowledge_at=request.retrieved_at,
-            recorded_at=request.retrieved_at,
-            supersedes_binding_revision_id=prior_binding_id,
-        )
-    )
-    return 3
+    if tuple(row) != expected:
+        raise ValueError("CompanyFacts snapshot document conflicts with exact response bytes")
 
 
 def _accession_scopes(payload: CompanyFactsPayload) -> dict[str, bytes]:
@@ -605,13 +518,6 @@ def supported_companyfacts_accessions(
     """Return the accession identities supported by immutable capture."""
 
     return frozenset(_accession_scopes(payload))
-
-
-def _scope_entry_count(scope_bytes: bytes) -> int:
-    decoded_raw: object = json.loads(scope_bytes)
-    if not isinstance(decoded_raw, list):
-        raise ValueError("canonical CompanyFacts accession scope is not a list")
-    return len(cast("list[object]", decoded_raw))
 
 
 def _ensure_location(

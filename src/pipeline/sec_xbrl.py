@@ -3,10 +3,10 @@
 For each ticker in the curated CIK map, fetch the SEC's
 `/api/xbrl/companyfacts/CIK{cik}.json` endpoint, persist the raw JSON to
 `data/historical/sec/{TICKER}_companyfacts.json`, and parse a curated set of
-GAAP/IFRS tags into `financial_facts`. Provenance: one `documents` row per
-unique SEC accession number (each filing the fact came from), so financial
-facts retain accession-level provenance even though they were extracted from
-an aggregated companyfacts response.
+GAAP/IFRS tags into `financial_facts`. Provenance: one content-addressed
+CompanyFacts snapshot document per aggregate response. Each fact locator keeps
+its SEC accession and exact JSON path; native filing document rows are created
+only when the native filing bytes are captured separately.
 
 Tag ladders
 -----------
@@ -73,12 +73,12 @@ from pipeline.restatement_detector import (
 )
 from provenance.issuer_registry import IssuerRegistry
 from provenance.sec_companyfacts_capture import (
-    CompanyFactsAccessionDocument,
     CompanyFactsContractError,
     CompanyFactsPayload,
     SecCompanyFactsCaptureRequest,
     capture_sec_companyfacts,
     parse_companyfacts_body,
+    supported_companyfacts_accessions,
 )
 from sec_identity import sec_user_agent
 
@@ -543,22 +543,6 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
 )
 
 
-# Map SEC form -> our DocType for the per-accession documents row.
-_FORM_TO_DOC_TYPE: dict[str, DocType] = {
-    "10-K": DocType.SEC_10K,
-    "10-K/A": DocType.SEC_10K,
-    "10-Q": DocType.SEC_10Q,
-    "10-Q/A": DocType.SEC_10Q,
-    "20-F": DocType.SEC_20F,
-    "20-F/A": DocType.SEC_20F,
-    "40-F": DocType.SEC_40F,
-    "40-F/A": DocType.SEC_40F,
-    "8-K": DocType.SEC_8K,
-    "8-K/A": DocType.SEC_8K,
-    "6-K": DocType.SEC_6K,
-    "6-K/A": DocType.SEC_6K,
-}
-
 # Annual forms whose fp="FY" entries anchor the fiscal-year-end month inference.
 _ANNUAL_FORMS = frozenset({"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"})
 
@@ -674,97 +658,169 @@ def enumerate_companyfacts_accessions(
     return out
 
 
-# Compatibility aliases for existing imports while callers migrate to the
-# public, typed accession API.
+# Read-only aliases retained for older callers during the aggregate-snapshot
+# cutover. They expose the same typed parser without reviving pseudo-document
+# writes; new code should use the public names above.
 _AccessionRecord = CompanyFactsAccessionRecord
 _enumerate_accessions = enumerate_companyfacts_accessions
+
+
+def upsert_companyfacts_snapshot_document(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    digest: str,
+    normalized_cik: str,
+    raw_body: bytes,
+    snapshot_root: Path,
+    fetched_at: datetime,
+) -> int:
+    """Return the one legacy document row for an exact aggregate snapshot.
+
+    This compatibility anchor satisfies the legacy facts FK. It is explicitly
+    typed as an aggregate snapshot and carries no accession, filing date, or
+    native-filing document type.
+    """
+    if hashlib.sha256(raw_body).hexdigest() != digest:
+        raise ValueError("CompanyFacts snapshot digest conflicts with exact response bytes")
+    snapshot_path = (snapshot_root.resolve() / digest[:2] / f"{digest}.json").resolve()
+    _write_verified_snapshot(snapshot_path, raw_body, digest)
+    snapshot_file_path = str(snapshot_path)
+    snapshot_byte_size = len(raw_body)
+    existing = conn.execute(
+        "SELECT id, ticker, source_type, doc_type, raw_bytes_size, source_url, "
+        "file_path FROM documents WHERE sha256 = ?",
+        (digest,),
+    ).fetchone()
+    source_url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{normalized_cik}.json"
+    expected = (
+        ticker.upper(),
+        SourceType.SEC_XBRL.value,
+        DocType.SEC_COMPANYFACTS_SNAPSHOT.value,
+        snapshot_byte_size,
+        source_url,
+    )
+    if existing is not None:
+        if tuple(existing[1:6]) != expected:
+            raise ValueError("CompanyFacts snapshot digest conflicts with legacy document row")
+        for optional_column in ("accession_number", "filing_date"):
+            if _has_column(conn, "documents", optional_column):
+                optional = conn.execute(
+                    f"SELECT {optional_column} FROM documents WHERE id = ?",  # nosec B608 -- closed internal column name
+                    (int(existing[0]),),
+                ).fetchone()
+                if optional is None or optional[0] is not None:
+                    raise ValueError(
+                        "CompanyFacts snapshot document must not carry filing identity"
+                    )
+        document_id = int(existing[0])
+        if str(existing[6]) != snapshot_file_path:
+            conn.execute(
+                "UPDATE documents SET file_path = ? WHERE id = ?",
+                (snapshot_file_path, document_id),
+            )
+        return document_id
+    captured_at = fetched_at or datetime.now()
+    tier = tier_for_source_type(SourceType.SEC_XBRL).value
+    columns = [
+        "ticker",
+        "source_type",
+        "doc_type",
+        "period_start",
+        "period_end",
+        "file_path",
+        "sha256",
+        "fetched_at",
+        "fetch_status",
+        "http_code",
+        "raw_bytes_size",
+        "source_url",
+        "parent_document_id",
+    ]
+    values: list[object] = [
+        ticker.upper(),
+        SourceType.SEC_XBRL.value,
+        DocType.SEC_COMPANYFACTS_SNAPSHOT.value,
+        None,
+        None,
+        snapshot_file_path,
+        digest,
+        captured_at,
+        FetchStatus.OK.value,
+        None,
+        snapshot_byte_size,
+        source_url,
+        None,
+    ]
+    if _has_column(conn, "documents", "source_quality_tier"):
+        columns.append("source_quality_tier")
+        values.append(tier)
+    if _has_column(conn, "documents", "accession_number"):
+        columns.append("accession_number")
+        values.append(None)
+    if _has_column(conn, "documents", "filing_date"):
+        columns.append("filing_date")
+        values.append(None)
+    placeholders = ",".join("?" for _ in columns)
+    cursor = conn.execute(
+        f"INSERT INTO documents ({','.join(columns)}) VALUES ({placeholders})",  # nosec B608 -- trusted internal SQL shape; values remain bound
+        tuple(values),
+    )
+    if cursor.lastrowid is None:
+        raise RuntimeError("CompanyFacts snapshot document insert returned no identity")
+    return int(cursor.lastrowid)
 
 
 def upsert_accession_documents(
     conn: sqlite3.Connection,
     *,
     ticker: str,
-    accessions: dict[str, CompanyFactsAccessionRecord],
-    project_root: Path,
+    accessions: Mapping[str, CompanyFactsAccessionRecord],
+    project_root: Path | None = None,
     normalized_cik: str | None = None,
     snapshot_relative_path: str | None = None,
     snapshot_byte_size: int = 0,
     fetched_at: datetime | None = None,
 ) -> dict[str, int]:
-    """Insert one `documents` row per unique accession; returns accession -> documents.id map."""
-    accession_to_doc_id: dict[str, int] = {}
-    captured_at = fetched_at or datetime.now()
-    for accn, record in accessions.items():
-        doc_type = _FORM_TO_DOC_TYPE.get(record.form)
-        if doc_type is None:
-            continue
-        sha256 = hashlib.sha256(accn.encode("utf-8")).hexdigest()
-        cur = conn.execute("SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (sha256,))
-        row = cur.fetchone()
-        if row is not None:
-            accession_to_doc_id[accn] = int(row["id"])
-            continue
-        base_path = (
-            snapshot_relative_path
-            if snapshot_relative_path is not None
-            else f"data/historical/sec/{ticker.upper()}_companyfacts.json"
-        )
-        rel_path = f"{base_path}#accn={accn}"
-        source_url = (
-            f"https://data.sec.gov/api/xbrl/companyfacts/CIK{normalized_cik}.json"
-            if normalized_cik is not None
-            else (
-                f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
-                f"&CIK={ticker}&type={record.form}&dateb=&owner=include&count=40"
+    """Resolve historical pseudo-document rows without creating new ones.
+
+    Older databases used one synthetic ``documents`` row per CompanyFacts
+    accession. Readers may still need those typed identities during cutover,
+    but new code must never manufacture them. Missing accessions therefore
+    fail closed and require separately captured native filing bytes.
+
+    Retained keyword arguments preserve the historical call contract; they are
+    intentionally read-only compatibility inputs.
+    """
+    del project_root, normalized_cik, snapshot_relative_path, snapshot_byte_size, fetched_at
+    resolved: dict[str, int] = {}
+    has_accession = _has_column(conn, "documents", "accession_number")
+    for accession in sorted(accessions):
+        if has_accession:
+            row = conn.execute(
+                "SELECT id FROM documents WHERE UPPER(ticker) = ? "
+                "AND source_type = ? AND (accession_number = ? OR "
+                "(accession_number IS NULL AND file_path LIKE ?)) ORDER BY id LIMIT 1",
+                (
+                    ticker.upper(),
+                    SourceType.SEC_XBRL.value,
+                    accession,
+                    f"%#accn={accession}",
+                ),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM documents WHERE UPPER(ticker) = ? "
+                "AND source_type = ? AND file_path LIKE ? ORDER BY id LIMIT 1",
+                (ticker.upper(), SourceType.SEC_XBRL.value, f"%#accn={accession}"),
+            ).fetchone()
+        if row is None:
+            raise ValueError(
+                f"legacy CompanyFacts accession {accession} is unresolved; "
+                "native filing bytes must be captured before creating a filing document"
             )
-        )
-        tier = tier_for_source_type(SourceType.SEC_XBRL).value
-        columns = [
-            "ticker",
-            "source_type",
-            "doc_type",
-            "period_start",
-            "period_end",
-            "file_path",
-            "sha256",
-            "fetched_at",
-            "fetch_status",
-            "http_code",
-            "raw_bytes_size",
-            "source_url",
-            "parent_document_id",
-        ]
-        values: list[object] = [
-            ticker.upper(),
-            SourceType.SEC_XBRL.value,
-            doc_type.value,
-            None,
-            None,
-            rel_path,
-            sha256,
-            captured_at,
-            FetchStatus.OK.value,
-            None,
-            snapshot_byte_size,
-            source_url,
-            None,
-        ]
-        if _has_column(conn, "documents", "source_quality_tier"):
-            columns.append("source_quality_tier")
-            values.append(tier)
-        if _has_column(conn, "documents", "accession_number"):
-            columns.append("accession_number")
-            values.append(accn)
-        if _has_column(conn, "documents", "filing_date"):
-            columns.append("filing_date")
-            values.append(record.filed or None)
-        placeholders = ",".join("?" for _ in columns)
-        cur = conn.execute(
-            f"INSERT INTO documents ({','.join(columns)}) VALUES ({placeholders})",  # nosec B608 -- trusted internal SQL shape; values remain bound
-            tuple(values),
-        )
-        accession_to_doc_id[accn] = int(cur.lastrowid) if cur.lastrowid is not None else 0
-    return accession_to_doc_id
+        resolved[accession] = int(row[0])
+    return resolved
 
 
 def _currency_of_unit_code(unit_code: str, kind: LadderKind) -> str | None:
@@ -987,7 +1043,7 @@ class _PendingFact(NamedTuple):
     collapse multi-frame same-document collisions (see
     ``_same_doc_pick_key``)."""
 
-    pick_key: tuple[str, int, Decimal]
+    pick_key: tuple[str, int, str, str, str]
     period_end: datetime
     fiscal_period_type: str
     value: Decimal
@@ -999,7 +1055,7 @@ class _PendingFact(NamedTuple):
 
 def _same_doc_pick_key(
     entry: Mapping[str, object], signed_value: Decimal
-) -> tuple[str, int, Decimal]:
+) -> tuple[str, int, str, str, str]:
     """Deterministic, order-independent tiebreak for two companyfacts entries
     that collapse onto the SAME write 5-tuple (ticker, period_end,
     fiscal_period_type, line_item, source_doc_id).
@@ -1013,18 +1069,25 @@ def _same_doc_pick_key(
     the other, and ``_correct_same_document_fact`` would UPDATE-churn it on every
     ingest — a value that flipped with companyfacts iteration order.
 
-    The winning entry (MAX pick_key) is the one with the latest ``start`` — the
-    tightest period ending at that fiscal-year-end, i.e. the company's own
-    reported figure rather than a recast super-annual span. Instant
-    (balance-sheet) facts have no ``start`` (all sort equal on the first
-    component) and repeat the same value across contexts, so this is a no-op for
-    them — which is why the churn only ever surfaced on a flow line item.
-    Remaining components (``frame`` presence, then the value itself) only break a
-    genuine ``start`` tie, keeping the order a total one."""
+    SEC chronology owns cross-accession conflicts: later filing date wins;
+    amendments win same-day ties; accession is the final filing-identity
+    tiebreak. Within one accession, latest start chooses the tightest duration
+    and frame provides a stable final context tiebreak. Value magnitude is
+    deliberately excluded so reported numbers never decide their own source.
+    """
+    del signed_value
+    filed_raw = entry.get("filed")
+    filed = filed_raw if isinstance(filed_raw, str) else ""
+    form_raw = entry.get("form")
+    form = form_raw if isinstance(form_raw, str) else ""
+    is_amendment = int(form.upper().endswith("/A"))
+    accession_raw = entry.get("accn")
+    accession = accession_raw if isinstance(accession_raw, str) else ""
     start_raw = entry.get("start")
     start_key = start_raw if isinstance(start_raw, str) else ""
-    has_frame = 1 if entry.get("frame") else 0
-    return (start_key, has_frame, signed_value)
+    frame_raw = entry.get("frame")
+    frame = frame_raw if isinstance(frame_raw, str) else ""
+    return (filed, is_amendment, accession, start_key, frame)
 
 
 def insert_facts_from_companyfacts(
@@ -1130,6 +1193,7 @@ def insert_facts_from_companyfacts(
                         row_label=tag_name,
                         column_header=end,
                         json_path=f"facts.{namespace}.{tag_name}.units.{unit_code}[{entry_idx}]",
+                        accession_number=accn,
                         cell_value_as_extracted=str(val),
                     )
                     value = Decimal(str(val))
@@ -1167,9 +1231,7 @@ def insert_facts_from_companyfacts(
                         pick_key = _same_doc_pick_key(entry, value)
                         wkey = (source_doc_id, end, fpt_out.value)
                         prev = chosen.get(wkey)
-                        if prev is not None and pick_key <= prev.pick_key:
-                            continue  # a tighter-period frame already won this 5-tuple
-                        chosen[wkey] = _PendingFact(
+                        pending = _PendingFact(
                             pick_key=pick_key,
                             period_end=period_end,
                             fiscal_period_type=fpt_out.value,
@@ -1179,6 +1241,31 @@ def insert_facts_from_companyfacts(
                             source_doc_id=source_doc_id,
                             locator_json=locator.to_json(),
                         )
+                        if prev is not None:
+                            if pick_key < prev.pick_key:
+                                continue
+                            if pick_key == prev.pick_key:
+                                if (
+                                    pending.period_end,
+                                    pending.fiscal_period_type,
+                                    pending.value,
+                                    pending.currency,
+                                    pending.unit,
+                                    pending.source_doc_id,
+                                ) != (
+                                    prev.period_end,
+                                    prev.fiscal_period_type,
+                                    prev.value,
+                                    prev.currency,
+                                    prev.unit,
+                                    prev.source_doc_id,
+                                ):
+                                    raise ValueError(
+                                        "CompanyFacts observations have identical SEC "
+                                        "chronology but conflicting values or locators"
+                                    )
+                                continue
+                        chosen[wkey] = pending
         # Ladder walk complete: emit each provenance 5-tuple's deterministic
         # winner exactly once. sorted() fixes the insertion order independent of
         # dict/payload iteration, so row ids and restatement observations are
@@ -1251,10 +1338,6 @@ def _validated_legacy_payload(payload: CompanyFactsPayload) -> dict[str, object]
     )
 
 
-def _companyfacts_snapshot_relative_path(digest: str) -> str:
-    return f"data/historical/sec/snapshots/{digest[:2]}/{digest}.json"
-
-
 def _atomic_write_bytes(path: Path, body: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -1272,6 +1355,16 @@ def _atomic_write_bytes(path: Path, body: bytes) -> None:
         temporary = Path(temporary_name)
         if temporary.exists():
             temporary.unlink()
+
+
+def _write_verified_snapshot(path: Path, body: bytes, digest: str) -> None:
+    if path.exists():
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise ValueError("CompanyFacts content-addressed snapshot is corrupt")
+        return
+    _atomic_write_bytes(path, body)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        raise RuntimeError("CompanyFacts snapshot write failed digest verification")
 
 
 def _quarantine_contract_failure(
@@ -1332,8 +1425,7 @@ def ingest_for_ticker(
         ) from None
     payload = _validated_legacy_payload(validated_payload)
     digest = hashlib.sha256(fetched.raw_body).hexdigest()
-    snapshot_relative_path = _companyfacts_snapshot_relative_path(digest)
-    accessions = enumerate_companyfacts_accessions(payload)
+    supported_accessions = supported_companyfacts_accessions(validated_payload)
     evidence_binding_ready = _has_table(
         conn,
         "legacy_document_evidence_binding_revisions",
@@ -1348,16 +1440,18 @@ def ingest_for_ticker(
             "0231_legacy_document_evidence_bindings after fact cutover"
         )
     try:
-        accession_to_doc_id = upsert_accession_documents(
+        snapshot_document_id = upsert_companyfacts_snapshot_document(
             conn,
             ticker=ticker,
-            accessions=accessions,
-            project_root=project_root,
+            digest=digest,
             normalized_cik=cik,
-            snapshot_relative_path=snapshot_relative_path,
-            snapshot_byte_size=len(fetched.raw_body),
+            raw_body=fetched.raw_body,
+            snapshot_root=project_root / "data" / "historical" / "sec" / "snapshots",
             fetched_at=fetched.retrieved_at,
         )
+        accession_to_doc_id = {
+            accession: snapshot_document_id for accession in sorted(supported_accessions)
+        }
         if evidence_binding_ready:
             canonical_issuer = IssuerRegistry(conn).resolve_identifier(
                 "sec_cik",
@@ -1373,13 +1467,7 @@ def ingest_for_ticker(
                     source_url=fetched.source_url,
                     raw_body=fetched.raw_body,
                     payload=validated_payload,
-                    accession_documents=tuple(
-                        CompanyFactsAccessionDocument(
-                            accession_number=accession,
-                            legacy_document_id=document_id,
-                        )
-                        for accession, document_id in sorted(accession_to_doc_id.items())
-                    ),
+                    snapshot_document_id=snapshot_document_id,
                     blob_root=project_root / "data" / "historical" / "sec" / "snapshots",
                     observed_at=fetched.observed_at,
                     retrieved_at=fetched.retrieved_at,

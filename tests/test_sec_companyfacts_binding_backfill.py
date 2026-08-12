@@ -358,6 +358,15 @@ def test_apply_spaces_requests_captures_only_evidence_and_resumes_idempotently(
         assert first.has_more is False
         assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        stored_snapshots = conn.execute(
+            "SELECT file_path, sha256 FROM documents ORDER BY ticker"
+        ).fetchall()
+        for stored_path, expected_sha in stored_snapshots:
+            path = Path(str(stored_path))
+            assert path.exists()
+            assert path.is_file()
+            assert path.is_relative_to((tmp_path / "immutable-companyfacts").resolve())
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == str(expected_sha)
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM legacy_document_evidence_binding_revisions"

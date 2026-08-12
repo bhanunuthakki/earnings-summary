@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -13,16 +16,19 @@ from pipeline.sec_xbrl import (
     CIK_MAP,
     NO_SEC_FILERS,
     TAG_LADDERS,
-    _AccessionRecord,
-    _enumerate_accessions,
+    CompanyFactsAccessionRecord,
     _infer_fye_month,
     _modal_currency,
     _period_span_months,
     _resolve_fiscal_period_type,
     _same_doc_pick_key,
+    enumerate_companyfacts_accessions,
     insert_facts_from_companyfacts,
     upsert_accession_documents,
+    upsert_companyfacts_snapshot_document,
 )
+
+TEST_ACCESSION = "0000000001-22-000001"
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -36,13 +42,15 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             period_start TIMESTAMP,
             period_end TIMESTAMP,
             file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
+            sha256 TEXT NOT NULL UNIQUE,
             fetched_at TIMESTAMP NOT NULL,
             fetch_status TEXT NOT NULL,
             http_code INTEGER,
             raw_bytes_size INTEGER NOT NULL,
             source_url TEXT,
-            parent_document_id INTEGER
+            parent_document_id INTEGER,
+            accession_number TEXT,
+            filing_date TEXT
         );
         CREATE TABLE financial_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,8 +61,15 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             value NUMERIC(24,6) NOT NULL,
             currency TEXT,
             unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL,
-            confidence REAL DEFAULT 1.0
+            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
+            confidence REAL DEFAULT 1.0,
+            extracted_by TEXT,
+            supersedes_id INTEGER REFERENCES financial_facts(id),
+            locator TEXT
+        );
+        CREATE UNIQUE INDEX uq_financial_facts_provenance
+        ON financial_facts (
+            ticker, period_end, fiscal_period_type, line_item, source_doc_id
         );
         """
     )
@@ -62,9 +77,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
 
 @pytest.fixture
-def conn() -> sqlite3.Connection:
-    c = sqlite3.connect(":memory:")
+def conn(tmp_path: Path) -> sqlite3.Connection:
+    c = sqlite3.connect(tmp_path / "pipeline-sec-xbrl.db")
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys = ON")
     _create_schema(c)
     return c
 
@@ -152,7 +168,7 @@ def test_enumerate_accessions_dedupes() -> None:
                     "units": {
                         "USD": [
                             {
-                                "accn": "0001-22-001",
+                                "accn": TEST_ACCESSION,
                                 "form": "10-K",
                                 "filed": "2025-02-01",
                                 "fy": 2024,
@@ -162,7 +178,7 @@ def test_enumerate_accessions_dedupes() -> None:
                                 "val": 100,
                             },
                             {
-                                "accn": "0001-22-001",
+                                "accn": TEST_ACCESSION,
                                 "form": "10-K",
                                 "filed": "2025-02-01",
                                 "fy": 2024,
@@ -177,47 +193,177 @@ def test_enumerate_accessions_dedupes() -> None:
             }
         }
     }
-    out = _enumerate_accessions(payload)
+    out = enumerate_companyfacts_accessions(payload)
     assert len(out) == 1
-    assert "0001-22-001" in out
+    assert TEST_ACCESSION in out
 
 
-def test_upsert_accession_documents_idempotent(conn: sqlite3.Connection) -> None:
-    """Re-running upsert with the same accessions inserts no new documents."""
-    accessions = {
-        "0001-22-001": _AccessionRecord(
-            accession="0001-22-001",
-            form="10-K",
-            filed="2025-02-01",
-            fy=2024,
-            fp="FY",
-        ),
-    }
-    first = upsert_accession_documents(
-        conn, ticker="X", accessions=accessions, project_root=Path("/tmp")
+def _register_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    accessions: tuple[str, ...],
+) -> dict[str, int]:
+    raw_body = ("snapshot:" + "|".join(accessions)).encode()
+    digest = hashlib.sha256(raw_body).hexdigest()
+    database_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    document_id = upsert_companyfacts_snapshot_document(
+        conn,
+        ticker=ticker,
+        digest=digest,
+        normalized_cik="0000000001",
+        raw_body=raw_body,
+        snapshot_root=database_path.parent / "snapshots",
+        fetched_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    second = upsert_accession_documents(
-        conn, ticker="X", accessions=accessions, project_root=Path("/tmp")
-    )
+    return {accession: document_id for accession in accessions}
+
+
+def test_upsert_companyfacts_snapshot_document_idempotent(conn: sqlite3.Connection) -> None:
+    """Re-running one exact aggregate snapshot inserts no new document."""
+    first = _register_snapshot(conn, ticker="X", accessions=(TEST_ACCESSION,))
+    second = _register_snapshot(conn, ticker="X", accessions=(TEST_ACCESSION,))
     assert first == second
     n = conn.execute("SELECT COUNT(*) FROM documents WHERE source_type='sec_xbrl'").fetchone()[0]
     assert n == 1
+    path = Path(str(conn.execute("SELECT file_path FROM documents").fetchone()[0]))
+    digest = hashlib.sha256(("snapshot:" + TEST_ACCESSION).encode()).hexdigest()
+    assert path == (path.parent.parent / digest[:2] / f"{digest}.json").resolve()
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+
+@pytest.mark.parametrize("registration_order", ["normal_then_backfill", "backfill_then_normal"])
+def test_same_sha_snapshot_registration_is_path_independent(
+    conn: sqlite3.Connection,
+    registration_order: str,
+) -> None:
+    raw_body = b"same exact SEC response"
+    digest = hashlib.sha256(raw_body).hexdigest()
+    database_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    normal_root = database_path.parent / "normal" / "data" / "historical" / "sec" / "snapshots"
+    backfill_root = database_path.parent / "backfill" / "immutable-companyfacts"
+
+    def normal_registration() -> int:
+        return upsert_companyfacts_snapshot_document(
+            conn,
+            ticker="X",
+            digest=digest,
+            normalized_cik="0000000001",
+            raw_body=raw_body,
+            snapshot_root=normal_root,
+            fetched_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    def backfill_registration() -> int:
+        return upsert_companyfacts_snapshot_document(
+            conn,
+            ticker="X",
+            digest=digest,
+            normalized_cik="0000000001",
+            raw_body=raw_body,
+            snapshot_root=backfill_root,
+            fetched_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    calls = (
+        (normal_registration, backfill_registration)
+        if registration_order == "normal_then_backfill"
+        else (backfill_registration, normal_registration)
+    )
+    first = calls[0]()
+    first_path = Path(str(conn.execute("SELECT file_path FROM documents").fetchone()[0]))
+    assert first_path.exists()
+    assert hashlib.sha256(first_path.read_bytes()).hexdigest() == digest
+    second = calls[1]()
+
+    assert first == second
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    final_path = Path(str(conn.execute("SELECT file_path FROM documents").fetchone()[0]))
+    assert final_path.exists()
+    assert hashlib.sha256(final_path.read_bytes()).hexdigest() == digest
+    expected_root = backfill_root if registration_order == "normal_then_backfill" else normal_root
+    assert final_path == (expected_root.resolve() / digest[:2] / f"{digest}.json")
+
+
+def test_legacy_accession_resolver_preserves_existing_fact_attribution(
+    conn: sqlite3.Connection,
+) -> None:
+    accession = TEST_ACCESSION
+    cursor = conn.execute(
+        "INSERT INTO documents "
+        "(ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, "
+        "raw_bytes_size, source_url, parent_document_id) "
+        "VALUES ('X', 'sec_xbrl', 'sec_10q', ?, ?, '2026-01-01', 'ok', 100, ?, NULL)",
+        (
+            f"data/historical/sec/X_companyfacts.json#accn={accession}",
+            hashlib.sha256(accession.encode()).hexdigest(),
+            "https://data.sec.gov/companyfacts",
+        ),
+    )
+    assert cursor.lastrowid is not None
+    document_id = int(cursor.lastrowid)
+    conn.execute(
+        "INSERT INTO financial_facts "
+        "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, "
+        "source_doc_id, confidence) VALUES "
+        "('X', '2025-12-31', 'FY', 'revenue', 100, 'USD', 'actual', ?, 1.0)",
+        (document_id,),
+    )
+    before = conn.execute(
+        "SELECT COUNT(*), MIN(source_doc_id), MAX(source_doc_id) FROM financial_facts"
+    ).fetchone()
+
+    resolved = upsert_accession_documents(
+        conn,
+        ticker="X",
+        accessions={
+            accession: CompanyFactsAccessionRecord(
+                accession=accession,
+                form="10-Q",
+                filed="2026-01-01",
+                fy=2025,
+                fp="FY",
+            )
+        },
+    )
+
+    after = conn.execute(
+        "SELECT COUNT(*), MIN(source_doc_id), MAX(source_doc_id) FROM financial_facts"
+    ).fetchone()
+    assert resolved == {accession: document_id}
+    assert tuple(before) == tuple(after) == (1, document_id, document_id)
+    unique_indexes = {
+        str(row[1])
+        for row in conn.execute("PRAGMA index_list('financial_facts')")
+        if int(row[2]) == 1
+    }
+    assert "uq_financial_facts_provenance" in unique_indexes
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_legacy_accession_resolver_never_manufactures_missing_filing_documents(
+    conn: sqlite3.Connection,
+) -> None:
+    with pytest.raises(ValueError, match="native filing bytes must be captured"):
+        upsert_accession_documents(
+            conn,
+            ticker="X",
+            accessions={
+                TEST_ACCESSION: CompanyFactsAccessionRecord(
+                    accession=TEST_ACCESSION,
+                    form="10-Q",
+                    filed="2026-01-01",
+                    fy=2025,
+                    fp="FY",
+                )
+            },
+        )
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
 
 
 def test_insert_facts_skips_ytd_aggregations(conn: sqlite3.Connection) -> None:
     """Mixed payload: Q3 standalone (3 month) + 9M YTD; only Q3 gets inserted."""
-    accessions = {
-        "0001-22-001": _AccessionRecord(
-            accession="0001-22-001",
-            form="10-Q",
-            filed="2025-10-30",
-            fy=2025,
-            fp="Q3",
-        ),
-    }
-    accn_to_doc = upsert_accession_documents(
-        conn, ticker="X", accessions=accessions, project_root=Path("/tmp")
-    )
+    accn_to_doc = _register_snapshot(conn, ticker="X", accessions=(TEST_ACCESSION,))
     payload = {
         "facts": {
             "us-gaap": {
@@ -226,7 +372,7 @@ def test_insert_facts_skips_ytd_aggregations(conn: sqlite3.Connection) -> None:
                         "USD": [
                             # Q3 standalone (3 months)
                             {
-                                "accn": "0001-22-001",
+                                "accn": TEST_ACCESSION,
                                 "form": "10-Q",
                                 "filed": "2025-10-30",
                                 "fy": 2025,
@@ -237,7 +383,7 @@ def test_insert_facts_skips_ytd_aggregations(conn: sqlite3.Connection) -> None:
                             },
                             # 9-month YTD (skipped)
                             {
-                                "accn": "0001-22-001",
+                                "accn": TEST_ACCESSION,
                                 "form": "10-Q",
                                 "filed": "2025-10-30",
                                 "fy": 2025,
@@ -383,7 +529,7 @@ def _payload_one_tag(
     return {"facts": {namespace: {tag: {"units": {unit_code: entries}}}}}
 
 
-def _q_entry(val: object, *, accn: str = "0001-22-001", **overrides: object) -> dict[str, object]:
+def _q_entry(val: object, *, accn: str = TEST_ACCESSION, **overrides: object) -> dict[str, object]:
     entry: dict[str, object] = {
         "accn": accn,
         "form": "10-Q",
@@ -398,17 +544,8 @@ def _q_entry(val: object, *, accn: str = "0001-22-001", **overrides: object) -> 
     return entry
 
 
-def _register_accession(conn: sqlite3.Connection, accn: str = "0001-22-001") -> dict[str, int]:
-    return upsert_accession_documents(
-        conn,
-        ticker="X",
-        accessions={
-            accn: _AccessionRecord(
-                accession=accn, form="10-Q", filed="2025-10-30", fy=2025, fp="Q3"
-            )
-        },
-        project_root=Path("/tmp"),
-    )
+def _register_accession(conn: sqlite3.Connection, accn: str = TEST_ACCESSION) -> dict[str, int]:
+    return _register_snapshot(conn, ticker="X", accessions=(accn,))
 
 
 def test_ladder_first_rung_wins_per_period(conn: sqlite3.Connection) -> None:
@@ -570,7 +707,7 @@ def test_fye_instant_dual_writes_fy_and_q4(conn: sqlite3.Connection) -> None:
     it from both its annual and quarterly endpoints."""
     accn_to_doc = _register_accession(conn)
     entry: dict[str, object] = {
-        "accn": "0001-22-001",
+        "accn": TEST_ACCESSION,
         "form": "10-K",
         "filed": "2025-02-01",
         "fy": 2024,
@@ -646,17 +783,75 @@ def test_same_doc_pick_key_prefers_latest_start() -> None:
     assert _same_doc_pick_key(framed, Decimal(1)) > _same_doc_pick_key(unframed, Decimal(1))
 
 
-def _register_10k(conn: sqlite3.Connection, accn: str) -> dict[str, int]:
-    return upsert_accession_documents(
-        conn,
-        ticker="LITE",
-        accessions={
-            accn: _AccessionRecord(
-                accession=accn, form="10-K", filed="2017-08-29", fy=2017, fp="FY"
-            )
-        },
-        project_root=Path("/tmp"),
+def test_same_doc_pick_key_uses_filing_identity_never_value_magnitude() -> None:
+    original = {
+        "filed": "2026-07-20",
+        "form": "10-Q",
+        "accn": "0000000001-26-000001",
+        "start": "2026-04-01",
+    }
+    amendment = {
+        "filed": "2026-07-20",
+        "form": "10-Q/A",
+        "accn": "0000000001-26-000002",
+        "start": "2026-04-01",
+    }
+
+    assert _same_doc_pick_key(original, Decimal("999999999")) == _same_doc_pick_key(
+        original, Decimal("0.01")
     )
+    assert _same_doc_pick_key(amendment, Decimal("0.01")) > _same_doc_pick_key(
+        original, Decimal("999999999")
+    )
+
+
+@pytest.mark.parametrize("amendment_first", [False, True])
+def test_cross_accession_amendment_uses_sec_chronology_not_value_magnitude(
+    conn: sqlite3.Connection,
+    amendment_first: bool,
+) -> None:
+    original_accession = "0000000001-26-000001"
+    amendment_accession = "0000000001-26-000002"
+    accession_to_doc_id = _register_snapshot(
+        conn,
+        ticker="X",
+        accessions=(original_accession, amendment_accession),
+    )
+    original = _q_entry(
+        900,
+        accn=original_accession,
+        filed="2026-07-20",
+        form="10-Q",
+    )
+    amendment = _q_entry(
+        100,
+        accn=amendment_accession,
+        filed="2026-07-25",
+        form="10-Q/A",
+    )
+    entries = [amendment, original] if amendment_first else [original, amendment]
+
+    inserted = insert_facts_from_companyfacts(
+        conn,
+        ticker="X",
+        payload=_payload_one_tag("us-gaap", "Revenues", entries),
+        accession_to_doc_id=accession_to_doc_id,
+    )
+
+    row = conn.execute(
+        "SELECT value, locator, COUNT(*) OVER () FROM financial_facts WHERE line_item='revenue'"
+    ).fetchone()
+    assert inserted == 1
+    assert int(row[0]) == 100
+    locator = json.loads(str(row[1]))
+    assert locator["accession_number"] == amendment_accession
+    expected_index = 0 if amendment_first else 1
+    assert locator["json_path"] == (f"facts.us-gaap.Revenues.units.USD[{expected_index}]")
+    assert int(row[2]) == 1
+
+
+def _register_10k(conn: sqlite3.Connection, accn: str) -> dict[str, int]:
+    return _register_snapshot(conn, ticker="LITE", accessions=(accn,))
 
 
 def _lite_multiframe_payload(recast_first: bool) -> dict[str, object]:

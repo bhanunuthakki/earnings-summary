@@ -202,6 +202,7 @@ def table_cell_locator(
     row_axis_path: list[str] | None = None,
     column_header: str | None,
     json_path: str | None,
+    accession_number: str | None = None,
     cell_value_as_extracted: str | None = None,
     verbatim_snippet: str | None = None,
 ) -> FactLocator:
@@ -220,6 +221,7 @@ def table_cell_locator(
     return FactLocator(
         section=section,
         json_path=json_path,
+        accession_number=accession_number,
         locator_version=2,
         kind=LocatorKind.FMP_JSON_TABLE,
         table_cell=cell,
