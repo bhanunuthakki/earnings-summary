@@ -558,9 +558,7 @@ class OfflineCorpusRunResult(BaseModel):
                 raise ValueError(f"{field_name} must be a lowercase SHA-256")
         if self.manifest_sha256 != self.manifest_before_sha256:
             raise ValueError("manifest_sha256 must identify the before manifest")
-        if self.manifest_unchanged and (
-            self.manifest_before_sha256 != self.manifest_after_sha256
-        ):
+        if self.manifest_unchanged and (self.manifest_before_sha256 != self.manifest_after_sha256):
             raise ValueError("unchanged corpus must have equal before and after manifests")
         if self.admitted_count != self.admitted_new_count + self.already_applied_count:
             raise ValueError("admitted count must split into new and already-applied counts")
@@ -573,10 +571,7 @@ class OfflineCorpusRunResult(BaseModel):
             != self.selected_count + self.excluded_by_tier_count + self.skipped_count
         ):
             raise ValueError("discovered corpus arithmetic is inconsistent")
-        if (
-            self.selected_count
-            != self.admitted_count + self.failed_count + self.deferred_count
-        ):
+        if self.selected_count != self.admitted_count + self.failed_count + self.deferred_count:
             raise ValueError("selected work arithmetic is inconsistent")
         if self.pending_count > self.selected_count:
             raise ValueError("pending count cannot exceed selected work")

@@ -969,18 +969,22 @@ def test_offline_corpus_only_bypasses_external_seams_is_idempotent_and_preserves
     assert refresh_cache._raw_corpus_manifest(raw_dir) == before
     facts = _connection(db_path)
     try:
-        assert facts.execute(
-            "SELECT COUNT(*) FROM financial_facts WHERE ticker='RBRK'"
-        ).fetchone()[0] > 0
+        assert (
+            facts.execute("SELECT COUNT(*) FROM financial_facts WHERE ticker='RBRK'").fetchone()[0]
+            > 0
+        )
         document_count = facts.execute(
             "SELECT COUNT(*) FROM documents WHERE ticker='RBRK' AND source_type='fmp'"
         ).fetchone()[0]
         assert document_count == 1
-        assert facts.execute(
-            "SELECT COUNT(*) FROM fmp_work_attempts attempt "
-            "JOIN fmp_work_backlog work ON work.work_id=attempt.work_id "
-            "WHERE work.ticker='META'"
-        ).fetchone()[0] == 0
+        assert (
+            facts.execute(
+                "SELECT COUNT(*) FROM fmp_work_attempts attempt "
+                "JOIN fmp_work_backlog work ON work.work_id=attempt.work_id "
+                "WHERE work.ticker='META'"
+            ).fetchone()[0]
+            == 0
+        )
         attempts_by_run = facts.execute(
             "SELECT run_id,COUNT(*) FROM fmp_work_attempts WHERE work_id IN "
             "(SELECT work_id FROM fmp_work_backlog WHERE ticker='RBRK') GROUP BY run_id"
