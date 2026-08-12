@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -37,6 +38,36 @@ def _write_db(path: Path, *, value: str = "owner-note") -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def _write_wal_mode_restored_db(path: Path, *, value: str = "owner-note") -> None:
+    """Create a sidecar-free restored snapshot whose database header is WAL-mode."""
+    active = path.with_name(f".{path.name}.active")
+    conn = sqlite3.connect(active)
+    try:
+        assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        conn.executescript(
+            """
+            PRAGMA foreign_keys=ON;
+            CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);
+            INSERT INTO alembic_version VALUES ('0008_add_fmp_recovery');
+            CREATE TABLE tracked_companies (
+                ticker TEXT PRIMARY KEY,
+                notes TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute("INSERT INTO tracked_companies VALUES ('META', ?)", (value,))
+        conn.commit()
+        assert conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() == (0, 0, 0)
+        shutil.copyfile(active, path)
+    finally:
+        conn.close()
+        active.unlink(missing_ok=True)
+        Path(f"{active}-wal").unlink(missing_ok=True)
+        Path(f"{active}-shm").unlink(missing_ok=True)
+    assert path.read_bytes()[18:20] == b"\x02\x02"
+    assert not any(Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
 
 
 def _sha(path: Path) -> str:
@@ -265,6 +296,24 @@ def test_online_backup_does_not_write_source_paths(tmp_path: Path) -> None:
     assert candidate.exists()
     assert not Path(f"{source}-wal").exists()
     assert not Path(f"{source}-shm").exists()
+
+
+def test_online_backup_uses_immutable_connection_for_sidecar_free_wal_snapshot(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "restored-wal.db"
+    candidate = tmp_path / "work" / "candidate.db"
+    _write_wal_mode_restored_db(source)
+    before = rehearsal.database_storage_identity(source)
+
+    rehearsal.online_backup_read_only(source, candidate)
+
+    assert rehearsal.database_storage_identity(source) == before
+    assert not any(Path(f"{source}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
+    with sqlite3.connect(candidate) as connection:
+        assert connection.execute("SELECT notes FROM tracked_companies").fetchone() == (
+            "owner-note",
+        )
 
 
 def test_online_backup_refuses_real_wal_before_opening_or_mutating_shm(tmp_path: Path) -> None:
@@ -542,8 +591,8 @@ def test_cli_apply_keeps_exact_sources_and_records_throwaway_rollback(
     source_corpus = tmp_path / "corpus"
     source_corpus.mkdir()
     (source_corpus / "META-income-statement.json").write_text("{}", encoding="utf-8")
-    _write_db(source_db)
-    source_db_sha = _sha(source_db)
+    _write_wal_mode_restored_db(source_db)
+    source_storage = rehearsal.database_storage_identity(source_db)
     source_manifest = rehearsal.build_corpus_manifest(source_corpus)
 
     def no_op_upgrade(
@@ -584,6 +633,24 @@ def test_cli_apply_keeps_exact_sources_and_records_throwaway_rollback(
         return clean_identity
 
     monkeypatch.setattr(cli, "code_identity", stable_identity)
+    real_connect = rehearsal.connect_sqlite
+    source_roles: list[rehearsal.SQLiteConnectionRole] = []
+
+    def observe_connection(
+        path: str | os.PathLike[str],
+        *,
+        role: rehearsal.SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection:
+        connection = real_connect(path, role=role, schema_preflight=schema_preflight)
+        if Path(path).resolve() == source_db.resolve():
+            source_roles.append(role)
+            assert not any(
+                Path(f"{source_db}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal")
+            )
+        return connection
+
+    monkeypatch.setattr(rehearsal, "connect_sqlite", observe_connection)
     receipt_path = tmp_path / "apply.json"
     work_dir = tmp_path / "work"
 
@@ -609,7 +676,8 @@ def test_cli_apply_keeps_exact_sources_and_records_throwaway_rollback(
     assert receipt.swap_rollback is not None and receipt.swap_rollback.rollback_restored
     assert receipt.forced_failure_rollback is not None
     assert receipt.forced_failure_rollback.rollback_restored
-    assert _sha(source_db) == source_db_sha
+    assert source_roles == [rehearsal.SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY] * 4
+    assert rehearsal.database_storage_identity(source_db) == source_storage
     assert rehearsal.build_corpus_manifest(source_corpus) == source_manifest
 
 

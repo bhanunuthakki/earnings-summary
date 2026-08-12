@@ -33,6 +33,7 @@ from log_redact import redact  # noqa: E402
 from provenance.data_backbone_rehearsal import (  # noqa: E402
     CodeIdentity,
     CodeManifestEntry,
+    DatabaseReadMode,
     RehearsalError,
     RehearsalFailureReceipt,
     RehearsalReceipt,
@@ -388,13 +389,23 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
     code_identity_before = code_identity(repo_root)
     runtime = _runtime_identity()
     require_sidecar_free_database(source_db)
-    source_revision = database_revision(source_db)
+    source_revision = database_revision(
+        source_db,
+        read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    )
     from upgrade_database import ACTIVE_HEAD
 
-    source_verification = verify_database(source_db, expected_head=source_revision)
+    source_verification = verify_database(
+        source_db,
+        expected_head=source_revision,
+        read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    )
     source_storage = database_storage_identity(source_db)
     source_manifest = build_corpus_manifest(source_corpus)
-    preservation_before = build_table_commitments(source_db)
+    preservation_before = build_table_commitments(
+        source_db,
+        read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    )
     required_disk = require_disk_space(
         work_dir,
         database_bytes=source_verification.size_bytes,

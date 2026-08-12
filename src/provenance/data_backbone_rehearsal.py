@@ -7,10 +7,13 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import tempfile
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Generator, Iterable, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Self
 
@@ -48,6 +51,13 @@ PRESERVATION_CRITICAL_TABLES: tuple[str, ...] = (
 
 class RehearsalError(RuntimeError):
     """A rehearsal invariant failed; no production activation is authorized."""
+
+
+class DatabaseReadMode(StrEnum):
+    """Whether a read targets a mutable candidate or a closed source snapshot."""
+
+    CANDIDATE = "candidate"
+    CLOSED_IMMUTABLE_SOURCE = "closed_immutable_source"
 
 
 class SwapRehearsalRolledBackError(RehearsalError):
@@ -409,6 +419,32 @@ def require_sidecar_free_database(path: Path) -> None:
         )
 
 
+@contextmanager
+def _open_database_read(
+    database: Path,
+    *,
+    read_mode: DatabaseReadMode,
+) -> Generator[sqlite3.Connection]:
+    """Open one database read and enforce closed-source immutability around it."""
+    resolved = database.resolve(strict=True)
+    source_before: DatabaseStorageIdentity | None = None
+    role = SQLiteConnectionRole.READ_ONLY
+    if read_mode is DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE:
+        require_sidecar_free_database(resolved)
+        source_before = database_storage_identity(resolved)
+        role = SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY
+    connection = connect_sqlite(resolved, role=role)
+    try:
+        yield connection
+    finally:
+        connection.close()
+        if source_before is not None:
+            require_sidecar_free_database(resolved)
+            source_after = database_storage_identity(resolved)
+            if source_after != source_before:
+                raise RehearsalError("source database changed during immutable read")
+
+
 def is_reparse_point(stat_result: os.stat_result) -> bool:
     return bool(int(getattr(stat_result, "st_file_attributes", 0)) & _REPARSE_POINT)
 
@@ -534,30 +570,27 @@ def copy_corpus_verified(
 
 
 def online_backup_read_only(source: Path, destination: Path) -> None:
-    """Back up one closed, sidecar-free lab snapshot through a read-only URI."""
+    """Back up one closed lab snapshot through an immutable read-only URI."""
     source = source.resolve(strict=True)
     require_sidecar_free_database(source)
     if destination.exists():
         raise RehearsalError(f"database destination already exists: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    source_before = database_storage_identity(source)
     temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
-    source_connection = connect_sqlite(source, role=SQLiteConnectionRole.READ_ONLY)
-    destination_connection = connect_sqlite(
-        temporary,
-        role=SQLiteConnectionRole.SNAPSHOT_DESTINATION,
-        schema_preflight=False,
-    )
     try:
-        source_connection.backup(destination_connection, pages=256)
-    finally:
-        destination_connection.close()
-        source_connection.close()
-    try:
-        source_after = database_storage_identity(source)
-        if source_after != source_before:
-            raise RehearsalError("source database changed during online backup")
-        require_sidecar_free_database(source)
+        with _open_database_read(
+            source,
+            read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+        ) as source_connection:
+            destination_connection = connect_sqlite(
+                temporary,
+                role=SQLiteConnectionRole.SNAPSHOT_DESTINATION,
+                schema_preflight=False,
+            )
+            try:
+                source_connection.backup(destination_connection, pages=256)
+            finally:
+                destination_connection.close()
         temporary.replace(destination)
     finally:
         temporary.unlink(missing_ok=True)
@@ -579,10 +612,10 @@ def build_table_commitments(
     database: Path,
     *,
     tables: Iterable[str] = PRESERVATION_CRITICAL_TABLES,
+    read_mode: DatabaseReadMode = DatabaseReadMode.CANDIDATE,
 ) -> tuple[TableCommitment, ...]:
-    connection = connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY)
     commitments: list[TableCommitment] = []
-    try:
+    with _open_database_read(database, read_mode=read_mode) as connection:
         existing = {
             str(row[0])
             for row in connection.execute(
@@ -630,8 +663,6 @@ def build_table_commitments(
                     logical_sha256=digest.hexdigest(),
                 )
             )
-    finally:
-        connection.close()
     return tuple(commitments)
 
 
@@ -643,30 +674,33 @@ def require_equal_commitments(
         raise RehearsalError("preservation commitment mismatch")
 
 
-def database_revision(database: Path) -> str:
-    connection = connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY)
-    try:
+def database_revision(
+    database: Path,
+    *,
+    read_mode: DatabaseReadMode = DatabaseReadMode.CANDIDATE,
+) -> str:
+    with _open_database_read(database, read_mode=read_mode) as connection:
         rows = connection.execute(
             "SELECT version_num FROM alembic_version ORDER BY version_num"
         ).fetchall()
-    finally:
-        connection.close()
     if len(rows) != 1 or not isinstance(rows[0][0], str) or not rows[0][0]:
         raise RehearsalError("database must contain exactly one Alembic revision")
     return str(rows[0][0])
 
 
-def verify_database(database: Path, *, expected_head: str) -> DatabaseVerification:
-    connection = connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY)
-    try:
+def verify_database(
+    database: Path,
+    *,
+    expected_head: str,
+    read_mode: DatabaseReadMode = DatabaseReadMode.CANDIDATE,
+) -> DatabaseVerification:
+    with _open_database_read(database, read_mode=read_mode) as connection:
         revisions = connection.execute(
             "SELECT version_num FROM alembic_version ORDER BY version_num"
         ).fetchall()
         quick = tuple(str(row[0]) for row in connection.execute("PRAGMA quick_check"))
         integrity = tuple(str(row[0]) for row in connection.execute("PRAGMA integrity_check"))
         foreign_keys = tuple(connection.execute("PRAGMA foreign_key_check"))
-    finally:
-        connection.close()
     if len(revisions) != 1 or str(revisions[0][0]) != expected_head:
         raise RehearsalError(
             f"Alembic revision mismatch: expected={expected_head} observed={revisions!r}"
