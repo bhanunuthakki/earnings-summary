@@ -1171,14 +1171,13 @@ def plan_run(connection: sqlite3.Connection, request: PlanRunRequest) -> RunPlan
         for spec in request.work:
             _upsert_work(connection, spec=spec, now=request.now)
         identifiers = tuple(make_work_id(spec) for spec in request.work)
-        placeholders = ",".join("?" for _ in identifiers)
-        # Only the count of qmark placeholders is interpolated; every work ID is bound.
         rows = connection.execute(
-            f"""  # nosec B608
-            SELECT * FROM fmp_work_backlog WHERE work_id IN ({placeholders})  -- nosec B608
+            """
+            SELECT * FROM fmp_work_backlog
+            WHERE work_id IN (SELECT value FROM json_each(?))
             ORDER BY priority DESC,created_at,ticker,work_id
             """,
-            identifiers,
+            (_canonical_json(list(identifiers)),),
         ).fetchall()
         availability = {
             item.work_id: item for item in (_availability_from_spec(spec) for spec in request.work)
@@ -1663,11 +1662,10 @@ def _receipt(
     )
     corpus_count = sum(code is OutcomeCode.CORPUS_SUCCESS for code in codes)
     ages = [max(0.0, (request.now - item.captured_at).total_seconds()) for item in corpus_snapshots]
-    expected_placeholders = ",".join("?" for _ in request.expected_work_ids)
-    # Only the count of qmark placeholders is interpolated; every work ID is bound.
     expected_rows = connection.execute(
-        f"SELECT work_id,state FROM fmp_work_backlog WHERE work_id IN ({expected_placeholders})",  # nosec B608
-        request.expected_work_ids,
+        "SELECT work_id,state FROM fmp_work_backlog "
+        "WHERE work_id IN (SELECT value FROM json_each(?))",
+        (_canonical_json(list(request.expected_work_ids)),),
     ).fetchall()
     if len(expected_rows) != len(request.expected_work_ids):
         raise ValueError("expected run plan contains unknown FMP recovery work")
