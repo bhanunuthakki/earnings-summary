@@ -80,15 +80,22 @@ def test_refresh_ir_kpis_boundary_renders_suppression_json(
 ) -> None:
     args = argparse.Namespace(
         ticker="NU",
-        quarters=8,
+        quarters=5,
         file=tmp_path / "nu.xlsx",
         url=None,
         discover=False,
         platform=None,
         results_center_url=None,
         repo_root=tmp_path,
+        db=tmp_path / "portfolio.db",
+        owner_requested=True,
     )
     monkeypatch.setattr(refresh_ir_kpis, "_parse_args", lambda: args)
+    monkeypatch.setattr(
+        refresh_ir_kpis,
+        "authorize_stored_collection_target",
+        lambda *_args, **_kwargs: SimpleNamespace(allowed=True),
+    )
     monkeypatch.setattr(
         refresh_ir_kpis,
         "get_config",

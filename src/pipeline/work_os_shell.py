@@ -1014,12 +1014,14 @@ def _make_allocation_language_honest(html: str) -> str:
     )
 
 
-def _add_production_contract(html: str, generated_at: datetime) -> str:
+def _add_production_contract(
+    html: str, generated_at: datetime, *, db_path: Path | None = None
+) -> str:
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
     html = _OPERATIONS_SECTION_RE.sub(
-        render_operations_settings_shell() + "\n      ", html, count=1
+        render_operations_settings_shell(db_path=db_path) + "\n      ", html, count=1
     )
     html = html.replace(
         '<div class="card-grid-stat-4col">',
@@ -1100,9 +1102,11 @@ def _prototype_html() -> str:
     return _PROTOTYPE_PATH.read_text(encoding="utf-8")
 
 
-def render_work_os_shell(*, generated_at: datetime | None = None) -> str:
+def render_work_os_shell(
+    *, generated_at: datetime | None = None, db_path: Path | None = None
+) -> str:
     """Render the exact prototype shell with production-safe behavior."""
 
     rendered_at = generated_at or datetime.now(UTC)
     html = _make_allocation_language_honest(_prototype_html())
-    return _add_production_contract(html, rendered_at)
+    return _add_production_contract(html, rendered_at, db_path=db_path)

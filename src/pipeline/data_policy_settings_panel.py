@@ -1,17 +1,13 @@
-"""Read-only Settings view of the canonical source collection policy.
-
-The panel deliberately exposes policy before runtime telemetry.  The recovery
-tables that will eventually report the FMP circuit and refresh backlog are not
-on ``origin/main`` yet, so this module does not probe for them or guess at live
-health.  Its typed read model says ``not_yet_wired`` until that integration is
-released explicitly.
-"""
+"""Read-only Settings view of collection policy and FMP recovery telemetry."""
 
 from __future__ import annotations
 
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from html import escape
-from typing import Literal
+from pathlib import Path
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -19,6 +15,7 @@ from models.companies import ListType
 from pipeline.source_policy import (
     DISPLAY_ROLE_ORDER,
     POLICY_VERSION,
+    SOURCE_POLICY_CONFIG,
     ArtifactKind,
     AuthorizationReason,
     CollectionMode,
@@ -27,6 +24,7 @@ from pipeline.source_policy import (
     issuer_policy,
     mode_for_role,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 class PolicyDisplayState(StrEnum):
@@ -79,16 +77,45 @@ class ApprovedIssuerView(BaseModel):
     policy_sha256: str
 
 
+FmpCircuitDisplayState = Literal["CLOSED", "OPEN", "HALF_OPEN", "UNINITIALIZED", "UNAVAILABLE"]
+FmpCorpusDisplayState = Literal["available", "empty", "unavailable"]
+FmpCircuitAdmission = Literal["permitted", "blocked", "probe_only", "unknown", "unavailable"]
+FmpProviderAvailability = Literal[
+    "available", "permitted_unverified", "degraded", "unknown", "unavailable"
+]
+FmpProviderFreshness = Literal["recent", "stale", "unverified"]
+
+
+class FmpProviderFreshnessPolicy(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    success_max_age: timedelta
+
+
+FMP_PROVIDER_FRESHNESS_POLICY = FmpProviderFreshnessPolicy(success_max_age=timedelta(hours=24))
+
+
 class FmpOperationalReadModel(BaseModel):
-    """Truthful placeholder for the unreleased recovery-state integration."""
+    """Sanitized read-only projection of the active FMP recovery schema."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    integration_state: Literal["not_yet_wired"] = "not_yet_wired"
-    provider_mode: Literal["not_yet_wired"] = "not_yet_wired"
-    circuit_state: Literal["not_yet_wired"] = "not_yet_wired"
+    circuit_state: FmpCircuitDisplayState
+    circuit_admission: FmpCircuitAdmission
+    provider_availability: FmpProviderAvailability
     backlog_count: int | None = None
+    pending_count: int | None = None
+    leased_count: int | None = None
+    satisfied_count: int | None = None
+    terminal_count: int | None = None
+    pending_tickers: tuple[str, ...] = ()
     next_probe_at: str | None = None
+    last_reason_code: str | None = None
+    last_success_at: str | None = None
+    last_success_freshness: FmpProviderFreshness = "unverified"
+    corpus_state: FmpCorpusDisplayState
+    corpus_ticker_count: int | None = None
+    last_corpus_at: str | None = None
 
 
 class DataPolicySettingsView(BaseModel):
@@ -151,7 +178,9 @@ _ROW_SPECS: tuple[tuple[str, CollectionSource, ArtifactKind, str, str], ...] = (
         CollectionSource.IR,
         ArtifactKind.IR_DOCUMENT,
         "IR financial documents",
-        "Owner-approved issuer pages; last 5 reported quarters; presentations and releases before web search.",
+        "Owner-approved issuer pages; last "
+        f"{SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters} reported quarters; "
+        "presentations and releases before web search.",
     ),
     (
         "text_transcripts",
@@ -210,7 +239,144 @@ def _display_cell(
     )
 
 
-def build_data_policy_settings_view() -> DataPolicySettingsView:
+def _provider_success_freshness(
+    last_success_at: str | None,
+    *,
+    as_of: datetime,
+) -> FmpProviderFreshness:
+    if last_success_at is None:
+        return "unverified"
+    try:
+        parsed = datetime.fromisoformat(last_success_at.replace("Z", "+00:00"))
+    except ValueError:
+        return "unverified"
+    observed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    now = as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
+    age = now - observed
+    if timedelta(0) <= age <= FMP_PROVIDER_FRESHNESS_POLICY.success_max_age:
+        return "recent"
+    return "stale"
+
+
+def read_fmp_operational_state(
+    db_path: Path | None,
+    *,
+    as_of: datetime | None = None,
+) -> FmpOperationalReadModel:
+    """Read recovery state without creating a database or taking a write lock."""
+
+    unavailable = FmpOperationalReadModel(
+        circuit_state="UNAVAILABLE",
+        circuit_admission="unavailable",
+        provider_availability="unavailable",
+        corpus_state="unavailable",
+    )
+    if db_path is None or not db_path.is_file():
+        return unavailable
+    try:
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        conn.row_factory = sqlite3.Row
+        try:
+            circuit = conn.execute(
+                "SELECT state,next_probe_at,last_reason_code,last_success_at "
+                "FROM provider_circuit_state WHERE provider='fmp'"
+            ).fetchone()
+            counts = {
+                str(row["state"]): int(row["count"])
+                for row in conn.execute(
+                    "SELECT state,COUNT(*) AS count FROM fmp_work_backlog GROUP BY state"
+                ).fetchall()
+            }
+            pending_tickers = tuple(
+                str(row["ticker"])
+                for row in conn.execute(
+                    "SELECT ticker FROM fmp_work_backlog "
+                    "WHERE state IN ('PENDING','LEASED') GROUP BY ticker "
+                    "ORDER BY MAX(priority) DESC,MIN(created_at),ticker LIMIT 12"
+                ).fetchall()
+            )
+            corpus = conn.execute(
+                "SELECT COUNT(DISTINCT work.ticker) AS ticker_count,"
+                "MAX(attempt.corpus_captured_at) AS last_corpus_at "
+                "FROM fmp_work_attempts AS attempt "
+                "JOIN fmp_work_backlog AS work ON work.work_id=attempt.work_id "
+                "WHERE attempt.corpus_content_sha256 IS NOT NULL"
+            ).fetchone()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return unavailable
+    pending = counts.get("PENDING", 0)
+    leased = counts.get("LEASED", 0)
+    corpus_ticker_count = int(corpus["ticker_count"]) if corpus is not None else 0
+    last_corpus_at = (
+        str(corpus["last_corpus_at"])
+        if corpus is not None and corpus["last_corpus_at"] is not None
+        else None
+    )
+    corpus_state: FmpCorpusDisplayState = "available" if corpus_ticker_count > 0 else "empty"
+    if circuit is None:
+        return FmpOperationalReadModel(
+            circuit_state="UNINITIALIZED",
+            circuit_admission="unknown",
+            provider_availability="unknown",
+            backlog_count=pending + leased,
+            pending_count=pending,
+            leased_count=leased,
+            satisfied_count=counts.get("SATISFIED", 0),
+            terminal_count=counts.get("TERMINAL", 0),
+            pending_tickers=pending_tickers,
+            corpus_state=corpus_state,
+            corpus_ticker_count=corpus_ticker_count,
+            last_corpus_at=last_corpus_at,
+        )
+    state = str(circuit["state"])
+    if state not in {"CLOSED", "OPEN", "HALF_OPEN"}:
+        return unavailable
+    normalized_state = cast("FmpCircuitDisplayState", state)
+    admission_by_state: dict[str, FmpCircuitAdmission] = {
+        "CLOSED": "permitted",
+        "OPEN": "blocked",
+        "HALF_OPEN": "probe_only",
+    }
+    last_success_at = (
+        str(circuit["last_success_at"]) if circuit["last_success_at"] is not None else None
+    )
+    last_success_freshness = _provider_success_freshness(
+        last_success_at,
+        as_of=datetime.now(UTC) if as_of is None else as_of,
+    )
+    if state == "CLOSED":
+        provider_availability: FmpProviderAvailability = (
+            "available" if last_success_freshness == "recent" else "permitted_unverified"
+        )
+    else:
+        provider_availability = "degraded"
+    return FmpOperationalReadModel(
+        circuit_state=normalized_state,
+        circuit_admission=admission_by_state[state],
+        provider_availability=provider_availability,
+        backlog_count=pending + leased,
+        pending_count=pending,
+        leased_count=leased,
+        satisfied_count=counts.get("SATISFIED", 0),
+        terminal_count=counts.get("TERMINAL", 0),
+        pending_tickers=pending_tickers,
+        next_probe_at=(
+            str(circuit["next_probe_at"]) if circuit["next_probe_at"] is not None else None
+        ),
+        last_reason_code=(
+            str(circuit["last_reason_code"]) if circuit["last_reason_code"] is not None else None
+        ),
+        last_success_at=last_success_at,
+        last_success_freshness=last_success_freshness,
+        corpus_state=corpus_state,
+        corpus_ticker_count=corpus_ticker_count,
+        last_corpus_at=last_corpus_at,
+    )
+
+
+def build_data_policy_settings_view(*, db_path: Path | None = None) -> DataPolicySettingsView:
     roles = tuple(
         CoverageRoleView(
             role=role,
@@ -250,7 +416,7 @@ def build_data_policy_settings_view() -> DataPolicySettingsView:
         roles=roles,
         rows=rows,
         approved_issuers=issuers,
-        fmp_state=FmpOperationalReadModel(),
+        fmp_state=read_fmp_operational_state(db_path),
     )
 
 
@@ -323,34 +489,89 @@ def _render_issuers(view: DataPolicySettingsView) -> str:
 
 
 def _render_fmp_state(state: FmpOperationalReadModel) -> str:
+    if state.provider_availability == "unavailable":
+        return (
+            '<div class="k-well k-well-warn">'
+            '<div class="k-card-row-title">Telemetry unavailable</div>'
+            "<p>The current recovery schema is not present or could not be read. No provider-health "
+            "claim is inferred.</p></div>"
+        )
+    availability_labels: dict[FmpProviderAvailability, str] = {
+        "available": "Available",
+        "permitted_unverified": "Permitted / Unverified",
+        "degraded": "Degraded",
+        "unknown": "Unknown",
+        "unavailable": "Unavailable",
+    }
+    admission_labels: dict[FmpCircuitAdmission, str] = {
+        "permitted": "Permitted",
+        "blocked": "Blocked",
+        "probe_only": "Probe only",
+        "unknown": "Unknown",
+        "unavailable": "Unavailable",
+    }
+    tone = "k-pill-ok" if state.provider_availability == "available" else "k-pill-warn"
+    backlog = str(state.backlog_count or 0)
+    next_probe = state.next_probe_at or "not scheduled"
+    reason = state.last_reason_code or "none"
+    corpus_last_seen = state.last_corpus_at or "none recorded"
+    provider_last_success = state.last_success_at or "none recorded"
+    provider_success_evidence = {
+        "recent": "Recent",
+        "stale": "Stale",
+        "unverified": "Unverified",
+    }[state.last_success_freshness]
+    queue = "".join(
+        f'<span class="k-chip k-chip-mono">{escape(ticker)}</span>'
+        for ticker in state.pending_tickers
+    )
     return (
-        '<div class="k-well k-well-warn">'
-        '<div class="k-card-row-title">FMP recovery telemetry is not yet wired</div>'
-        "<p>No live health claim is shown. The released Settings surface does not query an "
-        "unreleased recovery migration or infer circuit state from ordinary failures.</p>"
+        '<div class="k-well">'
+        '<div style="display:flex;align-items:center;justify-content:space-between;'
+        'gap:var(--sp-3);flex-wrap:wrap;">'
+        '<div class="k-card-row-title">FMP recovery telemetry</div>'
+        f'<span class="k-pill {tone}">{escape(availability_labels[state.provider_availability])}</span>'
+        "</div>"
         '<dl style="display:grid;grid-template-columns:repeat(auto-fit,minmax('
         'var(--grid-card-sm),1fr));gap:var(--sp-3);margin:var(--sp-3) 0 0;">'
-        f'<div><dt class="k-label">Provider mode</dt><dd>{escape(state.provider_mode.replace("_", " ").capitalize())}</dd></div>'
-        f'<div><dt class="k-label">Circuit</dt><dd>{escape(state.circuit_state.replace("_", " ").capitalize())}</dd></div>'
-        '<div><dt class="k-label">Refresh backlog</dt><dd>not yet wired</dd></div>'
-        '<div><dt class="k-label">Next recovery probe</dt><dd>not yet wired</dd></div>'
-        "</dl></div>"
+        f'<div><dt class="k-label">Circuit state</dt><dd>{escape(state.circuit_state)}</dd></div>'
+        f'<div><dt class="k-label">Network admission</dt><dd>{escape(admission_labels[state.circuit_admission])}</dd></div>'
+        f'<div><dt class="k-label">Provider availability</dt><dd>{escape(availability_labels[state.provider_availability])}</dd></div>'
+        f'<div><dt class="k-label">Refresh backlog</dt><dd>{escape(backlog)}</dd></div>'
+        f'<div><dt class="k-label">Pending / leased</dt><dd>{state.pending_count or 0} / {state.leased_count or 0}</dd></div>'
+        f'<div><dt class="k-label">Satisfied / terminal</dt><dd>{state.satisfied_count or 0} / {state.terminal_count or 0}</dd></div>'
+        f'<div><dt class="k-label">Next recovery probe</dt><dd>{escape(next_probe)}</dd></div>'
+        f'<div><dt class="k-label">Last reason code</dt><dd>{escape(reason)}</dd></div>'
+        f'<div><dt class="k-label">Last successful request</dt><dd>{escape(provider_last_success)}</dd></div>'
+        f'<div><dt class="k-label">Success evidence</dt><dd>{escape(provider_success_evidence)}</dd></div>'
+        f'<div><dt class="k-label">Corpus coverage</dt><dd>{state.corpus_ticker_count or 0} companies</dd></div>'
+        f'<div><dt class="k-label">Latest corpus capture</dt><dd>{escape(corpus_last_seen)}</dd></div>'
+        "</dl>"
+        + (
+            '<div class="k-label">Queued companies</div>'
+            f'<div style="display:flex;gap:var(--sp-2);flex-wrap:wrap;">{queue}</div>'
+            if queue
+            else ""
+        )
+        + "</div>"
     )
 
 
 def render_data_policy_settings_panel(
     view: DataPolicySettingsView | None = None,
+    *,
+    db_path: Path | None = None,
 ) -> str:
-    """Render the policy and honest runtime boundary; performs no I/O."""
+    """Render policy plus a read-only runtime projection when a DB is supplied."""
 
-    resolved = view or build_data_policy_settings_view()
+    resolved = view or build_data_policy_settings_view(db_path=db_path)
     return (
         '<section class="k-card k-card-stack" data-settings-panel="data-collection" '
         'aria-labelledby="data-policy-settings-title">'
         '<div class="k-toolbar">'
         '<div><h2 class="k-toolbar-title" id="data-policy-settings-title">Data collection policy</h2>'
         f'<div class="k-card-meta">Read-only · policy {escape(resolved.policy_version)}</div></div>'
-        '<span class="k-pill">Behavior dormant</span></div>'
+        '<span class="k-pill k-pill-ok">Policy enforced</span></div>'
         "<p>Company priority controls collection depth. Portfolio runs automatically; evaluation "
         "runs only after an owner request; watchlist remains metadata-only; index members receive "
         "FMP screening facts only. Webcasts are excluded.</p>"
@@ -365,7 +586,7 @@ def render_data_policy_settings_panel(
     )
 
 
-def render_operations_settings_shell() -> str:
+def render_operations_settings_shell(*, db_path: Path | None = None) -> str:
     """Truthful Operations screen with the requested Settings sub-tab."""
 
     return (
@@ -393,6 +614,6 @@ def render_operations_settings_shell() -> str:
         "onclick=\"openLiveDetail('screen-execution-queue')\">Open live operations →</button></div>"
         "</div></div>"
         '<div id="opsPaneSettings" role="tabpanel" aria-labelledby="opsTabSettings" hidden>'
-        + render_data_policy_settings_panel()
+        + render_data_policy_settings_panel(db_path=db_path)
         + "</div></section>"
     )

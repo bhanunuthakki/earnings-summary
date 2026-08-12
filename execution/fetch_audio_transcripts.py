@@ -50,6 +50,13 @@ from compute.transcript_ingest import (  # noqa: E402
 )
 from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url  # noqa: E402
 from log_redact import redact  # noqa: E402
+from models.companies import ListType  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    ArtifactKind,
+    AuthorizationReason,
+    CollectionSource,
+    decision_for,
+)
 from transcript_qa import (  # noqa: E402
     QaStatus,
     validate_audio_transcript,
@@ -168,6 +175,35 @@ class TranscriptionResult:
 
 class AudioFetchError(RuntimeError):
     """A media URL was unsafe or yt-dlp could not fetch it within the bounds."""
+
+
+class AudioCollectionPolicyError(AudioFetchError):
+    """Audio/webcast collection is disabled by the canonical source policy."""
+
+
+def _select_audio_url(
+    spec: FetchSpec,
+    ffmpeg_location: Path | None,
+) -> str:
+    """Legacy selector retained behind the policy gate for explicit testability."""
+
+    if spec.url is not None:
+        return _validate_audio_url(str(spec.url))
+    return smart_search_url(spec.ticker, spec.year, spec.quarter, ffmpeg_location)
+
+
+def _enforce_audio_policy() -> None:
+    """Fail closed before every downloader/search boundary; webcasts are excluded."""
+
+    decision = decision_for(
+        ListType.PORTFOLIO,
+        CollectionSource.TRANSCRIPT,
+        ArtifactKind.WEBCAST,
+        requested=True,
+    )
+    if decision.allowed or decision.reason is not AuthorizationReason.WEBCAST_EXCLUDED:
+        raise RuntimeError("source policy failed to produce the required webcast denial")
+    raise AudioCollectionPolicyError("Audio/webcast collection is excluded by source policy.")
 
 
 def _safe_external_message(value: object) -> str:
@@ -291,6 +327,7 @@ def _score_candidate(entry: dict[str, Any], ticker: str, year: int, quarter: int
 
 def smart_search_url(ticker: str, year: int, quarter: int, ffmpeg_location: Path | None) -> str:
     """Return the best matching YouTube URL via ytsearch5 + scoring. Raises if none qualify."""
+    _enforce_audio_policy()
     query = f"ytsearch5:{ticker} {_quarter_label(quarter)} {year} earnings conference call"
     opts = _bounded_ydl_options()
     opts.update({"skip_download": True, "extract_flat": False})
@@ -361,6 +398,7 @@ def _resolve_ffmpeg_location(cli_value: str | None) -> Path | None:
 
 def _download_audio(url: str, dest_stem: Path, ffmpeg_location: Path | None) -> Path:
     """Download audio to dest_stem.<ext>; return the actual produced file path."""
+    _enforce_audio_policy()
     safe_url = _validate_audio_url(url)
     opts = _bounded_ydl_options()
     opts.update(
@@ -489,6 +527,7 @@ def fetch_and_transcribe(
     whisper_model: str = DEFAULT_WHISPER_MODEL,
     beam_size: int = DEFAULT_BEAM_SIZE,
 ) -> TranscriptionResult | None:
+    _enforce_audio_policy()
     canonical_ticker = resolve_ticker(spec.ticker)
     qlabel = _quarter_label(spec.quarter)
     output_path = RAW_DIR / f"{canonical_ticker}_{qlabel}_{spec.year}.txt"

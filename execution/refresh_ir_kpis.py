@@ -36,12 +36,50 @@ from pipeline.run_accounting import (  # noqa: E402
     PipelineRunSuppressedError,
     suppression_payload,
 )
+from pipeline.source_policy import (  # noqa: E402
+    SOURCE_POLICY_CONFIG,
+    ArtifactKind,
+    CollectionSource,
+    authorize_stored_collection_target,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main() -> int:
     args = _parse_args()
     repo_root = args.repo_root.resolve()
+    db_path = args.db.resolve() if args.db is not None else repo_root / "data" / "portfolio.db"
+    bound = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+    if args.quarters < 1 or args.quarters > bound:
+        print(f"--quarters must be between 1 and {bound}", file=sys.stderr)
+        return 2
+    authorization = authorize_stored_collection_target(
+        db_path,
+        args.ticker,
+        requested=args.owner_requested,
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    if not authorization.allowed:
+        decision = authorization.decision
+        print(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": args.ticker.upper(),
+                    "source": CollectionSource.IR.value,
+                    "artifact_kind": ArtifactKind.IR_DOCUMENT.value,
+                    "reason": (
+                        decision.reason.value
+                        if decision is not None
+                        else authorization.status.value
+                    ),
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
     cfg = get_config(args.ticker, repo_root)
 
     # Resolve the spreadsheet (file / url / discover). --discover needs an existing
@@ -105,7 +143,6 @@ def main() -> int:
         save_config(cfg, repo_root)
 
     parsed = parse_spreadsheet(path, cfg, max_quarters=args.quarters)
-    db_path = repo_root / "data" / "portfolio.db"
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
@@ -148,7 +185,13 @@ def _parse_args() -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--ticker", required=True, help="Ticker with an IR config (e.g. NU)")
-    p.add_argument("--quarters", type=int, default=8, help="How many recent quarters to ingest")
+    bound = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+    p.add_argument(
+        "--quarters",
+        type=int,
+        default=bound,
+        help=f"How many recent reported quarters to ingest (1-{bound})",
+    )
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--file", type=Path, help="Local spreadsheet to parse + ingest")
     src.add_argument("--url", help="Spreadsheet URL to download, then parse + ingest")
@@ -165,6 +208,16 @@ def _parse_args() -> argparse.Namespace:
         help="IR results-center URL stored in a newly generated config (for future --discover)",
     )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    p.add_argument(
+        "--db",
+        type=Path,
+        help="Caller-selected portfolio DB containing the stored company role",
+    )
+    p.add_argument(
+        "--owner-requested",
+        action="store_true",
+        help="Explicit owner request; required for evaluation-company collection",
+    )
     return p.parse_args()
 
 

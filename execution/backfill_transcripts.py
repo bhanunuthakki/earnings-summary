@@ -1,9 +1,10 @@
-"""Backfill earnings-call transcripts + commitments for the active universe.
+"""Policy-bounded text-transcript backfill and commitment extraction.
 
-For every ticker in `db.ACTIVE_LIST_TYPES` (portfolio + watchlist + evaluation,
-non-archived), or a single ticker via `--ticker`:
+Scheduled runs cover non-archived portfolio names. An evaluation name runs only
+when explicitly selected with ``--ticker``; watchlist and index members do not
+enter transcript collection.
 
-  1. Compute the last N (default 6) fiscal-quarter end dates that have already
+  1. Compute the last N (default and maximum 5) fiscal-quarter end dates that have already
      passed, using `tracked_companies.fiscal_year_end` to map fiscal-quarter
      index → calendar quarter end.
   2. For each period with no exact DB/path/SHA evidence receipt, ingest an
@@ -20,10 +21,8 @@ non-archived), or a single ticker via `--ticker`:
 
 The script is idempotent at every layer:
   - Exact DB/path/SHA evidence skips a period already ingested
-  - Aggregator misses are logged but tolerated — coverage gaps are expected
-    for delisted micro-caps and certain foreign issuers (e.g. NTDOY). Pass
-    --audio-fallback to escalate a miss to the YouTube-audio + Whisper path
-    (fetch_audio_transcripts); off by default since Whisper is CPU-heavy.
+  - Aggregator misses are logged but tolerated. Audio/webcast extraction is
+    excluded by source policy; this runner fetches text transcripts only.
   - `ingest_transcripts.py` is sha256-keyed
   - `extract_commitments --auto` skips transcripts that already have commitments
 
@@ -36,12 +35,11 @@ Designed to run unattended:
     so worktree-based runs land on the main repo's DB and transcripts dir.
 
 Usage:
-    python execution/backfill_transcripts.py                       # all active tickers
+    python execution/backfill_transcripts.py                       # automatic portfolio tickers
     python execution/backfill_transcripts.py --ticker NTDOY
-    python execution/backfill_transcripts.py --lookback-quarters 8
+    python execution/backfill_transcripts.py --lookback-quarters 5
     python execution/backfill_transcripts.py --skip-extract        # fetch + ingest only
     python execution/backfill_transcripts.py --dry-run             # plan only
-    python execution/backfill_transcripts.py --ticker NU --audio-fallback  # miss -> Whisper
 """
 
 from __future__ import annotations
@@ -61,6 +59,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
+from models.companies import ListType  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    SOURCE_POLICY_CONFIG,
+    ArtifactKind,
+    CollectionSource,
+    CollectionTarget,
+    select_collection_targets,
+)
 from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # Sibling scripts in execution/ — needed when this module is imported (e.g.
@@ -76,7 +82,7 @@ import db  # noqa: E402
 
 _RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 _PROCESSED_DIR = PROJECT_ROOT / "transcripts" / "processed"
-_DEFAULT_LOOKBACK = 6
+_DEFAULT_LOOKBACK = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
 
 
 def _retarget_paths(repo_root: Path) -> None:
@@ -122,7 +128,7 @@ def recent_fiscal_quarters(fye_month: int, today: date, n: int) -> list[tuple[in
     out: list[tuple[int, int]] = []
     # Walk fiscal years from a year ahead (Apple's FYE 9 means Q1 of next
     # fiscal year can end in the current calendar year) backwards.
-    for y in range(today.year + 1, today.year - 5, -1):
+    for y in range(today.year + 1, today.year - _DEFAULT_LOOKBACK, -1):
         for q in (4, 3, 2, 1):
             end = quarter_end_date(y, q, fye_month)
             if end <= today:
@@ -256,8 +262,12 @@ def _backfill_one(
     lookback: int,
     today: date,
     dry_run: bool,
+    db_path: Path,
+    owner_requested: bool,
     audio_fallback: bool = False,
 ) -> TickerBackfillResult:
+    if lookback < 1 or lookback > _DEFAULT_LOOKBACK:
+        raise ValueError(f"lookback must be between 1 and {_DEFAULT_LOOKBACK}")
     result = TickerBackfillResult(ticker=ticker, fye_month=fye_month)
     quarters = recent_fiscal_quarters(fye_month, today, lookback)
     for y, q in quarters:
@@ -272,7 +282,12 @@ def _backfill_one(
             result.aggregator_misses.append(f"{label} [dry-run]")
             continue
         try:
-            hit = fetch_qa(FetchQaSpec(ticker=ticker, year=y, quarter=q), force=False)
+            hit = fetch_qa(
+                FetchQaSpec(ticker=ticker, year=y, quarter=q),
+                force=False,
+                db_path=db_path,
+                owner_requested=owner_requested,
+            )
         except Exception as e:
             result.errors.append(f"{label}: {type(e).__name__}: {e}"[:200])
             continue
@@ -286,26 +301,25 @@ def _backfill_one(
 
 
 def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
-    """Return [(ticker, fye_month), ...] sorted by ticker."""
+    """Return policy-authorized transcript work in company-priority order."""
     conn = db.get_connection()
     try:
         if arg_ticker:
             cur = conn.execute(
-                "SELECT ticker, fiscal_year_end FROM tracked_companies "
+                "SELECT ticker, fiscal_year_end, list_type FROM tracked_companies "
                 "WHERE ticker = ? AND archived_at IS NULL",
                 (arg_ticker.upper(),),
             )
         else:
             cur = conn.execute(
-                f"SELECT ticker, fiscal_year_end FROM tracked_companies "
-                f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
-                f"AND archived_at IS NULL "
-                f"ORDER BY ticker"
+                "SELECT ticker, fiscal_year_end, list_type FROM tracked_companies "
+                "WHERE archived_at IS NULL ORDER BY ticker"
             )
         rows = cur.fetchall()
     finally:
         conn.close()
-    out: list[tuple[str, int]] = []
+    months_by_ticker: dict[str, int] = {}
+    targets: list[CollectionTarget] = []
     for r in rows:
         fye_raw = r["fiscal_year_end"]
         if not isinstance(fye_raw, str) or len(fye_raw) < 2:
@@ -321,8 +335,42 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
         if not 1 <= month <= 12:
             sys.stderr.write(f"[skip] {r['ticker']}: fiscal_year_end month {month} out of range\n")
             continue
-        out.append((r["ticker"], month))
-    return out
+        ticker = str(r["ticker"]).upper()
+        try:
+            role = ListType(str(r["list_type"]))
+        except ValueError:
+            continue
+        months_by_ticker[ticker] = month
+        targets.append(
+            CollectionTarget(
+                ticker=ticker,
+                coverage_role=role,
+                requested=arg_ticker is not None,
+            )
+        )
+    selection = select_collection_targets(
+        tuple(targets),
+        source=CollectionSource.TRANSCRIPT,
+        artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
+    )
+    for item in selection.denied:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": item.target.ticker,
+                    "coverage_role": item.target.coverage_role.value,
+                    "source": CollectionSource.TRANSCRIPT.value,
+                    "artifact_kind": ArtifactKind.TEXT_TRANSCRIPT.value,
+                    "reason": item.decision.reason.value,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    return [
+        (item.target.ticker, months_by_ticker[item.target.ticker]) for item in selection.allowed
+    ]
 
 
 def _run_ingest(repo_root: Path, dry_run: bool) -> int:
@@ -410,7 +458,7 @@ def main() -> int:
     )
     p.add_argument(
         "--ticker",
-        help="Single ticker to backfill (overrides the default active-universe scope)",
+        help="Owner-requested stored portfolio/evaluation ticker",
     )
     p.add_argument(
         "--lookback-quarters",
@@ -434,9 +482,7 @@ def main() -> int:
     p.add_argument(
         "--audio-fallback",
         action="store_true",
-        help="On an aggregator miss, escalate to the YouTube-audio + Whisper "
-        "fallback (fetch_audio_transcripts). Off by default — Whisper is "
-        "CPU-heavy (minutes per call) and needs yt-dlp + faster-whisper.",
+        help="Deprecated compatibility flag; rejected because webcasts/audio are excluded",
     )
     p.add_argument(
         "--repo-root",
@@ -446,12 +492,17 @@ def main() -> int:
         "Worktree-based runs should pass the main repo path.",
     )
     args = p.parse_args()
+    if args.lookback_quarters < 1 or args.lookback_quarters > _DEFAULT_LOOKBACK:
+        p.error(f"--lookback-quarters must be between 1 and {_DEFAULT_LOOKBACK}")
+    if args.audio_fallback:
+        p.error("--audio-fallback is excluded by the text-transcript collection policy")
 
     repo_root = args.repo_root.resolve()
     if repo_root != PROJECT_ROOT:
         _retarget_paths(repo_root)
 
     today = date.today()
+    selected_db_path = repo_root / "data" / "portfolio.db"
     tickers = _resolve_tickers(args.ticker)
     if not tickers:
         print(json.dumps({"event": "no_tickers"}))
@@ -470,6 +521,8 @@ def main() -> int:
             args.lookback_quarters,
             today,
             args.dry_run,
+            selected_db_path,
+            args.ticker is not None,
             audio_fallback=args.audio_fallback,
         )
         per_ticker.append(r)

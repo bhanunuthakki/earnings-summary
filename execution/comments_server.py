@@ -1700,7 +1700,7 @@ def create_app(
     @app.route("/", methods=["GET"])
     def dashboard_page():
         """Eight-screen Work OS; legacy panel endpoints remain drill-throughs."""
-        return Response(render_work_os_shell(), mimetype="text/html")
+        return Response(render_work_os_shell(db_path=db_path), mimetype="text/html")
 
     @app.route("/api/work-os/portfolio", methods=["GET"])
     def work_os_portfolio_api():
@@ -2211,11 +2211,12 @@ def create_app(
 
         if name == "data_policy_settings":
             # Operations -> Settings: read-only collection authorization and
-            # issuer-adapter policy.  The renderer intentionally performs no
-            # DB or scheduler reads until recovery telemetry is released.
+            # issuer-adapter policy plus a read-only FMP recovery projection.
             from pipeline.data_policy_settings_panel import render_data_policy_settings_panel
 
-            return Response(render_data_policy_settings_panel(), mimetype="text/html")
+            return Response(
+                render_data_policy_settings_panel(db_path=db_path), mimetype="text/html"
+            )
 
         if name == "restatements":
             # "was X, now Y" over the supersede chains (P3.5) — every place a

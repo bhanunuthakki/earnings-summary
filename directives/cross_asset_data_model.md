@@ -105,7 +105,7 @@ Per-kind detail tables stay queryable, indexable, and migrate cleanly.
 - FMP: statements, profile, key-metrics, price-chart, earnings-calendar, transcripts
 - SEC EDGAR: 10-K / 10-Q XBRL + filing text
 - IR documents: manual + categorize_ir_uploads.py
-- Transcripts: aggregator chain + fetch_audio_transcripts.py fallback
+- Transcripts: stored-role-bound aggregator/issuer text chain, latest five reported quarters; audio/webcast fallback excluded
 
 ### ETF (this PR's MVP)
 - FMP endpoints used:

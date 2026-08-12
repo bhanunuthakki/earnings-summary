@@ -26,8 +26,10 @@ fallback for quarters not yet indexed by any aggregator.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -37,6 +39,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.append(str(SRC_DIR))
 
+import db  # noqa: E402
 import index_manager  # noqa: E402
 from aggregator_sources import (  # noqa: E402
     SOURCES,
@@ -44,12 +47,23 @@ from aggregator_sources import (  # noqa: E402
     fetch_qa_with_fallback,
 )
 from alias_manager import resolve_ticker  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    ArtifactKind,
+    CollectionSource,
+    StoredCollectionAuthorization,
+    authorize_stored_collection_target,
+    reported_quarter_is_in_window,
+)
 from transcript_qa import (  # noqa: E402
     QaStatus,
     validate_synthesized_transcript,
 )
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
+
+
+def _policy_today() -> date:
+    return date.today()
 
 
 class FetchQaSpec(BaseModel):
@@ -71,6 +85,58 @@ class FetchQaResult:
     output_path: Path
     source_name: str
     page_url: str
+
+
+class TranscriptCollectionPolicyError(RuntimeError):
+    """The stored role or reported-quarter window denied a network fetch."""
+
+
+def _authorize_fetch(
+    spec: FetchQaSpec,
+    *,
+    db_path: Path,
+    owner_requested: bool,
+    as_of: date,
+) -> StoredCollectionAuthorization | None:
+    canonical = resolve_ticker(spec.ticker)
+    authorization = authorize_stored_collection_target(
+        db_path,
+        canonical,
+        requested=owner_requested,
+        source=CollectionSource.TRANSCRIPT,
+        artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
+    )
+    in_window = authorization.fiscal_year_end_month is not None and reported_quarter_is_in_window(
+        fiscal_year=spec.year,
+        fiscal_quarter=spec.quarter,
+        fiscal_year_end_month=authorization.fiscal_year_end_month,
+        as_of=as_of,
+    )
+    if authorization.allowed and in_window:
+        return authorization
+    reason = (
+        "reported_quarter_window_denied"
+        if authorization.allowed
+        else (
+            authorization.decision.reason.value
+            if authorization.decision is not None
+            else authorization.status.value
+        )
+    )
+    sys.stderr.write(
+        json.dumps(
+            {
+                "event": "source_collection_policy_denied",
+                "ticker": canonical,
+                "source": CollectionSource.TRANSCRIPT.value,
+                "artifact_kind": ArtifactKind.TEXT_TRANSCRIPT.value,
+                "reason": reason,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    return None
 
 
 def _build_header(spec: FetchQaSpec, hit: AggregatorHit) -> str:
@@ -102,8 +168,23 @@ def _build_header(spec: FetchQaSpec, hit: AggregatorHit) -> str:
     )
 
 
-def fetch_qa(spec: FetchQaSpec, force: bool = False) -> FetchQaResult | None:
+def fetch_qa(
+    spec: FetchQaSpec,
+    force: bool = False,
+    *,
+    db_path: Path,
+    owner_requested: bool,
+    as_of: date | None = None,
+) -> FetchQaResult | None:
     canonical = resolve_ticker(spec.ticker)
+    authorization = _authorize_fetch(
+        spec,
+        db_path=db_path,
+        owner_requested=owner_requested,
+        as_of=_policy_today() if as_of is None else as_of,
+    )
+    if authorization is None:
+        return None
     qlabel = f"Q{spec.quarter}"
     output_path = RAW_DIR / f"{canonical}_{qlabel}_{spec.year}.txt"
 
@@ -119,7 +200,7 @@ def fetch_qa(spec: FetchQaSpec, force: bool = False) -> FetchQaResult | None:
         print(
             f"[miss] {canonical} {qlabel} {spec.year}: no aggregator hit. "
             f"Tried: {', '.join(tried)}. "
-            f"Fall back to fetch_audio_transcripts.py."
+            "No policy-approved audio/webcast fallback is available."
         )
         return None
 
@@ -168,6 +249,12 @@ def main() -> None:
     parser.add_argument("--year", required=True, type=int)
     parser.add_argument("--quarter", required=True, type=int, choices=[1, 2, 3, 4])
     parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path(db.DB_PATH),
+        help="portfolio.db containing the active stored company role",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite an existing transcript file.",
@@ -190,7 +277,7 @@ def main() -> None:
     except ValidationError as e:
         parser.error(str(e))
 
-    fetch_qa(spec, force=args.force)
+    fetch_qa(spec, force=args.force, db_path=args.db, owner_requested=True)
 
 
 if __name__ == "__main__":

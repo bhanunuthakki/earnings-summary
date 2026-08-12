@@ -32,9 +32,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -46,6 +48,12 @@ import ir_fetch_status  # noqa: E402
 from execution.fetch_ir_documents import process_ticker  # noqa: E402
 from ir_pipeline.manifest import ManifestEntry, merge_write  # noqa: E402
 from ir_uploads import calendar_id_from_fye  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    ArtifactKind,
+    CollectionSource,
+    authorize_stored_collection_target,
+    reported_quarter_is_in_window,
+)
 from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -129,17 +137,63 @@ def register_urls(
     *,
     repo_root: Path,
     db_path: Path,
+    year: int,
+    quarter: int,
     process: bool = True,
 ) -> int:
     """Seed the manifest with ``urls`` then download+register (+anchor). Returns count downloaded."""
     ticker = ticker.upper()
-    entries = [ManifestEntry(ticker=ticker, doc_type="", url=u) for u in urls]
+    authorization = authorize_stored_collection_target(
+        db_path,
+        ticker,
+        requested=True,
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    in_window = authorization.fiscal_year_end_month is not None and reported_quarter_is_in_window(
+        fiscal_year=year,
+        fiscal_quarter=quarter,
+        fiscal_year_end_month=authorization.fiscal_year_end_month,
+        as_of=date.today(),
+    )
+    if not authorization.allowed or not in_window:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": ticker,
+                    "reason": (
+                        "reported_quarter_window_denied"
+                        if authorization.allowed
+                        else authorization.status.value
+                    ),
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return 0
+    entries = [
+        ManifestEntry(
+            ticker=ticker,
+            doc_type="document",
+            url=u,
+            year=year,
+            quarter=f"Q{quarter}",
+        )
+        for u in urls
+    ]
     added, total = merge_write(repo_root, ticker, entries)
     sys.stdout.write(f"[{ticker}] manifest: +{added} new, {total} total\n")
 
     calendar = calendar_id_from_fye(_ticker_fye(db_path, ticker))
     summary = process_ticker(
-        ticker, root=repo_root, db_path=db_path, categorize=True, calendar=calendar
+        ticker,
+        root=repo_root,
+        db_path=db_path,
+        categorize=True,
+        calendar=calendar,
+        owner_requested=True,
     )
     downloaded = summary.get("downloaded")
     downloaded_n = downloaded if isinstance(downloaded, int) else 0
@@ -175,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         urls,
         repo_root=repo_root,
         db_path=db_path,
+        year=cast("int", args.year),
+        quarter=cast("int", args.quarter),
         process=not cast("bool", args.no_process),
     )
     return 0 if downloaded else 1
@@ -185,6 +241,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--ticker", required=True, help="Ticker to register documents for")
+    p.add_argument("--year", required=True, type=int, help="Reported fiscal year")
+    p.add_argument("--quarter", required=True, type=int, choices=[1, 2, 3, 4])
     p.add_argument("--url", action="append", help="A document URL (repeatable)")
     p.add_argument(
         "--urls-file", type=Path, help="File with one document URL per line (# comments ok)"

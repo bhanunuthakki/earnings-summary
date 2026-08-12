@@ -229,7 +229,7 @@ Each row links to the most recent brief. Overwritten in place on every run.
 |---|---|---|
 | `build_report.bat <T> [--enable-llm]` | `execution/build_artifacts.py` | Build the workspace report. `--enable-llm` re-runs bear case + news + valuation + company description |
 | `refresh_fmp.bat <T> [LIMIT]` | `execution/fetch_fmp_historical_data.py` | Pull fresh FMP financial data |
-| `refresh_transcripts.bat <T>` | `execution/backfill_transcripts.py` | Backfill last 6 quarters of transcripts |
+| `refresh_transcripts.bat <T>` | `execution/backfill_transcripts.py` | Owner-requested text-transcript backfill, bounded to the canonical last 5 reported quarters |
 | `refresh_news.bat <T> [DAYS]` | `execution/refresh_news.py` | Force-refresh §News with fresh WebSearch |
 | `start_comments_server.bat` | `execution/comments_server.py` | Flask server on `:7421` (dashboard + comments + chat) |
 | `process_comments.bat <T> [--apply] [--clear]` | `execution/process_report_comments.py` | Drain open comments → edits + LLM calls + rebuild |
@@ -253,8 +253,8 @@ The six daily tasks feed the 06:30 brief. The transcript jobs run before the pro
 | Task | Cadence | Script | What it does |
 |---|---|---|---|
 | `refresh_cache` | Daily 03:00 | `execution/refresh_cache.py run` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (`free`=250/day & /stable-only — propagates `FMP_TIER=free` so the fetcher drops the v3/v4 fallback rungs that 403 globally on free; `basic`=250/day; `starter`=unlimited @ 5/sec; `premium`=unlimited @ 12/sec). Drains highest-priority stale endpoints up to the daily cap. Failed endpoints (403 / Legacy) get a 30-day retry window — a downgrade builds a backlog automatically; an upgrade catches up over following days. Force-stale hints from `schedule_pre_earnings_refresh` override cadence for tickers reporting in the next 7 days |
-| `backfill_transcripts` | Daily 02:00 | `execution/backfill_transcripts.py` | For every active ticker, fetches the last 6 fiscal quarters of Q&A from the free aggregator chain (roic.ai → stockanalysis.com → tickertrends.io), ingests, extracts forward-looking commitments. Idempotent — file-exists check + sha256 dedup |
-| `scan_ir_transcripts` | Daily 02:15 | `execution/scan_ir_transcripts.py` | Re-checks issuer IR sites for active tickers inside the 14-day post-earnings window, then ingests any newly published official transcript. Idempotent on the processed transcript artifact |
+| `backfill_transcripts` | Daily 02:00 | `execution/backfill_transcripts.py` | Portfolio-only automatic text-transcript backfill, bounded to the canonical last 5 reported fiscal quarters; explicitly named evaluation work is on demand. Stored watchlist/index/ETF/unknown roles fail closed before network access. Ingest and commitment extraction preserve the existing evidence and SHA-256 idempotency contracts. |
+| `scan_ir_transcripts` | Daily 02:15 | `execution/scan_ir_transcripts.py` | Portfolio-only automatic re-check for the latest reported quarter inside the 14-day post-earnings window; explicitly named evaluation work is on demand. Idempotent on exact DB/path/SHA transcript evidence. |
 | `fetch_fmp_earnings_calendar` | Daily 05:45 | `execution/fetch_fmp_earnings_calendar.py --all` then `execution/refresh_expected_earnings.py` | Step 1 refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker (on free/basic tier FMP refuses — 402 since 2026-06-10 — and the cache stays at its last good state). Step 2 materializes the **canonical `expected_earnings` table** through the `next_earnings_date` stack in [src/sources/earnings_calendar.py](src/sources/earnings_calendar.py) (FMP cache → yfinance fallback); the Home rail's upcoming-earnings strip, cockpit, and portfolio-tracker bridge all read that table |
 | `backfill_earnings_surprises` | Daily 06:15 | `execution/backfill_earnings_surprises.py` + `ingest_earnings_surprises.py` | Two-stage: merges `<TICKER>_earnings_calendar.json` (FMP primary, EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Stage-2 gate prevents partial ingestion if stage-1 fails |
 | `daily_fetch_and_brief` | Daily 06:30 | `execution/daily_fetch_and_brief.py --enable-llm` | **The drainer.** Picks up every ticker with `brief_dirty=1`, applies three gates (see §[When the report auto-updates](#when-the-report-auto-updates)), runs `thesis_evaluator → match_commitments → refresh_dcf → build_artifacts` for un-skipped tickers, clears the flag |
@@ -488,7 +488,7 @@ Omit `--enable-llm` for a fast rebuild that reuses cached LLM outputs. Pass `--f
 
 ```cmd
 refresh_fmp.bat NVO 20            :: 20 quarters of FMP fundamentals
-refresh_transcripts.bat NVO       :: last 6 quarters of Q&A
+refresh_transcripts.bat NVO       :: owner-requested last 5 reported quarters of text Q&A
 refresh_news.bat NVO 14           :: 14-day news lookback
 cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker NVO --mode full
 ```

@@ -2,12 +2,17 @@
 
 ## Goal
 
-For every ticker the user actively analyzes (`db.ACTIVE_LIST_TYPES` =
-portfolio + watchlist + evaluation, non-archived), keep the last ~6 fiscal
-quarters of Q&A transcripts on disk AND in the database AND populated with
+For policy-authorized companies, keep at most the canonical last 5 reported
+fiscal quarters of text Q&A transcripts on disk AND in the database and populated with
 extracted forward-looking commitments — so §5 Earnings and §6 Say-Do are
 populated in the brief from the moment a new ticker is onboarded, not
 weeks later when the user remembers to run the fetchers manually.
+
+Every network attempt is bound to the active stored identity and `list_type`:
+portfolio is automatic; evaluation is allowed only by explicit owner `--ticker`
+request; watchlist, index, ETF, unknown, malformed, and ambiguous identities fail
+closed. Audio/webcast extraction is excluded. An approved manual transcript file
+may still enter through the existing ingest path without a network crawl.
 
 ## Why this exists
 
@@ -39,8 +44,8 @@ commitments existed in `management_commitments` to render.
 
 | Trigger | Cadence | Scope |
 |---|---|---|
-| `execution/onboard_ticker.py` | Per `db.track_company` add into `ACTIVE_LIST_TYPES` | Single ticker, fire-and-forget at the end of the onboard pipeline |
-| `cron/backfill_transcripts.task.xml` | Daily 02:00 | Full active universe |
+| `execution/onboard_ticker.py` | Per company onboarding | Stored-role policy applies; no implied evaluation escalation |
+| `cron/backfill_transcripts.task.xml` | Daily 02:00 | Non-archived portfolio only |
 | Manual ad-hoc | On-demand | `python execution/backfill_transcripts.py [--ticker X] [--lookback-quarters N]` |
 
 The daily cron + per-ticker onboard hook are belt-and-braces. The cron
@@ -65,13 +70,14 @@ and third times.
 
 | Class | Example | Action |
 |---|---|---|
-| Aggregator miss | All sources return "no transcript found" for (T, Y, Q) | Logged as `aggregator_misses`, run continues. Common for delisted micro-caps and certain foreign issuers (e.g. NTDOY) — these tickers simply won't get §5/§6 unless the user manually drops a transcript into `transcripts/raw/`. |
+| Policy denial | Stored identity/role missing, invalid, ambiguous, or too shallow | Structured denial before network access; run continues for other authorized names. |
+| Aggregator miss | All text sources return "no transcript found" for (T, Y, Q) | Logged as `aggregator_misses`; run continues. The owner may place an approved text transcript in `transcripts/raw/`. |
 | Aggregator error | Network timeout, parse failure on a single source | Tried sources in order, first hit wins; per-source failures are silent and the chain falls through. Script-level exceptions land in `errors` for the JSON summary. |
 | Ingest failure | Malformed file, schema drift | Surfaced by `ingest_transcripts.py`'s own per-file error path (logged to stderr; the offending file is skipped). |
 | Extract failure | LLM API error, JSON parse error | Logged per-transcript; `extract_commitments_from_transcript.py --auto` continues to the next transcript. |
 
-No failure class halts the run. The script is designed to make
-opportunistic progress over time.
+Per-name misses and transient failures do not halt the run. A child ingest failure
+is terminal for that run; authentication and schema/contract failures halt loudly.
 
 ## Quarter calendar math
 
@@ -91,6 +97,7 @@ the existing aggregator filename pattern `<T>_Q<n>_<Y>.txt`:
 | 6 (Jun, KLAC) | Sep Y-1 | Dec Y-1 | Mar Y | Jun Y |
 | 3 (Mar, HDB/NTDOY) | Jun Y-1 | Sep Y-1 | Dec Y-1 | Mar Y |
 
-The script attempts the last N quarter ends that have already passed
+The script attempts the last N quarter ends that have already passed, where
+`1 <= N <= SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters`,
 and lets the aggregator chain tell us via "miss" whether the call
 happened yet.

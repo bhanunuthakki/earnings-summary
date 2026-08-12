@@ -34,8 +34,8 @@ remain explicit user actions:
 
 - `execution/fetch_fmp_*.py` — refresh FMP fundamentals (paid plan required)
 - `execution/fetch_ir_documents.py` — refresh IR docs (URL manifest required)
-- `execution/fetch_audio_transcripts.py` — pull yt-dlp + Whisper transcribe
-- `execution/fetch_sec_xbrl.py --all-mapped` — SEC XBRL backfill
+- Text transcript acquisition is handled by the stored-role-bound aggregator/IR runners; audio/webcast collection is excluded.
+- `execution/fetch_sec_xbrl.py --all-mapped` — policy-bounded automatic portfolio SEC XBRL refresh. `quarterly_refresh.py --fetch-sec` applies the same stored-role decision inside the SEC stage; a single explicit `--ticker` may authorize an evaluation name.
 - `execution/sync_sec_filing_inventory.py` — capture and seal the authoritative
   SEC submissions/package inventory for one issuer.
 - `execution/capture_expected_sec_documents.py` — fetch a bounded accession

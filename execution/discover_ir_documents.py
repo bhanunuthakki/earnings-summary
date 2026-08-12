@@ -13,7 +13,7 @@ a missing extra surfaces as a non-zero exit with the ImportError in stderr.
 
 Usage:
     python execution/discover_ir_documents.py --ticker NU
-    python execution/discover_ir_documents.py --ticker ORCL --max-quarters 8
+    python execution/discover_ir_documents.py --ticker ORCL --max-quarters 5
     python execution/discover_ir_documents.py --ticker ZZ --url https://ir.zz.com/quarterly-results
 """
 
@@ -30,10 +30,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ir_pipeline.config import get_config  # noqa: E402
-from ir_pipeline.discover import discover_history_hybrid  # noqa: E402
+from ir_pipeline.discover import (  # noqa: E402
+    IrDiscoveryAuthenticationDeniedError,
+    discover_history_hybrid,
+)
 from ir_pipeline.discover._docmeta import CandidateDoc  # noqa: E402
 from ir_pipeline.ir_url_overrides import resolve_ir_url  # noqa: E402
 from ir_pipeline.manifest import ManifestEntry, manifest_path, merge_write  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    SOURCE_POLICY_CONFIG,
+    ArtifactKind,
+    CollectionSource,
+    StoredCollectionAuthorization,
+    authorize_stored_collection_target,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -78,10 +88,41 @@ def _to_entries(ticker: str, cands: list[CandidateDoc]) -> list[ManifestEntry]:
     ]
 
 
+def _emit_policy_denial(ticker: str, authorization: StoredCollectionAuthorization) -> None:
+    target = authorization.target
+    decision = authorization.decision
+    sys.stderr.write(
+        json.dumps(
+            {
+                "event": "source_collection_policy_denied",
+                "ticker": ticker,
+                "coverage_role": target.coverage_role.value if target is not None else None,
+                "source": CollectionSource.IR.value,
+                "artifact_kind": ArtifactKind.IR_DOCUMENT.value,
+                "reason": decision.reason.value
+                if decision is not None
+                else authorization.status.value,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     repo_root = cast("Path", args.repo_root).resolve()
     ticker = cast("str", args.ticker).upper()
+    authorization = authorize_stored_collection_target(
+        cast("Path", args.db),
+        ticker,
+        requested=not cast("bool", args.automatic),
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    if not authorization.allowed:
+        _emit_policy_denial(ticker, authorization)
+        return 2
 
     cfg = get_config(ticker, repo_root)
     config_url = cfg.results_center_url if cfg else None
@@ -92,12 +133,26 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ticker": ticker, "status": "no_ir_url", "discovered": 0, "added": 0}))
         return 0
 
-    cands = discover_history_hybrid(
-        ir_url=crawl_url,
-        config=cfg,
-        max_quarters=cast("int", args.max_quarters),
-        timeout_ms=cast("int", args.timeout),
-    )
+    try:
+        cands = discover_history_hybrid(
+            ir_url=crawl_url,
+            config=cfg,
+            max_quarters=cast("int", args.max_quarters),
+            timeout_ms=cast("int", args.timeout),
+        )
+    except IrDiscoveryAuthenticationDeniedError as exc:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "source_authentication_denied",
+                    "ticker": ticker,
+                    "status": exc.status_code,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return 10
     added, total = merge_write(repo_root, ticker, _to_entries(ticker, cands))
     print(
         json.dumps(
@@ -121,7 +176,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument("--ticker", required=True, help="Ticker to discover IR documents for")
     p.add_argument(
-        "--max-quarters", type=int, default=8, help="Newest quarters to keep (default 8)"
+        "--max-quarters",
+        type=int,
+        default=SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+        help="Newest reported quarters to keep (default: policy maximum)",
     )
     p.add_argument(
         "--timeout", type=int, default=60_000, help="Per-page headless-browser timeout (ms)"
@@ -134,7 +192,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="portfolio.db to read tracked_companies.ir_url from (default: %(default)s)",
     )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    return p.parse_args(argv)
+    p.add_argument(
+        "--automatic",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    args = p.parse_args(argv)
+    bound = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+    if cast("int", args.max_quarters) < 1 or cast("int", args.max_quarters) > bound:
+        p.error(f"--max-quarters must be between 1 and {bound} (source policy)")
+    return args
 
 
 if __name__ == "__main__":

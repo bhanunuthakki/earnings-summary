@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -175,6 +176,10 @@ def _install(
 
     monkeypatch.setattr("execution.refresh_ir_kpis_all.configured_tickers", _fake_configured)
     monkeypatch.setattr("execution.refresh_ir_kpis_all._spreadsheet_tickers", _fake_on_disk)
+    monkeypatch.setattr(
+        "execution.refresh_ir_kpis_all.authorize_stored_collection_target",
+        lambda *_args, **_kwargs: SimpleNamespace(allowed=True),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -215,13 +220,15 @@ def test_discover_and_args_forwarded_to_each_child(monkeypatch: pytest.MonkeyPat
     fake = _RecordingRun()
     _install(monkeypatch, fake, ["NU"])
 
-    rc = refresh_ir_kpis_all.main(["--quarters", "12"])
+    rc = refresh_ir_kpis_all.main(["--quarters", "5"])
     assert rc == 0
 
     argv = fake.calls[0]
     assert "--discover" in argv
     assert _ticker_of(argv) == "NU"
-    assert _flag_value(argv, "--quarters") == "12"
+    assert _flag_value(argv, "--quarters") == "5"
+    assert _flag_value(argv, "--db") is not None
+    assert "--owner-requested" not in argv
     assert _flag_value(argv, "--repo-root") is not None
 
 

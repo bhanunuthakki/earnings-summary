@@ -243,6 +243,7 @@ def test_companyfacts_fetch_uses_dynamic_sec_identity_header(
 
     class Response:
         content = b"{}"
+        status_code = 200
 
         @staticmethod
         def raise_for_status() -> None:

@@ -53,6 +53,11 @@ from models.kpis import BreachStatus
 from pipeline.sec_xbrl import CIK_MAP
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
 from pipeline.segment_cache_audit import audit_ticker_cache, segment_cache_present
+from pipeline.source_policy import (
+    ArtifactKind,
+    CollectionSource,
+    authorize_collection_target_in_connection,
+)
 from provenance.selection import selected_transcripts_relation
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.signal_writer import compute_and_persist_signals
@@ -183,7 +188,11 @@ def _safe_extract(
 
 
 def _stage_fetch_sec_xbrl(
-    conn: sqlite3.Connection, *, ticker: str, project_root: Path
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    project_root: Path,
+    owner_requested: bool,
 ) -> StageResult:
     """Hit SEC companyfacts API + persist new accessions/financial_facts. Idempotent.
 
@@ -196,6 +205,25 @@ def _stage_fetch_sec_xbrl(
             status=StageStatus.SKIPPED,
             rows_processed=0,
             notes="no CIK in CIK_MAP",
+        )
+    authorization = authorize_collection_target_in_connection(
+        conn,
+        ticker,
+        requested=owner_requested,
+        source=CollectionSource.SEC,
+        artifact_kind=ArtifactKind.COMPANY_FACTS,
+    )
+    if not authorization.allowed:
+        reason = (
+            authorization.decision.reason.value
+            if authorization.decision is not None
+            else authorization.status.value
+        )
+        return StageResult(
+            name=StageName.FETCH_SEC_XBRL,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes=f"source collection policy denied before network: {reason}",
         )
     try:
         stats = ingest_sec_for_ticker(conn, ticker=ticker, project_root=project_root)
@@ -621,6 +649,7 @@ def refresh_ticker(
     holdings_dir: Path,
     run_id: str,
     fetch_sec: bool = False,
+    sec_owner_requested: bool = False,
 ) -> TickerRefreshReport:
     """Run the full refresh DAG for one ticker.
 
@@ -630,7 +659,14 @@ def refresh_ticker(
     """
     stages: list[StageResult] = []
     if fetch_sec:
-        stages.append(_stage_fetch_sec_xbrl(conn, ticker=ticker, project_root=project_root))
+        stages.append(
+            _stage_fetch_sec_xbrl(
+                conn,
+                ticker=ticker,
+                project_root=project_root,
+                owner_requested=sec_owner_requested,
+            )
+        )
     stages.append(_stage_validate_segment_cache(ticker=ticker, project_root=project_root))
     stages.append(_stage_extract_fmp_facts(conn, ticker=ticker, project_root=project_root))
     stages.append(_stage_ingest_ir_transcripts(conn, ticker=ticker, project_root=project_root))
@@ -665,6 +701,7 @@ def refresh_portfolio(
     holdings_dir: Path,
     run_id: str,
     fetch_sec: bool = False,
+    sec_owner_requested: bool = False,
 ) -> RefreshReport:
     """Run in order and return terminal accounting even on an exception."""
     started_at = datetime.now()
@@ -672,14 +709,25 @@ def refresh_portfolio(
     execution: list[TickerExecutionReceipt] = []
     for index, ticker in enumerate(tickers):
         try:
-            ticker_report = refresh_ticker(
-                conn,
-                ticker=ticker,
-                project_root=project_root,
-                holdings_dir=holdings_dir,
-                run_id=run_id,
-                fetch_sec=fetch_sec,
-            )
+            if sec_owner_requested:
+                ticker_report = refresh_ticker(
+                    conn,
+                    ticker=ticker,
+                    project_root=project_root,
+                    holdings_dir=holdings_dir,
+                    run_id=run_id,
+                    fetch_sec=fetch_sec,
+                    sec_owner_requested=True,
+                )
+            else:
+                ticker_report = refresh_ticker(
+                    conn,
+                    ticker=ticker,
+                    project_root=project_root,
+                    holdings_dir=holdings_dir,
+                    run_id=run_id,
+                    fetch_sec=fetch_sec,
+                )
         except Exception as exc:
             execution.append(
                 TickerExecutionReceipt(

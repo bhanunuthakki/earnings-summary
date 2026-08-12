@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.error
 import urllib.request
 from typing import cast
 
@@ -28,6 +29,7 @@ from ir_pipeline._net import (
     install_public_only_playwright_routing,
 )
 from ir_pipeline.config import IrConfig
+from ir_pipeline.discover import IrDiscoveryAuthenticationDeniedError
 from ir_pipeline.discover._docmeta import classify, filename_for_url
 
 # Runs in the page: visible (offsetParent != null) anchors → their hrefs.
@@ -75,8 +77,13 @@ def _read_bounded(response: object) -> bytes:
 def _get_text(url: str, timeout: int = 30) -> str:
     ensure_safe_public_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with build_public_opener().open(request, timeout=timeout) as response:
-        return _read_bounded(response).decode("utf-8", errors="strict")
+    try:
+        with build_public_opener().open(request, timeout=timeout) as response:
+            return _read_bounded(response).decode("utf-8", errors="strict")
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise IrDiscoveryAuthenticationDeniedError(exc.code) from None
+        raise
 
 
 def _post_json(url: str, payload: dict[str, object], timeout: int = 30) -> object:
@@ -87,8 +94,13 @@ def _post_json(url: str, payload: dict[str, object], timeout: int = 30) -> objec
         headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
         method="POST",
     )
-    with build_public_opener().open(request, timeout=timeout) as response:
-        return cast(object, json.loads(_read_bounded(response)))
+    try:
+        with build_public_opener().open(request, timeout=timeout) as response:
+            return cast(object, json.loads(_read_bounded(response)))
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise IrDiscoveryAuthenticationDeniedError(exc.code) from None
+        raise
 
 
 def _catalog_config(page_html: str) -> tuple[str, str, list[str]]:
@@ -158,7 +170,9 @@ def _visible_filemanager_hrefs(url: str, timeout_ms: int = 60000) -> list[str]:
             )
             install_public_only_playwright_routing(context, timeout_s=timeout_ms / 1000)
             page = context.new_page()
-            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            response = page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            if response is not None and response.status in {401, 403}:
+                raise IrDiscoveryAuthenticationDeniedError(response.status)
             raw = page.eval_on_selector_all("a[href*='mzfilemanager']", _VISIBLE_HREFS_JS)
         finally:
             browser.close()

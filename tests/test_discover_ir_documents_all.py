@@ -7,6 +7,7 @@ monkeypatched throughout (no real children), and the roster is injected by
 string-path monkeypatch — except the one test that drives the real DB filter.
 """
 
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import json
@@ -22,6 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from execution import discover_ir_documents_all as batch  # noqa: E402
+from execution import onboard_ticker  # noqa: E402
 
 
 class _FakeCompleted:
@@ -193,6 +195,73 @@ def test_all_roster_tickers_succeed(
     assert all(item[1] == "discover" for item in fake.stages[:first_fetch])
 
 
+def test_discovery_auth_denial_is_typed_for_batch_halt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        batch,
+        "_run_child",
+        lambda *_args, **_kwargs: _FakeCompleted(
+            10,
+            "",
+            '{"event": "source_authentication_denied", "status": 403}\n',
+        ),
+    )
+
+    result = batch._run_discovery(
+        "NU",
+        repo_root=tmp_path,
+        db_path=tmp_path / "portfolio.db",
+        quarters=5,
+        timeout_s=1,
+        owner_requested=False,
+    )
+
+    assert result.status is batch.TickerStatus.FAILED
+    assert result.error == "auth_denial: discover halted"
+
+
+def test_onboarding_marks_ir_collection_as_owner_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def run_ticker(ticker: str, **kwargs: object) -> object:
+        captured.update(ticker=ticker, **kwargs)
+        return type("Result", (), {"status": batch.TickerStatus.OK})()
+
+    monkeypatch.setattr(batch, "run_ticker", run_ticker)
+
+    assert onboard_ticker._run_ir_documents("EVAL") == 0
+    assert captured["owner_requested"] is True
+
+
+def test_batch_halts_before_fetch_when_discovery_reports_auth_denial(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(batch, "_resolve_roster", lambda _db, _requested: (["NU"], []))
+    monkeypatch.setattr(
+        batch,
+        "_run_discovery",
+        lambda *_args, **_kwargs: batch.DiscoveryResult(
+            "NU",
+            batch.TickerStatus.FAILED,
+            None,
+            0.0,
+            error="auth_denial: discover halted",
+        ),
+    )
+    monkeypatch.setattr(
+        batch,
+        "_finish_discovery",
+        lambda *_args, **_kwargs: pytest.fail("fetch boundary crossed after auth denial"),
+    )
+
+    assert batch.main(_argv(tmp_path)) == 10
+
+
 def test_no_ir_url_is_skipped_not_failed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
@@ -315,6 +384,36 @@ def test_roster_filter_uses_real_db(
     assert set(cast("list[str]", s["skipped_not_in_roster"])) == {"XYZ", "FOO"}
     ran = {t for t, _ in fake.stages}
     assert ran == {"NU"}  # only the portfolio/evaluation match ran
+
+
+def test_default_roster_is_portfolio_only_and_explicit_evaluation_is_on_demand(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "x.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)")
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?, ?, NULL)",
+        [
+            ("PORT", "portfolio"),
+            ("EVAL", "evaluation"),
+            ("WATCH", "watchlist"),
+            ("IDX", "index_member"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    assert batch._resolve_roster(db, None) == (["PORT"], [])
+    assert batch._resolve_roster(db, ["EVAL", "WATCH", "IDX"]) == (
+        ["EVAL"],
+        ["IDX", "WATCH"],
+    )
+
+
+def test_ir_quarter_window_is_capped_at_five() -> None:
+    with pytest.raises(SystemExit):
+        batch._parse_args(["--max-quarters", "6"])
 
 
 # ---------------------------------------------------------------------------

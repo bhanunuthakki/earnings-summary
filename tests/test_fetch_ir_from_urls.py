@@ -22,13 +22,18 @@ from execution import fetch_ir_from_urls as mod  # noqa: E402
 from ir_pipeline.manifest import load_manifest  # noqa: E402
 
 
-def _make_db(db: Path) -> None:
+def _make_db(db: Path, *, role: str = "portfolio") -> None:
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db))
     conn.execute(
-        "CREATE TABLE tracked_companies (ticker TEXT, fiscal_year_end TEXT, brief_dirty INTEGER DEFAULT 0)"
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, "
+        "fiscal_year_end TEXT, brief_dirty INTEGER DEFAULT 0)"
     )
-    conn.execute("INSERT INTO tracked_companies (ticker, fiscal_year_end) VALUES ('NOW', '12-31')")
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, list_type, fiscal_year_end) "
+        "VALUES ('NOW', ?, '12-31')",
+        (role,),
+    )
     conn.execute(
         "CREATE TABLE ir_fetch_status (ticker TEXT PRIMARY KEY, last_attempt_at TEXT, "
         "last_status TEXT, discovered INTEGER, downloaded INTEGER, reason TEXT, updated_at TEXT)"
@@ -45,11 +50,18 @@ def _install_fake_process(
     monkeypatch: pytest.MonkeyPatch, *, downloaded: int, captured: dict[str, object]
 ) -> None:
     def _fake_process(
-        ticker: str, *, root: Path, db_path: Path, categorize: bool, calendar: str | None
+        ticker: str,
+        *,
+        root: Path,
+        db_path: Path,
+        categorize: bool,
+        calendar: str | None,
+        owner_requested: bool,
     ) -> dict[str, object]:
         captured["calendar"] = calendar
         captured["categorize"] = categorize
         captured["root"] = root
+        captured["owner_requested"] = owner_requested
         return {"ticker": ticker, "status": "done", "downloaded": downloaded, "failed": 0}
 
     monkeypatch.setattr("execution.fetch_ir_from_urls.process_ticker", _fake_process)
@@ -68,10 +80,13 @@ def test_register_urls_writes_manifest_registers_and_anchors(
         "https://s205.q4cdn.com/x/ServiceNow-1Q26-Investor-Presentation.pdf",
     ]
 
-    n = mod.register_urls("now", urls, repo_root=tmp_path, db_path=db, process=True)
+    n = mod.register_urls(
+        "now", urls, repo_root=tmp_path, db_path=db, year=2026, quarter=2, process=True
+    )
 
     assert n == 2
     assert captured["categorize"] is True  # docs are content-classified, not trusted blindly
+    assert captured["owner_requested"] is True
     # The provided URLs are persisted to the canonical manifest.
     assert {e.url for e in load_manifest(tmp_path, "NOW")} == set(urls)
     conn = sqlite3.connect(str(db))
@@ -94,7 +109,14 @@ def test_register_urls_no_downloads_marks_failed_and_skips_anchor(
     captured: dict[str, object] = {}
     _install_fake_process(monkeypatch, downloaded=0, captured=captured)
 
-    n = mod.register_urls("NOW", ["https://blocked.example/x.pdf"], repo_root=tmp_path, db_path=db)
+    n = mod.register_urls(
+        "NOW",
+        ["https://blocked.example/x.pdf"],
+        repo_root=tmp_path,
+        db_path=db,
+        year=2026,
+        quarter=2,
+    )
 
     assert n == 0
     conn = sqlite3.connect(str(db))
@@ -117,3 +139,56 @@ def test_collect_urls_dedups_args_and_file(tmp_path: Path) -> None:
         "https://x/a.pdf",
         "https://x/b.pdf",
     ]  # arg first, file adds new, comment skipped
+
+
+@pytest.mark.parametrize("role", ["watchlist", "index_member"])
+def test_approved_url_denial_never_crosses_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _make_db(db, role=role)
+    monkeypatch.setattr(
+        mod,
+        "process_ticker",
+        lambda *_args, **_kwargs: pytest.fail("network boundary crossed"),
+    )
+
+    assert (
+        mod.register_urls(
+            "NOW",
+            ["https://issuer.example/q2.pdf"],
+            repo_root=tmp_path,
+            db_path=db,
+            year=2026,
+            quarter=2,
+        )
+        == 0
+    )
+    assert not (tmp_path / ".tmp" / "ir_url_manifest" / "NOW_urls.json").exists()
+
+
+def test_approved_url_rejects_period_outside_five_quarter_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _make_db(db)
+    monkeypatch.setattr(
+        mod,
+        "process_ticker",
+        lambda *_args, **_kwargs: pytest.fail("network boundary crossed"),
+    )
+
+    assert (
+        mod.register_urls(
+            "NOW",
+            ["https://issuer.example/old.pdf"],
+            repo_root=tmp_path,
+            db_path=db,
+            year=2024,
+            quarter=4,
+        )
+        == 0
+    )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+# pyright: reportPrivateUsage=false
 import json
 import sqlite3
 from datetime import datetime
@@ -392,6 +393,66 @@ def test_refresh_ticker_skips_sec_stage_for_unmapped_ticker(
     sec_stage = next(s for s in report.stages if s.name == StageName.FETCH_SEC_XBRL)
     assert sec_stage.status == StageStatus.SKIPPED
     assert "no CIK" in sec_stage.notes
+
+
+def test_quarterly_sec_stage_denies_watchlist_before_network(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline import quarterly_refresh as module
+
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, "
+        "fiscal_year_end TEXT, archived_at TEXT)"
+    )
+    conn.execute("INSERT INTO tracked_companies VALUES ('MELI', 'watchlist', '12-31', NULL)")
+
+    def _unexpected_ingest(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("network boundary was crossed")
+
+    monkeypatch.setattr(module, "ingest_sec_for_ticker", _unexpected_ingest)
+
+    stage = module._stage_fetch_sec_xbrl(
+        conn,
+        ticker="MELI",
+        project_root=tmp_path,
+        owner_requested=True,
+    )
+
+    assert stage.status is StageStatus.SKIPPED
+    assert "coverage_depth_denied" in stage.notes
+
+
+def test_quarterly_sec_stage_allows_explicit_evaluation(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline import quarterly_refresh as module
+    from pipeline.sec_xbrl import IngestStats
+
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, "
+        "fiscal_year_end TEXT, archived_at TEXT)"
+    )
+    conn.execute("INSERT INTO tracked_companies VALUES ('MELI', 'evaluation', '12-31', NULL)")
+    calls: list[str] = []
+
+    def _ingest(*_args: object, ticker: str, **_kwargs: object) -> IngestStats:
+        calls.append(ticker)
+        return IngestStats(accessions_inserted=1, facts_inserted=2)
+
+    monkeypatch.setattr(module, "ingest_sec_for_ticker", _ingest)
+    stage = module._stage_fetch_sec_xbrl(
+        conn,
+        ticker="MELI",
+        project_root=tmp_path,
+        owner_requested=True,
+    )
+
+    assert stage.status is StageStatus.OK
+    assert calls == ["MELI"]
 
 
 def test_refresh_ticker_derives_kpis_when_facts_present(

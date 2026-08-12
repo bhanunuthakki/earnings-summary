@@ -6,15 +6,19 @@ import hashlib
 import ipaddress
 import json
 import re
+import sqlite3
+from datetime import date
 from enum import StrEnum
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from models.companies import ListType
 from models.documents import DocType
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-POLICY_VERSION = "2026-08-12.1"
+POLICY_VERSION = "2026-08-12.2"
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
@@ -151,11 +155,84 @@ class TranscriptSource(StrEnum):
     AUDIO = "audio"
 
 
+class ReportedQuarterWindow(BaseModel):
+    """Canonical maximum history admitted by quarter-bounded collectors."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    max_quarters: int = Field(default=5, ge=1, le=20)
+
+
+class SourcePolicyConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    policy_version: str = POLICY_VERSION
+    reported_quarter_window: ReportedQuarterWindow = Field(default_factory=ReportedQuarterWindow)
+
+
+SOURCE_POLICY_CONFIG = SourcePolicyConfig()
+
+
 class AcquisitionDecision(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     allowed: bool
     reason: AuthorizationReason
     mode: CollectionMode
+    reported_quarter_window: ReportedQuarterWindow | None = None
+
+
+class CollectionTarget(BaseModel):
+    """One company considered by a source runner before any external work."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    ticker: str = Field(min_length=1, max_length=16)
+    coverage_role: ListType
+    requested: bool = False
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_ticker(cls, value: str) -> str:
+        ticker = value.strip().upper()
+        if not ticker or not ticker.replace(".", "").replace("-", "").isalnum():
+            raise ValueError("ticker contains unsupported characters")
+        return ticker
+
+
+class CollectionTargetDecision(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    target: CollectionTarget
+    decision: AcquisitionDecision
+
+
+class CollectionSelection(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    allowed: tuple[CollectionTargetDecision, ...]
+    denied: tuple[CollectionTargetDecision, ...]
+
+
+class StoredIdentityStatus(StrEnum):
+    AUTHORIZED = "authorized"
+    IDENTITY_UNAVAILABLE = "stored_identity_unavailable"
+    IDENTITY_NOT_FOUND = "stored_identity_not_found"
+    IDENTITY_AMBIGUOUS = "stored_identity_ambiguous"
+    ROLE_INVALID = "stored_role_invalid"
+    POLICY_DENIED = "policy_denied"
+
+
+class StoredCollectionAuthorization(BaseModel):
+    """DB-bound identity plus the canonical collection decision."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    status: StoredIdentityStatus
+    target: CollectionTarget | None = None
+    decision: AcquisitionDecision | None = None
+    fiscal_year_end_month: int | None = Field(default=None, ge=1, le=12)
+
+    @property
+    def allowed(self) -> bool:
+        return (
+            self.status is StoredIdentityStatus.AUTHORIZED
+            and self.decision is not None
+            and self.decision.allowed
+        )
 
 
 class SectionRule(BaseModel):
@@ -216,7 +293,11 @@ class IrIssuerRules(BaseModel):
     approved_endpoints: tuple[IrEndpointRule, ...]
     fiscal_year_end: str
     admitted_doc_types: tuple[DocType, ...]
-    reported_quarter_window: int = Field(default=5, ge=1, le=20)
+    reported_quarter_window: int = Field(
+        default=SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+        ge=1,
+        le=SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+    )
     admits_webcasts: bool = False
 
     @model_validator(mode="after")
@@ -304,6 +385,14 @@ _ROLE_MODES: dict[ListType, CollectionMode] = {
     ListType.NONE: CollectionMode.CATALOG_ONLY,
     ListType.ETF: CollectionMode.CATALOG_ONLY,
 }
+_COLLECTION_PRIORITY: dict[ListType, int] = {
+    ListType.PORTFOLIO: 0,
+    ListType.EVALUATION: 1,
+    ListType.WATCHLIST: 2,
+    ListType.INDEX_MEMBER: 3,
+    ListType.ETF: 4,
+    ListType.NONE: 5,
+}
 DISPLAY_ROLE_ORDER: tuple[ListType, ...] = (
     ListType.PORTFOLIO,
     ListType.EVALUATION,
@@ -356,17 +445,28 @@ def decision_for(
         )
     except ValueError as exc:
         raise ValueError(f"unknown artifact kind: {artifact_kind!r}") from exc
+    reported_quarter_window = (
+        SOURCE_POLICY_CONFIG.reported_quarter_window
+        if (source_value, artifact)
+        in {
+            (CollectionSource.IR, ArtifactKind.IR_DOCUMENT),
+            (CollectionSource.TRANSCRIPT, ArtifactKind.TEXT_TRANSCRIPT),
+        }
+        else None
+    )
     if artifact not in _SOURCE_ARTIFACTS[source_value]:
         return AcquisitionDecision(
             allowed=False,
             reason=AuthorizationReason.SOURCE_ARTIFACT_MISMATCH,
             mode=mode,
+            reported_quarter_window=reported_quarter_window,
         )
     if artifact is ArtifactKind.WEBCAST:
         return AcquisitionDecision(
             allowed=False,
             reason=AuthorizationReason.WEBCAST_EXCLUDED,
             mode=mode,
+            reported_quarter_window=reported_quarter_window,
         )
     if mode is CollectionMode.SCREENING_ONLY:
         allowed = source_value is CollectionSource.FMP and artifact is ArtifactKind.FINANCIAL_FACT
@@ -378,6 +478,7 @@ def decision_for(
                 else AuthorizationReason.COVERAGE_DEPTH_DENIED
             ),
             mode=mode,
+            reported_quarter_window=reported_quarter_window,
         )
     if artifact is ArtifactKind.METADATA:
         allowed = mode is not CollectionMode.CATALOG_ONLY
@@ -389,12 +490,14 @@ def decision_for(
                 else AuthorizationReason.COVERAGE_DEPTH_DENIED
             ),
             mode=mode,
+            reported_quarter_window=reported_quarter_window,
         )
     if mode is CollectionMode.AUTOMATIC_FULL:
         return AcquisitionDecision(
             allowed=True,
             reason=AuthorizationReason.AUTOMATIC,
             mode=mode,
+            reported_quarter_window=reported_quarter_window,
         )
     if mode is CollectionMode.ON_DEMAND_FULL:
         return AcquisitionDecision(
@@ -405,12 +508,185 @@ def decision_for(
                 else AuthorizationReason.REQUEST_REQUIRED
             ),
             mode=mode,
+            reported_quarter_window=reported_quarter_window,
         )
     return AcquisitionDecision(
         allowed=False,
         reason=AuthorizationReason.COVERAGE_DEPTH_DENIED,
         mode=mode,
+        reported_quarter_window=reported_quarter_window,
     )
+
+
+def select_collection_targets(
+    targets: tuple[CollectionTarget, ...],
+    *,
+    source: CollectionSource,
+    artifact_kind: ArtifactKind,
+) -> CollectionSelection:
+    """Authorize and priority-order a runner scope through the canonical policy.
+
+    Portfolio always precedes explicitly requested evaluation work. Denied names
+    remain in the receipt so scheduled runners can explain skipped coverage
+    instead of silently broadening their crawl.
+    """
+
+    ordered = sorted(
+        targets,
+        key=lambda target: (_COLLECTION_PRIORITY[target.coverage_role], target.ticker),
+    )
+    decisions = tuple(
+        CollectionTargetDecision(
+            target=target,
+            decision=decision_for(
+                target.coverage_role,
+                source,
+                artifact_kind,
+                requested=target.requested,
+            ),
+        )
+        for target in ordered
+    )
+    return CollectionSelection(
+        allowed=tuple(item for item in decisions if item.decision.allowed),
+        denied=tuple(item for item in decisions if not item.decision.allowed),
+    )
+
+
+def authorize_stored_collection_target(
+    db_path: Path,
+    ticker: str,
+    *,
+    requested: bool,
+    source: CollectionSource,
+    artifact_kind: ArtifactKind,
+) -> StoredCollectionAuthorization:
+    """Bind a network decision to one active stored company identity.
+
+    Missing, malformed, or ambiguous roster state is denied before external
+    work. The caller decides whether a denial is terminal or a batch skip.
+    """
+
+    normalized_ticker = ticker.strip().upper()
+    if not db_path.is_file():
+        return StoredCollectionAuthorization(status=StoredIdentityStatus.IDENTITY_UNAVAILABLE)
+    try:
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            return authorize_collection_target_in_connection(
+                conn,
+                normalized_ticker,
+                requested=requested,
+                source=source,
+                artifact_kind=artifact_kind,
+            )
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return StoredCollectionAuthorization(status=StoredIdentityStatus.IDENTITY_UNAVAILABLE)
+
+
+def authorize_collection_target_in_connection(
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    requested: bool,
+    source: CollectionSource,
+    artifact_kind: ArtifactKind,
+) -> StoredCollectionAuthorization:
+    """Authorize one active stored identity using a caller-owned connection."""
+
+    normalized_ticker = ticker.strip().upper()
+    try:
+        rows = conn.execute(
+            "SELECT ticker,list_type FROM tracked_companies "
+            "WHERE UPPER(ticker)=? AND archived_at IS NULL",
+            (normalized_ticker,),
+        ).fetchall()
+    except sqlite3.Error:
+        return StoredCollectionAuthorization(status=StoredIdentityStatus.IDENTITY_UNAVAILABLE)
+    if not rows:
+        return StoredCollectionAuthorization(status=StoredIdentityStatus.IDENTITY_NOT_FOUND)
+    if len(rows) != 1:
+        return StoredCollectionAuthorization(status=StoredIdentityStatus.IDENTITY_AMBIGUOUS)
+    row = rows[0]
+    try:
+        target = CollectionTarget(
+            ticker=str(row[0]),
+            coverage_role=ListType(str(row[1])),
+            requested=requested,
+        )
+    except (ValueError, TypeError):
+        return StoredCollectionAuthorization(status=StoredIdentityStatus.ROLE_INVALID)
+    columns = {
+        str(column[1]) for column in conn.execute("PRAGMA table_info(tracked_companies)").fetchall()
+    }
+    fye_row = (
+        conn.execute(
+            "SELECT fiscal_year_end FROM tracked_companies "
+            "WHERE UPPER(ticker)=? AND archived_at IS NULL",
+            (normalized_ticker,),
+        ).fetchone()
+        if "fiscal_year_end" in columns
+        else None
+    )
+    fye_raw = fye_row[0] if fye_row is not None else None
+    fiscal_year_end_month: int | None = None
+    if isinstance(fye_raw, str) and len(fye_raw) >= 2:
+        try:
+            candidate_month = int(fye_raw[:2])
+        except ValueError:
+            candidate_month = 0
+        if 1 <= candidate_month <= 12:
+            fiscal_year_end_month = candidate_month
+    decision = decision_for(
+        target.coverage_role,
+        source,
+        artifact_kind,
+        requested=target.requested,
+    )
+    return StoredCollectionAuthorization(
+        status=(
+            StoredIdentityStatus.AUTHORIZED
+            if decision.allowed
+            else StoredIdentityStatus.POLICY_DENIED
+        ),
+        target=target,
+        decision=decision,
+        fiscal_year_end_month=fiscal_year_end_month,
+    )
+
+
+def reported_quarter_is_in_window(
+    *,
+    fiscal_year: int,
+    fiscal_quarter: int,
+    fiscal_year_end_month: int,
+    as_of: date,
+    max_quarters: int = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+) -> bool:
+    """Return whether a fiscal quarter is among the latest completed policy window."""
+
+    if not 1 <= fiscal_quarter <= 4 or not 1 <= fiscal_year_end_month <= 12:
+        return False
+    completed: list[tuple[date, int, int]] = []
+    for year in range(as_of.year - 2, as_of.year + 2):
+        for quarter in range(1, 5):
+            months_before_fye = (4 - quarter) * 3
+            end_year = year
+            end_month = fiscal_year_end_month - months_before_fye
+            while end_month < 1:
+                end_month += 12
+                end_year -= 1
+            if end_month == 12:
+                next_month = date(end_year + 1, 1, 1)
+            else:
+                next_month = date(end_year, end_month + 1, 1)
+            period_end = date.fromordinal(next_month.toordinal() - 1)
+            if period_end <= as_of:
+                completed.append((period_end, year, quarter))
+    newest = sorted(completed, reverse=True)[:max_quarters]
+    return any(year == fiscal_year and quarter == fiscal_quarter for _, year, quarter in newest)
 
 
 def _reviewed_policies() -> tuple[IssuerAcquisitionPolicy, ...]:

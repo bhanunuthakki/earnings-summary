@@ -4,11 +4,12 @@ A company publishes the official earnings-call transcript on its OWN IR site
 days-to-weeks before the free aggregators index the call (``issuer_ir`` is the
 first link of the aggregator chain — see ``ir_pipeline.transcript``). This scan
 re-checks the IR site DAILY for a short window after each tracked ticker's last
-earnings date and stops as soon as that quarter's transcript is fetched +
-ingested.
+earnings date and stops as soon as that quarter's transcript is fetched and
+ingested. Scheduled scope is portfolio-only; evaluation names require an
+explicit ``--ticker`` request, while watchlist and index-member names are denied.
 
-It is distinct from ``backfill_transcripts.py`` (a broad daily sweep over the
-last 6 quarters of every active ticker): this is a FOCUSED, windowed re-check of
+It is distinct from ``backfill_transcripts.py`` (a bounded five-quarter text
+backfill for portfolio names): this is a FOCUSED, windowed re-check of
 just the *latest reported* quarter. Its stop signal is the exact DB-bound path
 and SHA, so it keeps retrying until the official transcript is truly ingested.
 
@@ -55,6 +56,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
+from models.companies import ListType  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    SOURCE_POLICY_CONFIG,
+    ArtifactKind,
+    CollectionSource,
+    CollectionTarget,
+    select_collection_targets,
+)
 from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # Sibling scripts in execution/ — needed when this module is imported (e.g. from
@@ -188,6 +197,8 @@ def scan_one(
     today: date,
     window_days: int,
     dry_run: bool,
+    db_path: Path,
+    owner_requested: bool,
 ) -> TickerScanResult:
     """Decide + (unless dry-run) perform this ticker's post-earnings scan.
 
@@ -200,7 +211,8 @@ def scan_one(
         last_s = last.isoformat() if last else "none"
         return TickerScanResult(ticker, "out_of_window", detail=f"last_earnings={last_s}")
 
-    quarters = recent_fiscal_quarters(fye_month, today, 1)
+    latest_quarter_count = min(1, SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters)
+    quarters = recent_fiscal_quarters(fye_month, today, latest_quarter_count)
     if not quarters:
         return TickerScanResult(ticker, "no_fiscal_quarter")
     year, quarter = quarters[0]
@@ -216,7 +228,12 @@ def scan_one(
         return TickerScanResult(ticker, "pending_ingest", qlabel)
 
     try:
-        hit = fetch_qa(FetchQaSpec(ticker=ticker, year=year, quarter=quarter), force=False)
+        hit = fetch_qa(
+            FetchQaSpec(ticker=ticker, year=year, quarter=quarter),
+            force=False,
+            db_path=db_path,
+            owner_requested=owner_requested,
+        )
     except Exception as e:  # aggregator/issuer scraping is fragile — isolate one ticker
         return TickerScanResult(ticker, "error", qlabel, detail=f"{type(e).__name__}: {e}"[:200])
     if hit is None:
@@ -225,32 +242,26 @@ def scan_one(
 
 
 def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
-    """Return [(ticker, fye_month), ...] for the scan scope, sorted by ticker.
-
-    Default scope is the active universe (``db.ACTIVE_LIST_TYPES``); ``--ticker``
-    narrows to one. Mirrors ``backfill_transcripts._resolve_tickers``' parse of
-    the ``MMDD`` ``fiscal_year_end`` into a calendar month.
-    """
+    """Return policy-authorized transcript work in company-priority order."""
     conn = db.get_connection()
     try:
         if arg_ticker:
             cur = conn.execute(
-                "SELECT ticker, fiscal_year_end FROM tracked_companies "
+                "SELECT ticker, fiscal_year_end, list_type FROM tracked_companies "
                 "WHERE ticker = ? AND archived_at IS NULL",
                 (arg_ticker.upper(),),
             )
         else:
             cur = conn.execute(
-                f"SELECT ticker, fiscal_year_end FROM tracked_companies "
-                f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
-                f"AND archived_at IS NULL "
-                f"ORDER BY ticker"
+                "SELECT ticker, fiscal_year_end, list_type FROM tracked_companies "
+                "WHERE archived_at IS NULL ORDER BY ticker"
             )
         rows = cur.fetchall()
     finally:
         conn.close()
 
-    out: list[tuple[str, int]] = []
+    months_by_ticker: dict[str, int] = {}
+    targets: list[CollectionTarget] = []
     for r in rows:
         fye_raw = r["fiscal_year_end"]
         if not isinstance(fye_raw, str) or len(fye_raw) < 2:
@@ -266,8 +277,42 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
         if not 1 <= month <= 12:
             sys.stderr.write(f"[skip] {r['ticker']}: fiscal_year_end month {month} out of range\n")
             continue
-        out.append((str(r["ticker"]), month))
-    return out
+        ticker = str(r["ticker"]).upper()
+        try:
+            role = ListType(str(r["list_type"]))
+        except ValueError:
+            continue
+        months_by_ticker[ticker] = month
+        targets.append(
+            CollectionTarget(
+                ticker=ticker,
+                coverage_role=role,
+                requested=arg_ticker is not None,
+            )
+        )
+    selection = select_collection_targets(
+        tuple(targets),
+        source=CollectionSource.TRANSCRIPT,
+        artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
+    )
+    for item in selection.denied:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": item.target.ticker,
+                    "coverage_role": item.target.coverage_role.value,
+                    "source": CollectionSource.TRANSCRIPT.value,
+                    "artifact_kind": ArtifactKind.TEXT_TRANSCRIPT.value,
+                    "reason": item.decision.reason.value,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    return [
+        (item.target.ticker, months_by_ticker[item.target.ticker]) for item in selection.allowed
+    ]
 
 
 def _run_ingest(repo_root: Path, dry_run: bool) -> int:
@@ -321,6 +366,7 @@ def main() -> int:
         _retarget_paths(repo_root)
 
     today = date.today()
+    selected_db_path = repo_root / "data" / "portfolio.db"
     tickers = _resolve_tickers(args.ticker)
     if not tickers:
         print(json.dumps({"event": "no_tickers"}))
@@ -333,7 +379,16 @@ def main() -> int:
     )
     results: list[TickerScanResult] = []
     for ticker, fye_month in tickers:
-        r = scan_one(ticker, fye_month, repo_root, today, args.window_days, args.dry_run)
+        r = scan_one(
+            ticker,
+            fye_month,
+            repo_root,
+            today,
+            args.window_days,
+            args.dry_run,
+            selected_db_path,
+            args.ticker is not None,
+        )
         results.append(r)
         if r.status != "out_of_window":
             print(f"  {ticker:6s} {r.status:18s} {r.quarter} {r.detail}".rstrip(), file=sys.stderr)

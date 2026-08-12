@@ -605,6 +605,7 @@ class HealthRecord:
     ended_at: str
     status: str
     exit_code: int
+    severity: str
     detail: str | None = None
 
 
@@ -857,6 +858,27 @@ def _write_health(repo_root: Path, record: HealthRecord) -> Path:
     return path
 
 
+def _child_health_semantics(job_name: str, exit_code: int) -> tuple[str, str, str | None]:
+    """Translate reviewed child receipts without erasing Scheduler exit codes."""
+
+    if job_name == "refresh_cache":
+        if exit_code == 2:
+            return (
+                "degraded_corpus",
+                "warning",
+                "live FMP unavailable; existing corpus served; recovery queued",
+            )
+        if exit_code == 3:
+            return (
+                "partial",
+                "warning",
+                "some FMP work was served or refreshed; unresolved work remains queued",
+            )
+    if exit_code == 0:
+        return "ok", "info", None
+    return "failed", "error", None
+
+
 def run_job(
     *,
     repo_root: Path,
@@ -894,6 +916,7 @@ def run_job(
                 ended_at=datetime.now(UTC).isoformat(),
                 status="blocked_schema_drift",
                 exit_code=SCHEMA_DRIFT_EXIT_CODE,
+                severity="error",
                 detail=blocked,
             ),
         )
@@ -911,15 +934,16 @@ def run_job(
                 env=child_env,
                 scheduler_owner=_SCHEDULER_OWNER,
             )
-        status = "ok" if exit_code == 0 else "failed"
-        detail = None
+        status, severity, detail = _child_health_semantics(job_name, exit_code)
     except JobAlreadyRunningError as exc:
         exit_code = 75  # EX_TEMPFAIL: safe, retryable scheduler contention.
         status = "skipped_locked"
+        severity = "warning"
         detail = str(exc)
     except OSError as exc:
         exit_code = 1
         status = "failed"
+        severity = "error"
         detail = str(exc)
     ended = datetime.now(UTC)
     _write_health(
@@ -931,6 +955,7 @@ def run_job(
             ended_at=ended.isoformat(),
             status=status,
             exit_code=exit_code,
+            severity=severity,
             detail=detail,
         ),
     )
