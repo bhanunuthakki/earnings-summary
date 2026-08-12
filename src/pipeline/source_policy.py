@@ -3,15 +3,81 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import re
 from enum import StrEnum
+from urllib.parse import unquote, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from models.companies import ListType
 from models.documents import DocType
 
-POLICY_VERSION = "2026-08-11.1"
+POLICY_VERSION = "2026-08-12.1"
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _canonical_dns_host(host: str) -> str | None:
+    if host != host.casefold() or not host.isascii() or len(host) > 253:
+        return None
+    if host != host.strip() or host.endswith(".") or ".." in host:
+        return None
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return None
+    labels = host.split(".")
+    if len(labels) < 2 or any(_DNS_LABEL.fullmatch(label) is None for label in labels):
+        return None
+    return host
+
+
+def _canonical_safe_path(raw_path: str) -> str | None:
+    if not raw_path.startswith("/") or not raw_path.isascii():
+        return None
+    current = raw_path
+    for _ in range(5):
+        if any(ord(character) < 32 or ord(character) == 127 for character in current):
+            return None
+        if (
+            "\\" in current
+            or "//" in current
+            or any(segment in {".", ".."} for segment in current.split("/"))
+        ):
+            return None
+        decoded = unquote(current)
+        if decoded == current:
+            return current
+        if decoded.count("/") != current.count("/") or "\\" in decoded:
+            return None
+        current = decoded
+    return None
+
+
+def canonical_https_url(url: str) -> tuple[str, str] | None:
+    """Return strict ASCII DNS host and traversal-safe path for a plain HTTPS URL."""
+    try:
+        parsed = urlsplit(url)
+        explicit_port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or explicit_port is not None
+        or parsed.fragment
+    ):
+        return None
+    host = _canonical_dns_host(parsed.hostname)
+    path = _canonical_safe_path(parsed.path or "/")
+    if host is None or path is None:
+        return None
+    return host, path
 
 
 class CollectionSource(StrEnum):
@@ -111,15 +177,82 @@ class SecIssuerRules(BaseModel):
     relevant_sections: tuple[SectionRule, ...] = ()
 
 
+class IrEndpointRule(BaseModel):
+    """An exact HTTPS host and its explicitly approved path surface."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    host: str
+    exact_paths: tuple[str, ...] = ()
+    path_prefixes: tuple[str, ...] = ()
+
+    @field_validator("host")
+    @classmethod
+    def _validate_host(cls, value: str) -> str:
+        if _canonical_dns_host(value) is None:
+            raise ValueError("approved IR host must be an exact lowercase hostname")
+        return value
+
+    @field_validator("exact_paths", "path_prefixes")
+    @classmethod
+    def _validate_paths(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("approved IR paths must be unique")
+        for path in value:
+            if _canonical_safe_path(path) != path or "?" in path or "#" in path or "%" in path:
+                raise ValueError("approved IR paths must be canonical safe absolute URL paths")
+        return value
+
+    @model_validator(mode="after")
+    def _require_path_surface(self) -> IrEndpointRule:
+        if not self.exact_paths and not self.path_prefixes:
+            raise ValueError("approved IR endpoint must include an exact path or path prefix")
+        return self
+
+
 class IrIssuerRules(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     authority_url: str
     adapter_key: AdapterKey
-    publisher_host_suffixes: tuple[str, ...]
+    approved_endpoints: tuple[IrEndpointRule, ...]
     fiscal_year_end: str
     admitted_doc_types: tuple[DocType, ...]
     reported_quarter_window: int = Field(default=5, ge=1, le=20)
     admits_webcasts: bool = False
+
+    @model_validator(mode="after")
+    def _validate_authority_endpoint(self) -> IrIssuerRules:
+        canonical = canonical_https_url(self.authority_url)
+        parsed = urlsplit(self.authority_url)
+        if canonical is None or parsed.query:
+            raise ValueError("IR authority URL must be a plain exact HTTPS endpoint")
+        if len(self.approved_endpoints) != len(set(self.approved_endpoints)):
+            raise ValueError("approved IR endpoints must be unique")
+        authority_host, authority_path = canonical
+        exact_authority = any(
+            authority_host == endpoint.host and authority_path in endpoint.exact_paths
+            for endpoint in self.approved_endpoints
+        )
+        if not exact_authority:
+            raise ValueError("IR authority URL must be an exact approved endpoint path")
+        return self
+
+
+def ir_url_is_authorized(rules: IrIssuerRules, url: str) -> bool:
+    """Return whether ``url`` is inside an issuer's exact approved endpoint surface."""
+    canonical = canonical_https_url(url)
+    if canonical is None:
+        return False
+    host, path = canonical
+    for endpoint in rules.approved_endpoints:
+        if host != endpoint.host:
+            continue
+        if path in endpoint.exact_paths:
+            return True
+        for prefix in endpoint.path_prefixes:
+            boundary = prefix if prefix.endswith("/") else f"{prefix}/"
+            if path == prefix.rstrip("/") or path.startswith(boundary):
+                return True
+    return False
 
 
 class FmpIssuerRules(BaseModel):
@@ -305,12 +438,18 @@ def _reviewed_policies() -> tuple[IssuerAcquisitionPolicy, ...]:
             ir=IrIssuerRules(
                 authority_url="https://ir.rubrik.com/financials/quarterly-results/default.aspx",
                 adapter_key=AdapterKey.RUBRIK_QUARTER_TABLE,
-                publisher_host_suffixes=("ir.rubrik.com", "q4cdn.com"),
+                approved_endpoints=(
+                    IrEndpointRule(
+                        host="ir.rubrik.com",
+                        exact_paths=("/financials/quarterly-results/default.aspx",),
+                        path_prefixes=("/news-events/press-releases/detail", "/static-files"),
+                    ),
+                ),
                 fiscal_year_end="01-31",
                 admitted_doc_types=(
                     DocType.IR_PRESS_RELEASE,
                     DocType.IR_PRESENTATION,
-                    DocType.SEC_10Q,
+                    DocType.IR_TRANSCRIPT,
                 ),
             ),
         ),
@@ -329,7 +468,14 @@ def _reviewed_policies() -> tuple[IssuerAcquisitionPolicy, ...]:
             ir=IrIssuerRules(
                 authority_url="https://investors.wix.com/financials",
                 adapter_key=AdapterKey.WIX_VISIBLE_QUARTER,
-                publisher_host_suffixes=("investors.wix.com", "usrfiles.com"),
+                approved_endpoints=(
+                    IrEndpointRule(
+                        host="investors.wix.com",
+                        exact_paths=("/financials",),
+                        path_prefixes=("/static-files",),
+                    ),
+                    IrEndpointRule(host="static.wixstatic.com", path_prefixes=("/media",)),
+                ),
                 fiscal_year_end="12-31",
                 admitted_doc_types=(
                     DocType.IR_PRESS_RELEASE,
