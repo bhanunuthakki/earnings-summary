@@ -17,6 +17,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+import urllib.response
 from typing import cast
 
 from pydantic import BaseModel, ValidationError
@@ -84,7 +85,11 @@ def _get_text(url: str, timeout: int = 30) -> str:
     ensure_safe_public_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with build_public_opener().open(request, timeout=timeout) as response:
+        response = cast(
+            urllib.response.addinfourl,
+            build_public_opener().open(request, timeout=timeout),
+        )
+        with response:
             return _read_bounded(response).decode("utf-8", errors="strict")
     except urllib.error.HTTPError as exc:
         status_code = _authentication_denial_status(exc.code)
@@ -102,7 +107,11 @@ def _post_json(url: str, payload: dict[str, object], timeout: int = 30) -> objec
         method="POST",
     )
     try:
-        with build_public_opener().open(request, timeout=timeout) as response:
+        response = cast(
+            urllib.response.addinfourl,
+            build_public_opener().open(request, timeout=timeout),
+        )
+        with response:
             return cast(object, json.loads(_read_bounded(response)))
     except urllib.error.HTTPError as exc:
         status_code = _authentication_denial_status(exc.code)
