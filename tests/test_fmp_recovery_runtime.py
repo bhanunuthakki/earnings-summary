@@ -43,6 +43,7 @@ from pipeline.fmp_recovery import (
 from provenance.financial_fact_resolution import governed_document_fact_admission
 
 REVISION = "0008_add_fmp_recovery"
+ACTIVE_REVISION = "0009_add_ir_approval_store"
 NOW = datetime(2026, 8, 12, 9, 0, 0)
 CONTENT = "c" * 64
 
@@ -867,7 +868,7 @@ def test_offline_corpus_only_bypasses_external_seams_is_idempotent_and_preserves
         encoding="utf-8",
     )
     (raw_dir / "LOW_income_statement_quarterly.json").write_text("[]", encoding="utf-8")
-    db_path = migrated_db(project_root / "data" / "runtime.db", target=REVISION)
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=ACTIVE_REVISION)
     seed = _connection(db_path)
     seed.execute(
         "INSERT INTO tracked_companies (ticker,name,list_type) VALUES ('RBRK','Rubrik','portfolio')"
@@ -1020,7 +1021,7 @@ def test_offline_corpus_only_reports_partial_malformed_corpus_truthfully(
         encoding="utf-8",
     )
     (raw_dir / "WIX_balance_sheet_quarterly.json").write_bytes(b"{not-json")
-    db_path = migrated_db(project_root / "data" / "runtime.db", target=REVISION)
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=ACTIVE_REVISION)
     seed = _connection(db_path)
     seed.executemany(
         "INSERT INTO tracked_companies (ticker,name,list_type) VALUES (?,?,?)",

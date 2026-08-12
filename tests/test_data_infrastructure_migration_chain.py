@@ -12,7 +12,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0008_add_fmp_recovery"
+HEAD = "0009_add_ir_approval_store"
 RETAINED_TABLES = {
     "archive_generations",
     "ask_exchange_artifacts",
@@ -23,6 +23,8 @@ RETAINED_TABLES = {
     "evidence_content_blobs",
     "metric_ontology_operation_ledger",
     "llm_circuit_breakers",
+    "ir_approval_candidates",
+    "ir_approval_decisions",
     "research_snapshot_headers",
     "search_corpus_manifests",
 }

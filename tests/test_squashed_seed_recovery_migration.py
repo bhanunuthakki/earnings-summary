@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0008_add_fmp_recovery"
+_ACTIVE_HEAD = "0009_add_ir_approval_store"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
