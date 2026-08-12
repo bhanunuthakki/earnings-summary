@@ -1175,7 +1175,7 @@ def plan_run(connection: sqlite3.Connection, request: PlanRunRequest) -> RunPlan
         # Only the count of qmark placeholders is interpolated; every work ID is bound.
         rows = connection.execute(
             f"""  # nosec B608
-            SELECT * FROM fmp_work_backlog WHERE work_id IN ({placeholders})
+            SELECT * FROM fmp_work_backlog WHERE work_id IN ({placeholders})  -- nosec B608
             ORDER BY priority DESC,created_at,ticker,work_id
             """,
             identifiers,
