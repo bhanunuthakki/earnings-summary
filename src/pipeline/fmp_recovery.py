@@ -94,6 +94,16 @@ class ContainmentReason(StrEnum):
     )
 
 
+class CorpusFailureReason(StrEnum):
+    FILE_UNAVAILABLE = "file_unavailable"
+    SNAPSHOT_MISMATCH = "snapshot_mismatch"
+    INVALID_PAYLOAD = "invalid_payload"
+    UNSUPPORTED_STATEMENT = "unsupported_statement"
+    DOCUMENT_ADMISSION_FAILED = "document_admission_failed"
+    FACT_ADMISSION_FAILED = "fact_admission_failed"
+    EVIDENCE_CHANGED = "evidence_changed"
+
+
 class ReceiptStatus(StrEnum):
     FRESH = "FRESH"
     DEGRADED_CORPUS = "DEGRADED_CORPUS"
@@ -423,6 +433,7 @@ class WorkOutcome(_FrozenModel):
     corpus_snapshot: CorpusSnapshot | None = None
     fmp_snapshot: FmpSnapshotProof | None = None
     alternative_resolution: AlternativeResolution | None = None
+    corpus_failure_reason: CorpusFailureReason | None = None
 
     _work_hash = field_validator("work_id")(_validate_sha256)
     _observed_at = field_validator("observed_at")(_validate_naive_utc)
@@ -467,6 +478,10 @@ class WorkOutcome(_FrozenModel):
             raise ValueError("transport error must not invent an HTTP status")
         if self.outcome_code is OutcomeCode.CORPUS_SUCCESS and self.corpus_snapshot is None:
             raise ValueError("corpus success requires a typed corpus snapshot")
+        if self.corpus_failure_reason is not None and (
+            self.outcome_code is not OutcomeCode.CORPUS_UNAVAILABLE
+        ):
+            raise ValueError("corpus failure reason is valid only for unavailable corpus")
         if self.outcome_code is OutcomeCode.ALTERNATIVE_SUCCESS and (
             self.alternative_resolution is None
         ):

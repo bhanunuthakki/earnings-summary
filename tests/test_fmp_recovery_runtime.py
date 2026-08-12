@@ -27,6 +27,7 @@ from pipeline.fmp_recovery import (
     CircuitConfig,
     CircuitState,
     ContainmentReason,
+    CorpusFailureReason,
     CredentialAvailability,
     EnqueueWorkRequest,
     ExecutionMode,
@@ -44,7 +45,12 @@ from pipeline.fmp_recovery import (
     plan_run,
     recoverable_work,
 )
-from provenance.financial_fact_resolution import governed_document_fact_admission
+from provenance import financial_fact_resolution
+from provenance.evidence_backfill import ensure_legacy_document_evidence
+from provenance.financial_fact_resolution import (
+    governed_document_fact_admission,
+    rehydrate_document_fact_observations,
+)
 
 REVISION = "0008_add_fmp_recovery"
 ACTIVE_REVISION = "0009_add_ir_approval_store"
@@ -85,6 +91,89 @@ def _connection(path: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def _seed_legacy_fmp_facts_without_observations(
+    connection: sqlite3.Connection,
+    *,
+    project_root: Path,
+    raw_path: Path,
+    ticker: str = "RBRK",
+) -> tuple[int, int]:
+    relative_path = str(raw_path.resolve().relative_to(project_root.resolve())).replace("\\", "/")
+    content_sha = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+    connection.execute(
+        "INSERT INTO documents "
+        "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
+        "fetch_status,raw_bytes_size,source_url) "
+        "VALUES (?,'fmp','fmp_income_statement','2026-07-31',?,?,?,'ok',?,NULL)",
+        (ticker, relative_path, content_sha, NOW.isoformat(), raw_path.stat().st_size),
+    )
+    document_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+    ensure_legacy_document_evidence(
+        connection,
+        repo_root=project_root,
+        document_id=document_id,
+    )
+    connection.commit()
+    trigger = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' "
+        "AND name='trg_financial_facts_observation_insert'"
+    ).fetchone()
+    assert trigger is not None and isinstance(trigger[0], str)
+    connection.execute("DROP TRIGGER trg_financial_facts_observation_insert")
+    connection.execute(
+        "ALTER TABLE fact_observation_revisions RENAME TO legacy_fact_observation_revisions"
+    )
+    from compute.income_statement import extract_income_statement_facts
+
+    fact_count = extract_income_statement_facts(connection, document_id, project_root)
+    connection.execute(
+        "ALTER TABLE legacy_fact_observation_revisions RENAME TO fact_observation_revisions"
+    )
+    connection.execute(str(trigger[0]))
+    connection.commit()
+    assert fact_count > 0
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+            (document_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    return document_id, fact_count
+
+
+def _upgrade_legacy_fmp_fixture(
+    migrated_db: Callable[..., Path],
+    destination: Path,
+    *,
+    project_root: Path,
+    raw_path: Path,
+) -> tuple[Path, int, int]:
+    seeded: list[tuple[int, int]] = []
+
+    def before_upgrade(path: Path) -> None:
+        connection = _connection(path)
+        try:
+            seeded.append(
+                _seed_legacy_fmp_facts_without_observations(
+                    connection,
+                    project_root=project_root,
+                    raw_path=raw_path,
+                )
+            )
+        finally:
+            connection.close()
+
+    db_path = migrated_db(
+        destination,
+        upgrade_from="0007_add_earnings_surprise_observations",
+        before_upgrade=before_upgrade,
+        target=ACTIVE_REVISION,
+    )
+    assert len(seeded) == 1
+    return db_path, *seeded[0]
 
 
 def _live_outcome(
@@ -473,6 +562,304 @@ def test_real_corpus_admission_reclaims_crashed_lease_without_duplicate_facts(
         hashlib.sha256(raw_path.read_bytes()).hexdigest(),
         raw_path.stat().st_mtime_ns,
     ) == raw_before
+
+
+def test_real_corpus_rehydrates_legacy_facts_missing_canonical_observations(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "RBRK_income_statement_quarterly.json"
+    raw_path.write_text(
+        json.dumps(
+            [
+                {
+                    "date": "2026-07-31",
+                    "symbol": "RBRK",
+                    "reportedCurrency": "USD",
+                    "period": "Q2",
+                    "fiscalYear": "2026",
+                    "revenue": 310000000,
+                    "netIncome": -42000000,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    db_path, document_id, fact_count = _upgrade_legacy_fmp_fixture(
+        migrated_db,
+        project_root / "data" / "runtime.db",
+        project_root=project_root,
+        raw_path=raw_path,
+    )
+    connection = _connection(db_path)
+    try:
+        first = refresh_cache.run_recovery_batch(
+            connection,
+            items=(_item("RBRK"),),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="legacy-facts-first",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+        assert first.corpus_count == 1
+        assert first.pending_count == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+                (document_id,),
+            ).fetchone()[0]
+            == fact_count
+        )
+        assert (
+            governed_document_fact_admission(
+                connection,
+                document_id=document_id,
+                ticker="RBRK",
+                content_sha256=hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+                inserted_count=0,
+            ).status
+            == "idempotent_replay"
+        )
+
+        second = refresh_cache.run_recovery_batch(
+            connection,
+            items=(_item("RBRK"),),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW + timedelta(minutes=6),
+            run_id="legacy-facts-second",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+        assert second.corpus_count == 1
+        assert second.pending_count == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+                (document_id,),
+            ).fetchone()[0]
+            == fact_count
+        )
+    finally:
+        connection.close()
+
+
+def test_legacy_fact_rehydration_rejects_content_mismatch_without_capture(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "RBRK_income_statement_quarterly.json"
+    raw_path.write_text(
+        json.dumps([{"date": "2026-07-31", "symbol": "RBRK", "period": "Q2", "revenue": 1}]),
+        encoding="utf-8",
+    )
+    db_path, document_id, _ = _upgrade_legacy_fmp_fixture(
+        migrated_db,
+        project_root / "data" / "runtime.db",
+        project_root=project_root,
+        raw_path=raw_path,
+    )
+    connection = _connection(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        with pytest.raises(ValueError, match="document/hash"):
+            rehydrate_document_fact_observations(
+                connection,
+                document_id=document_id,
+                ticker="RBRK",
+                content_sha256="0" * 64,
+                inserted_count=0,
+                recorded_at=NOW,
+            )
+        connection.rollback()
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+                (document_id,),
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        connection.close()
+
+
+def test_legacy_fact_rehydration_rolls_back_partial_capture(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "RBRK_income_statement_quarterly.json"
+    raw_path.write_text(
+        json.dumps(
+            [
+                {
+                    "date": "2026-07-31",
+                    "symbol": "RBRK",
+                    "period": "Q2",
+                    "revenue": 310000000,
+                    "netIncome": -42000000,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    raw_before = (hashlib.sha256(raw_path.read_bytes()).hexdigest(), raw_path.stat().st_mtime_ns)
+    db_path, document_id, fact_count = _upgrade_legacy_fmp_fixture(
+        migrated_db,
+        project_root / "data" / "runtime.db",
+        project_root=project_root,
+        raw_path=raw_path,
+    )
+    connection = _connection(db_path)
+    try:
+        assert fact_count == 2
+        real_capture = financial_fact_resolution.capture_fact_row_observation
+        calls = 0
+
+        def fail_second_capture(
+            conn: sqlite3.Connection,
+            *,
+            fact_table: financial_fact_resolution.FactTable,
+            fact_row_id: int,
+            recorded_at: datetime,
+        ) -> bool:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("forced partial capture failure")
+            return real_capture(
+                conn,
+                fact_table=fact_table,
+                fact_row_id=fact_row_id,
+                recorded_at=recorded_at,
+            )
+
+        monkeypatch.setattr(
+            financial_fact_resolution,
+            "capture_fact_row_observation",
+            fail_second_capture,
+        )
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(_item("RBRK"),),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="legacy-facts-partial-failure",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+        assert result.failed_count == 1
+        assert len(result.corpus_failure_diagnostics) == 1
+        assert (
+            result.corpus_failure_diagnostics[0].reason
+            is refresh_cache.CorpusFailureReason.FACT_ADMISSION_FAILED
+        )
+        assert result.corpus_failure_diagnostics[0].disposition == "pending_retry"
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+                (document_id,),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM fact_resolution_outcomes").fetchone()[0] == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM financial_facts WHERE source_doc_id=?", (document_id,)
+            ).fetchone()[0]
+            == fact_count
+        )
+        assert (
+            hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+            raw_path.stat().st_mtime_ns,
+        ) == raw_before
+    finally:
+        connection.close()
+
+
+def test_legacy_fact_rehydration_reports_evidence_drift_truthfully(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "RBRK_income_statement_quarterly.json"
+    raw_path.write_text(
+        json.dumps(
+            [
+                {
+                    "date": "2026-07-31",
+                    "symbol": "RBRK",
+                    "period": "Q2",
+                    "revenue": 310000000,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    db_path, document_id, _ = _upgrade_legacy_fmp_fixture(
+        migrated_db,
+        project_root / "data" / "runtime.db",
+        project_root=project_root,
+        raw_path=raw_path,
+    )
+    connection = _connection(db_path)
+
+    real_reread = refresh_cache._HeldCorpusFile.reread
+    rereads = 0
+
+    def fail_reread(
+        self: refresh_cache._HeldCorpusFile,
+    ) -> tuple[bytes, os.stat_result]:
+        nonlocal rereads
+        rereads += 1
+        if rereads == 3:
+            raise RuntimeError("forced held evidence drift")
+        return real_reread(self)
+
+    monkeypatch.setattr(refresh_cache._HeldCorpusFile, "reread", fail_reread)
+    try:
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(_item("RBRK"),),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="legacy-facts-evidence-drift",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+        assert result.failed_count == 1
+        assert result.corpus_failure_diagnostics[0].reason is CorpusFailureReason.EVIDENCE_CHANGED
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+                (document_id,),
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        connection.close()
 
 
 def test_real_corpus_admission_keeps_exact_governed_empty_document_unavailable(

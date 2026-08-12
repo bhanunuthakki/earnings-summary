@@ -86,6 +86,7 @@ from pipeline.fmp_recovery import (  # noqa: E402
     CircuitConfig,
     CircuitState,
     ContainmentReason,
+    CorpusFailureReason,
     CorpusSnapshot,
     CredentialAvailability,
     EnqueueWorkRequest,
@@ -112,7 +113,7 @@ from pipeline.source_policy import (  # noqa: E402
     issuer_policy,
 )
 from provenance.financial_fact_resolution import (  # noqa: E402
-    governed_document_fact_admission,
+    rehydrate_document_fact_observations,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -474,6 +475,7 @@ class RecoveryRunResult:
     circuit_state: CircuitState
     circuit_revision: int
     pending_count: int
+    corpus_failure_diagnostics: tuple[CorpusFailureDiagnostic, ...] = ()
 
     @property
     def exit_code(self) -> int:
@@ -498,6 +500,9 @@ class RecoveryRunResult:
             "circuit_state": self.circuit_state.value,
             "circuit_revision": self.circuit_revision,
             "pending_count": self.pending_count,
+            "corpus_failure_diagnostics": [
+                item.model_dump(mode="json") for item in self.corpus_failure_diagnostics
+            ],
             "exit_code": self.exit_code,
         }
 
@@ -510,6 +515,18 @@ class RawCorpusManifestEntry:
     size_bytes: int
     content_sha256: str
     modified_at_ns: int
+
+
+class CorpusFailureDiagnostic(BaseModel):
+    """Bounded, non-secret reason for one unavailable corpus obligation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    work_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ticker: str = Field(min_length=1, max_length=16)
+    endpoint_key: str = Field(min_length=1, max_length=96)
+    disposition: Literal["pending_retry"] = "pending_retry"
+    reason: CorpusFailureReason
 
 
 @dataclass(frozen=True)
@@ -540,6 +557,7 @@ class OfflineCorpusRunResult(BaseModel):
     excluded_by_tier_count: int = Field(ge=0)
     skipped_count: int = Field(ge=0)
     pending_count: int = Field(ge=0)
+    failure_diagnostics: tuple[CorpusFailureDiagnostic, ...] = Field(default=(), max_length=500)
     manifest_sha256: str
     manifest_before_sha256: str
     manifest_after_sha256: str
@@ -585,6 +603,8 @@ class OfflineCorpusRunResult(BaseModel):
             raise ValueError("selected work arithmetic is inconsistent")
         if self.pending_count > self.selected_count:
             raise ValueError("pending count cannot exceed selected work")
+        if len(self.failure_diagnostics) > self.failed_count:
+            raise ValueError("failure diagnostics cannot exceed failed count")
         expected_status = ReceiptStatus.FAILED
         if self.manifest_unchanged and self.admitted_count > 0:
             expected_status = (
@@ -622,6 +642,9 @@ class OfflineCorpusRunResult(BaseModel):
             "excluded_by_tier_count": self.excluded_by_tier_count,
             "skipped_count": self.skipped_count,
             "pending_count": self.pending_count,
+            "failure_diagnostics": [
+                item.model_dump(mode="json") for item in self.failure_diagnostics
+            ],
             "network_calls": self.network_calls,
             "manifest_sha256": self.manifest_sha256,
             "manifest_before_sha256": self.manifest_before_sha256,
@@ -1078,8 +1101,14 @@ def _admit_corpus(
                 observed_at,
                 held,
             )
-    except (OSError, RuntimeError, ValueError):
-        return unavailable
+    except OSError:
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=lease_token,
+            outcome_code=OutcomeCode.CORPUS_UNAVAILABLE,
+            observed_at=observed_at,
+            corpus_failure_reason=CorpusFailureReason.FILE_UNAVAILABLE,
+        )
 
 
 def _admit_held_corpus(
@@ -1096,18 +1125,23 @@ def _admit_held_corpus(
         raise RuntimeError("corpus admission cannot start inside a transaction")
     if planned.lease_token is None or planned.corpus_snapshot is None:
         raise ValueError("corpus admission requires a typed corpus lease")
+    lease_token = planned.lease_token
     path = held.path
     before_snapshot = _held_snapshot(held.content, held.stat_result)
     before_stat = held.stat_result
     last_pulled_before = _last_pulled(connection, item=item)
-    unavailable = WorkOutcome(
-        work_id=planned.work_id,
-        lease_token=planned.lease_token,
-        outcome_code=OutcomeCode.CORPUS_UNAVAILABLE,
-        observed_at=observed_at,
-    )
+
+    def unavailable(reason: CorpusFailureReason) -> WorkOutcome:
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=lease_token,
+            outcome_code=OutcomeCode.CORPUS_UNAVAILABLE,
+            observed_at=observed_at,
+            corpus_failure_reason=reason,
+        )
+
     if before_snapshot != planned.corpus_snapshot:
-        return unavailable
+        return unavailable(CorpusFailureReason.SNAPSHOT_MISMATCH)
 
     corpus_snapshot = planned.corpus_snapshot
     coordinate = FmpPayloadCoordinate(endpoint=item.endpoint, suffix=item.suffix)
@@ -1147,7 +1181,7 @@ def _admit_held_corpus(
     period_end = dates[-1] if dates else None
     expected_raw_dir = project_root / "data" / "historical" / "fmp"
     if Path(os.path.abspath(raw_corpus_dir)) != Path(os.path.abspath(expected_raw_dir)):
-        return unavailable
+        return unavailable(CorpusFailureReason.DOCUMENT_ADMISSION_FAILED)
     relative_path = str(Path("data") / "historical" / "fmp" / path.name).replace("\\", "/")
 
     connection.execute(
@@ -1171,7 +1205,7 @@ def _admit_held_corpus(
         (item.ticker, relative_path, corpus_snapshot.content_sha256),
     ).fetchone()
     if document is None:
-        return unavailable
+        return unavailable(CorpusFailureReason.DOCUMENT_ADMISSION_FAILED)
     document_id = int(document[0])
     if connection.in_transaction:
         raise RuntimeError("document indexing left an active transaction before extraction")
@@ -1191,7 +1225,7 @@ def _admit_held_corpus(
     except (OSError, ValueError, sqlite3.Error):
         if connection.in_transaction:
             connection.rollback()
-        return unavailable
+        return unavailable(CorpusFailureReason.DOCUMENT_ADMISSION_FAILED)
     if connection.in_transaction:
         raise RuntimeError("evidence admission left an active transaction before extraction")
 
@@ -1207,36 +1241,45 @@ def _admit_held_corpus(
     try:
         if extractor is not None:
             inserted_count = extractor(connection, document_id, project_root)
-            admission = governed_document_fact_admission(
+            if connection.in_transaction:
+                raise RuntimeError("corpus extractor returned with an active transaction")
+            connection.execute("BEGIN IMMEDIATE")
+            rehydration = rehydrate_document_fact_observations(
                 connection,
                 document_id=document_id,
                 ticker=item.ticker,
                 content_sha256=corpus_snapshot.content_sha256,
                 inserted_count=inserted_count,
+                recorded_at=observed_at,
             )
-            admission_status = admission.status
-    except (KeyError, OSError, ValueError, json.JSONDecodeError, sqlite3.Error):
+            admission_status = rehydration.admission.status
+        try:
+            after_content, after_stat = held.reread()
+            after_snapshot = _held_snapshot(after_content, after_stat)
+            path_snapshot = _corpus_snapshot(path, root=raw_corpus_dir)
+        except (OSError, RuntimeError, ValueError):
+            if connection.in_transaction:
+                connection.rollback()
+            return unavailable(CorpusFailureReason.EVIDENCE_CHANGED)
+        raw_unchanged = (
+            after_snapshot == before_snapshot
+            and path_snapshot == before_snapshot
+            and after_stat.st_mtime_ns == before_stat.st_mtime_ns
+            and after_stat.st_size == before_stat.st_size
+        )
+        freshness_unchanged = _last_pulled(connection, item=item) == last_pulled_before
+        if admission_status == "empty":
+            raise ValueError("corpus admission did not admit exact document facts")
+        if not raw_unchanged or not freshness_unchanged:
+            if connection.in_transaction:
+                connection.rollback()
+            return unavailable(CorpusFailureReason.EVIDENCE_CHANGED)
+        if connection.in_transaction:
+            connection.commit()
+    except (KeyError, OSError, RuntimeError, ValueError, json.JSONDecodeError, sqlite3.Error):
         if connection.in_transaction:
             connection.rollback()
-        return unavailable
-    if connection.in_transaction:
-        raise RuntimeError("corpus extractor returned with an active transaction")
-
-    try:
-        after_content, after_stat = held.reread()
-        after_snapshot = _held_snapshot(after_content, after_stat)
-        path_snapshot = _corpus_snapshot(path, root=raw_corpus_dir)
-    except (OSError, RuntimeError, ValueError):
-        return unavailable
-    raw_unchanged = (
-        after_snapshot == before_snapshot
-        and path_snapshot == before_snapshot
-        and after_stat.st_mtime_ns == before_stat.st_mtime_ns
-        and after_stat.st_size == before_stat.st_size
-    )
-    freshness_unchanged = _last_pulled(connection, item=item) == last_pulled_before
-    if admission_status == "empty" or not raw_unchanged or not freshness_unchanged:
-        return unavailable
+        return unavailable(CorpusFailureReason.FACT_ADMISSION_FAILED)
     return WorkOutcome(
         work_id=planned.work_id,
         lease_token=planned.lease_token,
@@ -1433,6 +1476,7 @@ def run_recovery_batch(
     admitted_new_count = 0
     already_applied_count = 0
     failed_count = 0
+    corpus_failure_diagnostics: list[CorpusFailureDiagnostic] = []
     dispatch_count = 0
     cursor_now = now
     processed: set[str] = set()
@@ -1563,6 +1607,15 @@ def run_recovery_batch(
                 admitted_new_count += 1
             else:
                 failed_count += 1
+                if outcome.corpus_failure_reason is not None:
+                    corpus_failure_diagnostics.append(
+                        CorpusFailureDiagnostic(
+                            work_id=planned.work_id,
+                            ticker=item.ticker,
+                            endpoint_key=item.suffix,
+                            reason=outcome.corpus_failure_reason,
+                        )
+                    )
             processed.add(planned.work_id)
             newly_processed += 1
         if newly_processed == 0:
@@ -1596,6 +1649,7 @@ def run_recovery_batch(
         circuit_state=CircuitState(str(circuit["state"])),
         circuit_revision=int(circuit["revision"]),
         pending_count=pending_count,
+        corpus_failure_diagnostics=tuple(corpus_failure_diagnostics),
     )
 
 
@@ -2186,12 +2240,14 @@ def _run_offline_corpus_only(args: argparse.Namespace) -> int:
                 connection,
                 intended_work_ids=intended_ids,
             )
+            failure_diagnostics = recovery.corpus_failure_diagnostics
         else:
             corpus_count = 0
             admitted_new_count = 0
             already_applied_count = 0
             failed_count = 0
             pending_count = 0
+            failure_diagnostics = ()
         processed_count = corpus_count + failed_count
         deferred_count = max(0, len(items) - processed_count)
     finally:
@@ -2224,6 +2280,7 @@ def _run_offline_corpus_only(args: argparse.Namespace) -> int:
             len(before_manifest.entries) - len(items) - excluded_by_tier_count,
         ),
         pending_count=pending_count,
+        failure_diagnostics=failure_diagnostics,
         manifest_sha256=before_manifest.manifest_sha256,
         manifest_before_sha256=before_manifest.manifest_sha256,
         manifest_after_sha256=after_manifest.manifest_sha256,
