@@ -16,6 +16,7 @@ from alembic.config import Config
 from alembic import command
 from pipeline import restatement_detector, sec_xbrl
 from pipeline.sec_xbrl import FetchedCompanyFacts, ingest_for_ticker
+from provenance.financial_fact_resolution import FactTable
 from provenance.issuer_registry import (
     IdentifierAssertion,
     IdentifierResolution,
@@ -237,9 +238,21 @@ def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
         assert snapshot is not None
         assert tuple(snapshot) == ("sec_companyfacts_snapshot", digest, None)
 
+        binding_before = tuple(
+            conn.execute(
+                "SELECT binding_revision_id, idempotency_key, effective_at, "
+                "knowledge_at, recorded_at "
+                "FROM legacy_document_evidence_binding_revisions"
+            ).fetchone()
+        )
         replay = capture_sec_companyfacts(
             conn,
-            _request(tmp_path, raw_body, snapshot_document_id=1),
+            _request(
+                tmp_path,
+                raw_body,
+                snapshot_document_id=1,
+                retrieved_at=STAMP + timedelta(hours=1),
+            ),
         )
         conn.commit()
         assert replay.document_version_created is False
@@ -251,6 +264,19 @@ def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
                 "SELECT COUNT(*) FROM legacy_document_evidence_binding_revisions"
             ).fetchone()[0]
             == 1
+        )
+        binding_after = tuple(
+            conn.execute(
+                "SELECT binding_revision_id, idempotency_key, effective_at, "
+                "knowledge_at, recorded_at "
+                "FROM legacy_document_evidence_binding_revisions"
+            ).fetchone()
+        )
+        assert binding_after == binding_before
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0] == 2
+        assert (
+            conn.execute("SELECT COUNT(*) FROM evidence_document_observation_links").fetchone()[0]
+            == 2
         )
     finally:
         conn.close()
@@ -573,48 +599,72 @@ def test_current_schema_companyfacts_replay_is_idempotent(
     conn.execute("PRAGMA foreign_keys = ON")
     _seed_issuer_identity(conn)
     raw_body = _body()
-    fetched = FetchedCompanyFacts(
-        source_url=SOURCE_URL,
-        raw_body=raw_body,
-        observed_at=STAMP - timedelta(seconds=1),
-        retrieved_at=STAMP,
+    responses = iter(
+        (
+            FetchedCompanyFacts(
+                source_url=SOURCE_URL,
+                raw_body=raw_body,
+                observed_at=STAMP - timedelta(seconds=1),
+                retrieved_at=STAMP,
+            ),
+            FetchedCompanyFacts(
+                source_url=SOURCE_URL,
+                raw_body=raw_body,
+                observed_at=STAMP + timedelta(hours=1) - timedelta(seconds=1),
+                retrieved_at=STAMP + timedelta(hours=1),
+            ),
+        )
     )
     monkeypatch.setitem(sec_xbrl.CIK_MAP, "ACME", CIK)
 
     def _fetch(_cik: str) -> FetchedCompanyFacts:
-        return fetched
+        return next(responses)
 
     monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", _fetch)
     try:
         first = ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path)
-        before = tuple(
-            conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in (
-                "documents",
-                "financial_facts",
-                "legacy_fact_evidence_match_revisions",
-                "reported_observations",
-                "fact_observation_revisions",
-                "fact_observation_match_proofs",
-                "observation_resolution_revisions",
-            )
+        immutable_chain_tables = (
+            "documents",
+            "legacy_document_evidence_binding_revisions",
+            "financial_facts",
+            "legacy_fact_evidence_match_revisions",
+            "reported_observations",
+            "fact_observation_revisions",
+            "fact_observation_match_proofs",
+            "observation_resolution_revisions",
         )
+        before = {
+            table: [
+                tuple(row)
+                for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            ]
+            for table in immutable_chain_tables
+        }
+        source_observations_before = conn.execute(
+            "SELECT COUNT(*) FROM evidence_source_observations"
+        ).fetchone()[0]
+        retrieval_links_before = conn.execute(
+            "SELECT COUNT(*) FROM evidence_document_observation_links"
+        ).fetchone()[0]
         second = ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path)
-        after = tuple(
-            conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in (
-                "documents",
-                "financial_facts",
-                "legacy_fact_evidence_match_revisions",
-                "reported_observations",
-                "fact_observation_revisions",
-                "fact_observation_match_proofs",
-                "observation_resolution_revisions",
-            )
-        )
+        after = {
+            table: [
+                tuple(row)
+                for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            ]
+            for table in immutable_chain_tables
+        }
         assert first.facts_inserted == 2
         assert second.facts_inserted == 0
         assert before == after
+        assert (
+            conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0]
+            == source_observations_before + 1
+        )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM evidence_document_observation_links").fetchone()[0]
+            == retrieval_links_before + 1
+        )
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
@@ -692,11 +742,26 @@ def test_current_schema_companyfacts_post_match_observation_proof_failure_rolls_
         retrieved_at=STAMP,
     )
     monkeypatch.setitem(sec_xbrl.CIK_MAP, "ACME", CIK)
-    monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", lambda _cik: fetched)
+
+    def _fetch(_cik: str) -> FetchedCompanyFacts:
+        return fetched
+
+    monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", _fetch)
     capture = sec_xbrl.capture_fact_row_observation
 
-    def _capture_then_reject(*args: object, **kwargs: object) -> bool:
-        capture(*args, **kwargs)
+    def _capture_then_reject(
+        connection: sqlite3.Connection,
+        *,
+        fact_table: FactTable,
+        fact_row_id: int,
+        recorded_at: datetime,
+    ) -> bool:
+        capture(
+            connection,
+            fact_table=fact_table,
+            fact_row_id=fact_row_id,
+            recorded_at=recorded_at,
+        )
         assert (
             conn.execute("SELECT COUNT(*) FROM legacy_fact_evidence_match_revisions").fetchone()[0]
             == 1
@@ -742,7 +807,11 @@ def test_current_schema_companyfacts_resolution_failure_rolls_back(
         retrieved_at=STAMP,
     )
     monkeypatch.setitem(sec_xbrl.CIK_MAP, "ACME", CIK)
-    monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", lambda _cik: fetched)
+
+    def _fetch(_cik: str) -> FetchedCompanyFacts:
+        return fetched
+
+    monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", _fetch)
 
     def _reject_resolution(*_args: object, **_kwargs: object) -> None:
         assert (
