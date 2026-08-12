@@ -112,6 +112,17 @@ class GovernedDocumentFactAdmission(_CutoverModel):
     status: DocumentFactAdmissionStatus
 
 
+class DocumentFactObservationRehydration(_CutoverModel):
+    """Atomic repair proof for exact legacy facts missing immutable observations."""
+
+    document_id: int = Field(gt=0)
+    ticker: str = Field(min_length=1, max_length=16)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    exact_fact_count: int = Field(ge=0)
+    captured_count: int = Field(ge=0)
+    admission: GovernedDocumentFactAdmission
+
+
 def governed_document_fact_admission(
     conn: sqlite3.Connection,
     *,
@@ -169,6 +180,90 @@ def governed_document_fact_admission(
         inserted_count=inserted_count,
         total_admitted_count=total_admitted_count,
         status=status,
+    )
+
+
+def rehydrate_document_fact_observations(
+    conn: sqlite3.Connection,
+    *,
+    document_id: int,
+    ticker: str,
+    content_sha256: str,
+    inserted_count: int,
+    recorded_at: datetime,
+) -> DocumentFactObservationRehydration:
+    """Capture missing observations for every fact owned by one exact document.
+
+    The caller owns an active transaction and must commit only after its corpus
+    handle is re-read unchanged. Any mismatch or partial capture therefore
+    rolls back as one unit instead of blessing legacy rows blindly.
+
+    This transitional legacy read retires once the governed FMP corpus
+    backfill proves no financial-fact row remains without an observation link.
+    """
+    if not conn.in_transaction:
+        raise RuntimeError("document fact observation rehydration requires a transaction")
+    normalized_ticker = ticker.upper()
+    # This proves the document/hash has a succeeded canonical evidence chain
+    # before any missing fact observation is created. An empty admission is an
+    # expected legacy starting state, not authorization by itself.
+    governed_document_fact_admission(
+        conn,
+        document_id=document_id,
+        ticker=normalized_ticker,
+        content_sha256=content_sha256,
+        inserted_count=0,
+    )
+    rows = conn.execute(
+        "SELECT fact.id, fact.ticker, link.fact_row_id "
+        "FROM financial_facts AS fact "
+        "LEFT JOIN fact_observation_revisions AS link "
+        "ON link.fact_table='financial_facts' AND link.fact_row_id=fact.id "
+        "WHERE fact.source_doc_id=? ORDER BY fact.id",
+        (document_id,),
+    ).fetchall()
+    fact_ids: list[int] = []
+    missing_ids: list[int] = []
+    for row in rows:
+        if str(row["ticker"]).upper() != normalized_ticker:
+            raise ValueError("document owns a financial fact for a different ticker")
+        fact_id = int(row["id"])
+        if fact_id not in fact_ids:
+            fact_ids.append(fact_id)
+        if row["fact_row_id"] is None and fact_id not in missing_ids:
+            missing_ids.append(fact_id)
+
+    captured_count = 0
+    for fact_id in missing_ids:
+        if capture_fact_row_observation(
+            conn,
+            fact_table="financial_facts",
+            fact_row_id=fact_id,
+            recorded_at=recorded_at,
+        ):
+            captured_count += 1
+        resolve_fact_row(
+            conn,
+            fact_table="financial_facts",
+            fact_row_id=fact_id,
+            knowledge_cutoff=recorded_at,
+        )
+    admission = governed_document_fact_admission(
+        conn,
+        document_id=document_id,
+        ticker=normalized_ticker,
+        content_sha256=content_sha256,
+        inserted_count=inserted_count,
+    )
+    if admission.total_admitted_count != len(fact_ids):
+        raise RuntimeError("not every exact document fact has canonical evidence admission")
+    return DocumentFactObservationRehydration(
+        document_id=document_id,
+        ticker=normalized_ticker,
+        content_sha256=content_sha256,
+        exact_fact_count=len(fact_ids),
+        captured_count=captured_count,
+        admission=admission,
     )
 
 

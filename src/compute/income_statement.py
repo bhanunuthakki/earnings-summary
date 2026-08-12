@@ -9,6 +9,7 @@ source_doc_id.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from compute._common import (
@@ -64,7 +65,12 @@ def extract_facts_from_record(
 
 
 def extract_income_statement_facts(
-    conn: sqlite3.Connection, document_id: int, project_root: Path
+    conn: sqlite3.Connection,
+    document_id: int,
+    project_root: Path,
+    *,
+    records: Sequence[Mapping[str, object]] | None = None,
+    commit: bool = True,
 ) -> int:
     """Read documents[document_id]'s file, write FinancialFact rows. Idempotent.
 
@@ -74,11 +80,11 @@ def extract_income_statement_facts(
     queries don't conflate TTM rolls with standalone quarters.
     """
     _ticker, file_path_str = load_document_row(conn, document_id, _DOC_TYPE)
-    records = read_records_json(project_root / file_path_str)
+    source_records = read_records_json(project_root / file_path_str) if records is None else records
     period_override = FiscalPeriodType.TTM if file_path_str.endswith("_ttm.json") else None
 
     inserted = 0
-    for idx, rec_data in enumerate(records):
+    for idx, rec_data in enumerate(source_records):
         rec = FmpIncomeStatementRecord.model_validate(rec_data)
         facts = extract_facts_from_record(
             rec,
@@ -89,5 +95,6 @@ def extract_income_statement_facts(
         inserted += insert_financial_facts(
             conn, facts, extracted_by="fmp", tier=SourceQualityTier.FMP_NORMALIZED
         )
-    conn.commit()
+    if commit:
+        conn.commit()
     return inserted
