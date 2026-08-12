@@ -247,6 +247,7 @@ def _seed(
     period_end: str = "2026-06-30",
     fiscal_period: str = "Q2",
     locator: str | None = ('{"json_path":"facts.us-gaap.Revenues.units.USD[0]"}'),
+    aggregate_identity: bool = False,
 ) -> tuple[sqlite3.Connection, Path]:
     db_path = tmp_path / "matcher.db"
     conn = sqlite3.connect(db_path)
@@ -265,9 +266,15 @@ def _seed(
     blob_path.write_bytes(raw_body)
     conn.execute(
         "INSERT INTO documents VALUES "
-        "(1, 'ACME', 'sec_xbrl', 'sec_10q', 'companyfacts.json', ?, ?, "
+        "(1, 'ACME', 'sec_xbrl', ?, 'companyfacts.json', ?, ?, "
         "'ok', ?, 'https://data.sec.gov/companyfacts', 'sec_official', ?)",
-        (hashlib.sha256(ACCESSION.encode()).hexdigest(), STAMP, len(raw_body), ACCESSION),
+        (
+            "sec_companyfacts_snapshot" if aggregate_identity else "sec_10q",
+            blob_sha if aggregate_identity else hashlib.sha256(ACCESSION.encode()).hexdigest(),
+            STAMP,
+            len(raw_body),
+            None if aggregate_identity else ACCESSION,
+        ),
     )
     conn.execute(
         "INSERT INTO evidence_content_blobs VALUES (?, ?, 'application/json', ?, ?)",
@@ -292,8 +299,12 @@ def _seed(
         "INSERT INTO legacy_document_evidence_binding_revisions VALUES "
         "('binding-1', 1, 1, 'document-1', 'node-1', ?, ?, ?, ?)",
         (
-            json.dumps({"accession_number": ACCESSION}),
-            scope_sha,
+            json.dumps(
+                {"source_ref": "https://data.sec.gov/companyfacts"}
+                if aggregate_identity
+                else {"accession_number": ACCESSION}
+            ),
+            blob_sha if aggregate_identity else scope_sha,
             STAMP,
             STAMP,
         ),
@@ -318,6 +329,77 @@ def _seed(
     )
     conn.commit()
     return conn, blob_root
+
+
+def test_aggregate_snapshot_matches_fact_locator_without_filing_document(
+    tmp_path: Path,
+) -> None:
+    locator = json.dumps(
+        {
+            "accession_number": ACCESSION,
+            "json_path": "facts.us-gaap.Revenues.units.USD[0]",
+        }
+    )
+    raw = _payload()
+    conn, blob_root = _seed(
+        tmp_path,
+        raw,
+        locator=locator,
+        aggregate_identity=True,
+    )
+    try:
+        summary = match_legacy_companyfacts_evidence(
+            conn,
+            _request(tmp_path, blob_root, apply=True),
+            now=lambda: STAMP,
+        )
+
+        assert summary.accepted == 1
+        document = conn.execute(
+            "SELECT doc_type, accession_number, sha256 FROM documents"
+        ).fetchone()
+        assert tuple(document) == (
+            "sec_companyfacts_snapshot",
+            None,
+            hashlib.sha256(raw).hexdigest(),
+        )
+        binding = conn.execute(
+            "SELECT scope_locator_json, scope_content_sha256 "
+            "FROM legacy_document_evidence_binding_revisions"
+        ).fetchone()
+        assert "accession_number" not in json.loads(str(binding[0]))
+        assert str(binding[1]) == hashlib.sha256(raw).hexdigest()
+    finally:
+        conn.close()
+
+
+def test_legacy_accession_binding_remains_readable_with_enriched_fact_locator(
+    tmp_path: Path,
+) -> None:
+    locator = json.dumps(
+        {
+            "accession_number": ACCESSION,
+            "json_path": "facts.us-gaap.Revenues.units.USD[0]",
+        }
+    )
+    conn, blob_root = _seed(tmp_path, _payload(), locator=locator)
+    try:
+        summary = match_legacy_companyfacts_evidence(
+            conn,
+            _request(tmp_path, blob_root, apply=True),
+            now=lambda: STAMP,
+        )
+
+        assert summary.accepted == 1
+        match = conn.execute(
+            "SELECT outcome, relocated_locator_json FROM legacy_fact_evidence_match_revisions"
+        ).fetchone()
+        assert str(match[0]) == "accepted"
+        relocated = json.loads(str(match[1]))
+        assert relocated["accession_number"] == ACCESSION
+        assert relocated["json_path"] == "facts.us-gaap.Revenues.units.USD[0]"
+    finally:
+        conn.close()
 
 
 def _request(tmp_path: Path, blob_root: Path, *, apply: bool) -> CompanyFactsFactMatcherRequest:

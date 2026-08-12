@@ -1,7 +1,7 @@
 """Bounded SEC CompanyFacts capture for legacy accession evidence bindings.
 
 This backfill is intentionally narrower than the normal SEC XBRL ingestion
-path: it creates legacy ``documents`` rows and immutable evidence bindings, but
+path: it creates aggregate snapshot ``documents`` rows and immutable evidence bindings, but
 never financial facts or the mutable latest-companyfacts compatibility cache.
 Dry runs are offline and read-only.  Apply runs fetch fresh official SEC bytes.
 """
@@ -28,11 +28,10 @@ from pipeline.sec_xbrl import (
     FetchedCompanyFacts,
     enumerate_companyfacts_accessions,
     fetch_companyfacts,
-    upsert_accession_documents,
+    upsert_companyfacts_snapshot_document,
 )
 from provenance.issuer_registry import IssuerRegistry, UnresolvedIssuerIdentityError
 from provenance.sec_companyfacts_capture import (
-    CompanyFactsAccessionDocument,
     SecCompanyFactsCaptureRequest,
     capture_sec_companyfacts,
     parse_companyfacts_body,
@@ -294,27 +293,20 @@ def _capture_target(
     accessions = enumerate_companyfacts_accessions(legacy_payload)
     supported_accessions = set(supported_companyfacts_accessions(payload))
     digest = hashlib.sha256(fetched.raw_body).hexdigest()
-    snapshot_path = request.blob_root.resolve() / digest[:2] / f"{digest}.json"
     before_documents = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
     try:
         conn.execute("BEGIN IMMEDIATE")
-        accession_to_document = upsert_accession_documents(
+        snapshot_document_id = upsert_companyfacts_snapshot_document(
             conn,
             ticker=target.ticker,
-            accessions=accessions,
-            project_root=request.blob_root.resolve(),
+            digest=digest,
             normalized_cik=target.normalized_cik,
-            snapshot_relative_path=str(snapshot_path),
-            snapshot_byte_size=len(fetched.raw_body),
+            raw_body=fetched.raw_body,
+            snapshot_root=request.blob_root,
             fetched_at=fetched.retrieved_at,
         )
-        if set(accession_to_document) != supported_accessions:
-            missing = sorted(supported_accessions - set(accession_to_document))
-            unexpected = sorted(set(accession_to_document) - supported_accessions)
-            raise CompanyFactsBackfillError(
-                "accession document map does not exactly cover supported CompanyFacts "
-                f"accessions (missing={missing}, unexpected={unexpected})"
-            )
+        if not supported_accessions.issubset(accessions):
+            raise CompanyFactsBackfillError("validated accession inventory is inconsistent")
         captured = capture_sec_companyfacts(
             conn,
             SecCompanyFactsCaptureRequest(
@@ -324,13 +316,7 @@ def _capture_target(
                 source_url=fetched.source_url,
                 raw_body=fetched.raw_body,
                 payload=payload,
-                accession_documents=tuple(
-                    CompanyFactsAccessionDocument(
-                        accession_number=accession,
-                        legacy_document_id=document_id,
-                    )
-                    for accession, document_id in sorted(accession_to_document.items())
-                ),
+                snapshot_document_id=snapshot_document_id,
                 blob_root=request.blob_root,
                 observed_at=fetched.observed_at,
                 retrieved_at=fetched.retrieved_at,

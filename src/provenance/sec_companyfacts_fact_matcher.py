@@ -1,8 +1,9 @@
 """Deterministic legacy-fact relocation inside immutable CompanyFacts blobs.
 
 The matcher is deliberately offline.  It consumes the exact current
-``legacy_document_evidence`` binding, verifies the immutable blob and the
-binding's accession-scoped digest, and appends only match-ledger revisions.
+``legacy_document_evidence`` binding, verifies the immutable blob and its
+aggregate snapshot digest (or a historical accession-scoped binding), and
+appends only match-ledger revisions.
 It never changes legacy facts, observations, or evidence bindings.
 
 The private ``pipeline.sec_xbrl`` helpers imported below are the canonical
@@ -59,16 +60,16 @@ _BlobCache = dict[
     tuple[CompanyFactsPayload, dict[str, bytes]],
 ]
 _MATCHER_NAME = "deterministic-companyfacts-relocator"
-_MATCHER_VERSION = "1"
+_MATCHER_VERSION = "2"
 _MATCHER_CONFIG: dict[str, JsonValue] = {
     "candidate_manifest": "all_accession_ladder_entries",
     "decimal_comparison": "exact_signed",
     "derived_kpi_policy": "terminal_not_document_matchable",
     "fiscal_semantics": "pipeline.sec_xbrl@current",
-    "locator_policy": "old_index_is_hint",
+    "locator_policy": "fact_accession_required_for_aggregate_snapshot",
     "matcher_name": _MATCHER_NAME,
     "matcher_version": _MATCHER_VERSION,
-    "scope_verification": "canonical_accession_scope_sha256",
+    "scope_verification": "aggregate_blob_sha256_or_legacy_accession_scope_sha256",
     "unit_semantics": "pipeline.sec_xbrl@current",
 }
 _MATCHER_CONFIG_JSON = json.dumps(
@@ -94,7 +95,7 @@ _resolve_fiscal_period_type = cast(
     vars(sec_xbrl)["_resolve_fiscal_period_type"],
 )
 _same_doc_pick_key = cast(
-    "Callable[[Mapping[str, object], Decimal], tuple[str, int, Decimal]]",
+    "Callable[[Mapping[str, object], Decimal], tuple[str, int, str, str, str]]",
     vars(sec_xbrl)["_same_doc_pick_key"],
 )
 _accession_scopes = cast(
@@ -260,7 +261,7 @@ class _RawCandidate(BaseModel):
     modal_currency: str | None
     parsed_currency: str | None
     signed_value: Decimal
-    pick_key: tuple[str, int, Decimal]
+    pick_key: tuple[str, int, str, str, str]
 
 
 def emit_structured_event(event: str, **fields: object) -> None:
@@ -732,7 +733,7 @@ def _match_target(
         "supersedes_match_revision_id": target.prior_match_revision_id,
     }
     try:
-        accession = _binding_accession(target)
+        accession, legacy_accession_scope = _fact_accession(target)
         if target.canonical_cik_count != 1 or target.normalized_cik is None:
             raise CompanyFactsFactMatcherError("issuer lacks one canonical SEC CIK")
         payload, scopes = _verified_payload_and_scopes(
@@ -746,9 +747,14 @@ def _match_target(
             raise CompanyFactsFactMatcherError(
                 "binding accession is absent from canonical CompanyFacts scope"
             )
-        if hashlib.sha256(scope_bytes).hexdigest() != target.binding_scope_content_sha256:
+        expected_scope_sha = (
+            hashlib.sha256(scope_bytes).hexdigest()
+            if legacy_accession_scope
+            else target.blob_sha256
+        )
+        if expected_scope_sha != target.binding_scope_content_sha256:
             raise CompanyFactsFactMatcherError(
-                "binding accession scope digest conflicts with immutable blob"
+                "binding scope digest conflicts with immutable CompanyFacts blob"
             )
     except (OSError, ValueError, CompanyFactsFactMatcherError) as exc:
         return _record(
@@ -852,15 +858,29 @@ def _record(
     return LegacyFactEvidenceMatchRevision.model_validate({**base, **decision})
 
 
-def _binding_accession(target: _Target) -> str:
+def _fact_accession(target: _Target) -> tuple[str, bool]:
+    fact_locator = None if target.fact_payload.locator is None else target.fact_payload.locator.root
+    fact_accession = None if fact_locator is None else fact_locator.get("accession_number")
     locator_raw: object = json.loads(target.scope_locator_json)
     if not isinstance(locator_raw, dict):
         raise CompanyFactsFactMatcherError("binding scope locator is not an object")
     locator = cast("dict[str, object]", locator_raw)
-    accession_raw = locator.get("accession_number")
-    if not isinstance(accession_raw, str) or not accession_raw:
-        raise CompanyFactsFactMatcherError("binding scope locator lacks an accession")
-    return accession_raw
+    legacy_accession = locator.get("accession_number")
+    if fact_accession is not None and (
+        not isinstance(fact_accession, str)
+        or len(fact_accession) != 20
+        or fact_accession[10] != "-"
+        or fact_accession[13] != "-"
+        or not fact_accession.replace("-", "").isdigit()
+    ):
+        raise CompanyFactsFactMatcherError("fact locator has an invalid SEC accession")
+    if isinstance(legacy_accession, str) and legacy_accession:
+        if fact_accession is not None and legacy_accession != fact_accession:
+            raise CompanyFactsFactMatcherError("fact and legacy binding accessions disagree")
+        return legacy_accession, True
+    if isinstance(fact_accession, str):
+        return fact_accession, False
+    raise CompanyFactsFactMatcherError("CompanyFacts fact locator lacks an accession")
 
 
 def _verified_blob(target: _Target, blob_root: Path) -> bytes:

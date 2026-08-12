@@ -243,7 +243,7 @@ def test_sec_xbrl_locator_is_v2_on_fixture() -> None:
         "INSERT INTO documents "
         "(ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, raw_bytes_size) "
         "VALUES ('GOOG', 'sec_xbrl', 'sec_10q', "
-        "'data/historical/sec/GOOG_companyfacts.json#accn=0001-01-000001', 'b', ?, 'ok', 1)",
+        "'data/historical/sec/GOOG_companyfacts.json#accn=0000000001-01-000001', 'b', ?, 'ok', 1)",
         (datetime.now(),),
     )
     doc_id = conn.execute("SELECT id FROM documents").fetchone()["id"]
@@ -254,7 +254,7 @@ def test_sec_xbrl_locator_is_v2_on_fixture() -> None:
                     "units": {
                         "USD": [
                             {
-                                "accn": "0001-01-000001",
+                                "accn": "0000000001-01-000001",
                                 "end": "2025-03-31",
                                 "start": "2025-01-01",
                                 "val": 80500000000,
@@ -267,7 +267,10 @@ def test_sec_xbrl_locator_is_v2_on_fixture() -> None:
         }
     }
     inserted = insert_facts_from_companyfacts(
-        conn, ticker="GOOG", payload=payload, accession_to_doc_id={"0001-01-000001": doc_id}
+        conn,
+        ticker="GOOG",
+        payload=payload,
+        accession_to_doc_id={"0000000001-01-000001": doc_id},
     )
     assert inserted == 1
     row = conn.execute("SELECT locator FROM financial_facts").fetchone()

@@ -119,6 +119,9 @@ class DocType(StrEnum):
     SEC_40F = "sec_40f"
     SEC_8K = "sec_8k"
     SEC_6K = "sec_6k"
+    # Aggregate SEC API response. This is an evidence snapshot, not a filing;
+    # native filing document types are reserved for separately captured bytes.
+    SEC_COMPANYFACTS_SNAPSHOT = "sec_companyfacts_snapshot"
     IR_PRESS_RELEASE = "ir_press_release"
     IR_PRESENTATION = "ir_presentation"
     IR_SUPPLEMENT = "ir_supplement"

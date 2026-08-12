@@ -154,6 +154,13 @@ class FactLocator(BaseModel):
     # Pointer into an FMP JSON payload, e.g. "[3].netIncome" — record index
     # plus field name within the cached endpoint response.
     json_path: str | None = None
+    # SEC CompanyFacts is an aggregate snapshot. The accession identifies the
+    # filing-scoped fact inside that snapshot without pretending the aggregate
+    # response is a captured native filing document.
+    accession_number: str | None = Field(
+        default=None,
+        pattern=r"^\d{10}-\d{2}-\d{6}$",
+    )
 
     locator_version: int = 1
     kind: LocatorKind | None = None

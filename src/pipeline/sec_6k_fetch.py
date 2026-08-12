@@ -1,13 +1,8 @@
 """Locate + fetch a single 6-K exhibit for an FPI ticker (docs/design/
 segment_quarterly_framework.md §1.1, Phase 3 — ``fpi_6k`` route).
 
-Why this exists: ``pipeline.sec_xbrl.upsert_accession_documents`` already
-registers a ``documents`` row (``doc_type='sec_6k'``) for every 6-K accession
-a CIK_MAP ticker has filed, but that row's ``file_path`` is a synthetic
-pointer into the aggregated companyfacts.json response
-(``data/historical/sec/{T}_companyfacts.json#accn=...``) — there is no real
-per-accession HTML file behind it, because that pipeline only cares about
-XBRL companyfacts tags, not filing narrative. The segment/product-revenue
+Why this exists: ``pipeline.sec_xbrl`` stores the aggregate CompanyFacts API
+response as a snapshot, not as a native filing document. The segment/product-revenue
 tables this framework needs (Phase-3 spike, docs/design/
 segment_quarterly_framework.md) live in 6-K EXHIBIT narrative text (an HTML
 document, sometimes an image-scanned slide deck — see ``fetch_6k_exhibit_text``'s
@@ -289,14 +284,14 @@ def register_6k_document(
 ) -> int:
     """Persist the raw exhibit HTML to ``data/historical/sec/`` and insert one
     ``documents`` row (``doc_type='sec_6k'``, ``source_type='sec_xbrl'`` --
-    the same source_type ``pipeline.sec_xbrl.upsert_accession_documents``
-    already uses for every SEC-EDGAR-origin document, tier=SEC_OFFICIAL; this
+    the same source_type ``pipeline.sec_xbrl`` uses for SEC-origin evidence,
+    tier=SEC_OFFICIAL; this
     IS a bona fide SEC-official primary filing, the LLM-extraction method is
     recorded on the segment_dimensions rows' own extracted_by/method_version,
     not by picking a different document source_type -- same convention
     ``compute.segment_crosstabs_llm`` uses for its ``fmp_10k_json`` documents).
 
-    Idempotent on sha256 (mirrors ``upsert_accession_documents``): re-running
+    Idempotent on sha256: re-running
     against the same exhibit content returns the existing row's id."""
     sha256 = hashlib.sha256(fetched.raw_html.encode("utf-8")).hexdigest()
     existing = conn.execute(

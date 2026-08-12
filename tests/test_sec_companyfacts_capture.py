@@ -24,7 +24,6 @@ from provenance.issuer_registry import (
     identifier_candidate_digest,
 )
 from provenance.sec_companyfacts_capture import (
-    CompanyFactsAccessionDocument,
     SecCompanyFactsCaptureRequest,
     capture_sec_companyfacts,
     parse_companyfacts_body,
@@ -72,23 +71,6 @@ def _database(tmp_path: Path) -> sqlite3.Connection:
         );
         """
     )
-    for document_id, accession in ((1, ACCESSION_ONE), (2, ACCESSION_TWO)):
-        conn.execute(
-            "INSERT INTO documents "
-            "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
-            "fetch_status, raw_bytes_size, source_url, source_quality_tier, "
-            "accession_number, filing_date) "
-            "VALUES (?, 'ACME', 'sec_xbrl', 'sec_10q', ?, ?, ?, 'ok', 0, ?, "
-            "'sec_official', ?, '2026-07-20')",
-            (
-                document_id,
-                f"sec-companyfacts://ACME/{accession}",
-                hashlib.sha256(accession.encode()).hexdigest(),
-                STAMP,
-                SOURCE_URL,
-                accession,
-            ),
-        )
     conn.commit()
     conn.close()
     config = _config(path)
@@ -98,6 +80,34 @@ def _database(tmp_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _seed_snapshot_document(
+    conn: sqlite3.Connection,
+    body: bytes,
+    *,
+    document_id: int,
+    fetched_at: datetime = STAMP,
+) -> None:
+    digest = hashlib.sha256(body).hexdigest()
+    database_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    snapshot_path = (database_path.parent / "snapshots" / digest[:2] / f"{digest}.json").resolve()
+    conn.execute(
+        "INSERT INTO documents "
+        "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
+        "fetch_status, raw_bytes_size, source_url, source_quality_tier, "
+        "accession_number, filing_date) "
+        "VALUES (?, 'ACME', 'sec_xbrl', 'sec_companyfacts_snapshot', ?, ?, ?, "
+        "'ok', ?, ?, 'sec_official', NULL, NULL)",
+        (
+            document_id,
+            str(snapshot_path),
+            digest,
+            fetched_at,
+            len(body),
+            SOURCE_URL,
+        ),
+    )
 
 
 def _body(*, second_value: int = 200) -> bytes:
@@ -159,7 +169,11 @@ def test_contract_accepts_explicit_null_taxonomy_metadata_but_not_missing_fields
 
 
 def _request(
-    tmp_path: Path, body: bytes, *, retrieved_at: datetime = STAMP
+    tmp_path: Path,
+    body: bytes,
+    *,
+    snapshot_document_id: int,
+    retrieved_at: datetime = STAMP,
 ) -> SecCompanyFactsCaptureRequest:
     return SecCompanyFactsCaptureRequest(
         ticker="ACME",
@@ -168,16 +182,7 @@ def _request(
         source_url=SOURCE_URL,
         raw_body=body,
         payload=parse_companyfacts_body(body, expected_cik=CIK),
-        accession_documents=(
-            CompanyFactsAccessionDocument(
-                accession_number=ACCESSION_ONE,
-                legacy_document_id=1,
-            ),
-            CompanyFactsAccessionDocument(
-                accession_number=ACCESSION_TWO,
-                legacy_document_id=2,
-            ),
-        ),
+        snapshot_document_id=snapshot_document_id,
         blob_root=tmp_path / "snapshots",
         observed_at=retrieved_at - timedelta(seconds=1),
         retrieved_at=retrieved_at,
@@ -190,11 +195,15 @@ def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
     conn = _database(tmp_path)
     raw_body = _body()
     try:
-        first = capture_sec_companyfacts(conn, _request(tmp_path, raw_body))
+        _seed_snapshot_document(conn, raw_body, document_id=1)
+        first = capture_sec_companyfacts(
+            conn,
+            _request(tmp_path, raw_body, snapshot_document_id=1),
+        )
         conn.commit()
 
         assert first.document_version_created is True
-        assert first.bindings_created == 2
+        assert first.bindings_created == 1
         assert first.bindings_unchanged == 0
         digest = hashlib.sha256(raw_body).hexdigest()
         blob = conn.execute(
@@ -206,8 +215,7 @@ def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
         assert stored_path.read_bytes() == raw_body
         assert (
             conn.execute(
-                "SELECT COUNT(DISTINCT document_version_id) "
-                "FROM legacy_document_evidence_binding_revisions"
+                "SELECT COUNT(*) FROM legacy_document_evidence_binding_revisions"
             ).fetchone()[0]
             == 1
         )
@@ -221,63 +229,82 @@ def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
             conn.execute(
                 "SELECT COUNT(*) FROM evidence_nodes WHERE node_kind = 'section'"
             ).fetchone()[0]
-            == 2
+            == 0
         )
+        snapshot = conn.execute(
+            "SELECT doc_type, sha256, accession_number FROM documents"
+        ).fetchone()
+        assert snapshot is not None
+        assert tuple(snapshot) == ("sec_companyfacts_snapshot", digest, None)
 
-        replay = capture_sec_companyfacts(conn, _request(tmp_path, raw_body))
+        replay = capture_sec_companyfacts(
+            conn,
+            _request(tmp_path, raw_body, snapshot_document_id=1),
+        )
         conn.commit()
         assert replay.document_version_created is False
         assert replay.bindings_created == 0
-        assert replay.bindings_unchanged == 2
+        assert replay.bindings_unchanged == 1
         assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 1
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM legacy_document_evidence_binding_revisions"
             ).fetchone()[0]
-            == 2
+            == 1
         )
     finally:
         conn.close()
 
 
-def test_changed_snapshot_rebinds_only_changed_accession_scope(tmp_path: Path) -> None:
+def test_changed_response_creates_a_new_aggregate_snapshot_without_mutation(
+    tmp_path: Path,
+) -> None:
     conn = _database(tmp_path)
     try:
-        first = capture_sec_companyfacts(conn, _request(tmp_path, _body()))
+        first_body = _body()
+        second_body = _body(second_value=201)
+        _seed_snapshot_document(conn, first_body, document_id=1)
+        first = capture_sec_companyfacts(
+            conn,
+            _request(tmp_path, first_body, snapshot_document_id=1),
+        )
         conn.commit()
+        _seed_snapshot_document(
+            conn,
+            second_body,
+            document_id=2,
+            fetched_at=STAMP + timedelta(hours=1),
+        )
         second = capture_sec_companyfacts(
             conn,
             _request(
                 tmp_path,
-                _body(second_value=201),
+                second_body,
+                snapshot_document_id=2,
                 retrieved_at=STAMP + timedelta(hours=1),
             ),
         )
         conn.commit()
 
-        assert first.bindings_created == 2
+        assert first.bindings_created == 1
         assert second.document_version_created is True
         assert second.bindings_created == 1
-        assert second.bindings_unchanged == 1
-        counts = conn.execute(
-            "SELECT legacy_document_id, COUNT(*) "
+        assert second.bindings_unchanged == 0
+        bindings = conn.execute(
+            "SELECT legacy_document_id, revision, scope_content_sha256 "
             "FROM legacy_document_evidence_binding_revisions "
-            "GROUP BY legacy_document_id ORDER BY legacy_document_id"
-        ).fetchall()
-        assert [tuple(row) for row in counts] == [(1, 1), (2, 2)]
-        current = conn.execute(
-            "SELECT legacy_document_id, revision, document_version_id "
-            "FROM v_legacy_document_evidence_bindings_current "
             "ORDER BY legacy_document_id"
         ).fetchall()
-        assert int(current[0][1]) == 1
-        assert int(current[1][1]) == 2
-        assert str(current[0][2]) != str(current[1][2])
+        assert [(int(row[0]), int(row[1])) for row in bindings] == [(1, 1), (2, 1)]
+        assert [str(row[2]) for row in bindings] == [
+            hashlib.sha256(first_body).hexdigest(),
+            hashlib.sha256(second_body).hexdigest(),
+        ]
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM evidence_nodes WHERE node_kind = 'section'"
             ).fetchone()[0]
-            == 3
+            == 0
         )
     finally:
         conn.close()
@@ -431,8 +458,21 @@ def test_ingest_captures_evidence_before_post_cutover_fact_write(
 
         assert stats.accessions_inserted == 2
         assert stats.facts_inserted == 2
+        documents = conn.execute(
+            "SELECT doc_type, accession_number, sha256, file_path FROM documents"
+        ).fetchall()
+        assert len(documents) == 1
+        assert tuple(documents[0][:3]) == (
+            "sec_companyfacts_snapshot",
+            None,
+            hashlib.sha256(raw_body).hexdigest(),
+        )
+        stored_path = Path(str(documents[0][3]))
+        assert stored_path.exists()
+        assert hashlib.sha256(stored_path.read_bytes()).hexdigest() == documents[0][2]
         facts = conn.execute(
-            "SELECT fact.value, observation.evidence_node_id, node.node_kind "
+            "SELECT fact.value, fact.source_doc_id, fact.locator, "
+            "observation.evidence_node_id, node.node_kind "
             "FROM financial_facts AS fact "
             "JOIN fact_observation_revisions AS link "
             "ON link.fact_table = 'financial_facts' AND link.fact_row_id = fact.id "
@@ -440,16 +480,16 @@ def test_ingest_captures_evidence_before_post_cutover_fact_write(
             "JOIN evidence_nodes AS node ON node.node_id = observation.evidence_node_id "
             "ORDER BY fact.value"
         ).fetchall()
-        assert [(int(row[0]), str(row[2])) for row in facts] == [
-            (100, "section"),
-            (200, "section"),
+        assert [(int(row[0]), int(row[1]), str(row[4])) for row in facts] == [
+            (100, 1, "document"),
+            (200, 1, "document"),
         ]
-        assert all(str(row[1]).startswith("sec-companyfacts-accession-node:") for row in facts)
-        document_paths = conn.execute(
-            "SELECT DISTINCT file_path FROM documents ORDER BY file_path"
-        ).fetchall()
-        assert len(document_paths) == 2
-        assert all("/snapshots/" in str(row[0]).replace("\\", "/") for row in document_paths)
+        locators = {int(row[0]): json.loads(str(row[2])) for row in facts}
+        assert locators[100]["accession_number"] == ACCESSION_ONE
+        assert locators[100]["json_path"] == "facts.us-gaap.Revenues.units.USD[0]"
+        assert locators[200]["accession_number"] == ACCESSION_TWO
+        assert locators[200]["json_path"] == "facts.us-gaap.Revenues.units.USD[1]"
+        assert "/snapshots/" in str(stored_path).replace("\\", "/")
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         conn.close()
