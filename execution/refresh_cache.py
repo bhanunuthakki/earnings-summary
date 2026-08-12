@@ -35,26 +35,35 @@ Tier semantics:
     basic    250 calls/day, no rate limit (we throttle to 4/sec for steady drip)
     starter  no daily cap, 300 calls/min
     premium  no daily cap, 720 calls/min (we use 720, not 750, for headroom)
+
+Clone rehearsal:
+    --offline-corpus-only  adopt eligible immutable statement files through the
+                           governed recovery path without credentials or network
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
+import importlib
 import json
 import os
 import sqlite3
+import stat
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
+import uuid
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from sqlite3 import Connection
-from typing import Literal, TypedDict, cast
+from typing import BinaryIO, Literal, Protocol, Self, TypedDict, cast
 
 from dotenv import dotenv_values
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -84,10 +93,17 @@ from pipeline.fmp_recovery import (  # noqa: E402
     WorkOutcome,
     WorkSpec,
     enqueue_work,
+    make_work_id,
     record_outcomes,
     recoverable_work,
 )
-from pipeline.source_policy import POLICY_VERSION, issuer_policy  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    POLICY_VERSION,
+    ArtifactKind,
+    CollectionSource,
+    decision_for,
+    issuer_policy,
+)
 from provenance.financial_fact_resolution import (  # noqa: E402
     governed_document_fact_admission,
 )
@@ -98,6 +114,7 @@ ENV_FILE = PROJECT_ROOT / ".env"
 CACHE_DIR = PROJECT_ROOT / ".tmp" / "cacher"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 LOCK_PATH = CACHE_DIR / ".lock"
+OFFLINE_LOCK_PATH = CACHE_DIR / ".offline-corpus.lock"
 QUEUE_PATH = CACHE_DIR / "queue.json"
 HINTS_PATH = CACHE_DIR / "forced_stale.json"
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
@@ -430,6 +447,7 @@ RecoveryDispatcher = Callable[[sqlite3.Connection, QueueItem, PlannedWork], Work
 CorpusAdmitter = Callable[
     [sqlite3.Connection, QueueItem, PlannedWork, Path, Path, datetime], WorkOutcome
 ]
+BacklogItemResolver = Callable[[sqlite3.Row], QueueItem | None]
 
 
 @dataclass(frozen=True)
@@ -442,6 +460,8 @@ class RecoveryRunResult:
     dispatch_count: int
     fresh_count: int
     corpus_count: int
+    admitted_new_count: int
+    already_applied_count: int
     failed_count: int
     circuit_state: CircuitState
     circuit_revision: int
@@ -464,12 +484,433 @@ class RecoveryRunResult:
             "dispatch_count": self.dispatch_count,
             "fresh_count": self.fresh_count,
             "corpus_count": self.corpus_count,
+            "admitted_new_count": self.admitted_new_count,
+            "already_applied_count": self.already_applied_count,
             "failed_count": self.failed_count,
             "circuit_state": self.circuit_state.value,
             "circuit_revision": self.circuit_revision,
             "pending_count": self.pending_count,
             "exit_code": self.exit_code,
         }
+
+
+@dataclass(frozen=True)
+class RawCorpusManifestEntry:
+    """Stable proof that one corpus path and its bytes were not modified."""
+
+    relative_path: str
+    size_bytes: int
+    content_sha256: str
+    modified_at_ns: int
+
+
+@dataclass(frozen=True)
+class RawCorpusManifest:
+    """Compact whole-corpus preservation proof used by offline rehearsal."""
+
+    entries: tuple[RawCorpusManifestEntry, ...]
+    total_bytes: int
+    manifest_sha256: str
+
+
+class OfflineCorpusRunResult(BaseModel):
+    """Terminal receipt for a guaranteed-zero-network corpus replay."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: str
+    status: ReceiptStatus
+    discovered_file_count: int = Field(ge=0)
+    selected_count: int = Field(ge=0)
+    admitted_count: int = Field(ge=0)
+    admitted_new_count: int = Field(ge=0)
+    already_applied_count: int = Field(ge=0)
+    eligible_count: int = Field(ge=0)
+    corpus_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    deferred_count: int = Field(ge=0)
+    excluded_by_tier_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    pending_count: int = Field(ge=0)
+    manifest_sha256: str
+    manifest_before_sha256: str
+    manifest_after_sha256: str
+    manifest_unchanged: bool
+    network_calls: Literal[0] = 0
+    mode: Literal["offline_corpus_only"] = "offline_corpus_only"
+
+    @model_validator(mode="after")
+    def _receipt_consistency(self) -> Self:
+        prefix = "offline-corpus:"
+        if not self.run_id.startswith(prefix):
+            raise ValueError("offline run_id must use the offline-corpus UUID namespace")
+        raw_uuid = self.run_id[len(prefix) :]
+        try:
+            parsed_uuid = uuid.UUID(raw_uuid)
+        except ValueError as exc:
+            raise ValueError("offline run_id must contain a UUID") from exc
+        if str(parsed_uuid) != raw_uuid or parsed_uuid.version != 4:
+            raise ValueError("offline run_id must contain a canonical lowercase UUID4")
+        for field_name, value in (
+            ("manifest_sha256", self.manifest_sha256),
+            ("manifest_before_sha256", self.manifest_before_sha256),
+            ("manifest_after_sha256", self.manifest_after_sha256),
+        ):
+            if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+                raise ValueError(f"{field_name} must be a lowercase SHA-256")
+        if self.manifest_sha256 != self.manifest_before_sha256:
+            raise ValueError("manifest_sha256 must identify the before manifest")
+        if self.manifest_unchanged and (self.manifest_before_sha256 != self.manifest_after_sha256):
+            raise ValueError("unchanged corpus must have equal before and after manifests")
+        if self.admitted_count != self.admitted_new_count + self.already_applied_count:
+            raise ValueError("admitted count must split into new and already-applied counts")
+        if self.admitted_count != self.corpus_count:
+            raise ValueError("corpus count must equal admitted count")
+        if self.eligible_count != self.selected_count:
+            raise ValueError("eligible count must equal selected count")
+        if (
+            self.discovered_file_count
+            != self.selected_count + self.excluded_by_tier_count + self.skipped_count
+        ):
+            raise ValueError("discovered corpus arithmetic is inconsistent")
+        if self.selected_count != self.admitted_count + self.failed_count + self.deferred_count:
+            raise ValueError("selected work arithmetic is inconsistent")
+        if self.pending_count > self.selected_count:
+            raise ValueError("pending count cannot exceed selected work")
+        expected_status = ReceiptStatus.FAILED
+        if self.manifest_unchanged and self.admitted_count > 0:
+            expected_status = (
+                ReceiptStatus.PARTIAL
+                if self.failed_count > 0 or self.deferred_count > 0
+                else ReceiptStatus.DEGRADED_CORPUS
+            )
+        if self.status is not expected_status:
+            raise ValueError("offline receipt status is inconsistent with its outcomes")
+        return self
+
+    @property
+    def exit_code(self) -> int:
+        return {
+            ReceiptStatus.FRESH: 0,
+            ReceiptStatus.DEGRADED_CORPUS: 2,
+            ReceiptStatus.PARTIAL: 3,
+            ReceiptStatus.FAILED: 4,
+        }[self.status]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "mode": self.mode,
+            "run_id": self.run_id,
+            "status": self.status.value,
+            "discovered_file_count": self.discovered_file_count,
+            "selected_count": self.selected_count,
+            "admitted_count": self.admitted_count,
+            "admitted_new_count": self.admitted_new_count,
+            "already_applied_count": self.already_applied_count,
+            "eligible_count": self.eligible_count,
+            "corpus_count": self.corpus_count,
+            "failed_count": self.failed_count,
+            "deferred_count": self.deferred_count,
+            "excluded_by_tier_count": self.excluded_by_tier_count,
+            "skipped_count": self.skipped_count,
+            "pending_count": self.pending_count,
+            "network_calls": self.network_calls,
+            "manifest_sha256": self.manifest_sha256,
+            "manifest_before_sha256": self.manifest_before_sha256,
+            "manifest_after_sha256": self.manifest_after_sha256,
+            "manifest_unchanged": self.manifest_unchanged,
+            "exit_code": self.exit_code,
+        }
+
+
+def _raw_corpus_manifest(path: Path) -> RawCorpusManifest:
+    """Hash every regular corpus file without changing path metadata or bytes."""
+    entries: list[RawCorpusManifestEntry] = []
+    for file_path in _safe_corpus_files(path):
+        content, stable_stat = _read_stable_corpus_file(path, file_path)
+        entries.append(
+            RawCorpusManifestEntry(
+                relative_path=str(file_path.relative_to(path)).replace("\\", "/"),
+                size_bytes=stable_stat.st_size,
+                content_sha256=hashlib.sha256(content).hexdigest(),
+                modified_at_ns=stable_stat.st_mtime_ns,
+            )
+        )
+    canonical = json.dumps(
+        [
+            {
+                "content_sha256": entry.content_sha256,
+                "modified_at_ns": entry.modified_at_ns,
+                "relative_path": entry.relative_path,
+                "size_bytes": entry.size_bytes,
+            }
+            for entry in entries
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return RawCorpusManifest(
+        entries=tuple(entries),
+        total_bytes=sum(entry.size_bytes for entry in entries),
+        manifest_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+
+
+def _is_reparse_point(stat_result: os.stat_result) -> bool:
+    attributes = int(getattr(stat_result, "st_file_attributes", 0))
+    return bool(attributes & 0x400)
+
+
+def _safe_corpus_files(root: Path) -> tuple[Path, ...]:
+    """Enumerate corpus files without following links or Windows reparse points."""
+    if root.is_symlink():
+        raise ValueError(f"unsafe corpus entry: {root}")
+    if not root.exists():
+        return ()
+    root_stat = root.lstat()
+    if root.is_symlink() or _is_reparse_point(root_stat):
+        raise ValueError(f"unsafe corpus entry: {root}")
+    root_resolved = root.resolve(strict=True)
+    files: list[Path] = []
+
+    def walk(directory: Path) -> None:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                entry_path = Path(entry.path)
+                entry_stat = entry.stat(follow_symlinks=False)
+                if entry.is_symlink() or _is_reparse_point(entry_stat):
+                    raise ValueError(f"unsafe corpus entry: {entry_path}")
+                try:
+                    entry_path.resolve(strict=True).relative_to(root_resolved)
+                except (OSError, ValueError) as exc:
+                    raise ValueError(f"unsafe corpus entry: {entry_path}") from exc
+                if entry.is_dir(follow_symlinks=False):
+                    walk(entry_path)
+                elif entry.is_file(follow_symlinks=False):
+                    files.append(entry_path)
+                else:
+                    raise ValueError(f"unsafe corpus entry: {entry_path}")
+
+    walk(root)
+    return tuple(sorted(files))
+
+
+def _validate_corpus_ancestors(root: Path, path: Path) -> None:
+    """Reject every link/reparse/traversal component from root through path."""
+    root_resolved = root.resolve(strict=True)
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"unsafe corpus entry: {path}") from exc
+    current = root
+    for part in relative.parts:
+        if part in {"", ".", ".."}:
+            raise ValueError(f"unsafe corpus entry: {path}")
+        current = current / part
+        current_stat = current.lstat()
+        if current.is_symlink() or _is_reparse_point(current_stat):
+            raise ValueError(f"unsafe corpus entry: {current}")
+    try:
+        path.resolve(strict=True).relative_to(root_resolved)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"unsafe corpus entry: {path}") from exc
+
+
+@dataclass
+class _HeldCorpusFile:
+    """One stable corpus file whose native handle remains locked for admission."""
+
+    path: Path
+    handle: BinaryIO
+    content: bytes
+    stat_result: os.stat_result
+
+    def reread(self) -> tuple[bytes, os.stat_result]:
+        self.handle.seek(0)
+        content = self.handle.read()
+        current = os.fstat(self.handle.fileno())
+        if _file_identity(current) != _file_identity(self.stat_result):
+            raise RuntimeError(f"corpus changed while held: {self.path.name}")
+        if len(content) != current.st_size:
+            raise RuntimeError(f"corpus changed while held: {self.path.name}")
+        return content, current
+
+
+def _file_identity(value: os.stat_result) -> tuple[int, int, int, int]:
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+
+
+class _WinDllFactory(Protocol):
+    def __call__(self, name: str, *, use_last_error: bool) -> object: ...
+
+
+class _WinUIntFunction(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *args: object) -> int: ...
+
+
+class _WinHandleFunction(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *args: object) -> int | None: ...
+
+
+class _MsvcrtModule(Protocol):
+    def open_osfhandle(self, handle: int, flags: int) -> int: ...
+
+
+class _LastErrorFunction(Protocol):
+    def __call__(self) -> int: ...
+
+
+def _windows_runtime() -> tuple[object, _MsvcrtModule, _LastErrorFunction]:
+    """Load Win32-only symbols behind an explicitly typed POSIX-safe boundary."""
+    if sys.platform != "win32":
+        raise OSError("Win32 corpus snapshot API is unavailable")
+    win_dll_value = getattr(ctypes, "WinDLL", None)
+    last_error_value = getattr(ctypes, "get_last_error", None)
+    if not callable(win_dll_value) or not callable(last_error_value):
+        raise OSError("Win32 corpus snapshot API is unavailable")
+    win_dll = cast(_WinDllFactory, win_dll_value)
+    last_error = cast(_LastErrorFunction, last_error_value)
+    msvcrt = cast(_MsvcrtModule, importlib.import_module("msvcrt"))
+    return win_dll("kernel32", use_last_error=True), msvcrt, last_error
+
+
+def _win_uint_function(library: object, name: str) -> _WinUIntFunction:
+    return cast(_WinUIntFunction, getattr(library, name))
+
+
+def _win_handle_function(library: object, name: str) -> _WinHandleFunction:
+    return cast(_WinHandleFunction, getattr(library, name))
+
+
+def _windows_locked_fd(root: Path, path: Path) -> int:
+    """Open a Windows read handle that denies concurrent writes and deletes."""
+    class FileAttributeTagInfo(ctypes.Structure):
+        _fields_ = [("file_attributes", ctypes.c_ulong), ("reparse_tag", ctypes.c_ulong)]
+
+    kernel32, msvcrt, get_last_error = _windows_runtime()
+    create_file = _win_handle_function(kernel32, "CreateFileW")
+    create_file.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+    ]
+    create_file.restype = ctypes.c_void_p
+    close_handle = _win_uint_function(kernel32, "CloseHandle")
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+    get_attribute_tag = _win_uint_function(kernel32, "GetFileInformationByHandleEx")
+    get_attribute_tag.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+    ]
+    get_attribute_tag.restype = ctypes.c_int
+    get_final_path = _win_uint_function(kernel32, "GetFinalPathNameByHandleW")
+    get_final_path.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_wchar_p,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+    ]
+    get_final_path.restype = ctypes.c_ulong
+
+    handle = create_file(
+        str(path),
+        0x80000000,  # GENERIC_READ
+        0x00000001,  # FILE_SHARE_READ: deny writers and deletion while held
+        None,
+        3,  # OPEN_EXISTING
+        0x00200000 | 0x08000000,  # OPEN_REPARSE_POINT | SEQUENTIAL_SCAN
+        None,
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle is None or handle == invalid_handle:
+        raise OSError(get_last_error(), "unable to open locked corpus handle")
+    handle_value = int(handle)
+    native_handle = ctypes.c_void_p(handle_value)
+    try:
+        tag_info = FileAttributeTagInfo()
+        if not get_attribute_tag(
+            native_handle,
+            9,  # FileAttributeTagInfo
+            ctypes.byref(tag_info),
+            ctypes.sizeof(tag_info),
+        ):
+            raise OSError(get_last_error(), "unable to inspect locked corpus handle")
+        if tag_info.file_attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+            raise ValueError(f"unsafe corpus entry: {path}")
+
+        final_path_buffer = ctypes.create_unicode_buffer(32_768)
+        final_length = get_final_path(
+            native_handle,
+            final_path_buffer,
+            len(final_path_buffer),
+            0,
+        )
+        if final_length == 0 or final_length >= len(final_path_buffer):
+            raise OSError(get_last_error(), "unable to resolve locked corpus handle")
+        final_path_text = final_path_buffer.value
+        if final_path_text.startswith("\\\\?\\UNC\\"):
+            final_path_text = "\\\\" + final_path_text[8:]
+        elif final_path_text.startswith("\\\\?\\"):
+            final_path_text = final_path_text[4:]
+        final_path = Path(final_path_text)
+        final_path.relative_to(root.resolve(strict=True))
+
+        descriptor = msvcrt.open_osfhandle(
+            handle_value,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        )
+    except BaseException:
+        close_handle(native_handle)
+        raise
+    return descriptor
+
+
+@contextmanager
+def _held_corpus_file(root: Path, path: Path) -> Generator[_HeldCorpusFile]:
+    """Hold one fail-closed, no-follow corpus handle through its consumer."""
+    _validate_corpus_ancestors(root, path)
+    if os.name == "nt":
+        descriptor = _windows_locked_fd(root, path)
+    else:
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise RuntimeError("secure corpus snapshots require O_NOFOLLOW")
+        descriptor = os.open(path, os.O_RDONLY | nofollow)
+    handle = os.fdopen(descriptor, "rb")
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or _is_reparse_point(before):
+            raise ValueError(f"unsafe corpus entry: {path}")
+        content = handle.read()
+        after = os.fstat(descriptor)
+        _validate_corpus_ancestors(root, path)
+        if _file_identity(before) != _file_identity(after) or len(content) != before.st_size:
+            raise RuntimeError(f"corpus changed while reading: {path.name}")
+        held = _HeldCorpusFile(path=path, handle=handle, content=content, stat_result=after)
+        yield held
+        held.reread()
+    finally:
+        handle.close()
+
+
+def _read_stable_corpus_file(root: Path, path: Path) -> tuple[bytes, os.stat_result]:
+    """Read once from one validated handle and prove its identity stayed stable."""
+    with _held_corpus_file(root, path) as held:
+        return held.content, held.stat_result
 
 
 def _generic_fmp_policy_sha256(ticker: str) -> str:
@@ -493,19 +934,24 @@ def _policy_sha256(ticker: str) -> str:
         return _generic_fmp_policy_sha256(ticker)
 
 
-def _corpus_snapshot(path: Path) -> CorpusSnapshot | None:
+def _corpus_snapshot(path: Path, *, root: Path | None = None) -> CorpusSnapshot | None:
     """Hash a stable raw file without opening a transaction or modifying it."""
     try:
-        before = path.stat()
-        content = path.read_bytes()
-        after = path.stat()
-    except OSError:
-        return None
-    if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+        content, after = _read_stable_corpus_file(root or path.parent, path)
+    except (OSError, RuntimeError, ValueError):
         return None
     captured_at = datetime.fromtimestamp(after.st_mtime, UTC).replace(tzinfo=None)
     return CorpusSnapshot(
         cache_generation_id=f"raw:{after.st_mtime_ns}:{after.st_size}",
+        content_sha256=hashlib.sha256(content).hexdigest(),
+        captured_at=captured_at,
+    )
+
+
+def _held_snapshot(content: bytes, stat_result: os.stat_result) -> CorpusSnapshot:
+    captured_at = datetime.fromtimestamp(stat_result.st_mtime, UTC).replace(tzinfo=None)
+    return CorpusSnapshot(
+        cache_generation_id=f"raw:{stat_result.st_mtime_ns}:{stat_result.st_size}",
         content_sha256=hashlib.sha256(content).hexdigest(),
         captured_at=captured_at,
     )
@@ -543,16 +989,47 @@ def _admit_corpus(
     observed_at: datetime,
 ) -> WorkOutcome:
     """Index and extract one immutable corpus artifact before accepting it."""
+    if planned.lease_token is None:
+        raise ValueError("corpus admission requires a typed corpus lease")
+    lease_token = planned.lease_token
+    path = raw_corpus_dir / f"{item.ticker}_{item.suffix}.json"
+    try:
+        with _held_corpus_file(raw_corpus_dir, path) as held:
+            return _admit_held_corpus(
+                connection,
+                item,
+                planned,
+                raw_corpus_dir,
+                project_root,
+                observed_at,
+                held,
+            )
+    except (OSError, RuntimeError, ValueError):
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=lease_token,
+            outcome_code=OutcomeCode.CORPUS_UNAVAILABLE,
+            observed_at=observed_at,
+        )
+
+
+def _admit_held_corpus(
+    connection: sqlite3.Connection,
+    item: QueueItem,
+    planned: PlannedWork,
+    raw_corpus_dir: Path,
+    project_root: Path,
+    observed_at: datetime,
+    held: _HeldCorpusFile,
+) -> WorkOutcome:
+    """Complete governed admission while the selected corpus handle is locked."""
     if connection.in_transaction:
         raise RuntimeError("corpus admission cannot start inside a transaction")
     if planned.lease_token is None or planned.corpus_snapshot is None:
         raise ValueError("corpus admission requires a typed corpus lease")
-    path = raw_corpus_dir / f"{item.ticker}_{item.suffix}.json"
-    before_snapshot = _corpus_snapshot(path)
-    try:
-        before_stat = path.stat()
-    except OSError:
-        before_stat = None
+    path = held.path
+    before_snapshot = _held_snapshot(held.content, held.stat_result)
+    before_stat = held.stat_result
     last_pulled_before = _last_pulled(connection, item=item)
     unavailable = WorkOutcome(
         work_id=planned.work_id,
@@ -560,15 +1037,15 @@ def _admit_corpus(
         outcome_code=OutcomeCode.CORPUS_UNAVAILABLE,
         observed_at=observed_at,
     )
-    if before_snapshot != planned.corpus_snapshot or before_stat is None:
+    if before_snapshot != planned.corpus_snapshot:
         return unavailable
 
     corpus_snapshot = planned.corpus_snapshot
     # Parse and classify before the short document write; the admission path is
     # intentionally limited to statement endpoints that produce governed facts.
     try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload: object = json.loads(held.content.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
         return unavailable
     if not isinstance(payload, list):
         return unavailable
@@ -669,13 +1146,15 @@ def _admit_corpus(
     if connection.in_transaction:
         raise RuntimeError("corpus extractor returned with an active transaction")
 
-    after_snapshot = _corpus_snapshot(path)
     try:
-        after_stat = path.stat()
-    except OSError:
+        after_content, after_stat = held.reread()
+        after_snapshot = _held_snapshot(after_content, after_stat)
+        path_snapshot = _corpus_snapshot(path, root=raw_corpus_dir)
+    except (OSError, RuntimeError, ValueError):
         return unavailable
     raw_unchanged = (
         after_snapshot == before_snapshot
+        and path_snapshot == before_snapshot
         and after_stat.st_mtime_ns == before_stat.st_mtime_ns
         and after_stat.st_size == before_stat.st_size
     )
@@ -709,7 +1188,10 @@ def _work_spec(
         policy_sha256=_policy_sha256(item.ticker),
         requested=requested,
         owner_request_id=owner_request_id if requested else None,
-        corpus_snapshot=_corpus_snapshot(raw_corpus_dir / f"{item.ticker}_{item.suffix}.json"),
+        corpus_snapshot=_corpus_snapshot(
+            raw_corpus_dir / f"{item.ticker}_{item.suffix}.json",
+            root=raw_corpus_dir,
+        ),
     )
 
 
@@ -752,29 +1234,66 @@ def _item_from_backlog_row(row: sqlite3.Row) -> QueueItem | None:
     )
 
 
+def _offline_item_from_backlog_row(row: sqlite3.Row) -> QueueItem | None:
+    """Resolve offline statement work without importing the provider adapter."""
+    suffix = str(row["endpoint_key"])
+    endpoint_period = _OFFLINE_STATEMENT_SUFFIXES.get(suffix)
+    if endpoint_period is None:
+        return None
+    endpoint, period = endpoint_period
+    return QueueItem(
+        ticker=str(row["ticker"]),
+        list_type=str(row["coverage_role"]),
+        endpoint=endpoint,
+        period=period,
+        suffix=suffix,
+        endpoint_class="statement",
+        bucket="failed_retry_ok",
+        last_pulled=None,
+        last_status=None,
+        days_overdue=0,
+        priority=0,
+    )
+
+
 def _pending_recovery_context(
     connection: sqlite3.Connection,
     *,
     raw_corpus_dir: Path,
     now: datetime,
+    allowed_work_ids: frozenset[str] | None = None,
+    item_resolver: BacklogItemResolver = _item_from_backlog_row,
 ) -> tuple[dict[str, QueueItem], tuple[RecoveryAvailability, ...]]:
-    rows = connection.execute(
-        "SELECT * FROM fmp_work_backlog WHERE state='PENDING' AND available_at <= ? "
-        "ORDER BY priority DESC,created_at,ticker,work_id LIMIT 500",
-        (now.isoformat(),),
-    ).fetchall()
+    if allowed_work_ids is None:
+        rows = connection.execute(
+            "SELECT * FROM fmp_work_backlog WHERE state='PENDING' AND available_at <= ? "
+            "ORDER BY priority DESC,created_at,ticker,work_id LIMIT 500",
+            (now.isoformat(),),
+        ).fetchall()
+    else:
+        allowed_json = json.dumps(sorted(allowed_work_ids), separators=(",", ":"))
+        rows = connection.execute(
+            "SELECT work.* FROM fmp_work_backlog work "
+            "JOIN json_each(?) allowed ON allowed.value=work.work_id "
+            "WHERE work.state='PENDING' AND work.available_at <= ? "
+            "ORDER BY work.priority DESC,work.created_at,work.ticker,work.work_id LIMIT 500",
+            (allowed_json, now.isoformat()),
+        ).fetchall()
     items: dict[str, QueueItem] = {}
     availability: list[RecoveryAvailability] = []
     for row in rows:
         work_id = str(row["work_id"])
-        item = _item_from_backlog_row(row)
+        item = item_resolver(row)
         if item is not None:
             items[work_id] = item
         availability.append(
             RecoveryAvailability(
                 work_id=work_id,
                 corpus_snapshot=(
-                    _corpus_snapshot(raw_corpus_dir / f"{item.ticker}_{item.suffix}.json")
+                    _corpus_snapshot(
+                        raw_corpus_dir / f"{item.ticker}_{item.suffix}.json",
+                        root=raw_corpus_dir,
+                    )
                     if item is not None
                     else None
                 ),
@@ -799,6 +1318,8 @@ def run_recovery_batch(
     provider_call_budget: int | None = None,
     owner_request_id: str | None = None,
     circuit_config: CircuitConfig | None = None,
+    restrict_to_intended: bool = False,
+    backlog_item_resolver: BacklogItemResolver = _item_from_backlog_row,
 ) -> RecoveryRunResult:
     """Persist every authorized intent, then drain a bounded priority batch."""
     if connection.in_transaction:
@@ -819,6 +1340,7 @@ def run_recovery_batch(
     )
     config = circuit_config or CircuitConfig()
     admit_corpus = corpus_admitter or _admit_corpus
+    intended_work_ids = frozenset(make_work_id(spec) for spec in specs)
     # Authorization and durable intent are complete before the first lease or call.
     for offset in range(0, len(specs), 500):
         enqueue_work(
@@ -831,6 +1353,8 @@ def run_recovery_batch(
         )
     fresh_count = 0
     corpus_count = 0
+    admitted_new_count = 0
+    already_applied_count = 0
     failed_count = 0
     dispatch_count = 0
     cursor_now = now
@@ -857,6 +1381,8 @@ def run_recovery_batch(
             connection,
             raw_corpus_dir=raw_corpus_dir,
             now=cursor_now,
+            allowed_work_ids=intended_work_ids if restrict_to_intended else None,
+            item_resolver=backlog_item_resolver,
         )
         if not availability:
             break
@@ -869,6 +1395,9 @@ def run_recovery_batch(
                 credentials=credentials,
                 provider_calls_permitted=provider_calls_permitted,
                 availability=availability,
+                allowed_work_ids=(
+                    tuple(sorted(intended_work_ids)) if restrict_to_intended else None
+                ),
                 limit=limit,
             ),
         )
@@ -886,6 +1415,7 @@ def run_recovery_batch(
                     fresh_count += 1
                 else:
                     corpus_count += 1
+                    already_applied_count += 1
                 processed.add(planned.work_id)
                 newly_processed += 1
                 continue
@@ -943,6 +1473,7 @@ def run_recovery_batch(
                 fresh_count += 1
             elif outcome.outcome_code is OutcomeCode.CORPUS_SUCCESS:
                 corpus_count += 1
+                admitted_new_count += 1
             else:
                 failed_count += 1
             processed.add(planned.work_id)
@@ -972,6 +1503,8 @@ def run_recovery_batch(
         dispatch_count=dispatch_count,
         fresh_count=fresh_count,
         corpus_count=corpus_count,
+        admitted_new_count=admitted_new_count,
+        already_applied_count=already_applied_count,
         failed_count=failed_count,
         circuit_state=CircuitState(str(circuit["state"])),
         circuit_revision=int(circuit["revision"]),
@@ -1346,6 +1879,41 @@ def cmd_run(args: argparse.Namespace) -> int:
         _release_lock()
 
 
+def _run_offline_with_lock(args: argparse.Namespace) -> int:
+    """Own a separate atomic lock without consulting process-list subprocesses."""
+    token = uuid.uuid4().hex
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(OFFLINE_LOCK_PATH, flags, 0o600)
+    except FileExistsError:
+        print(
+            json.dumps(
+                {
+                    "event": "offline_corpus_lock_contended",
+                    "mode": "offline_corpus_only",
+                    "network_calls": 0,
+                    "retryable": True,
+                    "exit_code": 75,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return 75
+    try:
+        os.write(descriptor, f"{os.getpid()}:{token}".encode("ascii"))
+    finally:
+        os.close(descriptor)
+    try:
+        return _run_offline_corpus_only(args)
+    finally:
+        try:
+            if OFFLINE_LOCK_PATH.read_text(encoding="ascii") == f"{os.getpid()}:{token}":
+                OFFLINE_LOCK_PATH.unlink()
+        except OSError:
+            pass
+
+
 def _maybe_refresh_earnings_hints(*, env: Mapping[str, str] | None = None) -> None:
     """Run the earnings-calendar surrogate once per day before audit.
 
@@ -1387,6 +1955,250 @@ def _authorized_recovery_items(
         ):
             authorized.append(item)
     return authorized
+
+
+_OFFLINE_STATEMENT_SUFFIXES: dict[str, tuple[str, str]] = {
+    "income_statement_annual": ("income-statement", "annual"),
+    "income_statement_quarterly": ("income-statement", "quarter"),
+    "balance_sheet_annual": ("balance-sheet-statement", "annual"),
+    "balance_sheet_quarterly": ("balance-sheet-statement", "quarter"),
+    "cash_flow_annual": ("cashflow-statement", "annual"),
+    "cash_flow_quarterly": ("cashflow-statement", "quarter"),
+}
+
+
+def _offline_corpus_items(
+    connection: sqlite3.Connection,
+    *,
+    raw_corpus_dir: Path,
+    only_list_type: str | None,
+    explicit_tickers: Sequence[str] | None,
+) -> tuple[list[QueueItem], int]:
+    """Map immutable statement files to policy-authorized governed work."""
+    requested_tickers = {ticker.upper() for ticker in explicit_tickers or ()}
+    active = {
+        ticker: ListType(list_type)
+        for ticker, list_type in _all_active_tickers(
+            connection,
+            None,
+            list(requested_tickers) if requested_tickers else None,
+        )
+    }
+    items: list[QueueItem] = []
+    excluded_by_tier_count = 0
+    if not raw_corpus_dir.exists():
+        return items, excluded_by_tier_count
+    for path in _safe_corpus_files(raw_corpus_dir):
+        if path.parent != raw_corpus_dir:
+            continue
+        matched: tuple[str, str, str] | None = None
+        for suffix, (endpoint, period) in _OFFLINE_STATEMENT_SUFFIXES.items():
+            ending = f"_{suffix}.json"
+            if path.name.endswith(ending):
+                matched = (path.name[: -len(ending)].upper(), endpoint, period)
+                break
+        if matched is None:
+            continue
+        ticker, endpoint, period = matched
+        role = active.get(ticker)
+        if role is None:
+            continue
+        selected_roles = (
+            frozenset({ListType(only_list_type)})
+            if only_list_type is not None
+            else frozenset({ListType.PORTFOLIO, ListType.EVALUATION})
+        )
+        if role not in selected_roles:
+            excluded_by_tier_count += 1
+            continue
+        suffix = path.stem[len(ticker) + 1 :]
+        requested = role is ListType.EVALUATION
+        authorization = decision_for(
+            role,
+            CollectionSource.FMP,
+            ArtifactKind.FINANCIAL_FACT,
+            requested=requested,
+        )
+        if not authorization.allowed:
+            excluded_by_tier_count += 1
+            continue
+        if role is ListType.INDEX_MEMBER and suffix not in SCREENING_ENDPOINT_KEYS:
+            excluded_by_tier_count += 1
+            continue
+        items.append(
+            QueueItem(
+                ticker=ticker,
+                list_type=role.value,
+                endpoint=endpoint,
+                period=period,
+                suffix=suffix,
+                endpoint_class="statement",
+                bucket="missing",
+                last_pulled=None,
+                last_status=None,
+                days_overdue=0,
+                priority=_priority(role.value, "statement", "missing", 0),
+            )
+        )
+    return items, excluded_by_tier_count
+
+
+def _run_offline_corpus_only(args: argparse.Namespace) -> int:
+    """Replay raw statement evidence without resolving or constructing provider I/O."""
+    now = _utc_now()
+    before_manifest = _raw_corpus_manifest(FMP_DIR)
+    connection = connect_sqlite(
+        args.db,
+        role=SQLiteConnectionRole.WRITER,
+    )
+    try:
+        explicit_tickers = _split_tickers(args.tickers)
+        items, excluded_by_tier_count = _offline_corpus_items(
+            connection,
+            raw_corpus_dir=FMP_DIR,
+            only_list_type=args.only,
+            explicit_tickers=explicit_tickers,
+        )
+        run_id = f"offline-corpus:{uuid.uuid4()}"
+        if items:
+            intended_ids = frozenset(
+                make_work_id(
+                    _work_spec(
+                        item,
+                        raw_corpus_dir=FMP_DIR,
+                        now=now,
+                        owner_request_id=f"offline-corpus:{run_id}",
+                    )
+                )
+                for item in items
+            )
+            recovery = run_recovery_batch(
+                connection,
+                items=items,
+                credentials=CredentialAvailability.MISSING,
+                raw_corpus_dir=FMP_DIR,
+                project_root=PROJECT_ROOT,
+                now=now,
+                run_id=run_id,
+                dispatch=_unexpected_offline_dispatch,
+                max_items=500,
+                provider_call_budget=0,
+                owner_request_id=f"offline-corpus:{run_id}",
+                restrict_to_intended=True,
+                backlog_item_resolver=_offline_item_from_backlog_row,
+            )
+            corpus_count = recovery.corpus_count
+            admitted_new_count = recovery.admitted_new_count
+            already_applied_count = recovery.already_applied_count
+            failed_count = _offline_failed_count(
+                connection,
+                run_id=run_id,
+                intended_work_ids=intended_ids,
+            )
+            pending_count = _offline_pending_count(
+                connection,
+                intended_work_ids=intended_ids,
+            )
+        else:
+            corpus_count = 0
+            admitted_new_count = 0
+            already_applied_count = 0
+            failed_count = 0
+            pending_count = 0
+        processed_count = corpus_count + failed_count
+        deferred_count = max(0, len(items) - processed_count)
+    finally:
+        connection.close()
+    after_manifest = _raw_corpus_manifest(FMP_DIR)
+    manifest_unchanged = after_manifest == before_manifest
+    if not manifest_unchanged:
+        status = ReceiptStatus.FAILED
+    elif corpus_count > 0 and failed_count == 0 and deferred_count == 0:
+        status = ReceiptStatus.DEGRADED_CORPUS
+    elif corpus_count > 0:
+        status = ReceiptStatus.PARTIAL
+    else:
+        status = ReceiptStatus.FAILED
+    result = OfflineCorpusRunResult(
+        run_id=run_id,
+        status=status,
+        discovered_file_count=len(before_manifest.entries),
+        selected_count=len(items),
+        admitted_count=corpus_count,
+        admitted_new_count=admitted_new_count,
+        already_applied_count=already_applied_count,
+        eligible_count=len(items),
+        corpus_count=corpus_count,
+        failed_count=failed_count,
+        deferred_count=deferred_count,
+        excluded_by_tier_count=excluded_by_tier_count,
+        skipped_count=max(
+            0,
+            len(before_manifest.entries) - len(items) - excluded_by_tier_count,
+        ),
+        pending_count=pending_count,
+        manifest_sha256=before_manifest.manifest_sha256,
+        manifest_before_sha256=before_manifest.manifest_sha256,
+        manifest_after_sha256=after_manifest.manifest_sha256,
+        manifest_unchanged=manifest_unchanged,
+    )
+    print(json.dumps(result.to_dict(), sort_keys=True, separators=(",", ":")))
+    print(
+        json.dumps(
+            {
+                "event": "offline_corpus_replay_complete",
+                "exit_code": result.exit_code,
+                "manifest_unchanged": result.manifest_unchanged,
+                "network_calls": 0,
+                "run_id": result.run_id,
+                "status": result.status.value,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        file=sys.stderr,
+    )
+    return result.exit_code
+
+
+def _offline_failed_count(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    intended_work_ids: frozenset[str],
+) -> int:
+    """Count only failed attempts belonging to this offline selection."""
+    attempts = connection.execute(
+        "SELECT work_id,outcome_code FROM fmp_work_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchall()
+    return sum(
+        1
+        for attempt in attempts
+        if str(attempt["work_id"]) in intended_work_ids
+        and str(attempt["outcome_code"]) != OutcomeCode.CORPUS_SUCCESS.value
+    )
+
+
+def _offline_pending_count(
+    connection: sqlite3.Connection,
+    *,
+    intended_work_ids: frozenset[str],
+) -> int:
+    """Count pending state only for the work selected by this offline run."""
+    rows = connection.execute(
+        "SELECT work_id,state FROM fmp_work_backlog WHERE state='PENDING'"
+    ).fetchall()
+    return sum(1 for row in rows if str(row["work_id"]) in intended_work_ids)
+
+
+def _unexpected_offline_dispatch(
+    _connection: sqlite3.Connection,
+    _item: QueueItem,
+    _planned: PlannedWork,
+) -> WorkOutcome:
+    """Fail closed if the recovery planner ever violates the zero-call budget."""
+    raise AssertionError("offline corpus-only mode attempted provider dispatch")
 
 
 def _dispatch_one(
@@ -1756,6 +2568,11 @@ def main() -> int:
     p_run.add_argument(
         "--dry-run", action="store_true", help="Audit and write queue.json but don't invoke fetcher"
     )
+    p_run.add_argument(
+        "--offline-corpus-only",
+        action="store_true",
+        help="Admit existing raw statement corpus with zero credentials and network calls",
+    )
     p_run.add_argument("--background", action="store_true", help="Detach and exit immediately")
     p_run.add_argument("--background-child", action="store_true", help=argparse.SUPPRESS)
 
@@ -1786,6 +2603,10 @@ def main() -> int:
     if args.cmd == "reactivate":
         return cmd_reactivate(args)
     if args.cmd == "run":
+        if args.offline_corpus_only and (args.background or args.dry_run):
+            ap.error("--offline-corpus-only cannot be combined with --background or --dry-run")
+        if args.offline_corpus_only:
+            return _run_offline_with_lock(args)
         if args.background and not args.background_child:
             return _spawn_background(args)
         return cmd_run(args)

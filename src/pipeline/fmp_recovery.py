@@ -350,6 +350,7 @@ class RecoverableWorkRequest(_FrozenModel):
     credentials: CredentialAvailability
     provider_calls_permitted: bool = True
     availability: tuple[RecoveryAvailability, ...] = Field(default=(), max_length=500)
+    allowed_work_ids: tuple[str, ...] | None = Field(default=None, max_length=500)
     limit: int = Field(default=100, ge=1, le=500)
 
     _now = field_validator("now")(_validate_naive_utc)
@@ -359,6 +360,11 @@ class RecoverableWorkRequest(_FrozenModel):
         identifiers = tuple(item.work_id for item in self.availability)
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("recovery availability contains duplicate work IDs")
+        if self.allowed_work_ids is not None:
+            if len(set(self.allowed_work_ids)) != len(self.allowed_work_ids):
+                raise ValueError("allowed recovery work IDs must be unique")
+            for work_id in self.allowed_work_ids:
+                _validate_sha256(work_id)
         return self
 
 
@@ -1270,14 +1276,31 @@ def recoverable_work(
             credentials=request.credentials,
             now=request.now,
         )
-        rows = connection.execute(
-            """
-            SELECT * FROM fmp_work_backlog
-            WHERE state=? AND available_at <= ?
-            ORDER BY priority DESC,created_at,ticker,work_id LIMIT ?
-            """,
-            (WorkState.PENDING.value, _iso(request.now), request.limit),
-        ).fetchall()
+        if request.allowed_work_ids is None:
+            rows = connection.execute(
+                """
+                SELECT * FROM fmp_work_backlog
+                WHERE state=? AND available_at <= ?
+                ORDER BY priority DESC,created_at,ticker,work_id LIMIT ?
+                """,
+                (WorkState.PENDING.value, _iso(request.now), request.limit),
+            ).fetchall()
+        else:
+            allowed_json = json.dumps(request.allowed_work_ids, separators=(",", ":"))
+            rows = connection.execute(
+                """
+                SELECT work.* FROM fmp_work_backlog work
+                JOIN json_each(?) allowed ON allowed.value=work.work_id
+                WHERE work.state=? AND work.available_at <= ?
+                ORDER BY work.priority DESC,work.created_at,work.ticker,work.work_id LIMIT ?
+                """,
+                (
+                    allowed_json,
+                    WorkState.PENDING.value,
+                    _iso(request.now),
+                    request.limit,
+                ),
+            ).fetchall()
         items = _claim_rows(
             connection,
             rows=rows,
