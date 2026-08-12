@@ -149,11 +149,10 @@ def test_approved_url_denial_never_crosses_network(
 ) -> None:
     db = tmp_path / "data" / "portfolio.db"
     _make_db(db, role=role)
-    monkeypatch.setattr(
-        mod,
-        "process_ticker",
-        lambda *_args, **_kwargs: pytest.fail("network boundary crossed"),
-    )
+    def fail_network(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("network boundary crossed")
+
+    monkeypatch.setattr(mod, "process_ticker", fail_network)
 
     assert (
         mod.register_urls(
@@ -175,11 +174,10 @@ def test_approved_url_rejects_period_outside_five_quarter_window(
 ) -> None:
     db = tmp_path / "data" / "portfolio.db"
     _make_db(db)
-    monkeypatch.setattr(
-        mod,
-        "process_ticker",
-        lambda *_args, **_kwargs: pytest.fail("network boundary crossed"),
-    )
+    def fail_network(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("network boundary crossed")
+
+    monkeypatch.setattr(mod, "process_ticker", fail_network)
 
     assert (
         mod.register_urls(

@@ -176,9 +176,13 @@ def _install(
 
     monkeypatch.setattr("execution.refresh_ir_kpis_all.configured_tickers", _fake_configured)
     monkeypatch.setattr("execution.refresh_ir_kpis_all._spreadsheet_tickers", _fake_on_disk)
+
+    def _allow(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(allowed=True)
+
     monkeypatch.setattr(
         "execution.refresh_ir_kpis_all.authorize_stored_collection_target",
-        lambda *_args, **_kwargs: SimpleNamespace(allowed=True),
+        _allow,
     )
 
 
@@ -474,6 +478,6 @@ def test_spreadsheet_tickers_scans_disk(tmp_path: Path) -> None:
     (base / "MELI" / "MELI_1Q26.xlsx").write_bytes(b"x")
     (base / "stray_file.txt").write_bytes(b"x")  # non-dir ignored
 
-    found = refresh_ir_kpis_all._spreadsheet_tickers(tmp_path)
+    found = refresh_ir_kpis_all.spreadsheet_tickers(tmp_path)
     assert set(found) == {"NU", "MELI"}
     assert found["NU"].name == "NU_1Q26.xlsx"

@@ -64,6 +64,12 @@ class _DocumentsEnvelope(BaseModel):
     data: _DocumentData
 
 
+def _authentication_denial_status(status_code: object) -> int | None:
+    if isinstance(status_code, int) and status_code in {401, 403}:
+        return status_code
+    return None
+
+
 def _read_bounded(response: object) -> bytes:
     read = getattr(response, "read", None)
     if not callable(read):
@@ -81,8 +87,9 @@ def _get_text(url: str, timeout: int = 30) -> str:
         with build_public_opener().open(request, timeout=timeout) as response:
             return _read_bounded(response).decode("utf-8", errors="strict")
     except urllib.error.HTTPError as exc:
-        if exc.code in {401, 403}:
-            raise IrDiscoveryAuthenticationDeniedError(exc.code) from None
+        status_code = _authentication_denial_status(exc.code)
+        if status_code is not None:
+            raise IrDiscoveryAuthenticationDeniedError(status_code) from None
         raise
 
 
@@ -98,8 +105,9 @@ def _post_json(url: str, payload: dict[str, object], timeout: int = 30) -> objec
         with build_public_opener().open(request, timeout=timeout) as response:
             return cast(object, json.loads(_read_bounded(response)))
     except urllib.error.HTTPError as exc:
-        if exc.code in {401, 403}:
-            raise IrDiscoveryAuthenticationDeniedError(exc.code) from None
+        status_code = _authentication_denial_status(exc.code)
+        if status_code is not None:
+            raise IrDiscoveryAuthenticationDeniedError(status_code) from None
         raise
 
 
@@ -114,6 +122,11 @@ def _catalog_config(page_html: str) -> tuple[str, str, list[str]]:
     if issuer_match is None or base_match is None or not categories:
         raise ValueError("MZ catalog configuration is absent from the results page")
     return base_match.group(1).rstrip("/"), issuer_match.group(1), categories
+
+
+# Public, typed seams used by boundary tests and adapter callers.
+get_text = _get_text
+post_json = _post_json
 
 
 def _catalog_documents(results_center_url: str) -> dict[str, str]:

@@ -184,6 +184,11 @@ def _resolve_tickers(
     return [_job(t) for t in selected], skipped
 
 
+# Public typed seams for policy verification without reaching into internals.
+resolve_tickers = _resolve_tickers
+spreadsheet_tickers = _spreadsheet_tickers
+
+
 def _rows_from_stdout(stdout: str) -> int | None:
     """Pull ``rows_inserted`` from the child's JSON stdout; None if unparseable.
 

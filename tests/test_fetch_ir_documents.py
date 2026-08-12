@@ -149,7 +149,10 @@ def test_downloader_halts_on_explicit_auth_denial(
     def _fake_opener(*_args: object) -> _FakeOpener:
         return _FakeOpener(_raise_auth)
 
-    monkeypatch.setattr(fid, "ensure_safe_public_url", lambda _url: None)
+    def safe_url(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr(fid, "ensure_safe_public_url", safe_url)
     monkeypatch.setattr(fid, "build_public_opener", _fake_opener)
     with pytest.raises(fid.SourceAuthenticationDeniedError) as exc_info:
         fid.process_ticker("ZZ", root=root, db_path=db, categorize=False)

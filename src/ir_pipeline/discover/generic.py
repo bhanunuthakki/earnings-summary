@@ -27,6 +27,7 @@ import urllib.request
 import urllib.robotparser
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 from ir_pipeline._net import (
     PLAYWRIGHT_NETWORK_LOCKDOWN_ARG,
@@ -592,9 +593,13 @@ def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
             )
             install_public_only_playwright_routing(context, timeout_s=timeout_ms / 1000)
             page = context.new_page()
-            response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            if response is not None and response.status in {401, 403}:
-                raise IrDiscoveryAuthenticationDeniedError(response.status)
+            response = cast(
+                object | None,
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms),
+            )
+            status_code = getattr(response, "status", None)
+            if isinstance(status_code, int) and status_code in {401, 403}:
+                raise IrDiscoveryAuthenticationDeniedError(status_code)
             try:
                 page.wait_for_selector(_DOC_LINK_SELECTOR, timeout=_DOC_WAIT_MS, state="attached")
             except Exception:  # no doc link surfaced — a nav/landing page; harvest its links

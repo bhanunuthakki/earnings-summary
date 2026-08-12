@@ -58,10 +58,13 @@ def test_direct_kpi_refresh_authorizes_before_network(
     class ReachedNetworkError(RuntimeError):
         pass
 
+    def reach_network(_url: str, _repo_root: Path, _ticker: str) -> Path:
+        raise ReachedNetworkError
+
     monkeypatch.setattr(
         refresh_ir_kpis,
         "download_spreadsheet",
-        lambda *_args: (_ for _ in ()).throw(ReachedNetworkError()),
+        reach_network,
     )
     if allowed:
         with pytest.raises(ReachedNetworkError):
@@ -87,10 +90,14 @@ def test_direct_kpi_refresh_rejects_more_than_five_before_network(
         owner_requested=True,
     )
     monkeypatch.setattr(refresh_ir_kpis, "_parse_args", lambda: args)
+
+    def fail_network(_url: str, _repo_root: Path, _ticker: str) -> Path:
+        pytest.fail("network boundary crossed")
+
     monkeypatch.setattr(
         refresh_ir_kpis,
         "download_spreadsheet",
-        lambda *_args: pytest.fail("network boundary crossed"),
+        fail_network,
     )
     assert refresh_ir_kpis.main() == 2
 
@@ -109,19 +116,21 @@ def test_batch_scope_is_portfolio_automatic_and_explicit_evaluation(
             ("IDX", "index_member"),
         ],
     )
-    monkeypatch.setattr(
-        refresh_ir_kpis_all,
-        "configured_tickers",
-        lambda _root: ["PORT", "EVAL", "WATCH", "IDX", "UNKNOWN"],
-    )
-    monkeypatch.setattr(refresh_ir_kpis_all, "_spreadsheet_tickers", lambda _root: {})
+    def configured(_root: Path) -> list[str]:
+        return ["PORT", "EVAL", "WATCH", "IDX", "UNKNOWN"]
 
-    automatic, automatic_skipped = refresh_ir_kpis_all._resolve_tickers(
+    def on_disk(_root: Path) -> dict[str, Path]:
+        return {}
+
+    monkeypatch.setattr(refresh_ir_kpis_all, "configured_tickers", configured)
+    monkeypatch.setattr(refresh_ir_kpis_all, "_spreadsheet_tickers", on_disk)
+
+    automatic, automatic_skipped = refresh_ir_kpis_all.resolve_tickers(
         repo_root=tmp_path,
         db_path=db_path,
         requested=None,
     )
-    requested, requested_skipped = refresh_ir_kpis_all._resolve_tickers(
+    requested, requested_skipped = refresh_ir_kpis_all.resolve_tickers(
         repo_root=tmp_path,
         db_path=db_path,
         requested=["EVAL", "WATCH", "IDX", "UNKNOWN"],

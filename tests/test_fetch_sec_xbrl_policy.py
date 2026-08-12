@@ -4,8 +4,9 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
+from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import NoReturn, cast
 
 import pytest
 
@@ -88,12 +89,18 @@ def test_companyfacts_boundary_classifies_auth_denial(
     monkeypatch: pytest.MonkeyPatch,
     status: int,
 ) -> None:
-    response = SimpleNamespace(
-        status_code=status,
-        content=b"denied",
-        raise_for_status=lambda: pytest.fail("generic HTTP path was used"),
-    )
-    monkeypatch.setattr(sec_xbrl.requests, "get", lambda *_args, **_kwargs: response)
+    class AuthResponse(sec_xbrl.requests.Response):
+        def raise_for_status(self) -> NoReturn:
+            pytest.fail("generic HTTP path was used")
+
+    response = AuthResponse()
+    response.status_code = status
+    response._content = b"denied"
+
+    def get_response(*_args: object, **_kwargs: object) -> AuthResponse:
+        return response
+
+    monkeypatch.setattr(sec_xbrl.requests, "get", get_response)
 
     with pytest.raises(sec_xbrl.SecCompanyFactsAuthenticationDeniedError) as exc_info:
         sec_xbrl.fetch_companyfacts("0000000001")
@@ -107,9 +114,18 @@ def test_sec_auth_denial_halts_before_the_next_ticker(
     conn = sqlite3.connect(":memory:")
     calls: list[str] = []
     terminal: dict[str, object] = {}
-    monkeypatch.setattr(fetch_sec_xbrl, "open_db", lambda _path: conn)
-    monkeypatch.setattr(fetch_sec_xbrl, "_resolve_tickers", lambda _args, _conn: ["META", "RBRK"])
-    monkeypatch.setattr(fetch_sec_xbrl, "start_run", lambda *_args, **_kwargs: "run-1")
+    def open_test_db(_path: Path) -> sqlite3.Connection:
+        return conn
+
+    def tickers(_args: argparse.Namespace, _conn: sqlite3.Connection) -> list[str]:
+        return ["META", "RBRK"]
+
+    def begin_run(*_args: object, **_kwargs: object) -> str:
+        return "run-1"
+
+    monkeypatch.setattr(fetch_sec_xbrl, "open_db", open_test_db)
+    monkeypatch.setattr(fetch_sec_xbrl, "_resolve_tickers", tickers)
+    monkeypatch.setattr(fetch_sec_xbrl, "start_run", begin_run)
 
     def ingest(
         _conn: sqlite3.Connection,

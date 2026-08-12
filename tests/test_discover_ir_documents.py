@@ -152,11 +152,10 @@ def test_auth_denial_is_not_reported_as_no_docs(
 ) -> None:
     db = tmp_path / "m.db"
     _make_tracked_db(db, "NU", "portfolio")
-    monkeypatch.setattr(
-        discover_ir_documents,
-        "discover_history_hybrid",
-        lambda **_kwargs: (_ for _ in ()).throw(IrDiscoveryAuthenticationDeniedError(status)),
-    )
+    def deny_auth(**_kwargs: object) -> list[object]:
+        raise IrDiscoveryAuthenticationDeniedError(status)
+
+    monkeypatch.setattr(discover_ir_documents, "discover_history_hybrid", deny_auth)
 
     rc = discover_ir_documents.main(
         [

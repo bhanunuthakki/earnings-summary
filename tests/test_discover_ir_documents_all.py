@@ -199,15 +199,14 @@ def test_discovery_auth_denial_is_typed_for_batch_halt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        batch,
-        "_run_child",
-        lambda *_args, **_kwargs: _FakeCompleted(
+    def auth_child(_argv: list[str], _timeout_s: float) -> _FakeCompleted:
+        return _FakeCompleted(
             10,
             "",
             '{"event": "source_authentication_denied", "status": 403}\n',
-        ),
-    )
+        )
+
+    monkeypatch.setattr(batch, "_run_child", auth_child)
 
     result = batch._run_discovery(
         "NU",
@@ -241,23 +240,37 @@ def test_batch_halts_before_fetch_when_discovery_reports_auth_denial(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(batch, "_resolve_roster", lambda _db, _requested: (["NU"], []))
-    monkeypatch.setattr(
-        batch,
-        "_run_discovery",
-        lambda *_args, **_kwargs: batch.DiscoveryResult(
-            "NU",
+    def roster(_db: Path, _requested: list[str] | None) -> tuple[list[str], list[str]]:
+        return ["NU"], []
+
+    def denied_discovery(
+        ticker: str,
+        *,
+        repo_root: Path,
+        db_path: Path,
+        quarters: int,
+        timeout_s: float,
+        owner_requested: bool,
+    ) -> batch.DiscoveryResult:
+        del repo_root, db_path, quarters, timeout_s, owner_requested
+        return batch.DiscoveryResult(
+            ticker,
             batch.TickerStatus.FAILED,
             None,
             0.0,
             error="auth_denial: discover halted",
-        ),
-    )
+        )
+
+    def fail_fetch(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("fetch boundary crossed after auth denial")
+
+    monkeypatch.setattr(batch, "_resolve_roster", roster)
     monkeypatch.setattr(
         batch,
-        "_finish_discovery",
-        lambda *_args, **_kwargs: pytest.fail("fetch boundary crossed after auth denial"),
+        "_run_discovery",
+        denied_discovery,
     )
+    monkeypatch.setattr(batch, "_finish_discovery", fail_fetch)
 
     assert batch.main(_argv(tmp_path)) == 10
 

@@ -113,13 +113,16 @@ def test_mz_http_auth_denial_is_typed_at_the_network_boundary(
             url = getattr(request, "full_url", "https://issuer.example/")
             raise urllib.error.HTTPError(str(url), status, "denied", email.message.Message(), None)
 
-    monkeypatch.setattr(mz, "ensure_safe_public_url", lambda _url: None)
+    def safe_url(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr(mz, "ensure_safe_public_url", safe_url)
     monkeypatch.setattr(mz, "build_public_opener", lambda: Opener())
 
     with pytest.raises(IrDiscoveryAuthenticationDeniedError) as exc_info:
         if helper == "get":
-            mz._get_text("https://issuer.example/")
+            mz.get_text("https://issuer.example/")
         else:
-            mz._post_json("https://issuer.example/api", {})
+            mz.post_json("https://issuer.example/api", {})
 
     assert exc_info.value.status_code == status

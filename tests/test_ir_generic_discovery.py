@@ -318,10 +318,16 @@ def test_hybrid_does_not_swallow_mz_auth_denial(monkeypatch: pytest.MonkeyPatch)
         platform="mz",
         results_center_url="https://ir.example/",
     )
-    monkeypatch.setattr(generic, "discover_document_history", lambda **_kwargs: [])
+    def no_generic_history(**_kwargs: object) -> list[object]:
+        return []
+
+    def denied_mz(_cfg: IrConfig) -> dict[str, str]:
+        raise IrDiscoveryAuthenticationDeniedError(403)
+
+    monkeypatch.setattr(generic, "discover_document_history", no_generic_history)
     monkeypatch.setattr(
         "ir_pipeline.discover.discover_documents",
-        lambda _cfg: (_ for _ in ()).throw(IrDiscoveryAuthenticationDeniedError(403)),
+        denied_mz,
     )
 
     with pytest.raises(IrDiscoveryAuthenticationDeniedError):
