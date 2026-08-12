@@ -4,9 +4,40 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import importlib
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, cast
+
+
+class _WinDllFactory(Protocol):
+    def __call__(self, name: str, *, use_last_error: bool) -> object: ...
+
+
+class _WinUIntFunction(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *args: object) -> int: ...
+
+
+class _WinHandleFunction(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *args: object) -> int | None: ...
+
+
+class _MsvcrtModule(Protocol):
+    def get_osfhandle(self, fd: int) -> int: ...
+
+    def open_osfhandle(self, handle: int, flags: int) -> int: ...
+
+
+class _LastErrorFunction(Protocol):
+    def __call__(self) -> int: ...
 
 
 class UnsafeEvidencePathError(ValueError):
@@ -33,11 +64,31 @@ def _identity(stat_result: os.stat_result) -> tuple[int, int, int, int]:
     )
 
 
-def _windows_final_path(fd: int) -> Path:
-    import msvcrt
+def _windows_runtime() -> tuple[object, _MsvcrtModule, _LastErrorFunction]:
+    """Load Win32-only APIs behind a typed boundary that also parses on POSIX."""
+    if sys.platform != "win32":
+        raise EvidenceSourceChangedError("Win32 evidence API is unavailable")
+    win_dll_value = getattr(ctypes, "WinDLL", None)
+    last_error_value = getattr(ctypes, "get_last_error", None)
+    if not callable(win_dll_value) or not callable(last_error_value):
+        raise EvidenceSourceChangedError("Win32 evidence API is unavailable")
+    win_dll = cast(_WinDllFactory, win_dll_value)
+    last_error = cast(_LastErrorFunction, last_error_value)
+    msvcrt = cast(_MsvcrtModule, importlib.import_module("msvcrt"))
+    return (win_dll("kernel32", use_last_error=True), msvcrt, last_error)
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    get_final = kernel32.GetFinalPathNameByHandleW
+
+def _win_uint_function(library: object, name: str) -> _WinUIntFunction:
+    return cast(_WinUIntFunction, getattr(library, name))
+
+
+def _win_handle_function(library: object, name: str) -> _WinHandleFunction:
+    return cast(_WinHandleFunction, getattr(library, name))
+
+
+def _windows_final_path(fd: int) -> Path:
+    kernel32, msvcrt, _last_error = _windows_runtime()
+    get_final = _win_uint_function(kernel32, "GetFinalPathNameByHandleW")
     get_final.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32]
     get_final.restype = ctypes.c_uint32
     handle = msvcrt.get_osfhandle(fd)
@@ -57,10 +108,8 @@ def _windows_final_path(fd: int) -> Path:
 
 
 def _windows_open_no_follow(path: Path, *, directory: bool) -> int:
-    import msvcrt
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create_file = kernel32.CreateFileW
+    kernel32, msvcrt, get_last_error = _windows_runtime()
+    create_file = _win_handle_function(kernel32, "CreateFileW")
     create_file.argtypes = [
         ctypes.c_wchar_p,
         ctypes.c_uint32,
@@ -76,7 +125,7 @@ def _windows_open_no_follow(path: Path, *, directory: bool) -> int:
     handle = create_file(str(path), 0x80000000, share_mode, None, 3, flags, None)
     invalid = ctypes.c_void_p(-1).value
     if handle in (None, invalid):
-        if ctypes.get_last_error() in {2, 3}:
+        if get_last_error() in {2, 3}:
             raise FileNotFoundError("evidence path is missing")
         raise EvidenceSourceChangedError("unable to open evidence handle")
 
@@ -84,14 +133,16 @@ def _windows_open_no_follow(path: Path, *, directory: bool) -> int:
         _fields_ = [("attributes", ctypes.c_uint32), ("reparse_tag", ctypes.c_uint32)]
 
     info = FileAttributeTagInfo()
-    get_info = kernel32.GetFileInformationByHandleEx
+    get_info = _win_uint_function(kernel32, "GetFileInformationByHandleEx")
     get_info.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     get_info.restype = ctypes.c_int
     if not get_info(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
-        kernel32.CloseHandle(handle)
+        close_handle = _win_uint_function(kernel32, "CloseHandle")
+        close_handle(handle)
         raise EvidenceSourceChangedError("unable to inspect evidence handle")
     if info.attributes & 0x400:
-        kernel32.CloseHandle(handle)
+        close_handle = _win_uint_function(kernel32, "CloseHandle")
+        close_handle(handle)
         raise UnsafeEvidencePathError("evidence handle is a reparse point")
     return msvcrt.open_osfhandle(int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0))
 
