@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import os
 import sqlite3
@@ -165,6 +166,20 @@ def test_staging_rejects_reparse_source_root(tmp_path: Path) -> None:
 
     with pytest.raises(mod.UnsafeEvidencePathError):
         mod._stage_evidence_file(source, tmp_path, raw, processed)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX O_NOFOLLOW contract")
+def test_posix_nofollow_error_is_typed_unsafe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from compute import evidence_snapshot
+
+    def reject_link(_path: Path, _flags: int) -> int:
+        raise OSError(errno.ELOOP, "too many symbolic links")
+
+    monkeypatch.setattr(evidence_snapshot.os, "open", reject_link)
+    with pytest.raises(evidence_snapshot.UnsafeEvidencePathError, match="unsafe link"):
+        evidence_snapshot.capture_snapshot(tmp_path / "link", tmp_path)
 
 
 def test_opened_handle_containment_rejects_deterministic_swap(

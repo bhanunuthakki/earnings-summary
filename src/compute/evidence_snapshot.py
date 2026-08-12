@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import hashlib
 import importlib
 import os
@@ -153,7 +154,15 @@ def _open_no_follow(path: Path, *, directory: bool = False) -> int:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if not isinstance(no_follow, int):
         raise UnsafeEvidencePathError("no-follow file opening is unavailable")
-    return os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0) | no_follow)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | no_follow
+    if directory:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    try:
+        return os.open(path, flags)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise UnsafeEvidencePathError("evidence path crosses an unsafe link") from exc
+        raise
 
 
 def _final_path(fd: int, fallback: Path) -> Path:

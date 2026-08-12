@@ -15,9 +15,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from compute.evidence_snapshot import (  # noqa: E402
+    UnsafeEvidencePathError,
     capture_snapshot,
     recorded_evidence_location,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 class IntegrityStatus(StrEnum):
@@ -101,9 +103,7 @@ def _alias_for(repo_root: Path, recorded: str) -> Path | None:
 
 
 def _open_read_only(db_path: Path) -> sqlite3.Connection:
-    uri = f"file:{db_path.resolve().as_posix()}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.execute("PRAGMA query_only=ON")
     return conn
 
@@ -174,8 +174,12 @@ def audit_transcript_evidence(
                         )
                     except FileNotFoundError:
                         status = IntegrityStatus.MISSING
+                    except UnsafeEvidencePathError:
+                        status = IntegrityStatus.UNSAFE_PATH
                     except OSError:
                         status = IntegrityStatus.UNREADABLE
+            except UnsafeEvidencePathError:
+                status = IntegrityStatus.UNSAFE_PATH
             except OSError:
                 status = IntegrityStatus.UNREADABLE
         items.append(
