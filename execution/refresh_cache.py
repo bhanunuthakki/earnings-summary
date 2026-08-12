@@ -651,7 +651,7 @@ def _admit_corpus(
     else:
         from compute.cashflow import extract_cashflow_facts as extractor
     try:
-        extractor(connection, document_id, project_root)
+        fact_count = extractor(connection, document_id, project_root)
     except (KeyError, OSError, ValueError, json.JSONDecodeError, sqlite3.Error):
         if connection.in_transaction:
             connection.rollback()
@@ -659,12 +659,6 @@ def _admit_corpus(
     if connection.in_transaction:
         raise RuntimeError("corpus extractor returned with an active transaction")
 
-    fact_count = int(
-        connection.execute(
-            "SELECT COUNT(*) FROM financial_facts WHERE source_doc_id=?",
-            (document_id,),
-        ).fetchone()[0]
-    )
     after_snapshot = _corpus_snapshot(path)
     try:
         after_stat = path.stat()
