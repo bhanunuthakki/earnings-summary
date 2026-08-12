@@ -159,6 +159,14 @@ class FmpAnalystEstimateRecord(BaseModel):
     numAnalystsEps: int | None = None
 
 
+STABLE_FMP_RECORD_MODELS: dict[str, type[BaseModel]] = {
+    "income-statement": FmpIncomeStatementRecord,
+    "balance-sheet-statement": FmpBalanceSheetRecord,
+    "cashflow-statement": FmpCashFlowRecord,
+    "analyst-estimates": FmpAnalystEstimateRecord,
+}
+
+
 class FmpAsReportedRecord(BaseModel):
     """One period record from FMP /stable/as-reported-* endpoints.
 

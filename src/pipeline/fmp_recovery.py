@@ -88,6 +88,12 @@ class OutcomeCode(StrEnum):
     CORPUS_UNAVAILABLE = "corpus_unavailable"
 
 
+class ContainmentReason(StrEnum):
+    OPERATOR_CALL_BUDGET_EXHAUSTED_AFTER_RATE_LIMIT = (
+        "operator_call_budget_exhausted_after_rate_limit"
+    )
+
+
 class ReceiptStatus(StrEnum):
     FRESH = "FRESH"
     DEGRADED_CORPUS = "DEGRADED_CORPUS"
@@ -444,13 +450,15 @@ class WorkOutcome(_FrozenModel):
         ):
             raise ValueError("server error requires a 5xx HTTP status")
         if self.outcome_code is OutcomeCode.CLIENT_CONTRACT_ERROR and not (
-            self.http_status is not None
-            and (
+            self.http_status is None
+            or (
                 200 <= self.http_status <= 299
                 or (400 <= self.http_status <= 499 and self.http_status not in {401, 402, 403, 429})
             )
         ):
-            raise ValueError("client contract error requires a 2xx or non-auth client status")
+            raise ValueError(
+                "client contract error requires corpus provenance, a 2xx, or non-auth client status"
+            )
         if self.outcome_code is OutcomeCode.ENDPOINT_EMPTY and not (
             self.http_status is not None and 200 <= self.http_status <= 299
         ):
@@ -475,6 +483,7 @@ class RecordOutcomesRequest(_FrozenModel):
     now: datetime
     expected_work_ids: tuple[str, ...] = Field(min_length=1, max_length=500)
     outcomes: tuple[WorkOutcome, ...] = Field(min_length=1, max_length=500)
+    containment_reason: ContainmentReason | None = None
 
     _now = field_validator("now")(_validate_naive_utc)
 
@@ -497,6 +506,10 @@ class RecordOutcomesRequest(_FrozenModel):
             raise ValueError("outcomes must be ordered by observation time")
         if any(item.observed_at > self.now for item in self.outcomes):
             raise ValueError("outcome observation cannot be after recording time")
+        if self.containment_reason is not None and (
+            self.outcomes[-1].outcome_code is not OutcomeCode.RATE_LIMITED
+        ):
+            raise ValueError("provider containment requires a final rate-limited outcome")
         return self
 
 
@@ -742,6 +755,45 @@ def _close_circuit(
         attempt_id=attempt_id,
     )
     return current
+
+
+def _contain_rate_limited_provider(
+    connection: sqlite3.Connection,
+    *,
+    request: RecordOutcomesRequest,
+) -> None:
+    """Open a still-closed circuit inside the final outcome transaction.
+
+    The configured threshold remains the normal automatic policy. This seam is
+    for an operator-supplied hard call cap: when the cap prevents observing the
+    next threshold-crossing response, the provider must still fail closed
+    without an extra network call.
+    """
+    reason = request.containment_reason
+    if reason is None:
+        return
+    circuit = _circuit_row(connection)
+    if (
+        circuit["state"] == CircuitState.CLOSED.value
+        and int(circuit["consecutive_rate_limits"]) > 0
+    ):
+        circuit = _open_circuit(
+            connection,
+            now=request.now,
+            reason=reason.value,
+            next_probe_at=request.now
+            + timedelta(seconds=int(circuit["rate_limit_probe_delay_seconds"])),
+        )
+        _event(
+            connection,
+            event_key=("circuit-contained", request.run_id, int(circuit["revision"])),
+            recorded_at=request.now,
+            event_type="circuit_contained",
+            reason_code=reason.value,
+            state_from=CircuitState.CLOSED.value,
+            state_to=CircuitState.OPEN.value,
+            circuit_revision=int(circuit["revision"]),
+        )
 
 
 def _apply_credentials(
@@ -1371,7 +1423,11 @@ def _validate_mode_outcome(
             }
         ),
         ExecutionMode.CORPUS: frozenset(
-            {OutcomeCode.CORPUS_SUCCESS, OutcomeCode.CORPUS_UNAVAILABLE}
+            {
+                OutcomeCode.CORPUS_SUCCESS,
+                OutcomeCode.CORPUS_UNAVAILABLE,
+                OutcomeCode.CLIENT_CONTRACT_ERROR,
+            }
         ),
         ExecutionMode.ALTERNATIVE: frozenset({OutcomeCode.ALTERNATIVE_SUCCESS}),
         ExecutionMode.RECONCILE: frozenset({OutcomeCode.RECONCILED_SUCCESS}),
@@ -1380,6 +1436,11 @@ def _validate_mode_outcome(
         raise ValueError(
             f"outcome {outcome.outcome_code.value} is invalid for lease mode {mode.value}"
         )
+    if outcome.outcome_code is OutcomeCode.CLIENT_CONTRACT_ERROR:
+        if mode is ExecutionMode.CORPUS and outcome.http_status is not None:
+            raise ValueError("corpus contract errors must not invent an HTTP status")
+        if mode in {ExecutionMode.LIVE, ExecutionMode.PROBE} and outcome.http_status is None:
+            raise ValueError("live contract errors require an HTTP status")
     if outcome.alternative_resolution is not None and (
         outcome.alternative_resolution.policy_sha256 != row["policy_sha256"]
         or outcome.alternative_resolution.endpoint_key != row["endpoint_key"]
@@ -1858,6 +1919,7 @@ def record_outcomes(
             codes.append(outcome.outcome_code)
             if outcome.corpus_snapshot is not None:
                 corpus_snapshots.append(outcome.corpus_snapshot)
+        _contain_rate_limited_provider(connection, request=request)
         return _receipt(
             connection,
             request=request,
@@ -1874,6 +1936,7 @@ __all__ = [
     "BacklogStatus",
     "CircuitConfig",
     "CircuitState",
+    "ContainmentReason",
     "CorpusSnapshot",
     "CredentialAvailability",
     "EnqueueWorkReceipt",

@@ -153,14 +153,23 @@ def test_quarantine_auto_logs_deferred(
 def test_analyst_estimate_record_gates_shape() -> None:
     # a well-formed row validates; a shape with the required `date` missing drifts
     good = _EST_BODY
-    drift = save_fmp_data._validate_stable_record("analyst-estimates", "stable:", good)
+    drift = save_fmp_data._validate_stable_record(
+        "analyst-estimates", "stable:", "BKNG", "analyst_estimates_annual", good
+    )
     assert drift is None
     bad = [{"symbol": "BKNG"}]  # no `date`
-    drift2 = save_fmp_data._validate_stable_record("analyst-estimates", "stable:", bad)
+    drift2 = save_fmp_data._validate_stable_record(
+        "analyst-estimates", "stable:", "BKNG", "analyst_estimates_annual", bad
+    )
     assert drift2 is not None
 
 
 def test_non_stable_rung_not_gated() -> None:
     # v3/v4 fallback rungs are passed through unchecked (kind not stable:)
     bad = [{"symbol": "BKNG"}]
-    assert save_fmp_data._validate_stable_record("analyst-estimates", "v3", bad) is None
+    assert (
+        save_fmp_data._validate_stable_record(
+            "analyst-estimates", "v3", "BKNG", "analyst_estimates_annual", bad
+        )
+        is not None
+    )

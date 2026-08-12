@@ -83,7 +83,7 @@ _FMP_DOC_TYPE_MAP: dict[str, str] = {
 }
 
 
-def _classify_filename(fname: str) -> str:
+def classify_fmp_filename(fname: str) -> str:
     """Return the doc_type for a `{TICKER}_*.json` filename. Mirrors 0003+0010+0015."""
     if _FORM_10K_RX.match(fname):
         return "fmp_10k_json"
@@ -459,7 +459,7 @@ def index_fmp_files_for_ticker(
         if not path.is_file() or not path.name.startswith(prefix) or path.suffix != ".json":
             continue
 
-        doc_type = _classify_filename(path.name)
+        doc_type = classify_fmp_filename(path.name)
         period_end = _max_date_in_records(path)
         sha = _sha256_of(path)
         stat = path.stat()
