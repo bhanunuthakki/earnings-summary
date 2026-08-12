@@ -224,7 +224,7 @@ def test_offline_receipt_rejects_network_or_manifest_gap() -> None:
         "deferred_count": 0,
         "excluded_by_tier_count": 0,
         "skipped_count": 0,
-        "pending_count": 0,
+        "pending_count": 1,
         "manifest_sha256": "a" * 64,
         "manifest_before_sha256": "a" * 64,
         "manifest_after_sha256": "a" * 64,
@@ -250,6 +250,34 @@ def test_offline_receipt_rejects_network_or_manifest_gap() -> None:
     with pytest.raises(rehearsal.RehearsalError, match="terminal code"):
         rehearsal.validate_offline_receipt(
             json.dumps(valid), return_code=1, copied_manifest_sha="a" * 64
+        )
+    with pytest.raises(rehearsal.RehearsalError, match=r"pending.*selected"):
+        rehearsal.validate_offline_receipt(
+            json.dumps({**valid, "pending_count": 0}),
+            return_code=2,
+            copied_manifest_sha="a" * 64,
+        )
+    # A global backlog count would contaminate the receipt with rows that this
+    # offline replay did not select. The terminal gate accepts only its exact
+    # selected corpus obligations.
+    with pytest.raises(rehearsal.RehearsalError, match=r"pending.*selected"):
+        rehearsal.validate_offline_receipt(
+            json.dumps({**valid, "pending_count": 2}),
+            return_code=2,
+            copied_manifest_sha="a" * 64,
+        )
+    with pytest.raises(rehearsal.RehearsalError, match="selected work arithmetic"):
+        rehearsal.validate_offline_receipt(
+            json.dumps(
+                {
+                    **valid,
+                    "admitted_count": 0,
+                    "admitted_new_count": 0,
+                    "corpus_count": 0,
+                }
+            ),
+            return_code=2,
+            copied_manifest_sha="a" * 64,
         )
 
 
@@ -486,9 +514,19 @@ def _offline_receipt(manifest_sha: str) -> rehearsal.OfflineTerminalReceipt:
         {
             "run_id": "offline-corpus:9e4a714d-72be-4a4a-a8c1-747266be2098",
             "status": "DEGRADED_CORPUS",
+            "discovered_file_count": 1,
+            "selected_count": 1,
+            "admitted_count": 1,
+            "admitted_new_count": 1,
+            "already_applied_count": 0,
+            "eligible_count": 1,
+            "corpus_count": 1,
             "failed_count": 0,
             "deferred_count": 0,
-            "pending_count": 0,
+            "excluded_by_tier_count": 0,
+            "skipped_count": 0,
+            "pending_count": 1,
+            "manifest_sha256": manifest_sha,
             "network_calls": 0,
             "manifest_before_sha256": manifest_sha,
             "manifest_after_sha256": manifest_sha,

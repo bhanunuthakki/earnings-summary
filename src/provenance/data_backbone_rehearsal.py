@@ -156,15 +156,46 @@ class OfflineTerminalReceipt(BaseModel):
 
     run_id: str = Field(min_length=1)
     status: Literal["DEGRADED_CORPUS"]
+    discovered_file_count: int = Field(ge=0)
+    selected_count: int = Field(gt=0)
+    admitted_count: int = Field(ge=0)
+    admitted_new_count: int = Field(ge=0)
+    already_applied_count: int = Field(ge=0)
+    eligible_count: int = Field(ge=0)
+    corpus_count: int = Field(ge=0)
     failed_count: Literal[0]
     deferred_count: Literal[0]
-    pending_count: Literal[0]
+    excluded_by_tier_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    pending_count: int = Field(ge=0)
+    manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
     network_calls: Literal[0]
     manifest_before_sha256: str = Field(pattern=_SHA256_PATTERN)
     manifest_after_sha256: str = Field(pattern=_SHA256_PATTERN)
     manifest_unchanged: Literal[True]
     mode: Literal["offline_corpus_only"]
     exit_code: Literal[2]
+
+    @model_validator(mode="after")
+    def _closed_replay_arithmetic(self) -> Self:
+        if self.admitted_count != self.admitted_new_count + self.already_applied_count:
+            raise ValueError("admitted count split is inconsistent")
+        if self.admitted_count != self.corpus_count:
+            raise ValueError("corpus count must equal admitted count")
+        if self.eligible_count != self.selected_count:
+            raise ValueError("eligible count must equal selected count")
+        if (
+            self.discovered_file_count
+            != self.selected_count + self.excluded_by_tier_count + self.skipped_count
+        ):
+            raise ValueError("discovered corpus arithmetic is inconsistent")
+        if self.selected_count != self.admitted_count + self.failed_count + self.deferred_count:
+            raise ValueError("selected work arithmetic is inconsistent")
+        if self.pending_count != self.selected_count:
+            raise ValueError("pending count must equal selected corpus obligations")
+        if self.manifest_sha256 != self.manifest_before_sha256:
+            raise ValueError("manifest_sha256 must identify the before manifest")
+        return self
 
 
 class SwapRollbackEvidence(BaseModel):
