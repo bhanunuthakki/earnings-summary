@@ -20,17 +20,19 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
 import sys
 import time
 from collections.abc import Mapping
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -39,6 +41,7 @@ from compute.split_normalization import (  # noqa: E402
     NormalizationEvent,
     normalize_estimates,
 )
+from log_redact import redact  # noqa: E402
 from models.fmp_payloads import (  # noqa: E402
     FmpAnalystEstimateRecord,
     FmpBalanceSheetRecord,
@@ -64,16 +67,10 @@ from sources import registry as source_calls_log  # noqa: E402
 
 load_project_env(PROJECT_ROOT)
 API_KEY = os.environ.get("FMP_API_KEY")
-if not API_KEY:
-    print("FATAL: FMP_API_KEY not set in .env", file=sys.stderr)
-    sys.exit(1)
 
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 SNAP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp_snapshots"
 SECTOR_DIR = PROJECT_ROOT / "data" / "historical" / "sector_industry"
-FMP_DIR.mkdir(parents=True, exist_ok=True)
-SNAP_DIR.mkdir(parents=True, exist_ok=True)
-SECTOR_DIR.mkdir(parents=True, exist_ok=True)
 
 # Log every FMP fetch outcome (and every cache-skip) to the shared source_calls
 # provenance table so FMP cache-hit-rate is measurable from real data — the
@@ -84,6 +81,91 @@ SECTOR_DIR.mkdir(parents=True, exist_ok=True)
 # this fetcher writes to (db.DB_PATH), so prod, tests, and worktree runs agree.
 source_calls_log.set_db_path(Path(portfolio_db.DB_PATH))
 _FMP_SOURCE = "fmp"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+class FmpWorkReceiptOutcome(StrEnum):
+    SUCCESS = "success"
+    EMPTY = "empty"
+    ACCOUNT_UNAUTHORIZED = "account_unauthorized"
+    ACCOUNT_PAYMENT_REQUIRED = "account_payment_required"
+    ACCOUNT_FORBIDDEN = "account_forbidden"
+    ENDPOINT_FORBIDDEN = "endpoint_forbidden"
+    RATE_LIMITED = "rate_limited"
+    SERVER_ERROR = "server_error"
+    TRANSPORT_ERROR = "transport_error"
+    CONTRACT_ERROR = "contract_error"
+
+
+class FmpWorkReceipt(BaseModel):
+    """Typed, per-logical-work result consumed by the recovery orchestrator."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal["fmp-work-receipt/v1"] = "fmp-work-receipt/v1"
+    ticker: str
+    endpoint: str
+    period: str
+    outcome: FmpWorkReceiptOutcome
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    file_path: str | None = None
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    captured_at: datetime
+
+    @field_validator("captured_at")
+    @classmethod
+    def _naive_utc_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is not None:
+            raise ValueError("receipt timestamp must be naive UTC")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_outcome_evidence(self) -> FmpWorkReceipt:
+        expected_status = {
+            FmpWorkReceiptOutcome.ACCOUNT_UNAUTHORIZED: 401,
+            FmpWorkReceiptOutcome.ACCOUNT_PAYMENT_REQUIRED: 402,
+            FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN: 403,
+            FmpWorkReceiptOutcome.ENDPOINT_FORBIDDEN: 403,
+            FmpWorkReceiptOutcome.RATE_LIMITED: 429,
+        }
+        exact = expected_status.get(self.outcome)
+        if exact is not None and self.http_status != exact:
+            raise ValueError(f"{self.outcome.value} requires HTTP {exact}")
+        if self.outcome is FmpWorkReceiptOutcome.SUCCESS:
+            if not (self.http_status is not None and 200 <= self.http_status <= 299):
+                raise ValueError("success receipt requires a 2xx HTTP status")
+            if self.file_path is None or self.content_sha256 is None:
+                raise ValueError("success receipt requires a path and content hash")
+        elif self.file_path is not None or self.content_sha256 is not None:
+            raise ValueError("failed receipt cannot claim persisted success evidence")
+        if self.outcome is FmpWorkReceiptOutcome.SERVER_ERROR and not (
+            self.http_status is not None and 500 <= self.http_status <= 599
+        ):
+            raise ValueError("server error receipt requires a 5xx HTTP status")
+        return self
+
+
+def _forbidden_outcome(error: str | None) -> FmpWorkReceiptOutcome:
+    normalized = (error or "").casefold()
+    endpoint_markers = (
+        "restricted endpoint",
+        "not available under your current subscription",
+        "upgrade your plan",
+    )
+    if any(marker in normalized for marker in endpoint_markers):
+        return FmpWorkReceiptOutcome.ENDPOINT_FORBIDDEN
+    return FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN
+
+
+def _write_work_receipt(path: Path, receipt: FmpWorkReceipt) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(receipt.model_dump_json(indent=2), encoding="utf-8")
+    temporary.replace(path)
+
 
 # Endpoints whose values change over time (forward consensus, current ratings,
 # DCF, TTM aggregates, market-quote-driven). Each pull is snapshotted to
@@ -258,11 +340,11 @@ def _http_get(url: str, params: Mapping[str, object]) -> tuple[int, object | Non
         code = exc.status_code or 0
         body = exc.payload
         if isinstance(body, dict) and "Error Message" in body:
-            return (code, None, f"fmp-err: {str(body['Error Message'])[:200]}")
+            return (code, None, f"fmp-err: {redact(body['Error Message'])[:200]}")
         prefix = "network" if code == 0 else "http"
-        return (code, None, f"{prefix}: {exc}")
+        return (code, None, f"{prefix}: {redact(exc)}")
     if isinstance(body, dict) and "Error Message" in body:
-        return (code, None, f"fmp-err: {str(body['Error Message'])[:200]}")
+        return (code, None, f"fmp-err: {redact(body['Error Message'])[:200]}")
     return (code, body, None)
 
 
@@ -832,7 +914,7 @@ def _build_status_row(
         file_path,
         file_bytes,
         error_msg,
-        datetime.now().isoformat(timespec="seconds"),
+        _utc_now().isoformat(timespec="seconds"),
     )
 
 
@@ -937,6 +1019,7 @@ def run_ticker(
     force_snapshot: bool = False,
     manifest_filter: set[tuple[str, str]] | None = None,
     max_calls: int | None = None,
+    work_receipts: list[FmpWorkReceipt] | None = None,
 ) -> dict[str, int]:
     lt = _list_type_for(ticker)
     print(f"\n=== {ticker} ({lt}) ===", flush=True)
@@ -1034,6 +1117,17 @@ def run_ticker(
                     )
                 )
                 summary["error"] += 1
+                if work_receipts is not None:
+                    work_receipts.append(
+                        FmpWorkReceipt(
+                            ticker=ticker,
+                            endpoint=endpoint,
+                            period=period,
+                            outcome=FmpWorkReceiptOutcome.CONTRACT_ERROR,
+                            http_status=code,
+                            captured_at=_utc_now(),
+                        )
+                    )
                 src_calls.append(
                     source_calls_log.PendingSourceCall(
                         source_name=_FMP_SOURCE,
@@ -1080,6 +1174,17 @@ def run_ticker(
                         )
                     )
                     summary["error"] += 1
+                    if work_receipts is not None:
+                        work_receipts.append(
+                            FmpWorkReceipt(
+                                ticker=ticker,
+                                endpoint=endpoint,
+                                period=period,
+                                outcome=FmpWorkReceiptOutcome.CONTRACT_ERROR,
+                                http_status=code,
+                                captured_at=_utc_now(),
+                            )
+                        )
                     src_calls.append(
                         source_calls_log.PendingSourceCall(
                             source_name=_FMP_SOURCE,
@@ -1104,6 +1209,7 @@ def run_ticker(
 
             file_path = FMP_DIR / f"{ticker}_{suffix}.json"
             file_path.write_text(json.dumps(body, indent=2), encoding="utf-8")
+            captured_at = _utc_now()
 
             # For time-sensitive endpoints (forward consensus, ratings, DCF, TTM,
             # market-data-driven), also write a dated snapshot so historical
@@ -1136,6 +1242,19 @@ def run_ticker(
                 )
             )
             summary["ok"] += 1
+            if work_receipts is not None:
+                work_receipts.append(
+                    FmpWorkReceipt(
+                        ticker=ticker,
+                        endpoint=endpoint,
+                        period=period,
+                        outcome=FmpWorkReceiptOutcome.SUCCESS,
+                        http_status=code,
+                        file_path=str(file_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+                        content_sha256=hashlib.sha256(file_path.read_bytes()).hexdigest(),
+                        captured_at=captured_at,
+                    )
+                )
             src_calls.append(
                 source_calls_log.PendingSourceCall(
                     source_name=_FMP_SOURCE,
@@ -1163,6 +1282,17 @@ def run_ticker(
                 )
             )
             summary["error"] += 1
+            if work_receipts is not None:
+                work_receipts.append(
+                    FmpWorkReceipt(
+                        ticker=ticker,
+                        endpoint=endpoint,
+                        period=period,
+                        outcome=FmpWorkReceiptOutcome.RATE_LIMITED,
+                        http_status=code,
+                        captured_at=_utc_now(),
+                    )
+                )
             src_calls.append(
                 source_calls_log.PendingSourceCall(
                     source_name=_FMP_SOURCE,
@@ -1203,6 +1333,22 @@ def run_ticker(
                 )
             )
             summary["forbidden"] += 1
+            if work_receipts is not None:
+                forbidden_outcome = {
+                    401: FmpWorkReceiptOutcome.ACCOUNT_UNAUTHORIZED,
+                    402: FmpWorkReceiptOutcome.ACCOUNT_PAYMENT_REQUIRED,
+                    403: _forbidden_outcome(err),
+                }[code]
+                work_receipts.append(
+                    FmpWorkReceipt(
+                        ticker=ticker,
+                        endpoint=endpoint,
+                        period=period,
+                        outcome=forbidden_outcome,
+                        http_status=code,
+                        captured_at=_utc_now(),
+                    )
+                )
             src_calls.append(
                 source_calls_log.PendingSourceCall(
                     source_name=_FMP_SOURCE,
@@ -1228,6 +1374,17 @@ def run_ticker(
                 )
             )
             summary["empty"] += 1
+            if work_receipts is not None:
+                work_receipts.append(
+                    FmpWorkReceipt(
+                        ticker=ticker,
+                        endpoint=endpoint,
+                        period=period,
+                        outcome=FmpWorkReceiptOutcome.EMPTY,
+                        http_status=200,
+                        captured_at=_utc_now(),
+                    )
+                )
             src_calls.append(
                 source_calls_log.PendingSourceCall(
                     source_name=_FMP_SOURCE,
@@ -1253,6 +1410,26 @@ def run_ticker(
                 )
             )
             summary["error"] += 1
+            if work_receipts is not None:
+                outcome = (
+                    FmpWorkReceiptOutcome.SERVER_ERROR
+                    if 500 <= code <= 599
+                    else (
+                        FmpWorkReceiptOutcome.CONTRACT_ERROR
+                        if 400 <= code <= 499
+                        else FmpWorkReceiptOutcome.TRANSPORT_ERROR
+                    )
+                )
+                work_receipts.append(
+                    FmpWorkReceipt(
+                        ticker=ticker,
+                        endpoint=endpoint,
+                        period=period,
+                        outcome=outcome,
+                        http_status=code or None,
+                        captured_at=_utc_now(),
+                    )
+                )
             src_calls.append(
                 source_calls_log.PendingSourceCall(
                     source_name=_FMP_SOURCE,
@@ -1496,7 +1673,7 @@ def run_stable_probe(ticker: str) -> dict[str, list[str]]:
     return report
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--probe", action="store_true", help="Run full endpoint set on GOOGL only")
     ap.add_argument("--tickers", help="Comma-separated tickers")
@@ -1547,6 +1724,12 @@ def main():
         "the counter exceeds this; remaining work is left for next run",
     )
     ap.add_argument(
+        "--work-receipt",
+        type=Path,
+        default=None,
+        help="Write one typed receipt for a single-entry manifest.",
+    )
+    ap.add_argument(
         "--stable-only",
         action="store_true",
         help="Drop the /api/v3 + /api/v4 fallback rungs; hit /stable only "
@@ -1561,13 +1744,21 @@ def main():
     )
     args = ap.parse_args()
 
+    if not API_KEY:
+        print("FATAL: FMP_API_KEY not configured", file=sys.stderr)
+        return 1
+
+    FMP_DIR.mkdir(parents=True, exist_ok=True)
+    SNAP_DIR.mkdir(parents=True, exist_ok=True)
+    SECTOR_DIR.mkdir(parents=True, exist_ok=True)
+
     if args.stable_only:
         _enable_stable_only()
 
     if args.probe_stable:
         probe_ticker = args.tickers.split(",")[0].strip().upper() if args.tickers else "GOOGL"
         run_stable_probe(probe_ticker)
-        return
+        return 0
 
     targets: list[str] = []
     do_sector = False
@@ -1585,6 +1776,15 @@ def main():
             t = e["ticker"].upper()
             manifest_filter.setdefault(t, set()).add((e["endpoint"], e.get("period", "")))
         targets = sorted(manifest_filter.keys())
+        if (
+            args.work_receipt is not None
+            and sum(len(values) for values in manifest_filter.values()) != 1
+        ):
+            print("FATAL: --work-receipt requires a one-entry manifest", file=sys.stderr)
+            return 2
+    elif args.work_receipt is not None:
+        print("FATAL: --work-receipt requires --manifest", file=sys.stderr)
+        return 2
 
     if args.probe:
         targets = ["GOOGL"]
@@ -1613,12 +1813,13 @@ def main():
 
     if not targets and not do_sector:
         ap.print_help()
-        sys.exit(2)
+        return 2
 
     snapshot_index = _load_snapshot_index()
     print(f"snapshot index: {len(snapshot_index)} entries", flush=True)
 
     grand = {"ok": 0, "empty": 0, "forbidden": 0, "error": 0, "skipped": 0, "total": 0}
+    work_receipts: list[FmpWorkReceipt] = []
     for t in targets:
         if args.max_calls is not None and args.max_calls <= _CALL_COUNTER:
             print(f"  [max-calls {args.max_calls} reached; halting before {t}]")
@@ -1630,6 +1831,7 @@ def main():
             force_snapshot=args.force_snapshot,
             manifest_filter=manifest_filter.get(t) if manifest_filter else None,
             max_calls=args.max_calls,
+            work_receipts=work_receipts if args.work_receipt is not None else None,
         )
         for k in grand:
             grand[k] += s[k]
@@ -1656,17 +1858,29 @@ def main():
     try:
         _BUDGET_DIR.mkdir(parents=True, exist_ok=True)
         budget_path = _BUDGET_DIR / f"budget_{TODAY_STR}.json"
-        existing = {"calls_made": 0, "runs": 0}
+        existing: dict[str, int | str] = {"calls_made": 0, "runs": 0}
         if budget_path.exists():
             existing = json.loads(budget_path.read_text(encoding="utf-8"))
-        existing["calls_made"] = existing.get("calls_made", 0) + _SERVED_COUNTER
+        existing["calls_made"] = int(existing.get("calls_made", 0)) + _SERVED_COUNTER
         existing["attempts"] = int(existing.get("attempts", 0)) + _CALL_COUNTER
-        existing["runs"] = existing.get("runs", 0) + 1
+        existing["runs"] = int(existing.get("runs", 0)) + 1
         existing["last_run_at"] = datetime.now().isoformat(timespec="seconds")
         budget_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     except OSError as e:
         print(f"  [warn] could not write budget file: {e}", file=sys.stderr)
+    if args.work_receipt is not None:
+        if len(work_receipts) != 1:
+            print("FATAL: fetch did not produce exactly one work receipt", file=sys.stderr)
+            return 1
+        try:
+            _write_work_receipt(args.work_receipt, work_receipts[0])
+        except OSError as exc:
+            print(f"FATAL: work receipt write failed: {redact(exc)}", file=sys.stderr)
+            return 1
+    attempted_success = grand["ok"]
+    attempted_failure = grand["empty"] + grand["forbidden"] + grand["error"]
+    return 1 if attempted_success == 0 and attempted_failure > 0 else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

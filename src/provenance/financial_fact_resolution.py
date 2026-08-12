@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 FactTable: TypeAlias = Literal["financial_facts", "kpi_facts"]
 ResolutionStatus: TypeAlias = Literal["resolved", "unresolved_material"]
 SelectionMode: TypeAlias = Literal["resolved_view", "legacy_pre_cutover"]
+DocumentFactAdmissionStatus: TypeAlias = Literal["inserted", "idempotent_replay", "empty"]
 
 _TABLES: tuple[FactTable, ...] = ("financial_facts", "kpi_facts")
 _POLICY_VERSION = "investor-grade-fact-resolution@1"
@@ -98,6 +99,77 @@ class FactResolutionResult(_CutoverModel):
     resolution_status: ResolutionStatus
     material_dissent: bool
     created: bool
+
+
+class GovernedDocumentFactAdmission(_CutoverModel):
+    """Canonical proof that one exact evidence-backed document owns admitted facts."""
+
+    document_id: int = Field(gt=0)
+    ticker: str = Field(min_length=1, max_length=16)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    inserted_count: int = Field(ge=0)
+    total_admitted_count: int = Field(ge=0)
+    status: DocumentFactAdmissionStatus
+
+
+def governed_document_fact_admission(
+    conn: sqlite3.Connection,
+    *,
+    document_id: int,
+    ticker: str,
+    content_sha256: str,
+    inserted_count: int,
+) -> GovernedDocumentFactAdmission:
+    """Prove total facts for an exact document/hash through canonical evidence links."""
+    governed = conn.execute(
+        "SELECT 1 FROM documents AS document "
+        "JOIN evidence_document_versions AS version "
+        "ON version.legacy_document_id = document.id "
+        "JOIN evidence_extraction_runs AS run "
+        "ON run.document_version_id = version.document_version_id "
+        "JOIN evidence_nodes AS node ON node.extraction_run_id = run.extraction_run_id "
+        "WHERE document.id = ? AND UPPER(document.ticker) = UPPER(?) "
+        "AND document.sha256 = ? AND version.blob_sha256 = document.sha256 "
+        "AND run.outcome = 'succeeded' AND node.node_kind = 'document' LIMIT 1",
+        (document_id, ticker, content_sha256),
+    ).fetchone()
+    if governed is None:
+        raise ValueError("document/hash lacks canonical evidence admission")
+
+    row = conn.execute(
+        "SELECT COUNT(*) FROM ("
+        "SELECT link.fact_table, link.fact_row_id "
+        "FROM fact_observation_revisions AS link "
+        "JOIN reported_observations AS observation "
+        "ON observation.observation_id = link.observation_id "
+        "JOIN evidence_nodes AS node ON node.node_id = observation.evidence_node_id "
+        "JOIN evidence_extraction_runs AS run "
+        "ON run.extraction_run_id = node.extraction_run_id "
+        "JOIN evidence_document_versions AS version "
+        "ON version.document_version_id = run.document_version_id "
+        "WHERE link.source_document_id = ? AND link.fact_table = 'financial_facts' "
+        "AND version.legacy_document_id = link.source_document_id "
+        "AND version.blob_sha256 = ? AND run.outcome = 'succeeded' "
+        "GROUP BY link.fact_table, link.fact_row_id)",
+        (document_id, content_sha256),
+    ).fetchone()
+    total_admitted_count = int(row[0]) if row is not None else 0
+    if inserted_count > total_admitted_count:
+        raise RuntimeError("extractor insert count exceeds canonical admitted fact count")
+    if total_admitted_count == 0:
+        status: DocumentFactAdmissionStatus = "empty"
+    elif inserted_count == 0:
+        status = "idempotent_replay"
+    else:
+        status = "inserted"
+    return GovernedDocumentFactAdmission(
+        document_id=document_id,
+        ticker=ticker.upper(),
+        content_sha256=content_sha256,
+        inserted_count=inserted_count,
+        total_admitted_count=total_admitted_count,
+        status=status,
+    )
 
 
 @dataclass(frozen=True, slots=True)
