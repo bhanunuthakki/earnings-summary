@@ -33,7 +33,7 @@ from sqlite_runtime import (
 )
 
 ACTIVE_BASE = "0001_initial_schema"
-ACTIVE_HEAD = "0007_add_earnings_surprise_observations"
+ACTIVE_HEAD = "0008_add_fmp_recovery"
 
 _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "tracked_companies": frozenset({"ticker", "processing_tier"}),
