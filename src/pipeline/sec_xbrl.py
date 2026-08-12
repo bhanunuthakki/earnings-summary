@@ -46,7 +46,7 @@ import os
 import sqlite3
 import tempfile
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -70,6 +70,9 @@ from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import record_validation_issue
 from pipeline.restatement_detector import (
     insert_with_restatement_detection,
+)
+from provenance.financial_fact_resolution import (
+    capture_fact_row_observation,
 )
 from provenance.issuer_registry import IssuerRegistry
 from provenance.sec_companyfacts_capture import (
@@ -1097,12 +1100,36 @@ def insert_facts_from_companyfacts(
     payload: dict[str, object],
     accession_to_doc_id: dict[str, int],
     run_id: str = "sec_xbrl_ingest",
+    snapshot_root: Path | None = None,
 ) -> int:
     """Walk TAG_LADDERS; insert financial_facts, first rung winning per period.
 
     ``run_id`` tags any ``UNIT_MISMATCH`` validation_issues the unit sanity guard
     raises (a value whose resolved unit is neither ACTUAL nor COUNT); production
     passes the ingest run's id, ad-hoc callers get a stable default."""
+    before_resolve: Callable[[int], None] | None = None
+    if snapshot_root is not None:
+        # Deferred import breaks the intentional matcher -> ladder dependency
+        # while keeping live admission at this boundary.
+        from provenance.sec_companyfacts_fact_matcher import (
+            match_companyfacts_fact_row,
+        )
+
+        def _capture_companyfacts_provenance(fact_row_id: int) -> None:
+            match_companyfacts_fact_row(
+                conn,
+                fact_row_id=fact_row_id,
+                blob_root=snapshot_root,
+            )
+            capture_fact_row_observation(
+                conn,
+                fact_table="financial_facts",
+                fact_row_id=fact_row_id,
+                recorded_at=datetime.now(UTC),
+            )
+
+        before_resolve = _capture_companyfacts_provenance
+
     facts_raw = payload.get("facts", {})
     if not isinstance(facts_raw, dict):
         return 0
@@ -1288,6 +1315,7 @@ def insert_facts_from_companyfacts(
                 ),
                 extracted_by="sec_xbrl",
                 locator=pf.locator_json,
+                before_resolve=before_resolve,
             )
             if new_id is not None:
                 inserted += 1
@@ -1430,6 +1458,10 @@ def ingest_for_ticker(
         conn,
         "legacy_document_evidence_binding_revisions",
     )
+    exact_match_ready = _has_table(
+        conn,
+        "legacy_fact_evidence_match_revisions",
+    ) and _has_table(conn, "fact_observation_match_proofs")
     post_cutover_trigger = _has_trigger(
         conn,
         "trg_financial_facts_observation_insert",
@@ -1487,6 +1519,11 @@ def ingest_for_ticker(
             payload=payload,
             accession_to_doc_id=accession_to_doc_id,
             run_id=run_id,
+            snapshot_root=(
+                project_root / "data" / "historical" / "sec" / "snapshots"
+                if exact_match_ready
+                else None
+            ),
         )
         conn.commit()
     except Exception:

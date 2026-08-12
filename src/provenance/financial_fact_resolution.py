@@ -522,6 +522,30 @@ def resolve_fact_row(
     )
 
 
+def capture_fact_row_observation(
+    conn: sqlite3.Connection,
+    *,
+    fact_table: FactTable,
+    fact_row_id: int,
+    recorded_at: datetime,
+) -> bool:
+    """Capture one already-persisted row without resolving its logical key.
+
+    Live CompanyFacts admission uses this after its exact evidence match is
+    accepted and before ``resolve_fact_row``.  The caller owns the transaction,
+    so a later failure rolls back the fact, match, observation, and proof as one
+    atomic unit.
+    """
+
+    created, _ = _capture_fact_row(
+        conn,
+        fact_table=fact_table,
+        row_id=fact_row_id,
+        recorded_at=recorded_at,
+    )
+    return created
+
+
 def _capture_fact_row(
     conn: sqlite3.Connection,
     *,
