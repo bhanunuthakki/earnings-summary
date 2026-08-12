@@ -290,7 +290,11 @@ def _reviewed_policies() -> tuple[IssuerAcquisitionPolicy, ...]:
                 relevant_sections=(
                     SectionRule(
                         form=FilingForm.FORM_10K,
-                        sections=(FilingSection.ITEM_1, FilingSection.ITEM_1A, FilingSection.ITEM_7),
+                        sections=(
+                            FilingSection.ITEM_1,
+                            FilingSection.ITEM_1A,
+                            FilingSection.ITEM_7,
+                        ),
                     ),
                     SectionRule(
                         form=FilingForm.FORM_10Q,

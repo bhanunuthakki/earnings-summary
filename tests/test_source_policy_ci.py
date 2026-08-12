@@ -54,18 +54,24 @@ def test_coverage_policy_order_and_unknowns_are_fail_closed() -> None:
 
 
 def test_source_authorization_never_elevates_lower_priority_roles() -> None:
-    assert decision_for(
-        ListType.PORTFOLIO,
-        CollectionSource.SEC,
-        ArtifactKind.FILING_PACKAGE,
-        requested=False,
-    ).reason is AuthorizationReason.AUTOMATIC
-    assert decision_for(
-        ListType.EVALUATION,
-        CollectionSource.IR,
-        ArtifactKind.IR_DOCUMENT,
-        requested=False,
-    ).reason is AuthorizationReason.REQUEST_REQUIRED
+    assert (
+        decision_for(
+            ListType.PORTFOLIO,
+            CollectionSource.SEC,
+            ArtifactKind.FILING_PACKAGE,
+            requested=False,
+        ).reason
+        is AuthorizationReason.AUTOMATIC
+    )
+    assert (
+        decision_for(
+            ListType.EVALUATION,
+            CollectionSource.IR,
+            ArtifactKind.IR_DOCUMENT,
+            requested=False,
+        ).reason
+        is AuthorizationReason.REQUEST_REQUIRED
+    )
     assert decision_for(
         ListType.EVALUATION,
         CollectionSource.IR,
@@ -109,8 +115,10 @@ def test_policy_is_deeply_immutable_and_hashes_are_golden() -> None:
     with pytest.raises(ValidationError):
         rubrik.fmp.endpoint_aliases += (NameRule(source_name="old", canonical_name="new"),)
     assert issuer_policy("rbrk").policy_sha256 == original_hash
-    assert rubrik.policy_sha256 == "542c3d70f3599e0ffdeeb14fa2005271225f3a0ed2c389d912ac566cbfb7781e"
-    assert wix.policy_sha256 == "112015facabe16776da9d4e64cd1f05c64d16eee4d7e95034d96121e4b6cc082"
+    rubrik_golden = "542c3d70f3599e0ffdeeb14fa2005271225f3a0ed2c389d912ac566cbfb7781e"
+    wix_golden = "112015facabe16776da9d4e64cd1f05c64d16eee4d7e95034d96121e4b6cc082"
+    assert rubrik.policy_sha256 == rubrik_golden
+    assert wix.policy_sha256 == wix_golden
 
 
 def _policy(issuer_id: str, *aliases: str) -> IssuerAcquisitionPolicy:
