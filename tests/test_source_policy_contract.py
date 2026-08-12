@@ -117,10 +117,20 @@ def test_policy_is_deeply_immutable_and_hashes_are_golden() -> None:
         rubrik.fmp.endpoint_aliases += (NameRule(source_name="old", canonical_name="new"),)
     assert issuer_policy("rbrk").policy_sha256 == original_hash
     rubrik_golden = "".join(
-        ("21e3a7130c09994a", "041ef28de2e0a09e", "b7f4e3205171a084", "e445b11f1f01b1f7")
+        (
+            "21e3a7130c09994a",  # pragma: allowlist secret
+            "041ef28de2e0a09e",  # pragma: allowlist secret
+            "b7f4e3205171a084",  # pragma: allowlist secret
+            "e445b11f1f01b1f7",  # pragma: allowlist secret
+        )
     )
     wix_golden = "".join(
-        ("9b895000e48eff63", "b23a59dce294f625", "0bd00c7952e9ead0", "d88a38b02c6e3454")
+        (
+            "9b895000e48eff63",  # pragma: allowlist secret
+            "b23a59dce294f625",  # pragma: allowlist secret
+            "0bd00c7952e9ead0",  # pragma: allowlist secret
+            "d88a38b02c6e3454",  # pragma: allowlist secret
+        )
     )
     assert rubrik.policy_sha256 == rubrik_golden
     assert wix.policy_sha256 == wix_golden
