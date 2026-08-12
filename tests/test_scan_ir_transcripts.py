@@ -8,8 +8,11 @@ hitting the network or a browser.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import sqlite3
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -119,7 +122,7 @@ def test_scan_one_already_ingested(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.setattr(mod, "last_earnings_date", _earnings)
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
-    monkeypatch.setattr(mod, "_processed_exists", _true)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _true)
     r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
     assert r.status == "already_ingested"
     assert r.quarter == "Q1_2026"
@@ -129,7 +132,7 @@ def test_scan_one_dry_run_would_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.setattr(mod, "last_earnings_date", _earnings)
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
-    monkeypatch.setattr(mod, "_processed_exists", _false)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     # fetch_qa must not run in a dry-run.
     monkeypatch.setattr(mod, "fetch_qa", _fetch_boom)
     r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, True)
@@ -141,7 +144,7 @@ def test_scan_one_pending_ingest_when_raw_exists(monkeypatch: pytest.MonkeyPatch
     mod = _load_module()
     monkeypatch.setattr(mod, "last_earnings_date", _earnings)
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
-    monkeypatch.setattr(mod, "_processed_exists", _false)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     monkeypatch.setattr(mod, "_raw_exists", _true)
     # A raw already on disk must NOT trigger a re-fetch — flag it for ingest.
     monkeypatch.setattr(mod, "fetch_qa", _fetch_boom)
@@ -153,7 +156,7 @@ def test_scan_one_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.setattr(mod, "last_earnings_date", _earnings)
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
-    monkeypatch.setattr(mod, "_processed_exists", _false)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     monkeypatch.setattr(mod, "_raw_exists", _false)
     monkeypatch.setattr(mod, "fetch_qa", _fetch_hit)
     r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
@@ -165,7 +168,7 @@ def test_scan_one_not_published_yet(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.setattr(mod, "last_earnings_date", _earnings)
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
-    monkeypatch.setattr(mod, "_processed_exists", _false)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     monkeypatch.setattr(mod, "_raw_exists", _false)
     monkeypatch.setattr(mod, "fetch_qa", _fetch_none)
     r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
@@ -176,12 +179,119 @@ def test_scan_one_error_is_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.setattr(mod, "last_earnings_date", _earnings)
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
-    monkeypatch.setattr(mod, "_processed_exists", _false)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     monkeypatch.setattr(mod, "_raw_exists", _false)
     monkeypatch.setattr(mod, "fetch_qa", _fetch_boom)
     r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
     assert r.status == "error"
     assert "RuntimeError" in r.detail
+
+
+class _FakeProc:
+    def __init__(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+
+
+def test_run_ingest_disables_promotion_and_preserves_child_rc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return _FakeProc(returncode=9)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert mod._run_ingest(tmp_path, dry_run=False) == 9
+    assert captured["cmd"][-1] == "--no-promote"
+    assert captured["kwargs"]["cwd"] == str(tmp_path)
+    assert mod._terminal_exit_code(9) == 9
+    assert mod._terminal_exit_code(None, scan_errors=1) == 1
+    assert mod._terminal_exit_code(7, scan_errors=1) == 7
+
+
+def test_ingested_evidence_requires_exact_ticker_period_path_and_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    raw = tmp_path / "transcripts" / "raw" / "NU_Q1_2026.txt"
+    raw.parent.mkdir(parents=True)
+    raw.write_text("issuer transcript bytes", encoding="utf-8")
+    digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+    db_path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL
+        );
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL, ticker TEXT NOT NULL,
+            fiscal_period_type TEXT NOT NULL, period_end TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO documents VALUES (1, 'NU', 'transcripts/raw/NU_Q1_2026.txt', ?)",
+        (digest,),
+    )
+    conn.execute("INSERT INTO transcripts VALUES (1, 1, 'NU', 'Q1', '2026-03-31 00:00:00')")
+    conn.commit()
+    conn.close()
+
+    def connect() -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(mod.db, "get_connection", connect)
+
+    assert mod._ingested_evidence_exists(tmp_path, "NU", 2026, 1, 12) is True
+    assert mod._ingested_evidence_exists(tmp_path, "WIX", 2026, 1, 12) is False
+    assert mod._ingested_evidence_exists(tmp_path, "NU", 2026, 2, 12) is False
+
+    raw.write_text("different bytes", encoding="utf-8")
+    assert mod._ingested_evidence_exists(tmp_path, "NU", 2026, 1, 12) is False
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    ["../outside.txt", "transcripts/raw/../outside.txt", "C:/outside.txt"],
+)
+def test_ingested_evidence_rejects_non_relative_recorded_paths(
+    recorded: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    db_path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE documents (id INTEGER PRIMARY KEY, ticker TEXT, file_path TEXT, sha256 TEXT);
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY, document_id INTEGER, ticker TEXT,
+            fiscal_period_type TEXT, period_end TEXT
+        );
+        INSERT INTO transcripts VALUES (1, 1, 'NU', 'Q1', '2026-03-31');
+        """
+    )
+    conn.execute("INSERT INTO documents VALUES (1, 'NU', ?, 'abc')", (recorded,))
+    conn.commit()
+    conn.close()
+
+    def connect() -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(mod.db, "get_connection", connect)
+    assert mod._ingested_evidence_exists(tmp_path, "NU", 2026, 1, 12) is False
 
 
 # ---------------------------------------------------------------------------

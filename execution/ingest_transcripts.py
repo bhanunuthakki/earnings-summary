@@ -19,20 +19,21 @@ import json
 import os
 import sqlite3
 import sys
+from contextlib import suppress
 from pathlib import Path
+from uuid import uuid4
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 import index_manager  # noqa: E402
+from compute import evidence_snapshot  # noqa: E402
 from compute.transcript_ingest import (  # noqa: E402
     IngestResult,
     ParsedFilename,
-    ingest_existing_ir_transcript,
-    ingest_one,
+    ingest_evidence_file,
     parse_transcript_filename,
-    sha256_of,
 )
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.invocation_fingerprint import files_fingerprint  # noqa: E402
@@ -52,11 +53,85 @@ _TRANSCRIPT_DIRS = (
 )
 
 
+class EvidencePathConflictError(ValueError):
+    """An immutable document path now contains bytes different from its receipt."""
+
+
+UnsafeEvidencePathError = evidence_snapshot.UnsafeEvidencePathError
+EvidenceSourceChangedError = evidence_snapshot.EvidenceSourceChangedError
+
+
+def _stage_evidence_file(
+    source: Path,
+    project_root: Path,
+    raw_root: Path,
+    processed_root: Path,
+    *,
+    snapshot: evidence_snapshot.EvidenceSnapshot | None = None,
+) -> Path:
+    """Atomically bind one stable byte snapshot to a content-addressed raw path."""
+    allowed_roots = (raw_root, processed_root)
+    source_parent = source.parent
+    if source_parent not in allowed_roots:
+        raise UnsafeEvidencePathError("transcript source is outside an intake root")
+    stable = snapshot or evidence_snapshot.capture_snapshot(source, source_parent)
+    payload, digest = stable.payload, stable.sha256
+    evidence_root = raw_root / ".evidence"
+    digest_root = evidence_root / digest
+    digest_root.mkdir(parents=True, exist_ok=True)
+    destination = digest_root / source.name
+    if destination.exists():
+        if evidence_snapshot.capture_snapshot(destination, raw_root).sha256 != digest:
+            raise EvidencePathConflictError("content-addressed evidence path has different bytes")
+        return destination
+
+    temporary = digest_root / f".{source.name}.{uuid4().hex}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            if evidence_snapshot.capture_snapshot(destination, raw_root).sha256 != digest:
+                raise EvidencePathConflictError(
+                    "content-addressed evidence path has different bytes"
+                ) from None
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
+    if evidence_snapshot.capture_snapshot(destination, raw_root).sha256 != digest:
+        raise EvidenceSourceChangedError("staged transcript evidence failed verification")
+    return destination
+
+
+def _assert_evidence_path_identity(
+    conn: sqlite3.Connection,
+    *,
+    file_path: Path,
+    project_root: Path,
+    current_sha: str,
+) -> None:
+    """Fail closed before ingest when a recorded path's bytes have changed."""
+    relative = str(file_path.relative_to(project_root)).replace("\\", "/")
+    recorded = {
+        str(row["sha256"])
+        for row in conn.execute(
+            "SELECT sha256 FROM documents WHERE file_path = ?", (relative,)
+        ).fetchall()
+    }
+    if recorded and recorded != {current_sha}:
+        raise EvidencePathConflictError(f"immutable evidence path has different bytes: {relative}")
+
+
 def _promote_raw_to_processed(
     result: IngestResult,
     parsed: ParsedFilename,
     conn: sqlite3.Connection,
     project_root: Path,
+    *,
+    commit: bool = True,
 ) -> Path:
     """Move a freshly-ingested `transcripts/raw/<name>` file to `transcripts/processed/<name>`.
 
@@ -88,8 +163,8 @@ def _promote_raw_to_processed(
     fiscal_quarter = f"Q{parsed.quarter_idx}"
 
     if target.exists():
-        src_sha = sha256_of(src)
-        target_sha = sha256_of(target)
+        src_sha = evidence_snapshot.capture_snapshot(src, src.parent).sha256
+        target_sha = evidence_snapshot.capture_snapshot(target, target.parent).sha256
         if src_sha == target_sha:
             os.remove(src)
         else:
@@ -115,7 +190,8 @@ def _promote_raw_to_processed(
         "UPDATE documents SET file_path = ? WHERE id = ?",
         (new_rel, result.document_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     index_manager.update_local_path(
         ticker=parsed.ticker,
         year=parsed.fiscal_year_label,
@@ -183,24 +259,30 @@ def _backfill_existing_ir_transcripts(
     for row in rows:
         doc_id = int(row["id"])
         ticker = row["ticker"]
-        rel_path = row["file_path"]
-        abs_path = (PROJECT_ROOT / rel_path).resolve()
-        if not abs_path.exists():
+        rel_path = str(row["file_path"])
+        location = evidence_snapshot.recorded_evidence_location(PROJECT_ROOT, rel_path)
+        if location is None:
             record_stage(
                 conn,
                 run_id,
                 ticker,
                 StageName.INGEST,
                 StageStatus.FAILED,
-                error_msg=f"missing_file: {rel_path}",
+                error_msg=f"unsafe_evidence_path: doc#{doc_id}",
             )
             failed += 1
-            sys.stderr.write(f"FAILED missing file for doc#{doc_id}: {rel_path}\n")
+            sys.stderr.write(f"FAILED unsafe evidence path for doc#{doc_id}\n")
             continue
+        abs_path, allowed_root = location
         try:
-            result: IngestResult = ingest_existing_ir_transcript(
-                conn, document_id=doc_id, file_path=abs_path
+            result = ingest_evidence_file(
+                conn,
+                document_id=doc_id,
+                file_path=abs_path,
+                allowed_root=allowed_root,
+                project_root=PROJECT_ROOT,
             )
+            assert result is not None
         except (ValueError, OSError) as e:
             record_stage(
                 conn,
@@ -208,10 +290,10 @@ def _backfill_existing_ir_transcripts(
                 ticker,
                 StageName.INGEST,
                 StageStatus.FAILED,
-                error_msg=f"ir_transcript doc#{doc_id}: {type(e).__name__}: {e}"[:500],
+                error_msg=f"ir_transcript doc#{doc_id}: {type(e).__name__}",
             )
             failed += 1
-            sys.stderr.write(f"FAILED doc#{doc_id} ({rel_path}): {type(e).__name__}: {e}\n")
+            sys.stderr.write(f"FAILED doc#{doc_id}: {type(e).__name__}\n")
             continue
         if result.skipped_existing:
             skipped_existing += 1
@@ -282,7 +364,6 @@ def _invocation_inputs(
     no_promote: bool,
 ) -> dict[str, JsonValue]:
     source_paths = [path for path, _ in in_scope]
-    source_paths.extend(path for _, _, _, path in ir_sources)
     return {
         "include_ir_transcripts": include_ir_transcripts,
         "no_promote": no_promote,
@@ -340,6 +421,61 @@ def main() -> int:
             print(json.dumps(plan, indent=2))
             return 0
 
+        raw_root = PROJECT_ROOT / "transcripts" / "raw"
+        processed_root = PROJECT_ROOT / "transcripts" / "processed"
+        snapshots: dict[Path, evidence_snapshot.EvidenceSnapshot] = {}
+        try:
+            staged_scope: list[tuple[Path, ParsedFilename]] = []
+            for path, parsed in in_scope:
+                stable = evidence_snapshot.capture_snapshot(path, path.parent)
+                staged = _stage_evidence_file(
+                    path,
+                    PROJECT_ROOT,
+                    raw_root,
+                    processed_root,
+                    snapshot=stable,
+                )
+                staged_scope.append((staged, parsed))
+                snapshots[staged] = evidence_snapshot.EvidenceSnapshot(
+                    path=staged,
+                    payload=stable.payload,
+                    sha256=stable.sha256,
+                )
+            for path, _parsed in staged_scope:
+                _assert_evidence_path_identity(
+                    conn,
+                    file_path=path,
+                    project_root=PROJECT_ROOT,
+                    current_sha=snapshots[path].sha256,
+                )
+        except (
+            EvidencePathConflictError,
+            EvidenceSourceChangedError,
+            UnsafeEvidencePathError,
+        ) as exc:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "transcript_evidence_capture_failed",
+                        "error_class": type(exc).__name__,
+                    }
+                )
+                + "\n"
+            )
+            print(
+                json.dumps(
+                    {
+                        **plan,
+                        "ingested": 0,
+                        "skipped_existing": 0,
+                        "failed": 1,
+                        "terminal_status": "failed_closed",
+                    }
+                )
+            )
+            return 1
+        in_scope = staged_scope
+
         ir_sources = (
             _ir_transcript_sources(conn, args.ticker) if args.include_ir_transcripts else []
         )
@@ -373,25 +509,50 @@ def main() -> int:
         failed = 0
 
         for path, parsed in in_scope:
+            savepoint = (
+                f"transcript_file_{parsed.ticker}_{parsed.fiscal_year_label}_{parsed.quarter_idx}"
+            )
+            conn.execute(f"SAVEPOINT {savepoint}")  # nosec B608 -- identifier from parsed filename
             try:
-                result = ingest_one(
+                result = ingest_evidence_file(
                     conn,
                     file_path=path,
+                    allowed_root=raw_root,
                     project_root=PROJECT_ROOT,
                     tracked_tickers=tracked,
+                    commit=False,
                 )
+                if result is not None and not result.skipped_existing and not args.no_promote:
+                    new_path = _promote_raw_to_processed(
+                        result, parsed, conn, PROJECT_ROOT, commit=False
+                    )
+                    if new_path != result.file_path:
+                        result = dataclasses.replace(result, file_path=new_path)
             except Exception as e:
+                conn.execute(f"ROLLBACK TO {savepoint}")  # nosec B608
+                conn.execute(f"RELEASE {savepoint}")  # nosec B608
                 record_stage(
                     conn,
                     run_id,
                     parsed.ticker,
                     StageName.INGEST,
                     StageStatus.FAILED,
-                    error_msg=f"{path.name}: {type(e).__name__}: {e}"[:500],
+                    error_msg=f"{path.name}: {type(e).__name__}",
                 )
                 failed += 1
-                sys.stderr.write(f"FAILED {path.name}: {type(e).__name__}: {e}\n")
+                sys.stderr.write(
+                    json.dumps(
+                        {
+                            "event": "transcript_ingest_failed",
+                            "ticker": parsed.ticker,
+                            "error_class": type(e).__name__,
+                        }
+                    )
+                    + "\n"
+                )
                 continue
+
+            conn.execute(f"RELEASE {savepoint}")  # nosec B608
 
             if result is None:
                 continue
@@ -406,10 +567,6 @@ def main() -> int:
                     period_end=result.period_end,
                 )
             else:
-                if not args.no_promote:
-                    new_path = _promote_raw_to_processed(result, parsed, conn, PROJECT_ROOT)
-                    if new_path != result.file_path:
-                        result = dataclasses.replace(result, file_path=new_path)
                 record_stage(
                     conn,
                     run_id,

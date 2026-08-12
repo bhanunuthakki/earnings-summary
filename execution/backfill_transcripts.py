@@ -6,9 +6,8 @@ non-archived), or a single ticker via `--ticker`:
   1. Compute the last N (default 6) fiscal-quarter end dates that have already
      passed, using `tracked_companies.fiscal_year_end` to map fiscal-quarter
      index → calendar quarter end.
-  2. For each (fiscal_year, fiscal_quarter) with no transcript file on disk
-     (neither `transcripts/raw/<T>_Q<n>_<Y>.txt` nor
-     `transcripts/processed/<T>_Q<n>_<Y>.txt`), invoke
+  2. For each period with no exact DB/path/SHA evidence receipt, ingest an
+     existing local file or invoke
      `fetch_qa_transcript.fetch_qa()` to pull the Q&A segment from the free
      aggregator chain (roic.ai → stockanalysis.com → tickertrends.io).
   3. After all per-ticker fetches, invoke `execution/ingest_transcripts.py`
@@ -20,7 +19,7 @@ non-archived), or a single ticker via `--ticker`:
      don't yet have any commitments row.
 
 The script is idempotent at every layer:
-  - File-exists check skips a (ticker, year, quarter) we've already fetched
+  - Exact DB/path/SHA evidence skips a period already ingested
   - Aggregator misses are logged but tolerated — coverage gaps are expected
     for delisted micro-caps and certain foreign issuers (e.g. NTDOY). Pass
     --audio-fallback to escalate a miss to the YouTube-audio + Whisper path
@@ -48,6 +47,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -60,6 +60,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
 from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # Sibling scripts in execution/ — needed when this module is imported (e.g.
@@ -95,7 +96,7 @@ def _retarget_paths(repo_root: Path) -> None:
     fetch_qa_transcript.RAW_DIR = _RAW_DIR
 
 
-def _quarter_end_date(fiscal_year: int, fiscal_quarter: int, fye_month: int) -> date:
+def quarter_end_date(fiscal_year: int, fiscal_quarter: int, fye_month: int) -> date:
     """Calendar date when fiscal Q<q> of fiscal year <fy> ends.
 
     Convention: `fiscal_year` is the calendar year in which the fiscal year
@@ -123,7 +124,7 @@ def recent_fiscal_quarters(fye_month: int, today: date, n: int) -> list[tuple[in
     # fiscal year can end in the current calendar year) backwards.
     for y in range(today.year + 1, today.year - 5, -1):
         for q in (4, 3, 2, 1):
-            end = _quarter_end_date(y, q, fye_month)
+            end = quarter_end_date(y, q, fye_month)
             if end <= today:
                 out.append((y, q))
                 if len(out) == n:
@@ -145,9 +146,69 @@ def _qlabel(year: int, quarter: int) -> str:
     return f"Q{quarter}_{year}"
 
 
-def _has_transcript_file(ticker: str, year: int, quarter: int) -> bool:
+def _local_transcript_file_exists(ticker: str, year: int, quarter: int) -> bool:
     name = f"{ticker}_Q{quarter}_{year}.txt"
     return (_RAW_DIR / name).exists() or (_PROCESSED_DIR / name).exists()
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _recorded_evidence_path(root: Path, recorded: str) -> Path | None:
+    candidate = Path(recorded)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    parts = candidate.parts
+    if len(parts) < 3 or parts[0] != "transcripts" or parts[1] not in {"raw", "processed"}:
+        return None
+    intended = (root / parts[0] / parts[1]).resolve()
+    lexical = root / candidate
+    current = lexical
+    while True:
+        try:
+            attributes = getattr(current.lstat(), "st_file_attributes", 0)
+        except OSError:
+            attributes = 0
+        if current.is_symlink() or (isinstance(attributes, int) and bool(attributes & 0x400)):
+            return None
+        if current == root:
+            break
+        if root not in current.parents:
+            return None
+        current = current.parent
+    try:
+        resolved = lexical.resolve(strict=True)
+        resolved.relative_to(intended)
+        return resolved
+    except (OSError, ValueError):
+        return None
+
+
+def _has_ingested_evidence(ticker: str, year: int, quarter: int, fye_month: int) -> bool:
+    """Require the exact fiscal-period DB receipt, path, and bytes."""
+    period_end = quarter_end_date(year, quarter, fye_month).isoformat()
+    conn = db.get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT d.file_path, d.sha256 FROM documents AS d "
+            "JOIN transcripts AS t ON t.document_id = d.id "
+            "WHERE UPPER(d.ticker) = ? AND UPPER(t.ticker) = ? "
+            "AND t.fiscal_period_type = ? AND date(t.period_end) = date(?)",
+            (ticker.upper(), ticker.upper(), f"Q{quarter}", period_end),
+        ).fetchall()
+    finally:
+        conn.close()
+    root = Path(db.PROJECT_ROOT).resolve()
+    for row in rows:
+        snapshot = snapshot_recorded_evidence(root, str(row["file_path"]))
+        if snapshot is not None and snapshot.sha256 == str(row["sha256"]):
+            return True
+    return False
 
 
 def _try_audio_fallback(ticker: str, year: int, quarter: int) -> bool:
@@ -201,8 +262,11 @@ def _backfill_one(
     quarters = recent_fiscal_quarters(fye_month, today, lookback)
     for y, q in quarters:
         label = _qlabel(y, q)
-        if _has_transcript_file(ticker, y, q):
+        if _has_ingested_evidence(ticker, y, q, fye_month):
             result.skipped_existing.append(label)
+            continue
+        if _local_transcript_file_exists(ticker, y, q):
+            result.fetched.append(f"{label} [pending_ingest]")
             continue
         if dry_run:
             result.aggregator_misses.append(f"{label} [dry-run]")
@@ -275,6 +339,7 @@ def _run_ingest(repo_root: Path, dry_run: bool) -> int:
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
         str(repo_root / "execution" / "ingest_transcripts.py"),
+        "--no-promote",
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
@@ -324,6 +389,19 @@ def _newly_ingested_tickers(
     if ingest_rc != 0:
         return []
     return [result.ticker for result in results if result.fetched]
+
+
+def _terminal_exit_code(
+    ingest_rc: int | None,
+    extract_results: list[dict[str, object]],
+    acquisition_errors: int = 0,
+) -> int:
+    """Preserve a child-ingest failure for Scheduler and human operators."""
+    if ingest_rc not in (None, 0):
+        return ingest_rc
+    if acquisition_errors or any(item.get("rc") != 0 for item in extract_results):
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -444,7 +522,11 @@ def main() -> int:
         },
     }
     print(json.dumps(summary, indent=2))
-    return 0
+    return _terminal_exit_code(
+        ingest_rc,
+        extract_results,
+        acquisition_errors=sum(len(result.errors) for result in per_ticker),
+    )
 
 
 if __name__ == "__main__":

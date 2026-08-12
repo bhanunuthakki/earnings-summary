@@ -13,17 +13,19 @@ _RAW_RELATION = re.compile(r"\b(?:FROM|JOIN)\s+(?:transcripts|filing_sections)\b
 
 # This exact inventory is migration debt, not an approved extension surface.
 # Every remaining entry is intentionally history-aware: backfill/dedupe/repair
-# tools must see superseded rows; transcript ingestion and refetch mutate a
+# tools and immutable-evidence auditors must see superseded rows; transcript ingestion and refetch mutate a
 # specifically identified legacy row; section-item, longitudinal, and tone
 # readers validate an explicit historical identifier; quarterly refresh avoids
 # reparsing a document even after its transcript is superseded. New raw readers
 # must not appear, and deleting an entry is always allowed.
 AUDITED_RAW_RELATION_READS = {
-    "execution/backfill_transcripts.py": 1,
+    "execution/audit_transcript_evidence.py": 1,
+    "execution/backfill_transcripts.py": 2,
     "execution/dedupe_transcripts.py": 1,
     "execution/ingest_filing_sections.py": 1,
     "execution/refetch_aggregator_transcripts.py": 1,
     "execution/repair_document_parent_links.py": 1,
+    "execution/scan_ir_transcripts.py": 1,
     "src/compute/transcript_ingest.py": 2,
     "src/filings/section_items.py": 1,
     "src/pipeline/quarterly_refresh.py": 1,

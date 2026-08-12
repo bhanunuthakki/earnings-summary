@@ -14,6 +14,7 @@ explicit named patterns — no substring matching, no LLM.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 import sqlite3
@@ -26,6 +27,7 @@ from typing import cast
 
 from pypdf import PdfReader
 
+from compute import evidence_snapshot
 from models.documents import DocType, FetchStatus, SourceType
 from models.facts import FiscalPeriodType
 from provenance.selection import selected_transcripts_relation
@@ -115,6 +117,20 @@ def read_transcript_text(path: Path) -> str:
     elif path.suffix.lower() == ".txt":
         with open(path, encoding="utf-8") as f:
             text = f.read()
+    else:
+        raise ValueError(f"Unsupported transcript suffix: {path.suffix}")
+    if not text.strip():
+        raise ValueError(f"Empty text extracted from {path}")
+    return text
+
+
+def read_transcript_snapshot(path: Path, payload: bytes) -> str:
+    """Extract transcript text from the exact bytes used for evidence identity."""
+    if path.suffix.lower() == ".pdf":
+        reader = PdfReader(io.BytesIO(payload))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    elif path.suffix.lower() == ".txt":
+        text = payload.decode("utf-8")
     else:
         raise ValueError(f"Unsupported transcript suffix: {path.suffix}")
     if not text.strip():
@@ -696,6 +712,8 @@ def ingest_one(
     file_path: Path,
     project_root: Path,
     tracked_tickers: frozenset[str],
+    commit: bool = True,
+    snapshot_bytes: bytes | None = None,
 ) -> IngestResult | None:
     """Process one transcript file. Returns None for filename mismatches / out-of-scope tickers.
 
@@ -709,7 +727,11 @@ def ingest_one(
     if parsed.ticker not in tracked_tickers:
         return None
 
-    sha = sha256_of(file_path)
+    sha = (
+        hashlib.sha256(snapshot_bytes).hexdigest()
+        if snapshot_bytes is not None
+        else sha256_of(file_path)
+    )
     existing = find_existing_document_id(conn, sha)
     period = map_to_period(parsed)
 
@@ -725,7 +747,11 @@ def ingest_one(
                 segment_count=0,
                 skipped_existing=True,
             )
-        text = read_transcript_text(file_path)
+        text = (
+            read_transcript_snapshot(file_path, snapshot_bytes)
+            if snapshot_bytes is not None
+            else read_transcript_text(file_path)
+        )
         turns = segment_by_speaker(text, known_speakers=known_speakers_for(parsed.ticker))
         qa = detect_qa_section(text)
         source = classify_transcript_source(
@@ -761,7 +787,8 @@ def ingest_one(
             new_document_id=existing,
             new_transcript_id=transcript_id,
         )
-        conn.commit()
+        if commit:
+            conn.commit()
         return IngestResult(
             file_path=file_path,
             ticker=parsed.ticker,
@@ -775,7 +802,11 @@ def ingest_one(
             source=source,
         )
 
-    text = read_transcript_text(file_path)
+    text = (
+        read_transcript_snapshot(file_path, snapshot_bytes)
+        if snapshot_bytes is not None
+        else read_transcript_text(file_path)
+    )
     turns = segment_by_speaker(text, known_speakers=known_speakers_for(parsed.ticker))
     qa = detect_qa_section(text)
     source = classify_transcript_source(
@@ -825,7 +856,8 @@ def ingest_one(
             winner_transcript_id=winner_transcript_id,
             loser_transcript_ids=[losing_transcript_id],
         )
-        conn.commit()
+        if commit:
+            conn.commit()
         return IngestResult(
             file_path=file_path,
             ticker=parsed.ticker,
@@ -863,7 +895,8 @@ def ingest_one(
         new_document_id=document_id,
         new_transcript_id=transcript_id,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return IngestResult(
         file_path=file_path,
         ticker=parsed.ticker,
@@ -878,11 +911,80 @@ def ingest_one(
     )
 
 
+def ingest_evidence_file(
+    conn: sqlite3.Connection,
+    *,
+    file_path: Path,
+    allowed_root: Path,
+    project_root: Path,
+    tracked_tickers: frozenset[str] | None = None,
+    document_id: int | None = None,
+    commit: bool = True,
+) -> IngestResult | None:
+    """Capture, parse, and persist one evidence file as a single atomic operation.
+
+    SHA computation and parsing use the same handle-bound byte snapshot. The
+    pathname is revalidated before the savepoint is released so a concurrent
+    replacement fails closed and rolls back all per-file writes.
+    """
+    if (tracked_tickers is None) == (document_id is None):
+        raise ValueError("provide exactly one of tracked_tickers or document_id")
+    snapshot = evidence_snapshot.capture_snapshot(file_path, allowed_root)
+    savepoint = "transcript_evidence_ingest"
+    conn.execute(f"SAVEPOINT {savepoint}")  # nosec B608 -- constant internal identifier
+    try:
+        if document_id is not None:
+            row = conn.execute(
+                "SELECT sha256 FROM documents WHERE id = ?", (document_id,)
+            ).fetchone()
+            recorded_sha = str(row["sha256"]) if row is not None and row["sha256"] else ""
+            if re.fullmatch(r"[0-9a-f]{64}", recorded_sha) is None:
+                raise evidence_snapshot.EvidenceSourceChangedError(
+                    "document evidence receipt is missing or invalid"
+                )
+            if recorded_sha != snapshot.sha256:
+                raise evidence_snapshot.EvidenceSourceChangedError(
+                    "document evidence does not match its immutable receipt"
+                )
+            result: IngestResult | None = ingest_existing_ir_transcript(
+                conn,
+                document_id=document_id,
+                file_path=file_path,
+                snapshot_bytes=snapshot.payload,
+                commit=False,
+            )
+        else:
+            assert tracked_tickers is not None
+            result = ingest_one(
+                conn,
+                file_path=file_path,
+                project_root=project_root,
+                tracked_tickers=tracked_tickers,
+                snapshot_bytes=snapshot.payload,
+                commit=False,
+            )
+        verified_after = evidence_snapshot.capture_snapshot(file_path, allowed_root)
+        if verified_after.sha256 != snapshot.sha256:
+            raise evidence_snapshot.EvidenceSourceChangedError(
+                "evidence changed before transaction release"
+            )
+    except Exception:
+        conn.execute(f"ROLLBACK TO {savepoint}")  # nosec B608
+        conn.execute(f"RELEASE {savepoint}")  # nosec B608
+        raise
+    conn.execute(f"RELEASE {savepoint}")  # nosec B608
+    if commit:
+        conn.commit()
+    return result
+
+
 def ingest_existing_ir_transcript(
     conn: sqlite3.Connection,
     *,
     document_id: int,
     file_path: Path,
+    snapshot_bytes: bytes,
+    commit: bool = True,
 ) -> IngestResult:
     """Backfill `transcripts` + `transcript_segments` for an already-ingested ir_transcript document.
 
@@ -906,7 +1008,7 @@ def ingest_existing_ir_transcript(
         raise ValueError(
             f"Document {document_id} ({file_path.name}) has NULL period_end; cannot link transcript"
         )
-    text = read_transcript_text(file_path)
+    text = read_transcript_snapshot(file_path, snapshot_bytes)
     turns = segment_by_speaker(text, known_speakers=known_speakers_for(ticker))
     qa = detect_qa_section(text)
     fiscal_period_type = _infer_fiscal_period_type(period_end)
@@ -942,7 +1044,8 @@ def ingest_existing_ir_transcript(
             winner_transcript_id=winner_transcript_id,
             loser_transcript_ids=[losing_transcript_id],
         )
-        conn.commit()
+        if commit:
+            conn.commit()
         return IngestResult(
             file_path=file_path,
             ticker=ticker,
@@ -972,7 +1075,8 @@ def ingest_existing_ir_transcript(
         new_document_id=document_id,
         new_transcript_id=transcript_id,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return IngestResult(
         file_path=file_path,
         ticker=ticker,
