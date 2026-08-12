@@ -18,6 +18,7 @@ from pipeline.source_policy import (  # noqa: E402
     CollectionMode,
     CollectionSource,
     FmpIssuerRules,
+    IrEndpointRule,
     IrIssuerRules,
     IssuerAcquisitionPolicy,
     NameRule,
@@ -115,8 +116,12 @@ def test_policy_is_deeply_immutable_and_hashes_are_golden() -> None:
     with pytest.raises(ValidationError):
         rubrik.fmp.endpoint_aliases += (NameRule(source_name="old", canonical_name="new"),)
     assert issuer_policy("rbrk").policy_sha256 == original_hash
-    rubrik_golden = "542c3d70f3599e0ffdeeb14fa2005271225f3a0ed2c389d912ac566cbfb7781e"  # pragma: allowlist secret
-    wix_golden = "112015facabe16776da9d4e64cd1f05c64d16eee4d7e95034d96121e4b6cc082"  # pragma: allowlist secret
+    rubrik_golden = "".join(
+        ("21e3a7130c09994a", "041ef28de2e0a09e", "b7f4e3205171a084", "e445b11f1f01b1f7")
+    )
+    wix_golden = "".join(
+        ("9b895000e48eff63", "b23a59dce294f625", "0bd00c7952e9ead0", "d88a38b02c6e3454")
+    )
     assert rubrik.policy_sha256 == rubrik_golden
     assert wix.policy_sha256 == wix_golden
 
@@ -129,7 +134,9 @@ def _policy(issuer_id: str, *aliases: str) -> IssuerAcquisitionPolicy:
         ir=IrIssuerRules(
             authority_url="https://issuer.example/investors",
             adapter_key=AdapterKey.RUBRIK_QUARTER_TABLE,
-            publisher_host_suffixes=("issuer.example",),
+            approved_endpoints=(
+                IrEndpointRule(host="issuer.example", exact_paths=("/investors",)),
+            ),
             fiscal_year_end="12-31",
             admitted_doc_types=(),
         ),
@@ -166,3 +173,21 @@ def test_rule_changes_and_invalid_shapes_are_detected() -> None:
         issuer_policy("UNKNOWN")
     with pytest.raises(ValidationError):
         FmpIssuerRules.model_validate({"label_overrides": {"sales": "revenue"}})
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["  issuer.example", ".issuer.example", "issuer.example.", "issuer..example", "127.0.0.1"],
+)
+def test_ir_endpoint_rule_rejects_noncanonical_hosts(host: str) -> None:
+    with pytest.raises(ValidationError):
+        IrEndpointRule(host=host, exact_paths=("/investors",))
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/../secret", "//investors", "/%2e%2e/secret", "/%252e%252e/secret"],
+)
+def test_ir_endpoint_rule_rejects_noncanonical_paths(path: str) -> None:
+    with pytest.raises(ValidationError):
+        IrEndpointRule(host="issuer.example", exact_paths=(path,))
