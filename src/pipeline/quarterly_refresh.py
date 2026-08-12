@@ -36,6 +36,7 @@ from pathlib import Path
 from compute.as_reported import extract_as_reported_facts
 from compute.balance_sheet import extract_balance_sheet_facts
 from compute.cashflow import extract_cashflow_facts
+from compute.evidence_snapshot import recorded_evidence_location
 from compute.fmp_derived_kpis import derive_for_ticker
 from compute.income_statement import extract_income_statement_facts
 from compute.say_do import match_pending as match_commitments_pending
@@ -46,9 +47,7 @@ from compute.thesis_evaluator import (
     evaluate_ticker_thesis,
     persist_verdict,
 )
-from compute.transcript_ingest import (
-    ingest_existing_ir_transcript,
-)
+from compute.transcript_ingest import ingest_evidence_file
 from log_redact import redact
 from models.kpis import BreachStatus
 from pipeline.sec_xbrl import CIK_MAP
@@ -346,12 +345,19 @@ def _stage_ingest_ir_transcripts(
     failed = 0
     for row in docs:
         doc_id = int(row["id"])
-        abs_path = (project_root / row["file_path"]).resolve()
-        if not abs_path.exists():
+        location = recorded_evidence_location(project_root, str(row["file_path"]))
+        if location is None:
             failed += 1
             continue
+        abs_path, allowed_root = location
         try:
-            ingest_existing_ir_transcript(conn, document_id=doc_id, file_path=abs_path)
+            ingest_evidence_file(
+                conn,
+                document_id=doc_id,
+                file_path=abs_path,
+                allowed_root=allowed_root,
+                project_root=project_root,
+            )
             processed += 1
         except (ValueError, OSError):
             failed += 1

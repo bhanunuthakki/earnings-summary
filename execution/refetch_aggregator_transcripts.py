@@ -60,7 +60,7 @@ from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E40
 )
 
 import db  # noqa: E402
-from compute.transcript_ingest import ingest_one  # noqa: E402
+from compute.transcript_ingest import ingest_evidence_file  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 
 _TRANSCRIPT_INDEX = PROJECT_ROOT / ".tmp" / "transcript_index.json"
@@ -240,8 +240,12 @@ def _process_one(
         )
 
     try:
-        result = ingest_one(
-            conn, file_path=fetched.output_path, project_root=repo_root, tracked_tickers=tracked
+        result = ingest_evidence_file(
+            conn,
+            file_path=fetched.output_path,
+            allowed_root=repo_root / "transcripts" / "raw",
+            project_root=repo_root,
+            tracked_tickers=tracked,
         )
     except Exception as e:
         return QuarterResult(

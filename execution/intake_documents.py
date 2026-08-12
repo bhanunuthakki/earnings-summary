@@ -26,6 +26,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict
+
 # Make `src/` importable
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -37,7 +39,16 @@ from models.documents import DocType  # noqa: E402
 from runtime.python_process import managed_python_prefix  # noqa: E402
 
 
-def summarize(results: list[IntakeResult]) -> dict:
+class ChainResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    process_failures: int = 0
+    ingest_failures: int = 0
+    commitment_failures: int = 0
+    exit_code: int = 0
+
+
+def summarize(results: list[IntakeResult]) -> dict[str, object]:
     skip_reasons: Counter[str] = Counter(
         r.skip_reason for r in results if r.skipped and r.skip_reason
     )
@@ -55,7 +66,12 @@ def summarize(results: list[IntakeResult]) -> dict:
     }
 
 
-def chain_processing(results: list[IntakeResult]) -> None:
+def chain_processing(
+    results: list[IntakeResult],
+    *,
+    process_documents: bool = True,
+    include_ir_transcripts: bool = True,
+) -> ChainResult:
     """Run downstream pipelines for each ticker that got new IR docs.
 
     Every ticker with new docs gets `process_ir_documents.py` (LLM summary).
@@ -70,7 +86,7 @@ def chain_processing(results: list[IntakeResult]) -> None:
     new_filings = [r for r in results if not r.skipped and r.classification is not None]
     if not new_filings:
         print("[intake] No newly-filed IR documents — skipping process chain.", file=sys.stderr)
-        return
+        return ChainResult()
 
     tickers = sorted({r.classification.ticker for r in new_filings if r.classification})
     transcript_tickers = sorted(
@@ -84,20 +100,30 @@ def chain_processing(results: list[IntakeResult]) -> None:
     process_script = SCRIPT_DIR / "process_ir_documents.py"
     ingest_script = SCRIPT_DIR / "ingest_transcripts.py"
     commitments_script = SCRIPT_DIR / "extract_commitments_from_transcript.py"
+    process_failures = 0
+    ingest_failures = 0
+    commitment_failures = 0
+    exit_code = 0
 
-    for ticker in tickers:
-        print(f"[intake] Chaining: process_ir_documents.py --ticker {ticker}", file=sys.stderr)
-        subprocess.run(
-            [*managed_python_prefix(PROJECT_ROOT), str(process_script), "--ticker", ticker],
-            check=False,
-        )
+    if process_documents:
+        for ticker in tickers:
+            print(f"[intake] Chaining: process_ir_documents.py --ticker {ticker}", file=sys.stderr)
+            completed = subprocess.run(
+                [*managed_python_prefix(PROJECT_ROOT), str(process_script), "--ticker", ticker],
+                check=False,
+            )
+            child_rc = completed.returncode
+            if child_rc != 0:
+                process_failures += 1
+                if exit_code == 0:
+                    exit_code = child_rc
 
-    for ticker in transcript_tickers:
+    for ticker in transcript_tickers if include_ir_transcripts else ():
         print(
             f"[intake] Chaining: ingest_transcripts.py --ticker {ticker} --include-ir-transcripts",
             file=sys.stderr,
         )
-        subprocess.run(
+        completed = subprocess.run(
             [
                 *managed_python_prefix(PROJECT_ROOT),
                 str(ingest_script),
@@ -107,11 +133,27 @@ def chain_processing(results: list[IntakeResult]) -> None:
             ],
             check=False,
         )
+        ingest_rc = completed.returncode
+        if ingest_rc != 0:
+            ingest_failures += 1
+            if exit_code == 0:
+                exit_code = ingest_rc
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "intake_transcript_ingest_failed",
+                        "ticker": ticker,
+                        "return_code": ingest_rc,
+                    }
+                )
+                + "\n"
+            )
+            continue
         print(
             f"[intake] Chaining: extract_commitments_from_transcript.py --auto --ticker {ticker}",
             file=sys.stderr,
         )
-        subprocess.run(
+        completed = subprocess.run(
             [
                 *managed_python_prefix(PROJECT_ROOT),
                 str(commitments_script),
@@ -121,9 +163,21 @@ def chain_processing(results: list[IntakeResult]) -> None:
             ],
             check=False,
         )
+        commitment_rc = completed.returncode
+        if commitment_rc != 0:
+            commitment_failures += 1
+            if exit_code == 0:
+                exit_code = commitment_rc
+
+    return ChainResult(
+        process_failures=process_failures,
+        ingest_failures=ingest_failures,
+        commitment_failures=commitment_failures,
+        exit_code=exit_code,
+    )
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Classify user-dropped documents in _inbox/ and file them into the canonical "
@@ -147,15 +201,26 @@ def main() -> None:
         action="store_true",
         help="After filing, run process_ir_documents.py for each affected ticker",
     )
+    parser.add_argument(
+        "--include-ir-transcripts",
+        action="store_true",
+        help="After filing, ingest transcript documents and extract Say-Do commitments",
+    )
     args = parser.parse_args()
 
     results = scan_inbox(args.inbox, dry_run=args.dry_run)
     summary = summarize(results)
-    print(json.dumps(summary, indent=2))
+    chain = ChainResult()
 
-    if args.process and not args.dry_run:
-        chain_processing(results)
+    if (args.process or args.include_ir_transcripts) and not args.dry_run:
+        chain = chain_processing(
+            results,
+            process_documents=bool(args.process),
+            include_ir_transcripts=bool(args.include_ir_transcripts or args.process),
+        )
+    print(json.dumps({**summary, "chain": chain.model_dump()}, separators=(",", ":")))
+    return chain.exit_code
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

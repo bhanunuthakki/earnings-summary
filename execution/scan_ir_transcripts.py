@@ -8,11 +8,9 @@ earnings date and stops as soon as that quarter's transcript is fetched +
 ingested.
 
 It is distinct from ``backfill_transcripts.py`` (a broad daily sweep over the
-last 6 quarters of every active ticker, idempotent on raw OR processed): this is
-a FOCUSED, windowed re-check of just the *latest reported* quarter, idempotent on
-the **processed** artifact (``transcripts/processed/<T>_Q<n>_<Y>.txt`` — the
-canonical file the Q&A roster reads), so it keeps retrying through the window
-until the official transcript actually lands and is ingested.
+last 6 quarters of every active ticker): this is a FOCUSED, windowed re-check of
+just the *latest reported* quarter. Its stop signal is the exact DB-bound path
+and SHA, so it keeps retrying until the official transcript is truly ingested.
 
 Per ticker:
 
@@ -20,14 +18,14 @@ Per ticker:
      Outside ``[earnings, earnings + window_days]`` → skip (not in a window).
   2. Latest reported fiscal quarter (``recent_fiscal_quarters`` via
      ``tracked_companies.fiscal_year_end``).
-  3. Processed file already present → skip (already ingested — the stop signal).
-  4. Raw file present but not yet processed → flag for ingest (a prior fetch).
+  3. Exact ticker/period DB receipt + recorded path + SHA means ingested.
+  4. Raw file present without that receipt is pending ingest.
   5. Otherwise ``fetch_qa(...)`` — the issuer_ir-first chain re-checks the IR
      site and writes the raw Q&A file.
 
 After the per-ticker pass, if anything was fetched (or is awaiting ingest),
-invoke ``execution/ingest_transcripts.py`` once to promote raw → processed +
-register the ``transcripts`` rows.
+invoke ``execution/ingest_transcripts.py --no-promote`` once to register rows
+while preserving the immutable raw evidence path.
 
 Idempotent + best-effort: an issuer that hasn't posted yet is a no-op that
 retries tomorrow, and one ticker's failure never aborts the batch.
@@ -45,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -55,13 +54,14 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from compute.evidence_snapshot import snapshot_recorded_evidence  # noqa: E402
 from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # Sibling scripts in execution/ — needed when this module is imported (e.g. from
 # tests) rather than run directly via `python execution/scan_ir_transcripts.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from backfill_transcripts import recent_fiscal_quarters  # noqa: E402
+from backfill_transcripts import quarter_end_date, recent_fiscal_quarters  # noqa: E402
 from fetch_qa_transcript import FetchQaSpec, fetch_qa  # noqa: E402
 
 import db  # noqa: E402
@@ -101,9 +101,71 @@ def _transcript_name(ticker: str, year: int, quarter: int) -> str:
     return f"{ticker.upper()}_Q{quarter}_{year}.txt"
 
 
-def _processed_exists(repo_root: Path, ticker: str, year: int, quarter: int) -> bool:
-    name = _transcript_name(ticker, year, quarter)
-    return (repo_root / "transcripts" / "processed" / name).exists()
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _recorded_evidence_path(repo_root: Path, recorded: str) -> Path | None:
+    candidate = Path(recorded)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    parts = candidate.parts
+    if len(parts) < 3 or parts[0] != "transcripts" or parts[1] not in {"raw", "processed"}:
+        return None
+    root = repo_root.resolve()
+    intended = (root / parts[0] / parts[1]).resolve()
+    lexical = root / candidate
+    current = lexical
+    while True:
+        try:
+            attributes = getattr(current.lstat(), "st_file_attributes", 0)
+        except OSError:
+            attributes = 0
+        if current.is_symlink() or (isinstance(attributes, int) and bool(attributes & 0x400)):
+            return None
+        if current == root:
+            break
+        if root not in current.parents:
+            return None
+        current = current.parent
+    try:
+        resolved = lexical.resolve(strict=True)
+        resolved.relative_to(intended)
+        return resolved
+    except (OSError, ValueError):
+        return None
+
+
+def _ingested_evidence_exists(
+    repo_root: Path,
+    ticker: str,
+    year: int,
+    quarter: int,
+    fye_month: int,
+) -> bool:
+    """Return true only for DB-bound bytes at the exact ticker and fiscal period."""
+    period_end = quarter_end_date(year, quarter, fye_month).isoformat()
+    conn = db.get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT d.file_path, d.sha256 FROM documents AS d "
+            "JOIN transcripts AS t ON t.document_id = d.id "
+            "WHERE UPPER(d.ticker) = ? AND UPPER(t.ticker) = ? "
+            "AND t.fiscal_period_type = ? AND date(t.period_end) = date(?)",
+            (ticker.upper(), ticker.upper(), f"Q{quarter}", period_end),
+        ).fetchall()
+    finally:
+        conn.close()
+    root = repo_root.resolve()
+    for row in rows:
+        snapshot = snapshot_recorded_evidence(root, str(row["file_path"]))
+        if snapshot is not None and snapshot.sha256 == str(row["sha256"]):
+            return True
+    return False
 
 
 def _raw_exists(repo_root: Path, ticker: str, year: int, quarter: int) -> bool:
@@ -144,7 +206,7 @@ def scan_one(
     year, quarter = quarters[0]
     qlabel = f"Q{quarter}_{year}"
 
-    if _processed_exists(repo_root, ticker, year, quarter):
+    if _ingested_evidence_exists(repo_root, ticker, year, quarter, fye_month):
         return TickerScanResult(ticker, "already_ingested", qlabel)
     if dry_run:
         return TickerScanResult(ticker, "would_fetch", qlabel, detail=f"last_earnings={last}")
@@ -209,7 +271,7 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
 
 
 def _run_ingest(repo_root: Path, dry_run: bool) -> int:
-    """Run ingest_transcripts.py to promote new raw files → processed + DB rows.
+    """Run ingest_transcripts.py without moving immutable evidence paths.
 
     Invokes `repo_root`'s copy of the script with `cwd=repo_root` (the same
     rationale as backfill_transcripts) so a worktree run lands on the main repo.
@@ -220,6 +282,7 @@ def _run_ingest(repo_root: Path, dry_run: bool) -> int:
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
         str(repo_root / "execution" / "ingest_transcripts.py"),
+        "--no-promote",
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
@@ -295,7 +358,17 @@ def main() -> int:
         "in_window": [asdict(r) for r in results if r.status != "out_of_window"],
     }
     print(json.dumps(summary, indent=2))
-    return 0
+    return _terminal_exit_code(
+        ingest_rc,
+        scan_errors=sum(1 for result in results if result.status == "error"),
+    )
+
+
+def _terminal_exit_code(ingest_rc: int | None, scan_errors: int = 0) -> int:
+    """Preserve a child-ingest failure for Scheduler and human operators."""
+    if ingest_rc not in (None, 0):
+        return ingest_rc
+    return 1 if scan_errors else 0
 
 
 if __name__ == "__main__":

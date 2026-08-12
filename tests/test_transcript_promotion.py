@@ -12,6 +12,7 @@ import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -291,11 +292,14 @@ def test_index_entries_are_updated_after_promotion(
 
     mod._promote_raw_to_processed(_result(raw_path, doc_id=doc_id), _parsed(), conn, fake_project)
 
-    t_entry = index_manager.has_transcript("GOOG", 2025, "Q1")
+    t_entry = cast("dict[str, object] | None", index_manager.has_transcript("GOOG", 2025, "Q1"))
     assert t_entry is not None
     assert t_entry["filepath"] == "transcripts/processed/GOOG_Q1_2025.txt"
 
-    d_entry = index_manager.has_document("GOOG", 2025, "Q1", "transcript")
+    d_entry = cast(
+        "dict[str, object] | None",
+        index_manager.has_document("GOOG", 2025, "Q1", "transcript"),
+    )
     assert d_entry is not None
     assert d_entry["local_path"] == "transcripts/processed/GOOG_Q1_2025.txt"
 
@@ -305,10 +309,10 @@ def test_index_entries_are_updated_after_promotion(
 # ---------------------------------------------------------------------------
 
 
-def test_main_promotes_after_fresh_ingest(
+def test_main_stages_content_addressed_evidence_before_ingest(
     fake_project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """End-to-end: a fresh-raw file is in processed/ after the script exits."""
+    """End-to-end: ingest binds stable bytes without moving the intake file."""
     mod = _load_ingest_module()
 
     # Stand up a temp portfolio.db with the minimum schema main() touches.
@@ -433,9 +437,8 @@ def test_main_promotes_after_fresh_ingest(
     rc = mod.main()
     assert rc == 0
 
-    # File promoted, DB updated.
-    assert (fake_project / "transcripts" / "processed" / "GOOG_Q1_2025.txt").exists()
-    assert not raw_path.exists()
+    assert raw_path.exists()
+    assert not (fake_project / "transcripts" / "processed" / "GOOG_Q1_2025.txt").exists()
     c = sqlite3.connect(str(db_path))
     c.row_factory = sqlite3.Row
     row = c.execute(
@@ -443,4 +446,7 @@ def test_main_promotes_after_fresh_ingest(
         "AND doc_type = 'earnings_call_transcript'"
     ).fetchone()
     c.close()
-    assert row["file_path"] == "transcripts/processed/GOOG_Q1_2025.txt"
+    assert row["file_path"].startswith("transcripts/raw/.evidence/")
+    evidence = fake_project / row["file_path"]
+    assert evidence.exists()
+    assert evidence.read_bytes() == raw_path.read_bytes()
