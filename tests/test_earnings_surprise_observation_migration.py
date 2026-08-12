@@ -15,6 +15,7 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
+ACTIVE_HEAD = "0008_add_fmp_recovery"
 
 
 def _config(path: Path) -> Config:
@@ -62,7 +63,7 @@ def test_upgrade_creates_immutable_ledgers_and_projection_lineage(
 
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            REVISION,
+            ACTIVE_HEAD,
         )
         tables = {
             str(row[0])

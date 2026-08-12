@@ -33,6 +33,36 @@ The database row is the sole membership authority. Workbooks, research directori
 
 Cron invariants: every selector excludes archived rows; a cadence runs only its exact tier; target ages are P1 daily, P2 seven days, and P3 thirty days. Full briefs, DCFs, dirty-artifact drains, model evaluation, and advisor candidate generation are restricted to active portfolio/evaluation rows. P3 work is deterministic and zero-token. These rules require neither a new migration nor a recurring parity checker.
 
+## Data Collection Policy
+
+**Definition.** The owner-approved ceiling on which source and artifact combinations may be collected for each Coverage Role. It governs authorization and depth; it does not report current freshness, pipeline health, backlog, or failures.
+**Contract.** Portfolio permits automatic full collection. Evaluation permits metadata automatically and full documents only for an explicit owner request or approved event rule. Watchlist permits narrow metadata monitoring. Index member permits only deterministic FMP screening facts. Catalog and legacy ETF roles authorize no new company-specific collection. Webcasts are excluded for every role.
+
+## Issuer Acquisition Policy
+
+**Definition.** The immutable, canonical-JSON-hashed set of issuer-specific SEC, investor-relations, FMP normalization, and transcript rules. The canonical issuer identity is the key; ticker symbols are aliases only.
+**Contract.** Acquisition plans, source captures, extraction derivatives, and admission receipts carry the exact policy hash used. A policy change may invalidate a derivative or plan, but it never rewrites or deletes preserved source bytes.
+
+## Provider Circuit
+
+**Definition.** The durable provider-wide admission state that prevents repeated calls when a source is unavailable. Its states are `CLOSED`, `OPEN`, and `HALF_OPEN`.
+**Contract.** `CLOSED` permits bounded live work. `OPEN` permits no provider calls and schedules a future probe. `HALF_OPEN` grants exactly one leased entitlement probe. Missing or invalid authentication and account-wide authorization failures open immediately; configured consecutive rate-limit or provider failures may open at their threshold. Endpoint-specific denial does not poison the Provider Circuit.
+
+## FMP Recovery Work
+
+**Definition.** One idempotent desired FMP refresh, identified by ticker, endpoint, period, freshness generation, and Issuer Acquisition Policy hash. Its durable states are `PENDING`, `LEASED`, `SATISFIED`, and `TERMINAL`.
+**Contract.** A Work Lease grants bounded ownership across an external operation, while every database claim or outcome transaction remains short. Expired leases are reclaimable, and stale lease tokens cannot complete work. Portfolio work outranks owner-requested Evaluation work, which outranks permitted Index-member screening work.
+
+## Corpus Mode
+
+**Definition.** A zero-FMP-network recovery mode that indexes and extracts already-preserved raw FMP files while live provider access is unavailable.
+**Contract.** Corpus Mode never modifies raw corpus bytes, advances provider freshness, or claims that stale data was refreshed. Unrefreshed work remains durable FMP Recovery Work. An alternative source may satisfy a work item only with explicit period-and-concept coverage, freshness, provenance, policy authorization, and no unresolved disagreement.
+
+## Refresh Receipt
+
+**Definition.** The typed, attributable outcome of a refresh run. Its status is exactly one of `FRESH`, `DEGRADED_CORPUS`, `PARTIAL`, or `FAILED`.
+**Contract.** `FRESH` requires current-source obligations to be satisfied. `DEGRADED_CORPUS` means usable preserved data was rehydrated but refresh work remains. `PARTIAL` reports mixed usable and unresolved outcomes. `FAILED` reports no usable result. Receipts expose counts, backlog age, circuit state, and next probe without raw provider bodies or secrets.
+
 ## Coverage Lifecycle Actions
 
 | Owner action | Result | Resource consequence |
