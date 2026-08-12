@@ -13,10 +13,14 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from execution.fetch_sec_xbrl import _flag_silent_staleness  # noqa: E402
+from execution import fetch_sec_xbrl  # noqa: E402
+from execution.fetch_sec_xbrl import flag_silent_staleness, handle_silent_staleness  # noqa: E402
+from pipeline.sec_xbrl import IngestStats  # noqa: E402
 
 
 def _build_schema(conn: sqlite3.Connection, *, with_brief_dirty: bool) -> None:
@@ -43,7 +47,7 @@ def test_flag_flips_brief_dirty_for_matching_ticker(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     try:
         _build_schema(conn, with_brief_dirty=True)
-        updated = _flag_silent_staleness(conn, "AMZN")
+        updated = flag_silent_staleness(conn, "AMZN")
         assert updated is True
 
         row = conn.execute(
@@ -66,7 +70,7 @@ def test_flag_handles_lowercase_ticker_via_upper(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     try:
         _build_schema(conn, with_brief_dirty=True)
-        updated = _flag_silent_staleness(conn, "amzn")
+        updated = flag_silent_staleness(conn, "amzn")
         assert updated is True
     finally:
         conn.close()
@@ -76,7 +80,7 @@ def test_flag_returns_false_when_ticker_not_tracked(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     try:
         _build_schema(conn, with_brief_dirty=True)
-        updated = _flag_silent_staleness(conn, "NVDA")
+        updated = flag_silent_staleness(conn, "NVDA")
         assert updated is False
     finally:
         conn.close()
@@ -87,7 +91,86 @@ def test_flag_is_schema_tolerant_when_column_missing(tmp_path: Path) -> None:
     conn = sqlite3.connect(":memory:")
     try:
         _build_schema(conn, with_brief_dirty=False)
-        updated = _flag_silent_staleness(conn, "AMZN")
+        updated = flag_silent_staleness(conn, "AMZN")
         assert updated is False
+    finally:
+        conn.close()
+
+
+def test_exact_replay_does_not_invalidate_fact_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        _build_schema(conn, with_brief_dirty=True)
+
+        def _unexpected_call(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("exact replay must not invalidate fact consumers")
+
+        monkeypatch.setattr(fetch_sec_xbrl, "flag_silent_staleness", _unexpected_call)
+        monkeypatch.setattr(
+            fetch_sec_xbrl,
+            "mark_artifacts_dirty_for_fact_change",
+            _unexpected_call,
+        )
+
+        result = handle_silent_staleness(
+            conn,
+            ticker="AMZN",
+            stats=IngestStats(accessions_inserted=0, facts_inserted=0),
+            db_path=":memory:",
+        )
+
+        assert result == (False, 0)
+        assert (
+            conn.execute(
+                "SELECT brief_dirty FROM tracked_companies WHERE ticker = 'AMZN'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert capsys.readouterr().err == ""
+    finally:
+        conn.close()
+
+
+def test_new_snapshot_without_facts_still_invalidates_and_emits_event(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        _build_schema(conn, with_brief_dirty=True)
+
+        def _mark_artifacts_dirty(
+            *,
+            ticker: str,
+            reason: str,
+            db_path: Path | str | None = None,
+        ) -> int:
+            del ticker, reason, db_path
+            return 3
+
+        monkeypatch.setattr(
+            fetch_sec_xbrl,
+            "mark_artifacts_dirty_for_fact_change",
+            _mark_artifacts_dirty,
+        )
+
+        result = handle_silent_staleness(
+            conn,
+            ticker="AMZN",
+            stats=IngestStats(accessions_inserted=2, facts_inserted=0),
+            db_path=":memory:",
+        )
+
+        assert result == (True, 3)
+        assert (
+            conn.execute(
+                "SELECT brief_dirty FROM tracked_companies WHERE ticker = 'AMZN'"
+            ).fetchone()[0]
+            == 1
+        )
+        assert '"event": "sec_silent_staleness_detected"' in capsys.readouterr().err
     finally:
         conn.close()

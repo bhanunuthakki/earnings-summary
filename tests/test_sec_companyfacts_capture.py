@@ -14,6 +14,7 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
+from execution import fetch_sec_xbrl as fetch_sec_xbrl_execution
 from pipeline import restatement_detector, sec_xbrl
 from pipeline.sec_xbrl import FetchedCompanyFacts, ingest_for_ticker
 from provenance.financial_fact_resolution import FactTable
@@ -589,6 +590,7 @@ def test_current_schema_companyfacts_fact_admission_is_ordered(
 def test_current_schema_companyfacts_replay_is_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     migrated_db: object,
 ) -> None:
     database_path = tmp_path / "current-companyfacts-replay.db"
@@ -598,6 +600,10 @@ def test_current_schema_companyfacts_replay_is_idempotent(
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     _seed_issuer_identity(conn)
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, name, list_type) "
+        "VALUES ('ACME', 'Acme', 'evaluation')"
+    )
     raw_body = _body()
     responses = iter(
         (
@@ -646,6 +652,8 @@ def test_current_schema_companyfacts_replay_is_idempotent(
         retrieval_links_before = conn.execute(
             "SELECT COUNT(*) FROM evidence_document_observation_links"
         ).fetchone()[0]
+        conn.execute("UPDATE tracked_companies SET brief_dirty = 0 WHERE ticker = 'ACME'")
+        conn.commit()
         second = ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path)
         after = {
             table: [
@@ -654,7 +662,9 @@ def test_current_schema_companyfacts_replay_is_idempotent(
             ]
             for table in immutable_chain_tables
         }
+        assert first.accessions_inserted == 2
         assert first.facts_inserted == 2
+        assert second.accessions_inserted == 0
         assert second.facts_inserted == 0
         assert before == after
         assert (
@@ -665,6 +675,34 @@ def test_current_schema_companyfacts_replay_is_idempotent(
             conn.execute("SELECT COUNT(*) FROM evidence_document_observation_links").fetchone()[0]
             == retrieval_links_before + 1
         )
+        capsys.readouterr()
+
+        def _unexpected_invalidation(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("exact replay must not invalidate fact consumers")
+
+        monkeypatch.setattr(
+            fetch_sec_xbrl_execution,
+            "flag_silent_staleness",
+            _unexpected_invalidation,
+        )
+        monkeypatch.setattr(
+            fetch_sec_xbrl_execution,
+            "mark_artifacts_dirty_for_fact_change",
+            _unexpected_invalidation,
+        )
+        assert fetch_sec_xbrl_execution.handle_silent_staleness(
+            conn,
+            ticker="ACME",
+            stats=second,
+            db_path=str(database_path),
+        ) == (False, 0)
+        assert (
+            conn.execute(
+                "SELECT brief_dirty FROM tracked_companies WHERE ticker = 'ACME'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert capsys.readouterr().err == ""
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:

@@ -668,7 +668,13 @@ _AccessionRecord = CompanyFactsAccessionRecord
 _enumerate_accessions = enumerate_companyfacts_accessions
 
 
-def upsert_companyfacts_snapshot_document(
+@dataclass(frozen=True, slots=True)
+class _SnapshotDocumentRegistration:
+    document_id: int
+    created: bool
+
+
+def _register_companyfacts_snapshot_document(
     conn: sqlite3.Connection,
     *,
     ticker: str,
@@ -677,8 +683,8 @@ def upsert_companyfacts_snapshot_document(
     raw_body: bytes,
     snapshot_root: Path,
     fetched_at: datetime,
-) -> int:
-    """Return the one legacy document row for an exact aggregate snapshot.
+) -> _SnapshotDocumentRegistration:
+    """Register the one legacy document row for an exact aggregate snapshot.
 
     This compatibility anchor satisfies the legacy facts FK. It is explicitly
     typed as an aggregate snapshot and carries no accession, filing date, or
@@ -722,7 +728,7 @@ def upsert_companyfacts_snapshot_document(
                 "UPDATE documents SET file_path = ? WHERE id = ?",
                 (snapshot_file_path, document_id),
             )
-        return document_id
+        return _SnapshotDocumentRegistration(document_id=document_id, created=False)
     captured_at = fetched_at or datetime.now()
     tier = tier_for_source_type(SourceType.SEC_XBRL).value
     columns = [
@@ -771,7 +777,30 @@ def upsert_companyfacts_snapshot_document(
     )
     if cursor.lastrowid is None:
         raise RuntimeError("CompanyFacts snapshot document insert returned no identity")
-    return int(cursor.lastrowid)
+    return _SnapshotDocumentRegistration(document_id=int(cursor.lastrowid), created=True)
+
+
+def upsert_companyfacts_snapshot_document(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    digest: str,
+    normalized_cik: str,
+    raw_body: bytes,
+    snapshot_root: Path,
+    fetched_at: datetime,
+) -> int:
+    """Return the legacy document id for an exact aggregate snapshot."""
+
+    return _register_companyfacts_snapshot_document(
+        conn,
+        ticker=ticker,
+        digest=digest,
+        normalized_cik=normalized_cik,
+        raw_body=raw_body,
+        snapshot_root=snapshot_root,
+        fetched_at=fetched_at,
+    ).document_id
 
 
 def upsert_accession_documents(
@@ -1472,7 +1501,7 @@ def ingest_for_ticker(
             "0231_legacy_document_evidence_bindings after fact cutover"
         )
     try:
-        snapshot_document_id = upsert_companyfacts_snapshot_document(
+        snapshot_registration = _register_companyfacts_snapshot_document(
             conn,
             ticker=ticker,
             digest=digest,
@@ -1481,6 +1510,7 @@ def ingest_for_ticker(
             snapshot_root=project_root / "data" / "historical" / "sec" / "snapshots",
             fetched_at=fetched.retrieved_at,
         )
+        snapshot_document_id = snapshot_registration.document_id
         accession_to_doc_id = {
             accession: snapshot_document_id for accession in sorted(supported_accessions)
         }
@@ -1533,4 +1563,7 @@ def ingest_for_ticker(
         project_root / "data" / "historical" / "sec" / f"{ticker.upper()}_companyfacts.json"
     )
     _atomic_write_bytes(latest_cache, fetched.raw_body)
-    return IngestStats(accessions_inserted=len(accession_to_doc_id), facts_inserted=facts_inserted)
+    return IngestStats(
+        accessions_inserted=(len(supported_accessions) if snapshot_registration.created else 0),
+        facts_inserted=facts_inserted,
+    )
