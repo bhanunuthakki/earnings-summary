@@ -44,7 +44,9 @@ Clone rehearsal:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
+import importlib
 import json
 import os
 import sqlite3
@@ -58,7 +60,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from sqlite3 import Connection
-from typing import BinaryIO, Literal, Self, TypedDict, cast
+from typing import BinaryIO, Literal, Protocol, Self, TypedDict, cast
 
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -739,17 +741,62 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int]:
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
 
 
+class _WinDllFactory(Protocol):
+    def __call__(self, name: str, *, use_last_error: bool) -> object: ...
+
+
+class _WinUIntFunction(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *args: object) -> int: ...
+
+
+class _WinHandleFunction(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *args: object) -> int | None: ...
+
+
+class _MsvcrtModule(Protocol):
+    def open_osfhandle(self, handle: int, flags: int) -> int: ...
+
+
+class _LastErrorFunction(Protocol):
+    def __call__(self) -> int: ...
+
+
+def _windows_runtime() -> tuple[object, _MsvcrtModule, _LastErrorFunction]:
+    """Load Win32-only symbols behind an explicitly typed POSIX-safe boundary."""
+    if sys.platform != "win32":
+        raise OSError("Win32 corpus snapshot API is unavailable")
+    win_dll_value = getattr(ctypes, "WinDLL", None)
+    last_error_value = getattr(ctypes, "get_last_error", None)
+    if not callable(win_dll_value) or not callable(last_error_value):
+        raise OSError("Win32 corpus snapshot API is unavailable")
+    win_dll = cast(_WinDllFactory, win_dll_value)
+    last_error = cast(_LastErrorFunction, last_error_value)
+    msvcrt = cast(_MsvcrtModule, importlib.import_module("msvcrt"))
+    return win_dll("kernel32", use_last_error=True), msvcrt, last_error
+
+
+def _win_uint_function(library: object, name: str) -> _WinUIntFunction:
+    return cast(_WinUIntFunction, getattr(library, name))
+
+
+def _win_handle_function(library: object, name: str) -> _WinHandleFunction:
+    return cast(_WinHandleFunction, getattr(library, name))
+
+
 def _windows_locked_fd(root: Path, path: Path) -> int:
     """Open a Windows read handle that denies concurrent writes and deletes."""
-    import ctypes
-    import msvcrt
-
     class FileAttributeTagInfo(ctypes.Structure):
         _fields_ = [("file_attributes", ctypes.c_ulong), ("reparse_tag", ctypes.c_ulong)]
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create_file = kernel32.CreateFileW
-    create_file.argtypes = (
+    kernel32, msvcrt, get_last_error = _windows_runtime()
+    create_file = _win_handle_function(kernel32, "CreateFileW")
+    create_file.argtypes = [
         ctypes.c_wchar_p,
         ctypes.c_ulong,
         ctypes.c_ulong,
@@ -757,26 +804,26 @@ def _windows_locked_fd(root: Path, path: Path) -> int:
         ctypes.c_ulong,
         ctypes.c_ulong,
         ctypes.c_void_p,
-    )
+    ]
     create_file.restype = ctypes.c_void_p
-    close_handle = kernel32.CloseHandle
-    close_handle.argtypes = (ctypes.c_void_p,)
+    close_handle = _win_uint_function(kernel32, "CloseHandle")
+    close_handle.argtypes = [ctypes.c_void_p]
     close_handle.restype = ctypes.c_int
-    get_attribute_tag = kernel32.GetFileInformationByHandleEx
-    get_attribute_tag.argtypes = (
+    get_attribute_tag = _win_uint_function(kernel32, "GetFileInformationByHandleEx")
+    get_attribute_tag.argtypes = [
         ctypes.c_void_p,
         ctypes.c_int,
         ctypes.c_void_p,
         ctypes.c_ulong,
-    )
+    ]
     get_attribute_tag.restype = ctypes.c_int
-    get_final_path = kernel32.GetFinalPathNameByHandleW
-    get_final_path.argtypes = (
+    get_final_path = _win_uint_function(kernel32, "GetFinalPathNameByHandleW")
+    get_final_path.argtypes = [
         ctypes.c_void_p,
         ctypes.c_wchar_p,
         ctypes.c_ulong,
         ctypes.c_ulong,
-    )
+    ]
     get_final_path.restype = ctypes.c_ulong
 
     handle = create_file(
@@ -789,8 +836,8 @@ def _windows_locked_fd(root: Path, path: Path) -> int:
         None,
     )
     invalid_handle = ctypes.c_void_p(-1).value
-    if handle in {None, invalid_handle}:
-        raise ctypes.WinError(ctypes.get_last_error())
+    if handle is None or handle == invalid_handle:
+        raise OSError(get_last_error(), "unable to open locked corpus handle")
     handle_value = int(handle)
     native_handle = ctypes.c_void_p(handle_value)
     try:
@@ -801,7 +848,7 @@ def _windows_locked_fd(root: Path, path: Path) -> int:
             ctypes.byref(tag_info),
             ctypes.sizeof(tag_info),
         ):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise OSError(get_last_error(), "unable to inspect locked corpus handle")
         if tag_info.file_attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
             raise ValueError(f"unsafe corpus entry: {path}")
 
@@ -813,7 +860,7 @@ def _windows_locked_fd(root: Path, path: Path) -> int:
             0,
         )
         if final_length == 0 or final_length >= len(final_path_buffer):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise OSError(get_last_error(), "unable to resolve locked corpus handle")
         final_path_text = final_path_buffer.value
         if final_path_text.startswith("\\\\?\\UNC\\"):
             final_path_text = "\\\\" + final_path_text[8:]
