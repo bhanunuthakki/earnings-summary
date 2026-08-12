@@ -2209,6 +2209,14 @@ def create_app(
 
             return Response(render_ticker_settings_panel(db_path), mimetype="text/html")
 
+        if name == "data_policy_settings":
+            # Operations -> Settings: read-only collection authorization and
+            # issuer-adapter policy.  The renderer intentionally performs no
+            # DB or scheduler reads until recovery telemetry is released.
+            from pipeline.data_policy_settings_panel import render_data_policy_settings_panel
+
+            return Response(render_data_policy_settings_panel(), mimetype="text/html")
+
         if name == "restatements":
             # "was X, now Y" over the supersede chains (P3.5) — every place a
             # later filing changed an already-reported number, linking both
