@@ -50,26 +50,24 @@ def test_fmp_auth_prefers_process_environment_over_project_dotenv(tmp_path: Path
     assert dotenv_value not in repr(config)
 
 
-def test_run_with_missing_fmp_auth_fails_loud_before_dispatch(
+def test_run_with_missing_fmp_auth_enters_runtime_recovery_instead_of_preflight_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.delenv("FMP_API_KEY", raising=False)
     monkeypatch.setattr(refresh_cache, "ENV_FILE", tmp_path / "missing.env")
     monkeypatch.setattr(sys, "argv", ["refresh_cache.py", "run"])
-    dispatched = False
+    recovery_started = False
 
-    def unexpected_dispatch(_args: object) -> int:
-        nonlocal dispatched
-        dispatched = True
+    def recovery_entrypoint(_args: object) -> int:
+        nonlocal recovery_started
+        recovery_started = True
         return 0
 
-    monkeypatch.setattr(refresh_cache, "cmd_run", unexpected_dispatch)
+    monkeypatch.setattr(refresh_cache, "cmd_run", recovery_entrypoint)
 
     exit_code = refresh_cache.main()
     captured = capsys.readouterr()
 
-    assert exit_code != 0
-    assert not dispatched
-    assert "FMP_API_KEY" in captured.err
-    assert "missing.env" not in captured.err
-    assert "process-only-canary" not in captured.err
+    assert exit_code == 0
+    assert recovery_started
+    assert captured.err == ""

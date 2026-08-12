@@ -84,6 +84,7 @@ class OutcomeCode(StrEnum):
     SERVER_ERROR = "server_error"
     TRANSPORT_ERROR = "transport_error"
     CLIENT_CONTRACT_ERROR = "client_contract_error"
+    ENDPOINT_EMPTY = "endpoint_empty"
     CORPUS_UNAVAILABLE = "corpus_unavailable"
 
 
@@ -317,6 +318,21 @@ class PlanRunRequest(_FrozenModel):
         return self
 
 
+class EnqueueWorkRequest(_FrozenModel):
+    now: datetime
+    circuit_config: CircuitConfig = Field(default_factory=CircuitConfig)
+    work: tuple[WorkSpec, ...] = Field(min_length=1, max_length=500)
+
+    _now = field_validator("now")(_validate_naive_utc)
+
+    @model_validator(mode="after")
+    def _unique_work(self) -> Self:
+        identifiers = tuple(make_work_id(spec) for spec in self.work)
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("enqueue contains duplicate FMP recovery work")
+        return self
+
+
 class RecoveryAvailability(_FrozenModel):
     work_id: str
     corpus_snapshot: CorpusSnapshot | None = None
@@ -332,6 +348,7 @@ class RecoverableWorkRequest(_FrozenModel):
     now: datetime
     lease_seconds: int = Field(default=300, ge=1, le=86_400)
     credentials: CredentialAvailability
+    provider_calls_permitted: bool = True
     availability: tuple[RecoveryAvailability, ...] = Field(default=(), max_length=500)
     limit: int = Field(default=100, ge=1, le=500)
 
@@ -368,6 +385,12 @@ class BacklogStatus(_FrozenModel):
     terminal_count: int
     oldest_pending_age_seconds: float | None
     next_probe_at: datetime | None
+
+
+class EnqueueWorkReceipt(_FrozenModel):
+    work_ids: tuple[str, ...]
+    enqueued_count: int
+    backlog: BacklogStatus
 
 
 class RunPlan(_FrozenModel):
@@ -416,10 +439,16 @@ class WorkOutcome(_FrozenModel):
             raise ValueError("server error requires a 5xx HTTP status")
         if self.outcome_code is OutcomeCode.CLIENT_CONTRACT_ERROR and not (
             self.http_status is not None
-            and 400 <= self.http_status <= 499
-            and self.http_status not in {401, 402, 403, 429}
+            and (
+                200 <= self.http_status <= 299
+                or (400 <= self.http_status <= 499 and self.http_status not in {401, 402, 403, 429})
+            )
         ):
-            raise ValueError("client contract error requires a non-auth, non-429 4xx status")
+            raise ValueError("client contract error requires a 2xx or non-auth client status")
+        if self.outcome_code is OutcomeCode.ENDPOINT_EMPTY and not (
+            self.http_status is not None and 200 <= self.http_status <= 299
+        ):
+            raise ValueError("endpoint empty requires a 2xx HTTP status")
         if self.outcome_code is OutcomeCode.TRANSPORT_ERROR and self.http_status is not None:
             raise ValueError("transport error must not invent an HTTP status")
         if self.outcome_code is OutcomeCode.CORPUS_SUCCESS and self.corpus_snapshot is None:
@@ -870,6 +899,7 @@ def _claim_mode(
     row: sqlite3.Row,
     availability: RecoveryAvailability,
     credentials: CredentialAvailability,
+    provider_calls_permitted: bool,
     now: datetime,
 ) -> ExecutionMode:
     if availability.alternative_resolution is not None:
@@ -877,7 +907,7 @@ def _claim_mode(
     if availability.fmp_snapshot is not None:
         return ExecutionMode.RECONCILE
     circuit = _circuit_row(connection)
-    if credentials is CredentialAvailability.AVAILABLE:
+    if provider_calls_permitted and credentials is CredentialAvailability.AVAILABLE:
         if circuit["state"] == CircuitState.CLOSED.value:
             return ExecutionMode.LIVE
         if (
@@ -1008,6 +1038,7 @@ def _claim_rows(
     rows: Sequence[sqlite3.Row],
     availability_by_id: dict[str, RecoveryAvailability],
     credentials: CredentialAvailability,
+    provider_calls_permitted: bool,
     run_id: str,
     worker_id: str,
     now: datetime,
@@ -1088,6 +1119,7 @@ def _claim_rows(
             row=row,
             availability=availability,
             credentials=credentials,
+            provider_calls_permitted=provider_calls_permitted,
             now=now,
         )
         if mode is ExecutionMode.UNAVAILABLE:
@@ -1187,6 +1219,7 @@ def plan_run(connection: sqlite3.Connection, request: PlanRunRequest) -> RunPlan
             rows=rows,
             availability_by_id=availability,
             credentials=request.credentials,
+            provider_calls_permitted=True,
             run_id=request.run_id,
             worker_id=request.worker_id,
             now=request.now,
@@ -1200,6 +1233,26 @@ def plan_run(connection: sqlite3.Connection, request: PlanRunRequest) -> RunPlan
             circuit_revision=int(circuit["revision"]),
             items=items,
             backlog=backlog,
+        )
+
+
+def enqueue_work(
+    connection: sqlite3.Connection,
+    request: EnqueueWorkRequest,
+) -> EnqueueWorkReceipt:
+    """Authorize and durably upsert desired work without leasing or external I/O."""
+    for spec in request.work:
+        _authorize(spec)
+    identifiers = tuple(make_work_id(spec) for spec in request.work)
+    with _short_transaction(connection):
+        _ensure_circuit(connection, now=request.now, config=request.circuit_config)
+        _expire_leases(connection, now=request.now)
+        for spec in request.work:
+            _upsert_work(connection, spec=spec, now=request.now)
+        return EnqueueWorkReceipt(
+            work_ids=identifiers,
+            enqueued_count=len(identifiers),
+            backlog=_backlog_status(connection, now=request.now),
         )
 
 
@@ -1230,6 +1283,7 @@ def recoverable_work(
             rows=rows,
             availability_by_id=availability,
             credentials=request.credentials,
+            provider_calls_permitted=request.provider_calls_permitted,
             run_id=request.run_id,
             worker_id=request.worker_id,
             now=request.now,
@@ -1276,6 +1330,7 @@ def _validate_mode_outcome(
                 OutcomeCode.SERVER_ERROR,
                 OutcomeCode.TRANSPORT_ERROR,
                 OutcomeCode.CLIENT_CONTRACT_ERROR,
+                OutcomeCode.ENDPOINT_EMPTY,
             }
         ),
         ExecutionMode.PROBE: frozenset(
@@ -1289,6 +1344,7 @@ def _validate_mode_outcome(
                 OutcomeCode.SERVER_ERROR,
                 OutcomeCode.TRANSPORT_ERROR,
                 OutcomeCode.CLIENT_CONTRACT_ERROR,
+                OutcomeCode.ENDPOINT_EMPTY,
             }
         ),
         ExecutionMode.CORPUS: frozenset(
@@ -1506,6 +1562,19 @@ def _record_provider_outcome(
                 next_probe_at=next_probe,
             )
         return
+    if code in {
+        OutcomeCode.ENDPOINT_EMPTY,
+        OutcomeCode.ENDPOINT_FORBIDDEN,
+        OutcomeCode.CLIENT_CONTRACT_ERROR,
+    }:
+        if mode is ExecutionMode.PROBE or circuit["state"] == CircuitState.CLOSED.value:
+            _close_circuit(
+                connection,
+                now=request.now,
+                success_at=outcome.observed_at,
+                attempt_id=attempt_id,
+            )
+        return
     if code in {OutcomeCode.SERVER_ERROR, OutcomeCode.TRANSPORT_ERROR}:
         new_count = int(circuit["consecutive_failures"]) + 1
         connection.execute(
@@ -1574,7 +1643,11 @@ def _apply_work_outcome(
             now=request.now,
             available_at=request.now,
         )
-    elif code in {OutcomeCode.ENDPOINT_FORBIDDEN, OutcomeCode.CLIENT_CONTRACT_ERROR}:
+    elif code in {
+        OutcomeCode.ENDPOINT_EMPTY,
+        OutcomeCode.ENDPOINT_FORBIDDEN,
+        OutcomeCode.CLIENT_CONTRACT_ERROR,
+    }:
         _terminal_work(
             connection,
             work_id=outcome.work_id,
@@ -1617,7 +1690,12 @@ def _apply_work_outcome(
             }
             else (
                 WorkState.TERMINAL.value
-                if code in {OutcomeCode.ENDPOINT_FORBIDDEN, OutcomeCode.CLIENT_CONTRACT_ERROR}
+                if code
+                in {
+                    OutcomeCode.ENDPOINT_EMPTY,
+                    OutcomeCode.ENDPOINT_FORBIDDEN,
+                    OutcomeCode.CLIENT_CONTRACT_ERROR,
+                }
                 else WorkState.PENDING.value
             )
         ),
@@ -1775,6 +1853,8 @@ __all__ = [
     "CircuitState",
     "CorpusSnapshot",
     "CredentialAvailability",
+    "EnqueueWorkReceipt",
+    "EnqueueWorkRequest",
     "ExecutionMode",
     "FmpSnapshotProof",
     "OutcomeCode",
@@ -1789,6 +1869,7 @@ __all__ = [
     "WorkOutcome",
     "WorkSpec",
     "WorkState",
+    "enqueue_work",
     "make_work_id",
     "plan_run",
     "record_outcomes",

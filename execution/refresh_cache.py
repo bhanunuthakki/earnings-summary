@@ -40,14 +40,16 @@ Tier semantics:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from sqlite3 import Connection
 from typing import Literal, TypedDict, cast
@@ -62,7 +64,30 @@ from runtime.python_process import managed_python_prefix  # noqa: E402
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 from log_redact import redact  # noqa: E402
+from models.companies import ListType  # noqa: E402
 from pipeline import cadence_policy as _cadence_policy  # noqa: E402
+from pipeline.fmp_recovery import (  # noqa: E402
+    SCREENING_ENDPOINT_KEYS,
+    CircuitConfig,
+    CircuitState,
+    CorpusSnapshot,
+    CredentialAvailability,
+    EnqueueWorkRequest,
+    ExecutionMode,
+    FmpSnapshotProof,
+    OutcomeCode,
+    PlannedWork,
+    ReceiptStatus,
+    RecordOutcomesRequest,
+    RecoverableWorkRequest,
+    RecoveryAvailability,
+    WorkOutcome,
+    WorkSpec,
+    enqueue_work,
+    record_outcomes,
+    recoverable_work,
+)
+from pipeline.source_policy import POLICY_VERSION, issuer_policy  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
@@ -72,6 +97,7 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 LOCK_PATH = CACHE_DIR / ".lock"
 QUEUE_PATH = CACHE_DIR / "queue.json"
 HINTS_PATH = CACHE_DIR / "forced_stale.json"
+FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 
 
 @dataclass(frozen=True)
@@ -84,6 +110,16 @@ class FmpAuthConfig:
 
 class FmpAuthError(RuntimeError):
     """The cache cannot dispatch because no FMP credential is configured."""
+
+
+@dataclass(frozen=True)
+class RecoveryCredentialDecision:
+    """Credential state after consulting the provider circuit first."""
+
+    credentials: CredentialAvailability
+    auth: FmpAuthConfig | None
+    network_permitted: bool
+    hints_permitted: bool
 
 
 class _FmpJob(TypedDict):
@@ -139,6 +175,50 @@ def _prepare_fmp_auth() -> bool:
         return False
     os.environ["FMP_API_KEY"] = config.api_key
     return True
+
+
+def decide_recovery_credentials(
+    connection: sqlite3.Connection,
+    *,
+    now: datetime,
+    auth_loader: Callable[[], FmpAuthConfig] = load_fmp_auth,
+) -> RecoveryCredentialDecision:
+    """Consult durable circuit state before reading auth or allowing FMP I/O."""
+    row = connection.execute(
+        "SELECT state,next_probe_at FROM provider_circuit_state WHERE provider='fmp'"
+    ).fetchone()
+    if row is not None:
+        state = CircuitState(str(row["state"]))
+        next_probe_at = (
+            datetime.fromisoformat(str(row["next_probe_at"]))
+            if row["next_probe_at"] is not None
+            else None
+        )
+        if state is CircuitState.HALF_OPEN or (
+            state is CircuitState.OPEN and next_probe_at is not None and next_probe_at > now
+        ):
+            return RecoveryCredentialDecision(
+                credentials=CredentialAvailability.AVAILABLE,
+                auth=None,
+                network_permitted=False,
+                hints_permitted=False,
+            )
+    try:
+        auth = auth_loader()
+    except FmpAuthError:
+        return RecoveryCredentialDecision(
+            credentials=CredentialAvailability.MISSING,
+            auth=None,
+            network_permitted=False,
+            hints_permitted=False,
+        )
+    is_probe = row is not None and str(row["state"]) == CircuitState.OPEN.value
+    return RecoveryCredentialDecision(
+        credentials=CredentialAvailability.AVAILABLE,
+        auth=auth,
+        network_permitted=True,
+        hints_permitted=not is_probe,
+    )
 
 
 def _load_force_stale_hints() -> set[str]:
@@ -343,6 +423,558 @@ class AuditReport:
         return [i for i in self.items if i.bucket in ("missing", "stale", "failed_retry_ok")]
 
 
+RecoveryDispatcher = Callable[[sqlite3.Connection, QueueItem, PlannedWork], WorkOutcome]
+CorpusAdmitter = Callable[
+    [sqlite3.Connection, QueueItem, PlannedWork, Path, Path, datetime], WorkOutcome
+]
+
+
+@dataclass(frozen=True)
+class RecoveryRunResult:
+    """One structured runtime receipt suitable for stdout and process exit."""
+
+    run_id: str
+    status: ReceiptStatus
+    planned_count: int
+    dispatch_count: int
+    fresh_count: int
+    corpus_count: int
+    failed_count: int
+    circuit_state: CircuitState
+    circuit_revision: int
+    pending_count: int
+
+    @property
+    def exit_code(self) -> int:
+        return {
+            ReceiptStatus.FRESH: 0,
+            ReceiptStatus.DEGRADED_CORPUS: 2,
+            ReceiptStatus.PARTIAL: 3,
+            ReceiptStatus.FAILED: 4,
+        }[self.status]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "status": self.status.value,
+            "planned_count": self.planned_count,
+            "dispatch_count": self.dispatch_count,
+            "fresh_count": self.fresh_count,
+            "corpus_count": self.corpus_count,
+            "failed_count": self.failed_count,
+            "circuit_state": self.circuit_state.value,
+            "circuit_revision": self.circuit_revision,
+            "pending_count": self.pending_count,
+            "exit_code": self.exit_code,
+        }
+
+
+def _generic_fmp_policy_sha256(ticker: str) -> str:
+    payload = json.dumps(
+        {
+            "fmp_rules": {"endpoint_aliases": [], "label_overrides": []},
+            "issuer_id": f"ticker:{ticker.upper()}",
+            "policy_version": POLICY_VERSION,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _policy_sha256(ticker: str) -> str:
+    try:
+        return issuer_policy(ticker).policy_sha256
+    except ValueError:
+        return _generic_fmp_policy_sha256(ticker)
+
+
+def _corpus_snapshot(path: Path) -> CorpusSnapshot | None:
+    """Hash a stable raw file without opening a transaction or modifying it."""
+    try:
+        before = path.stat()
+        content = path.read_bytes()
+        after = path.stat()
+    except OSError:
+        return None
+    if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+        return None
+    captured_at = datetime.fromtimestamp(after.st_mtime, UTC).replace(tzinfo=None)
+    return CorpusSnapshot(
+        cache_generation_id=f"raw:{after.st_mtime_ns}:{after.st_size}",
+        content_sha256=hashlib.sha256(content).hexdigest(),
+        captured_at=captured_at,
+    )
+
+
+def _naive_utc(value: datetime) -> datetime:
+    """Normalize an aware repository clock value to the DB's naive-UTC contract."""
+    if value.tzinfo is None:
+        raise ValueError("repository clock must be timezone-aware")
+    return value.astimezone(UTC).replace(tzinfo=None)
+
+
+def _utc_now() -> datetime:
+    return _naive_utc(datetime.now(UTC))
+
+
+def _last_pulled(
+    connection: sqlite3.Connection,
+    *,
+    item: QueueItem,
+) -> str | None:
+    row = connection.execute(
+        "SELECT last_pulled FROM fmp_endpoint_status WHERE ticker=? AND endpoint=? AND period=?",
+        (item.ticker, item.endpoint, item.period),
+    ).fetchone()
+    return None if row is None or row[0] is None else str(row[0])
+
+
+def _admit_corpus(
+    connection: sqlite3.Connection,
+    item: QueueItem,
+    planned: PlannedWork,
+    raw_corpus_dir: Path,
+    project_root: Path,
+    observed_at: datetime,
+) -> WorkOutcome:
+    """Index and extract one immutable corpus artifact before accepting it."""
+    if connection.in_transaction:
+        raise RuntimeError("corpus admission cannot start inside a transaction")
+    if planned.lease_token is None or planned.corpus_snapshot is None:
+        raise ValueError("corpus admission requires a typed corpus lease")
+    path = raw_corpus_dir / f"{item.ticker}_{item.suffix}.json"
+    before_snapshot = _corpus_snapshot(path)
+    try:
+        before_stat = path.stat()
+    except OSError:
+        before_stat = None
+    last_pulled_before = _last_pulled(connection, item=item)
+    unavailable = WorkOutcome(
+        work_id=planned.work_id,
+        lease_token=planned.lease_token,
+        outcome_code=OutcomeCode.CORPUS_UNAVAILABLE,
+        observed_at=observed_at,
+    )
+    if before_snapshot != planned.corpus_snapshot or before_stat is None:
+        return unavailable
+
+    corpus_snapshot = planned.corpus_snapshot
+    # Parse and classify before the short document write; the admission path is
+    # intentionally limited to statement endpoints that produce governed facts.
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return unavailable
+    if not isinstance(payload, list):
+        return unavailable
+    records = cast(list[object], payload)
+    doc_types = {
+        "income_statement": "fmp_income_statement",
+        "balance_sheet": "fmp_balance_sheet",
+        "cash_flow": "fmp_cashflow",
+    }
+    statement_kind = next((key for key in doc_types if item.suffix.startswith(key)), None)
+    if statement_kind is None:
+        return unavailable
+    doc_type = doc_types[statement_kind]
+    dates: list[datetime] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        record_object = cast(dict[str, object], record)
+        for key in ("date", "fillingDate"):
+            value = record_object.get(key)
+            if isinstance(value, str):
+                try:
+                    dates.append(datetime.fromisoformat(value[:10]))
+                except ValueError:
+                    continue
+                break
+    dates.sort()
+    period_end = dates[-1] if dates else None
+    try:
+        relative_path = str(path.resolve().relative_to(project_root.resolve())).replace("\\", "/")
+    except ValueError:
+        return unavailable
+
+    connection.execute(
+        "INSERT OR IGNORE INTO documents "
+        "(ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,"
+        "fetch_status,raw_bytes_size,source_url) "
+        "VALUES (?,'fmp',?,?,?,?,?,'ok',?,NULL)",
+        (
+            item.ticker,
+            doc_type,
+            period_end,
+            relative_path,
+            corpus_snapshot.content_sha256,
+            corpus_snapshot.captured_at,
+            before_stat.st_size,
+        ),
+    )
+    connection.commit()
+    document = connection.execute(
+        "SELECT id FROM documents WHERE ticker=? AND file_path=? AND sha256=?",
+        (item.ticker, relative_path, corpus_snapshot.content_sha256),
+    ).fetchone()
+    if document is None:
+        return unavailable
+    document_id = int(document[0])
+    if connection.in_transaction:
+        raise RuntimeError("document indexing left an active transaction before extraction")
+
+    # The fact writer rejects ungoverned documents. Evidence capture performs
+    # its disk verification before its ledger writes; commit that short unit
+    # before invoking the extractor.
+    from provenance.evidence_backfill import ensure_legacy_document_evidence
+
+    try:
+        ensure_legacy_document_evidence(
+            connection,
+            repo_root=project_root,
+            document_id=document_id,
+        )
+        connection.commit()
+    except (OSError, ValueError, sqlite3.Error):
+        if connection.in_transaction:
+            connection.rollback()
+        return unavailable
+    if connection.in_transaction:
+        raise RuntimeError("evidence admission left an active transaction before extraction")
+
+    if doc_type == "fmp_income_statement":
+        from compute.income_statement import extract_income_statement_facts as extractor
+    elif doc_type == "fmp_balance_sheet":
+        from compute.balance_sheet import extract_balance_sheet_facts as extractor
+    else:
+        from compute.cashflow import extract_cashflow_facts as extractor
+    try:
+        extractor(connection, document_id, project_root)
+    except (KeyError, OSError, ValueError, json.JSONDecodeError, sqlite3.Error):
+        if connection.in_transaction:
+            connection.rollback()
+        return unavailable
+    if connection.in_transaction:
+        raise RuntimeError("corpus extractor returned with an active transaction")
+
+    fact_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM financial_facts WHERE source_doc_id=?",
+            (document_id,),
+        ).fetchone()[0]
+    )
+    after_snapshot = _corpus_snapshot(path)
+    try:
+        after_stat = path.stat()
+    except OSError:
+        return unavailable
+    raw_unchanged = (
+        after_snapshot == before_snapshot
+        and after_stat.st_mtime_ns == before_stat.st_mtime_ns
+        and after_stat.st_size == before_stat.st_size
+    )
+    freshness_unchanged = _last_pulled(connection, item=item) == last_pulled_before
+    if fact_count <= 0 or not raw_unchanged or not freshness_unchanged:
+        return unavailable
+    return WorkOutcome(
+        work_id=planned.work_id,
+        lease_token=planned.lease_token,
+        outcome_code=OutcomeCode.CORPUS_SUCCESS,
+        observed_at=observed_at,
+        corpus_snapshot=planned.corpus_snapshot,
+    )
+
+
+def _work_spec(
+    item: QueueItem,
+    *,
+    raw_corpus_dir: Path,
+    now: datetime,
+    owner_request_id: str | None,
+) -> WorkSpec:
+    role = ListType(item.list_type)
+    requested = role is ListType.EVALUATION
+    return WorkSpec(
+        ticker=item.ticker,
+        coverage_role=role,
+        endpoint_key=item.suffix,
+        period_key=item.period or "current",
+        cache_generation_id=f"refresh:{now.date().isoformat()}",
+        policy_sha256=_policy_sha256(item.ticker),
+        requested=requested,
+        owner_request_id=owner_request_id if requested else None,
+        corpus_snapshot=_corpus_snapshot(raw_corpus_dir / f"{item.ticker}_{item.suffix}.json"),
+    )
+
+
+def _status_for_counts(*, fresh: int, corpus: int, failed: int) -> ReceiptStatus:
+    if fresh > 0 and failed == 0 and corpus == 0:
+        return ReceiptStatus.FRESH
+    if corpus > 0 and failed == 0 and fresh == 0:
+        return ReceiptStatus.DEGRADED_CORPUS
+    if fresh + corpus > 0:
+        return ReceiptStatus.PARTIAL
+    return ReceiptStatus.FAILED
+
+
+def _item_from_backlog_row(row: sqlite3.Row) -> QueueItem | None:
+    """Resolve durable work back to the existing provider adapter catalog."""
+    import save_fmp_data as fmp_save
+
+    ticker = str(row["ticker"])
+    list_type = str(row["coverage_role"])
+    jobs = cast(list[_FmpJob], fmp_save.per_ticker_jobs(ticker, list_type=list_type))
+    job = next(
+        (candidate for candidate in jobs if candidate["suffix"] == row["endpoint_key"]), None
+    )
+    if job is None:
+        return None
+    endpoint = job["path"]
+    period = job["period"] or ""
+    return QueueItem(
+        ticker=ticker,
+        list_type=list_type,
+        endpoint=endpoint,
+        period=period,
+        suffix=job["suffix"],
+        endpoint_class=classify_endpoint(endpoint),
+        bucket="failed_retry_ok",
+        last_pulled=None,
+        last_status=None,
+        days_overdue=0,
+        priority=0,
+    )
+
+
+def _pending_recovery_context(
+    connection: sqlite3.Connection,
+    *,
+    raw_corpus_dir: Path,
+    now: datetime,
+) -> tuple[dict[str, QueueItem], tuple[RecoveryAvailability, ...]]:
+    rows = connection.execute(
+        "SELECT * FROM fmp_work_backlog WHERE state='PENDING' AND available_at <= ? "
+        "ORDER BY priority DESC,created_at,ticker,work_id LIMIT 500",
+        (now.isoformat(),),
+    ).fetchall()
+    items: dict[str, QueueItem] = {}
+    availability: list[RecoveryAvailability] = []
+    for row in rows:
+        work_id = str(row["work_id"])
+        item = _item_from_backlog_row(row)
+        if item is not None:
+            items[work_id] = item
+        availability.append(
+            RecoveryAvailability(
+                work_id=work_id,
+                corpus_snapshot=(
+                    _corpus_snapshot(raw_corpus_dir / f"{item.ticker}_{item.suffix}.json")
+                    if item is not None
+                    else None
+                ),
+            )
+        )
+    return items, tuple(availability)
+
+
+def run_recovery_batch(
+    connection: sqlite3.Connection,
+    *,
+    items: Sequence[QueueItem],
+    credentials: CredentialAvailability,
+    raw_corpus_dir: Path,
+    now: datetime,
+    run_id: str,
+    dispatch: RecoveryDispatcher,
+    corpus_admitter: CorpusAdmitter | None = None,
+    project_root: Path = PROJECT_ROOT,
+    worker_id: str = "refresh-cache",
+    max_items: int = 500,
+    provider_call_budget: int | None = None,
+    owner_request_id: str | None = None,
+    circuit_config: CircuitConfig | None = None,
+) -> RecoveryRunResult:
+    """Persist every authorized intent, then drain a bounded priority batch."""
+    if connection.in_transaction:
+        raise RuntimeError("recovery runtime requires a connection with no active transaction")
+    if not 1 <= max_items <= 500:
+        raise ValueError("max_items must be between 1 and 500")
+    if provider_call_budget is not None and provider_call_budget < 0:
+        raise ValueError("provider_call_budget must be non-negative")
+    intended = tuple(items)
+    specs = tuple(
+        _work_spec(
+            item,
+            raw_corpus_dir=raw_corpus_dir,
+            now=now,
+            owner_request_id=owner_request_id or f"refresh-cache:{run_id}",
+        )
+        for item in intended
+    )
+    config = circuit_config or CircuitConfig()
+    admit_corpus = corpus_admitter or _admit_corpus
+    # Authorization and durable intent are complete before the first lease or call.
+    for offset in range(0, len(specs), 500):
+        enqueue_work(
+            connection,
+            EnqueueWorkRequest(
+                now=now,
+                circuit_config=config,
+                work=specs[offset : offset + 500],
+            ),
+        )
+    fresh_count = 0
+    corpus_count = 0
+    failed_count = 0
+    dispatch_count = 0
+    cursor_now = now
+    processed: set[str] = set()
+    call_budget = max_items if provider_call_budget is None else provider_call_budget
+
+    while len(processed) < max_items:
+        circuit_before = connection.execute(
+            "SELECT state FROM provider_circuit_state WHERE provider='fmp'"
+        ).fetchone()
+        if circuit_before is None:
+            raise RuntimeError("FMP recovery circuit was not initialized")
+        provider_calls_permitted = dispatch_count < call_budget
+        closed_with_auth = (
+            provider_calls_permitted
+            and credentials is CredentialAvailability.AVAILABLE
+            and str(circuit_before["state"]) == CircuitState.CLOSED.value
+        )
+        remaining = max_items - len(processed)
+        # Closed-circuit HTTP leases are deliberately serial: each receipt may
+        # open the circuit and must be durable before another provider call.
+        limit = 1 if closed_with_auth else remaining
+        item_by_id, availability = _pending_recovery_context(
+            connection,
+            raw_corpus_dir=raw_corpus_dir,
+            now=cursor_now,
+        )
+        if not availability:
+            break
+        plan = recoverable_work(
+            connection,
+            RecoverableWorkRequest(
+                run_id=run_id,
+                worker_id=worker_id,
+                now=cursor_now,
+                credentials=credentials,
+                provider_calls_permitted=provider_calls_permitted,
+                availability=availability,
+                limit=limit,
+            ),
+        )
+        if not plan.items:
+            break
+        newly_processed = 0
+        provider_reachable_probe = False
+        for planned in plan.items:
+            if planned.work_id in processed:
+                continue
+            item = item_by_id.get(planned.work_id)
+            mode = planned.execution_mode
+            if mode in {ExecutionMode.ALREADY_SATISFIED, ExecutionMode.ALREADY_APPLIED_CORPUS}:
+                if mode is ExecutionMode.ALREADY_SATISFIED:
+                    fresh_count += 1
+                else:
+                    corpus_count += 1
+                processed.add(planned.work_id)
+                newly_processed += 1
+                continue
+            if mode is ExecutionMode.UNAVAILABLE or item is None:
+                if provider_reachable_probe:
+                    # This item was classified while the circuit was HALF_OPEN;
+                    # let the next closed-circuit plan lease it for live work.
+                    continue
+                failed_count += 1
+                processed.add(planned.work_id)
+                newly_processed += 1
+                continue
+            if mode in {ExecutionMode.LIVE, ExecutionMode.PROBE}:
+                if dispatch_count >= call_budget:
+                    break
+                outcome = dispatch(connection, item, planned)
+                dispatch_count += 1
+            elif mode is ExecutionMode.CORPUS:
+                outcome = admit_corpus(
+                    connection,
+                    item,
+                    planned,
+                    raw_corpus_dir,
+                    project_root,
+                    cursor_now,
+                )
+            else:
+                failed_count += 1
+                processed.add(planned.work_id)
+                newly_processed += 1
+                continue
+            if connection.in_transaction:
+                raise RuntimeError("recovery action returned with an active database transaction")
+            cursor_now = max(cursor_now, outcome.observed_at)
+            record_outcomes(
+                connection,
+                RecordOutcomesRequest(
+                    run_id=run_id,
+                    now=cursor_now,
+                    expected_work_ids=(planned.work_id,),
+                    outcomes=(outcome,),
+                ),
+            )
+            provider_reachable_probe = mode is ExecutionMode.PROBE and outcome.outcome_code in {
+                OutcomeCode.LIVE_SUCCESS,
+                OutcomeCode.ENDPOINT_EMPTY,
+                OutcomeCode.ENDPOINT_FORBIDDEN,
+                OutcomeCode.CLIENT_CONTRACT_ERROR,
+            }
+            if outcome.outcome_code in {
+                OutcomeCode.LIVE_SUCCESS,
+                OutcomeCode.ALTERNATIVE_SUCCESS,
+                OutcomeCode.RECONCILED_SUCCESS,
+            }:
+                fresh_count += 1
+            elif outcome.outcome_code is OutcomeCode.CORPUS_SUCCESS:
+                corpus_count += 1
+            else:
+                failed_count += 1
+            processed.add(planned.work_id)
+            newly_processed += 1
+        if newly_processed == 0:
+            break
+
+    circuit = connection.execute(
+        "SELECT state,revision FROM provider_circuit_state WHERE provider='fmp'"
+    ).fetchone()
+    if circuit is None:
+        raise RuntimeError("FMP recovery circuit was not initialized")
+    pending_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM fmp_work_backlog WHERE state='PENDING'"
+        ).fetchone()[0]
+    )
+    status = _status_for_counts(
+        fresh=fresh_count,
+        corpus=corpus_count,
+        failed=failed_count,
+    )
+    return RecoveryRunResult(
+        run_id=run_id,
+        status=status,
+        planned_count=len(specs),
+        dispatch_count=dispatch_count,
+        fresh_count=fresh_count,
+        corpus_count=corpus_count,
+        failed_count=failed_count,
+        circuit_state=CircuitState(str(circuit["state"])),
+        circuit_revision=int(circuit["revision"]),
+        pending_count=pending_count,
+    )
+
+
 def _all_active_tickers(
     conn: Connection,
     only_list_types: frozenset[str] | None,
@@ -372,9 +1004,11 @@ def _existing_status_rows(
     if not tickers:
         return {}
     cur = conn.cursor()
+    # B608: interpolation is only a generated comma-list of '?' placeholders;
+    # every ticker remains a separately bound SQLite parameter.
     placeholders = ",".join("?" for _ in tickers)
     cur.execute(
-        f"SELECT ticker, endpoint, period, status, last_pulled "
+        f"SELECT ticker, endpoint, period, status, last_pulled "  # nosec B608
         f"FROM fmp_endpoint_status WHERE ticker IN ({placeholders})",
         tickers,
     )
@@ -708,7 +1342,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         _release_lock()
 
 
-def _maybe_refresh_earnings_hints() -> None:
+def _maybe_refresh_earnings_hints(*, env: Mapping[str, str] | None = None) -> None:
     """Run the earnings-calendar surrogate once per day before audit.
 
     Costs 1 FMP call. Skipped if hints file is fresher than 23h.
@@ -727,128 +1361,324 @@ def _maybe_refresh_earnings_hints() -> None:
             stderr=subprocess.DEVNULL,
             check=False,
             timeout=30,
+            env=env,
         )
     except (subprocess.SubprocessError, OSError) as e:
         sys.stderr.write(f"[hints] surrogate failed: {type(e).__name__}: {e}\n")
 
 
-def _run_under_lock(args: argparse.Namespace) -> int:
-    tier = resolve_tier(args.tier)
-    _maybe_refresh_earnings_hints()
-    conn = connect_sqlite(
-        args.db,
-        role=SQLiteConnectionRole.READ_ONLY,
-        schema_preflight=False,
-    )
+def _authorized_recovery_items(
+    items: Sequence[QueueItem],
+    *,
+    explicit_tickers: Sequence[str] | None,
+) -> list[QueueItem]:
+    explicitly_requested = {ticker.upper() for ticker in explicit_tickers or ()}
+    authorized: list[QueueItem] = []
+    for item in items:
+        role = ListType(item.list_type)
+        if (
+            role is ListType.PORTFOLIO
+            or (role is ListType.EVALUATION and item.ticker in explicitly_requested)
+            or (role is ListType.INDEX_MEMBER and item.suffix in SCREENING_ENDPOINT_KEYS)
+        ):
+            authorized.append(item)
+    return authorized
+
+
+def _dispatch_one(
+    connection: sqlite3.Connection,
+    item: QueueItem,
+    planned: PlannedWork,
+    *,
+    tier: TierConfig,
+    auth: FmpAuthConfig,
+    db_path: Path,
+    log_path: Path,
+) -> WorkOutcome:
+    """Run one logical endpoint after its durable lease has committed."""
+    if connection.in_transaction:
+        raise RuntimeError("FMP dispatch cannot run inside a database transaction")
+    if planned.lease_token is None or planned.lease_expires_at is None:
+        raise ValueError("live dispatch requires an active recovery lease")
+    from save_fmp_data import FmpWorkReceipt, FmpWorkReceiptOutcome
+
+    lease_started_at = _utc_now()
+    dispatch_dir = CACHE_DIR / "dispatch" / planned.work_id[:16]
+    manifest_path = dispatch_dir / "manifest.json"
+    receipt_path = dispatch_dir / "work_receipt.json"
     try:
-        report = audit(
-            conn,
-            only_list_types=frozenset({args.only}) if args.only else None,
-            explicit_tickers=_split_tickers(args.tickers),
-            force=args.force,
+        dispatch_dir.mkdir(parents=True, exist_ok=True)
+        with suppress(FileNotFoundError):
+            receipt_path.unlink()
+        manifest_path.write_text(
+            json.dumps({"items": [item.to_manifest_entry()]}, sort_keys=True),
+            encoding="utf-8",
         )
-    finally:
-        conn.close()
-
-    queueable = report.queueable()
-    if not queueable:
-        print(json.dumps({"event": "no_work", "audit_counts": report.counts}, indent=2))
-        return 0
-
-    # Apply budget cap. Each queue entry costs ~1.05 HTTP attempts on average
-    # (try-ladder for OK endpoints succeeds first try; failed/forbidden may
-    # exhaust 5+). We use 1.0 as the conservative estimate so we don't undershoot.
-    budget = args.max_calls if args.max_calls is not None else remaining_budget(tier)
-    if budget <= 0:
-        print(
-            json.dumps(
-                {
-                    "event": "budget_exhausted",
-                    "tier": tier.name,
-                    "deferred": len(queueable),
-                    "audit_counts": report.counts,
-                },
-                indent=2,
-            )
+    except OSError:
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.TRANSPORT_ERROR,
+            observed_at=_utc_now(),
         )
-        return 0
-
-    capped = queueable[:budget]
-    deferred = len(queueable) - len(capped)
-
-    manifest_entries = [i.to_manifest_entry() for i in capped]
-    QUEUE_PATH.write_text(
-        json.dumps(
-            {
-                "generated_at": report.generated_at.isoformat(timespec="seconds"),
-                "tier": tier.name,
-                "items": manifest_entries,
-                "deferred": deferred,
-                "audit_counts": report.counts,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    if args.dry_run:
-        print(
-            json.dumps(
-                {
-                    "dry_run": True,
-                    "tier": tier.name,
-                    "would_dispatch": len(capped),
-                    "deferred": deferred,
-                    "audit_counts": report.counts,
-                },
-                indent=2,
-            )
-        )
-        return 0
-
-    # Set rate limit env var for save_fmp_data's TokenBucket, and propagate the
-    # resolved tier so the fetcher's ladder gates correctly: FMP_TIER=free makes
-    # save_fmp_data (and fetch_etf_data) drop the v3/v4 rungs and hit /stable only.
     env = os.environ.copy()
+    env["FMP_API_KEY"] = auth.api_key
     env["FMP_RATE_LIMIT_PER_SEC"] = str(tier.calls_per_sec)
     env["FMP_TIER"] = tier.name
-
+    env["EARNINGS_SUMMARY_DB_PATH"] = str(db_path)
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "save_fmp_data.py"),
         "--manifest",
-        str(QUEUE_PATH),
+        str(manifest_path),
         "--max-calls",
-        str(budget),
+        "1",
+        "--work-receipt",
+        str(receipt_path),
     ]
-    log_path = CACHE_DIR / f"run_{report.generated_at.strftime('%Y%m%dT%H%M%S')}.log"
-    with log_path.open("w", encoding="utf-8") as logf:
-        logf.write(
-            f"# refresh_cache: tier={tier.name} budget={budget} dispatch={len(capped)} deferred={deferred}\n"
+    try:
+        with log_path.open("a", encoding="utf-8") as logf:
+            proc = subprocess.run(  # nosec B603 - fixed local interpreter/script
+                cmd,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                check=False,
+                env=env,
+                timeout=240,
+            )
+    except (OSError, subprocess.SubprocessError):
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.TRANSPORT_ERROR,
+            observed_at=_utc_now(),
         )
-        logf.flush()
-        proc = subprocess.run(
-            cmd,
-            stdout=logf,
-            stderr=subprocess.STDOUT,
-            check=False,
-            env=env,
+    observed_at = _utc_now()
+    try:
+        receipt = FmpWorkReceipt.model_validate_json(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.TRANSPORT_ERROR,
+            observed_at=observed_at,
+        )
+    if (
+        receipt.ticker != item.ticker
+        or receipt.endpoint != item.endpoint
+        or receipt.period != item.period
+    ):
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.TRANSPORT_ERROR,
+            observed_at=observed_at,
+        )
+    if receipt.outcome is FmpWorkReceiptOutcome.SUCCESS:
+        if proc.returncode != 0 or receipt.file_path is None or receipt.content_sha256 is None:
+            return WorkOutcome(
+                work_id=planned.work_id,
+                lease_token=planned.lease_token,
+                outcome_code=OutcomeCode.TRANSPORT_ERROR,
+                observed_at=observed_at,
+            )
+        file_path = (PROJECT_ROOT / receipt.file_path).resolve()
+        try:
+            file_path.relative_to(FMP_DIR.resolve())
+        except ValueError:
+            return WorkOutcome(
+                work_id=planned.work_id,
+                lease_token=planned.lease_token,
+                outcome_code=OutcomeCode.TRANSPORT_ERROR,
+                observed_at=observed_at,
+            )
+        try:
+            content_sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        except OSError:
+            return WorkOutcome(
+                work_id=planned.work_id,
+                lease_token=planned.lease_token,
+                outcome_code=OutcomeCode.TRANSPORT_ERROR,
+                observed_at=observed_at,
+            )
+        if (
+            content_sha256 != receipt.content_sha256
+            or receipt.captured_at < lease_started_at
+            or receipt.captured_at > observed_at
+        ):
+            return WorkOutcome(
+                work_id=planned.work_id,
+                lease_token=planned.lease_token,
+                outcome_code=OutcomeCode.TRANSPORT_ERROR,
+                observed_at=observed_at,
+            )
+        if planned.cache_generation_id is None or planned.policy_sha256 is None:
+            raise AssertionError("live lease lost its recovery identity")
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.LIVE_SUCCESS,
+            observed_at=observed_at,
+            http_status=receipt.http_status,
+            fmp_snapshot=FmpSnapshotProof(
+                work_id=planned.work_id,
+                cache_generation_id=planned.cache_generation_id,
+                policy_sha256=planned.policy_sha256,
+                content_sha256=receipt.content_sha256,
+                captured_at=receipt.captured_at,
+            ),
+        )
+    outcome_by_receipt = {
+        FmpWorkReceiptOutcome.ACCOUNT_UNAUTHORIZED: OutcomeCode.HTTP_UNAUTHORIZED,
+        FmpWorkReceiptOutcome.ACCOUNT_PAYMENT_REQUIRED: OutcomeCode.ACCOUNT_PAYMENT_REQUIRED,
+        FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN: OutcomeCode.ACCOUNT_AUTH_FORBIDDEN,
+        FmpWorkReceiptOutcome.ENDPOINT_FORBIDDEN: OutcomeCode.ENDPOINT_FORBIDDEN,
+        FmpWorkReceiptOutcome.RATE_LIMITED: OutcomeCode.RATE_LIMITED,
+        FmpWorkReceiptOutcome.SERVER_ERROR: OutcomeCode.SERVER_ERROR,
+        FmpWorkReceiptOutcome.EMPTY: OutcomeCode.ENDPOINT_EMPTY,
+        FmpWorkReceiptOutcome.CONTRACT_ERROR: OutcomeCode.CLIENT_CONTRACT_ERROR,
+    }
+    outcome_code = outcome_by_receipt.get(receipt.outcome)
+    if outcome_code is None or (
+        outcome_code is OutcomeCode.CLIENT_CONTRACT_ERROR and receipt.http_status is None
+    ):
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.TRANSPORT_ERROR,
+            observed_at=observed_at,
+        )
+    return WorkOutcome(
+        work_id=planned.work_id,
+        lease_token=planned.lease_token,
+        outcome_code=outcome_code,
+        observed_at=observed_at,
+        http_status=receipt.http_status,
+    )
+
+
+def _run_under_lock(args: argparse.Namespace) -> int:
+    tier = resolve_tier(args.tier)
+    now = _utc_now()
+    connection = connect_sqlite(
+        args.db,
+        role=SQLiteConnectionRole.WRITER,
+    )
+    try:
+        credential_decision = decide_recovery_credentials(connection, now=now)
+        child_env = os.environ.copy()
+        child_env["FMP_RATE_LIMIT_PER_SEC"] = str(tier.calls_per_sec)
+        child_env["FMP_TIER"] = tier.name
+        if credential_decision.auth is not None:
+            child_env["FMP_API_KEY"] = credential_decision.auth.api_key
+        if credential_decision.hints_permitted:
+            _maybe_refresh_earnings_hints(env=child_env)
+        explicit_tickers = _split_tickers(args.tickers)
+        report = audit(
+            connection,
+            only_list_types=frozenset({args.only}) if args.only else None,
+            explicit_tickers=explicit_tickers,
+            force=args.force,
+            now=now,
+        )
+        queueable = _authorized_recovery_items(
+            report.queueable(),
+            explicit_tickers=explicit_tickers,
+        )
+        due_backlog_count = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM fmp_work_backlog WHERE state='PENDING' AND available_at <= ?",
+                (now.isoformat(),),
+            ).fetchone()[0]
+        )
+        if not queueable and due_backlog_count == 0:
+            print(json.dumps({"event": "no_work", "audit_counts": report.counts}, indent=2))
+            return 0
+
+        budget = args.max_calls if args.max_calls is not None else remaining_budget(tier)
+        processing_preview = queueable[:500]
+        deferred = max(0, len(queueable) - len(processing_preview))
+        QUEUE_PATH.write_text(
+            json.dumps(
+                {
+                    "generated_at": report.generated_at.isoformat(timespec="seconds"),
+                    "tier": tier.name,
+                    "items": [item.to_manifest_entry() for item in processing_preview],
+                    "deferred": deferred,
+                    "audit_counts": report.counts,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        if args.dry_run:
+            print(
+                json.dumps(
+                    {
+                        "dry_run": True,
+                        "tier": tier.name,
+                        "would_enqueue": len(queueable),
+                        "would_process": len(processing_preview),
+                        "due_backlog": due_backlog_count,
+                        "provider_call_budget": max(0, budget),
+                        "deferred": deferred,
+                        "audit_counts": report.counts,
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+
+        run_id = f"refresh-cache:{now.strftime('%Y%m%dT%H%M%S')}:{os.getpid()}"
+        log_path = CACHE_DIR / f"run_{now.strftime('%Y%m%dT%H%M%S')}.log"
+        log_path.write_text(
+            f"# refresh_cache: tier={tier.name} intended={len(queueable)} deferred={deferred}\n",
+            encoding="utf-8",
         )
 
-    print(
-        json.dumps(
+        def dispatch(
+            conn: sqlite3.Connection,
+            item: QueueItem,
+            planned: PlannedWork,
+        ) -> WorkOutcome:
+            auth = credential_decision.auth
+            if auth is None:
+                raise RuntimeError("recovery plan authorized network work without FMP auth")
+            return _dispatch_one(
+                conn,
+                item,
+                planned,
+                tier=tier,
+                auth=auth,
+                db_path=Path(args.db),
+                log_path=log_path,
+            )
+
+        result = run_recovery_batch(
+            connection,
+            items=queueable,
+            credentials=credential_decision.credentials,
+            raw_corpus_dir=FMP_DIR,
+            now=now,
+            run_id=run_id,
+            dispatch=dispatch,
+            max_items=500,
+            provider_call_budget=max(0, budget),
+            owner_request_id=(f"cli:{run_id}" if explicit_tickers else None),
+        )
+        output = result.to_dict()
+        output.update(
             {
                 "tier": tier.name,
-                "dispatched": len(capped),
                 "deferred": deferred,
-                "fetcher_exit_code": proc.returncode,
-                "log": str(log_path.relative_to(PROJECT_ROOT)),
+                "log": str(log_path),
                 "audit_counts": report.counts,
-            },
-            indent=2,
+            }
         )
-    )
-    return proc.returncode
+        print(json.dumps(output, indent=2))
+        return result.exit_code
+    finally:
+        connection.close()
 
 
 def _spawn_background(args: argparse.Namespace) -> int:
@@ -942,9 +1772,6 @@ def main() -> int:
     if args.cmd is None:
         # Re-parse with `run` injected
         args = ap.parse_args(["run", *sys.argv[1:]])
-
-    if args.cmd in {"audit", "run"} and not _prepare_fmp_auth():
-        return 2
 
     if args.cmd == "audit":
         return cmd_audit(args)

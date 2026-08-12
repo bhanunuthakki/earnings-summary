@@ -21,6 +21,7 @@ from pipeline.fmp_recovery import (
     CircuitState,
     CorpusSnapshot,
     CredentialAvailability,
+    EnqueueWorkRequest,
     ExecutionMode,
     FmpSnapshotProof,
     OutcomeCode,
@@ -33,6 +34,7 @@ from pipeline.fmp_recovery import (
     WorkOutcome,
     WorkSpec,
     WorkState,
+    enqueue_work,
     make_work_id,
     plan_run,
     record_outcomes,
@@ -202,6 +204,42 @@ def test_work_id_is_deterministic_and_commits_generation_and_policy() -> None:
     assert make_work_id(base) == make_work_id(base)
     assert make_work_id(base) != make_work_id(_spec("RBRK", generation="refresh-2"))
     assert make_work_id(base) != make_work_id(_spec("RBRK", policy_sha256=POLICY_B))
+
+
+def test_enqueue_work_persists_authorized_intent_without_leasing(db_path: Path) -> None:
+    specs = (_spec("RBRK"), _spec("WIX"))
+    with _connection(db_path) as connection:
+        receipt = enqueue_work(
+            connection,
+            EnqueueWorkRequest(now=NOW, work=specs),
+        )
+
+        assert receipt.enqueued_count == 2
+        assert receipt.work_ids == tuple(make_work_id(spec) for spec in specs)
+        assert receipt.backlog.pending_count == 2
+        assert receipt.backlog.leased_count == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fmp_recovery_events WHERE event_type='work_leased'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_enqueue_work_denial_is_atomic(db_path: Path) -> None:
+    with _connection(db_path) as connection:
+        with pytest.raises(ValueError, match="not authorized"):
+            enqueue_work(
+                connection,
+                EnqueueWorkRequest(
+                    now=NOW,
+                    work=(
+                        _spec("RBRK"),
+                        _spec("WATCH", role=ListType.WATCHLIST),
+                    ),
+                ),
+            )
+        assert connection.execute("SELECT COUNT(*) FROM fmp_work_backlog").fetchone()[0] == 0
 
 
 def test_plan_prioritizes_portfolio_then_requested_evaluation_then_index(
@@ -430,6 +468,37 @@ def test_endpoint_forbidden_is_terminal_without_poisoning_provider(db_path: Path
         assert work[0] == WorkState.TERMINAL.value
 
 
+@pytest.mark.parametrize(
+    "code,status",
+    [
+        (OutcomeCode.ENDPOINT_EMPTY, 200),
+        (OutcomeCode.CLIENT_CONTRACT_ERROR, 200),
+        (OutcomeCode.CLIENT_CONTRACT_ERROR, 422),
+    ],
+)
+def test_repeated_endpoint_results_never_poison_provider_circuit(
+    db_path: Path,
+    code: OutcomeCode,
+    status: int,
+) -> None:
+    with _connection(db_path) as connection:
+        for ticker in ("RBRK", "WIX"):
+            run_id = f"endpoint-{ticker}"
+            plan = _plan(connection, _spec(ticker), run_id=run_id)
+            _record(
+                connection,
+                plan,
+                (code,),
+                run_id=run_id,
+                statuses=(status,),
+            )
+        circuit = connection.execute(
+            "SELECT state,consecutive_failures,consecutive_rate_limits "
+            "FROM provider_circuit_state WHERE provider='fmp'"
+        ).fetchone()
+        assert tuple(circuit) == (CircuitState.CLOSED.value, 0, 0)
+
+
 def test_stale_live_success_cannot_close_a_newer_auth_circuit(db_path: Path) -> None:
     with _connection(db_path) as connection:
         stale_live = _plan(connection, _spec("RBRK"), run_id="stale-live")
@@ -457,10 +526,11 @@ def test_stale_live_success_cannot_close_a_newer_auth_circuit(db_path: Path) -> 
     "outcome_code,http_status",
     [
         (OutcomeCode.ENDPOINT_FORBIDDEN, 403),
+        (OutcomeCode.ENDPOINT_EMPTY, 200),
         (OutcomeCode.CLIENT_CONTRACT_ERROR, 422),
     ],
 )
-def test_non_global_probe_failure_reopens_instead_of_stranding_half_open(
+def test_non_global_probe_result_closes_without_stranding_half_open(
     db_path: Path,
     outcome_code: OutcomeCode,
     http_status: int,
@@ -486,14 +556,10 @@ def test_non_global_probe_failure_reopens_instead_of_stranding_half_open(
             statuses=(http_status,),
         )
         state = connection.execute(
-            "SELECT state,last_reason_code,next_probe_at FROM provider_circuit_state "
-            "WHERE provider='fmp'"
+            "SELECT state,consecutive_failures,consecutive_rate_limits "
+            "FROM provider_circuit_state WHERE provider='fmp'"
         ).fetchone()
-        assert tuple(state) == (
-            CircuitState.OPEN.value,
-            outcome_code.value,
-            (probe_at + timedelta(seconds=10)).isoformat(),
-        )
+        assert tuple(state) == (CircuitState.CLOSED.value, 0, 0)
 
 
 def test_subset_success_receipt_is_partial_while_same_run_work_is_unresolved(
