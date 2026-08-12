@@ -1018,7 +1018,9 @@ def _add_production_contract(html: str, generated_at: datetime) -> str:
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
-    html = _OPERATIONS_SECTION_RE.sub(render_operations_settings_shell() + "\n      ", html, count=1)
+    html = _OPERATIONS_SECTION_RE.sub(
+        render_operations_settings_shell() + "\n      ", html, count=1
+    )
     html = html.replace(
         '<div class="card-grid-stat-4col">',
         '<div class="card-grid-stat-4col" id="workOsPortfolioStats">',
