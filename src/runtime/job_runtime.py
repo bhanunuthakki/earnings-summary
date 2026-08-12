@@ -1,8 +1,9 @@
 """Safe shared runtime for a job that mutates one or more named write sets.
 
-Both Task Scheduler wrappers and an interactive caller use this module.  The
-lock is intentionally keyed by *what is written*, not only a job name: two
-different commands that touch ``portfolio-db`` cannot overlap.
+Both Task Scheduler wrappers and an interactive caller use this module. Locks
+are keyed by the smallest mutable lane that needs whole-job single-flight.
+SQLite transactions remain the serialization boundary for database writes;
+long network, browser, and LLM phases must not monopolize ``portfolio-db``.
 """
 
 from __future__ import annotations
@@ -44,6 +45,74 @@ _CONTEXT_LOCK_CLAIMS: ContextVar[dict[str, tuple[str, int]] | None] = ContextVar
 _ALLOW_NESTED_LOCKS: ContextVar[bool] = ContextVar("allow_nested_job_locks", default=False)
 _SCHEDULER_OWNER: tuple[int, str | None] | None = None
 _CREATE_SUSPENDED = getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
+
+# Closed scheduler compatibility policy. These wrappers historically declared
+# the coarse portfolio-db write set even though most of their wall time is
+# network/browser/LLM work. Keep one same-lane run at a time without blocking
+# unrelated SQLite writers before the child opens its bounded transaction.
+# Unlisted jobs and any caller with an explicit non-default write set retain
+# their requested lock unchanged.
+_SCHEDULER_PORTFOLIO_DB_POLICY: tuple[tuple[str, str], ...] = (
+    ("backfill-earnings-surprises-fetch", "market-data-refresh"),
+    ("backfill-earnings-surprises-ingest", "market-data-refresh"),
+    ("backfill-transcripts", "transcript-refresh"),
+    ("check-comp-set-drift", "comp-metrics"),
+    ("coach-pings", "notification-delivery"),
+    ("compute-macro-sensitivities", "market-data-refresh"),
+    ("daily_fetch_and_brief", "research-synthesis"),
+    ("db-gc", "portfolio-db"),
+    ("decision-nudge", "notification-delivery"),
+    ("disclosure-change-sweep", "research-synthesis"),
+    ("discover-ir-documents", "ir-discovery"),
+    ("discover-ir-failing", "ir-discovery"),
+    ("fetch-fmp-earnings-calendar", "fmp-refresh"),
+    ("fetch-macro-series", "market-data-refresh"),
+    ("fetch-sec-xbrl", "sec-companyfacts"),
+    ("grade-calibration", "llm-evaluation"),
+    ("ledger-synthesis", "research-synthesis"),
+    ("monthly-advisor-memos", "research-synthesis"),
+    ("monthly-calibration-scorecard", "llm-evaluation"),
+    ("monthly_p3_refresh", "lens-refresh"),
+    ("morning_pipeline", "morning-orchestration"),
+    ("refresh-business-factors", "research-synthesis"),
+    ("refresh-dirty-artifacts", "artifact-refresh"),
+    ("refresh-expected-earnings", "market-data-refresh"),
+    ("refresh-ir-kpis", "ir-discovery"),
+    ("refresh_fmp", "fmp-refresh"),
+    ("refresh_cache", "fmp-refresh"),
+    ("refresh_scenario_priors", "research-synthesis"),
+    ("restore-drill", "backup-restore"),
+    ("scan-ir-transcripts", "transcript-refresh"),
+    ("senior-partner-brief", "notification-delivery"),
+    ("submit-saydo-batch-prepare", "saydo-batch"),
+    ("submit-saydo-batch-submit", "saydo-batch"),
+    ("tenet-accountability", "research-synthesis"),
+    ("thesis-collision", "research-synthesis"),
+    ("track-comp-metrics-build-sets", "comp-metrics"),
+    ("track-comp-metrics-record", "comp-metrics"),
+    ("weekly-cleanup", "filesystem-maintenance"),
+    ("weekly-cleanup-expire-research", "portfolio-db"),
+    ("weekly-model-eval", "llm-evaluation"),
+    ("weekly-p2-lens-refresh", "lens-refresh"),
+    ("weekly-packet", "notification-delivery"),
+    ("weekly-score-stances", "advisor-scoring"),
+    ("weekly-synthesis", "research-synthesis"),
+    ("weekly-validation", "portfolio-db"),
+)
+_DATABASE_ADJACENT_LANES = frozenset(
+    lane for _, lane in _SCHEDULER_PORTFOLIO_DB_POLICY if lane != "portfolio-db"
+)
+
+
+def _scheduler_write_sets(job_name: str, requested: list[str]) -> list[str]:
+    """Narrow legacy scheduler declarations for explicitly approved long jobs."""
+
+    if requested != ["portfolio-db"]:
+        return list(requested)
+    for known_job, lane in _SCHEDULER_PORTFOLIO_DB_POLICY:
+        if job_name == known_job:
+            return [lane]
+    return list(requested)
 
 
 class _ProcessQueryKernel32(Protocol):
@@ -697,6 +766,12 @@ def _write_set_lock_path(repo_root: Path, write_set: str) -> Path:
         from run_lock import lock_path_for
 
         return lock_path_for(portfolio_db_path(repo_root))
+    if write_set in _DATABASE_ADJACENT_LANES:
+        # The runtime and an interactive checkout can point at one canonical
+        # database. Key approved long-runner lanes next to that database too,
+        # or each checkout would admit its own simultaneous "single" flight.
+        db_path = portfolio_db_path(repo_root)
+        return db_path.with_name(f"{db_path.name}.{_safe_name(write_set)}.lock")
     return repo_root / ".tmp" / "job_locks" / f"{_safe_name(write_set)}.lock"
 
 
@@ -903,12 +978,16 @@ def main(argv: list[str] | None = None) -> int:
             args.python_bootstrap,
             *script_command,
         ]
-        write_sets = [write_set]
+        write_sets = _scheduler_write_sets(job_name, [write_set])
     else:
         if args.job is None:
             parser.error("--job is required")
         job_name = args.job
-        write_sets = args.write_set or ["portfolio-db"]
+        write_sets = (
+            list(args.write_set)
+            if args.write_set
+            else _scheduler_write_sets(job_name, ["portfolio-db"])
+        )
     previous_owner = _SCHEDULER_OWNER
     if args.scheduler_wrapper and os.name == "nt":
         # sqlite_bootstrap runpy-executes this module in the same process. Its

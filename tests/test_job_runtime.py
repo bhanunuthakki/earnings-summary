@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -16,6 +20,7 @@ from runtime.job_runtime import (
     JobAlreadyRunningError,
     JobLock,
     _run_managed_child,
+    _scheduler_write_sets,
     _windows_mutex_name,
     _write_set_lock_path,
     allow_nested_job_locks,
@@ -23,6 +28,74 @@ from runtime.job_runtime import (
     main,
     run_job,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+_PORTFOLIO_DB_POLICY = {
+    "backfill-earnings-surprises-fetch": "market-data-refresh",
+    "backfill-earnings-surprises-ingest": "market-data-refresh",
+    "backfill-transcripts": "transcript-refresh",
+    "check-comp-set-drift": "comp-metrics",
+    "coach-pings": "notification-delivery",
+    "compute-macro-sensitivities": "market-data-refresh",
+    "daily_fetch_and_brief": "research-synthesis",
+    "db-gc": "portfolio-db",
+    "decision-nudge": "notification-delivery",
+    "disclosure-change-sweep": "research-synthesis",
+    "discover-ir-documents": "ir-discovery",
+    "discover-ir-failing": "ir-discovery",
+    "fetch-fmp-earnings-calendar": "fmp-refresh",
+    "fetch-macro-series": "market-data-refresh",
+    "fetch-sec-xbrl": "sec-companyfacts",
+    "grade-calibration": "llm-evaluation",
+    "ledger-synthesis": "research-synthesis",
+    "monthly-advisor-memos": "research-synthesis",
+    "monthly-calibration-scorecard": "llm-evaluation",
+    "monthly_p3_refresh": "lens-refresh",
+    "morning_pipeline": "morning-orchestration",
+    "refresh-business-factors": "research-synthesis",
+    "refresh-dirty-artifacts": "artifact-refresh",
+    "refresh-expected-earnings": "market-data-refresh",
+    "refresh-ir-kpis": "ir-discovery",
+    "refresh_fmp": "fmp-refresh",
+    "refresh_cache": "fmp-refresh",
+    "refresh_scenario_priors": "research-synthesis",
+    "restore-drill": "backup-restore",
+    "scan-ir-transcripts": "transcript-refresh",
+    "senior-partner-brief": "notification-delivery",
+    "submit-saydo-batch-prepare": "saydo-batch",
+    "submit-saydo-batch-submit": "saydo-batch",
+    "tenet-accountability": "research-synthesis",
+    "thesis-collision": "research-synthesis",
+    "track-comp-metrics-build-sets": "comp-metrics",
+    "track-comp-metrics-record": "comp-metrics",
+    "weekly-cleanup": "filesystem-maintenance",
+    "weekly-cleanup-expire-research": "portfolio-db",
+    "weekly-model-eval": "llm-evaluation",
+    "weekly-p2-lens-refresh": "lens-refresh",
+    "weekly-packet": "notification-delivery",
+    "weekly-score-stances": "advisor-scoring",
+    "weekly-synthesis": "research-synthesis",
+    "weekly-validation": "portfolio-db",
+}
+_LONG_RUNNING_LANES = tuple(
+    (job_name, lane) for job_name, lane in _PORTFOLIO_DB_POLICY.items() if lane != "portfolio-db"
+)
+
+
+def _wait_for(path: Path, process: subprocess.Popen[str], *, timeout_s: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not path.exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert path.exists(), process.communicate(timeout=1)
+
+
+def _subprocess_env() -> dict[str, str]:
+    return {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join((str(PROJECT_ROOT), str(PROJECT_ROOT / "src"))),
+    }
 
 
 class _PollingProcess:
@@ -246,6 +319,178 @@ def test_windows_mutex_is_cross_session(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(("job_name", "lane"), sorted(_PORTFOLIO_DB_POLICY.items()))
+def test_scheduler_applies_reviewed_portfolio_db_policy(job_name: str, lane: str) -> None:
+    assert _scheduler_write_sets(job_name, ["portfolio-db"]) == [lane]
+
+
+def test_scheduler_preserves_unknown_and_explicit_write_sets() -> None:
+    assert _scheduler_write_sets("new-unreviewed-job", ["portfolio-db"]) == ["portfolio-db"]
+    assert _scheduler_write_sets("refresh_cache", ["operator-explicit"]) == ["operator-explicit"]
+
+
+def test_every_cron_portfolio_db_job_has_an_explicit_reviewed_classification() -> None:
+    observed: set[str] = set()
+    invocation = re.compile(
+        r'run_python\.bat"\s+"([^"]+)"\s+"portfolio-db"',
+        re.IGNORECASE,
+    )
+    for wrapper in (PROJECT_ROOT / "cron").glob("*.bat"):
+        for line in wrapper.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().lower().startswith("rem "):
+                continue
+            match = invocation.search(line)
+            if match is not None:
+                observed.add(match.group(1))
+
+    assert observed == set(_PORTFOLIO_DB_POLICY) - {"refresh_fmp"}
+
+
+def test_only_proven_bounded_database_jobs_keep_the_coarse_mutex() -> None:
+    # db-gc owns deliberate batch/VACUUM maintenance; expiry is a bounded row
+    # update; weekly validation is a measured seconds-long confidence rescore.
+    # Every job that reads a large file corpus or can perform external I/O is
+    # intentionally absent even when it eventually writes portfolio.db.
+    assert {
+        job_name for job_name, lane in _PORTFOLIO_DB_POLICY.items() if lane == "portfolio-db"
+    } == {
+        "db-gc",
+        "weekly-cleanup-expire-research",
+        "weekly-validation",
+    }
+
+
+@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+def test_lane_lock_is_cross_process_single_flight(tmp_path: Path, lane: str) -> None:
+    acquired = tmp_path / f"{lane}.acquired"
+    release = tmp_path / f"{lane}.release"
+    script = "\n".join(
+        (
+            "import sys, time",
+            "from pathlib import Path",
+            "from runtime.job_runtime import JobLock",
+            "root, lane, acquired, release = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4])",
+            "with JobLock(root, 'holder', [lane], wait_s=0):",
+            "    acquired.write_text('held', encoding='utf-8')",
+            "    while not release.exists(): time.sleep(0.01)",
+        )
+    )
+    holder = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path), lane, str(acquired), str(release)],
+        cwd=PROJECT_ROOT,
+        env=_subprocess_env(),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _wait_for(acquired, holder)
+        with pytest.raises(JobAlreadyRunningError, match=f"write set busy: {lane}"):
+            JobLock(tmp_path, "contender", [lane], wait_s=0).__enter__()
+    finally:
+        release.touch()
+        stdout, stderr = holder.communicate(timeout=5)
+    assert holder.returncode == 0, (stdout, stderr)
+    assert not _write_set_lock_path(tmp_path, lane).exists()
+
+
+@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+def test_lane_lock_converges_across_checkouts_for_one_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lane: str
+) -> None:
+    first = tmp_path / "checkout-one"
+    second = tmp_path / "checkout-two"
+    database = tmp_path / "shared" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(database))
+
+    assert _write_set_lock_path(first, lane) == _write_set_lock_path(second, lane)
+    with (
+        JobLock(first, "first", [lane], wait_s=0),
+        pytest.raises(JobAlreadyRunningError, match=f"write set busy: {lane}"),
+    ):
+        JobLock(second, "second", [lane], wait_s=0).__enter__()
+
+
+@pytest.mark.parametrize("lane", sorted({lane for _, lane in _LONG_RUNNING_LANES}))
+def test_lane_job_leaves_global_mutex_free_and_sqlite_bounds_writer_contention(
+    tmp_path: Path, lane: str
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE writes (value TEXT NOT NULL)")
+
+    slow = tmp_path / "slow-network"
+    begin_write = tmp_path / "begin-write"
+    writing = tmp_path / "writing"
+    fail = tmp_path / "fail"
+    script = "\n".join(
+        (
+            "import sqlite3, sys, time",
+            "from pathlib import Path",
+            "from runtime.job_runtime import JobLock",
+            "root, db, slow, begin_write, writing, fail = map(Path, sys.argv[1:7])",
+            "lane = sys.argv[7]",
+            "with JobLock(root, 'lane-holder', [lane], wait_s=0):",
+            "    slow.write_text('network', encoding='utf-8')",
+            "    while not begin_write.exists(): time.sleep(0.01)",
+            "    conn = sqlite3.connect(db, timeout=0)",
+            "    try:",
+            "        conn.execute('BEGIN IMMEDIATE')",
+            "        conn.execute(\"INSERT INTO writes VALUES ('rolled-back')\")",
+            "        writing.write_text('transaction', encoding='utf-8')",
+            "        while not fail.exists(): time.sleep(0.01)",
+            "        raise RuntimeError('forced child failure')",
+            "    finally:",
+            "        conn.rollback()",
+            "        conn.close()",
+        )
+    )
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(tmp_path),
+            str(db_path),
+            str(slow),
+            str(begin_write),
+            str(writing),
+            str(fail),
+            lane,
+        ],
+        cwd=PROJECT_ROOT,
+        env=_subprocess_env(),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _wait_for(slow, holder)
+        with (
+            JobLock(tmp_path, "global-contender", ["portfolio-db"], wait_s=0),
+            sqlite3.connect(db_path, timeout=0) as conn,
+        ):
+            conn.execute("INSERT INTO writes VALUES ('during-network')")
+
+        begin_write.touch()
+        _wait_for(writing, holder)
+        with (
+            sqlite3.connect(db_path, timeout=0) as conn,
+            pytest.raises(sqlite3.OperationalError, match="database is locked"),
+        ):
+            conn.execute("BEGIN IMMEDIATE")
+    finally:
+        fail.touch()
+        stdout, stderr = holder.communicate(timeout=5)
+
+    assert holder.returncode != 0, (stdout, stderr)
+    with sqlite3.connect(db_path, timeout=0) as conn:
+        conn.execute("INSERT INTO writes VALUES ('after-failure')")
+        rows = conn.execute("SELECT value FROM writes ORDER BY rowid").fetchall()
+    assert rows == [("during-network",), ("after-failure",)]
+    assert not _write_set_lock_path(tmp_path, lane).exists()
+
+
 def test_scheduler_wrapper_preserves_script_arguments(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -281,7 +526,7 @@ def test_scheduler_wrapper_preserves_script_arguments(
                 "execution/sqlite_bootstrap.py",
                 "--python-arg=-3.11",
                 "--",
-                "morning",
+                "morning_pipeline",
                 "portfolio-db",
                 "execution/morning pipeline.py",
                 "--label",
@@ -292,8 +537,8 @@ def test_scheduler_wrapper_preserves_script_arguments(
     )
     assert captured == {
         "repo_root": tmp_path.resolve(),
-        "job_name": "morning",
-        "write_sets": ["portfolio-db"],
+        "job_name": "morning_pipeline",
+        "write_sets": ["morning-orchestration"],
         "command": [
             "py",
             "-u",
@@ -305,6 +550,62 @@ def test_scheduler_wrapper_preserves_script_arguments(
         ],
         "allow_schema_drift": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("job_name", "cli_write_sets", "expected"),
+    (
+        ("refresh_cache", [], ["fmp-refresh"]),
+        ("refresh_cache", ["portfolio-db"], ["portfolio-db"]),
+        ("refresh_cache", ["operator-explicit"], ["operator-explicit"]),
+        ("new-unreviewed-job", [], ["portfolio-db"]),
+    ),
+)
+def test_interactive_cli_applies_policy_only_to_implicit_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    job_name: str,
+    cli_write_sets: list[str],
+    expected: list[str],
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_job(
+        *,
+        repo_root: Path,
+        job_name: str,
+        write_sets: list[str],
+        command: list[str],
+        allow_schema_drift: bool,
+    ) -> int:
+        captured.update(
+            repo_root=repo_root,
+            job_name=job_name,
+            write_sets=write_sets,
+            command=command,
+            allow_schema_drift=allow_schema_drift,
+        )
+        return 0
+
+    monkeypatch.setattr(job_runtime, "run_job", fake_run_job)
+    argv = ["--repo-root", str(tmp_path), "--job", job_name]
+    for write_set in cli_write_sets:
+        argv.extend(("--write-set", write_set))
+    argv.extend(("--", sys.executable, "-c", "pass"))
+
+    assert main(argv) == 0
+    assert captured["write_sets"] == expected
+
+
+def test_scheduled_and_interactive_known_job_contend_on_same_lane(tmp_path: Path) -> None:
+    scheduled_lane = _scheduler_write_sets("refresh_cache", ["portfolio-db"])
+    interactive_lane = _scheduler_write_sets("refresh_cache", ["portfolio-db"])
+    assert scheduled_lane == interactive_lane == ["fmp-refresh"]
+    with (
+        JobLock(tmp_path, "scheduled-refresh", scheduled_lane, wait_s=0),
+        pytest.raises(JobAlreadyRunningError, match="write set busy: fmp-refresh"),
+    ):
+        JobLock(tmp_path, "interactive-refresh", interactive_lane, wait_s=0).__enter__()
 
 
 def test_run_job_writes_machine_readable_health(tmp_path: Path) -> None:
