@@ -1229,21 +1229,48 @@ def _admit_held_corpus(
     if connection.in_transaction:
         raise RuntimeError("evidence admission left an active transaction before extraction")
 
-    if doc_type == "fmp_income_statement":
-        from compute.income_statement import extract_income_statement_facts as extractor
-    elif doc_type == "fmp_balance_sheet":
-        from compute.balance_sheet import extract_balance_sheet_facts as extractor
-    elif doc_type == "fmp_cashflow":
-        from compute.cashflow import extract_cashflow_facts as extractor
-    else:
-        extractor = None
     admission_status: str | None = None
     try:
-        if extractor is not None:
-            inserted_count = extractor(connection, document_id, project_root)
-            if connection.in_transaction:
-                raise RuntimeError("corpus extractor returned with an active transaction")
+        inserted_count: int | None = None
+        if doc_type in {
+            "fmp_income_statement",
+            "fmp_balance_sheet",
+            "fmp_cashflow",
+        }:
             connection.execute("BEGIN IMMEDIATE")
+        if doc_type == "fmp_income_statement":
+            from compute.income_statement import extract_income_statement_facts
+
+            inserted_count = extract_income_statement_facts(
+                connection,
+                document_id,
+                project_root,
+                records=records,
+                commit=False,
+            )
+        elif doc_type == "fmp_balance_sheet":
+            from compute.balance_sheet import extract_balance_sheet_facts
+
+            inserted_count = extract_balance_sheet_facts(
+                connection,
+                document_id,
+                project_root,
+                records=records,
+                commit=False,
+            )
+        elif doc_type == "fmp_cashflow":
+            from compute.cashflow import extract_cashflow_facts
+
+            inserted_count = extract_cashflow_facts(
+                connection,
+                document_id,
+                project_root,
+                records=records,
+                commit=False,
+            )
+        if inserted_count is not None:
+            if not connection.in_transaction:
+                raise RuntimeError("corpus extractor closed its caller-owned transaction")
             rehydration = rehydrate_document_fact_observations(
                 connection,
                 document_id=document_id,

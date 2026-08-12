@@ -197,6 +197,9 @@ def rehydrate_document_fact_observations(
     The caller owns an active transaction and must commit only after its corpus
     handle is re-read unchanged. Any mismatch or partial capture therefore
     rolls back as one unit instead of blessing legacy rows blindly.
+
+    This transitional legacy read retires once the governed FMP corpus
+    backfill proves no financial-fact row remains without an observation link.
     """
     if not conn.in_transaction:
         raise RuntimeError("document fact observation rehydration requires a transaction")

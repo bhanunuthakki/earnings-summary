@@ -19,6 +19,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import compute.balance_sheet as balance_sheet
+import compute.cashflow as cashflow
+import compute.income_statement as income_statement
 import execution.refresh_cache as refresh_cache
 from execution.save_fmp_data import TODAY, per_ticker_jobs
 from models.companies import ListType
@@ -564,6 +567,113 @@ def test_real_corpus_admission_reclaims_crashed_lease_without_duplicate_facts(
     ) == raw_before
 
 
+@pytest.mark.parametrize(
+    ("module", "endpoint", "suffix", "field", "held_value", "path_value", "line_item"),
+    (
+        (
+            income_statement,
+            "income-statement",
+            "income_statement_quarterly",
+            "revenue",
+            111,
+            911,
+            "revenue",
+        ),
+        (
+            balance_sheet,
+            "balance-sheet-statement",
+            "balance_sheet_quarterly",
+            "totalAssets",
+            222,
+            922,
+            "total_assets",
+        ),
+        (
+            cashflow,
+            "cashflow-statement",
+            "cash_flow_quarterly",
+            "freeCashFlow",
+            333,
+            933,
+            "free_cash_flow",
+        ),
+    ),
+    ids=("income", "balance", "cashflow"),
+)
+def test_corpus_statement_facts_use_validated_held_records_not_reopened_path(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    module: object,
+    endpoint: str,
+    suffix: str,
+    field: str,
+    held_value: int,
+    path_value: int,
+    line_item: str,
+) -> None:
+    """A swap-and-restore pathname reader cannot change held-byte extraction."""
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / f"RBRK_{suffix}.json"
+    held_record: dict[str, object] = {
+        "date": "2026-07-31",
+        "symbol": "RBRK",
+        "reportedCurrency": "USD",
+        "period": "Q2",
+        field: held_value,
+    }
+    raw_path.write_text(json.dumps([held_record]), encoding="utf-8")
+    original = raw_path.read_bytes()
+    path_reader_calls = 0
+
+    def swapped_path_reader(path: Path) -> list[dict[str, object]]:
+        nonlocal path_reader_calls
+        path_reader_calls += 1
+        swapped = {**held_record, field: path_value}
+        # Simulate the vulnerable second pathname read observing replaced bytes,
+        # followed by an attacker restoring the exact governed corpus artifact.
+        assert path == raw_path
+        return [swapped]
+
+    monkeypatch.setattr(module, "read_records_json", swapped_path_reader)
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=ACTIVE_REVISION)
+    connection = _connection(db_path)
+    try:
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(
+                _item(
+                    "RBRK",
+                    endpoint=endpoint,
+                    suffix=suffix,
+                    endpoint_class="statement",
+                ),
+            ),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id=f"held-records-{suffix}",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+
+        assert result.corpus_count == 1
+        assert result.failed_count == 0
+        assert path_reader_calls == 0
+        fact = connection.execute(
+            "SELECT value FROM financial_facts WHERE ticker='RBRK' AND line_item=?",
+            (line_item,),
+        ).fetchone()
+        assert fact is not None
+        assert int(fact["value"]) == held_value
+        assert raw_path.read_bytes() == original
+    finally:
+        connection.close()
+
+
 def test_real_corpus_rehydrates_legacy_facts_missing_canonical_observations(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -851,6 +961,81 @@ def test_legacy_fact_rehydration_reports_evidence_drift_truthfully(
         )
         assert result.failed_count == 1
         assert result.corpus_failure_diagnostics[0].reason is CorpusFailureReason.EVIDENCE_CHANGED
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+                (document_id,),
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        connection.close()
+
+
+def test_fresh_fact_extraction_rolls_back_on_post_extract_evidence_drift(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "RBRK_income_statement_quarterly.json"
+    raw_path.write_text(
+        json.dumps(
+            [
+                {
+                    "date": "2026-07-31",
+                    "symbol": "RBRK",
+                    "reportedCurrency": "USD",
+                    "period": "Q2",
+                    "revenue": 310000000,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=ACTIVE_REVISION)
+    connection = _connection(db_path)
+    real_reread = refresh_cache._HeldCorpusFile.reread
+    rereads = 0
+
+    def fail_post_extract_reread(
+        self: refresh_cache._HeldCorpusFile,
+    ) -> tuple[bytes, os.stat_result]:
+        nonlocal rereads
+        rereads += 1
+        if rereads == 3:
+            raise RuntimeError("forced post-extract evidence drift")
+        return real_reread(self)
+
+    monkeypatch.setattr(refresh_cache._HeldCorpusFile, "reread", fail_post_extract_reread)
+    try:
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(_item("RBRK"),),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="fresh-facts-evidence-drift",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+
+        assert result.failed_count == 1
+        assert result.corpus_failure_diagnostics[0].reason is CorpusFailureReason.EVIDENCE_CHANGED
+        document = connection.execute(
+            "SELECT id FROM documents WHERE ticker='RBRK' AND source_type='fmp'"
+        ).fetchone()
+        assert document is not None
+        document_id = int(document["id"])
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM financial_facts WHERE source_doc_id=?", (document_id,)
+            ).fetchone()[0]
+            == 0
+        )
         assert (
             connection.execute(
                 "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",

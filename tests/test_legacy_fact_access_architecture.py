@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import re
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +126,31 @@ AUDITED_LEGACY_FACT_READS = {
 }
 
 
+@dataclass(frozen=True)
+class _TransitionalReadExemption:
+    function_name: str
+    read_count: int
+    retirement_criterion: str
+
+
+# This is migration repair, not a product read path: it enumerates only the
+# exact legacy rows owned by one already-governed FMP document so missing
+# immutable observations can be captured atomically. Keep it outside the
+# frozen reader-debt count, but make both its scope and deletion gate executable.
+_TRANSITIONAL_READ_EXEMPTIONS = {
+    "src/provenance/financial_fact_resolution.py": (
+        _TransitionalReadExemption(
+            function_name="rehydrate_document_fact_observations",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after the governed FMP corpus backfill proves zero legacy "
+                "financial_facts rows without fact_observation_revisions."
+            ),
+        ),
+    ),
+}
+
+
 def _matching_files(pattern: re.Pattern[str]) -> set[str]:
     return {
         path.relative_to(ROOT).as_posix()
@@ -144,15 +170,33 @@ def _dynamic_legacy_mutation_files() -> set[str]:
     return result
 
 
+def _read_count(node: ast.AST) -> int:
+    return sum(
+        len(_DIRECT_READ.findall(child.value))
+        for child in ast.walk(node)
+        if isinstance(child, ast.Constant)
+        and isinstance(child.value, str)
+        and re.search(r"\bSELECT\b", child.value, re.IGNORECASE)
+    )
+
+
 def _legacy_read_count(path: Path) -> int:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return sum(
-        len(_DIRECT_READ.findall(node.value))
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and re.search(r"\bSELECT\b", node.value, re.IGNORECASE)
-    )
+    relative = path.relative_to(ROOT).as_posix()
+    count = _read_count(tree)
+    for exemption in _TRANSITIONAL_READ_EXEMPTIONS.get(relative, ()):
+        functions = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == exemption.function_name
+        ]
+        assert len(functions) == 1, f"transitional reader moved or disappeared: {relative}"
+        actual = _read_count(functions[0])
+        assert actual == exemption.read_count, (
+            f"transitional reader scope changed: {relative}:{exemption.function_name}"
+        )
+        count -= actual
+    return count
 
 
 def test_no_new_direct_legacy_fact_mutation_surface() -> None:
@@ -179,3 +223,16 @@ def test_no_new_legacy_fact_readers_before_canonical_cutover() -> None:
 def test_legacy_fact_reader_inventory_names_live_files() -> None:
     missing = [path for path in AUDITED_LEGACY_FACT_READS if not (ROOT / path).is_file()]
     assert missing == []
+
+
+def test_transitional_legacy_reader_exemptions_are_narrow_and_retirable() -> None:
+    assert _TRANSITIONAL_READ_EXEMPTIONS
+    for relative, exemptions in _TRANSITIONAL_READ_EXEMPTIONS.items():
+        assert (ROOT / relative).is_file()
+        assert len(exemptions) == 1
+        exemption = exemptions[0]
+        assert exemption.read_count == 1
+        assert exemption.retirement_criterion.startswith("Retire after ")
+        # _legacy_read_count also proves the exact named top-level function
+        # still owns precisely the approved read count.
+        _legacy_read_count(ROOT / relative)
