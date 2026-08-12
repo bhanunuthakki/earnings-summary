@@ -724,7 +724,7 @@ def _safe_corpus_files(root: Path) -> tuple[Path, ...]:
                     raise ValueError(f"unsafe corpus entry: {entry_path}")
 
     walk(root)
-    return tuple(sorted(files))
+    return tuple(sorted(files, key=lambda item: item.relative_to(root).as_posix()))
 
 
 def _validate_corpus_ancestors(root: Path, path: Path) -> None:
