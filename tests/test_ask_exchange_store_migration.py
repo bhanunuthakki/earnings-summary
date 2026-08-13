@@ -10,7 +10,7 @@ from alembic.config import Config
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "0009_add_ir_approval_store"
+REVISION = "0010_add_rehearsal_io_indexes"
 
 
 def _config(path: Path) -> Config:

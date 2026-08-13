@@ -131,6 +131,7 @@ class _TransitionalReadExemption:
     function_name: str
     read_count: int
     retirement_criterion: str
+    sql_constant_name: str | None = None
 
 
 # This is migration repair, not a product read path: it enumerates only the
@@ -146,6 +147,7 @@ _TRANSITIONAL_READ_EXEMPTIONS = {
                 "Retire after the governed FMP corpus backfill proves zero legacy "
                 "financial_facts rows without fact_observation_revisions."
             ),
+            sql_constant_name="DOCUMENT_FACT_REHYDRATION_SQL",
         ),
     ),
 }
@@ -180,6 +182,20 @@ def _read_count(node: ast.AST) -> int:
     )
 
 
+def _named_assignment_value(node: ast.stmt, name: str) -> ast.AST | None:
+    if (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == name
+    ):
+        return node.value
+    if isinstance(node, ast.Assign) and any(
+        isinstance(target, ast.Name) and target.id == name for target in node.targets
+    ):
+        return node.value
+    return None
+
+
 def _legacy_read_count(path: Path) -> int:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     relative = path.relative_to(ROOT).as_posix()
@@ -191,7 +207,34 @@ def _legacy_read_count(path: Path) -> int:
             if isinstance(node, ast.FunctionDef) and node.name == exemption.function_name
         ]
         assert len(functions) == 1, f"transitional reader moved or disappeared: {relative}"
-        actual = _read_count(functions[0])
+        if exemption.sql_constant_name is None:
+            actual = _read_count(functions[0])
+        else:
+            constant_name = exemption.sql_constant_name
+            loads = sum(
+                1
+                for node in ast.walk(functions[0])
+                if isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and node.id == constant_name
+            )
+            assert loads == 1, (
+                f"transitional reader must load {constant_name} exactly once: "
+                f"{relative}:{exemption.function_name}"
+            )
+            assert _read_count(functions[0]) == 0, (
+                f"transitional reader duplicated its named SQL constant: "
+                f"{relative}:{exemption.function_name}"
+            )
+            constants: list[ast.AST] = []
+            for node in tree.body:
+                constant_value = _named_assignment_value(node, constant_name)
+                if constant_value is not None:
+                    constants.append(constant_value)
+            assert len(constants) == 1, (
+                f"transitional reader SQL constant moved or duplicated: {relative}:{constant_name}"
+            )
+            actual = _read_count(constants[0])
         assert actual == exemption.read_count, (
             f"transitional reader scope changed: {relative}:{exemption.function_name}"
         )
