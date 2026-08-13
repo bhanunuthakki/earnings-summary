@@ -220,6 +220,58 @@ def test_capture_fails_closed_without_selection_or_evidence(
     assert not any((tmp_path / "blobs").rglob("*"))
 
 
+def test_default_robots_denial_preserves_approval_database_and_blob_state(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = migrated_db(tmp_path / "robots-denied.db")
+    candidate_id = _approved_candidate(path)
+    session = Session([])
+
+    def _safe_url(url: str) -> str:
+        return url
+
+    def _deny_policy(_authority: str) -> tuple[Callable[[str], bool], float]:
+        def _denied(_exact_url: str) -> bool:
+            return False
+
+        return _denied, 0.0
+
+    monkeypatch.setattr(evidence_capture, "ensure_safe_public_url", _safe_url)
+    monkeypatch.setattr(
+        evidence_capture,
+        "robots_policy",
+        _deny_policy,
+    )
+
+    with pytest.raises(ExactIrCaptureError, match="ir_robots_denied"):
+        capture_and_admit_exact_ir_document(
+            path,
+            ExactIrCaptureActionInput(candidate_id=candidate_id, reason="Capture approved bytes"),
+            owner_actor="owner@example.test",
+            checkpoint_root=tmp_path / "checkpoints",
+            blob_root=tmp_path / "blobs",
+            task_id="rbrk-robots-denied",
+            user_agent="earnings-summary-test/1.0",
+            session=cast(SessionLike, session),
+            now=lambda: datetime(2026, 8, 12, 15, 1, 0),
+        )
+
+    assert session.urls == []
+    with sqlite3.connect(path) as conn:
+        current = get_current_decision(conn, candidate_id)
+        assert current is not None and current.action is DecisionAction.APPROVE
+        for table in (
+            "evidence_content_blobs",
+            "evidence_source_observations",
+            "evidence_document_versions",
+            "evidence_document_observation_links",
+        ):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)  # nosec B608
+    assert not (tmp_path / "blobs").exists()
+
+
 def test_exact_capture_never_dereferences_even_an_authorized_redirect(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:

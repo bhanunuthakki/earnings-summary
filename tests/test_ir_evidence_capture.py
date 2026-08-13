@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
+from email.message import Message
 from pathlib import Path
 from typing import cast
 
@@ -19,13 +21,16 @@ from execution import capture_observed_ir_documents as cli
 from ir_pipeline import evidence_capture
 from ir_pipeline._net import UnsafeURLError
 from ir_pipeline.authority import PublisherEndpointRule
+from ir_pipeline.discover import generic
 from ir_pipeline.discover._docmeta import CandidateDoc
 from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
 from ir_pipeline.evidence_capture import (
+    ExactIRFetchRequest,
     IRDocumentCaptureError,
     IRDocumentCaptureRequest,
     IRDocumentCaptureResult,
     capture_observed_ir_documents,
+    fetch_exact_ir_bytes,
 )
 from ir_pipeline.source_inventory import source_inventory_request, sync_ir_source_inventory
 
@@ -34,6 +39,7 @@ STAMP = datetime(2026, 7, 27, 14, 0, tzinfo=UTC)
 CONFIG_SHA = "d" * 64
 INVENTORY_KEY = "issuer-acme:ir-crawl"
 URL = "https://ir.acme.test/q4-2025-results.pdf"
+EXACT_PUBLIC_URL = "https://93.184.216.34/q4-2025-results.pdf"
 BODY = b"%PDF-1.7 investor presentation bytes"
 ROBOTS_ALLOWS = cast(
     Callable[[str, str], bool],
@@ -100,8 +106,8 @@ class FakeRobotsResponse:
     def __init__(self, body: bytes) -> None:
         self.body = body
 
-    def read(self, maximum: int) -> bytes:
-        return self.body[:maximum]
+    def read(self, maximum: int = -1) -> bytes:
+        return self.body if maximum < 0 else self.body[:maximum]
 
     def __enter__(self) -> FakeRobotsResponse:
         return self
@@ -208,6 +214,274 @@ def _request(
         apply=apply,
         max_document_bytes=maximum,
     )
+
+
+def _exact_request(
+    tmp_path: Path,
+    *,
+    authority_url: str = "https://ir.acme.test/financials",
+    exact_url: str = EXACT_PUBLIC_URL,
+    task_id: str = "exact-ir",
+) -> ExactIRFetchRequest:
+    parsed = urllib.parse.urlparse(exact_url)
+    assert parsed.hostname is not None
+    return ExactIRFetchRequest(
+        candidate_id="a" * 64,
+        authority_url=authority_url,
+        exact_url=exact_url,
+        publisher_file_rules=(
+            PublisherEndpointRule(host=parsed.hostname, path_prefix=parsed.path),
+        ),
+        checkpoint_root=tmp_path / "exact-checkpoints",
+        blob_root=tmp_path / "exact-blobs",
+        task_id=task_id,
+        user_agent="research-agent test@example.test",
+    )
+
+
+def test_exact_capture_resolves_authority_policy_and_applies_it_to_cdn_url(
+    tmp_path: Path,
+) -> None:
+    authority = "https://investors.wix.com/financials"
+    exact = "https://4f4a3186-9467-4c09-aa74-51fe1affec20.usrfiles.com/ugd/report.pdf"
+    resolver_urls: list[str] = []
+    predicate_urls: list[str] = []
+    sleeps: list[float] = []
+
+    def _resolver(url: str) -> tuple[Callable[[str], bool], float]:
+        resolver_urls.append(url)
+
+        def _predicate(candidate_url: str) -> bool:
+            predicate_urls.append(candidate_url)
+            return True
+
+        return _predicate, 30.0
+
+    session = FakeSession([FakeResponse()])
+    result = fetch_exact_ir_bytes(
+        _exact_request(tmp_path, authority_url=authority, exact_url=exact),
+        session=session,
+        robots_policy_resolver=_resolver,
+        sleeper=sleeps.append,
+    )
+
+    assert result.network_fetched
+    assert resolver_urls == [authority]
+    assert predicate_urls == [exact]
+    assert sleeps == [12.0]
+    assert session.calls == [exact]
+
+
+def test_exact_capture_robots_override_has_zero_delay_and_no_resolver(
+    tmp_path: Path,
+) -> None:
+    session = FakeSession([FakeResponse()])
+
+    def _unexpected_resolver(_url: str) -> tuple[Callable[[str], bool], float]:
+        raise AssertionError("test override must bypass production policy resolution")
+
+    result = fetch_exact_ir_bytes(
+        _exact_request(tmp_path),
+        session=session,
+        robots_allows=lambda _url, _agent: True,
+        robots_policy_resolver=_unexpected_resolver,
+        sleeper=lambda _delay: (_ for _ in ()).throw(AssertionError("unexpected sleep")),
+    )
+
+    assert result.network_fetched
+
+
+def test_exact_capture_rechecks_prior_robots_denial_and_can_recover(tmp_path: Path) -> None:
+    request = _exact_request(tmp_path)
+    with pytest.raises(IRDocumentCaptureError, match="ir_robots_denied"):
+        fetch_exact_ir_bytes(
+            request,
+            session=FakeSession([]),
+            robots_allows=lambda _url, _agent: False,
+        )
+    session = FakeSession([FakeResponse()])
+    result = fetch_exact_ir_bytes(
+        request,
+        session=session,
+        robots_allows=lambda _url, _agent: True,
+    )
+
+    assert result.network_fetched
+    assert session.calls == [EXACT_PUBLIC_URL]
+
+
+def test_exact_capture_fetched_checkpoint_replays_without_policy_or_network(
+    tmp_path: Path,
+) -> None:
+    request = _exact_request(tmp_path)
+    first = fetch_exact_ir_bytes(
+        request,
+        session=FakeSession([FakeResponse()]),
+        robots_allows=lambda _url, _agent: True,
+    )
+
+    def _unexpected_resolver(_url: str) -> tuple[Callable[[str], bool], float]:
+        raise AssertionError("fetched replay must not resolve robots policy")
+
+    replay = fetch_exact_ir_bytes(
+        request,
+        session=FakeSession([]),
+        robots_policy_resolver=_unexpected_resolver,
+        sleeper=lambda _delay: (_ for _ in ()).throw(AssertionError("unexpected sleep")),
+    )
+
+    assert not replay.network_fetched
+    assert replay.content_sha256 == first.content_sha256
+
+
+def test_exact_capture_denial_prevents_document_or_blob_write(tmp_path: Path) -> None:
+    with pytest.raises(IRDocumentCaptureError, match="ir_robots_denied"):
+        fetch_exact_ir_bytes(
+            _exact_request(tmp_path),
+            session=FakeSession([]),
+            robots_policy_resolver=lambda _authority: (lambda _url: False, 0.0),
+        )
+
+    assert not (tmp_path / "exact-blobs").exists()
+    response_root = tmp_path / "exact-checkpoints" / "exact-ir" / "responses"
+    assert not response_root.exists() or not tuple(response_root.iterdir())
+
+
+def test_exact_capture_authorizes_url_before_resolving_robots_policy(tmp_path: Path) -> None:
+    request = _exact_request(tmp_path).model_copy(
+        update={
+            "exact_url": "https://evil.example/forged.pdf",
+            "publisher_file_rules": (
+                PublisherEndpointRule(host="cdn.publisher.test", path_prefix="/approved/"),
+            ),
+        }
+    )
+
+    def _unexpected_resolver(_url: str) -> tuple[Callable[[str], bool], float]:
+        raise AssertionError("authorization failure must precede robots policy")
+
+    with pytest.raises(IRDocumentCaptureError, match="not authorized"):
+        fetch_exact_ir_bytes(
+            request,
+            session=FakeSession([]),
+            robots_policy_resolver=_unexpected_resolver,
+        )
+
+
+@pytest.mark.parametrize("failure", [404, 403, "unreachable"])
+def test_canonical_missing_or_unreachable_authority_robots_allows_exact_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: int | str,
+) -> None:
+    class _UnavailableOpener:
+        def open(self, _request: urllib.request.Request, *, timeout: int) -> FakeRobotsResponse:
+            assert timeout == 15
+            if isinstance(failure, int):
+                raise urllib.error.HTTPError("robots", failure, "unavailable", Message(), None)
+            raise urllib.error.URLError("unreachable")
+
+    monkeypatch.setattr(generic, "ensure_safe_public_url", _safe_public_url)
+    monkeypatch.setattr(generic, "build_public_opener", _UnavailableOpener)
+    monkeypatch.setattr(evidence_capture, "ensure_safe_public_url", _safe_public_url)
+    result = fetch_exact_ir_bytes(
+        _exact_request(tmp_path, task_id=f"robots-{failure}"),
+        session=FakeSession([FakeResponse()]),
+        sleeper=lambda _delay: None,
+    )
+
+    assert result.network_fetched
+
+
+def test_canonical_unsafe_authority_robots_denies_exact_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _unsafe_authority(_url: str) -> str:
+        raise UnsafeURLError("private authority")
+
+    monkeypatch.setattr(generic, "ensure_safe_public_url", _unsafe_authority)
+    monkeypatch.setattr(evidence_capture, "ensure_safe_public_url", _safe_public_url)
+
+    with pytest.raises(IRDocumentCaptureError, match="ir_robots_denied"):
+        fetch_exact_ir_bytes(
+            _exact_request(tmp_path),
+            session=FakeSession([]),
+            sleeper=lambda _delay: None,
+        )
+
+
+def test_canonical_authority_disallow_is_applied_to_exact_cdn_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opener = FakeRobotsOpener(b"User-agent: *\nDisallow: /ugd/\n")
+    monkeypatch.setattr(generic, "ensure_safe_public_url", _safe_public_url)
+    monkeypatch.setattr(generic, "build_public_opener", lambda: opener)
+    monkeypatch.setattr(evidence_capture, "ensure_safe_public_url", _safe_public_url)
+    session = FakeSession([])
+
+    with pytest.raises(IRDocumentCaptureError, match="ir_robots_denied"):
+        fetch_exact_ir_bytes(
+            _exact_request(
+                tmp_path,
+                authority_url="https://investors.wix.com/financials",
+                exact_url=(
+                    "https://4f4a3186-9467-4c09-aa74-51fe1affec20.usrfiles.com/ugd/report.pdf"
+                ),
+            ),
+            session=session,
+            sleeper=lambda _delay: None,
+        )
+
+    assert opener.requests[0].full_url == "https://investors.wix.com/robots.txt"
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    ("authority_url", "exact_url"),
+    [
+        (
+            "https://investors.wix.com/financials",
+            "https://4f4a3186-9467-4c09-aa74-51fe1affec20.usrfiles.com/ugd/report.pdf",
+        ),
+        (
+            "https://ir.rubrik.com/financials/quarterly-results/default.aspx",
+            "https://s203.q4cdn.com/667520861/files/doc_financials/report.pdf",
+        ),
+    ],
+)
+def test_exact_capture_accepts_approved_wix_and_rubrik_cdn_fixtures(
+    tmp_path: Path,
+    authority_url: str,
+    exact_url: str,
+) -> None:
+    policy_urls: list[str] = []
+    predicate_urls: list[str] = []
+
+    def _resolver(url: str) -> tuple[Callable[[str], bool], float]:
+        policy_urls.append(url)
+
+        def _allows(candidate_url: str) -> bool:
+            predicate_urls.append(candidate_url)
+            return True
+
+        return _allows, 0.0
+
+    result = fetch_exact_ir_bytes(
+        _exact_request(
+            tmp_path,
+            authority_url=authority_url,
+            exact_url=exact_url,
+            task_id="publisher-cdn",
+        ),
+        session=FakeSession([FakeResponse()]),
+        robots_policy_resolver=_resolver,
+    )
+
+    assert result.final_url == exact_url
+    assert policy_urls == [authority_url]
+    assert predicate_urls == [exact_url]
 
 
 def test_dry_run_streams_raw_checkpoint_without_database_or_durable_blob_write(
