@@ -41,6 +41,7 @@ from macro_store import (  # noqa: E402
 )
 from net.client import DEFAULT_FMP_BASE_URL  # noqa: E402
 from sources import registry as source_calls  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 class AttemptOutcome(StrEnum):
@@ -261,7 +262,11 @@ def _validate_rows(
 
 def _fmp_disabled_reason(db_path: Path) -> str:
     try:
-        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.READ_ONLY,
+            schema_preflight=True,
+        )
         try:
             row = conn.execute(
                 "SELECT state FROM provider_circuit_state WHERE provider='fmp'"
