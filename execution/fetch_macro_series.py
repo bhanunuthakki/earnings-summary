@@ -185,7 +185,9 @@ def _sync_db_path(repo_root: Path) -> Path:
 
 
 def _default_yfinance_loader(symbol: str, *, timeout_seconds: float) -> list[tuple[date, float]]:
-    import yfinance as yf  # type: ignore[import-untyped]
+    import importlib
+
+    yf = importlib.import_module("yfinance")
 
     history = (
         cast("Any", yf)
