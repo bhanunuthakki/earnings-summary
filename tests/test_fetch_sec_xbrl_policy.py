@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import NoReturn, cast
@@ -110,10 +112,12 @@ def test_companyfacts_boundary_classifies_auth_denial(
 
 def test_sec_auth_denial_halts_before_the_next_ticker(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     conn = sqlite3.connect(":memory:")
     calls: list[str] = []
     terminal: dict[str, object] = {}
+
     def open_test_db(_path: Path) -> sqlite3.Connection:
         return conn
 
@@ -133,9 +137,30 @@ def test_sec_auth_denial_halts_before_the_next_ticker(
         ticker: str,
         project_root: object,
         run_id: str,
+        timing_sink: Callable[[sec_xbrl.SecIngestTimingReceipt], None],
     ) -> object:
         del project_root, run_id
         calls.append(ticker)
+        timing_sink(
+            sec_xbrl.SecIngestTimingReceipt(
+                ticker=ticker,
+                outcome="failed",
+                failed_phase="http_fetch",
+                total_ms=2.0,
+                phases=sec_xbrl.SecIngestPhaseDurations(
+                    http_fetch_ms=2.0,
+                    payload_parse_ms=0.0,
+                    snapshot_registration_ms=0.0,
+                    accession_mapping_ms=0.0,
+                    document_evidence_capture_ms=0.0,
+                    tag_selection_ms=0.0,
+                    fact_persistence_restatement_ms=0.0,
+                    evidence_capture_resolution_ms=0.0,
+                    commit_ms=0.0,
+                    latest_cache_publish_ms=0.0,
+                ),
+            )
+        )
         raise sec_xbrl.SecCompanyFactsAuthenticationDeniedError(403)
 
     def finish(
@@ -154,3 +179,27 @@ def test_sec_auth_denial_halts_before_the_next_ticker(
     assert fetch_sec_xbrl.main() == 1
     assert calls == ["META"]
     assert terminal["error_summary"] == "1 tickers failed"
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert events == [
+        {
+            "event": "sec_xbrl_ingest_timing",
+            "failed_phase": "http_fetch",
+            "outcome": "failed",
+            "phases": {
+                "accession_mapping_ms": 0.0,
+                "commit_ms": 0.0,
+                "document_evidence_capture_ms": 0.0,
+                "evidence_capture_resolution_ms": 0.0,
+                "fact_persistence_restatement_ms": 0.0,
+                "http_fetch_ms": 2.0,
+                "latest_cache_publish_ms": 0.0,
+                "payload_parse_ms": 0.0,
+                "snapshot_registration_ms": 0.0,
+                "tag_selection_ms": 0.0,
+            },
+            "run_id": "run-1",
+            "schema_version": "sec_companyfacts_ingest_timing.v1",
+            "ticker": "META",
+            "total_ms": 2.0,
+        }
+    ]

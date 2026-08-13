@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -366,6 +367,8 @@ def insert_with_restatement_detection(
     extracted_by: str | None = None,
     locator: str | None = None,
     before_resolve: Callable[[int], None] | None = None,
+    evidence_resolution_timing_sink: Callable[[int], None] | None = None,
+    monotonic_ns: Callable[[], int] = time.perf_counter_ns,
 ) -> tuple[int | None, int | None]:
     """Insert one financial_facts row, setting `supersedes_id` when this is
     a restatement of an existing row from an earlier filing.
@@ -392,6 +395,10 @@ def insert_with_restatement_detection(
     for the new row. A successful insert always resolves after that callback
     returns; callback or resolution failures propagate to the transaction
     owner so the entire admission can be rolled back.
+
+    `evidence_resolution_timing_sink`, when provided, receives the elapsed
+    nanoseconds for the source-specific provenance callback plus mandatory
+    resolution. It is observational only and does not own transaction state.
 
     Callers should use this in place of a raw INSERT OR IGNORE when the
     extractor wants the restatement chain populated. Existing call sites
@@ -534,9 +541,18 @@ def insert_with_restatement_detection(
         return (None, None)
     new_row_id = int(cur.lastrowid) if cur.lastrowid is not None else None
     if new_row_id is not None:
-        if before_resolve is not None:
-            before_resolve(new_row_id)
-        resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=new_row_id)
+        if evidence_resolution_timing_sink is None:
+            if before_resolve is not None:
+                before_resolve(new_row_id)
+            resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=new_row_id)
+        else:
+            evidence_started_ns = monotonic_ns()
+            try:
+                if before_resolve is not None:
+                    before_resolve(new_row_id)
+                resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=new_row_id)
+            finally:
+                evidence_resolution_timing_sink(max(0, monotonic_ns() - evidence_started_ns))
     return (new_row_id, supersedes_id)
 
 
