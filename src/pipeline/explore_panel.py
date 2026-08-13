@@ -106,8 +106,8 @@ _PANEL_STYLE = """<style>
 
 # Plain string (not an f-string) so braces pass through untouched; the panel
 # assembler drops it into one <script> tag. All state lives in the DOM.
-_PANEL_JS = """
-(function () {
+EXPLORE_PANEL_JS = """
+window.initExplorePanel = function () {
   var root = document.getElementById('vx-root');
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
@@ -120,6 +120,14 @@ _PANEL_JS = """
       return s.trim().toUpperCase();
     }).filter(Boolean);
   }
+  root.addEventListener('work-os-explore-tickers', function (event) {
+    var next = event.detail && Array.isArray(event.detail.tickers) ? event.detail.tickers : [];
+    next = next.map(function (ticker) { return String(ticker || '').trim().toUpperCase(); })
+      .filter(Boolean);
+    if (!next.length) return;
+    el('vx-tickers').value = next.join(', ');
+    loadCatalog(selectedTokens());
+  });
   // ---- Type-ahead pickers: the per-ticker fact list can run to many hundreds
   // of entries (capture-every-number long tail), so each picker filters as you
   // type. Selection is tracked in a per-select token map (not the live <option>
@@ -639,7 +647,8 @@ _PANEL_JS = """
   }
   window.addEventListener('cc-view-id', consumePaletteView);
   consumePaletteView();
-})();
+};
+window.initExplorePanel();
 """
 
 
@@ -744,9 +753,19 @@ def render_keymetrics_fragment(db_path: Path, tickers: list[str]) -> str:
     return render_key_metrics_inner(bubbles, symbols)
 
 
-def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
+def render_explore_panel(
+    db_path: Path,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    initial_tickers: list[str] | None = None,
+    include_runtime: bool = True,
+) -> str:
     """The Research → Explore tab fragment: builder + saved views + result."""
-    tickers = _default_tickers(db_path, user_id)
+    tickers = (
+        [ticker.strip().upper() for ticker in initial_tickers if ticker.strip()]
+        if initial_tickers is not None
+        else _default_tickers(db_path, user_id)
+    )
     catalog: dict[str, list[dict[str, object]]] = (
         metric_catalog(db_path, tickers) if tickers else {"fin": [], "kpi": [], "seg": []}
     )
@@ -773,6 +792,7 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     second = tickers[1] if len(tickers) > 1 else "MELI"
     # Research prompts are doorway controls into Work OS Copilot.  The panel
     # itself owns only deterministic ViewSpec compilation and execution.
+    runtime = f"<script>{EXPLORE_PANEL_JS}</script>" if include_runtime else ""
     return f"""{_PANEL_STYLE}
 <div id="vx-root">
 <div class="ask-thread" id="ask-thread">
@@ -855,4 +875,4 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
  period end. Saved views embed elsewhere via /api/views/&lt;id&gt;/fragment.</p>
 </div>
 </div>
-<script>{_PANEL_JS}</script>"""
+{runtime}"""

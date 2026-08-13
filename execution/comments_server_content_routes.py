@@ -22,6 +22,7 @@ from pipeline.work_os_briefs import (
     resolve_report_artifact,
 )
 from pipeline.work_os_company import build_company_desk
+from pipeline.work_os_decisions import build_decision_projection
 
 
 class _TickerCommandCenter(Protocol):
@@ -453,7 +454,14 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
                 409,
             )
         try:
-            payload = load_report_reader_payload(repo_root, artifact_id)
+            decision, _conditions, _warnings = build_decision_projection(
+                context.get_read_db(), artifact.ticker
+            )
+            payload = load_report_reader_payload(
+                repo_root,
+                artifact_id,
+                decision=decision,
+            )
         except FileNotFoundError:
             return (
                 {

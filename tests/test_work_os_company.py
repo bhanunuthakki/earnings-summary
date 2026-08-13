@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -155,14 +155,22 @@ def test_company_desk_is_a_narrow_governed_read_model(work_os_app_repo: Path) ->
     assert desk.schema_version == "company_desk.v1"
     assert desk.company.ticker == "NU"
     assert desk.company.coverage_role == "portfolio"
-    assert desk.current_decision is not None
-    assert desk.current_decision.decision_id == 7
-    assert desk.current_decision.owner_state == "hold"
-    assert desk.current_decision.model_recommendation == "trim"
-    assert desk.current_decision.revision == "2026-08-07T12:00:00Z"
+    assert desk.current_decision.relationship == "conflict"
+    assert desk.current_decision.freshness == "current"
+    assert desk.current_decision.owner is not None
+    assert desk.current_decision.owner.decision_id == 7
+    assert desk.current_decision.owner.value == "hold"
+    assert desk.current_decision.owner.revision == "2026-08-07T12:00:00Z"
+    assert desk.current_decision.model is not None
+    assert desk.current_decision.model.decision_id == 8
+    assert desk.current_decision.model.value == "trim"
+    assert desk.current_decision.model.revision == "2026-08-08T12:00:00Z"
     assert desk.conditions[0].stable_id == "decision:7:condition:0"
     assert desk.open_questions[0].stable_id == "analyst_note:11"
     assert desk.open_questions[0].revision == "2026-08-08T10:00:00Z"
+    assert desk.open_questions[0].origin == "owner"
+    assert desk.open_questions[0].approval == "owner-authored"
+    assert desk.question_store_status == "ok"
     assert desk.latest_brief is None
     assert "position_snapshot_unavailable" in desk.warnings
 
@@ -177,7 +185,9 @@ def test_company_desk_api_is_read_only_and_no_store(
     assert response.headers["Cache-Control"] == "no-store"
     payload = response.get_json()
     assert payload["company"]["ticker"] == "NU"
-    assert payload["current_decision"]["owner_state"] == "hold"
+    assert payload["current_decision"]["owner"]["value"] == "hold"
+    assert payload["current_decision"]["model"]["value"] == "trim"
+    assert payload["current_decision"]["relationship"] == "conflict"
     assert payload["conditions"][0]["evidence_ref"] == "financial"
 
 
@@ -192,10 +202,32 @@ def test_company_desk_degrades_when_optional_tables_are_absent(
         conn.close()
 
     assert desk.company.coverage_role == "evaluation"
-    assert desk.current_decision is None
+    assert desk.current_decision.relationship == "unavailable"
+    assert desk.current_decision.freshness == "unavailable"
+    assert desk.current_decision.owner is None
+    assert desk.current_decision.model is None
     assert desk.conditions == []
     assert desk.open_questions == []
+    assert desk.question_store_status == "unavailable"
     assert desk.status == "degraded"
+
+
+def test_company_desk_marks_old_decision_state_stale(work_os_app_repo: Path) -> None:
+    _seed_company_state(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(
+            work_os_app_repo,
+            conn,
+            "NU",
+            generated_at=datetime(2027, 1, 15, tzinfo=UTC),
+        )
+    finally:
+        conn.close()
+
+    assert desk.current_decision.freshness == "stale"
+    assert desk.current_decision.stale_after_days == 90
 
 
 def test_company_desk_exposes_latest_governed_dcf_snapshot(

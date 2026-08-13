@@ -138,6 +138,30 @@ def test_explore_panel_renders_with_default_universe(db_path: Path) -> None:
     assert "Save view" in html_out
 
 
+def test_explore_panel_has_searchable_tracked_ticker_picker_and_flexible_window(
+    db_path: Path,
+) -> None:
+    html_out = render_explore_panel(db_path)
+
+    assert 'id="vx-tickers"' in html_out
+    assert 'id="vx-periods"' in html_out
+    assert 'min="1" max="40"' in html_out
+    assert "window.initExplorePanel" in html_out
+    assert "work-os-explore-tickers" in html_out
+
+
+def test_work_os_explore_fragment_is_runtime_free_and_seeded_to_requested_ticker(
+    client: FlaskClient,
+) -> None:
+    response = client.get("/api/panel/explore?fragment=work-os&tickers=TST")
+
+    assert response.status_code == 200
+    html_out = response.get_data(as_text=True)
+    assert 'id="vx-root"' in html_out
+    assert 'id="vx-tickers" name="tickers" value="TST"' in html_out
+    assert "<script>" not in html_out
+
+
 def test_explore_panel_is_copilot_handoff_first(db_path: Path) -> None:
     """Prompt controls lead into Copilot; the deterministic builder remains."""
     html_out = render_explore_panel(db_path)

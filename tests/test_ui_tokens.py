@@ -111,6 +111,7 @@ def test_chrome_tokens_pin_the_one_radius_and_standard_transition() -> None:
     assert CHROME_TOKENS["radius-drawer"] == "14px"
     assert CHROME_TOKENS["radius-full"] == "999px"
     assert CHROME_TOKENS["transition"] == "150ms ease"
+    assert int(CHROME_TOKENS["z-modal"]) > 250
 
 
 def test_scale_tokens_ride_along_in_both_palette_css_modes() -> None:

@@ -122,6 +122,7 @@ export const CHROME_TOKENS = {
   "lift-sm": "-1px",
   "lift-md": "-2px",
   "toast-hide-y": "100px",
+  "z-modal": "300",
   "blur-sm": "6px",
   "blur-md": "16px",
   "blur-lg": "24px",

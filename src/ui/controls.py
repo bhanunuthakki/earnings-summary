@@ -358,6 +358,7 @@ button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var
   max-width: 100%; }
 .k-tick-sym { font-family: var(--mono); font-weight: 600; letter-spacing: 0.02em;
   color: var(--fg); text-decoration: none; }
+.k-tick-sym-display { font-size: var(--fs-display); }
 a.k-tick-sym:hover { color: var(--accent); }
 .k-tick-name { font-family: var(--sans); font-weight: 400; font-size: var(--fs-caption);
   color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

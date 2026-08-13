@@ -15,11 +15,18 @@ READER_OVERRIDE_CSS = """
   color: var(--fg);
   background: var(--bg);
 }
+.work-os-report-content.k-doc {
+  inline-size: 100%;
+  max-inline-size: var(--main-max-width);
+  margin-inline: auto;
+  padding: var(--sp-5);
+}
 .l1-root {
   height: auto !important;
   min-height: 100%;
   overflow: visible !important;
   padding-bottom: var(--sp-6);
+  background: transparent !important;
 }
 .tab-group-pane,
 .tab-pane,
@@ -28,6 +35,14 @@ READER_OVERRIDE_CSS = """
 }
 .tab-group-pane + .tab-group-pane {
   margin-top: var(--sp-6);
+}
+.work-os-report-content.k-doc .tab-group-pane,
+.work-os-report-content.k-doc .tab-pane {
+  max-inline-size: 100%;
+}
+.work-os-report-content.k-doc .tab-pane {
+  padding-block: var(--sp-4);
+  border-bottom: var(--bw-thin) solid var(--border);
 }
 .reader-group-title {
   margin: 0 0 var(--sp-4);
@@ -39,6 +54,7 @@ READER_OVERRIDE_CSS = """
 .cmt-sidebar,
 .chat-drawer,
 .scrim {
+  /* The transient Work OS reader owns comments/Ask in its outer toolbar. */
   display: none !important;
 }
 """

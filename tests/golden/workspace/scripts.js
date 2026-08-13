@@ -415,7 +415,7 @@ ${r?'Expression: "'+r+`"
   // The symmetric close: animate the surface out along its open axis, then
   // hide. Falls straight through when motion is off / disabled.
   function animateOut(el, motion, done) {
-    if (!el || motion === 'none' || reduceMotion()) { done(); return; }
+    if (!el || motion === 'none' || reduceMotion()) { done(); return function () {}; }
     var mcls = 'cc-m-' + motion;
     el.classList.add('cc-anim-out', mcls);
     var finished = false;
@@ -427,23 +427,54 @@ ${r?'Expression: "'+r+`"
     }
     function onEnd(e) { if (e.target === el) fin(); }
     el.addEventListener('transitionend', onEnd);
-    setTimeout(fin, 240);  // fallback if transitionend never fires
+    var timer = setTimeout(fin, 240);  // fallback if transitionend never fires
+    return function () {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      el.removeEventListener('transitionend', onEnd);
+    };
   }
 
   function doOpen(s) {
+    // Invalidate and cancel any asynchronous close before deciding whether the
+    // surface is already open. A stale transition callback must never hide a
+    // surface that has since been reopened.
+    var reopeningInterruptedClose = !s.isOpen && !!s.cancelCloseAnimation;
+    s.closeGeneration += 1;
+    if (s.cancelCloseAnimation) {
+      s.cancelCloseAnimation();
+      s.cancelCloseAnimation = null;
+    }
     if (s.isOpen) return;
     // Mutual exclusion: opening a grouped surface closes its open siblings.
+    var inheritedOpener = null;
     if (s.opts.group) {
       for (var i = 0; i < surfaces.length; i++) {
         var o = surfaces[i];
-        if (o !== s && o.isOpen && o.opts.group === s.opts.group) doClose(o);
+        if (o !== s && o.isOpen && o.opts.group === s.opts.group) {
+          if (!inheritedOpener && o.opener) inheritedOpener = o.opener;
+          doClose(o);
+        }
       }
     }
-    if (s.opts.restoreFocus) s.opener = document.activeElement;
+    if (s.opts.restoreFocus) {
+      if (reopeningInterruptedClose && s.opener) {
+        // Preserve the original external opener across close -> rapid reopen.
+      } else if (inheritedOpener) {
+        // A grouped handoff is one interaction: both surfaces restore to the
+        // opener that launched the first sibling, never the hidden sibling.
+        s.opener = inheritedOpener;
+      } else {
+        s.opener = document.activeElement;
+      }
+    }
     s.isOpen = true;
     s.seq = ++seqCounter;
     if (s.el) {
-      s.el.classList.remove('cc-anim-out', 'cc-m-rise', 'cc-m-slide-right', 'cc-m-pop');
+      s.el.classList.remove(
+        'cc-anim-out', 'cc-m-rise', 'cc-m-slide-right', 'cc-m-pop', 'cc-m-fade'
+      );
       // A persistent surface (e.g. the dock) drives its own visibility via a
       // data-attr/CSS — CCOverlay only tracks it for Escape/scrim — so it opts
       // out of the [hidden] toggle.
@@ -465,6 +496,8 @@ ${r?'Expression: "'+r+`"
   function doClose(s) {
     if (!s.isOpen) return;  // idempotent — re-entrant onClose calls are no-ops
     s.isOpen = false;
+    var closeGeneration = ++s.closeGeneration;
+    if (s.opts.onBeforeClose) { try { s.opts.onBeforeClose(); } catch (e) {} }
     var el = s.el;
     // With s.isOpen now false, this reflects who still needs the scrim AFTER s
     // leaves. If nobody does, fade the scrim out concurrently with the surface.
@@ -473,16 +506,20 @@ ${r?'Expression: "'+r+`"
       scrim.classList.add('cc-scrim-out');
     }
     function finish() {
+      if (s.closeGeneration !== closeGeneration || s.isOpen) return;
+      s.cancelCloseAnimation = null;
       if (el && s.opts.toggleHidden !== false) el.hidden = true;
-      if (stillScrim) syncScrim();  // reposition under the now-top surface
-      else { scrim.classList.remove('cc-scrim-out'); scrim.hidden = true; }
+      // Recompute rather than trusting the close-start snapshot: a grouped
+      // sibling may have opened during this surface's exit animation.
+      syncScrim();
       if (s.opts.onClose) { try { s.opts.onClose(); } catch (e) {} }
-      if (s.opts.restoreFocus && s.opener && s.opener.focus) {
+      var currentTop = topModalSurface();
+      if (!currentTop && s.opts.restoreFocus && s.opener && s.opener.focus) {
         try { s.opener.focus(); } catch (e) {}
-        s.opener = null;
       }
+      s.opener = null;
     }
-    animateOut(el, s.opts.motion, finish);
+    s.cancelCloseAnimation = animateOut(el, s.opts.motion, finish);
   }
 
   // ---- ONE keydown listener: Escape (priority-resolved) + Tab (focus trap) --
@@ -523,7 +560,10 @@ ${r?'Expression: "'+r+`"
     opts.trapFocus = !!opts.trapFocus;
     opts.restoreFocus = opts.restoreFocus !== false;  // default: restore
     opts.motion = opts.motion || 'rise';
-    var s = { el: el, opts: opts, isOpen: false, seq: 0, opener: null };
+    var s = {
+      el: el, opts: opts, isOpen: false, seq: 0, opener: null,
+      closeGeneration: 0, cancelCloseAnimation: null
+    };
     surfaces.push(s);
     // The close control (x): auto-wire its click to dismiss. A surface whose
     // close control is a multi-state toggle (e.g. the dock's collapse-one-level

@@ -169,6 +169,24 @@ def test_work_os_shell_uses_live_backend_mounts_without_removing_old_endpoints()
     assert 'aria-live="polite"' in html
 
 
+def test_fact_playground_is_a_live_governed_mount_not_static_verified_demo_data() -> None:
+    html = render_work_os_shell()
+
+    assert 'id="screen-analytics-playground"' in html
+    assert 'id="workOsFactPlayground"' in html
+    assert "workOsRenderFactPlayground" in html
+    assert "fragment=work-os" in html
+    assert "window.initExplorePanel()" in html
+    assert 'id="workOsFactTicker"' in html
+    assert "work-os-explore-tickers" in html
+    assert "new Function" not in html
+    assert "eval(" not in html
+    assert "EXTRACTED_FACTS_DB" not in html
+    assert "100% PROVENANCE VERIFIED" not in html
+    assert "Mexico Deposits ($B)" not in html
+    assert "No prototype values are being shown" in html
+
+
 def test_work_os_deep_links_old_surfaces_into_the_eight_screen_ia() -> None:
     html = render_work_os_shell()
     for old_hash, screen_id in {
@@ -299,10 +317,34 @@ def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> Non
     assert "attachShadow" in html
     assert "report_reader_payload.v1" in html
     assert "content.innerHTML = payload.body_html" in html
+    assert 'id="workOsBriefReaderBack"' in html
+    assert 'id="workOsBriefReaderDecision"' in html
+    assert 'id="workOsBriefReaderSections"' in html
+    assert "workOsRenderReaderDecision(payload.decision)" in html
+    assert "const owner = projection.owner" in html
+    assert "const model = projection.model" in html
+    assert "payload.sections" in html
+    assert "section.dom_id" in html
+    assert "work-os-report-content k-doc" in html
+    assert "editorial.v1" in html
+    assert "startsWith('/source/')" in html
+    assert "sourceUrl.searchParams.set('fragment', '1')" in html
+    assert "window.workOsOpenPeekRoute = workOsOpenPeekRoute" in html
+    assert 'data-research-chat="full-brief"' in html
+    assert "workOsReaderContext = artifact" in html
+    assert "briefReader.contains(trigger) && workOsReaderContext" in html
+    assert "const chatTicker = readerScoped ? workOsReaderContext.ticker" in html
+    assert "':artifact:' + workOsReaderContext.artifact_id" in html
+    assert "sourceUrl.pathname + sourceUrl.search + sourceUrl.hash" in html
+    assert "const sourceLocator = parsedRoute.hash ? parsedRoute.hash.slice(1)" in html
+    assert "located.classList.add('is-cited-location')" in html
+    assert "data-peek-url" in html
     brief_loader = html.split("async function workOsLoadBriefArtifact", 1)[1].split(
         "window.openWorkOsBriefReader", 1
     )[0]
     assert "<iframe" not in brief_loader
+    assert "artifact.reader_mode !== 'shared_body'" in html
+    assert "artifact.reader_mode !== 'shared_body' || !artifact.body_url" not in html
     assert "legacy brief has not been migrated" in html
 
 
@@ -325,6 +367,42 @@ def test_company_desk_and_library_use_production_read_models_not_demo_facts() ->
     assert "item.list_type === 'portfolio' || item.list_type === 'evaluation'" in html
     assert "Company Desk (' + (identity.ticker || normalized) + ')'" in html
     assert "try { await workOsEnsureResearchCompanies(); }" in html
+    assert 'id="deskQuestionCapture"' in html
+    assert "kind: 'question'" in html
+    assert "desk.question_store_status === 'unavailable'" in html
+    assert "question.origin" in html and "question.approval" in html
+
+
+def test_earnings_peek_ignores_stale_requests_and_aborts_on_close() -> None:
+    html = render_work_os_shell()
+
+    assert "let workOsPeekRequestSequence = 0" in html
+    assert "let workOsPeekRequestController = null" in html
+    assert "const controller = new AbortController()" in html
+    assert "signal: controller.signal" in html
+    assert "requestSequence !== workOsPeekRequestSequence" in html
+    assert "error.name === 'AbortError'" in html
+    assert "workOsAbortPeekRequest();" in html
+    assert "onBeforeClose: function () { workOsAbortPeekRequest(); }" in html
+
+
+def test_company_desk_identity_ticker_uses_the_display_role_without_changing_shared_tickers() -> (
+    None
+):
+    html = render_work_os_shell()
+
+    assert 'class="k-tick-sym k-tick-sym-display" id="deskTicker"' in html
+    assert ".k-tick-sym-display" in html
+    assert "font-size: var(--fs-display)" in html
+    assert 'class="k-ticker-symbol t-mono" id="deskTicker"' not in html
+
+
+def test_full_brief_reader_has_a_resolved_modal_stacking_token() -> None:
+    """The reader toolbar must stay above sticky app chrome and the scrim."""
+    html = render_work_os_shell()
+
+    assert "--z-modal: 300;" in html
+    assert ".work-os-reader { position: fixed; inset: 0; z-index: var(--z-modal);" in html
 
 
 def test_cockpit_hydration_does_not_construct_company_desk() -> None:
@@ -425,8 +503,11 @@ def test_earnings_doorway_route_uses_the_document_level_peek_delegate() -> None:
     assert "event.target.closest('[data-peek-url]')" in html
     assert "route.startsWith('/api/peek/')" in html
     assert "workOsOpenPeekRoute(route" in html
-    assert "fetch(route, { headers: { Accept: 'text/html' } })" in html
-    assert "body.innerHTML = await response.text()" in html
+    assert "const response = await fetch(parsedRoute.pathname + parsedRoute.search" in html
+    assert "headers: { Accept: 'text/html' }" in html
+    assert "signal: controller.signal" in html
+    assert "const html = await response.text()" in html
+    assert "body.innerHTML = html" in html
     assert "peekOverlay.open()" in html
     assert "The persisted earnings artifact is unavailable." in html
 
