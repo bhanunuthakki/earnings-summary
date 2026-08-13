@@ -877,16 +877,16 @@ def test_companyfacts_selection_failure_keeps_elapsed_timing_and_rolls_back(
     entries[1]["val"] = 999
     raw_body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     monkeypatch.setitem(sec_xbrl.CIK_MAP, "ACME", CIK)
-    monkeypatch.setattr(
-        sec_xbrl,
-        "fetch_companyfacts",
-        lambda _cik: FetchedCompanyFacts(
+
+    def _fetch(_cik: str) -> FetchedCompanyFacts:
+        return FetchedCompanyFacts(
             source_url=SOURCE_URL,
             raw_body=raw_body,
             observed_at=STAMP - timedelta(seconds=1),
             retrieved_at=STAMP,
-        ),
-    )
+        )
+
+    monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", _fetch)
     receipts: list[sec_xbrl.SecIngestTimingReceipt] = []
     try:
         with pytest.raises(ValueError, match="identical SEC chronology"):
@@ -1084,9 +1084,24 @@ def test_current_schema_companyfacts_amendment_preserves_chronology(
         clock = _AdvancingClock()
         record_restatement = sec_xbrl.record_restatement_observation
 
-        def _slow_restatement_observation(*args: object, **kwargs: object) -> object:
+        def _slow_restatement_observation(
+            connection: sqlite3.Connection,
+            *,
+            fact_table: str,
+            superseded_id: int,
+            new_value: object,
+            user_id: str = "bhanu",
+            observed_at: str | None = None,
+        ) -> int | None:
             clock.advance(50_000_000)
-            return record_restatement(*args, **kwargs)
+            return record_restatement(
+                connection,
+                fact_table=fact_table,
+                superseded_id=superseded_id,
+                new_value=new_value,
+                user_id=user_id,
+                observed_at=observed_at,
+            )
 
         monkeypatch.setattr(
             sec_xbrl,
