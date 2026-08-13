@@ -720,6 +720,10 @@ def _reviewed_policies() -> tuple[IssuerAcquisitionPolicy, ...]:
                         exact_paths=("/financials/quarterly-results/default.aspx",),
                         path_prefixes=("/news-events/press-releases/detail", "/static-files"),
                     ),
+                    IrEndpointRule(
+                        host="s203.q4cdn.com",
+                        path_prefixes=("/667520861/files",),
+                    ),
                 ),
                 fiscal_year_end="01-31",
                 admitted_doc_types=(
@@ -751,6 +755,10 @@ def _reviewed_policies() -> tuple[IssuerAcquisitionPolicy, ...]:
                         path_prefixes=("/static-files",),
                     ),
                     IrEndpointRule(host="static.wixstatic.com", path_prefixes=("/media",)),
+                    IrEndpointRule(
+                        host="4f4a3186-9467-4c09-aa74-51fe1affec20.usrfiles.com",
+                        path_prefixes=("/ugd",),
+                    ),
                 ),
                 fiscal_year_end="12-31",
                 admitted_doc_types=(

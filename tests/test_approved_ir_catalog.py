@@ -65,6 +65,24 @@ def test_exact_endpoint_authorization_rejects_suffix_and_path_confusion() -> Non
         rubrik.ir,
         "https://ir.rubrik.com/static-files/%252f..%252fother/q2.pdf",
     )
+    assert ir_url_is_authorized(
+        rubrik.ir,
+        "https://s203.q4cdn.com/667520861/files/doc_financials/2027/q1/report.pdf",
+    )
+    assert not ir_url_is_authorized(
+        rubrik.ir,
+        "https://s203.q4cdn.com/other/files/report.pdf",
+    )
+
+    wix = issuer_policy("WIX")
+    assert ir_url_is_authorized(
+        wix.ir,
+        "https://4f4a3186-9467-4c09-aa74-51fe1affec20.usrfiles.com/ugd/4f4a31_report.pdf",
+    )
+    assert not ir_url_is_authorized(
+        wix.ir,
+        "https://4f4a3186-9467-4c09-aa74-51fe1affec20.usrfiles.com/other/report.pdf",
+    )
 
 
 @pytest.mark.parametrize(
