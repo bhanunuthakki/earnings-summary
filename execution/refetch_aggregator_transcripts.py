@@ -61,7 +61,15 @@ from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E40
 
 import db  # noqa: E402
 from compute.transcript_ingest import ingest_evidence_file  # noqa: E402
+from models.companies import ListType  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    SOURCE_POLICY_CONFIG,
+    ArtifactKind,
+    CollectionSource,
+    CollectionTarget,
+    select_collection_targets,
+)
 
 _TRANSCRIPT_INDEX = PROJECT_ROOT / ".tmp" / "transcript_index.json"
 _MANIFEST_DIR = PROJECT_ROOT / ".tmp" / "refetch_aggregator_transcripts"
@@ -94,7 +102,7 @@ def _retarget(repo_root: Path) -> None:
 
 
 def _roic_quarters_in_scope(scope_tickers: frozenset[str]) -> list[tuple[str, int, int]]:
-    """[(ticker, year, quarter), ...] for every aggregator_roic index entry in scope."""
+    """Latest policy-bounded aggregator_roic quarters for each authorized ticker."""
     if not _TRANSCRIPT_INDEX.exists():
         return []
     data = json.loads(_TRANSCRIPT_INDEX.read_text(encoding="utf-8"))
@@ -116,28 +124,66 @@ def _roic_quarters_in_scope(scope_tickers: frozenset[str]) -> list[tuple[str, in
         except ValueError:
             continue
         out.append((ticker, year, quarter))
-    out.sort()
-    return out
+    bound = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+    bounded: list[tuple[str, int, int]] = []
+    for ticker in sorted(scope_tickers):
+        ticker_periods = sorted(
+            (item for item in out if item[0] == ticker),
+            key=lambda item: (item[1], item[2]),
+            reverse=True,
+        )
+        bounded.extend(sorted(ticker_periods[:bound]))
+    return bounded
 
 
 def _scope_tickers(
     conn: sqlite3.Connection, scope: str, explicit: list[str] | None
 ) -> frozenset[str]:
-    if explicit:
-        return frozenset(t.upper() for t in explicit)
     list_types = {
         "portfolio_evaluation": ("portfolio", "evaluation"),
         "portfolio": ("portfolio",),
         "evaluation": ("evaluation",),
         "all_active": ("portfolio", "watchlist", "evaluation"),
     }[scope]
+    if explicit:
+        list_types = ("portfolio", "evaluation", "watchlist", "index_member")
     placeholders = ", ".join("?" for _ in list_types)
     rows = conn.execute(
-        f"SELECT ticker FROM tracked_companies WHERE list_type IN ({placeholders}) "
+        f"SELECT ticker,list_type FROM tracked_companies WHERE list_type IN ({placeholders}) "  # nosec B608 -- placeholders are generated only from the closed role tuple
         f"AND archived_at IS NULL AND COALESCE(instrument_type, '') != 'etf'",
         list_types,
     ).fetchall()
-    return frozenset(str(r[0]).upper() for r in rows)
+    explicit_tickers = frozenset(t.strip().upper() for t in explicit or [] if t.strip())
+    targets = tuple(
+        CollectionTarget(
+            ticker=str(row[0]),
+            coverage_role=ListType(str(row[1])),
+            requested=bool(explicit_tickers),
+        )
+        for row in rows
+        if not explicit_tickers or str(row[0]).upper() in explicit_tickers
+    )
+    selection = select_collection_targets(
+        targets,
+        source=CollectionSource.TRANSCRIPT,
+        artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
+    )
+    for item in selection.denied:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": item.target.ticker,
+                    "coverage_role": item.target.coverage_role.value,
+                    "source": CollectionSource.TRANSCRIPT.value,
+                    "artifact_kind": ArtifactKind.TEXT_TRANSCRIPT.value,
+                    "reason": item.decision.reason.value,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    return frozenset(item.target.ticker for item in selection.allowed)
 
 
 def _existing_txt_document(
@@ -179,6 +225,8 @@ def _process_one(
     tracked: frozenset[str],
     dry_run: bool,
     repo_root: Path,
+    db_path: Path,
+    owner_requested: bool,
 ) -> QuarterResult:
     processed_rel = f"transcripts/processed/{ticker}_Q{quarter}_{year}.txt"
     raw_rel = f"transcripts/raw/{ticker}_Q{quarter}_{year}.txt"
@@ -209,7 +257,12 @@ def _process_one(
         )
 
     try:
-        fetched = fetch_qa(FetchQaSpec(ticker=ticker, year=year, quarter=quarter), force=True)
+        fetched = fetch_qa(
+            FetchQaSpec(ticker=ticker, year=year, quarter=quarter),
+            force=True,
+            db_path=db_path,
+            owner_requested=owner_requested,
+        )
     except Exception as e:
         return QuarterResult(
             ticker=ticker,
@@ -321,7 +374,8 @@ def main() -> int:
     if repo_root != PROJECT_ROOT:
         _retarget(repo_root)
 
-    conn = open_db(str(Path(db.DB_PATH)))
+    selected_db_path = repo_root / "data" / "portfolio.db"
+    conn = open_db(str(selected_db_path))
     try:
         explicit = [t.strip() for t in args.tickers.split(",")] if args.tickers else None
         scope_tickers = _scope_tickers(conn, args.scope, explicit)
@@ -333,7 +387,17 @@ def main() -> int:
 
         results: list[QuarterResult] = []
         for i, (ticker, year, quarter) in enumerate(quarters):
-            r = _process_one(conn, ticker, year, quarter, scope_tickers, args.dry_run, repo_root)
+            r = _process_one(
+                conn,
+                ticker,
+                year,
+                quarter,
+                scope_tickers,
+                args.dry_run,
+                repo_root,
+                selected_db_path,
+                explicit is not None,
+            )
             results.append(r)
             sys.stderr.write(json.dumps({"event": "quarter_done", **asdict(r)}) + "\n")
             if not args.dry_run and i + 1 < len(quarters):

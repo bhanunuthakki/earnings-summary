@@ -61,7 +61,7 @@ def test_refetch_rolls_back_when_source_mutates_after_snapshot(
     mod = _load_module()
     repo_root, db_path, path = _repo(tmp_path, migrated_db)
 
-    def fake_fetch(_spec: object, *, force: bool) -> SimpleNamespace:
+    def fake_fetch(_spec: object, *, force: bool, **_kwargs: object) -> SimpleNamespace:
         del force
         return SimpleNamespace(output_path=path)
 
@@ -86,7 +86,17 @@ def test_refetch_rolls_back_when_source_mutates_after_snapshot(
             conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             for table in ("documents", "transcripts", "transcript_segments")
         )
-        result = mod._process_one(conn, "NU", 2026, 1, frozenset({"NU"}), False, repo_root)
+        result = mod._process_one(
+            conn,
+            "NU",
+            2026,
+            1,
+            frozenset({"NU"}),
+            False,
+            repo_root,
+            repo_root / "data" / "portfolio.db",
+            False,
+        )
         after = tuple(
             conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             for table in ("documents", "transcripts", "transcript_segments")
@@ -104,7 +114,7 @@ def test_refetch_rolls_back_partial_transcript_writes(
     mod = _load_module()
     repo_root, db_path, path = _repo(tmp_path, migrated_db)
 
-    def fake_fetch(_spec: object, *, force: bool) -> SimpleNamespace:
+    def fake_fetch(_spec: object, *, force: bool, **_kwargs: object) -> SimpleNamespace:
         del force
         return SimpleNamespace(output_path=path)
 
@@ -122,7 +132,17 @@ def test_refetch_rolls_back_partial_transcript_writes(
             conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             for table in ("documents", "transcripts", "transcript_segments")
         )
-        result = mod._process_one(conn, "NU", 2026, 1, frozenset({"NU"}), False, repo_root)
+        result = mod._process_one(
+            conn,
+            "NU",
+            2026,
+            1,
+            frozenset({"NU"}),
+            False,
+            repo_root,
+            repo_root / "data" / "portfolio.db",
+            False,
+        )
         after = tuple(
             conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             for table in ("documents", "transcripts", "transcript_segments")

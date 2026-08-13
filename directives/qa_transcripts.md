@@ -68,7 +68,7 @@ python execution/qa_transcripts.py [--ticker T] [--backfill] [--rerun-all]
 
 ## Operational rules
 
-- **Skip-existing is QA-aware.** `fetch_audio_transcripts.py` will not re-transcribe a file that already exists and is `qa=ok`; it will refuse to overwrite a `qa=failed` file (delete the file by hand to retry).
+- **Legacy audio QA remains readable.** `fetch_audio_transcripts.py` now denies every audio/webcast network path before search or download; existing audio-derived files may still be audited by this validator.
 - **Audio cleanup is QA-gated.** Successful Whisper runs delete their `.tmp/temp_audio_*` immediately. Failed runs preserve the audio so the operator can rerun with a stronger model or higher beam size without paying the YouTube round-trip again.
 - **Backfill is automatic.** The first time the fetcher (or the standalone CLI) sees a transcript without `qa_status`, it validates and records — no manual step.
 - **Threshold changes require `--rerun-all`.** Editing constants in `src/transcript_qa.py` does not auto-revalidate; the recorded statuses persist until you ask for re-evaluation.

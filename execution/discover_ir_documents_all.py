@@ -1,9 +1,8 @@
-"""Batch IR-document discovery + fetch across the portfolio + evaluation list.
+"""Policy-bounded IR-document discovery and fetch.
 
-The scheduled companion to the single-ticker CLIs. For every active-universe
-ticker in the ``documents`` roster (``tracked_companies.list_type`` in
-``portfolio`` / ``evaluation`` — i.e. ``db.BRIEFED_LIST_TYPES``), it runs two
-subprocess-isolated stages:
+Scheduled runs cover portfolio names automatically. Evaluation names enter
+only when explicitly named with ``--tickers``; watchlist and index-member names
+never enter the document crawler. Each selected name runs two isolated stages:
 
   1. ``discover_ir_documents.py --ticker <T>`` — headless-crawl the issuer's IR
      site and (re-)write its URL manifest.
@@ -13,8 +12,7 @@ subprocess-isolated stages:
      ``--calendar`` is the FYE-derived id (``ir_uploads.calendar_id_from_fye``),
      so even a ticker not yet in ``ISSUER_REGISTRY`` registers best-effort.
 
-Because the roster is read from the DB at run time, **newly-added evaluation
-companies are picked up automatically** on the next run — no per-ticker config.
+The collection window is capped at the latest five reported quarters.
 
 Resilience contract (mirrors ``refresh_ir_kpis_all.py``):
 
@@ -34,7 +32,7 @@ as a per-ticker failure (the child exits non-zero), not a batch crash.
 Usage:
     python execution/discover_ir_documents_all.py
     python execution/discover_ir_documents_all.py --tickers NU ORCL
-    python execution/discover_ir_documents_all.py --max-quarters 12 --discover-timeout 600
+    python execution/discover_ir_documents_all.py --max-quarters 5 --discover-timeout 600
     python execution/discover_ir_documents_all.py --skip-download   # discover only
 """
 
@@ -58,14 +56,19 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import ir_fetch_status  # noqa: E402
 from ir_uploads import calendar_id_from_fye  # noqa: E402
 from log_redact import redact  # noqa: E402
+from models.companies import ListType  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    SOURCE_POLICY_CONFIG,
+    ArtifactKind,
+    CollectionSource,
+    CollectionTarget,
+    authorize_stored_collection_target,
+    select_collection_targets,
+)
 from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
-# Roster = the "briefed" active universe (portfolio + evaluation). Hardcoded to
-# match db.BRIEFED_LIST_TYPES (the import is avoided to keep this orchestrator
-# light + test-isolated, like execution/run_triggers.py).
-_ROSTER_LIST_TYPES_SQL = "('portfolio', 'evaluation')"
-_DEFAULT_QUARTERS = 8
+_DEFAULT_QUARTERS = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
 _DEFAULT_DISCOVER_TIMEOUT_S = 300  # headless browser render
 # Download + content-classify + register. Generous on purpose: deep-history names (AMZN, V,
 # WIX) have 50-100 docs to pull, and the old 300s timed them out mid-download → 0 registered
@@ -112,35 +115,63 @@ class DiscoveryResult:
 
 
 def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[str], list[str]]:
-    """Return ``(selected, skipped_not_in_roster)``.
+    """Resolve automatic portfolio and explicitly requested evaluation work."""
 
-    ``selected`` are the portfolio+evaluation tickers to process; with a
-    ``--tickers`` filter, the intersection is taken and requested tickers outside
-    the roster are surfaced (logged, never run).
-    """
-    roster: list[str] = []
+    targets: list[CollectionTarget] = []
     if db_path.exists():
         try:
             conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
             conn.row_factory = sqlite3.Row
             try:
                 rows = conn.execute(
-                    "SELECT ticker FROM tracked_companies "
-                    f"WHERE list_type IN {_ROSTER_LIST_TYPES_SQL} AND archived_at IS NULL "
-                    "ORDER BY ticker"
+                    "SELECT ticker,list_type FROM tracked_companies "
+                    "WHERE archived_at IS NULL ORDER BY ticker"
                 ).fetchall()
             finally:
                 conn.close()
-            roster = [str(r["ticker"]).upper() for r in rows]
+            wanted = {ticker.upper() for ticker in requested or []}
+            for row in rows:
+                ticker = str(row["ticker"]).upper()
+                if requested and ticker not in wanted:
+                    continue
+                try:
+                    role = ListType(str(row["list_type"]))
+                except ValueError:
+                    continue
+                targets.append(
+                    CollectionTarget(
+                        ticker=ticker,
+                        coverage_role=role,
+                        requested=requested is not None,
+                    )
+                )
         except sqlite3.Error:
-            roster = []
-    roster_set = set(roster)
-    if requested:
-        wanted = [t.upper() for t in requested]
-        selected = sorted({t for t in wanted if t in roster_set})
-        skipped = sorted({t for t in wanted if t not in roster_set})
-        return selected, skipped
-    return sorted(roster_set), []
+            targets = []
+    selection = select_collection_targets(
+        tuple(targets),
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    for item in selection.denied:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": item.target.ticker,
+                    "coverage_role": item.target.coverage_role.value,
+                    "source": CollectionSource.IR.value,
+                    "artifact_kind": ArtifactKind.IR_DOCUMENT.value,
+                    "reason": item.decision.reason.value,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    selected = [item.target.ticker for item in selection.allowed]
+    if not requested:
+        return selected, []
+    skipped = sorted({ticker.upper() for ticker in requested} - set(selected))
+    return selected, skipped
 
 
 def _ticker_fye(db_path: Path, ticker: str) -> str | None:
@@ -319,6 +350,7 @@ def _run_discovery(
     db_path: Path,
     quarters: int,
     timeout_s: float,
+    owner_requested: bool,
 ) -> DiscoveryResult:
     """Run the network-heavy crawl without touching shared database state.
 
@@ -340,6 +372,8 @@ def _run_discovery(
         "--db",
         str(db_path),
     ]
+    if not owner_requested:
+        discover_argv.append("--automatic")
     try:
         disc = _run_child(discover_argv, timeout_s)
     except subprocess.TimeoutExpired:
@@ -363,6 +397,7 @@ def _run_discovery(
     discovered = _json_field(disc.stdout, "discovered")
     discovered_n = discovered if isinstance(discovered, int) else None
     if disc.returncode != 0:
+        auth_denied = '"event": "source_authentication_denied"' in disc.stderr
         return DiscoveryResult(
             ticker,
             TickerStatus.FAILED,
@@ -370,7 +405,11 @@ def _run_discovery(
             _elapsed(t0),
             stdout=disc.stdout,
             stderr=disc.stderr,
-            error=f"discover exited {disc.returncode}",
+            error=(
+                "auth_denial: discover halted"
+                if auth_denied
+                else f"discover exited {disc.returncode}"
+            ),
         )
     if status == "no_ir_url":
         return DiscoveryResult(
@@ -412,6 +451,7 @@ def _finish_discovery(
     process_timeout: float,
     ticker_deadline: float,
     whole_deadline_at: float | None,
+    owner_requested: bool,
 ) -> TickerResult:
     """Serialize fetch/register/process for one completed discovery result."""
     ticker = discovery.ticker
@@ -477,6 +517,8 @@ def _finish_discovery(
         "--db",
         str(db_path),
     ]
+    if not owner_requested:
+        fetch_argv.append("--automatic")
     finish_t0 = time.monotonic()
     try:
         fetch = _run_child(fetch_argv, fetch_timeout)
@@ -502,7 +544,11 @@ def _finish_discovery(
     if fetch.returncode != 0:
         return _fail(
             ticker,
-            f"fetch exited {fetch.returncode}",
+            (
+                "auth_denial: fetch halted"
+                if fetch.returncode == 10
+                else f"fetch exited {fetch.returncode}"
+            ),
             round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
             discovered=discovery.discovered,
         )
@@ -552,6 +598,7 @@ def _run_one(
     summaries: bool = False,
     process_timeout: float = _DEFAULT_PROCESS_TIMEOUT_S,
     ticker_deadline: float = _DEFAULT_TICKER_DEADLINE_S,
+    owner_requested: bool = False,
 ) -> TickerResult:
     """Discover then fetch one ticker, subprocess-isolated. Never raises."""
     discovery = _run_discovery(
@@ -560,6 +607,7 @@ def _run_one(
         db_path=db_path,
         quarters=quarters,
         timeout_s=min(discover_timeout, ticker_deadline),
+        owner_requested=owner_requested,
     )
     return _finish_discovery(
         discovery,
@@ -572,6 +620,7 @@ def _run_one(
         process_timeout=process_timeout,
         ticker_deadline=ticker_deadline,
         whole_deadline_at=None,
+        owner_requested=owner_requested,
     )
 
 
@@ -611,7 +660,7 @@ def _reason_for(result: TickerResult) -> str | None:
     if result.status is TickerStatus.FAILED:
         return result.error
     if result.status is TickerStatus.SKIPPED:
-        return "no resolvable IR URL"
+        return result.error or "no resolvable IR URL"
     if result.status is TickerStatus.OK and not result.downloaded:
         return "crawl found no new documents (site may be bot-protected)"
     return None
@@ -631,6 +680,7 @@ def run_ticker(
     process_timeout: float = _DEFAULT_PROCESS_TIMEOUT_S,
     ticker_deadline: float = _DEFAULT_TICKER_DEADLINE_S,
     record_status: bool = True,
+    owner_requested: bool = False,
 ) -> TickerResult:
     """Full single-ticker IR chain (discover → fetch+register → process), then
     persist the crawl outcome to ``ir_fetch_status``.
@@ -641,19 +691,47 @@ def run_ticker(
     raises (wraps the subprocess-isolated ``_run_one``); status bookkeeping is
     best-effort.
     """
-    result = _run_one(
+    authorization = authorize_stored_collection_target(
+        db_path,
         ticker,
-        repo_root=repo_root,
-        db_path=db_path,
-        quarters=quarters,
-        discover_timeout=discover_timeout,
-        download_timeout=download_timeout,
-        skip_download=skip_download,
-        process=process,
-        summaries=summaries,
-        process_timeout=process_timeout,
-        ticker_deadline=ticker_deadline,
+        requested=owner_requested,
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
     )
+    bound = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+    if not authorization.allowed:
+        result = TickerResult(
+            ticker.upper(),
+            TickerStatus.SKIPPED,
+            None,
+            None,
+            0.0,
+            error=authorization.status.value,
+        )
+    elif quarters < 1 or quarters > bound:
+        result = TickerResult(
+            ticker.upper(),
+            TickerStatus.FAILED,
+            None,
+            None,
+            0.0,
+            error=f"quarter window must be between 1 and {bound}",
+        )
+    else:
+        result = _run_one(
+            ticker,
+            repo_root=repo_root,
+            db_path=db_path,
+            quarters=quarters,
+            discover_timeout=discover_timeout,
+            download_timeout=download_timeout,
+            skip_download=skip_download,
+            process=process,
+            summaries=summaries,
+            process_timeout=process_timeout,
+            ticker_deadline=ticker_deadline,
+            owner_requested=owner_requested,
+        )
     if record_status:
         ir_fetch_status.record_attempt(
             db_path,
@@ -821,7 +899,7 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.monotonic()
     selected, skipped_not_in_roster = _resolve_roster(db_path, requested)
     for t in skipped_not_in_roster:
-        sys.stdout.write(f"[{t}] not in the portfolio/evaluation roster — skipped\n")
+        sys.stdout.write(f"[{t}] not authorized by stored identity/role policy — skipped\n")
 
     if cast("bool", args.only_failing):
         gaps = set(ir_fetch_status.gap_tickers(db_path, selected))
@@ -859,6 +937,7 @@ def main(argv: list[str] | None = None) -> int:
         "no_process": cast("bool", args.no_process),
         "summaries": cast("bool", args.summaries),
         "db_path": str(db_path.resolve()),
+        "owner_requested": requested is not None,
     }
     discoveries: dict[str, DiscoveryResult] = {}
     completed: dict[str, TickerResult] = {}
@@ -892,22 +971,31 @@ def main(argv: list[str] | None = None) -> int:
                     cast("float", args.per_ticker_deadline),
                     max(0.001, whole_deadline_at - time.monotonic()),
                 ),
+                owner_requested=requested is not None,
             ): ticker
             for ticker in pending_discovery
         }
+        auth_denied = False
         try:
             timeout = max(0.001, whole_deadline_at - time.monotonic())
             for future in concurrent.futures.as_completed(futures, timeout=timeout):
                 discovery = future.result()
                 discoveries[discovery.ticker] = discovery
                 _save_checkpoint(checkpoint_path, signature, discoveries, completed)
+                if discovery.error and discovery.error.startswith("auth_denial:"):
+                    auth_denied = True
+                    for pending in futures:
+                        pending.cancel()
+                    break
         except TimeoutError:
             deadline_hit = True
             sys.stderr.write("Whole-run deadline reached during discovery; pending work canceled\n")
             for future in futures:
                 future.cancel()
         finally:
-            executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=not auth_denied, cancel_futures=True)
+        if auth_denied:
+            return 10
 
     results_by_ticker = dict(completed)
     for ticker in selected:
@@ -948,10 +1036,13 @@ def main(argv: list[str] | None = None) -> int:
             process_timeout=cast("float", args.process_timeout),
             ticker_deadline=cast("float", args.per_ticker_deadline),
             whole_deadline_at=whole_deadline_at,
+            owner_requested=requested is not None,
         )
         results_by_ticker[ticker] = result
         _record_result(db_path, result)
         if result.status is TickerStatus.FAILED:
+            if result.error and result.error.startswith("auth_denial:"):
+                return 10
             if result.error and "deadline" in result.error:
                 deadline_hit = True
             continue
@@ -1048,6 +1139,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     for field in positive_fields:
         if cast("float", getattr(args, field)) <= 0:
             p.error(f"--{field.replace('_', '-')} must be greater than zero")
+    bound = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+    if cast("int", args.max_quarters) < 1 or cast("int", args.max_quarters) > bound:
+        p.error(f"--max-quarters must be between 1 and {bound} (source policy)")
     return args
 
 

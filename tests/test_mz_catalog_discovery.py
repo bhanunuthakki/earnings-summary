@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import email.message
+import urllib.error
+
 import pytest
 
 from ir_pipeline.config import IrConfig
-from ir_pipeline.discover import mz
+from ir_pipeline.discover import IrDiscoveryAuthenticationDeniedError, mz
 
 _PAGE = """
 <script>
@@ -96,3 +99,30 @@ def test_catalog_schema_failure_falls_back_to_guarded_browser(
     assert mz.discover_documents(config) == {
         "spreadsheet": "https://api.mziq.com/mzfilemanager/v2/d/id/file"
     }
+
+
+@pytest.mark.parametrize(("helper", "status"), [("get", 401), ("post", 403)])
+def test_mz_http_auth_denial_is_typed_at_the_network_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    helper: str,
+    status: int,
+) -> None:
+    class Opener:
+        def open(self, request: object, timeout: int = 30) -> object:
+            del timeout
+            url = getattr(request, "full_url", "https://issuer.example/")
+            raise urllib.error.HTTPError(str(url), status, "denied", email.message.Message(), None)
+
+    def safe_url(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr(mz, "ensure_safe_public_url", safe_url)
+    monkeypatch.setattr(mz, "build_public_opener", lambda: Opener())
+
+    with pytest.raises(IrDiscoveryAuthenticationDeniedError) as exc_info:
+        if helper == "get":
+            mz.get_text("https://issuer.example/")
+        else:
+            mz.post_json("https://issuer.example/api", {})
+
+    assert exc_info.value.status_code == status

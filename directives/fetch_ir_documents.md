@@ -5,11 +5,11 @@
 Acquire investor relations documents (press releases, earnings presentations, supplements,
 shareholder letters, transcripts) for tracked names through two parallel paths:
 
-1. **Auto-fetch** — download PDFs from official IR websites for the 11 tracked portfolio
-   holdings, covering the last 8 quarters. Files land in `ir_documents/{TICKER}/{period}/`
+1. **Auto-fetch** — download documents from official IR websites for authorized companies,
+   covering at most the canonical last 5 reported quarters. Files land in `ir_documents/{TICKER}/{period}/`
    and are registered in the canonical `documents` SQLite table (`source_type='ir_doc'`).
-2. **Manual upload** — the user drops PDFs/XLSX at the root of `ir_documents/` for a
-   subset of names (typically portfolio + selected watchlist). The
+2. **Manual upload** — the user drops an explicitly approved PDF/XLSX at the root of
+   `ir_documents/`. This exact-document lane does not start a crawler. The
    `categorize_ir_uploads.py` step classifies and routes them through the same
    provenance contract as auto-fetch.
 
@@ -17,10 +17,13 @@ The IR pipeline as a whole is **optional** on the broader project: when neither 
 yields any documents for a ticker, the rest of the analysis (FMP, SEC, transcripts) runs
 without IR data — IR rows simply don't appear in `documents` for that ticker.
 
-## Auto-fetch coverage (validated live 2026-06-04, full portfolio + evaluation list)
+## Auto-fetch authorization and known site coverage
 
-The headless crawler was empirically validated against every tracked portfolio +
-evaluation IR site. URLs live in `src/ir_pipeline/ir_url_overrides.py`.
+Every discovery and download boundary binds the ticker to its active stored
+`tracked_companies.list_type`: portfolio is automatic; evaluation requires an
+explicit owner request; watchlist, index, ETF, unknown, malformed, and ambiguous
+identities fail closed before network access. `--url`, `--ticker`, and `--all`
+cannot bypass that decision. URLs live in `src/ir_pipeline/ir_url_overrides.py`.
 
 **25 of 32 auto-fetch multi-quarter IR docs** (✓): AMZN, GOOG, META, MELI, NU, NVO, BN,
 RBRK, VEEV, WIX (portfolio) + V, ORCL, FCX, BKNG, UBER, ABNB, NTDOY, SOFI, NTRA, TMO,
@@ -59,7 +62,7 @@ is deliberately out of scope. Re-validate periodically — sites change their pr
 | RBRK | https://ir.rubrik.com/financial-information/quarterly-results | Jan FY-end; IPO May 2024; best-effort for pre-IPO quarters |
 | VEEV | https://ir.veeva.com/ | Jan FY-end; map FY quarters to calendar year |
 | BN | https://bam.brookfield.com/investors | Brookfield Corp; supplemental packages |
-| LLY | https://investor.lilly.com/financial-information | **Watchlist (not held)** — tracked as competitive cross-check for NVO thesis (tirzepatide/retatrutide vs semaglutide). Calendar year. See `directives/nvo_external_sources.md`. |
+| LLY | https://investor.lilly.com/financial-information | Watchlist metadata only; no automatic crawl. An owner-approved exact document may use the manual lane. |
 
 ## Fiscal Calendar Notes
 
@@ -73,7 +76,9 @@ is deliberately out of scope. Re-validate periodically — sites change their pr
 
 ## Target Quarters
 
-8 quarters back from Q1 2026 (current): Q2 2024, Q3 2024, Q4 2024, Q1 2025, Q2 2025, Q3 2025, Q4 2025, Q1 2026.
+The typed bound is `SOURCE_POLICY_CONFIG.reported_quarter_window`: maximum 5
+reported quarters. Discovery and download both enforce it; lower-level CLI
+invocation cannot widen the window.
 
 ## Document Types
 
@@ -84,7 +89,7 @@ is deliberately out of scope. Re-validate periodically — sites change their pr
 |---|---|---|---|
 | `IR_PRESS_RELEASE` | `press_release` | Quarterly earnings press release or financial results PDF | High |
 | `IR_PRESENTATION`  | `presentation`  | Earnings slide deck / investor presentation PDF | High |
-| `IR_TRANSCRIPT`    | `transcript`    | IR-published earnings call transcript PDF (text) | High (YouTube/Whisper fallback) |
+| `IR_TRANSCRIPT`    | `transcript`    | IR-published earnings call transcript PDF (text) | High; no audio/webcast fallback |
 | `IR_SUPPLEMENT`    | (none)          | Financial supplement / data workbook (XLSX or PDF) | Medium |
 | `IR_INVESTOR_UPDATE`| (none)         | Shareholder letter, annual report, investor day deck | Medium |
 
@@ -119,8 +124,8 @@ best-effort step on onboard (`execution/onboard_ticker.py`, `--skip-ir` to skip)
    legacy JSON-index mirror. `--calendar <id>` (FYE-derived) lets a ticker not yet
    in `ISSUER_REGISTRY` register best-effort.
 3. **Batch** (`execution/discover_ir_documents_all.py`): the scheduled entry point.
-   Reads the portfolio+evaluation roster from the DB at run time (so new eval names
-   are auto-included), runs steps 1–2 per ticker subprocess-isolated, never aborts
+   Reads the active roster from the DB at run time; scheduled scope is portfolio-only
+   and explicitly named evaluation work is on demand. It runs steps 1–2 per ticker subprocess-isolated, never aborts
    on one ticker's failure; exit code = count of FAILED tickers.
 4. **Idempotency**: a URL already in `documents.source_url` is skipped; identical
    bytes are a sha256-keyed no-op. Re-running discovery or the batch is safe.
@@ -175,8 +180,10 @@ no fuzzy matching — a name either appears or doesn't.
 ## Edge Cases & Constraints
 
 - **Rate limiting**: 0.5 second pause between downloads. Never more than 10 requests per minute to any single domain.
+- **Idempotency key**: canonical source URL for fetch plus content SHA-256 for registration; manifest merge is URL-keyed.
+- **Failure policy**: stored-identity/role denial happens before network access. An explicit HTTP 401/403 is classified as a typed auth denial and halts the current job without retry or bypass. Ordinary non-auth transport errors, timeouts, and other source failures are logged per ticker and isolated; schema drift is not guessed around.
 - **robots.txt**: Always respect. These are all major public company IR pages; PDF downloads are explicitly intended for investor use.
-- **Auth**: Never attempt to bypass authentication. If a page requires login, skip and log.
+- **Auth**: Never attempt to bypass authentication. HTTP 401/403 halts the current job immediately; do not silently skip it as an ordinary unavailable document.
 - **Content type**: Some PDF links may serve `text/html`. Download anyway and attempt to parse; if PyPDF fails, log and skip processing.
 - **RBRK/NU sparse history**: Skip gracefully for quarters before the company's IPO or IR page launch. Do not fabricate entries.
 - **NVO H1/FY structure**: Map: H1 interim → Q2, 9-month → Q3, Full Year annual → Q4. Q1 release (sales update only) → Q1.

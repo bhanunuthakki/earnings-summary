@@ -570,6 +570,14 @@ class FetchedCompanyFacts(BaseModel):
         return self
 
 
+class SecCompanyFactsAuthenticationDeniedError(RuntimeError):
+    """SEC explicitly returned 401/403; the collection job must halt."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"SEC CompanyFacts authentication denied with HTTP {status_code}")
+
+
 def fetch_companyfacts(cik: str, *, timeout: int = 30) -> FetchedCompanyFacts:
     """Hit /api/xbrl/companyfacts/CIK{cik}.json. CIK must be 10-digit zero-padded."""
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
@@ -582,6 +590,8 @@ def fetch_companyfacts(cik: str, *, timeout: int = 30) -> FetchedCompanyFacts:
         },
         timeout=timeout,
     )
+    if response.status_code in {401, 403}:
+        raise SecCompanyFactsAuthenticationDeniedError(response.status_code)
     response.raise_for_status()
     retrieved_at = datetime.now(UTC)
     return FetchedCompanyFacts(

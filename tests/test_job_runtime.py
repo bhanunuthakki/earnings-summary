@@ -620,7 +620,57 @@ def test_run_job_writes_machine_readable_health(tmp_path: Path) -> None:
     assert len(records) == 1
     record = json.loads(records[0].read_text(encoding="utf-8"))
     assert record["status"] == "ok"
+    assert record["severity"] == "info"
     assert record["write_sets"] == ["portfolio-db"]
+
+
+@pytest.mark.parametrize(
+    ("job_name", "child_exit", "expected_status", "expected_severity"),
+    [
+        ("refresh_cache", 2, "degraded_corpus", "warning"),
+        ("refresh_cache", 3, "partial", "warning"),
+        ("refresh_cache", 4, "failed", "error"),
+        ("unrelated_job", 2, "failed", "error"),
+    ],
+)
+def test_refresh_cache_contained_exits_do_not_mask_failures_or_unrelated_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    job_name: str,
+    child_exit: int,
+    expected_status: str,
+    expected_severity: str,
+) -> None:
+    def no_drift(_repo_root: Path, _job_name: str) -> str | None:
+        return None
+
+    def selected_exit(
+        _command: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        scheduler_owner: tuple[int, str | None] | None,
+    ) -> int:
+        del cwd, env, scheduler_owner
+        return child_exit
+
+    monkeypatch.setattr(job_runtime, "_schema_preflight", no_drift)
+    monkeypatch.setattr(job_runtime, "_run_managed_child", selected_exit)
+
+    code = run_job(
+        repo_root=tmp_path,
+        job_name=job_name,
+        write_sets=["fmp-refresh"],
+        command=[sys.executable, "-c", "pass"],
+    )
+
+    assert code == child_exit
+    record_path = next((tmp_path / ".tmp" / "job_health" / job_name).glob("*.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["status"] == expected_status
+    assert record["severity"] == expected_severity
+    if expected_status == "failed":
+        assert record["detail"] is None
 
 
 def test_inherited_lock_valid_when_holder_is_grandparent_not_direct_parent(

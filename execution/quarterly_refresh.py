@@ -258,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             holdings_dir=_HOLDINGS_DIR,
             run_id=run_id,
             fetch_sec=args.fetch_sec,
+            sec_owner_requested=args.ticker is not None,
         )
         any_failed = _report_failed(report)
         failed_receipt = next(

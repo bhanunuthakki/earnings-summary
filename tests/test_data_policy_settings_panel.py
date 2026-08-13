@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ import comments_server  # noqa: E402
 from pipeline.data_policy_settings_panel import (  # noqa: E402
     PolicyDisplayState,
     build_data_policy_settings_view,
+    read_fmp_operational_state,
     render_data_policy_settings_panel,
 )
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
@@ -64,14 +67,152 @@ def test_policy_view_is_derived_from_the_canonical_authorization_contract() -> N
     assert all(cell.state is PolicyDisplayState.NEVER for cell in rows["webcasts"].cells)
 
 
-def test_fmp_operational_state_is_typed_and_explicitly_not_live() -> None:
-    state = build_data_policy_settings_view().fmp_state
+def test_fmp_operational_state_reads_current_recovery_state_without_mutation(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "portfolio.db"
+    corpus_hash = "a" * 64
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE provider_circuit_state (provider TEXT, state TEXT, next_probe_at TEXT, "
+            "last_reason_code TEXT, last_success_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_backlog (work_id TEXT, ticker TEXT, state TEXT, "
+            "priority INTEGER, created_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_attempts (work_id TEXT, corpus_content_sha256 TEXT, "
+            "corpus_captured_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO provider_circuit_state VALUES "
+            "('fmp', 'OPEN', '2026-08-12T18:00:00', 'rate_limited', '2026-08-10T01:00:00')"
+        )
+        conn.executemany(
+            "INSERT INTO fmp_work_backlog VALUES (?, ?, ?, ?, ?)",
+            [
+                ("work-rbrk", "RBRK", "PENDING", 300, "2026-08-12T10:00:00"),
+                ("work-wix", "WIX", "LEASED", 200, "2026-08-12T11:00:00"),
+                ("work-done", "RBRK", "SATISFIED", 300, "2026-08-11T10:00:00"),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO fmp_work_attempts VALUES (?, ?, ?)",
+            ("work-done", corpus_hash, "2026-08-11T12:00:00"),
+        )
+    before = db.stat().st_mtime_ns
 
-    assert state.integration_state == "not_yet_wired"
-    assert state.provider_mode == "not_yet_wired"
-    assert state.circuit_state == "not_yet_wired"
-    assert state.backlog_count is None
-    assert state.next_probe_at is None
+    state = build_data_policy_settings_view(db_path=db).fmp_state
+
+    assert state.circuit_state == "OPEN"
+    assert state.circuit_admission == "blocked"
+    assert state.provider_availability == "degraded"
+    assert state.backlog_count == 2
+    assert state.pending_count == 1
+    assert state.leased_count == 1
+    assert state.pending_tickers == ("RBRK", "WIX")
+    assert state.next_probe_at == "2026-08-12T18:00:00"
+    assert state.last_reason_code == "rate_limited"
+    assert state.corpus_state == "available"
+    assert state.corpus_ticker_count == 1
+    assert state.last_corpus_at == "2026-08-11T12:00:00"
+    assert db.stat().st_mtime_ns == before
+    shell = render_work_os_shell(db_path=db)
+    assert "Degraded" in shell
+    assert "rate_limited" in shell
+    assert "1 companies" in shell
+    assert corpus_hash not in shell
+
+
+def test_closed_circuit_without_a_success_is_permitted_but_never_live(tmp_path: Path) -> None:
+    db = tmp_path / "portfolio.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE provider_circuit_state (provider TEXT, state TEXT, next_probe_at TEXT, "
+            "last_reason_code TEXT, last_success_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_backlog (work_id TEXT, ticker TEXT, state TEXT, "
+            "priority INTEGER, created_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_attempts (work_id TEXT, corpus_content_sha256 TEXT, "
+            "corpus_captured_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO provider_circuit_state VALUES ('fmp', 'CLOSED', NULL, NULL, NULL)"
+        )
+
+    state = build_data_policy_settings_view(db_path=db).fmp_state
+    html = render_data_policy_settings_panel(db_path=db)
+
+    assert state.circuit_state == "CLOSED"
+    assert state.circuit_admission == "permitted"
+    assert state.provider_availability == "permitted_unverified"
+    assert state.last_success_at is None
+    assert "Permitted / Unverified" in html
+    assert ">Live<" not in html
+
+
+def test_closed_circuit_with_stale_success_is_not_available(tmp_path: Path) -> None:
+    db = tmp_path / "portfolio.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE provider_circuit_state (provider TEXT, state TEXT, next_probe_at TEXT, "
+            "last_reason_code TEXT, last_success_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_backlog (work_id TEXT, ticker TEXT, state TEXT, "
+            "priority INTEGER, created_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_attempts (work_id TEXT, corpus_content_sha256 TEXT, "
+            "corpus_captured_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO provider_circuit_state VALUES "
+            "('fmp', 'CLOSED', NULL, NULL, '2026-08-10T12:00:00+00:00')"
+        )
+
+    state = read_fmp_operational_state(
+        db,
+        as_of=datetime(2026, 8, 12, 12, tzinfo=UTC),
+    )
+
+    assert state.circuit_state == "CLOSED"
+    assert state.circuit_admission == "permitted"
+    assert state.provider_availability == "permitted_unverified"
+    assert state.last_success_freshness == "stale"
+
+
+def test_closed_circuit_requires_recent_success_for_available(tmp_path: Path) -> None:
+    db = tmp_path / "portfolio.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE provider_circuit_state (provider TEXT, state TEXT, next_probe_at TEXT, "
+            "last_reason_code TEXT, last_success_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_backlog (work_id TEXT, ticker TEXT, state TEXT, "
+            "priority INTEGER, created_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_attempts (work_id TEXT, corpus_content_sha256 TEXT, "
+            "corpus_captured_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO provider_circuit_state VALUES "
+            "('fmp', 'CLOSED', NULL, NULL, '2026-08-12T11:30:00+00:00')"
+        )
+
+    state = read_fmp_operational_state(
+        db,
+        as_of=datetime(2026, 8, 12, 12, tzinfo=UTC),
+    )
+
+    assert state.provider_availability == "available"
+    assert state.last_success_freshness == "recent"
 
 
 def test_panel_is_legible_read_only_and_names_owner_approved_ir_sources() -> None:
@@ -95,8 +236,7 @@ def test_panel_is_legible_read_only_and_names_owner_approved_ir_sources() -> Non
     assert "https://investors.wix.com/financials" in html
     assert "rubrik_quarter_table" in html
     assert "wix_visible_quarter" in html
-    assert "not yet wired" in html.lower()
-    assert "No live health claim is shown" in html
+    assert "Telemetry unavailable" in html
     assert "Save" not in html
     assert "Run now" not in html
     assert "fetch(" not in html

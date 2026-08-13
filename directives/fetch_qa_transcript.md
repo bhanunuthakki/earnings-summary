@@ -2,7 +2,7 @@
 
 ## Goal
 
-Pull just the **Question-and-Answer segment** of an earnings call from free, no-auth aggregator websites and write it into the same `transcripts/raw/` slot the audio fetcher uses. This is the **primary** transcript-acquisition path for the say-do pipeline; audio (`fetch_audio_transcripts.py`) is the fallback when no aggregator has indexed the quarter yet.
+Pull just the **Question-and-Answer segment** of an earnings call from free, no-auth aggregator websites and write it into `transcripts/raw/`. Before network access, bind the ticker to its active stored role and limit work to the latest five completed reported quarters. Audio/webcast fallback is excluded.
 
 ## Why Q&A only
 
@@ -71,7 +71,7 @@ python execution/fetch_qa_transcript.py --list-sources
 ## Edge cases
 
 - **Fiscal-year tickers (RBRK, VEEV)**: roic.ai uses fiscal-year labelling. Pass `--year` and `--quarter` as the company reports them (e.g. RBRK Q4 FY26 = `--year 2026 --quarter 4`).
-- **Most-recent quarter not yet indexed**: aggregators typically update within 12-48h of the call. If the call was within the last day, expect `[miss]` and fall back to `fetch_audio_transcripts.py`.
+- **Most-recent quarter not yet indexed**: aggregators typically update within 12-48h of the call. If the call was within the last day, expect `[miss]`; retry the text source later because audio/webcast fallback is excluded.
 - **Speaker-tag formatting differs across sources**: roic.ai is parsed from its actual DOM structure (`_parse_roic_messages` in `src/aggregator_sources.py`, fixed 2026-07-25 — see note below); stockanalysis/tickertrends still use the flattened-text + `_split_into_speaker_paragraphs` heuristic (documented residual gap, not yet fixed).
 - **Page footer leakage**: handled by the end-cue trim. If a new aggregator is added that uses a different end-of-call template, extend `QA_TAIL_RE` in `src/aggregator_sources.py`.
 - **IR-officer-run queue (NU)**: NU's IR officer, not the operator, hands off to each analyst ("could you please open the line for Mr. X from Firm?"). `_QA_HANDOFF_RE` in `src/aggregator_sources.py` recognizes this variant per-turn, alongside the standard operator-script cues.

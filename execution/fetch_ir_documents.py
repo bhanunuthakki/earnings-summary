@@ -16,8 +16,9 @@ source URL is recorded in ``.tmp/ir_incoming_urls.json`` so the categorizer stam
 it as ``documents.source_url`` (provenance) instead of the ``manual_upload:`` placeholder.
 
 Idempotent: a URL already present in the ``documents`` table (source_url) is
-skipped. Best-effort: a failed/forbidden download is logged and skipped (the rest
-of the ticker still runs); never bypasses auth.
+skipped. Best-effort transport failures are logged and skipped, while an explicit
+HTTP 401/403 is a typed authentication denial that halts the current job; auth is
+never bypassed.
 
 Usage:
     python execution/fetch_ir_documents.py --ticker GOOG
@@ -56,6 +57,13 @@ from ir_pipeline._net import (  # noqa: E402
     safe_redirect_url,
 )
 from log_redact import redact  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    SOURCE_POLICY_CONFIG,
+    ArtifactKind,
+    CollectionSource,
+    StoredCollectionAuthorization,
+    authorize_stored_collection_target,
+)
 from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -77,6 +85,15 @@ _CONNECT_READ_TIMEOUT = 60
 _RATE_LIMIT_S = 0.5
 _CATEGORIZER = SCRIPT_DIR / "categorize_ir_uploads.py"
 _MAX_REDIRECTS = 5
+_QUARTER = re.compile(r"^Q([1-4])$")
+
+
+class SourceAuthenticationDeniedError(RuntimeError):
+    """An origin explicitly denied authorization; callers must halt this job."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"source authentication denied with HTTP {status_code}")
 
 
 def resolve_root(arg_repo_root: str | None) -> Path:
@@ -114,6 +131,45 @@ def load_url_manifest(root: Path, ticker: str) -> list[dict[str, object]]:
     if not isinstance(raw, list):
         return []
     return [cast("dict[str, object]", e) for e in cast("list[object]", raw) if isinstance(e, dict)]
+
+
+def _reported_quarter(entry: dict[str, object]) -> tuple[int, int] | None:
+    year = entry.get("year")
+    quarter = entry.get("quarter")
+    match = _QUARTER.fullmatch(str(quarter)) if quarter is not None else None
+    if not isinstance(year, int) or match is None:
+        return None
+    return year, int(match.group(1))
+
+
+def _bounded_manifest_entries(
+    entries: list[dict[str, object]],
+    *,
+    max_quarters: int,
+) -> tuple[list[dict[str, object]], int]:
+    """Admit only entries in the newest typed reported-quarter window."""
+
+    periods = sorted(
+        {period for entry in entries if (period := _reported_quarter(entry)) is not None},
+        reverse=True,
+    )
+    admitted_periods = frozenset(periods[:max_quarters])
+    admitted = [entry for entry in entries if _reported_quarter(entry) in admitted_periods]
+    return admitted, len(entries) - len(admitted)
+
+
+def _emit_policy_denial(ticker: str, authorization: StoredCollectionAuthorization) -> None:
+    target = authorization.target
+    decision = authorization.decision
+    payload = {
+        "event": "source_collection_policy_denied",
+        "ticker": ticker,
+        "coverage_role": target.coverage_role.value if target is not None else None,
+        "source": CollectionSource.IR.value,
+        "artifact_kind": ArtifactKind.IR_DOCUMENT.value,
+        "reason": decision.reason.value if decision is not None else authorization.status.value,
+    }
+    sys.stderr.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _url_sha8(url: str) -> str:
@@ -233,6 +289,15 @@ def _fetch_curl_cffi(url: str) -> tuple[bytes, str, str] | None:
                 )
                 return None
             continue
+        if resp.status_code in {401, 403}:
+            log.error(
+                {
+                    "event": "source_authentication_denied",
+                    "url": redact(current),
+                    "status": resp.status_code,
+                }
+            )
+            raise SourceAuthenticationDeniedError(resp.status_code)
         if resp.status_code != 200:
             log.error(
                 {"event": "curl_cffi_http", "url": redact(current), "status": resp.status_code}
@@ -278,6 +343,15 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
                 resp.headers.get("Content-Type", "") or "",
             )
     except urllib.error.HTTPError as e:
+        if e.code in {401, 403}:
+            log.error(
+                {
+                    "event": "source_authentication_denied",
+                    "url": redact(url),
+                    "status": e.code,
+                }
+            )
+            raise SourceAuthenticationDeniedError(e.code) from None
         log.error({"event": "http_error", "url": redact(url), "status": e.code})
         return None
     except (urllib.error.URLError, OSError, ValueError) as e:
@@ -367,9 +441,29 @@ def process_ticker(
     dry_run: bool = False,
     categorize: bool = False,
     calendar: str | None = None,
+    owner_requested: bool = False,
 ) -> dict[str, object]:
     """Download every manifest URL for ``ticker`` into staging; optionally categorize."""
     ticker = ticker.upper()
+    authorization = authorize_stored_collection_target(
+        db_path,
+        ticker,
+        requested=owner_requested,
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    if not authorization.allowed:
+        _emit_policy_denial(ticker, authorization)
+        denied: dict[str, object] = {
+            "ticker": ticker,
+            "status": "policy_denied",
+            "downloaded": 0,
+            "skipped": 0,
+            "failed": 0,
+            "policy_skipped": 0,
+        }
+        print(json.dumps(denied))
+        return denied
     entries = load_url_manifest(root, ticker)
     if not entries:
         empty: dict[str, object] = {
@@ -378,9 +472,14 @@ def process_ticker(
             "downloaded": 0,
             "skipped": 0,
             "failed": 0,
+            "policy_skipped": 0,
         }
         print(json.dumps(empty))
         return empty
+    entries, policy_skipped = _bounded_manifest_entries(
+        entries,
+        max_quarters=SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters,
+    )
 
     already = _registered_source_urls(db_path, ticker)
     dest_dir = root / "ir_documents" / ticker
@@ -422,6 +521,7 @@ def process_ticker(
         "downloaded": downloaded,
         "skipped": skipped,
         "failed": failed,
+        "policy_skipped": policy_skipped,
         "categorize_rc": cat_rc,
     }
     print(json.dumps(summary))
@@ -460,26 +560,34 @@ def main(argv: list[str] | None = None) -> int:
         if not manifests:
             print(f"No URL manifests in {manifest_dir(root)}", file=sys.stderr)
             return 1
-        for p in manifests:
-            process_ticker(
-                p.stem.replace("_urls", ""),
-                root=root,
-                db_path=db_path,
-                dry_run=args.dry_run,
-                categorize=args.categorize,
-                calendar=args.calendar,
-            )
+        try:
+            for p in manifests:
+                process_ticker(
+                    p.stem.replace("_urls", ""),
+                    root=root,
+                    db_path=db_path,
+                    dry_run=args.dry_run,
+                    categorize=args.categorize,
+                    calendar=args.calendar,
+                    owner_requested=False,
+                )
+        except SourceAuthenticationDeniedError:
+            return 10
         return 0
 
-    process_ticker(
-        args.ticker,
-        root=root,
-        db_path=db_path,
-        dry_run=args.dry_run,
-        categorize=args.categorize,
-        calendar=args.calendar,
-    )
-    return 0
+    try:
+        summary = process_ticker(
+            args.ticker,
+            root=root,
+            db_path=db_path,
+            dry_run=args.dry_run,
+            categorize=args.categorize,
+            calendar=args.calendar,
+            owner_requested=not args.automatic,
+        )
+    except SourceAuthenticationDeniedError:
+        return 10
+    return 2 if summary["status"] == "policy_denied" else 0
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -505,6 +613,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--repo-root", dest="repo_root", help="Root holding ir_documents/ + data/ + .tmp/"
     )
+    p.add_argument("--automatic", action="store_true", help=argparse.SUPPRESS)
     return p.parse_args(argv)
 
 

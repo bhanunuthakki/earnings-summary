@@ -35,7 +35,7 @@ def _write_manifest(root: Path, ticker: str, entries: list[dict[str, object]]) -
     (d / f"{ticker}_urls.json").write_text(json.dumps(entries), encoding="utf-8")
 
 
-def _make_documents_db(db: Path) -> None:
+def _make_documents_db(db: Path, ticker: str = "NU") -> None:
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db))
     conn.execute(
@@ -43,6 +43,11 @@ def _make_documents_db(db: Path) -> None:
         " id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, source_type TEXT,"
         " doc_type TEXT, period_end TEXT, file_path TEXT, sha256 TEXT UNIQUE,"
         " fetched_at TEXT, fetch_status TEXT, raw_bytes_size INTEGER, source_url TEXT)"
+    )
+    conn.execute("CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)")
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (?, 'portfolio', NULL)",
+        (ticker,),
     )
     conn.commit()
     conn.close()
@@ -67,20 +72,32 @@ class _FakeResp:
         return self._body
 
 
+def _safe_url(url: str) -> str:
+    return url
+
+
 # ---------------------------------------------------------------------------
 # fetch_ir_documents.py
 # ---------------------------------------------------------------------------
 
 
 def test_no_manifest_status(tmp_path: Path) -> None:
-    summary = fid.process_ticker("ZZ", root=tmp_path, db_path=tmp_path / "db")
+    db = tmp_path / "db"
+    _make_documents_db(db, "ZZ")
+    summary = fid.process_ticker("ZZ", root=tmp_path, db_path=db)
     assert summary["status"] == "no_manifest"
 
 
 def test_real_download_picks_xlsx_extension_from_content_disposition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_manifest(tmp_path, "NU", [{"url": "https://x/opaque", "doc_type": "supplement"}])
+    db = tmp_path / "db"
+    _make_documents_db(db, "NU")
+    _write_manifest(
+        tmp_path,
+        "NU",
+        [{"url": "https://x/opaque", "doc_type": "supplement", "year": 2026, "quarter": "Q1"}],
+    )
 
     def _nosleep(_seconds: float) -> None:
         return None
@@ -88,7 +105,7 @@ def test_real_download_picks_xlsx_extension_from_content_disposition(
     monkeypatch.setattr("execution.fetch_ir_documents.time.sleep", _nosleep)
     monkeypatch.setattr(
         "execution.fetch_ir_documents.ensure_safe_public_url",
-        lambda url: url,
+        _safe_url,
     )
 
     class _FakeOpener:
@@ -98,16 +115,16 @@ def test_real_download_picks_xlsx_extension_from_content_disposition(
                 b"PKfake",
             )
 
-    monkeypatch.setattr(
-        "execution.fetch_ir_documents.urllib.request.build_opener",
-        lambda *_handlers: _FakeOpener(),
-    )
-    fid.process_ticker("NU", root=tmp_path, db_path=tmp_path / "db")
+    def _fake_opener(*_handlers: object) -> _FakeOpener:
+        return _FakeOpener()
+
+    monkeypatch.setattr("execution.fetch_ir_documents.urllib.request.build_opener", _fake_opener)
+    fid.process_ticker("NU", root=tmp_path, db_path=db)
 
     staged = list((tmp_path / "ir_documents" / "NU").glob("*"))
     assert len(staged) == 1
     assert staged[0].suffix == ".xlsx"
-    assert staged[0].name.startswith("NU_supplement_undated__")
+    assert staged[0].name.startswith("NU_supplement_2026Q1__")
     # Sidecar maps the staged filename → the real URL.
     sidecar = json.loads((tmp_path / ".tmp" / "ir_incoming_urls.json").read_text(encoding="utf-8"))
     assert sidecar[staged[0].name] == "https://x/opaque"
@@ -120,7 +137,11 @@ def test_skips_already_registered_urls(tmp_path: Path, monkeypatch: pytest.Monke
     conn.execute("INSERT INTO documents (ticker, source_url) VALUES ('NU', 'https://x/a.pdf')")
     conn.commit()
     conn.close()
-    _write_manifest(tmp_path, "NU", [{"url": "https://x/a.pdf", "doc_type": "press_release"}])
+    _write_manifest(
+        tmp_path,
+        "NU",
+        [{"url": "https://x/a.pdf", "doc_type": "press_release", "year": 2026, "quarter": "Q1"}],
+    )
 
     calls: list[str] = []
 
@@ -163,6 +184,7 @@ def test_categorize_registers_unregistered_ticker_with_source_url(tmp_path: Path
     proc = subprocess.run(
         [
             sys.executable,
+            str(PROJECT_ROOT / "execution" / "sqlite_bootstrap.py"),
             str(_CATEGORIZER),
             "--ticker",
             "ZZZ",

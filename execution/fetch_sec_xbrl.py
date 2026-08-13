@@ -19,9 +19,9 @@ Rate-limited per SEC fair-use policy: ~10 req/sec absolute max; we sleep 0.2s
 between tickers (~5 req/sec) to stay polite.
 
 Usage:
-    python execution/fetch_sec_xbrl.py                   # tracked universe filtered to CIK_MAP
-    python execution/fetch_sec_xbrl.py --all-mapped      # every CIK_MAP ticker
-    python execution/fetch_sec_xbrl.py --ticker NU       # single ticker
+    python execution/fetch_sec_xbrl.py                   # automatic portfolio scope
+    python execution/fetch_sec_xbrl.py --all-mapped      # same policy-bounded automatic scope
+    python execution/fetch_sec_xbrl.py --ticker NU       # owner-requested stored portfolio/evaluation
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
+from models.companies import ListType  # noqa: E402
 from models.runs import StageStatus  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
 from pipeline.run_accounting import (  # noqa: E402
@@ -45,7 +46,19 @@ from pipeline.run_accounting import (  # noqa: E402
     start_run,
     suppression_payload,
 )
-from pipeline.sec_xbrl import CIK_MAP, NO_SEC_FILERS, IngestStats, ingest_for_ticker  # noqa: E402
+from pipeline.sec_xbrl import (  # noqa: E402
+    CIK_MAP,
+    NO_SEC_FILERS,
+    IngestStats,
+    SecCompanyFactsAuthenticationDeniedError,
+    ingest_for_ticker,
+)
+from pipeline.source_policy import (  # noqa: E402
+    ArtifactKind,
+    CollectionSource,
+    CollectionTarget,
+    select_collection_targets,
+)
 from provenance.sec_companyfacts_capture import CompanyFactsContractError  # noqa: E402
 
 _PER_TICKER_DELAY_S = 0.2
@@ -109,34 +122,86 @@ def handle_silent_staleness(
 
 
 def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:
-    """Default scope: the live tracked universe (portfolio + evaluation +
-    watchlist) filtered to CIK_MAP, so list changes never need a script edit. Tracked
-    names without a CIK are reported on stderr — NO_SEC_FILERS silently
-    (documented, expected), unknown ones loudly (CIK_MAP is stale)."""
-    if args.ticker:
-        return [args.ticker.upper()]
-    if args.all_mapped:
-        return sorted(CIK_MAP.keys())
+    """Automatic portfolio scope plus an explicitly requested evaluation name."""
+
     try:
-        tracked = [c.ticker.upper() for c in tracked_companies_for_user(conn)]
+        if args.ticker:
+            tracked = tracked_companies_for_user(conn, list_types=frozenset(ListType))
+        else:
+            tracked = tracked_companies_for_user(conn)
     except sqlite3.Error:
-        # Synthetic env without tracked_companies — fall back to the full map.
-        return sorted(CIK_MAP.keys())
-    uncovered = sorted(t for t in tracked if t not in CIK_MAP and t not in NO_SEC_FILERS)
+        # No governed roster means no authorized network scope.
+        return []
+    requested_ticker = args.ticker.upper() if args.ticker else None
+    candidates = [
+        CollectionTarget(
+            ticker=company.ticker,
+            coverage_role=company.list_type,
+            requested=requested_ticker is not None,
+        )
+        for company in tracked
+        if requested_ticker is None or company.ticker.upper() == requested_ticker
+    ]
+    if requested_ticker is not None and not candidates:
+        candidates = [
+            CollectionTarget(
+                ticker=requested_ticker,
+                coverage_role=ListType.NONE,
+                requested=True,
+            )
+        ]
+    selection = select_collection_targets(
+        tuple(candidates),
+        source=CollectionSource.SEC,
+        artifact_kind=ArtifactKind.COMPANY_FACTS,
+    )
+    for item in selection.denied:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "source_collection_policy_denied",
+                    "ticker": item.target.ticker,
+                    "coverage_role": item.target.coverage_role.value,
+                    "source": CollectionSource.SEC.value,
+                    "artifact_kind": ArtifactKind.COMPANY_FACTS.value,
+                    "reason": item.decision.reason.value,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    allowed = [item.target.ticker for item in selection.allowed]
+    for ticker in allowed:
+        if ticker in NO_SEC_FILERS:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "sec_no_filer_disposition",
+                        "ticker": ticker,
+                        "disposition": "documented_non_filer",
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+    uncovered = sorted(t for t in allowed if t not in CIK_MAP and t not in NO_SEC_FILERS)
     if uncovered:
         sys.stderr.write(
             json.dumps({"event": "sec_cik_map_stale", "tickers_missing_cik": uncovered}) + "\n"
         )
-    return sorted(t for t in tracked if t in CIK_MAP)
+    return [ticker for ticker in allowed if ticker in CIK_MAP]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ticker", help="Single ticker (must be in CIK_MAP)")
+    parser.add_argument(
+        "--ticker",
+        help="Owner-requested stored portfolio/evaluation ticker (must be in CIK_MAP)",
+    )
     parser.add_argument(
         "--all-mapped",
         action="store_true",
-        help="Fetch every CIK_MAP ticker instead of the tracked universe",
+        help="Compatibility flag; collection policy still limits automatic work to portfolio",
     )
     parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
     args = parser.parse_args()
@@ -164,6 +229,17 @@ def main() -> int:
                 stats = ingest_for_ticker(
                     conn, ticker=ticker, project_root=PROJECT_ROOT, run_id=run_id
                 )
+            except SecCompanyFactsAuthenticationDeniedError as e:
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "error": str(e),
+                        "class": "auth_denial",
+                        "http_status": e.status_code,
+                    }
+                )
+                failed += 1
+                break
             except OSError as e:
                 # Transient: network / filesystem. Continue with next ticker.
                 rows.append(

@@ -19,7 +19,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ir_pipeline.authority import PublisherEndpointRule  # noqa: E402
 from ir_pipeline.config import IrConfig  # noqa: E402
-from ir_pipeline.discover import discover_history_hybrid  # noqa: E402
+from ir_pipeline.discover import (  # noqa: E402
+    IrDiscoveryAuthenticationDeniedError,
+    discover_history_hybrid,
+)
 from ir_pipeline.discover._docmeta import CandidateDoc  # noqa: E402
 from ir_pipeline.discover.generic import (  # noqa: E402
     discover_document_history,
@@ -282,3 +285,50 @@ def test_hybrid_generic_only_when_no_mz_config(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(generic, "discover_document_history", _fake_generic)
     docs = discover_history_hybrid(ir_url="https://ir.x/", config=None)
     assert {d.url for d in docs} == {"u1"}
+
+
+@pytest.mark.parametrize("inventory", [False, True])
+def test_generic_renderer_auth_denial_is_never_swallowed(inventory: bool) -> None:
+    from ir_pipeline.discover import generic
+
+    def denied(_url: str, _timeout: int) -> list[tuple[str, str]]:
+        raise IrDiscoveryAuthenticationDeniedError(403)
+
+    with pytest.raises(IrDiscoveryAuthenticationDeniedError):
+        if inventory:
+            generic.discover_document_inventory(
+                ir_url="https://ir.example/",
+                render=denied,
+                check_robots=False,
+            )
+        else:
+            generic.discover_document_history(
+                ir_url="https://ir.example/",
+                render=denied,
+                check_robots=False,
+            )
+
+
+def test_hybrid_does_not_swallow_mz_auth_denial(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ir_pipeline.config import IrConfig
+    from ir_pipeline.discover import generic
+
+    cfg = IrConfig(
+        ticker="NU",
+        platform="mz",
+        results_center_url="https://ir.example/",
+    )
+    def no_generic_history(**_kwargs: object) -> list[object]:
+        return []
+
+    def denied_mz(_cfg: IrConfig) -> dict[str, str]:
+        raise IrDiscoveryAuthenticationDeniedError(403)
+
+    monkeypatch.setattr(generic, "discover_document_history", no_generic_history)
+    monkeypatch.setattr(
+        "ir_pipeline.discover.discover_documents",
+        denied_mz,
+    )
+
+    with pytest.raises(IrDiscoveryAuthenticationDeniedError):
+        discover_history_hybrid(ir_url="https://ir.example/", config=cfg)

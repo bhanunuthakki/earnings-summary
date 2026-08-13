@@ -27,6 +27,7 @@ import urllib.request
 import urllib.robotparser
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 from ir_pipeline._net import (
     PLAYWRIGHT_NETWORK_LOCKDOWN_ARG,
@@ -37,6 +38,7 @@ from ir_pipeline._net import (
     install_public_only_playwright_routing,
 )
 from ir_pipeline.authority import PublisherEndpointRule
+from ir_pipeline.discover import IrDiscoveryAuthenticationDeniedError
 from ir_pipeline.discover._docmeta import CandidateDoc, classify, filename_for_url
 
 # (href, visible anchor text) for one page; the unit a renderer returns.
@@ -185,6 +187,8 @@ def discover_document_inventory(
             continue
         try:
             anchors = do_render(page_url, timeout_ms)
+        except IrDiscoveryAuthenticationDeniedError:
+            raise
         except Exception as exc:
             pages.append(
                 CrawlPageOutcome(
@@ -278,6 +282,8 @@ def discover_document_history(
         visited.add(page_url)
         try:
             anchors = do_render(page_url, timeout_ms)
+        except IrDiscoveryAuthenticationDeniedError:
+            raise
         except Exception:  # one page's browser/network failure is non-fatal
             return []
         for href, text in anchors:
@@ -587,7 +593,13 @@ def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
             )
             install_public_only_playwright_routing(context, timeout_s=timeout_ms / 1000)
             page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            response = cast(
+                object | None,
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms),
+            )
+            status_code = getattr(response, "status", None)
+            if isinstance(status_code, int) and status_code in {401, 403}:
+                raise IrDiscoveryAuthenticationDeniedError(status_code)
             try:
                 page.wait_for_selector(_DOC_LINK_SELECTOR, timeout=_DOC_WAIT_MS, state="attached")
             except Exception:  # no doc link surfaced — a nav/landing page; harvest its links

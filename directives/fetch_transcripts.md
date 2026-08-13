@@ -2,11 +2,11 @@
 
 ## Goal
 
-Automate the retrieval of company earnings call audio and transcribe it locally to generate text transcripts. This bypasses anti-bot protected sites and paid APIs by pulling audio from YouTube and running private, cost-free transcription via `faster-whisper`. The fetched transcripts will be processed and formatted into the ingestion pipeline.
+Audio/webcast retrieval is retired and denied before network access. Text transcripts are acquired from policy-authorized issuer or aggregator sources; existing audio-transcript artifacts remain readable for provenance and QA only.
 
 ## Input modes
 
-`execution/fetch_audio_transcripts.py` has three mutually exclusive modes:
+`execution/fetch_audio_transcripts.py` retains its legacy CLI shape only to fail closed with the canonical `webcast_excluded` policy. It does not search, download, or transcribe.
 
 | Mode | Flags | Use when |
 |---|---|---|

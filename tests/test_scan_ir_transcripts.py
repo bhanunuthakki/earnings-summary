@@ -107,14 +107,18 @@ def test_due_for_scan_out_of_window() -> None:
 def test_scan_one_out_of_window_no_earnings(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.setattr(mod, "last_earnings_date", _no_earnings)
-    r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
+    r = mod.scan_one(
+        "NU", _FYE_DEC, Path("/x"), _TODAY, 14, False, Path("/x/data/portfolio.db"), False
+    )
     assert r.status == "out_of_window"
 
 
 def test_scan_one_out_of_window_stale_earnings(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.setattr(mod, "last_earnings_date", _stale_earnings)
-    r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
+    r = mod.scan_one(
+        "NU", _FYE_DEC, Path("/x"), _TODAY, 14, False, Path("/x/data/portfolio.db"), False
+    )
     assert r.status == "out_of_window"
 
 
@@ -123,7 +127,9 @@ def test_scan_one_already_ingested(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "last_earnings_date", _earnings)
     monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
     monkeypatch.setattr(mod, "_ingested_evidence_exists", _true)
-    r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
+    r = mod.scan_one(
+        "NU", _FYE_DEC, Path("/x"), _TODAY, 14, False, Path("/x/data/portfolio.db"), False
+    )
     assert r.status == "already_ingested"
     assert r.quarter == "Q1_2026"
 
@@ -135,7 +141,9 @@ def test_scan_one_dry_run_would_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     # fetch_qa must not run in a dry-run.
     monkeypatch.setattr(mod, "fetch_qa", _fetch_boom)
-    r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, True)
+    r = mod.scan_one(
+        "NU", _FYE_DEC, Path("/x"), _TODAY, 14, True, Path("/x/data/portfolio.db"), False
+    )
     assert r.status == "would_fetch"
     assert r.quarter == "Q1_2026"
 
@@ -148,7 +156,9 @@ def test_scan_one_pending_ingest_when_raw_exists(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(mod, "_raw_exists", _true)
     # A raw already on disk must NOT trigger a re-fetch — flag it for ingest.
     monkeypatch.setattr(mod, "fetch_qa", _fetch_boom)
-    r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
+    r = mod.scan_one(
+        "NU", _FYE_DEC, Path("/x"), _TODAY, 14, False, Path("/x/data/portfolio.db"), False
+    )
     assert r.status == "pending_ingest"
 
 
@@ -159,7 +169,9 @@ def test_scan_one_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     monkeypatch.setattr(mod, "_raw_exists", _false)
     monkeypatch.setattr(mod, "fetch_qa", _fetch_hit)
-    r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
+    r = mod.scan_one(
+        "NU", _FYE_DEC, Path("/x"), _TODAY, 14, False, Path("/x/data/portfolio.db"), False
+    )
     assert r.status == "fetched"
     assert r.detail == "issuer_ir"
 
@@ -171,7 +183,9 @@ def test_scan_one_not_published_yet(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     monkeypatch.setattr(mod, "_raw_exists", _false)
     monkeypatch.setattr(mod, "fetch_qa", _fetch_none)
-    r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
+    r = mod.scan_one(
+        "NU", _FYE_DEC, Path("/x"), _TODAY, 14, False, Path("/x/data/portfolio.db"), False
+    )
     assert r.status == "not_published_yet"
 
 
@@ -182,7 +196,9 @@ def test_scan_one_error_is_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
     monkeypatch.setattr(mod, "_raw_exists", _false)
     monkeypatch.setattr(mod, "fetch_qa", _fetch_boom)
-    r = mod.scan_one("NU", _FYE_DEC, Path("/x"), _TODAY, 14, False)
+    r = mod.scan_one(
+        "NU", _FYE_DEC, Path("/x"), _TODAY, 14, False, Path("/x/data/portfolio.db"), False
+    )
     assert r.status == "error"
     assert "RuntimeError" in r.detail
 
@@ -292,6 +308,39 @@ def test_ingested_evidence_rejects_non_relative_recorded_paths(
 
     monkeypatch.setattr(mod.db, "get_connection", connect)
     assert mod._ingested_evidence_exists(tmp_path, "NU", 2026, 1, 12) is False
+
+
+def test_scan_scope_applies_the_same_portfolio_and_explicit_evaluation_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    db_path = tmp_path / "portfolio.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, "
+            "fiscal_year_end TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies VALUES (?, ?, NULL, '12-31')",
+            [
+                ("PORT", "portfolio"),
+                ("EVAL", "evaluation"),
+                ("WATCH", "watchlist"),
+                ("IDX", "index_member"),
+            ],
+        )
+
+    def connect() -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(mod.db, "get_connection", connect)
+    assert mod._resolve_tickers(None) == [("PORT", 12)]
+    assert mod._resolve_tickers("EVAL") == [("EVAL", 12)]
+    assert mod._resolve_tickers("WATCH") == []
+    assert mod._resolve_tickers("IDX") == []
 
 
 # ---------------------------------------------------------------------------

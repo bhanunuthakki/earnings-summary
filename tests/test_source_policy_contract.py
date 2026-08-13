@@ -12,11 +12,13 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from models.companies import ListType  # noqa: E402
 from pipeline.source_policy import (  # noqa: E402
     DISPLAY_ROLE_ORDER,
+    SOURCE_POLICY_CONFIG,
     AdapterKey,
     ArtifactKind,
     AuthorizationReason,
     CollectionMode,
     CollectionSource,
+    CollectionTarget,
     FmpIssuerRules,
     IrEndpointRule,
     IrIssuerRules,
@@ -27,7 +29,82 @@ from pipeline.source_policy import (  # noqa: E402
     decision_for,
     issuer_policy,
     mode_for_role,
+    select_collection_targets,
 )
+
+
+def test_typed_collection_selector_orders_by_priority_and_requires_explicit_evaluation() -> None:
+    selection = select_collection_targets(
+        (
+            CollectionTarget(ticker="IDX", coverage_role=ListType.INDEX_MEMBER),
+            CollectionTarget(ticker="EVAL", coverage_role=ListType.EVALUATION),
+            CollectionTarget(ticker="ASKED", coverage_role=ListType.EVALUATION, requested=True),
+            CollectionTarget(ticker="PORT", coverage_role=ListType.PORTFOLIO),
+            CollectionTarget(ticker="WATCH", coverage_role=ListType.WATCHLIST),
+        ),
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+
+    assert [item.target.ticker for item in selection.allowed] == ["PORT", "ASKED"]
+    assert [item.decision.reason for item in selection.denied] == [
+        AuthorizationReason.REQUEST_REQUIRED,
+        AuthorizationReason.COVERAGE_DEPTH_DENIED,
+        AuthorizationReason.COVERAGE_DEPTH_DENIED,
+    ]
+
+
+def test_reported_quarter_bound_is_typed_and_carried_by_collection_decisions() -> None:
+    bound = SOURCE_POLICY_CONFIG.reported_quarter_window
+
+    assert bound.max_quarters == 5
+    assert (
+        decision_for(
+            ListType.PORTFOLIO,
+            CollectionSource.IR,
+            ArtifactKind.IR_DOCUMENT,
+            requested=False,
+        ).reported_quarter_window
+        == bound
+    )
+    assert (
+        decision_for(
+            ListType.EVALUATION,
+            CollectionSource.TRANSCRIPT,
+            ArtifactKind.TEXT_TRANSCRIPT,
+            requested=True,
+        ).reported_quarter_window
+        == bound
+    )
+    assert (
+        decision_for(
+            ListType.PORTFOLIO,
+            CollectionSource.SEC,
+            ArtifactKind.COMPANY_FACTS,
+            requested=False,
+        ).reported_quarter_window
+        is None
+    )
+
+
+def test_operator_docs_match_the_stored_role_and_temporal_policy() -> None:
+    docs = "\n".join(
+        (PROJECT_ROOT / relative).read_text(encoding="utf-8")
+        for relative in (
+            "directives/edgar_pipeline.md",
+            "directives/backfill_transcripts.md",
+            "directives/fetch_ir_documents.md",
+            "cron/SETUP_WINDOWS_SCHEDULER.md",
+            "README.md",
+        )
+    )
+
+    assert "portfolio is automatic" in docs
+    assert "evaluation requires" in docs
+    assert "fail closed" in docs
+    assert "canonical last 5 reported" in docs
+    assert "last 6 fiscal quarters" not in docs
+    assert "covering the last 8 quarters" not in docs
 
 
 def test_coverage_policy_order_and_unknowns_are_fail_closed() -> None:
@@ -118,18 +195,18 @@ def test_policy_is_deeply_immutable_and_hashes_are_golden() -> None:
     assert issuer_policy("rbrk").policy_sha256 == original_hash
     rubrik_golden = "".join(
         (
-            "21e3a7130c09994a",  # pragma: allowlist secret
-            "041ef28de2e0a09e",  # pragma: allowlist secret
-            "b7f4e3205171a084",  # pragma: allowlist secret
-            "e445b11f1f01b1f7",  # pragma: allowlist secret
+            "c001d5a94a28c9c7",  # pragma: allowlist secret
+            "5ed23ab64bd1a639",  # pragma: allowlist secret
+            "5f52737cad03e959",  # pragma: allowlist secret
+            "10d61428b84d25f0",  # pragma: allowlist secret
         )
     )
     wix_golden = "".join(
         (
-            "9b895000e48eff63",  # pragma: allowlist secret
-            "b23a59dce294f625",  # pragma: allowlist secret
-            "0bd00c7952e9ead0",  # pragma: allowlist secret
-            "d88a38b02c6e3454",  # pragma: allowlist secret
+            "3d87ba08bf778993",  # pragma: allowlist secret
+            "7fef39e1f33ac3bd",  # pragma: allowlist secret
+            "ed0ca1bde912773c",  # pragma: allowlist secret
+            "cef7976b161fdf89",  # pragma: allowlist secret
         )
     )
     assert rubrik.policy_sha256 == rubrik_golden

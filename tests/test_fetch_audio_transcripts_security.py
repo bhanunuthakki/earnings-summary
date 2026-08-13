@@ -19,6 +19,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 import fetch_audio_transcripts as audio
 
 
+def test_audio_pipeline_is_denied_before_downloader_or_transcriber(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        audio,
+        "_select_audio_url",
+        lambda *_args, **_kwargs: pytest.fail("network boundary was crossed"),
+    )
+
+    with pytest.raises(audio.AudioCollectionPolicyError, match="excluded"):
+        audio.fetch_and_transcribe(audio.FetchSpec(ticker="ACME", year=2026, quarter=2), None)
+
+
 def test_validate_audio_url_rejects_private_target(monkeypatch: pytest.MonkeyPatch) -> None:
     def reject(_url: str) -> str:
         raise audio.UnsafeURLError("non-public host blocked: http://127.0.0.1/private")
@@ -82,20 +95,14 @@ def test_download_uses_bounded_options_and_sanitizes_exception(
     monkeypatch.setattr(audio, "_validate_audio_url", lambda value: value)
     monkeypatch.setattr(audio.yt_dlp, "YoutubeDL", FakeYdl)
 
-    with pytest.raises(audio.AudioFetchError) as caught:
+    with pytest.raises(audio.AudioCollectionPolicyError, match="excluded") as caught:
         audio._download_audio(
             "https://www.youtube.com/watch?v=123&access_token=TOPSECRET",
             tmp_path / "audio",
             None,
         )
 
-    assert captured["socket_timeout"] == audio.YDL_SOCKET_TIMEOUT_SEC
-    assert captured["retries"] == audio.YDL_RETRIES
-    assert captured["fragment_retries"] == audio.YDL_RETRIES
-    assert captured["extractor_retries"] == audio.YDL_RETRIES
-    assert captured["noplaylist"] is True
-    assert captured["max_filesize"] == audio.MAX_AUDIO_BYTES
-    assert captured["progress_hooks"] == [audio._enforce_download_bound]
+    assert captured == {}
     rendered = str(caught.value)
     assert "youtube.com" not in rendered
     assert "TOPSECRET" not in rendered

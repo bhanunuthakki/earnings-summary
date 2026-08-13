@@ -222,3 +222,41 @@ def test_backfill_stop_requires_exact_db_path_and_sha(
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is True
     raw.write_text("mutated", encoding="utf-8")
     assert mod._has_ingested_evidence("NU", 2026, 1, 12) is False
+
+
+def test_scheduled_transcript_scope_is_portfolio_only_but_explicit_evaluation_is_allowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_module()
+    db_path = tmp_path / "portfolio.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT, "
+            "fiscal_year_end TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies VALUES (?, ?, NULL, '12-31')",
+            [
+                ("PORT", "portfolio"),
+                ("EVAL", "evaluation"),
+                ("WATCH", "watchlist"),
+                ("IDX", "index_member"),
+            ],
+        )
+
+    def connect() -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(mod.db, "get_connection", connect)
+    assert mod._resolve_tickers(None) == [("PORT", 12)]
+    assert mod._resolve_tickers("EVAL") == [("EVAL", 12)]
+    assert mod._resolve_tickers("WATCH") == []
+    assert mod._resolve_tickers("IDX") == []
+
+
+def test_transcript_automatic_lookback_defaults_to_five() -> None:
+    mod = _load_module()
+    assert mod._DEFAULT_LOOKBACK == 5

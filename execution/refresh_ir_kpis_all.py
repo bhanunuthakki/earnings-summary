@@ -67,11 +67,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ir_pipeline.config import configured_tickers  # noqa: E402
+from pipeline.source_policy import (  # noqa: E402
+    SOURCE_POLICY_CONFIG,
+    ArtifactKind,
+    CollectionSource,
+    authorize_stored_collection_target,
+)
 from runtime.python_process import managed_python_prefix  # noqa: E402
 
 # How many recent quarters each child ingests. Mirrors refresh_ir_kpis.py's own
 # default so the batch path and the manual path behave identically.
-_DEFAULT_QUARTERS = 8
+_DEFAULT_QUARTERS = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
 
 # Per-ticker wall-clock cap. A child renders a headless browser (mz adapter's
 # goto uses a 60s networkidle timeout), downloads the spreadsheet (120s urllib
@@ -142,7 +148,7 @@ def _spreadsheet_tickers(repo_root: Path) -> dict[str, Path]:
 
 
 def _resolve_tickers(
-    *, repo_root: Path, requested: list[str] | None
+    *, repo_root: Path, db_path: Path, requested: list[str] | None
 ) -> tuple[list[_TickerJob], list[str]]:
     """Return ``(jobs, skipped)``.
 
@@ -160,12 +166,27 @@ def _resolve_tickers(
         return _TickerJob(ticker, None if ticker in configured else on_disk.get(ticker))
 
     universe = configured | set(on_disk)
-    if requested:
-        wanted = [t.upper() for t in requested]
-        selected = sorted({t for t in wanted if t in universe})
-        skipped = sorted({t for t in wanted if t not in universe})
-        return [_job(t) for t in selected], skipped
-    return [_job(t) for t in sorted(universe)], []
+    candidates = sorted({t.upper() for t in requested}) if requested else sorted(universe)
+    selected: list[str] = []
+    skipped: list[str] = []
+    for ticker in candidates:
+        authorization = authorize_stored_collection_target(
+            db_path,
+            ticker,
+            requested=requested is not None,
+            source=CollectionSource.IR,
+            artifact_kind=ArtifactKind.IR_DOCUMENT,
+        )
+        if not authorization.allowed or ticker not in universe:
+            skipped.append(ticker)
+            continue
+        selected.append(ticker)
+    return [_job(t) for t in selected], skipped
+
+
+# Public typed seams for policy verification without reaching into internals.
+resolve_tickers = _resolve_tickers
+spreadsheet_tickers = _spreadsheet_tickers
 
 
 def _rows_from_stdout(stdout: str) -> int | None:
@@ -208,7 +229,15 @@ def _fail(
     )
 
 
-def _run_one(job: _TickerJob, *, repo_root: Path, quarters: int, timeout_s: int) -> _TickerResult:
+def _run_one(
+    job: _TickerJob,
+    *,
+    repo_root: Path,
+    db_path: Path,
+    quarters: int,
+    timeout_s: int,
+    owner_requested: bool,
+) -> _TickerResult:
     """Refresh one ticker as a subprocess-isolated child; echo its output.
 
     A configured ticker (``job.file_path is None``) refreshes via ``--discover``;
@@ -230,7 +259,16 @@ def _run_one(job: _TickerJob, *, repo_root: Path, quarters: int, timeout_s: int)
         argv += ["--file", str(job.file_path)]
     else:
         argv += ["--discover"]
-    argv += ["--quarters", str(quarters), "--repo-root", str(repo_root)]
+    argv += [
+        "--quarters",
+        str(quarters),
+        "--repo-root",
+        str(repo_root),
+        "--db",
+        str(db_path),
+    ]
+    if owner_requested:
+        argv.append("--owner-requested")
     sys.stdout.write(f"\n{'=' * 72}\n=== IR-spreadsheet refresh - {ticker}\n{'=' * 72}\n")
     sys.stdout.flush()
 
@@ -340,9 +378,18 @@ def main(argv: list[str] | None = None) -> int:
     quarters = cast("int", args.quarters)
     timeout_s = cast("int", args.timeout)
     requested = cast("list[str] | None", args.tickers)
+    bound = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+    if quarters < 1 or quarters > bound:
+        sys.stderr.write(f"--quarters must be between 1 and {bound}\n")
+        return 2
+    db_path = repo_root / "data" / "portfolio.db"
 
     t0 = time.monotonic()
-    jobs, skipped = _resolve_tickers(repo_root=repo_root, requested=requested)
+    jobs, skipped = _resolve_tickers(
+        repo_root=repo_root,
+        db_path=db_path,
+        requested=requested,
+    )
     for t in skipped:
         sys.stdout.write(
             f"[{t}] SKIPPED - no IR config (micro_thesis/ir_config/{t}.json) and no "
@@ -363,7 +410,15 @@ def main(argv: list[str] | None = None) -> int:
     # _run_one never raises, so a failure / timeout in one ticker cannot stop the
     # next from running.
     results = [
-        _run_one(j, repo_root=repo_root, quarters=quarters, timeout_s=timeout_s) for j in jobs
+        _run_one(
+            j,
+            repo_root=repo_root,
+            db_path=db_path,
+            quarters=quarters,
+            timeout_s=timeout_s,
+            owner_requested=requested is not None,
+        )
+        for j in jobs
     ]
 
     summary = _summarize(results, skipped=skipped, elapsed_seconds=round(time.monotonic() - t0, 3))

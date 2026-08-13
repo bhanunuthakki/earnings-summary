@@ -19,6 +19,14 @@ _ADAPTERS: dict[str, str] = {
 }
 
 
+class IrDiscoveryAuthenticationDeniedError(RuntimeError):
+    """The issuer surface explicitly returned HTTP 401/403."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"IR discovery authentication denied with HTTP {status_code}")
+
+
 def discover_documents(config: IrConfig) -> dict[str, str]:
     """Return {doc_type: url} for the latest quarter on the ticker's IR site."""
     mod_name = _ADAPTERS.get(config.platform)
@@ -69,6 +77,8 @@ def discover_history_hybrid(
     if config is not None and config.platform == "mz":
         try:
             precise = discover_documents(config)
+        except IrDiscoveryAuthenticationDeniedError:
+            raise
         except Exception:  # precise path is best-effort; the generic crawl still stands
             precise = {}
         seen = {d.url for d in docs}

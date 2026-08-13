@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.error
 import urllib.request
+import urllib.response
 from typing import cast
 
 from pydantic import BaseModel, ValidationError
@@ -28,6 +30,7 @@ from ir_pipeline._net import (
     install_public_only_playwright_routing,
 )
 from ir_pipeline.config import IrConfig
+from ir_pipeline.discover import IrDiscoveryAuthenticationDeniedError
 from ir_pipeline.discover._docmeta import classify, filename_for_url
 
 # Runs in the page: visible (offsetParent != null) anchors → their hrefs.
@@ -62,6 +65,12 @@ class _DocumentsEnvelope(BaseModel):
     data: _DocumentData
 
 
+def _authentication_denial_status(status_code: object) -> int | None:
+    if isinstance(status_code, int) and status_code in {401, 403}:
+        return status_code
+    return None
+
+
 def _read_bounded(response: object) -> bytes:
     read = getattr(response, "read", None)
     if not callable(read):
@@ -75,8 +84,18 @@ def _read_bounded(response: object) -> bytes:
 def _get_text(url: str, timeout: int = 30) -> str:
     ensure_safe_public_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with build_public_opener().open(request, timeout=timeout) as response:
-        return _read_bounded(response).decode("utf-8", errors="strict")
+    try:
+        response = cast(
+            urllib.response.addinfourl,
+            build_public_opener().open(request, timeout=timeout),
+        )
+        with response:
+            return _read_bounded(response).decode("utf-8", errors="strict")
+    except urllib.error.HTTPError as exc:
+        status_code = _authentication_denial_status(exc.code)
+        if status_code is not None:
+            raise IrDiscoveryAuthenticationDeniedError(status_code) from None
+        raise
 
 
 def _post_json(url: str, payload: dict[str, object], timeout: int = 30) -> object:
@@ -87,8 +106,18 @@ def _post_json(url: str, payload: dict[str, object], timeout: int = 30) -> objec
         headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
         method="POST",
     )
-    with build_public_opener().open(request, timeout=timeout) as response:
-        return cast(object, json.loads(_read_bounded(response)))
+    try:
+        response = cast(
+            urllib.response.addinfourl,
+            build_public_opener().open(request, timeout=timeout),
+        )
+        with response:
+            return cast(object, json.loads(_read_bounded(response)))
+    except urllib.error.HTTPError as exc:
+        status_code = _authentication_denial_status(exc.code)
+        if status_code is not None:
+            raise IrDiscoveryAuthenticationDeniedError(status_code) from None
+        raise
 
 
 def _catalog_config(page_html: str) -> tuple[str, str, list[str]]:
@@ -102,6 +131,11 @@ def _catalog_config(page_html: str) -> tuple[str, str, list[str]]:
     if issuer_match is None or base_match is None or not categories:
         raise ValueError("MZ catalog configuration is absent from the results page")
     return base_match.group(1).rstrip("/"), issuer_match.group(1), categories
+
+
+# Public, typed seams used by boundary tests and adapter callers.
+get_text = _get_text
+post_json = _post_json
 
 
 def _catalog_documents(results_center_url: str) -> dict[str, str]:
@@ -158,7 +192,13 @@ def _visible_filemanager_hrefs(url: str, timeout_ms: int = 60000) -> list[str]:
             )
             install_public_only_playwright_routing(context, timeout_s=timeout_ms / 1000)
             page = context.new_page()
-            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            response = cast(
+                object,
+                page.goto(url, wait_until="networkidle", timeout=timeout_ms),
+            )
+            status_code = _authentication_denial_status(getattr(response, "status", None))
+            if status_code is not None:
+                raise IrDiscoveryAuthenticationDeniedError(status_code)
             raw = page.eval_on_selector_all("a[href*='mzfilemanager']", _VISIBLE_HREFS_JS)
         finally:
             browser.close()

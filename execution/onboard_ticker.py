@@ -440,7 +440,13 @@ def _run_ir_documents(ticker: str) -> int:
         sys.path.insert(0, str(PROJECT_ROOT))
     from execution.discover_ir_documents_all import TickerStatus, run_ticker
 
-    result = run_ticker(ticker, repo_root=PROJECT_ROOT, db_path=_DB_PATH, process=True)
+    result = run_ticker(
+        ticker,
+        repo_root=PROJECT_ROOT,
+        db_path=_DB_PATH,
+        process=True,
+        owner_requested=True,
+    )
     return 0 if result.status is not TickerStatus.FAILED else 1
 
 
