@@ -861,18 +861,26 @@ def _write_health(repo_root: Path, record: HealthRecord) -> Path:
 def _child_health_semantics(job_name: str, exit_code: int) -> tuple[str, str, str | None]:
     """Translate reviewed child receipts without erasing Scheduler exit codes."""
 
-    if job_name == "refresh_cache":
+    if job_name in {"refresh_cache", "fetch-macro-series"}:
         if exit_code == 2:
             return (
                 "degraded_corpus",
                 "warning",
-                "live FMP unavailable; existing corpus served; recovery queued",
+                (
+                    "live FMP unavailable; existing corpus served; recovery queued"
+                    if job_name == "refresh_cache"
+                    else "macro providers unavailable; fresh-enough cached series served"
+                ),
             )
         if exit_code == 3:
             return (
                 "partial",
                 "warning",
-                "some FMP work was served or refreshed; unresolved work remains queued",
+                (
+                    "some FMP work was served or refreshed; unresolved work remains queued"
+                    if job_name == "refresh_cache"
+                    else "some macro series remain unavailable; sensitivity compute skipped"
+                ),
             )
     if exit_code == 0:
         return "ok", "info", None

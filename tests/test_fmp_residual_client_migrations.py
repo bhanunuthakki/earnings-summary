@@ -14,7 +14,7 @@ import execution.fetch_fmp_10q_json as reports
 import execution.fetch_macro_series as macro
 import execution.schedule_pre_earnings_refresh as earnings
 from macro_series import REGISTRY
-from net.client import HttpCallError, HttpErrorKind, HttpJsonResponse, JsonShape, JsonValue
+from net.client import HttpJsonResponse, JsonShape, JsonValue
 
 
 def test_financial_report_fetch_uses_shared_client(
@@ -44,23 +44,9 @@ def test_financial_report_fetch_uses_shared_client(
     assert captured["expected"] is JsonShape.ANY
 
 
-def test_macro_fetch_preserves_rate_limit_sentinel(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_macro_fetch_never_bypasses_shared_recovery_circuit() -> None:
     provider = REGISTRY["fed_funds"].providers[0]
-
-    def rate_limited(*_args: object, **_kwargs: object) -> HttpJsonResponse:
-        raise HttpCallError(
-            kind=HttpErrorKind.RATE_LIMIT,
-            message="HTTP 429",
-            retryable=True,
-            status_code=429,
-        )
-
-    monkeypatch.setattr(macro.FMP_CLIENT, "get_url_json", rate_limited)
-    monkeypatch.setattr(macro, "FMP_API_KEY", "test-key")
-
-    assert macro._fetch_json(provider) == "RATE_LIMITED"
+    assert macro._fetch_json(provider) is None
 
 
 def test_pre_earnings_calendar_validates_records(

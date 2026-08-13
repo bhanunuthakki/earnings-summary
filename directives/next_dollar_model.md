@@ -104,14 +104,17 @@ momentum(s) = ln(latest / level ~90 calendar days earlier)
   brent both carry global risk appetite), so the sum double-counts shared variance.
   It's a *tilt*, not a forecast.
 
-**Populating the substrate:** `python execution/fetch_macro_series.py` (FMP, needs
-`FMP_API_KEY`) then `python execution/compute_macro_sensitivities.py --portfolio`.
-Both tables ship empty until those run; the factor hides itself meanwhile.
+**Populating the substrate:** `python execution/fetch_macro_series.py` uses
+timeout-bounded Yahoo candidates and explicitly disables direct FMP macro calls
+until they are admitted by the shared FMP circuit/budget/recovery service. It
+then runs `python execution/compute_macro_sensitivities.py --portfolio` only when
+all requested series are fresh or explicitly cached-degraded under the same
+45-day staleness guard used by the allocation reader. Both tables ship empty
+until those run; the factor hides itself meanwhile.
 **Refresh cadence:** the `earnings-summary\fetch_macro_series` scheduled task
-(`cron/run_fetch_macro_series.bat`, daily 05:35 local) runs both scripts right after
-the FMP daily quota reset (00:00 UTC) and before the 05:45/06:30 FMP crons consume
-the day's request budget — on a quota-exhausted day the fetch 429s harmlessly and
-the panel keeps the factor hidden (the staleness guard caps drift at 45 days).
+(`cron/run_fetch_macro_series.bat`, daily 05:35 local) preserves typed degraded or
+partial acquisition exit codes. If a source returns no current rows, the panel
+keeps the factor hidden (the staleness guard caps drift at 45 days).
 
 ## Standardize → blend → softmax
 
