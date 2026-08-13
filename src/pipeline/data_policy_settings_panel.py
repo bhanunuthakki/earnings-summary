@@ -12,6 +12,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict
 
 from models.companies import ListType
+from pipeline.ir_approval_panel import read_ir_approval_review, render_ir_approval_panel
 from pipeline.source_policy import (
     DISPLAY_ROLE_ORDER,
     POLICY_VERSION,
@@ -580,6 +581,7 @@ def render_data_policy_settings_panel(
         + _render_matrix(resolved)
         + '<h3 class="k-card-title">Owner-approved issuer adapters</h3>'
         + _render_issuers(resolved)
+        + render_ir_approval_panel(read_ir_approval_review(db_path))
         + '<h3 class="k-card-title">Current FMP operating state</h3>'
         + _render_fmp_state(resolved.fmp_state)
         + "</section>"
