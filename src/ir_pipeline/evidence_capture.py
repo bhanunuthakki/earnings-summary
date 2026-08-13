@@ -182,6 +182,125 @@ class IRDocumentCaptureResult(_ClosedModel):
     items: tuple[IRDocumentCaptureItem, ...]
 
 
+class ExactIRFetchRequest(_ClosedModel):
+    """Server-owned fetch parameters for one already-approved exact URL."""
+
+    candidate_id: str = Field(min_length=64, max_length=64)
+    authority_url: str = Field(min_length=1)
+    exact_url: str = Field(min_length=1)
+    publisher_file_rules: tuple[PublisherEndpointRule, ...] = Field(min_length=1)
+    checkpoint_root: Path
+    blob_root: Path
+    task_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    user_agent: str = Field(min_length=8, max_length=512)
+    max_document_bytes: int = Field(default=100_000_000, ge=1, le=1_000_000_000)
+    connect_timeout_seconds: int = Field(default=10, ge=1, le=120)
+    read_timeout_seconds: int = Field(default=60, ge=1, le=600)
+    max_redirects: int = Field(default=0, ge=0, le=0)
+
+
+class ExactIRFetchResult(_ClosedModel):
+    requested_url: str
+    final_url: str
+    content_sha256: str = Field(min_length=64, max_length=64)
+    byte_size: int = Field(ge=0)
+    media_type: str
+    observed_at: datetime
+    retrieved_at: datetime
+    storage_uri: str
+    network_fetched: bool
+
+
+def fetch_exact_ir_bytes(
+    request: ExactIRFetchRequest,
+    *,
+    session: SessionLike,
+    robots_allows: RobotsCheck | None = None,
+) -> ExactIRFetchResult:
+    """Fetch/checkpoint one approved exact URL, without database mutation."""
+
+    request = ExactIRFetchRequest.model_validate(request.model_dump())
+    candidate = ObservedIRDocument(
+        expected_document_id=request.candidate_id,
+        snapshot_id=request.candidate_id,
+        inventory_key=request.candidate_id,
+        inventory_source_url=request.authority_url,
+        inventory_completion_status="complete",
+        expected_document_key=request.candidate_id,
+        issuer_id="approval-bound",
+        ticker=None,
+        document_type="approval-bound",
+        source_url=request.exact_url,
+        expected_at=None,
+    )
+    capture_request = IRDocumentCaptureRequest(
+        inventory_keys=(request.candidate_id,),
+        publisher_file_rules=request.publisher_file_rules,
+        checkpoint_root=request.checkpoint_root,
+        blob_root=request.blob_root,
+        task_id=request.task_id,
+        user_agent=request.user_agent,
+        max_document_bytes=request.max_document_bytes,
+        connect_timeout_seconds=request.connect_timeout_seconds,
+        read_timeout_seconds=request.read_timeout_seconds,
+        max_redirects=request.max_redirects,
+    )
+    _authorize_url(candidate, request.exact_url, capture_request)
+    run_root = request.checkpoint_root / request.task_id
+    checkpoint_path = run_root / "state.json"
+    checkpoint = _load_checkpoint(checkpoint_path, request.task_id)
+    entries = {item.expected_document_id: item for item in checkpoint.entries}
+    prior = entries.get(candidate.expected_document_id)
+    if prior is None or prior.outcome == "transient_deferred":
+        network_fetched = True
+        try:
+            ensure_safe_public_url(request.exact_url)
+        except UnsafeURLError as exc:
+            raise IRDocumentCaptureError("exact IR URL is not public") from exc
+        entry = _fetch_one(
+            session,
+            candidate,
+            capture_request,
+            run_root,
+            robots_allows=robots_allows or _robots_allows,
+        )
+        entries[candidate.expected_document_id] = entry
+        _write_checkpoint(checkpoint_path, request.task_id, entries)
+    else:
+        network_fetched = False
+        entry = prior
+        _validate_checkpoint(candidate, entry)
+    if entry.outcome == "auth_hard_stop":
+        raise IRDocumentCaptureHardStopError(
+            "publisher authorization hard stop recorded; browser-auth scraping is forbidden"
+        )
+    if entry.outcome != "fetched":
+        raise IRDocumentCaptureError(f"exact IR fetch failed closed: {entry.reason_code}")
+    if _required_final_url(entry) != request.exact_url:
+        raise IRDocumentCaptureError("exact IR redirect changed the approved URL")
+    digest = _required_digest(entry)
+    if _required_media_type(entry) != "application/pdf":
+        raise IRDocumentCaptureError("exact IR response media type is not application/pdf")
+    checkpoint_body = run_root / "responses" / digest
+    _verify_file(checkpoint_body, digest, _required_size(entry))
+    with checkpoint_body.open("rb") as handle:
+        if handle.read(5) != b"%PDF-":
+            raise IRDocumentCaptureError("exact IR response bytes are not a PDF")
+    _promote_raw(run_root, request.blob_root, entry)
+    target = _blob_path(request.blob_root, digest)
+    return ExactIRFetchResult(
+        requested_url=request.exact_url,
+        final_url=_required_final_url(entry),
+        content_sha256=digest,
+        byte_size=_required_size(entry),
+        media_type=_required_media_type(entry),
+        observed_at=entry.observed_at,
+        retrieved_at=entry.retrieved_at,
+        storage_uri=target.resolve().as_uri(),
+        network_fetched=network_fetched,
+    )
+
+
 class _RawCandidate(_ClosedModel):
     url: str
     link_text: str

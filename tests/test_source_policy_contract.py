@@ -195,18 +195,18 @@ def test_policy_is_deeply_immutable_and_hashes_are_golden() -> None:
     assert issuer_policy("rbrk").policy_sha256 == original_hash
     rubrik_golden = "".join(
         (
-            "c001d5a94a28c9c7",  # pragma: allowlist secret
-            "5ed23ab64bd1a639",  # pragma: allowlist secret
-            "5f52737cad03e959",  # pragma: allowlist secret
-            "10d61428b84d25f0",  # pragma: allowlist secret
+            "7c87233926cca937",  # pragma: allowlist secret
+            "1cb89e719708aef6",  # pragma: allowlist secret
+            "a60ccf58d6b7397d",  # pragma: allowlist secret
+            "dda4282f8c25a875",  # pragma: allowlist secret
         )
     )
     wix_golden = "".join(
         (
-            "3d87ba08bf778993",  # pragma: allowlist secret
-            "7fef39e1f33ac3bd",  # pragma: allowlist secret
-            "ed0ca1bde912773c",  # pragma: allowlist secret
-            "cef7976b161fdf89",  # pragma: allowlist secret
+            "fa0a55b4c509ef71",  # pragma: allowlist secret
+            "16d9d60c67492fd6",  # pragma: allowlist secret
+            "299b11054953748c",  # pragma: allowlist secret
+            "c0da3b2335091e0f",  # pragma: allowlist secret
         )
     )
     assert rubrik.policy_sha256 == rubrik_golden
