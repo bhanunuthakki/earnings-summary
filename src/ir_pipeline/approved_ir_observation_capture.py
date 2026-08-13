@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import importlib
 import json
 import urllib.error
 import urllib.parse
@@ -64,6 +65,51 @@ _RUBRIK_IMPORT_PERIODS = (
     date(2025, 4, 30),
 )
 _CaptureT = TypeVar("_CaptureT")
+
+
+class _PlaywrightResponse(Protocol):
+    status: int
+
+
+class _PlaywrightPage(Protocol):
+    url: str
+
+    def goto(self, url: str, *, wait_until: str, timeout: int) -> _PlaywrightResponse | None: ...
+
+    def wait_for_timeout(self, timeout: int) -> None: ...
+
+
+class _PlaywrightContext(Protocol):
+    def new_page(self) -> _PlaywrightPage: ...
+
+
+class _PlaywrightBrowser(Protocol):
+    def new_context(self, *, user_agent: str, service_workers: str) -> _PlaywrightContext: ...
+
+    def close(self) -> None: ...
+
+
+class _ChromiumRuntime(Protocol):
+    def launch(self, *, headless: bool, args: list[str]) -> _PlaywrightBrowser: ...
+
+
+class _PlaywrightRuntime(Protocol):
+    chromium: _ChromiumRuntime
+
+
+class _PlaywrightManager(Protocol):
+    def __enter__(self) -> _PlaywrightRuntime: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object | None,
+    ) -> None: ...
+
+
+class _SyncPlaywrightFactory(Protocol):
+    def __call__(self) -> _PlaywrightManager: ...
 
 
 class ApprovedIrObservationCaptureError(ValueError):
@@ -291,7 +337,13 @@ class PlaywrightApprovedIrBrowser:
         timeout_ms: int,
         capture: Callable[[Any], _CaptureT],
     ) -> _CaptureT:
-        from playwright.sync_api import sync_playwright
+        module = importlib.import_module("playwright.sync_api")
+        factory_value = getattr(module, "sync_playwright", None)
+        if not callable(factory_value):
+            raise ApprovedIrObservationCaptureError(
+                "Playwright sync browser runtime is unavailable"
+            )
+        sync_playwright = cast(_SyncPlaywrightFactory, factory_value)
 
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
