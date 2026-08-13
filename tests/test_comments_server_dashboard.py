@@ -133,7 +133,9 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # packet band's read-only doorway). +1 post-earnings readout generation action.
     # +2 governed Copilot proposal routes; -3 retired compatibility routes
     # (/api/ask, /api/cockpit, /api/cron-health). +1 lazy shared-reader stylesheet.
-    assert len(rules) == 157
+    # +1 governed IR owner-decision action route.
+    assert len(rules) == 158
+    assert rules["ir_approval_action"] == ("/api/ir-approval/candidates/<candidate_id>/<action>")
     assert {
         endpoint: rules[endpoint]
         for endpoint in (

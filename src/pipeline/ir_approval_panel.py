@@ -304,8 +304,59 @@ def _render_candidate(candidate: IrCandidateReview) -> str:
     policy_tone = (
         "k-pill-ok" if candidate.policy_state is IrCandidatePolicyState.CURRENT else "k-pill-bad"
     )
+    candidate_id = escape(candidate.candidate_id, quote=True)
+    action_disabled = candidate.policy_state is IrCandidatePolicyState.STALE
+    approve_disabled = action_disabled or candidate.current_decision_action in {
+        DecisionAction.APPROVE,
+        DecisionAction.SELECT_EXACT,
+    }
+    reject_disabled = action_disabled or candidate.current_decision_action is DecisionAction.REJECT
+    disabled_reason = (
+        "Current issuer policy no longer authorizes this candidate"
+        if action_disabled
+        else "This is already the current owner decision"
+    )
+
+    def action_button(
+        action: DecisionAction,
+        label: str,
+        classes: str,
+        *,
+        disabled: bool,
+        title: str,
+    ) -> str:
+        disabled_attribute = " disabled" if disabled else ""
+        return (
+            f'<button type="button" class="k-btn {classes} k-btn-sm" '
+            f'data-ir-approval-action="{action.value}" '
+            f'data-ir-candidate-id="{candidate_id}" title="{escape(title, quote=True)}"'
+            f"{disabled_attribute}>{escape(label)}</button>"
+        )
+
+    approve_button = action_button(
+        DecisionAction.APPROVE,
+        "Approve",
+        "k-btn-quiet",
+        disabled=approve_disabled,
+        title=disabled_reason if approve_disabled else "Approve this policy-current candidate",
+    )
+    reject_button = action_button(
+        DecisionAction.REJECT,
+        "Reject",
+        "k-btn-danger",
+        disabled=reject_disabled,
+        title=disabled_reason if reject_disabled else "Reject this candidate with an owner reason",
+    )
+    selection_button = action_button(
+        DecisionAction.SELECT_EXACT,
+        "Select exact",
+        "k-btn-quiet",
+        disabled=True,
+        title="Unavailable until captured document bytes have a server-owned hash",
+    )
     return (
-        '<article class="k-well k-card-stack" style="min-width:0;">'
+        '<article class="k-well k-card-stack" style="min-width:0;" '
+        f'data-ir-approval-candidate="{candidate_id}">'
         '<div class="k-toolbar">'
         f"<div>{ticker_label(candidate.ticker, candidate.title)}"
         f'<div class="k-card-meta">Reporting period {candidate.quarter_end.isoformat()}</div></div>'
@@ -341,12 +392,74 @@ def _render_candidate(candidate: IrCandidateReview) -> str:
         '<dt class="k-label">Selected content hash</dt>'
         '<dd style="min-width:0;overflow-wrap:anywhere;">'
         f"<code>{escape(selected_hash)}</code></dd>"
-        "</dl></article>"
+        "</dl>"
+        f'<label class="k-label" for="ir-approval-reason-{candidate_id}">Owner reason</label>'
+        f'<textarea id="ir-approval-reason-{candidate_id}" data-ir-approval-reason '
+        'rows="2" maxlength="4096" placeholder="Required for every owner decision"></textarea>'
+        '<div class="k-toolbar-controls">'
+        f"{approve_button}{reject_button}{selection_button}</div>"
+        '<div class="k-card-meta" role="status" aria-live="polite" '
+        "data-ir-approval-receipt></div>"
+        "</article>"
     )
 
 
+_IR_APPROVAL_ACTIONS_SCRIPT = r"""
+<script>
+(function () {
+  if (window.__irApprovalActionsBound) return;
+  window.__irApprovalActionsBound = true;
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('[data-ir-approval-action]');
+    if (!button || button.disabled) return;
+    var card = button.closest('[data-ir-approval-candidate]');
+    if (!card || card.getAttribute('aria-busy') === 'true') return;
+    var reasonField = card.querySelector('[data-ir-approval-reason]');
+    var receipt = card.querySelector('[data-ir-approval-receipt]');
+    var reason = reasonField ? reasonField.value.trim() : '';
+    if (!reason) {
+      if (receipt) receipt.textContent = 'Owner reason is required.';
+      if (reasonField) reasonField.focus();
+      return;
+    }
+    var candidate = button.getAttribute('data-ir-candidate-id');
+    var action = button.getAttribute('data-ir-approval-action');
+    var actionButtons = Array.prototype.slice.call(
+      card.querySelectorAll('[data-ir-approval-action]')
+    );
+    var previouslyEnabled = actionButtons.filter(function (control) { return !control.disabled; });
+    card.setAttribute('aria-busy', 'true');
+    actionButtons.forEach(function (control) { control.disabled = true; });
+    if (receipt) receipt.textContent = 'Recording owner decision…';
+    fetch('/api/ir-approval/candidates/' + encodeURIComponent(candidate) + '/' +
+          encodeURIComponent(action), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reason: reason})
+    }).then(function (response) {
+      return response.json().then(function (payload) {
+        return {ok: response.ok, payload: payload};
+      });
+    }).then(function (result) {
+      if (!result.ok) throw new Error(result.payload.error || 'Owner decision was not recorded');
+      var panel = document.querySelector('[data-ir-approval-panel="review-queue"]');
+      if (panel && result.payload.panel_html) panel.outerHTML = result.payload.panel_html;
+      var refreshed = document.querySelector('[data-ir-approval-candidate="' + candidate + '"]');
+      var refreshedReceipt = refreshed && refreshed.querySelector('[data-ir-approval-receipt]');
+      if (refreshedReceipt) refreshedReceipt.textContent = result.payload.receipt;
+    }).catch(function (error) {
+      card.removeAttribute('aria-busy');
+      previouslyEnabled.forEach(function (control) { control.disabled = false; });
+      if (receipt) receipt.textContent = error.message;
+    });
+  });
+}());
+</script>
+"""
+
+
 def render_ir_approval_panel(view: IrApprovalReviewView) -> str:
-    """Render a truthful, inert owner-review queue using the canonical UI kit."""
+    """Render the owner-review queue and policy-gated decision controls."""
 
     if view.state is IrApprovalPanelState.UNAVAILABLE:
         content = (
@@ -368,11 +481,12 @@ def render_ir_approval_panel(view: IrApprovalReviewView) -> str:
         'aria-labelledby="ir-approval-review-title">'
         '<div class="k-toolbar"><div>'
         '<h3 class="k-card-title" id="ir-approval-review-title">IR document review queue</h3>'
-        '<div class="k-card-meta">Read-only · immutable owner decisions and exact selections</div>'
+        '<div class="k-card-meta">Owner-governed · immutable decisions</div>'
         "</div></div>"
-        "<p>Review candidate identity and the current owner decision. "
-        "Review actions are not enabled on this read-only surface.</p>"
-        f"{content}</section>"
+        "<p>Approve or reject policy-current candidates with a reason. Exact selection remains "
+        "unavailable until captured document bytes have a server-owned hash; the catalog "
+        "observation hash is not a document-byte identity.</p>"
+        f"{content}</section>{_IR_APPROVAL_ACTIONS_SCRIPT}"
     )
 
 

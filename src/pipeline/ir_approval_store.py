@@ -407,6 +407,19 @@ def _select_candidate(connection: sqlite3.Connection, candidate_id: str) -> IrCa
     return None if row is None else _candidate_from_row(row)
 
 
+def get_candidate(connection: sqlite3.Connection, candidate_id: str) -> IrCandidate | None:
+    """Return one immutable candidate by its validated content identity."""
+
+    _validate_sha256(candidate_id)
+    return _select_candidate(connection, candidate_id)
+
+
+def authorize_current_candidate(candidate: IrCandidate) -> None:
+    """Fail closed unless an immutable candidate still matches current issuer policy."""
+
+    _current_policy(candidate)
+
+
 def _current_policy(candidate: IrCandidate) -> IssuerAcquisitionPolicy:
     try:
         policy = issuer_policy(candidate.issuer_id)
@@ -726,6 +739,8 @@ __all__ = [
     "IrDecisionRequest",
     "VerifiedIrAdmission",
     "append_decision",
+    "authorize_current_candidate",
+    "get_candidate",
     "get_current_decision",
     "persist_candidate",
     "verify_admission",
