@@ -7,11 +7,13 @@ import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import pytest
 from alembic.config import Config
+from pydantic import ValidationError
 
 from alembic import command
 from execution import fetch_sec_xbrl as fetch_sec_xbrl_execution
@@ -38,6 +40,20 @@ ISSUER_ID = "issuer-acme"
 SOURCE_URL = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{CIK}.json"
 ACCESSION_ONE = "0000000001-26-000001"
 ACCESSION_TWO = "0000000001-26-000002"
+
+
+class _AdvancingClock:
+    def __init__(self, step_ns: int = 1_000_000) -> None:
+        self._now = 0
+        self._step_ns = step_ns
+
+    def __call__(self) -> int:
+        current = self._now
+        self._now += self._step_ns
+        return current
+
+    def advance(self, duration_ns: int) -> None:
+        self._now += duration_ns
 
 
 def _config(path: Path) -> Config:
@@ -492,9 +508,49 @@ def test_current_schema_companyfacts_fact_admission_is_ordered(
 
     monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", _fetch)
     try:
-        stats = ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path)
+        receipts: list[sec_xbrl.SecIngestTimingReceipt] = []
+        stats = ingest_for_ticker(
+            conn,
+            ticker="ACME",
+            project_root=tmp_path,
+            timing_sink=receipts.append,
+            monotonic_ns=_AdvancingClock(),
+        )
 
         assert stats.facts_inserted == 2
+        assert receipts == [stats.timing]
+        assert stats.timing is not None
+        assert stats.timing.outcome == "success"
+        assert stats.timing.failed_phase is None
+        assert stats.timing.total_ms > 0
+        phase_values = stats.timing.phases.model_dump()
+        assert all(value > 0 for value in phase_values.values())
+        receipt_payload = stats.timing.model_dump(mode="json")
+
+        def _keys(value: object) -> set[str]:
+            found: set[str] = set()
+            if isinstance(value, dict):
+                mapping = cast("dict[object, object]", value)
+                for key, item in mapping.items():
+                    found.add(str(key))
+                    found.update(_keys(item))
+            if isinstance(value, list):
+                for item in cast("list[object]", value):
+                    found.update(_keys(item))
+            return found
+
+        receipt_keys = _keys(receipt_payload)
+        for forbidden in (
+            "source_url",
+            "cik",
+            "raw_body",
+            "file_path",
+            "digest",
+            "accession",
+            "locator",
+            "value",
+        ):
+            assert forbidden not in receipt_keys
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
             "0010_add_rehearsal_io_indexes"
         )
@@ -743,8 +799,22 @@ def test_current_schema_companyfacts_match_failure_rolls_back_atomically(
         _reject,
     )
     try:
+        receipts: list[sec_xbrl.SecIngestTimingReceipt] = []
         with pytest.raises(ValueError, match="forced exact-match rejection"):
-            ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path)
+            ingest_for_ticker(
+                conn,
+                ticker="ACME",
+                project_root=tmp_path,
+                timing_sink=receipts.append,
+                monotonic_ns=_AdvancingClock(),
+            )
+        assert len(receipts) == 1
+        receipt = receipts[0]
+        assert receipt.outcome == "failed"
+        assert receipt.failed_phase == "fact_admission"
+        assert receipt.phases.http_fetch_ms > 0
+        assert receipt.phases.commit_ms == 0
+        assert "forced exact-match rejection" not in receipt.model_dump_json()
         for table in (
             "documents",
             "financial_facts",
@@ -756,6 +826,90 @@ def test_current_schema_companyfacts_match_failure_rolls_back_atomically(
         ):
             assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        conn.close()
+
+
+def test_sec_ingest_timing_receipt_rejects_negative_and_unknown_fields() -> None:
+    durations = {
+        "http_fetch_ms": 1.0,
+        "payload_parse_ms": 1.0,
+        "snapshot_registration_ms": 1.0,
+        "accession_mapping_ms": 1.0,
+        "document_evidence_capture_ms": 1.0,
+        "tag_selection_ms": 1.0,
+        "fact_persistence_restatement_ms": 1.0,
+        "evidence_capture_resolution_ms": 1.0,
+        "commit_ms": 1.0,
+        "latest_cache_publish_ms": 1.0,
+    }
+    with pytest.raises(ValidationError):
+        sec_xbrl.SecIngestPhaseDurations.model_validate({**durations, "http_fetch_ms": -1.0})
+    with pytest.raises(ValidationError):
+        sec_xbrl.SecIngestPhaseDurations.model_validate({**durations, "unexpected_ms": 1.0})
+    valid_phases = sec_xbrl.SecIngestPhaseDurations.model_validate(durations)
+    with pytest.raises(ValidationError, match="failed_phase"):
+        sec_xbrl.SecIngestTimingReceipt(
+            ticker="ACME",
+            outcome="failed",
+            failed_phase=None,
+            total_ms=10,
+            phases=valid_phases,
+        )
+
+
+def test_companyfacts_selection_failure_keeps_elapsed_timing_and_rolls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: object,
+) -> None:
+    database_path = tmp_path / "selection-failure.db"
+    assert callable(migrated_db)
+    migrated_db(database_path, target="head")
+    conn = sqlite3.connect(database_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    _seed_issuer_identity(conn)
+    payload = json.loads(_body())
+    entries = payload["facts"]["us-gaap"]["Revenues"]["units"]["USD"]
+    entries[1].update(entries[0])
+    entries[1]["val"] = 999
+    raw_body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    monkeypatch.setitem(sec_xbrl.CIK_MAP, "ACME", CIK)
+
+    def _fetch(_cik: str) -> FetchedCompanyFacts:
+        return FetchedCompanyFacts(
+            source_url=SOURCE_URL,
+            raw_body=raw_body,
+            observed_at=STAMP - timedelta(seconds=1),
+            retrieved_at=STAMP,
+        )
+
+    monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", _fetch)
+    receipts: list[sec_xbrl.SecIngestTimingReceipt] = []
+    try:
+        with pytest.raises(ValueError, match="identical SEC chronology"):
+            ingest_for_ticker(
+                conn,
+                ticker="ACME",
+                project_root=tmp_path,
+                timing_sink=receipts.append,
+                monotonic_ns=_AdvancingClock(),
+            )
+        assert len(receipts) == 1
+        receipt = receipts[0]
+        assert receipt.outcome == "failed"
+        assert receipt.failed_phase == "fact_admission"
+        assert receipt.phases.tag_selection_ms > 0
+        assert receipt.phases.commit_ms == 0
+        for table in (
+            "documents",
+            "financial_facts",
+            "legacy_document_evidence_binding_revisions",
+            "reported_observations",
+        ):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         conn.close()
@@ -927,7 +1081,41 @@ def test_current_schema_companyfacts_amendment_preserves_chronology(
     monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", _fetch)
     try:
         ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path)
-        ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path)
+        clock = _AdvancingClock()
+        record_restatement = sec_xbrl.record_restatement_observation
+
+        def _slow_restatement_observation(
+            connection: sqlite3.Connection,
+            *,
+            fact_table: str,
+            superseded_id: int,
+            new_value: object,
+            user_id: str = "bhanu",
+            observed_at: str | None = None,
+        ) -> int | None:
+            clock.advance(50_000_000)
+            return record_restatement(
+                connection,
+                fact_table=fact_table,
+                superseded_id=superseded_id,
+                new_value=new_value,
+                user_id=user_id,
+                observed_at=observed_at,
+            )
+
+        monkeypatch.setattr(
+            sec_xbrl,
+            "record_restatement_observation",
+            _slow_restatement_observation,
+        )
+        second = ingest_for_ticker(
+            conn,
+            ticker="ACME",
+            project_root=tmp_path,
+            monotonic_ns=clock,
+        )
+        assert second.timing is not None
+        assert second.timing.phases.fact_persistence_restatement_ms >= 50
 
         rows = conn.execute(
             "SELECT fact.id, fact.value, fact.supersedes_id, fact.locator, "

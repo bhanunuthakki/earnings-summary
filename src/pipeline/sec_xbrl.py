@@ -45,6 +45,7 @@ import logging
 import os
 import sqlite3
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -1014,10 +1015,70 @@ def _resolve_fiscal_period_type(
     return None
 
 
+SecIngestFailedPhase = Literal[
+    "http_fetch",
+    "payload_parse",
+    "snapshot_registration",
+    "accession_mapping",
+    "document_evidence_capture",
+    "fact_admission",
+    "commit",
+    "latest_cache_publish",
+]
+FactAdmissionTimingPhase = Literal[
+    "tag_selection",
+    "fact_persistence_restatement",
+    "evidence_capture_resolution",
+]
+
+
+class SecIngestPhaseDurations(BaseModel):
+    """Non-overlapping wall-clock durations for one CompanyFacts ingest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    http_fetch_ms: float = Field(ge=0)
+    payload_parse_ms: float = Field(ge=0)
+    snapshot_registration_ms: float = Field(ge=0)
+    accession_mapping_ms: float = Field(ge=0)
+    document_evidence_capture_ms: float = Field(ge=0)
+    tag_selection_ms: float = Field(ge=0)
+    fact_persistence_restatement_ms: float = Field(ge=0)
+    evidence_capture_resolution_ms: float = Field(ge=0)
+    commit_ms: float = Field(ge=0)
+    latest_cache_publish_ms: float = Field(ge=0)
+
+
+class SecIngestTimingReceipt(BaseModel):
+    """One structured phase receipt emitted on success and failure."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["sec_companyfacts_ingest_timing.v1"] = (
+        "sec_companyfacts_ingest_timing.v1"
+    )
+    ticker: str = Field(min_length=1, max_length=32)
+    outcome: Literal["success", "failed"]
+    failed_phase: SecIngestFailedPhase | None = None
+    total_ms: float = Field(ge=0)
+    phases: SecIngestPhaseDurations
+
+    @model_validator(mode="after")
+    def _validate_outcome_phase(self) -> Self:
+        if (self.outcome == "success") != (self.failed_phase is None):
+            raise ValueError("failed_phase must be set exactly when outcome is failed")
+        return self
+
+
 @dataclass(frozen=True)
 class IngestStats:
     accessions_inserted: int
     facts_inserted: int
+    timing: SecIngestTimingReceipt | None = None
+
+
+def _elapsed_ms(duration_ns: int) -> float:
+    return round(max(0, duration_ns) / 1_000_000, 3)
 
 
 def _modal_currency(units: dict[str, object], kind: LadderKind) -> str | None:
@@ -1140,6 +1201,9 @@ def insert_facts_from_companyfacts(
     accession_to_doc_id: dict[str, int],
     run_id: str = "sec_xbrl_ingest",
     snapshot_root: Path | None = None,
+    timing_sink: Callable[[FactAdmissionTimingPhase, int], None] | None = None,
+    timing_phase_started: Callable[[FactAdmissionTimingPhase], None] | None = None,
+    monotonic_ns: Callable[[], int] = time.perf_counter_ns,
 ) -> int:
     """Walk TAG_LADDERS; insert financial_facts, first rung winning per period.
 
@@ -1176,6 +1240,9 @@ def insert_facts_from_companyfacts(
     fye_month = _infer_fye_month(payload)
     inserted = 0
     for ladder in TAG_LADDERS:
+        if timing_phase_started is not None:
+            timing_phase_started("tag_selection")
+        selection_started_ns = monotonic_ns() if timing_sink is not None else 0
         # (period_end, fiscal_period_type) -> rung index that claimed it.
         # A key claimed by an earlier rung is invisible to later rungs, so the
         # pick is deterministic regardless of payload ordering.
@@ -1332,41 +1399,66 @@ def insert_facts_from_companyfacts(
                                     )
                                 continue
                         chosen[wkey] = pending
+        if timing_sink is not None:
+            timing_sink("tag_selection", max(0, monotonic_ns() - selection_started_ns))
         # Ladder walk complete: emit each provenance 5-tuple's deterministic
         # winner exactly once. sorted() fixes the insertion order independent of
         # dict/payload iteration, so row ids and restatement observations are
         # reproducible run to run.
         for wkey in sorted(chosen):
             pf = chosen[wkey]
-            new_id, superseded_id = insert_with_restatement_detection(
-                conn,
-                ticker=ticker,
-                period_end=pf.period_end,
-                fiscal_period_type=pf.fiscal_period_type,
-                line_item=ladder.line_item,
-                value=pf.value,
-                currency=pf.currency,
-                unit=pf.unit,
-                source_doc_id=pf.source_doc_id,
-                confidence=score_confidence(
-                    tier=tier_for_source_type(SourceType.SEC_XBRL),
-                    extracted_by="sec_xbrl",
-                ),
-                extracted_by="sec_xbrl",
-                locator=pf.locator_json,
-                before_resolve=before_resolve,
-            )
-            if new_id is not None:
-                inserted += 1
-            # L10: a SEC restatement of an earlier filing grades the old fact's
-            # confidence — capture it (best-effort), don't discard.
-            if superseded_id is not None:
-                _ = record_restatement_observation(
+            evidence_resolution_ns = 0
+
+            def _record_evidence_resolution(duration_ns: int) -> None:
+                nonlocal evidence_resolution_ns
+                evidence_resolution_ns += duration_ns
+                if timing_sink is not None:
+                    timing_sink("evidence_capture_resolution", duration_ns)
+
+            if timing_phase_started is not None:
+                timing_phase_started("fact_persistence_restatement")
+            persistence_started_ns = monotonic_ns() if timing_sink is not None else 0
+            try:
+                new_id, superseded_id = insert_with_restatement_detection(
                     conn,
-                    fact_table=FINANCIAL_FACTS,
-                    superseded_id=superseded_id,
-                    new_value=pf.value,
+                    ticker=ticker,
+                    period_end=pf.period_end,
+                    fiscal_period_type=pf.fiscal_period_type,
+                    line_item=ladder.line_item,
+                    value=pf.value,
+                    currency=pf.currency,
+                    unit=pf.unit,
+                    source_doc_id=pf.source_doc_id,
+                    confidence=score_confidence(
+                        tier=tier_for_source_type(SourceType.SEC_XBRL),
+                        extracted_by="sec_xbrl",
+                    ),
+                    extracted_by="sec_xbrl",
+                    locator=pf.locator_json,
+                    before_resolve=before_resolve,
+                    evidence_resolution_timing_sink=(
+                        _record_evidence_resolution if timing_sink is not None else None
+                    ),
+                    monotonic_ns=monotonic_ns,
                 )
+                if new_id is not None:
+                    inserted += 1
+                # L10: a SEC restatement of an earlier filing grades the old fact's
+                # confidence — capture it (best-effort), don't discard.
+                if superseded_id is not None:
+                    _ = record_restatement_observation(
+                        conn,
+                        fact_table=FINANCIAL_FACTS,
+                        superseded_id=superseded_id,
+                        new_value=pf.value,
+                    )
+            finally:
+                if timing_sink is not None:
+                    total_fact_ns = max(0, monotonic_ns() - persistence_started_ns)
+                    timing_sink(
+                        "fact_persistence_restatement",
+                        max(0, total_fact_ns - evidence_resolution_ns),
+                    )
     return inserted
 
 
@@ -1465,115 +1557,260 @@ def ingest_for_ticker(
     ticker: str,
     project_root: Path,
     run_id: str = "sec_xbrl_ingest",
+    timing_sink: Callable[[SecIngestTimingReceipt], None] | None = None,
+    monotonic_ns: Callable[[], int] = time.perf_counter_ns,
 ) -> IngestStats:
     """End-to-end: fetch + immutable capture + documents + financial facts.
 
     ``run_id`` flows to the unit sanity guard (see
     :func:`insert_facts_from_companyfacts`); the fetch driver passes its
     ingestion-run id so any UNIT_MISMATCH ties back to the run that raised it."""
-    cik = CIK_MAP.get(ticker.upper())
-    if cik is None:
-        raise ValueError(f"No CIK registered for {ticker}; add to CIK_MAP")
-    fetched = fetch_companyfacts(cik)
+    normalized_ticker = ticker.upper()
+    started_ns = monotonic_ns()
+    durations_ns = {
+        "http_fetch": 0,
+        "payload_parse": 0,
+        "snapshot_registration": 0,
+        "accession_mapping": 0,
+        "document_evidence_capture": 0,
+        "tag_selection": 0,
+        "fact_persistence_restatement": 0,
+        "evidence_capture_resolution": 0,
+        "commit": 0,
+        "latest_cache_publish": 0,
+    }
+    active_phase: SecIngestFailedPhase = "http_fetch"
+    transaction_started = False
+
+    def _record_phase(phase: str, duration_ns: int) -> None:
+        durations_ns[phase] += max(0, duration_ns)
+
+    def _receipt(
+        outcome: Literal["success", "failed"],
+        failed_phase: SecIngestFailedPhase | None,
+    ) -> SecIngestTimingReceipt:
+        return SecIngestTimingReceipt(
+            ticker=normalized_ticker,
+            outcome=outcome,
+            failed_phase=failed_phase,
+            total_ms=_elapsed_ms(monotonic_ns() - started_ns),
+            phases=SecIngestPhaseDurations(
+                http_fetch_ms=_elapsed_ms(durations_ns["http_fetch"]),
+                payload_parse_ms=_elapsed_ms(durations_ns["payload_parse"]),
+                snapshot_registration_ms=_elapsed_ms(durations_ns["snapshot_registration"]),
+                accession_mapping_ms=_elapsed_ms(durations_ns["accession_mapping"]),
+                document_evidence_capture_ms=_elapsed_ms(durations_ns["document_evidence_capture"]),
+                tag_selection_ms=_elapsed_ms(durations_ns["tag_selection"]),
+                fact_persistence_restatement_ms=_elapsed_ms(
+                    durations_ns["fact_persistence_restatement"]
+                ),
+                evidence_capture_resolution_ms=_elapsed_ms(
+                    durations_ns["evidence_capture_resolution"]
+                ),
+                commit_ms=_elapsed_ms(durations_ns["commit"]),
+                latest_cache_publish_ms=_elapsed_ms(durations_ns["latest_cache_publish"]),
+            ),
+        )
+
+    def _publish(receipt: SecIngestTimingReceipt) -> None:
+        if timing_sink is None:
+            return
+        try:
+            timing_sink(receipt)
+        except Exception as exc:  # pragma: no cover - observability must not break ingest
+            log.warning(
+                {
+                    "event": "sec_companyfacts_timing_sink_failed",
+                    "ticker": normalized_ticker,
+                    "error_type": type(exc).__name__,
+                }
+            )
+
     try:
-        validated_payload = parse_companyfacts_body(
-            fetched.raw_body,
-            expected_cik=cik,
-        )
-    except CompanyFactsContractError as exc:
-        quarantine_path = _quarantine_contract_failure(
-            project_root=project_root,
-            ticker=ticker,
-            raw_body=fetched.raw_body,
-        )
-        raise CompanyFactsContractError(
-            str(exc),
-            raw_response_path=quarantine_path,
-        ) from None
-    payload = _validated_legacy_payload(validated_payload)
-    digest = hashlib.sha256(fetched.raw_body).hexdigest()
-    supported_accessions = supported_companyfacts_accessions(validated_payload)
-    evidence_binding_ready = _has_table(
-        conn,
-        "legacy_document_evidence_binding_revisions",
-    )
-    exact_match_ready = _has_table(
-        conn,
-        "legacy_fact_evidence_match_revisions",
-    ) and _has_table(conn, "fact_observation_match_proofs")
-    post_cutover_trigger = _has_trigger(
-        conn,
-        "trg_financial_facts_observation_insert",
-    )
-    if post_cutover_trigger and not evidence_binding_ready:
-        raise RuntimeError(
-            "SEC CompanyFacts ingestion requires migration "
-            "0231_legacy_document_evidence_bindings after fact cutover"
-        )
-    try:
-        snapshot_registration = _register_companyfacts_snapshot_document(
-            conn,
-            ticker=ticker,
-            digest=digest,
-            normalized_cik=cik,
-            raw_body=fetched.raw_body,
-            snapshot_root=project_root / "data" / "historical" / "sec" / "snapshots",
-            fetched_at=fetched.retrieved_at,
-        )
+        cik = CIK_MAP.get(normalized_ticker)
+        if cik is None:
+            raise ValueError(f"No CIK registered for {ticker}; add to CIK_MAP")
+
+        fetch_started_ns = monotonic_ns()
+        try:
+            fetched = fetch_companyfacts(cik)
+        finally:
+            _record_phase("http_fetch", monotonic_ns() - fetch_started_ns)
+
+        active_phase = "payload_parse"
+        parse_started_ns = monotonic_ns()
+        try:
+            try:
+                validated_payload = parse_companyfacts_body(
+                    fetched.raw_body,
+                    expected_cik=cik,
+                )
+            except CompanyFactsContractError as exc:
+                quarantine_path = _quarantine_contract_failure(
+                    project_root=project_root,
+                    ticker=ticker,
+                    raw_body=fetched.raw_body,
+                )
+                raise CompanyFactsContractError(
+                    str(exc),
+                    raw_response_path=quarantine_path,
+                ) from None
+            payload = _validated_legacy_payload(validated_payload)
+            digest = hashlib.sha256(fetched.raw_body).hexdigest()
+            supported_accessions = supported_companyfacts_accessions(validated_payload)
+            evidence_binding_ready = _has_table(
+                conn,
+                "legacy_document_evidence_binding_revisions",
+            )
+            exact_match_ready = _has_table(
+                conn,
+                "legacy_fact_evidence_match_revisions",
+            ) and _has_table(conn, "fact_observation_match_proofs")
+            post_cutover_trigger = _has_trigger(
+                conn,
+                "trg_financial_facts_observation_insert",
+            )
+            if post_cutover_trigger and not evidence_binding_ready:
+                raise RuntimeError(
+                    "SEC CompanyFacts ingestion requires migration "
+                    "0231_legacy_document_evidence_bindings after fact cutover"
+                )
+        finally:
+            _record_phase("payload_parse", monotonic_ns() - parse_started_ns)
+
+        transaction_started = True
+        active_phase = "snapshot_registration"
+        snapshot_started_ns = monotonic_ns()
+        try:
+            snapshot_registration = _register_companyfacts_snapshot_document(
+                conn,
+                ticker=ticker,
+                digest=digest,
+                normalized_cik=cik,
+                raw_body=fetched.raw_body,
+                snapshot_root=project_root / "data" / "historical" / "sec" / "snapshots",
+                fetched_at=fetched.retrieved_at,
+            )
+        finally:
+            _record_phase("snapshot_registration", monotonic_ns() - snapshot_started_ns)
         snapshot_document_id = snapshot_registration.document_id
+
+        active_phase = "accession_mapping"
+        mapping_started_ns = monotonic_ns()
         accession_to_doc_id = {
             accession: snapshot_document_id for accession in sorted(supported_accessions)
         }
-        if evidence_binding_ready:
-            canonical_issuer = IssuerRegistry(conn).resolve_identifier(
-                "sec_cik",
-                cik,
-                knowledge_at=fetched.retrieved_at,
+        _record_phase("accession_mapping", monotonic_ns() - mapping_started_ns)
+
+        active_phase = "document_evidence_capture"
+        evidence_capture_started_ns = monotonic_ns()
+        try:
+            if evidence_binding_ready:
+                canonical_issuer = IssuerRegistry(conn).resolve_identifier(
+                    "sec_cik",
+                    cik,
+                    knowledge_at=fetched.retrieved_at,
+                )
+                capture_sec_companyfacts(
+                    conn,
+                    SecCompanyFactsCaptureRequest(
+                        ticker=ticker,
+                        normalized_cik=cik,
+                        issuer_id=canonical_issuer.issuer_id,
+                        source_url=fetched.source_url,
+                        raw_body=fetched.raw_body,
+                        payload=validated_payload,
+                        snapshot_document_id=snapshot_document_id,
+                        blob_root=(project_root / "data" / "historical" / "sec" / "snapshots"),
+                        observed_at=fetched.observed_at,
+                        retrieved_at=fetched.retrieved_at,
+                    ),
+                )
+            else:
+                log.warning(
+                    {
+                        "event": "sec_companyfacts_legacy_provenance_path",
+                        "ticker": normalized_ticker,
+                        "reason": "evidence_binding_schema_not_installed",
+                    }
+                )
+        finally:
+            _record_phase(
+                "document_evidence_capture",
+                monotonic_ns() - evidence_capture_started_ns,
             )
-            capture_sec_companyfacts(
+
+        active_phase = "fact_admission"
+        active_fact_phase: FactAdmissionTimingPhase = "tag_selection"
+
+        def _mark_fact_phase(phase: FactAdmissionTimingPhase) -> None:
+            nonlocal active_fact_phase
+            active_fact_phase = phase
+
+        fact_admission_started_ns = monotonic_ns()
+        try:
+            facts_inserted = insert_facts_from_companyfacts(
                 conn,
-                SecCompanyFactsCaptureRequest(
-                    ticker=ticker,
-                    normalized_cik=cik,
-                    issuer_id=canonical_issuer.issuer_id,
-                    source_url=fetched.source_url,
-                    raw_body=fetched.raw_body,
-                    payload=validated_payload,
-                    snapshot_document_id=snapshot_document_id,
-                    blob_root=project_root / "data" / "historical" / "sec" / "snapshots",
-                    observed_at=fetched.observed_at,
-                    retrieved_at=fetched.retrieved_at,
+                ticker=ticker,
+                payload=payload,
+                accession_to_doc_id=accession_to_doc_id,
+                run_id=run_id,
+                snapshot_root=(
+                    project_root / "data" / "historical" / "sec" / "snapshots"
+                    if exact_match_ready
+                    else None
                 ),
+                timing_sink=_record_phase,
+                timing_phase_started=_mark_fact_phase,
+                monotonic_ns=monotonic_ns,
             )
-        else:
-            log.warning(
-                {
-                    "event": "sec_companyfacts_legacy_provenance_path",
-                    "ticker": ticker.upper(),
-                    "reason": "evidence_binding_schema_not_installed",
-                }
+        except Exception:
+            fact_admission_elapsed_ns = max(0, monotonic_ns() - fact_admission_started_ns)
+            recorded_fact_ns = sum(
+                durations_ns[phase]
+                for phase in (
+                    "tag_selection",
+                    "fact_persistence_restatement",
+                    "evidence_capture_resolution",
+                )
             )
-        facts_inserted = insert_facts_from_companyfacts(
-            conn,
-            ticker=ticker,
-            payload=payload,
-            accession_to_doc_id=accession_to_doc_id,
-            run_id=run_id,
-            snapshot_root=(
-                project_root / "data" / "historical" / "sec" / "snapshots"
-                if exact_match_ready
-                else None
-            ),
-        )
-        conn.commit()
+            _record_phase(
+                active_fact_phase,
+                max(0, fact_admission_elapsed_ns - recorded_fact_ns),
+            )
+            raise
+
+        active_phase = "commit"
+        commit_started_ns = monotonic_ns()
+        try:
+            conn.commit()
+        finally:
+            _record_phase("commit", monotonic_ns() - commit_started_ns)
+        transaction_started = False
+
+        active_phase = "latest_cache_publish"
+        cache_started_ns = monotonic_ns()
+        try:
+            latest_cache = (
+                project_root
+                / "data"
+                / "historical"
+                / "sec"
+                / f"{normalized_ticker}_companyfacts.json"
+            )
+            _atomic_write_bytes(latest_cache, fetched.raw_body)
+        finally:
+            _record_phase("latest_cache_publish", monotonic_ns() - cache_started_ns)
     except Exception:
-        conn.rollback()
+        if transaction_started:
+            conn.rollback()
+        _publish(_receipt("failed", active_phase))
         raise
-    latest_cache = (
-        project_root / "data" / "historical" / "sec" / f"{ticker.upper()}_companyfacts.json"
-    )
-    _atomic_write_bytes(latest_cache, fetched.raw_body)
+
+    timing = _receipt("success", None)
+    _publish(timing)
     return IngestStats(
         accessions_inserted=(len(supported_accessions) if snapshot_registration.created else 0),
         facts_inserted=facts_inserted,
+        timing=timing,
     )

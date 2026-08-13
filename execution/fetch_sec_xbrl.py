@@ -51,6 +51,7 @@ from pipeline.sec_xbrl import (  # noqa: E402
     NO_SEC_FILERS,
     IngestStats,
     SecCompanyFactsAuthenticationDeniedError,
+    SecIngestTimingReceipt,
     ingest_for_ticker,
 )
 from pipeline.source_policy import (  # noqa: E402
@@ -69,6 +70,22 @@ def _integer_stat(row: dict[str, object], key: str) -> int:
     if not isinstance(value, int):
         raise TypeError(f"SEC XBRL result field {key!r} is not an integer")
     return value
+
+
+def emit_ingest_timing(receipt: SecIngestTimingReceipt, *, run_id: str) -> None:
+    """Emit one redaction-safe phase receipt without changing stdout."""
+
+    sys.stderr.write(
+        json.dumps(
+            {
+                "event": "sec_xbrl_ingest_timing",
+                "run_id": run_id,
+                **receipt.model_dump(mode="json"),
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 def flag_silent_staleness(conn: sqlite3.Connection, ticker: str) -> bool:
@@ -227,7 +244,14 @@ def main() -> int:
                 time.sleep(_PER_TICKER_DELAY_S)
             try:
                 stats = ingest_for_ticker(
-                    conn, ticker=ticker, project_root=PROJECT_ROOT, run_id=run_id
+                    conn,
+                    ticker=ticker,
+                    project_root=PROJECT_ROOT,
+                    run_id=run_id,
+                    timing_sink=lambda receipt: emit_ingest_timing(
+                        receipt,
+                        run_id=run_id,
+                    ),
                 )
             except SecCompanyFactsAuthenticationDeniedError as e:
                 rows.append(
