@@ -1,337 +1,480 @@
-"""execution/fetch_macro_series.py — populate the macro_series table.
+"""Acquire macro series without bypassing provider governance.
 
-Iterates the 12-series registry in src/macro_series.py, tries each series'
-provider candidates in order, and upserts whatever rows come back into
-macro_series. Idempotent: re-fetches the same date overwrite the prior
-value rather than duplicating.
-
-Failure modes — none of these raise; each just logs + skips:
-  - missing FMP_API_KEY        → all series logged as skipped
-  - endpoint 4xx/5xx           → that provider candidate skipped, next tried
-  - empty response             → next candidate tried
-  - rate-limited (429)         → backs off to single-threaded with sleeps
-  - response shape unexpected  → parsed loosely; rows with unparseable date
-                                 silently dropped
-
-CLI:
-    python execution/fetch_macro_series.py                # all 12
-    python execution/fetch_macro_series.py --series fed_funds,vix
-    python execution/fetch_macro_series.py --dry-run      # no DB writes
-
-Exit code 0 if at least one series populated rows; 1 if every series failed
-(the spec says success ≥ 6 of 12; the script only signals all-failed).
+Yahoo candidates are timeout bounded. FMP candidates are deliberately disabled
+until macro work is admitted by the shared FMP circuit/budget/recovery service;
+this job never calls FMP directly. All values are validated in memory and then
+committed in one short, value-change-aware transaction.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import logging
-import os
+import math
+import queue
+import sqlite3
 import sys
+import threading
 import time
-from datetime import date
+from collections.abc import Callable
+from datetime import UTC, date, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
+
+from pydantic import BaseModel, ConfigDict
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from log_redact import redact as _redact  # noqa: E402
-from macro_series import REGISTRY, ProviderSpec, SeriesSpec  # noqa: E402
-from macro_store import upsert_series_value  # noqa: E402
-from net.client import (  # noqa: E402
-    DEFAULT_FMP_BASE_URL,
-    FMP_CLIENT,
-    HttpCallError,
-    HttpErrorKind,
-    JsonShape,
+from log_redact import redact  # noqa: E402
+from macro_series import REGISTRY, ProviderSpec  # noqa: E402
+from macro_store import (  # noqa: E402
+    SeriesBatchWriteError,
+    SeriesValue,
+    SeriesWriteReceipt,
+    latest_series_value,
+    upsert_series_value,
+    upsert_series_values,
 )
-from runtime.secrets import load_project_env  # noqa: E402
+from net.client import DEFAULT_FMP_BASE_URL  # noqa: E402
+from sources import registry as source_calls  # noqa: E402
 
-load_project_env(PROJECT_ROOT)
-FMP_API_KEY = os.environ.get("FMP_API_KEY")
+
+class AttemptOutcome(StrEnum):
+    OK = "ok"
+    EMPTY = "empty"
+    TIMEOUT = "timeout"
+    ERROR = "error"
+    DISABLED = "disabled"
+
+
+class SeriesAvailability(StrEnum):
+    FRESH = "fresh"
+    CACHED_DEGRADED = "cached_degraded"
+    UNAVAILABLE = "unavailable"
+
+
+class RefreshStatus(StrEnum):
+    FRESH = "fresh"
+    CACHED_DEGRADED = "cached_degraded"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class _ReceiptModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class ProviderAttempt(_ReceiptModel):
+    source: str
+    provider: str
+    outcome: AttemptOutcome
+    reason: str | None = None
+    latency_ms: int | None = None
+    rows: int = 0
+
+
+class SeriesReceipt(_ReceiptModel):
+    series_id: str
+    availability: SeriesAvailability
+    rows_acquired: int
+    cached_through: date | None = None
+    cache_age_days: int | None = None
+    attempts: tuple[ProviderAttempt, ...]
+
+
+class WriteReceipt(_ReceiptModel):
+    inserted: int
+    updated: int
+    unchanged: int
+
+
+class MacroRefreshReceipt(_ReceiptModel):
+    status: RefreshStatus
+    compute_eligible: bool
+    series: tuple[SeriesReceipt, ...]
+    write: WriteReceipt
+    store_error: str | None = None
+
+
+YFinanceLoader = Callable[..., list[tuple[date, float]]]
+DEFAULT_TIMEOUT_SECONDS = 12.0
+MAX_CACHED_AGE_DAYS = 45
 FMP_STABLE = DEFAULT_FMP_BASE_URL
 
-log = logging.getLogger("fetch_macro_series")
+
+def _resolve_url(provider: ProviderSpec) -> str:
+    """Compatibility resolver; URL construction does not authorize a call."""
+    if provider.path.startswith(("http://", "https://")):
+        return provider.path
+    return f"{FMP_STABLE}/{provider.path}"
 
 
-def _sync_db_path(repo_root: Path) -> None:
-    """Re-point the db module + macro_store DB target at the caller's repo."""
+def _fetch_json(provider: ProviderSpec, *, sleep_seconds: float = 0.0) -> None:
+    """Fail-closed compatibility seam: macro FMP calls belong to recovery."""
+    del provider, sleep_seconds
+
+
+def _extract_rows(payload: object, provider: ProviderSpec) -> list[dict[str, Any]]:
+    if provider.row_field and isinstance(payload, dict):
+        inner = cast("dict[str, object]", payload).get(provider.row_field)
+        if not isinstance(inner, list):
+            return []
+        typed_inner = cast("list[object]", inner)
+        return [cast("dict[str, Any]", item) for item in typed_inner if isinstance(item, dict)]
+    if isinstance(payload, list):
+        typed_payload = cast("list[object]", payload)
+        return [cast("dict[str, Any]", item) for item in typed_payload if isinstance(item, dict)]
+    return []
+
+
+def _yfinance_rows(provider: ProviderSpec, *, dry_run: bool, series_id: str) -> int:
+    """Legacy focused-test seam; production uses the bounded batch path."""
+    from factor_proxies import fetch_proxy_series
+
+    rows = fetch_proxy_series(provider.path)
+    if dry_run:
+        return len(rows)
+    return sum(
+        upsert_series_value(
+            series_id=series_id,
+            rate_date=rate_date,
+            value=value * provider.scale,
+            source=provider.source,
+        )
+        is not None
+        for rate_date, value in rows
+    )
+
+
+def _populate_one_series(series: Any, *, dry_run: bool, sleep_seconds: float) -> int:
+    """Legacy parser-test seam; production routes through :func:`refresh_series`."""
+    for provider in series.providers:
+        if provider.kind == "yfinance":
+            count = _yfinance_rows(provider, dry_run=dry_run, series_id=series.series_id)
+            if count:
+                return count
+            continue
+        payload = _fetch_json(provider, sleep_seconds=sleep_seconds)
+        rows = _extract_rows(payload, provider)
+        valid = [
+            row
+            for row in rows
+            if isinstance(row.get(provider.date_key), str)
+            and isinstance(row.get(provider.value_key), (int, float))
+        ]
+        if valid and dry_run:
+            return len(valid)
+    return 0
+
+
+def _sync_db_path(repo_root: Path) -> Path:
+    """Re-point repository DB helpers at a caller-selected root."""
     import db
 
     db.PROJECT_ROOT = str(repo_root)
     db.DATA_DIR = str(repo_root / "data")
     db.DB_PATH = str(repo_root / "data" / "portfolio.db")
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
+    path = repo_root / "data" / "portfolio.db"
+    source_calls.set_db_path(path)
+    return path
 
 
-def _resolve_url(provider: ProviderSpec) -> str:
-    # All macro providers are on /stable (treasury-rates, economic-indicators,
-    # historical-price-eod/full). The legacy /api/v3 `historical-price-full`
-    # fallbacks were retired in the v3->stable migration (they 403 as "Legacy
-    # Endpoint" for non-legacy accounts). A fully-qualified URL is honoured
-    # verbatim; every other path is a /stable endpoint name.
-    if provider.path.startswith(("http://", "https://")):
-        return provider.path
-    return f"{FMP_STABLE}/{provider.path}"
+def _default_yfinance_loader(symbol: str, *, timeout_seconds: float) -> list[tuple[date, float]]:
+    import yfinance as yf  # type: ignore[import-untyped]
 
-
-def _fetch_json(provider: ProviderSpec, *, sleep_seconds: float = 0.0) -> object | None:
-    if not FMP_API_KEY:
-        log.warning({"event": "macro_no_api_key", "series_path": provider.path})
-        return None
-    params = dict(provider.params)
-    url = _resolve_url(provider)
-    if sleep_seconds > 0:
-        time.sleep(sleep_seconds)
-    try:
-        response = FMP_CLIENT.get_url_json(
-            url,
-            params=params,
-            api_key=FMP_API_KEY,
-            expected=JsonShape.ANY,
+    history = (
+        cast("Any", yf)
+        .Ticker(symbol)
+        .history(
+            period="2y",
+            interval="1d",
+            auto_adjust=True,
+            timeout=timeout_seconds,
         )
-    except HttpCallError as exc:
-        if exc.kind is HttpErrorKind.RATE_LIMIT:
-            log.warning({"event": "macro_rate_limited", "url": url, "status": exc.status_code})
-            return "RATE_LIMITED"
-        log.info(
-            {
-                "event": "macro_fetch_error",
-                "url": url,
-                "status": exc.status_code,
-                "error": str(exc),
-            }
-        )
-        return None
-    return response.payload
+    )
+    stamps: list[Any] = history.index.tolist()
+    closes: list[Any] = history["Close"].tolist()
+    rows: list[tuple[date, float]] = []
+    for stamp, close in zip(stamps, closes, strict=False):
+        raw_date = stamp.date() if hasattr(stamp, "date") else date.fromisoformat(str(stamp)[:10])
+        if isinstance(raw_date, datetime):
+            raw_date = raw_date.date()
+        rows.append((raw_date, float(close)))
+    return rows
 
 
-def _extract_rows(payload: object, provider: ProviderSpec) -> list[dict[str, Any]]:
-    """Pull the row-list out of FMP's various response shapes."""
-    if payload is None:
-        return []
-    if provider.row_field:
-        if isinstance(payload, dict):
-            inner = cast("dict[str, object]", payload).get(provider.row_field)
-            if isinstance(inner, list):
-                return [r for r in cast("list[Any]", inner) if isinstance(r, dict)]
-        return []
-    if isinstance(payload, list):
-        return [r for r in cast("list[Any]", payload) if isinstance(r, dict)]
-    # Some endpoints return an object with `historical` key without our hint;
-    # try a best-effort fallback.
-    if isinstance(payload, dict):
-        for k in ("historical", "data", "rates", "values"):
-            inner = cast("dict[str, object]", payload).get(k)
-            if isinstance(inner, list):
-                return [r for r in cast("list[Any]", inner) if isinstance(r, dict)]
-    return []
+def _bounded_yfinance_call(
+    loader: YFinanceLoader,
+    symbol: str,
+    *,
+    timeout_seconds: float,
+) -> tuple[AttemptOutcome, list[tuple[date, float]], int, str | None]:
+    result: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            result.put((True, loader(symbol, timeout_seconds=timeout_seconds)))
+        except Exception as exc:  # provider boundary: converted to typed receipt
+            result.put((False, exc))
+
+    started = time.monotonic()
+    worker = threading.Thread(target=invoke, daemon=True, name=f"macro-yf-{symbol}")
+    worker.start()
+    worker.join(timeout_seconds)
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if worker.is_alive():
+        return AttemptOutcome.TIMEOUT, [], latency_ms, "timeout"
+    ok, payload = result.get_nowait()
+    if not ok:
+        return AttemptOutcome.ERROR, [], latency_ms, type(cast("Exception", payload)).__name__
+    rows = cast("list[tuple[date, float]]", payload)
+    return (AttemptOutcome.OK if rows else AttemptOutcome.EMPTY), rows, latency_ms, None
 
 
-def _parse_date(raw: object) -> date | None:
-    if raw is None:
-        return None
-    s = str(raw)
-    try:
-        return date.fromisoformat(s[:10])
-    except ValueError:
-        return None
-
-
-def _parse_float(raw: object) -> float | None:
-    if raw is None:
-        return None
-    try:
-        f = float(raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    # Filter NaN / inf so downstream regression isn't poisoned.
-    if f != f or f in (float("inf"), float("-inf")):
-        return None
-    return f
-
-
-def _yfinance_rows(provider: ProviderSpec, *, dry_run: bool, series_id: str) -> int:
-    """Fetch a yfinance provider (2026-07-19 review: FMP had been 429ing all
-    12 series daily). Reuses factor_proxies.fetch_proxy_series — the repo's
-    established offline-degrade yfinance reader — and applies the provider's
-    scale (e.g. ^TNX yield×10 → percent). Returns rows persisted; 0 = failed
-    (next candidate tried)."""
-    from factor_proxies import fetch_proxy_series
-
-    rows = fetch_proxy_series(provider.path)
-    n_written = 0
-    for d, v in rows:
-        value = v * provider.scale
-        if dry_run:
-            n_written += 1
-            continue
-        row_id = upsert_series_value(
-            series_id=series_id,
-            rate_date=d,
+def _validate_rows(
+    rows: list[tuple[date, float]], provider: ProviderSpec, *, today: date
+) -> tuple[SeriesValue, ...]:
+    staged: dict[date, SeriesValue] = {}
+    for rate_date, raw_value in rows:
+        value = float(raw_value) * provider.scale
+        if rate_date > today or not math.isfinite(value) or value <= 0:
+            raise ValueError("provider returned an implausible macro value")
+        point = SeriesValue(
+            series_id="__pending__",
+            rate_date=rate_date,
             value=value,
             source=provider.source,
         )
-        if row_id is not None:
-            n_written += 1
-    return n_written
+        prior = staged.get(rate_date)
+        if prior is not None and prior.value != point.value:
+            raise ValueError("provider returned conflicting duplicate dates")
+        staged[rate_date] = point
+    return tuple(staged[key] for key in sorted(staged))
 
 
-def _populate_one_series(series: SeriesSpec, *, dry_run: bool, sleep_seconds: float) -> int:
-    """Try each provider in order. Returns the number of rows persisted (0
-    means every candidate failed for this series)."""
-    for provider in series.providers:
-        if provider.kind == "yfinance":
-            n_yf = _yfinance_rows(provider, dry_run=dry_run, series_id=series.series_id)
-            if n_yf > 0:
-                log.info(
-                    {
-                        "event": "macro_series_populated",
-                        "series_id": series.series_id,
-                        "provider": provider.path,
-                        "source": provider.source,
-                        "rows": n_yf,
-                        "dry_run": dry_run,
-                    }
-                )
-                return n_yf
-            continue
-        payload = _fetch_json(provider, sleep_seconds=sleep_seconds)
-        if payload == "RATE_LIMITED":
-            # Spec: switch to single-threaded with sleeps if rate limited.
-            time.sleep(2.0)
-            payload = _fetch_json(provider, sleep_seconds=sleep_seconds + 1.0)
-        if payload is None:
-            continue
-        rows = _extract_rows(payload, provider)
-        if not rows:
-            continue
-        n_written = 0
-        for raw in rows:
-            d = _parse_date(raw.get(provider.date_key))
-            v = _parse_float(raw.get(provider.value_key))
-            if d is None or v is None:
-                continue
-            if dry_run:
-                n_written += 1
-                continue
-            row_id = upsert_series_value(
-                series_id=series.series_id,
-                rate_date=d,
-                value=v,
-                source=provider.source,
-            )
-            if row_id is not None:
-                n_written += 1
-        if n_written > 0:
-            log.info(
-                {
-                    "event": "macro_series_populated",
-                    "series_id": series.series_id,
-                    "provider": provider.path,
-                    "rows": n_written,
-                    "dry_run": dry_run,
-                }
-            )
-            return n_written
-    log.warning(
-        {
-            "event": "macro_series_empty",
-            "series_id": series.series_id,
-            "tried": len(series.providers),
-        }
-    )
-    return 0
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--series",
-        help="Comma-separated series_ids. Omit for all 12.",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Parse but don't write to DB.")
-    parser.add_argument(
-        "--sleep",
-        type=float,
-        default=0.0,
-        help="Seconds to sleep between requests (raise on rate limit).",
-    )
-    parser.add_argument(
-        "--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root containing data/."
-    )
-    parser.add_argument("--verbose", "-v", action="store_true")
-    args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    _sync_db_path(args.repo_root.resolve())
-
-    if args.series:
-        ids = [s.strip() for s in args.series.split(",") if s.strip()]
-        missing = [sid for sid in ids if sid not in REGISTRY]
-        if missing:
-            print(f"Unknown series ids: {missing}", file=sys.stderr)
-            return 2
-    else:
-        ids = list(REGISTRY.keys())
-
-    if not FMP_API_KEY:
-        print(
-            "Warning: FMP_API_KEY not set in .env — every series will be skipped.", file=sys.stderr
-        )
-
-    summary: dict[str, int] = {}
-    for sid in ids:
-        spec = REGISTRY[sid]
-        n = _populate_one_series(spec, dry_run=args.dry_run, sleep_seconds=args.sleep)
-        summary[sid] = n
-
-    populated = sum(1 for n in summary.values() if n > 0)
-    total = len(summary)
-    print(json.dumps({"populated": populated, "total": total, "per_series": summary}, indent=2))
-    if populated == 0 and not args.dry_run:
-        _fire_deadman(args.repo_root.resolve(), tried=total)
-    return 0 if populated > 0 else 1
-
-
-def _fire_deadman(repo_root: Path, *, tried: int) -> None:
-    """The 'data_feed_stale' dead-man (0183): a full run that populated ZERO
-    series is an outage, not a quiet day — the 2026-07 incident had every FMP
-    series 429ing daily with "populated": 0 in a cron log nobody reads while
-    betas silently recomputed off frozen series. One book-level alert per day,
-    signature-deduped; never raises into the run it watches."""
+def _fmp_disabled_reason(db_path: Path) -> str:
     try:
-        from datetime import UTC, datetime
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT state FROM provider_circuit_state WHERE provider='fmp'"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return "circuit_unverified"
+    if row is None:
+        return "circuit_unverified"
+    state = str(row[0]).upper()
+    if state == "OPEN":
+        return "circuit_open"
+    if state == "HALF_OPEN":
+        return "circuit_half_open"
+    return "shared_recovery_only"
 
-        from alerts import store as alerts_store
 
-        db_path = repo_root / "data" / "portfolio.db"
-        now = datetime.now(UTC).replace(tzinfo=None)
-        sig = alerts_store.compute_signature_sha(
-            "data_feed_stale", "PORTFOLIO", {"feed": "macro_series", "date": now.date().isoformat()}
+def _source_call(attempt: ProviderAttempt, series_id: str) -> source_calls.PendingSourceCall:
+    status = {
+        AttemptOutcome.OK: source_calls.CallStatus.OK,
+        AttemptOutcome.EMPTY: source_calls.CallStatus.NOT_FOUND,
+        AttemptOutcome.DISABLED: source_calls.CallStatus.SKIPPED,
+        AttemptOutcome.TIMEOUT: source_calls.CallStatus.ERROR,
+        AttemptOutcome.ERROR: source_calls.CallStatus.ERROR,
+    }[attempt.outcome]
+    return source_calls.PendingSourceCall(
+        source_name=attempt.source,
+        kind=f"macro_series:{series_id}",
+        ticker=None,
+        status=status,
+        latency_ms=attempt.latency_ms,
+        record_count=attempt.rows,
+        notes=f"{attempt.provider}: {attempt.reason}" if attempt.reason else attempt.provider,
+    )
+
+
+def refresh_series(
+    *,
+    series_ids: tuple[str, ...],
+    db_path: Path,
+    yfinance_loader: YFinanceLoader = _default_yfinance_loader,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    now: datetime | None = None,
+    dry_run: bool = False,
+) -> MacroRefreshReceipt:
+    """Finish acquisition first, then persist all staged values atomically."""
+    if timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive")
+    stamp = now or datetime.now(UTC).replace(tzinfo=None)
+    today = stamp.date()
+    staged: list[SeriesValue] = []
+    raw_receipts: list[tuple[str, tuple[ProviderAttempt, ...], int, date | None]] = []
+    call_receipts: list[source_calls.PendingSourceCall] = []
+
+    fmp_reason = _fmp_disabled_reason(db_path)
+    for series_id in series_ids:
+        spec = REGISTRY[series_id]
+        attempts: list[ProviderAttempt] = []
+        acquired = 0
+        newest_acquired: date | None = None
+        for provider in spec.providers:
+            if provider.kind != "yfinance":
+                attempt = ProviderAttempt(
+                    source="FMP",
+                    provider=provider.path,
+                    outcome=AttemptOutcome.DISABLED,
+                    reason=fmp_reason,
+                )
+                attempts.append(attempt)
+                call_receipts.append(_source_call(attempt, series_id))
+                continue
+            outcome, rows, latency_ms, reason = _bounded_yfinance_call(
+                yfinance_loader,
+                provider.path,
+                timeout_seconds=timeout_seconds,
+            )
+            validated: tuple[SeriesValue, ...] = ()
+            if outcome is AttemptOutcome.OK:
+                try:
+                    pending = _validate_rows(rows, provider, today=today)
+                    validated = tuple(
+                        SeriesValue(
+                            series_id=series_id,
+                            rate_date=item.rate_date,
+                            value=item.value,
+                            source=item.source,
+                        )
+                        for item in pending
+                    )
+                except ValueError as exc:
+                    outcome = AttemptOutcome.ERROR
+                    reason = redact(exc)
+            attempt = ProviderAttempt(
+                source="yfinance",
+                provider=provider.path,
+                outcome=outcome,
+                reason=reason,
+                latency_ms=latency_ms,
+                rows=len(validated),
+            )
+            attempts.append(attempt)
+            call_receipts.append(_source_call(attempt, series_id))
+            if validated:
+                staged.extend(validated)
+                acquired = len(validated)
+                newest_acquired = validated[-1].rate_date
+                break
+        raw_receipts.append((series_id, tuple(attempts), acquired, newest_acquired))
+
+    write = SeriesWriteReceipt(inserted=0, updated=0, unchanged=0)
+    store_error: str | None = None
+    if staged and not dry_run:
+        try:
+            write = upsert_series_values(tuple(staged), db_path=db_path)
+        except SeriesBatchWriteError as exc:
+            store_error = redact(exc)
+    if not dry_run:
+        source_calls.set_db_path(db_path)
+        source_calls.log_calls_batch(call_receipts)
+
+    series_receipts: list[SeriesReceipt] = []
+    for series_id, raw_attempts, acquired, newest_acquired in raw_receipts:
+        cached = latest_series_value(series_id=series_id, db_path=db_path)
+        persisted_date = cached.rate_date if cached is not None else None
+        effective_date = persisted_date
+        if (
+            dry_run
+            and newest_acquired is not None
+            and (effective_date is None or newest_acquired > effective_date)
+        ):
+            effective_date = newest_acquired
+        age = (today - effective_date).days if effective_date is not None else None
+        acquired_age = (today - newest_acquired).days if newest_acquired is not None else None
+        acquired_is_fresh = (
+            acquired > 0 and acquired_age is not None and 0 <= acquired_age <= MAX_CACHED_AGE_DAYS
         )
-        if alerts_store.find_by_signature(signature_sha=sig, db_path=db_path) is not None:
-            return
-        alerts_store.fire_alert(
-            ticker="PORTFOLIO",
-            trigger_kind="data_feed_stale",
-            fired_at=now,
-            evidence_json=json.dumps(
-                {"feed": "macro_series", "series_tried": tried, "populated": 0}
-            ),
-            signature_sha=sig,
-            db_path=db_path,
+        effective_is_fresh = age is not None and 0 <= age <= MAX_CACHED_AGE_DAYS
+        if acquired_is_fresh and effective_is_fresh and store_error is None:
+            availability = SeriesAvailability.FRESH
+        elif cached is not None and effective_is_fresh:
+            availability = SeriesAvailability.CACHED_DEGRADED
+        else:
+            availability = SeriesAvailability.UNAVAILABLE
+        series_receipts.append(
+            SeriesReceipt(
+                series_id=series_id,
+                availability=availability,
+                rows_acquired=acquired,
+                cached_through=effective_date,
+                cache_age_days=age,
+                attempts=raw_attempts,
+            )
         )
-        log.warning({"event": "macro_deadman_fired", "series_tried": tried})
-    except Exception as exc:
-        log.warning({"event": "macro_deadman_failed", "error": _redact(exc)})
+
+    available = sum(
+        item.availability is not SeriesAvailability.UNAVAILABLE for item in series_receipts
+    )
+    fresh = sum(item.availability is SeriesAvailability.FRESH for item in series_receipts)
+    if store_error is not None or available == 0:
+        status = RefreshStatus.FAILED
+    elif available < len(series_receipts):
+        status = RefreshStatus.PARTIAL
+    elif fresh == len(series_receipts):
+        status = RefreshStatus.FRESH
+    else:
+        status = RefreshStatus.CACHED_DEGRADED
+    return MacroRefreshReceipt(
+        status=status,
+        compute_eligible=status in {RefreshStatus.FRESH, RefreshStatus.CACHED_DEGRADED},
+        series=tuple(series_receipts),
+        write=WriteReceipt(
+            inserted=write.inserted,
+            updated=write.updated,
+            unchanged=write.unchanged,
+        ),
+        store_error=store_error,
+    )
+
+
+def _exit_code(status: RefreshStatus) -> int:
+    return {
+        RefreshStatus.FRESH: 0,
+        RefreshStatus.CACHED_DEGRADED: 2,
+        RefreshStatus.PARTIAL: 3,
+        RefreshStatus.FAILED: 1,
+    }[status]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--series", help="Comma-separated series IDs; default is all")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    args = parser.parse_args(argv)
+    ids = (
+        tuple(item.strip() for item in args.series.split(",") if item.strip())
+        if args.series
+        else tuple(REGISTRY)
+    )
+    missing = tuple(item for item in ids if item not in REGISTRY)
+    if missing:
+        print(json.dumps({"event": "macro_unknown_series", "series_ids": missing}), file=sys.stderr)
+        return 1
+    db_path = _sync_db_path(args.repo_root.resolve())
+    receipt = refresh_series(
+        series_ids=ids,
+        db_path=db_path,
+        timeout_seconds=args.timeout_seconds,
+        dry_run=args.dry_run,
+    )
+    print(receipt.model_dump_json(indent=2))
+    return _exit_code(receipt.status)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

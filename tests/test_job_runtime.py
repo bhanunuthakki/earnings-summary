@@ -630,6 +630,8 @@ def test_run_job_writes_machine_readable_health(tmp_path: Path) -> None:
         ("refresh_cache", 2, "degraded_corpus", "warning"),
         ("refresh_cache", 3, "partial", "warning"),
         ("refresh_cache", 4, "failed", "error"),
+        ("fetch-macro-series", 2, "degraded_corpus", "warning"),
+        ("fetch-macro-series", 3, "partial", "warning"),
         ("unrelated_job", 2, "failed", "error"),
     ],
 )

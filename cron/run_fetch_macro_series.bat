@@ -1,12 +1,11 @@
 @echo off
-REM Daily 05:35 - populate macro_series (12-series FMP fetch) and recompute
+REM Daily 05:35 - populate macro_series (timeout-bounded Yahoo candidates;
+REM direct FMP macro calls disabled pending shared recovery admission) and recompute
 REM portfolio macro_sensitivities, the substrate of the next-dollar panel's
-REM macro tilt factor (directives/next_dollar_model.md). Scheduled right
-REM after the FMP daily quota reset (00:00 UTC = 05:30 local) and BEFORE
-REM fetch_fmp_earnings_calendar (05:45) + daily_fetch_and_brief (06:30)
-REM burn the day's request budget - the whole run is ~25 calls. The beta
-REM recompute is local CPU only (reads the cached price charts + the rows
-REM the fetch just wrote). Output: .tmp/cron_logs/fetch_macro_series_<TS>.log.
+REM macro tilt factor (directives/next_dollar_model.md). The local compute runs
+REM only after every requested series is fresh or explicitly cached-degraded;
+REM partial/failed acquisition preserves its warning/failure exit code. Output:
+REM .tmp/cron_logs/fetch_macro_series_<TS>.log.
 
 setlocal
 set PYTHONUTF8=1
@@ -22,8 +21,26 @@ set LOG_FILE=%LOG_DIR%\fetch_macro_series_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "fetch-macro-series" "portfolio-db" execution\fetch_macro_series.py > "%LOG_FILE%" 2>&1
+set "FETCH_RC=%ERRORLEVEL%"
+
+REM Only an all-series fresh or explicitly cached-degraded acquisition may feed
+REM the sensitivity compute. A partial/failed fetch must remain visible instead
+REM of being overwritten by a later successful compute exit code.
+if "%FETCH_RC%"=="0" goto compute
+if "%FETCH_RC%"=="2" goto compute
+set "RC=%FETCH_RC%"
+goto done
+
+:compute
 call "%PROJECT_ROOT%\cron\run_python.bat" "compute-macro-sensitivities" "portfolio-db" execution\compute_macro_sensitivities.py --portfolio >> "%LOG_FILE%" 2>&1
-set "RC=%ERRORLEVEL%"
+set "COMPUTE_RC=%ERRORLEVEL%"
+if not "%COMPUTE_RC%"=="0" (
+  set "RC=%COMPUTE_RC%"
+) else (
+  set "RC=%FETCH_RC%"
+)
+
+:done
 
 REM Propagate the job's exit code. Without this the script ended on
 REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded

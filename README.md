@@ -265,7 +265,7 @@ The six daily tasks feed the 06:30 brief. The transcript jobs run before the pro
 |---|---|---|---|
 | `backup_db` | Daily 02:45 | `cron/backup_db.py` | Consistent, sync-safe snapshot of `data/portfolio.db` via the SQLite online-backup API (safe while the DB is live) — Drive no longer backs the scratch tree |
 | `run_morning_pipeline` | Daily 04:00 | `execution/run_morning_pipeline.py --max-cost-usd 10` | Executes the typed 20-stage manifest in `src/pipeline/morning_manifest.py`: preflight; news and state reconciliation; fundamentals, DCF, fit, factor, risk, guard, and wealth materializations; triggers and standup; pre/post-earnings artifacts; feed; validation. Day + manifest-scoped atomic checkpoints resume only compatible successful stages. |
-| `fetch_macro_series` | Daily 05:35 | `execution/fetch_macro_series.py` then `compute_macro_sensitivities.py --portfolio` | Upserts the 12-series macro registry into `macro_series` (provider-candidate fallback, idempotent), then recomputes per-portfolio macro sensitivities |
+| `fetch_macro_series` | Daily 05:35 | `execution/fetch_macro_series.py` then conditionally `compute_macro_sensitivities.py --portfolio` | Upserts the 12-series macro registry from timeout-bounded Yahoo candidates (direct FMP macro calls disabled pending shared recovery admission); recomputes only when all requested series are fresh or explicitly cached-degraded within 45 days |
 
 ### Hourly catch-up
 

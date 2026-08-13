@@ -1,9 +1,11 @@
 """Macro-series registry — 12 macro slugs the scenario engine depends on.
 
-Each entry declares one OR more provider configs. The fetcher tries them in
-order; the first one that returns parseable rows wins. If all fail, the
-series is logged + skipped — the fetcher never raises and never blocks the
-rest of the universe.
+Each entry declares provider metadata in preference order. The macro job calls
+only timeout-bounded Yahoo candidates today. FMP entries remain declarative
+metadata for future admission through the shared FMP circuit/budget/recovery
+service; ``execution/fetch_macro_series.py`` never calls them directly. A
+series without a fresh or explicitly cached-degraded observation is unavailable
+and prevents the scheduled sensitivity recompute.
 
 Provider config shape:
     {
@@ -16,14 +18,10 @@ Provider config shape:
       "source":       label persisted in macro_series.source (default "FMP")
     }
 
-All providers are on FMP `/stable` (the legacy `/api/v3` `historical-price-full`
-fallbacks were retired in the v3->stable migration — they 403 as "Legacy
-Endpoint" for non-legacy accounts). A few symbols still live behind premium
-tiers (see the ^SOX note below); when a series' provider 402/403s it is logged
-+ skipped, fail-soft. The fetcher takes the first provider that parses; the
-registry enumerates candidates in priority order. Add a new fallback by
-extending the list (stable paths only); do NOT special-case in
-fetch_macro_series.py.
+All declared FMP providers use `/stable`; legacy `/api/v3` fallbacks remain
+retired. These entries are not authorization to issue a request. Add or enable
+an FMP macro source only through the shared recovery service, which owns circuit
+state, provider-call budgets, and durable backlog/receipts.
 """
 
 from __future__ import annotations
@@ -37,7 +35,7 @@ def _empty_params() -> dict[str, str]:
 
 @dataclass(slots=True, frozen=True)
 class ProviderSpec:
-    """One candidate endpoint for a series. Tried in order, first hit wins.
+    """One declared provider candidate for a series.
 
     ``kind="yfinance"`` (2026-07-19 review) is the free non-FMP provider: the
     daily FMP fetch had been 429ing on ALL 12 series for weeks ("populated": 0
@@ -46,6 +44,8 @@ class ProviderSpec:
     MELI+NU book) had ZERO rows ever. For yfinance providers ``path`` is the
     Yahoo symbol and ``scale`` multiplies each close (e.g. ^TNX quotes yield
     × 10, so scale=0.1 lands the series in percent like the FMP feed did).
+    FMP kinds are inactive metadata until shared-recovery admission; registry
+    order never bypasses that boundary.
     """
 
     kind: str
@@ -59,14 +59,13 @@ class ProviderSpec:
 
 
 def _yf(symbol: str, *, scale: float = 1.0) -> ProviderSpec:
-    """A yfinance provider candidate — listed FIRST so the free, working feed
-    wins and FMP demotes to fallback."""
+    """Build the timeout-bounded Yahoo candidate used by the macro job."""
     return ProviderSpec(kind="yfinance", path=symbol, source="yfinance", scale=scale)
 
 
 @dataclass(slots=True, frozen=True)
 class SeriesSpec:
-    """One macro series — its identity, what it measures, and where to fetch."""
+    """One macro series and its declarative provider metadata."""
 
     series_id: str
     display: str

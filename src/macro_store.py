@@ -26,6 +26,7 @@ math testable without setting up the schema.
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -42,6 +43,37 @@ class SeriesPoint:
     rate_date: date
     value: float
     source: str
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesValue:
+    """One validated value staged by a provider before database mutation."""
+
+    series_id: str
+    rate_date: date
+    value: float
+    source: str
+
+    def __post_init__(self) -> None:
+        if not self.series_id.strip():
+            raise ValueError("macro series_id is required")
+        if not self.source.strip():
+            raise ValueError("macro source is required")
+        if not math.isfinite(self.value):
+            raise ValueError("macro value must be finite")
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesWriteReceipt:
+    """Value-change-aware result of one atomic staged batch."""
+
+    inserted: int
+    updated: int
+    unchanged: int
+
+
+class SeriesBatchWriteError(RuntimeError):
+    """The staged macro batch could not be committed atomically."""
 
 
 @dataclass(slots=True)
@@ -119,36 +151,103 @@ def upsert_series_value(
 
     Re-fetches with a different value update the row rather than creating
     a duplicate (idempotent on the natural key)."""
+    try:
+        upsert_series_values(
+            (
+                SeriesValue(
+                    series_id=series_id,
+                    rate_date=rate_date,
+                    value=float(value),
+                    source=source,
+                ),
+            ),
+            db_path=db_path,
+        )
+    except (SeriesBatchWriteError, ValueError) as exc:
+        log.warning({"event": "macro_series_upsert_failed", "error": str(exc)})
+        return None
     conn = _open(db_path, expect_table="macro_series")
     if conn is None:
         return None
     try:
-        existing = conn.execute(
+        row = conn.execute(
             "SELECT id FROM macro_series WHERE series_id = ? AND rate_date = ?",
             (series_id, rate_date.isoformat()),
         ).fetchone()
-        now = datetime.now(UTC).isoformat()
-        if existing is not None:
-            conn.execute(
-                "UPDATE macro_series SET value = ?, source = ? WHERE id = ?",
-                (float(value), source, int(existing["id"])),
-            )
-            conn.commit()
-            return int(existing["id"])
-        cur = conn.execute(
-            """
-            INSERT INTO macro_series(series_id, rate_date, value, source, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (series_id, rate_date.isoformat(), float(value), source, now),
-        )
-        conn.commit()
-        return int(cur.lastrowid or 0)
-    except sqlite3.Error as exc:
-        log.warning({"event": "macro_series_upsert_failed", "error": str(exc)})
-        return None
+        return int(row["id"]) if row is not None else None
     finally:
         conn.close()
+
+
+def upsert_series_values(
+    values: tuple[SeriesValue, ...],
+    *,
+    db_path: Path | str | None = None,
+) -> SeriesWriteReceipt:
+    """Commit a validated batch in one short, value-change-aware transaction.
+
+    Providers must finish all network work before calling this function. Exact
+    replay does not issue an UPDATE, preserving both the row and its timestamp.
+    Any database error rolls the whole batch back and is surfaced to the caller.
+    """
+
+    keys = [(item.series_id, item.rate_date) for item in values]
+    if len(set(keys)) != len(keys):
+        raise ValueError("macro batch contains duplicate natural keys")
+    if not values:
+        return SeriesWriteReceipt(inserted=0, updated=0, unchanged=0)
+
+    conn = _open(db_path, expect_table="macro_series")
+    if conn is None:
+        raise SeriesBatchWriteError("macro_series table is unavailable")
+    inserted = 0
+    updated = 0
+    unchanged = 0
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        now = datetime.now(UTC).isoformat()
+        for item in values:
+            existing = conn.execute(
+                """
+                SELECT id,value,source FROM macro_series
+                WHERE series_id = ? AND rate_date = ?
+                """,
+                (item.series_id, item.rate_date.isoformat()),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO macro_series(series_id,rate_date,value,source,created_at)
+                    VALUES (?,?,?,?,?)
+                    """,
+                    (
+                        item.series_id,
+                        item.rate_date.isoformat(),
+                        float(item.value),
+                        item.source,
+                        now,
+                    ),
+                )
+                inserted += 1
+                continue
+            if (
+                float(existing["value"]) == float(item.value)
+                and str(existing["source"]) == item.source
+            ):
+                unchanged += 1
+                continue
+            conn.execute(
+                "UPDATE macro_series SET value = ?, source = ? WHERE id = ?",
+                (float(item.value), item.source, int(existing["id"])),
+            )
+            updated += 1
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise SeriesBatchWriteError(str(exc)) from exc
+    finally:
+        conn.close()
+    return SeriesWriteReceipt(inserted=inserted, updated=updated, unchanged=unchanged)
 
 
 def fetch_series(
