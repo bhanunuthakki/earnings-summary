@@ -277,7 +277,9 @@ def _production_runtime(generated_at: datetime) -> str:
 <script id="work-os-production-runtime">
   const WORK_OS_ENDPOINTS = {endpoint_json};
   const WORK_OS_LEGACY_HASHES = {legacy_hash_json};
-  const workOsRequests = new Map();
+  const workOsRequests = new WeakMap();
+  let workOsRequestGeneration = 0;
+  const WORK_OS_FETCH_TIMEOUT_MS = 15000;
   const originalNavigateTo = window.navigateTo;
   window.workOsActiveTicker = 'NU';
   let workOsPortfolioHydration = null;
@@ -340,6 +342,9 @@ def _production_runtime(generated_at: datetime) -> str:
     trapFocus: true, restoreFocus: true, motion: 'slide-right',
     group: 'work-os-drawer', closeId: 'drillDrawerClose', wireClose: false,
     onOpen: function () {{ drillDrawer.setAttribute('aria-hidden', 'false'); }},
+    onBeforeClose: function () {{
+      workOsAbortTarget(document.getElementById('drawerBody'), 'hidden');
+    }},
     onClose: function () {{ drillDrawer.setAttribute('aria-hidden', 'true'); originalCloseDrillDrawer(); }}
   }});
   const peekOverlay = peekDrawer && window.CCOverlay.register(peekDrawer, {{
@@ -1143,32 +1148,128 @@ def _production_runtime(generated_at: datetime) -> str:
     return base;
   }}
 
+  function workOsTrustedFragmentEndpoint(endpoint) {{
+    try {{
+      const url = new URL(endpoint, window.location.href);
+      return url.origin === window.location.origin && url.pathname.startsWith('/api/');
+    }} catch (_error) {{
+      return false;
+    }}
+  }}
+
+  function workOsMountHtml(target, markup, endpoint) {{
+    if (!workOsTrustedFragmentEndpoint(endpoint)) {{
+      throw new Error('Untrusted fragment endpoint');
+    }}
+    target.innerHTML = markup;
+    Array.from(target.querySelectorAll('script')).forEach(function (script) {{
+      if (script.src) {{
+        const scriptUrl = new URL(script.src, window.location.href);
+        const trusted = script.hasAttribute('data-work-os-trusted-script') &&
+          scriptUrl.origin === window.location.origin;
+        if (!trusted) {{
+          script.remove();
+          throw new Error('Untrusted fragment script source');
+        }}
+      }}
+      const replacement = document.createElement('script');
+      Array.from(script.attributes).forEach(function (attribute) {{
+        replacement.setAttribute(attribute.name, attribute.value);
+      }});
+      replacement.textContent = script.textContent;
+      script.replaceWith(replacement);
+    }});
+  }}
+  window.workOsMountHtml = workOsMountHtml;
+
+  function workOsLoadError(target, screenId, message) {{
+    target.innerHTML = '<div class="k-well k-well-warn" role="alert">' + message + ' ' +
+      '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-work-os-retry>Retry</button></div>';
+    target.dataset.workOsScreenId = screenId;
+  }}
+
+  function workOsTargetVisible(target) {{
+    return target.isConnected !== false &&
+      !(target.closest && target.closest('[hidden], [aria-hidden="true"]'));
+  }}
+
+  function workOsAbortTarget(target, reason) {{
+    if (!target) return;
+    const requestState = workOsRequests.get(target);
+    if (!requestState) return;
+    requestState.abortReason = reason;
+    window.clearTimeout(requestState.timeoutId);
+    requestState.controller.abort();
+    target.removeAttribute('aria-busy');
+    workOsRequests.delete(target);
+  }}
+
   async function workOsLoadScreen(screenId, target) {{
     const endpoint = workOsEndpoint(screenId);
-    if (!endpoint || !target) return;
-    const prior = workOsRequests.get(screenId);
-    if (prior) prior.abort();
+    if (!endpoint || !target || !workOsTargetVisible(target)) return;
+    const prior = workOsRequests.get(target);
+    if (prior) {{
+      prior.abortReason = 'superseded';
+      prior.controller.abort();
+      window.clearTimeout(prior.timeoutId);
+    }}
     const controller = new AbortController();
-    workOsRequests.set(screenId, controller);
+    const requestState = {{
+      controller: controller,
+      generation: ++workOsRequestGeneration,
+      abortReason: '',
+      timeoutId: 0
+    }};
+    requestState.timeoutId = window.setTimeout(function () {{
+      requestState.abortReason = 'timeout';
+      controller.abort();
+    }}, WORK_OS_FETCH_TIMEOUT_MS);
+    workOsRequests.set(target, requestState);
     target.setAttribute('aria-busy', 'true');
+    target.dataset.workOsScreenId = screenId;
     const status = document.getElementById('workOsLiveStatus');
     if (status) status.textContent = 'Loading live ' + screenId.replace('screen-', '') + ' data';
     try {{
       const response = await fetch(endpoint, {{ signal: controller.signal, headers: {{ Accept: 'text/html' }} }});
+      if (workOsRequests.get(target) !== requestState || !workOsTargetVisible(target)) return;
       if (!response.ok) throw new Error('HTTP ' + response.status);
-      target.innerHTML = await response.text();
+      const markup = await response.text();
+      if (workOsRequests.get(target) !== requestState || !workOsTargetVisible(target)) return;
+      workOsMountHtml(target, markup, endpoint);
       target.dataset.loadedEndpoint = endpoint;
-      if (window.htmx) window.htmx.process(target);
-      if (status) status.textContent = 'Live data loaded';
+      if (status) status.textContent = 'Live data fetched at ' + new Date().toLocaleTimeString();
     }} catch (error) {{
-      if (error && error.name === 'AbortError') return;
-      target.innerHTML = '<div class="k-well" role="alert">Live detail is temporarily unavailable. The screen summary remains usable.</div>';
-      if (status) status.textContent = 'Live data could not be loaded';
+      if (workOsRequests.get(target) !== requestState ||
+          requestState.abortReason === 'superseded' || requestState.abortReason === 'hidden') return;
+      const timedOut = requestState.abortReason === 'timeout';
+      workOsLoadError(
+        target,
+        screenId,
+        timedOut
+          ? 'Live detail timed out. The screen summary remains usable.'
+          : 'Live detail is temporarily unavailable. The screen summary remains usable.'
+      );
+      if (status) status.textContent = timedOut ? 'Live data timed out' : 'Live data could not be loaded';
     }} finally {{
-      target.removeAttribute('aria-busy');
-      if (workOsRequests.get(screenId) === controller) workOsRequests.delete(screenId);
+      window.clearTimeout(requestState.timeoutId);
+      if (workOsRequests.get(target) === requestState) {{
+        target.removeAttribute('aria-busy');
+        workOsRequests.delete(target);
+      }}
     }}
   }}
+  window.workOsLoadScreen = workOsLoadScreen;
+
+  document.addEventListener('click', function (event) {{
+    const retry = event.target && event.target.closest
+      ? event.target.closest('[data-work-os-retry]')
+      : null;
+    if (!retry) return;
+    const target = retry.closest('[data-work-os-screen-id]');
+    if (target && target.dataset.workOsScreenId) {{
+      workOsLoadScreen(target.dataset.workOsScreenId, target);
+    }}
+  }});
 
   function openLiveDetail(screenId) {{
     const endpoint = workOsEndpoint(screenId);

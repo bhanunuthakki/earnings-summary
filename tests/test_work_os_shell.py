@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -167,6 +169,108 @@ def test_work_os_shell_uses_live_backend_mounts_without_removing_old_endpoints()
     assert "workOsLoadScreen" in html
     assert "AbortController" in html
     assert 'aria-live="polite"' in html
+
+
+def test_live_backend_mount_executes_local_fragment_scripts_without_optional_htmx() -> None:
+    html = render_work_os_shell()
+
+    assert "window.workOsMountHtml" in html
+    assert "script.replaceWith(replacement)" in html
+    assert "workOsMountHtml(target, markup, endpoint)" in html
+    assert "window.htmx" not in html
+    assert "Live data loaded" not in html
+    assert "Live data fetched" in html
+    assert "const workOsRequests = new WeakMap()" in html
+    assert "WORK_OS_FETCH_TIMEOUT_MS = 15000" in html
+    assert "prior.abortReason = 'superseded'" in html
+    assert "Untrusted fragment script source" in html
+    assert "data-work-os-retry" in html
+    assert "workOsAbortTarget(document.getElementById('drawerBody'), 'hidden')" in html
+
+
+def test_live_loader_runtime_rejects_stale_completion_and_times_out() -> None:
+    node = shutil.which("node")
+    if node is None:
+        return
+    html = render_work_os_shell()
+    runtime = html.split("  function workOsTrustedFragmentEndpoint", 1)[1].split(
+        "  function openLiveDetail", 1
+    )[0]
+    runtime = "function workOsTrustedFragmentEndpoint" + runtime
+    harness = f"""
+const workOsRequests = new WeakMap();
+let workOsRequestGeneration = 0;
+const WORK_OS_FETCH_TIMEOUT_MS = 20;
+const WORK_OS_ENDPOINTS = {{'screen-a': '/api/a'}};
+function workOsEndpoint(screenId) {{ return WORK_OS_ENDPOINTS[screenId] || ''; }}
+const listeners = {{}};
+global.window = {{
+  location: new URL('http://127.0.0.1:7421/'), setTimeout, clearTimeout
+}};
+global.document = {{
+  createElement: () => ({{ attributes: [], setAttribute() {{}}, textContent: '', replaceWith() {{}} }}),
+  getElementById: () => null,
+  addEventListener: (name, fn) => {{ listeners[name] = fn; }}
+}};
+function target() {{
+  return {{
+    innerHTML: '', dataset: {{}}, attributes: {{}}, isConnected: true,
+    closest() {{ return null; }},
+    setAttribute(k, v) {{ this.attributes[k] = v; }},
+    removeAttribute(k) {{ delete this.attributes[k]; }},
+    querySelectorAll() {{ return []; }}
+  }};
+}}
+{runtime}
+(async () => {{
+  const pending = [];
+  global.fetch = (_url, options) => new Promise((resolve, reject) => {{
+    options.signal.addEventListener('abort', () => {{
+      const error = new Error('aborted'); error.name = 'AbortError'; reject(error);
+    }});
+    pending.push(resolve);
+  }});
+  const mount = target();
+  const first = workOsLoadScreen('screen-a', mount);
+  const second = workOsLoadScreen('screen-a', mount);
+  pending[1]({{ok:true, text:async()=>'<p>second</p>'}});
+  await second;
+  if (mount.innerHTML !== '<p>second</p>') throw new Error('second response not mounted');
+  pending[0]({{ok:true, text:async()=>'<p>stale</p>'}});
+  await first;
+  if (mount.innerHTML !== '<p>second</p>') throw new Error('stale response mounted');
+
+  global.fetch = (_url, options) => new Promise((_resolve, reject) => {{
+    options.signal.addEventListener('abort', () => {{
+      const error = new Error('aborted'); error.name = 'AbortError'; reject(error);
+    }});
+  }});
+  const timeoutMount = target();
+  await workOsLoadScreen('screen-a', timeoutMount);
+  if (!timeoutMount.innerHTML.includes('timed out') ||
+      !timeoutMount.innerHTML.includes('data-work-os-retry')) {{
+    throw new Error('timeout retry state missing');
+  }}
+
+  let hiddenAbort = 0;
+  global.fetch = (_url, options) => new Promise((_resolve, reject) => {{
+    options.signal.addEventListener('abort', () => {{
+      hiddenAbort += 1;
+      const error = new Error('aborted'); error.name = 'AbortError'; reject(error);
+    }});
+  }});
+  const hiddenMount = target();
+  const hiddenRequest = workOsLoadScreen('screen-a', hiddenMount);
+  workOsAbortTarget(hiddenMount, 'hidden');
+  await hiddenRequest;
+  if (hiddenAbort !== 1) throw new Error('drawer close did not abort the owned request');
+  if (hiddenMount.innerHTML) throw new Error('hidden request mounted stale content');
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }});
+"""
+    result = subprocess.run(
+        [node, "-"], input=harness, text=True, capture_output=True, check=False, timeout=10
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_fact_playground_is_a_live_governed_mount_not_static_verified_demo_data() -> None:
