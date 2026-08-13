@@ -319,6 +319,11 @@ def render_cron_health_live_body(db_path: Path) -> str:
     pipeline verdict flips from "Not run yet" to OK/FAILED in place, without a
     manual reload. Returned alone so the wrapper's chrome + CLI note never
     re-render on a poll."""
+    observed_at = datetime.now(UTC).isoformat(timespec="seconds")
+    observed_stamp = (
+        '<p class="muted" data-cron-observed>Observed by server '
+        f'<time datetime="{observed_at}">{observed_at}</time></p>'
+    )
     today = date.today()
     dates = [today - timedelta(days=i) for i in range(6, -1, -1)]
     since = datetime.combine(dates[0], datetime.min.time())
@@ -337,7 +342,7 @@ def render_cron_health_live_body(db_path: Path) -> str:
         return alarms + (
             '<p class="muted">No pipeline run rows yet. '
             "The morning pipeline writes to <code>ingestion_runs</code> after each "
-            "run; this panel fills as the daily jobs execute.</p>"
+            "run; this panel fills as the daily jobs execute.</p>" + observed_stamp
         )
 
     today_str = today.isoformat()
@@ -353,15 +358,19 @@ def render_cron_health_live_body(db_path: Path) -> str:
         else:
             break
 
-    return alarms + _kpi_strip(today_verdict, streak) + _timeline_table(all_runs, dates)
+    return (
+        alarms
+        + _kpi_strip(today_verdict, streak)
+        + _timeline_table(all_runs, dates)
+        + observed_stamp
+    )
 
 
 def render_cron_health_panel(db_path: Path) -> str:
     """The Cron Health tab fragment: a KPI strip + 7-day per-job timeline.
 
-    The live body self-refreshes every 60s via HTMX (the Wave 3 live-tile
-    pattern the Overview cockpit uses): the ``#cc-cron-live`` wrapper re-fetches
-    the operational panel route so today's verdict is current when viewed while the
+    The live body self-refreshes every 60s with bounded native fetch while the
+    wrapper is connected and visible, so today's verdict remains current as the
     morning pipeline runs. Degrades cleanly with JS off — the body is
     server-rendered, the poll is pure enhancement."""
     return "".join(
@@ -372,14 +381,155 @@ def render_cron_health_panel(db_path: Path) -> str:
             "<code>ingestion_runs</code>. "
             "Green = OK · Red = failed · Grey = no run recorded. "
             "</p>",
-            '<div id="cc-cron-live">',
+            '<div id="cc-cron-live" '
+            'data-cron-fragment-url="/api/panel/cron_health?fragment=live" '
+            'data-refresh-ms="60000">',
             render_cron_health_live_body(db_path),
             "</div>",
+            '<p class="muted" data-cron-status aria-live="polite">'
+            "Auto-refreshes every 60 seconds while visible.</p>",
+            '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+            "data-cron-retry>Refresh now</button>",
             '<div class="ch-note">Run '
             "<code>python execution/verify_cron_registration.py</code> to audit "
             "the Windows Task Scheduler registration, or "
             "<code>python execution/verify_daily_chain.py</code> to check "
             "whether today's morning pipeline completed successfully.</div>",
             "</section>",
+            f"<script>{_CRON_REFRESH_JS}</script>",
         ]
     )
+
+
+_CRON_REFRESH_JS = """
+(function () {
+  var script = document.currentScript;
+  var root = script && script.previousElementSibling;
+  if (!root || !root.classList.contains('panel')) return;
+  var live = root.querySelector('[data-cron-fragment-url]');
+  var status = root.querySelector('[data-cron-status]');
+  var retry = root.querySelector('[data-cron-retry]');
+  if (!live || !status || !retry) return;
+  var refreshMs = Number(live.dataset.refreshMs) || 60000;
+  var refreshing = false;
+  var timerId = null;
+  var controller = null;
+  var timeoutId = null;
+  var generation = 0;
+  var wasVisible = false;
+  var disposed = false;
+  var REQUEST_TIMEOUT_MS = 10000;
+
+  function visible() {
+    return !document.hidden && root.isConnected &&
+      !root.closest('[hidden], [aria-hidden="true"]');
+  }
+
+  function stop(reason) {
+    if (timerId !== null) window.clearTimeout(timerId);
+    if (timeoutId !== null) window.clearTimeout(timeoutId);
+    timerId = null;
+    timeoutId = null;
+    if (controller) {
+      controller.__cronAbortReason = reason;
+      controller.abort();
+      controller = null;
+    }
+    refreshing = false;
+    live.removeAttribute('aria-busy');
+  }
+
+  function schedule() {
+    if (disposed || !visible()) return;
+    if (timerId !== null) window.clearTimeout(timerId);
+    timerId = window.setTimeout(function () {
+      timerId = null;
+      if (!visible()) return;
+      refresh();
+    }, refreshMs);
+  }
+
+  async function refresh() {
+    if (refreshing || disposed || !visible()) return;
+    if (timerId !== null) window.clearTimeout(timerId);
+    timerId = null;
+    refreshing = true;
+    var requestGeneration = ++generation;
+    var requestController = new AbortController();
+    controller = requestController;
+    timeoutId = window.setTimeout(function () {
+      requestController.__cronAbortReason = 'timeout';
+      requestController.abort();
+    }, REQUEST_TIMEOUT_MS);
+    live.setAttribute('aria-busy', 'true');
+    status.textContent = 'Refreshing cron health';
+    try {
+      var response = await fetch(live.dataset.cronFragmentUrl, {
+        signal: requestController.signal,
+        headers: { Accept: 'text/html' },
+        cache: 'no-store'
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      var markup = await response.text();
+      if (disposed || !visible() || generation !== requestGeneration ||
+          controller !== requestController) return;
+      if (window.workOsMountHtml) {
+        window.workOsMountHtml(live, markup, live.dataset.cronFragmentUrl);
+      } else {
+        live.innerHTML = markup;
+      }
+      status.textContent = 'Response received ' + new Date().toLocaleString() +
+        '; server observation timestamp is shown above.';
+    } catch (_error) {
+      if (disposed || !visible() || generation !== requestGeneration ||
+          requestController.__cronAbortReason === 'hidden' ||
+          requestController.__cronAbortReason === 'replaced') return;
+      status.textContent = requestController.__cronAbortReason === 'timeout'
+        ? 'Cron health refresh timed out. Existing data may be stale; retry.'
+        : 'Cron health refresh failed. Existing data may be stale; retry.';
+    } finally {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      if (controller === requestController) {
+        controller = null;
+        timeoutId = null;
+        refreshing = false;
+        live.removeAttribute('aria-busy');
+        schedule();
+      }
+    }
+  }
+
+  retry.addEventListener('click', refresh);
+  function syncLifecycle() {
+    if (!root.isConnected) {
+      disposed = true;
+      stop('replaced');
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', syncLifecycle);
+      return;
+    }
+    var nowVisible = visible();
+    if (!nowVisible) {
+      if (wasVisible) stop('hidden');
+      wasVisible = false;
+      return;
+    }
+    if (!wasVisible) {
+      wasVisible = true;
+      refresh();
+      return;
+    }
+    schedule();
+  }
+
+  var observer = new MutationObserver(syncLifecycle);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['hidden', 'aria-hidden'],
+    childList: true,
+    subtree: true
+  });
+  document.addEventListener('visibilitychange', syncLifecycle);
+  syncLifecycle();
+})();
+""".strip()

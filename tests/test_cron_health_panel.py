@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -84,6 +86,72 @@ def test_panel_empty_state(tmp_path: Path) -> None:
     html = render_cron_health_panel(db_path)
     assert "Cron health" in html
     assert "No pipeline run rows yet" in html
+    assert 'data-cron-fragment-url="/api/panel/cron_health?fragment=live"' in html
+    assert 'data-refresh-ms="60000"' in html
+    assert "data-cron-retry" in html
+    assert "Response received" in html
+    assert "Cron health refresh failed" in html
+    assert "Observed by server" in html
+
+
+def test_cron_refresh_runtime_pauses_hidden_and_aborts_inflight() -> None:
+    node = shutil.which("node")
+    if node is None:
+        return
+    import pipeline.cron_health_panel as cron_health_panel
+
+    runtime = json.dumps(getattr(cron_health_panel, "_CRON_REFRESH_JS"))
+    harness = f"""
+let observerCallback = null;
+let visibilityCallback = null;
+let fetchCount = 0;
+let aborted = false;
+const live = {{
+  dataset: {{cronFragmentUrl:'/api/panel/cron_health?fragment=live', refreshMs:'60000'}},
+  setAttribute() {{}}, removeAttribute() {{}}, innerHTML:''
+}};
+const status = {{textContent:''}};
+const retry = {{addEventListener() {{}}}};
+const root = {{
+  isConnected: true,
+  classList: {{contains: value => value === 'panel'}},
+  closest: () => null,
+  querySelector: selector => selector.includes('fragment') ? live :
+    (selector.includes('status') ? status : retry)
+}};
+global.window = {{
+  location: new URL('http://127.0.0.1:7421/'), setTimeout, clearTimeout
+}};
+global.document = {{
+  hidden: true,
+  currentScript: {{previousElementSibling: root}},
+  documentElement: {{}},
+  addEventListener: (_name, fn) => {{ visibilityCallback = fn; }},
+  removeEventListener() {{}}
+}};
+global.MutationObserver = class {{
+  constructor(fn) {{ observerCallback = fn; }}
+  observe() {{}}
+  disconnect() {{}}
+}};
+global.fetch = (_url, options) => {{
+  fetchCount += 1;
+  options.signal.addEventListener('abort', () => {{ aborted = true; }});
+  return new Promise(() => {{}});
+}};
+eval({runtime});
+if (fetchCount !== 0) throw new Error('hidden cron panel polled');
+document.hidden = false;
+visibilityCallback();
+if (fetchCount !== 1) throw new Error('visible cron panel did not resume');
+document.hidden = true;
+observerCallback();
+if (!aborted) throw new Error('hidden cron panel did not abort in-flight request');
+"""
+    result = subprocess.run(
+        [node, "-"], input=harness, text=True, capture_output=True, check=False, timeout=10
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_panel_shows_ok_run(tmp_path: Path) -> None:

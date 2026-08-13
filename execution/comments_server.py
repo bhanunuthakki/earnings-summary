@@ -816,6 +816,9 @@ def create_app(
     def serve_fresh_panel_cache() -> Response | None:
         if request.method != "GET" or not request.path.startswith("/api/panel/"):
             return None
+        if request.path == "/api/panel/cron_health" and request.args.get("fragment") == "live":
+            g.panel_cache_bypass = True
+            return None
         cache_key = request.full_path.removesuffix("?")
         lookup = panel_cache.get_or_reserve(cache_key)
         if isinstance(lookup, PanelCacheReservation):
@@ -876,6 +879,9 @@ def create_app(
         # client changes. (Registered after add_cors_headers — Flask runs
         # after_request hooks in reverse order, so the 304 conversion happens
         # first and the CORS headers still land on the 304.)
+        if getattr(g, "panel_cache_bypass", False):
+            response.headers["Cache-Control"] = "no-store"
+            return response
         if (
             request.method == "GET"
             and request.path.startswith("/api/panel/")
@@ -1969,8 +1975,13 @@ def create_app(
             # Last-7-day pipeline run history from ingestion_runs, ordered by
             # criticality (backup_db → run_morning_pipeline → others); KPI strip
             # for today's morning pipeline verdict and consecutive-clean-day streak.
-            from pipeline.cron_health_panel import render_cron_health_panel
+            from pipeline.cron_health_panel import (
+                render_cron_health_live_body,
+                render_cron_health_panel,
+            )
 
+            if request.args.get("fragment") == "live":
+                return Response(render_cron_health_live_body(db_path), mimetype="text/html")
             return Response(render_cron_health_panel(db_path), mimetype="text/html")
 
         if name == "dcf_coverage":
