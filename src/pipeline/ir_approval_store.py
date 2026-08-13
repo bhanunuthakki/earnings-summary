@@ -414,6 +414,22 @@ def get_candidate(connection: sqlite3.Connection, candidate_id: str) -> IrCandid
     return _select_candidate(connection, candidate_id)
 
 
+def get_candidate_by_request_id(
+    connection: sqlite3.Connection, request_id: str
+) -> IrCandidate | None:
+    """Return one immutable candidate by its stable caller replay identity."""
+
+    normalized = request_id.strip()
+    if not normalized:
+        raise ValueError("request_id cannot be blank")
+    row = connection.execute(
+        f"SELECT {','.join(_CANDIDATE_COLUMNS)} FROM ir_approval_candidates "  # nosec B608 -- fixed internal column tuple; all values remain bound
+        "WHERE request_id=?",
+        (normalized,),
+    ).fetchone()
+    return None if row is None else _candidate_from_row(row)
+
+
 def authorize_current_candidate(candidate: IrCandidate) -> None:
     """Fail closed unless an immutable candidate still matches current issuer policy."""
 
@@ -741,6 +757,7 @@ __all__ = [
     "append_decision",
     "authorize_current_candidate",
     "get_candidate",
+    "get_candidate_by_request_id",
     "get_current_decision",
     "persist_candidate",
     "verify_admission",

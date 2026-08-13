@@ -44,6 +44,9 @@ class WixRenderedObservation(BaseModel):
     observation_key: str
     authority_url: str
     raw_sha256: Sha256Hex
+    requested_year: int
+    selected_year: int
+    year_control_locator: str
     requested_quarter_end: date
     panels: tuple[WixPanelObservation, ...]
 
@@ -67,6 +70,12 @@ def parse_wix_visible_quarters(
     source_observations: list[IrSourceObservation] = []
     excluded = 0
     for observation in observations:
+        if observation.requested_year != observation.requested_quarter_end.year:
+            raise IrCatalogError("requested Wix year does not match the reporting period")
+        if observation.selected_year != observation.requested_year:
+            raise IrCatalogError("selected Wix year does not match the requested year")
+        if not observation.year_control_locator.strip():
+            raise IrCatalogError("Wix year-control locator is required")
         selected = [panel for panel in observation.panels if panel.selected and panel.visible]
         if len(selected) != 1:
             raise IrCatalogError(
