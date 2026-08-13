@@ -616,9 +616,13 @@ def test_run_job_writes_machine_readable_health(tmp_path: Path) -> None:
         command=[sys.executable, "-c", "print('ok')"],
     )
     assert code == 0
-    records = list((tmp_path / ".tmp" / "job_health" / "unit-job").glob("*.json"))
+    directory = tmp_path / ".tmp" / "job_health" / "unit-job"
+    records = [path for path in directory.glob("*.json") if path.name != "latest.json"]
     assert len(records) == 1
     record = json.loads(records[0].read_text(encoding="utf-8"))
+    latest = json.loads((directory / "latest.json").read_text(encoding="utf-8"))
+    assert latest == record
+    assert latest["schema_version"] == "1"
     assert record["status"] == "ok"
     assert record["severity"] == "info"
     assert record["write_sets"] == ["portfolio-db"]
@@ -667,7 +671,7 @@ def test_refresh_cache_contained_exits_do_not_mask_failures_or_unrelated_jobs(
     )
 
     assert code == child_exit
-    record_path = next((tmp_path / ".tmp" / "job_health" / job_name).glob("*.json"))
+    record_path = tmp_path / ".tmp" / "job_health" / job_name / "latest.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
     assert record["status"] == expected_status
     assert record["severity"] == expected_severity

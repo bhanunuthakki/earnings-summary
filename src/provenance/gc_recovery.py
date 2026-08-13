@@ -47,6 +47,7 @@ from provenance.immutable_artifact import (
     require_canonical_text_artifact,
     require_no_reparse_points,
 )
+from runtime.service_registry import managed_service_names
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _DELETE_TRIGGER = "trg_financial_facts_observation_delete"
@@ -254,7 +255,7 @@ class RecoveryQuiescenceRegistry(BaseModel):
     schema_version: Literal["gc-recovery-quiescence/v1"]
     captured_at: datetime
     tasks: tuple[QuiescedTaskObservation, ...] = Field(min_length=1)
-    services: tuple[QuiescedServiceObservation, ...] = Field(min_length=2, max_length=2)
+    services: tuple[QuiescedServiceObservation, ...] = Field(min_length=1)
     listeners: tuple[QuiescedListenerObservation, ...] = Field(min_length=1, max_length=1)
 
 
@@ -462,8 +463,8 @@ class GcRecoveryAdmissionReceipt(BaseModel):
     quiescence_registry_artifact_size_bytes: int = Field(ge=1)
     expected_task_paths: tuple[str, ...] = Field(min_length=1)
     disabled_task_paths: tuple[str, ...] = Field(min_length=1)
-    expected_service_names: tuple[str, ...] = Field(min_length=2, max_length=2)
-    stopped_service_names: tuple[str, ...] = Field(min_length=2, max_length=2)
+    expected_service_names: tuple[str, ...] = Field(min_length=1)
+    stopped_service_names: tuple[str, ...] = Field(min_length=1)
     expected_listener_endpoints: tuple[str, ...] = Field(min_length=1)
     inactive_listener_endpoints: tuple[str, ...] = Field(min_length=1)
     process_census_scope: Literal["all-process-command-lines/v1"]
@@ -506,10 +507,10 @@ class GcRecoveryAdmissionReceipt(BaseModel):
             label="service",
         )
         if {name.casefold() for name in self.expected_service_names} != {
-            "es-dashboard",
-            "es-poller",
+            name.casefold() for name in managed_service_names()
         }:
-            raise ValueError("recovery admission must bind es-dashboard and es-poller")
+            expected = ", ".join(managed_service_names())
+            raise ValueError(f"recovery admission must bind {expected}")
         _require_exact_casefold_set(
             self.expected_listener_endpoints,
             self.inactive_listener_endpoints,

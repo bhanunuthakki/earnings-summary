@@ -115,6 +115,12 @@ def _scheduler_write_sets(job_name: str, requested: list[str]) -> list[str]:
     return list(requested)
 
 
+def effective_scheduler_write_sets(job_name: str, requested: list[str]) -> tuple[str, ...]:
+    """Public read-only projection of the scheduler lane policy."""
+
+    return tuple(_scheduler_write_sets(job_name, requested))
+
+
 class _ProcessQueryKernel32(Protocol):
     def OpenProcess(self, desired_access: int, inherit_handle: bool, pid: int) -> int: ...  # noqa: N802
 
@@ -850,12 +856,31 @@ def _schema_preflight(repo_root: Path, job_name: str) -> str | None:
 
 
 def _write_health(repo_root: Path, record: HealthRecord) -> Path:
-    directory = repo_root / ".tmp" / "job_health" / _safe_name(record.job)
+    directory = health_receipt_directory(repo_root, record.job)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = record.ended_at.replace(":", "-").replace("+", "_")
     path = directory / f"{stamp}.json"
-    path.write_text(json.dumps(asdict(record), sort_keys=True) + "\n", encoding="utf-8")
+    payload = json.dumps({"schema_version": "1", **asdict(record)}, sort_keys=True) + "\n"
+    path.write_text(payload, encoding="utf-8")
+
+    latest = directory / "latest.json"
+    temporary = directory / f".latest.{uuid4().hex}.tmp"
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, latest)
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
     return path
+
+
+def health_receipt_directory(repo_root: Path, job_name: str) -> Path:
+    """Return the canonical receipt directory without creating it."""
+
+    return repo_root / ".tmp" / "job_health" / _safe_name(job_name)
 
 
 def _child_health_semantics(job_name: str, exit_code: int) -> tuple[str, str, str | None]:

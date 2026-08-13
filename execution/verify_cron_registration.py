@@ -52,6 +52,10 @@ SRC = PROJECT_ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from runtime.service_registry import (  # noqa: E402
+    ServiceRole,
+    managed_service_for_role,
+)
 from scheduler_manifest import (  # noqa: E402
     TaskManifest,
     load_manifest,
@@ -67,7 +71,7 @@ _NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 # ready to fire; "Running" appears when the task is currently executing.
 _HEALTHY_STATUSES = {"Ready", "Running"}
 _CAPTURE_POLLER_TASK = r"\earnings-summary\capture_poller".lower()
-_CAPTURE_POLLER_SERVICE = "es-poller"
+_CAPTURE_POLLER_SERVICE = managed_service_for_role(ServiceRole.CAPTURE_POLLER).name
 
 
 class _XmlTask(NamedTuple):
@@ -121,6 +125,8 @@ def _parse_xml(path: Path) -> _XmlTask | None:
     """
     tree = ElementTree.parse(str(path))
     root = tree.getroot()
+    if root is None:
+        return None
     ns = f"{{{_NS}}}"
 
     uri_el = root.find(f".//{ns}URI")

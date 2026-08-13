@@ -203,7 +203,7 @@ def _drifted_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
 
 def _health_records(root: Path, job: str) -> list[dict[str, object]]:
     directory = root / ".tmp" / "job_health" / job
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(directory.glob("*.json"))]
+    return [json.loads((directory / "latest.json").read_text(encoding="utf-8"))]
 
 
 def test_drifted_database_blocks_the_job_before_any_work_runs(
