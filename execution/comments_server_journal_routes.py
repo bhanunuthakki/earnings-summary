@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from flask import Flask, Response, request
 
@@ -27,6 +27,74 @@ class JournalRouteContext:
 def register_journal_routes(app: Flask, context: JournalRouteContext) -> None:
     """Register analyst-note capture and lifecycle routes directly on ``app``."""
     db_path = context.db_path
+
+    @app.route("/api/work-os/question-proposals", methods=["POST", "OPTIONS"])
+    def question_proposals_api():
+        """Draft one inert thesis/engagement-derived open question."""
+
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from research.question_artifact import draft_question_proposal
+        from ticker_validation import safe_ticker
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        try:
+            ticker = safe_ticker(str(payload.get("ticker") or ""))
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
+        body = str(payload.get("body") or "").strip()
+        raw_origin = str(payload.get("origin") or "engagement")
+        if raw_origin not in {"thesis", "engagement", "model"}:
+            return ({"error": "origin must be thesis, engagement, or model"}, 400)
+        origin = cast("Literal['thesis', 'engagement', 'model']", raw_origin)
+        try:
+            proposal_id = draft_question_proposal(
+                ticker=ticker,
+                body=body,
+                origin=origin,
+                evidence_ref=(
+                    str(payload["evidence_ref"]) if payload.get("evidence_ref") else None
+                ),
+                supersedes_note_id=context.optional_int(payload.get("supersedes_note_id")),
+                expected_revision=(
+                    str(payload["expected_revision"])
+                    if payload.get("expected_revision") is not None
+                    else None
+                ),
+                db_path=db_path,
+            )
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
+        return ({"proposal_id": proposal_id, "status": "pending", "note": None}, 201)
+
+    @app.route(
+        "/api/work-os/question-proposals/<int:proposal_id>/approve",
+        methods=["POST", "OPTIONS"],
+    )
+    def approve_question_proposal_api(proposal_id: int):
+        """Apply an explicit owner approval to the durable question store."""
+
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from research.question_artifact import approve_question_proposal
+        from user_state.notes import NoteRevisionConflictError
+
+        try:
+            note = approve_question_proposal(proposal_id, db_path=db_path)
+        except NoteRevisionConflictError as exc:
+            return (
+                {"error": "revision_conflict", "current_revision": exc.current_revision},
+                409,
+            )
+        except LookupError as exc:
+            return ({"error": str(exc)}, 404)
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
+        return {
+            "proposal_id": proposal_id,
+            "status": "approved",
+            "note": context.note_to_json(note),
+        }
 
     @app.route("/api/notes", methods=["GET", "POST", "OPTIONS"])
     def notes_api():

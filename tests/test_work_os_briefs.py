@@ -13,6 +13,7 @@ from report.artifacts import (
     RenderedReportBody,
     ReportInteractionManifest,
     ReportSectionRef,
+    load_report_artifact_index,
     persist_report_artifact,
     reconcile_legacy_workspace_reports,
 )
@@ -39,12 +40,20 @@ def _work_os_client(work_os_app_repo: Path) -> FlaskClient:
     return comments_server.create_app(work_os_app_repo).test_client()
 
 
-def _persist_shared_brief(repo_root: Path, ticker: str = "NU") -> RenderedReportBody:
-    report_date = date(2026, 8, 10)
+def _persist_shared_brief(
+    repo_root: Path,
+    ticker: str = "NU",
+    *,
+    report_date: date = date(2026, 8, 10),
+    generated_at: datetime | None = None,
+) -> RenderedReportBody:
     body = RenderedReportBody.from_html(
         ticker=ticker,
         report_date=report_date,
-        body_html=f'<main data-report-body="v1"><section>{ticker} complete brief</section></main>',
+        body_html=(
+            f'<main data-report-body="v1"><section id="company" data-tab="company">'
+            f"{ticker} complete brief</section></main>"
+        ),
         sections=(ReportSectionRef(section_id="company", label="Company", group_id="overview"),),
         interaction_manifest=ReportInteractionManifest(),
     )
@@ -57,11 +66,51 @@ def _persist_shared_brief(repo_root: Path, ticker: str = "NU") -> RenderedReport
         repo_root=repo_root,
         body=body,
         standalone_path=workspace,
-        generated_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+        generated_at=generated_at or datetime(2026, 8, 10, 12, tzinfo=UTC),
         coverage_role="portfolio",
         title=f"{ticker} Full Research Brief",
     )
     return body
+
+
+def test_brief_library_projects_only_latest_artifact_per_ticker_before_pagination(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    older_nu = _persist_shared_brief(
+        work_os_app_repo,
+        report_date=date(2026, 8, 9),
+        generated_at=datetime(2026, 8, 9, 18, tzinfo=UTC),
+    )
+    latest_nu = _persist_shared_brief(
+        work_os_app_repo,
+        report_date=date(2026, 8, 10),
+        generated_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+    )
+    latest_meli = _persist_shared_brief(
+        work_os_app_repo,
+        "MELI",
+        report_date=date(2026, 8, 8),
+        generated_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
+    )
+
+    first = work_os_client.get("/api/work-os/briefs", query_string={"limit": 1}).get_json()
+    assert [item["artifact_id"] for item in first["items"]] == [latest_nu.artifact_id]
+    assert first["next_cursor"] == latest_nu.artifact_id
+
+    second = work_os_client.get(
+        "/api/work-os/briefs",
+        query_string={"limit": 1, "cursor": first["next_cursor"]},
+    ).get_json()
+    assert [item["artifact_id"] for item in second["items"]] == [latest_meli.artifact_id]
+    assert second["next_cursor"] is None
+
+    nu = work_os_client.get("/api/work-os/briefs", query_string={"ticker": "NU"}).get_json()
+    assert [item["artifact_id"] for item in nu["items"]] == [latest_nu.artifact_id]
+    assert older_nu.artifact_id not in {item["artifact_id"] for item in nu["items"]}
+
+    # Historical identity remains directly resolvable even though the default
+    # current-library projection no longer repeats it.
+    assert work_os_client.get(f"/api/work-os/briefs/{older_nu.artifact_id}/body").status_code == 200
 
 
 def test_brief_library_returns_stable_indexed_artifacts(
@@ -100,6 +149,22 @@ def test_report_body_route_serves_complete_persisted_fragment(
 ) -> None:
     body = _persist_shared_brief(work_os_app_repo)
 
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "CREATE TABLE decisions (id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, "
+        "recommendation_kind TEXT NOT NULL, recommendation_value REAL, conviction TEXT, "
+        "made_at TEXT NOT NULL, decision_conditions TEXT, source_lens TEXT, decided_by TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO decisions VALUES (?, 'NU', ?, NULL, ?, ?, '[]', ?, ?)",
+        [
+            (7, "add", "high", "2026-08-07T12:00:00Z", "owner_review", "owner"),
+            (8, "add", "medium", "2026-08-08T12:00:00Z", "model_review", "advisor"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
     response = work_os_client.get(f"/api/work-os/briefs/{body.artifact_id}/body")
 
     assert response.status_code == 200
@@ -110,6 +175,22 @@ def test_report_body_route_serves_complete_persisted_fragment(
     assert payload["ticker"] == "NU"
     assert "NU complete brief" in payload["body_html"]
     assert payload["style_url"] == "/api/work-os/report-reader.css"
+    assert payload["decision"]["relationship"] == "agree"
+    assert payload["decision"]["owner"]["decision_id"] == 7
+    assert payload["decision"]["owner"]["revision"] == "2026-08-07T12:00:00Z"
+    assert payload["decision"]["model"]["decision_id"] == 8
+    assert payload["decision"]["model"]["revision"] == "2026-08-08T12:00:00Z"
+    assert payload["sections"] == [
+        {
+            "section_id": "company",
+            "dom_id": next(
+                value.split('id="', 1)[1].split('"', 1)[0]
+                for value in payload["body_html"].split("<")
+                if 'data-tab="company"' in value and 'id="' in value
+            ),
+            "label": "Company",
+        }
+    ]
     assert response.headers["X-Report-Artifact-ID"] == body.artifact_id
     assert response.headers["X-Report-Body-SHA256"] == payload["body_sha256"]
 
@@ -149,3 +230,27 @@ def test_legacy_brief_returns_structured_standalone_fallback(
     standalone = work_os_client.get(response.get_json()["standalone_url"])
     assert standalone.status_code == 200
     assert "legacy brief" in standalone.get_data(as_text=True)
+
+
+def test_shared_body_descriptor_keeps_body_route_when_file_is_missing(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    body = _persist_shared_brief(work_os_app_repo)
+    artifact = next(
+        item
+        for item in load_report_artifact_index(work_os_app_repo).items
+        if item.artifact_id == body.artifact_id
+    )
+    assert artifact.body_path is not None
+    body_path = work_os_app_repo / artifact.body_path
+    body_path.unlink()
+
+    item = work_os_client.get("/api/work-os/briefs", query_string={"ticker": "NU"}).get_json()[
+        "items"
+    ][0]
+    assert item["reader_mode"] == "shared_body"
+    assert item["status"] == "degraded"
+    assert item["body_url"] == f"/api/work-os/briefs/{body.artifact_id}/body"
+    unavailable = work_os_client.get(item["body_url"])
+    assert unavailable.status_code == 409
+    assert unavailable.get_json()["status"] == "body_missing"

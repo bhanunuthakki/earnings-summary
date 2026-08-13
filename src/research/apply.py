@@ -30,6 +30,7 @@ from research.proposals import get_proposal
 if TYPE_CHECKING:
     from research.proposals import ResearchProposal
 
+
 # Kind -> the GATED writer, registered by Wave 3/4 (dcf, thesis, code). A mutating
 # kind absent here is "not yet wired" even once its gate clears.
 @dataclass(frozen=True, slots=True)
@@ -134,6 +135,11 @@ def apply_governed_proposal(
         return f"saved view: {getattr(row, 'name', None) or getattr(prop, 'title', 'view')}"
     if kind == "memo":
         return ""
+    if kind == "question":
+        from research.question_artifact import apply_question_proposal
+
+        note = apply_question_proposal(proposal_id, db_path=db_path)
+        return f"open question #{note.id} persisted for {note.ticker or 'portfolio'}"
     if kind in MUTATING_KINDS:
         gate = evaluate_higher_bar(
             kind=kind,

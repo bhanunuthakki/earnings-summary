@@ -7,24 +7,30 @@ directories, or invokes an LLM while a screen is loading.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
 from calendar_clock import calendar_today
 from dcf.latest import latest_dcf_row
-from decision_conditions import conditions_from_json
 from pipeline.earnings_doorway import (
     POST_EARNINGS_WINDOW_DAYS,
     PRE_EARNINGS_WINDOW_DAYS,
     EarningsDoorway,
     resolve_earnings_doorway,
 )
+from pipeline.work_os_briefs import BriefLibraryItem, build_brief_descriptor
+from pipeline.work_os_decisions import (
+    DecisionCondition,
+    DecisionProjection,
+    build_decision_projection,
+)
 from provenance.selection import selected_transcripts_relation
-from report.artifacts import ReportArtifactRef, load_report_artifact_index
+from report.artifacts import load_report_artifact_index
 
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
 
@@ -51,34 +57,6 @@ class DeskPositionSnapshot(BaseModel):
     fair_value_as_of: str | None = None
 
 
-class DeskDecision(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    decision_id: int
-    revision: str
-    made_at: str
-    owner_state: str | None
-    model_recommendation: str | None
-    target_weight_pct: float | None
-    conviction: str | None
-    source_lens: str | None
-
-
-class DeskCondition(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    stable_id: str
-    decision_id: int
-    revision: str
-    metric: str
-    operator: str
-    threshold: float
-    unit: str
-    for_periods: int
-    note: str | None
-    evidence_ref: str | None
-
-
 class DeskQuestion(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -86,7 +64,8 @@ class DeskQuestion(BaseModel):
     note_id: int
     revision: str
     body: str
-    owner: Literal["owner", "model", "system"]
+    origin: Literal["owner", "model", "thesis", "engagement", "system"]
+    approval: Literal["owner-authored", "owner-approved", "system"]
     evidence_ref: str | None
 
 
@@ -98,10 +77,11 @@ class CompanyDeskResponse(BaseModel):
     generated_at: str
     company: CompanyIdentity
     position: DeskPositionSnapshot
-    current_decision: DeskDecision | None
-    conditions: list[DeskCondition]
+    current_decision: DecisionProjection
+    conditions: list[DecisionCondition]
     open_questions: list[DeskQuestion]
-    latest_brief: ReportArtifactRef | None
+    question_store_status: Literal["ok", "unavailable"]
+    latest_brief: BriefLibraryItem | None
     earnings_doorway: EarningsDoorway
     warnings: list[str]
 
@@ -277,84 +257,9 @@ def _company(conn: sqlite3.Connection, ticker: str) -> CompanyIdentity | None:
     return CompanyIdentity(ticker=ticker, name=str(row["name"] or ticker), coverage_role=role)
 
 
-def _decision(
+def _questions(
     conn: sqlite3.Connection, ticker: str
-) -> tuple[DeskDecision | None, list[DeskCondition], list[str]]:
-    columns = _table_columns(conn, "decisions")
-    required = {
-        "id",
-        "ticker",
-        "recommendation_kind",
-        "recommendation_value",
-        "conviction",
-        "source_lens",
-        "decided_by",
-        "decision_conditions",
-        "made_at",
-    }
-    if not required <= columns:
-        return None, [], ["decision_store_unavailable"]
-    try:
-        owner_row = conn.execute(
-            "SELECT id, recommendation_kind, recommendation_value, conviction, "
-            "source_lens, decided_by, decision_conditions, made_at FROM decisions "
-            "WHERE UPPER(ticker) = ? AND decided_by = 'owner' "
-            "ORDER BY made_at DESC, id DESC LIMIT 1",
-            (ticker,),
-        ).fetchone()
-        model_row = conn.execute(
-            "SELECT id, recommendation_kind, recommendation_value, conviction, "
-            "source_lens, decided_by, decision_conditions, made_at FROM decisions "
-            "WHERE UPPER(ticker) = ? AND decided_by != 'owner' "
-            "ORDER BY made_at DESC, id DESC LIMIT 1",
-            (ticker,),
-        ).fetchone()
-    except sqlite3.Error:
-        return None, [], ["decision_store_unavailable"]
-    row = owner_row or model_row
-    if row is None:
-        return None, [], []
-    values = dict(row)
-    decision_id = int(values["id"])
-    made_at = str(values["made_at"])
-    warnings: list[str] = []
-    owner_state = str(owner_row["recommendation_kind"]) if owner_row is not None else None
-    model_recommendation = str(model_row["recommendation_kind"]) if model_row is not None else None
-    raw_value = values.get("recommendation_value")
-    target = float(raw_value) if isinstance(raw_value, (int, float)) else None
-    if target is not None and abs(target) <= 1:
-        target *= 100
-    decision = DeskDecision(
-        decision_id=decision_id,
-        revision=made_at,
-        made_at=made_at,
-        owner_state=owner_state,
-        model_recommendation=model_recommendation,
-        target_weight_pct=target,
-        conviction=(str(values["conviction"]) if values.get("conviction") is not None else None),
-        source_lens=(str(values["source_lens"]) if values.get("source_lens") is not None else None),
-    )
-    conditions: list[DeskCondition] = []
-    raw_conditions = values.get("decision_conditions")
-    for index, condition in enumerate(conditions_from_json(raw_conditions), start=0):
-        conditions.append(
-            DeskCondition(
-                stable_id=f"decision:{decision_id}:condition:{index}",
-                decision_id=decision_id,
-                revision=made_at,
-                metric=condition.metric,
-                operator=condition.op,
-                threshold=condition.threshold,
-                unit=condition.unit,
-                for_periods=condition.for_periods,
-                note=condition.note,
-                evidence_ref=condition.metric_source,
-            )
-        )
-    return decision, conditions, warnings
-
-
-def _questions(conn: sqlite3.Connection, ticker: str) -> tuple[list[DeskQuestion], list[str]]:
+) -> tuple[list[DeskQuestion], Literal["ok", "unavailable"], list[str]]:
     columns = _table_columns(conn, "analyst_notes")
     required = {
         "id",
@@ -369,34 +274,72 @@ def _questions(conn: sqlite3.Connection, ticker: str) -> tuple[list[DeskQuestion
         "updated_at",
     }
     if not required <= columns:
-        return [], ["analyst_notes_unavailable"]
+        return [], "unavailable", ["analyst_notes_unavailable"]
     try:
         notes = conn.execute(
-            "SELECT id, body, source, updated_at, "
+            "SELECT id, body, source, updated_at, context_json, "
             "COALESCE(fact_ref, source_ref) AS evidence_ref FROM analyst_notes "
             "WHERE UPPER(ticker) = ? AND kind = 'question' AND status = 'open' "
             "ORDER BY created_at DESC, id DESC LIMIT 20",
             (ticker,),
         ).fetchall()
     except sqlite3.Error:
-        return [], ["analyst_notes_unavailable"]
-    questions = [
-        DeskQuestion(
-            stable_id=f"analyst_note:{int(note['id'])}",
-            note_id=int(note["id"]),
-            revision=str(note["updated_at"]),
-            body=str(note["body"]),
-            owner=("owner" if str(note["source"]) in {"manual", "capture", "comment"} else "model"),
-            evidence_ref=(str(note["evidence_ref"]) if note["evidence_ref"] is not None else None),
+        return [], "unavailable", ["analyst_notes_unavailable"]
+    questions: list[DeskQuestion] = []
+    for note in notes:
+        context: dict[str, object] = {}
+        if note["context_json"]:
+            try:
+                decoded: object = json.loads(str(note["context_json"]))
+                if isinstance(decoded, dict):
+                    context = cast("dict[str, object]", decoded)
+            except (TypeError, ValueError):
+                pass
+        source = str(note["source"])
+        raw_origin = str(context.get("origin") or "")
+        origin: Literal["owner", "model", "thesis", "engagement", "system"]
+        if raw_origin == "thesis":
+            origin = "thesis"
+        elif raw_origin == "engagement":
+            origin = "engagement"
+        elif raw_origin == "model":
+            origin = "model"
+        elif source in {"manual", "capture", "comment"}:
+            origin = "owner"
+        elif source == "advisor":
+            origin = "model"
+        else:
+            origin = "system"
+        approval: Literal["owner-authored", "owner-approved", "system"]
+        if origin == "owner":
+            approval = "owner-authored"
+        elif context.get("approval") == "owner-approved":
+            approval = "owner-approved"
+        else:
+            approval = "system"
+        questions.append(
+            DeskQuestion(
+                stable_id=f"analyst_note:{int(note['id'])}",
+                note_id=int(note["id"]),
+                revision=str(note["updated_at"]),
+                body=str(note["body"]),
+                origin=origin,
+                approval=approval,
+                evidence_ref=(
+                    str(note["evidence_ref"]) if note["evidence_ref"] is not None else None
+                ),
+            )
         )
-        for note in notes
-    ]
-    return questions, []
+    return questions, "ok", []
 
 
-def _latest_brief(repo_root: Path, ticker: str) -> ReportArtifactRef | None:
+def _latest_brief(repo_root: Path, ticker: str) -> BriefLibraryItem | None:
     index = load_report_artifact_index(repo_root)
-    return next((item for item in index.items if item.ticker == ticker), None)
+    matches = [item for item in index.items if item.ticker == ticker]
+    if not matches:
+        return None
+    latest = max(matches, key=lambda item: (item.generated_at, item.artifact_id))
+    return build_brief_descriptor(repo_root, latest)
 
 
 def _position_snapshot(conn: sqlite3.Connection, ticker: str) -> DeskPositionSnapshot:
@@ -430,8 +373,10 @@ def build_company_desk(
     company = _company(conn, normalized)
     if company is None:
         raise LookupError(normalized)
-    decision, conditions, decision_warnings = _decision(conn, normalized)
-    questions, question_warnings = _questions(conn, normalized)
+    decision, conditions, decision_warnings = build_decision_projection(
+        conn, normalized, as_of=generated_at
+    )
+    questions, question_store_status, question_warnings = _questions(conn, normalized)
     latest_brief = _latest_brief(repo_root, normalized)
     earnings_doorway = build_earnings_doorway(
         conn,
@@ -453,6 +398,7 @@ def build_company_desk(
         current_decision=decision,
         conditions=conditions,
         open_questions=questions,
+        question_store_status=question_store_status,
         latest_brief=latest_brief,
         earnings_doorway=earnings_doorway,
         warnings=warnings,

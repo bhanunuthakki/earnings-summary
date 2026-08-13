@@ -1177,6 +1177,27 @@ def create_app(
         payload = cast("dict[str, object]", request.get_json(silent=True) or {})
         steer_text = str(payload.get("steer_text") or "").strip() or None
         _bump_activation_count(f"act:proposal:{verb}")
+        if verb == "approve" and proposal is not None and proposal.kind == "question":
+            from research.question_artifact import approve_question_proposal
+            from user_state.notes import NoteRevisionConflictError
+
+            try:
+                note = approve_question_proposal(proposal_id, db_path=db_path)
+            except NoteRevisionConflictError as exc:
+                return (
+                    {"error": "revision_conflict", "current_revision": exc.current_revision},
+                    409,
+                )
+            except LookupError as exc:
+                return ({"error": str(exc)}, 404)
+            except ValueError as exc:
+                return ({"error": str(exc)}, 400)
+            applied = f"open question #{note.id} persisted for {note.ticker or 'portfolio'}"
+            return {
+                "status": "approved",
+                "applied": applied,
+                "receipt": f"Approved — {applied}",
+            }
         status = act_on_proposal(proposal_id, verb, steer_text=steer_text, db_path=db_path)
         applied = ""
         apply_failed = False
@@ -2044,6 +2065,24 @@ def create_app(
                 ]
                 return Response(
                     render_keymetrics_fragment(db_path, km_tickers), mimetype="text/html"
+                )
+            if fragment == "work-os":
+                requested: list[str] = []
+                for raw_ticker in (request.args.get("tickers") or "").split(",")[:16]:
+                    if not raw_ticker.strip():
+                        continue
+                    try:
+                        requested.append(ticker_validation.safe_ticker(raw_ticker.strip()))
+                    except ValueError:
+                        abort(400)
+                return Response(
+                    render_explore_panel(
+                        db_path,
+                        user_id=user_id,
+                        initial_tickers=requested,
+                        include_runtime=False,
+                    ),
+                    mimetype="text/html",
                 )
             return Response(render_explore_panel(db_path, user_id=user_id), mimetype="text/html")
 

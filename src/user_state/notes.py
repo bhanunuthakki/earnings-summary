@@ -176,6 +176,7 @@ def create_note(
     position_entry_id: int | None = None,
     link_auto_resolve: bool = False,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> AnalystNoteRow:
     """INSERT one open note. ``ticker=None`` records a portfolio-level note.
 
@@ -187,10 +188,10 @@ def create_note(
     _validate("source", source, NOTE_SOURCES)
     if not body.strip():
         raise ValueError("note body must be non-empty")
-    conn = open_conn(db_path)
+    db_conn = conn or open_conn(db_path)
     try:
         row_id = _insert(
-            conn,
+            db_conn,
             user_id=user_id,
             ticker=ticker,
             kind=kind,
@@ -209,10 +210,12 @@ def create_note(
             position_entry_id=position_entry_id,
             link_auto_resolve=link_auto_resolve,
         )
-        conn.commit()
-        return _fetch_one(conn, row_id)
+        if conn is None:
+            db_conn.commit()
+        return _fetch_one(db_conn, row_id)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def get_note(
@@ -573,8 +576,12 @@ def supersede_note(
     *,
     body: str,
     kind: str | None = None,
+    source: str | None = None,
+    source_ref: str | None = None,
+    context: dict[str, object] | None = None,
     expected_revision: str | None = None,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> AnalystNoteRow:
     """Correct a note: INSERT a replacement chained via ``supersedes_id`` and
     mark the original superseded. The replacement inherits ticker + anchor
@@ -585,21 +592,25 @@ def supersede_note(
     """
     if kind is not None:
         _validate("kind", kind, NOTE_KINDS)
+    if source is not None:
+        _validate("source", source, NOTE_SOURCES)
     if not body.strip():
         raise ValueError("note body must be non-empty")
-    conn = open_conn(db_path)
+    db_conn = conn or open_conn(db_path)
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        old_row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
+        if conn is None:
+            db_conn.execute("BEGIN IMMEDIATE")
+        old_row = db_conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
         if old_row is None:
             raise LookupError(f"analyst_notes id={note_id} not found")
         old = _row_to_dc(old_row)
         current_revision = str(old_row["updated_at"])
         if expected_revision is not None and expected_revision != current_revision:
-            conn.rollback()
+            if conn is None:
+                db_conn.rollback()
             raise NoteRevisionConflictError(current_revision)
         new_id = _insert(
-            conn,
+            db_conn,
             user_id=old.user_id,
             ticker=old.ticker,
             kind=kind or old.kind,
@@ -608,24 +619,26 @@ def supersede_note(
             anchor_type=old.anchor_type,
             anchor_key=old.anchor_key,
             fact_ref=old.fact_ref,
-            source="manual",
-            source_ref=None,
+            source=source or "manual",
+            source_ref=source_ref,
             supersedes_id=old.id,
             resolution_note=None,
-            context=None,
+            context=context,
             resolved_at=None,
             decision_id=old.decision_id,
             position_entry_id=old.position_entry_id,
             link_auto_resolve=old.link_auto_resolve,
         )
-        conn.execute(
+        db_conn.execute(
             "UPDATE analyst_notes SET status = 'superseded', updated_at = ? WHERE id = ?",
             (now_iso(), note_id),
         )
-        conn.commit()
-        return _fetch_one(conn, new_id)
+        if conn is None:
+            db_conn.commit()
+        return _fetch_one(db_conn, new_id)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 # ---------------------------------------------------------------------------

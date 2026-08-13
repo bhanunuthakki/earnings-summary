@@ -280,6 +280,7 @@
 .k-scrim[hidden], .k-overlay[hidden] { display: none; }
 .k-tick-name { font-family: var(--sans); font-weight: 400; font-size: var(--fs-caption); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: var(--k-tick-max, 20ch); }
 .k-tick-sym { font-family: var(--mono); font-weight: 600; letter-spacing: 0.02em; color: var(--fg); text-decoration: none; }
+.k-tick-sym-display { font-size: var(--fs-display); }
 .k-toolbar-controls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-left: auto; }
 .k-toolbar-title { font-size: var(--fs-title); font-weight: 600; margin: 0; margin-right: auto; }
 .k-well-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); }

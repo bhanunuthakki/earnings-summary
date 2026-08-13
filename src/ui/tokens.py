@@ -194,6 +194,9 @@ CHROME_TOKENS: dict[str, str] = {
     "lift-sm": "-1px",
     "lift-md": "-2px",
     "toast-hide-y": "100px",
+    # The full-document reader sits above Work OS sticky chrome and scrims so
+    # its visible toolbar remains the pointer target.
+    "z-modal": "300",
     "blur-sm": "6px",
     "blur-md": "16px",
     "blur-lg": "24px",

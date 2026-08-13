@@ -17,13 +17,16 @@ from functools import lru_cache
 from html import escape
 from pathlib import Path
 
+from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
 from pipeline.data_policy_settings_panel import render_operations_settings_shell
+from pipeline.explore_panel import EXPLORE_PANEL_JS
 from pipeline.work_os_copilot import render_work_os_copilot
 from pipeline.work_os_research import (
     render_brief_library_shell,
     render_brief_reader_shell,
     render_company_desk_shell,
+    render_fact_playground_shell,
 )
 from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
@@ -140,6 +143,16 @@ _BRIEF_LIBRARY_SECTION_RE = re.compile(
     r"(?=<!-- =+\s*SURFACE: EXTRACTED FACT & METRIC)",
     re.DOTALL,
 )
+_FACT_PLAYGROUND_SECTION_RE = re.compile(
+    r'<section id="screen-analytics-playground".*?</section>\s*'
+    r"(?=<!-- =+\s*SURFACE 3: DECISION AUDIT LOG)",
+    re.DOTALL,
+)
+_FACT_PLAYGROUND_RUNTIME_RE = re.compile(
+    r"\n\s*// EXTRACTED FACT & METRIC ANALYTICS PLAYGROUND DATABASE & LOGIC.*?"
+    r"\n\s*// EMBEDDED DCF SLIDERS INSIDE REPORT",
+    re.DOTALL,
+)
 _OPERATIONS_SECTION_RE = re.compile(
     r'<section id="screen-execution-queue".*?</section>\s*'
     r"(?=</div>\s*</main>)",
@@ -162,6 +175,7 @@ def _production_runtime(generated_at: datetime) -> str:
     stamp = escape(generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     return f"""
 <style id="work-os-production-css">
+  {CC_ACTION_CSS}
   {CC_OVERLAY_CSS}
   html, body {{ min-height: 100dvh; }}
   body {{ padding-bottom: env(safe-area-inset-bottom); }}
@@ -172,7 +186,13 @@ def _production_runtime(generated_at: datetime) -> str:
   .work-os-report-host {{ display: block; min-height: 100%; border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); overflow: hidden; }}
   .work-os-reader {{ position: fixed; inset: 0; z-index: var(--z-modal); display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; padding: var(--sp-4); background: var(--bg); overflow: hidden; }}
   .work-os-reader[hidden] {{ display: none !important; }}
-  .work-os-reader-header {{ display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3); }}
+  .work-os-reader-header {{ position: sticky; inset-block-start: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3); background: var(--bg); }}
+  .work-os-reader-masthead {{ min-width: 0; text-align: center; }}
+  .work-os-reader-actions {{ display: flex; align-items: center; gap: var(--sp-2); }}
+  .work-os-reader-decision {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; }}
+  .work-os-reader-layout {{ display: grid; grid-template-columns: var(--grid-card-sm) minmax(0, 1fr); gap: var(--sp-4); flex: 1 1 auto; min-height: 0; max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; overflow: hidden; }}
+  .work-os-reader-sections {{ display: flex; flex-direction: column; align-self: start; gap: var(--sp-1); max-block-size: 100%; overflow-y: auto; }}
+  .work-os-reader-sections:empty {{ display: none; }}
   .work-os-reader-body {{ flex: 1 1 auto; min-height: 0; overflow: auto; }}
   .work-os-company-desk {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
   .work-os-company-toolbar {{ display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }}
@@ -198,6 +218,9 @@ def _production_runtime(generated_at: datetime) -> str:
   .research-decision-band {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); }}
   .research-grid {{ display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; }}
   .research-list {{ display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }}
+  .research-question-capture {{ display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }}
+  .research-question-capture input {{ flex: 1 1 auto; min-inline-size: var(--grid-card-sm); }}
+  .is-cited-location {{ background: color-mix(in srgb, var(--warn) 14%, transparent); }}
   .research-row {{ display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3); }}
   .research-library-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }}
   @media (max-width: 47.5rem) {{
@@ -234,7 +257,11 @@ def _production_runtime(generated_at: datetime) -> str:
     .matrix-table {{ display: block; max-width: 100%; overflow-x: auto; }}
     .k-action-row {{ flex-wrap: wrap; gap: var(--sp-2); }}
     .screen-view [style*="grid-template-columns"] {{ grid-template-columns: 1fr !important; }}
-    .research-decision-band, .research-grid, .research-library-grid {{ grid-template-columns: 1fr; }}
+    .research-decision-band, .research-grid, .research-library-grid, .work-os-reader-decision {{ grid-template-columns: 1fr; }}
+    .work-os-reader {{ padding: var(--sp-3); }}
+    .work-os-reader-layout {{ display: block; overflow: auto; }}
+    .work-os-reader-sections {{ display: none; }}
+    .work-os-reader-body {{ overflow: visible; }}
     .company-picker-trigger {{ min-block-size: var(--touch-target-size); opacity: 1; transform: none; }}
     .drill-drawer {{ width: 100%; max-width: 100%; border-radius: 0; }}
     input, select, textarea {{ font-size: var(--mobile-control-font-size) !important; }}
@@ -245,6 +272,7 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 </style>
 <div class="work-os-live-status" id="workOsLiveStatus" aria-live="polite" data-generated-at="{stamp}"></div>
+<script id="work-os-action-runtime">{CC_ACTION_JS}</script>
 <script id="work-os-overlay-runtime">{CC_OVERLAY_JS}</script>
 <script id="work-os-production-runtime">
   const WORK_OS_ENDPOINTS = {endpoint_json};
@@ -256,6 +284,10 @@ def _production_runtime(generated_at: datetime) -> str:
   let workOsResearchCompanies = null;
   let workOsCompanyRequestSequence = 0;
   let workOsCompanyRequestController = null;
+  let workOsPeekRequestSequence = 0;
+  let workOsPeekRequestController = null;
+  let workOsReaderContext = null;
+  let workOsFactPlaygroundLoading = null;
   let companyPickerMatches = [];
   let companyPickerActiveIndex = -1;
   const workOsLaunchParams = new URLSearchParams(window.location.search);
@@ -315,14 +347,22 @@ def _production_runtime(generated_at: datetime) -> str:
     trapFocus: true, restoreFocus: true, motion: 'slide-right',
     group: 'work-os-drawer', closeId: 'peekDrawerClose', wireClose: false,
     onOpen: function () {{ peekDrawer.setAttribute('aria-hidden', 'false'); }},
-    onClose: function () {{ peekDrawer.setAttribute('aria-hidden', 'true'); originalClosePeekDrawer(); }}
+    onBeforeClose: function () {{ workOsAbortPeekRequest(); }},
+    onClose: function () {{
+      peekDrawer.setAttribute('aria-hidden', 'true');
+      originalClosePeekDrawer();
+    }}
   }});
   const briefReaderOverlay = briefReader && window.CCOverlay.register(briefReader, {{
     modal: true, priority: window.CCOverlay.PRIORITY.PALETTE, scrim: false,
     trapFocus: true, restoreFocus: true, motion: 'fade',
     group: 'work-os-reader', closeId: 'workOsBriefReaderClose', wireClose: true,
     onOpen: function () {{ briefReader.hidden = false; briefReader.setAttribute('aria-hidden', 'false'); }},
-    onClose: function () {{ briefReader.hidden = true; briefReader.setAttribute('aria-hidden', 'true'); }}
+    onClose: function () {{
+      briefReader.hidden = true;
+      briefReader.setAttribute('aria-hidden', 'true');
+      workOsReaderContext = null;
+    }}
   }});
   const companyPickerOverlay = companyPickerPopover && window.CCOverlay.register(companyPickerPopover, {{
     priority: 0, scrim: false, trapFocus: false, restoreFocus: true,
@@ -372,6 +412,8 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   window.closeWorkOsBriefReader = function () {{ if (briefReaderOverlay) briefReaderOverlay.close(); }};
+  const briefReaderBack = document.getElementById('workOsBriefReaderBack');
+  if (briefReaderBack) briefReaderBack.addEventListener('click', window.closeWorkOsBriefReader);
 
   function escapeWorkOsHtml(value) {{
     return String(value == null ? '' : value)
@@ -382,19 +424,32 @@ def _production_runtime(generated_at: datetime) -> str:
   async function workOsLoadBriefArtifact(artifact) {{
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
+    const meta = document.getElementById('workOsBriefReaderMeta');
+    const sections = document.getElementById('workOsBriefReaderSections');
+    workOsReaderContext = artifact;
     if (title) title.textContent = artifact.ticker + ' · ' + artifact.title;
+    if (meta) meta.textContent = artifact.report_date + ' · ' + String(artifact.coverage_role || 'unknown') + ' coverage';
+    if (sections) sections.replaceChildren();
+    workOsRenderReaderDecision(null);
     if (briefReaderOverlay) briefReaderOverlay.open();
-    if (artifact.reader_mode !== 'shared_body' || !artifact.body_url) {{
-      if (body) body.innerHTML = '<div class="k-well">This legacy brief has not been migrated to the shared reader body. <a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(artifact.standalone_url) + '">Open persisted standalone brief →</a></div>';
+    if (artifact.reader_mode !== 'shared_body') {{
+      if (body) workOsReaderUnavailable(body, artifact, 'legacy_standalone');
       return;
     }}
     if (!body) return;
     body.innerHTML = '<div class="k-well" role="status">Loading complete persisted brief…</div>';
     try {{
-      const response = await fetch(artifact.body_url, {{ headers: {{ Accept: 'application/json' }} }});
-      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const bodyUrl = artifact.body_url || ('/api/work-os/briefs/' + encodeURIComponent(artifact.artifact_id) + '/body');
+      const response = await fetch(bodyUrl, {{ headers: {{ Accept: 'application/json' }} }});
+      if (!response.ok) {{
+        const unavailable = response.status === 409 ? await response.json() : null;
+        const error = new Error('HTTP ' + response.status);
+        error.readerStatus = unavailable && unavailable.status;
+        throw error;
+      }}
       const payload = await response.json();
-      if (!payload || payload.schema_version !== 'report_reader_payload.v1' || !payload.body_html || !payload.style_url) throw new Error('invalid reader payload');
+      if (!payload || payload.schema_version !== 'report_reader_payload.v1' || !payload.body_html || !payload.style_url || !payload.decision) throw new Error('invalid reader payload');
+      workOsRenderReaderDecision(payload.decision);
       const host = document.createElement('div');
       host.className = 'work-os-report-host';
       host.setAttribute('role', 'document');
@@ -405,12 +460,44 @@ def _production_runtime(generated_at: datetime) -> str:
       stylesheet.rel = 'stylesheet';
       stylesheet.href = payload.style_url;
       const content = document.createElement('div');
-      content.className = 'work-os-report-content';
+      content.className = 'work-os-report-content k-doc';
+      content.dataset.readerFormat = 'editorial.v1';
       content.innerHTML = payload.body_html;
       root.append(stylesheet, content);
       body.replaceChildren(host);
+      if (sections && Array.isArray(payload.sections)) {{
+        payload.sections.forEach(function (section) {{
+          if (!section || !section.dom_id || !root.getElementById(section.dom_id)) return;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'k-btn k-btn-quiet k-btn-sm';
+          button.textContent = section.label || workOsHumanizeSection(section.section_id);
+          button.dataset.sectionId = section.section_id;
+          button.addEventListener('click', function () {{
+            root.getElementById(section.dom_id)?.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+          }});
+          sections.appendChild(button);
+        }});
+      }}
+      root.addEventListener('click', function (event) {{
+        const trigger = event.composedPath().find(function (node) {{ return node && node.dataset && node.dataset.peekUrl; }});
+        if (trigger) {{
+          event.preventDefault();
+          window.workOsOpenPeekRoute(trigger.dataset.peekUrl, trigger.dataset.peekTitle || 'Source detail');
+          return;
+        }}
+        const sourceLink = event.composedPath().find(function (node) {{
+          return node && node.tagName === 'A' && typeof node.getAttribute === 'function'
+            && String(node.getAttribute('href') || '').startsWith('/source/');
+        }});
+        if (!sourceLink) return;
+        event.preventDefault();
+        const sourceUrl = new URL(sourceLink.getAttribute('href'), window.location.origin);
+        sourceUrl.searchParams.set('fragment', '1');
+        window.workOsOpenPeekRoute(sourceUrl.pathname + sourceUrl.search + sourceUrl.hash, sourceLink.textContent.trim() || 'Source detail');
+      }});
     }} catch (error) {{
-      body.innerHTML = '<div class="k-well" role="alert">The complete reader body is unavailable. <a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(artifact.standalone_url) + '">Open persisted standalone brief →</a></div>';
+      workOsReaderUnavailable(body, artifact, error && error.readerStatus);
     }}
   }}
 
@@ -473,17 +560,49 @@ def _production_runtime(generated_at: datetime) -> str:
     const ref = document.getElementById('peekRefKey');
     const body = document.getElementById('peekProse');
     if (!ref || !body || !peekOverlay) return;
+    const requestSequence = ++workOsPeekRequestSequence;
+    const parsedRoute = new URL(route, window.location.origin);
+    const sourceLocator = parsedRoute.hash ? parsedRoute.hash.slice(1) : '';
+    if (workOsPeekRequestController) workOsPeekRequestController.abort();
+    const controller = new AbortController();
+    workOsPeekRequestController = controller;
     ref.textContent = title || 'Research detail';
     body.innerHTML = '<div class="k-well" role="status">Loading persisted research artifact…</div>';
     peekOverlay.open();
     try {{
-      const response = await fetch(route, {{ headers: {{ Accept: 'text/html' }} }});
+      const response = await fetch(parsedRoute.pathname + parsedRoute.search, {{
+        signal: controller.signal,
+        headers: {{ Accept: 'text/html' }}
+      }});
       if (!response.ok) throw new Error('HTTP ' + response.status);
-      body.innerHTML = await response.text();
+      const html = await response.text();
+      if (requestSequence !== workOsPeekRequestSequence) return;
+      body.innerHTML = html;
+      if (sourceLocator) {{
+        const located = body.querySelector('#' + CSS.escape(sourceLocator));
+        if (located) {{
+          located.classList.add('is-cited-location');
+          located.scrollIntoView({{ block: 'center' }});
+        }}
+      }}
     }} catch (error) {{
+      if ((error && error.name === 'AbortError') || requestSequence !== workOsPeekRequestSequence) return;
       body.innerHTML = '<div class="k-well" role="alert">The persisted earnings artifact is unavailable.</div>';
+    }} finally {{
+      if (requestSequence === workOsPeekRequestSequence && workOsPeekRequestController === controller) {{
+        workOsPeekRequestController = null;
+      }}
     }}
   }}
+
+  function workOsAbortPeekRequest() {{
+    workOsPeekRequestSequence += 1;
+    if (workOsPeekRequestController) {{
+      workOsPeekRequestController.abort();
+      workOsPeekRequestController = null;
+    }}
+  }}
+  window.workOsOpenPeekRoute = workOsOpenPeekRoute;
 
   document.addEventListener('click', function (event) {{
     const trigger = event.target instanceof Element
@@ -630,10 +749,14 @@ def _production_runtime(generated_at: datetime) -> str:
       document.getElementById('deskTicker').textContent = identity.ticker || normalized;
       document.getElementById('deskCompanyName').textContent = identity.name || company.name;
       document.getElementById('deskCoverageRole').textContent = String(identity.coverage_role || 'unknown') + ' coverage';
-      const decision = desk.current_decision || {{}};
-      document.getElementById('deskOwnerState').textContent = decision.owner_state ? String(decision.owner_state).toUpperCase() : '—';
-      document.getElementById('deskModelState').textContent = decision.model_recommendation ? String(decision.model_recommendation).toUpperCase() : '—';
-      document.getElementById('deskOwnerRevision').textContent = decision.owner_state ? 'Owner · ' + decision.revision : 'No owner decision recorded';
+      const decision = desk.current_decision || {{ relationship: 'unavailable' }};
+      const ownerDecision = decision.owner || null;
+      const modelDecision = decision.model || null;
+      document.getElementById('deskDecisionBand').dataset.freshness = decision.freshness || 'unavailable';
+      document.getElementById('deskOwnerState').textContent = ownerDecision ? String(ownerDecision.value).toUpperCase() : '—';
+      document.getElementById('deskModelState').textContent = modelDecision ? String(modelDecision.value).toUpperCase() : '—';
+      document.getElementById('deskOwnerRevision').textContent = workOsDecisionMeta(ownerDecision, 'No owner decision recorded') + (decision.freshness === 'stale' ? ' · stale' : '');
+      document.getElementById('deskModelRevision').textContent = workOsDecisionMeta(modelDecision, 'No model recommendation recorded');
       const position = desk.position || {{}};
       const hasCockpitPosition = Number.isFinite(company.current_weight_pct);
       const weight = Number.isFinite(position.weight_pct) ? position.weight_pct : (hasCockpitPosition ? company.current_weight_pct : null);
@@ -659,8 +782,10 @@ def _production_runtime(generated_at: datetime) -> str:
       }}).join('') : '<div class="k-well">No governed conditions are attached to the current decision.</div>';
       const questions = Array.isArray(desk.open_questions) ? desk.open_questions : [];
       document.getElementById('deskQuestions').innerHTML = questions.length ? questions.map(function (question) {{
-        return '<div class="k-well" data-stable-id="' + escapeWorkOsHtml(question.stable_id) + '"><strong>' + escapeWorkOsHtml(question.body) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(question.owner) + ' · revision ' + escapeWorkOsHtml(question.revision) + '</div></div>';
-      }}).join('') : '<div class="k-well">No open research questions.</div>';
+        return '<div class="k-well" data-stable-id="' + escapeWorkOsHtml(question.stable_id) + '"><strong>' + escapeWorkOsHtml(question.body) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(question.origin) + ' · ' + escapeWorkOsHtml(question.approval) + ' · revision ' + escapeWorkOsHtml(question.revision) + '</div></div>';
+      }}).join('') : (desk.question_store_status === 'unavailable'
+        ? '<div class="k-well" role="alert">Open-question store unavailable.</div>'
+        : '<div class="k-well">No open research questions.</div>');
       const warnings = Array.isArray(desk.warnings) ? desk.warnings : [];
       const warningBox = document.getElementById('deskWarnings');
       if (warningBox) {{ warningBox.hidden = !warnings.length; warningBox.textContent = warnings.length ? 'Unavailable: ' + warnings.join(', ') : ''; }}
@@ -841,6 +966,110 @@ def _production_runtime(generated_at: datetime) -> str:
     return url.pathname + url.search + url.hash;
   }}
 
+  const deskQuestionCapture = document.getElementById('deskQuestionCapture');
+  if (deskQuestionCapture) deskQuestionCapture.addEventListener('submit', async function (event) {{
+    event.preventDefault();
+    const input = document.getElementById('deskQuestionInput');
+    const status = document.getElementById('deskQuestionCaptureStatus');
+    const body = input ? input.value.trim() : '';
+    if (!body) return;
+    if (status) status.textContent = 'Saving owner question…';
+    try {{
+      const response = await fetch('/api/notes', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json', Accept: 'application/json' }},
+        body: JSON.stringify({{ ticker: window.workOsActiveTicker, kind: 'question', body: body }})
+      }});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      if (input) input.value = '';
+      if (status) status.textContent = 'Question saved';
+      await workOsRenderCompanyDesk(window.workOsActiveTicker);
+    }} catch (error) {{
+      if (status) status.textContent = 'Question could not be saved';
+    }}
+  }});
+
+  function workOsDecisionMeta(state, emptyLabel) {{
+    if (!state) return emptyLabel;
+    const source = state.source_lens ? String(state.source_lens).replaceAll('_', ' ') : state.decided_by;
+    return source + ' · revision ' + state.revision;
+  }}
+
+  function workOsRenderReaderDecision(decision) {{
+    const projection = decision || {{ relationship: 'unavailable' }};
+    const owner = projection.owner || null;
+    const model = projection.model || null;
+    document.getElementById('workOsBriefOwnerState').textContent = owner ? String(owner.value).toUpperCase() : '—';
+    document.getElementById('workOsBriefOwnerMeta').textContent = workOsDecisionMeta(owner, 'No owner decision recorded');
+    document.getElementById('workOsBriefModelState').textContent = model ? String(model.value).toUpperCase() : '—';
+    document.getElementById('workOsBriefModelMeta').textContent = workOsDecisionMeta(model, 'No model recommendation recorded');
+    const relationship = String(projection.relationship || 'unavailable');
+    const freshness = String(projection.freshness || 'unavailable');
+    const relationshipNode = document.getElementById('workOsBriefDecisionRelationship');
+    relationshipNode.textContent = relationship.replaceAll('_', ' ') + ' · ' + freshness;
+    relationshipNode.className = relationship === 'agree' ? 'k-pill k-pill-ok' : (relationship === 'conflict' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn');
+  }}
+
+  function workOsReaderUnavailable(body, artifact, status) {{
+    const reasons = {{
+      legacy_standalone: 'This legacy brief has not been migrated to the shared reader body.',
+      body_missing: 'The indexed shared reader body is missing.',
+      body_checksum_mismatch: 'The persisted reader body failed its integrity check.'
+    }};
+    const message = reasons[status] || 'The complete reader body is unavailable.';
+    body.innerHTML = '<div class="k-well" role="alert">' + escapeWorkOsHtml(message) + ' <a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(artifact.standalone_url) + '">Open persisted standalone brief →</a></div>';
+  }}
+
+  function workOsHumanizeSection(sectionId) {{
+    return String(sectionId || 'section').replace(/^section[-_:]?/i, '').replaceAll('_', ' ').replaceAll('-', ' ');
+  }}
+
+  async function workOsRenderFactPlayground() {{
+    const mount = document.getElementById('workOsFactPlayground');
+    const picker = document.getElementById('workOsFactTicker');
+    const endpoint = WORK_OS_ENDPOINTS['screen-analytics-playground'];
+    if (!mount || !endpoint || mount.dataset.loadedEndpoint === endpoint) return;
+    if (workOsFactPlaygroundLoading) return workOsFactPlaygroundLoading;
+    workOsFactPlaygroundLoading = (async function () {{
+      mount.setAttribute('aria-busy', 'true');
+      mount.innerHTML = '<div class="k-well" role="status">Loading governed facts and metrics…</div>';
+      try {{
+        const companies = await workOsEnsureResearchCompanies();
+        if (picker) {{
+          picker.innerHTML = companies.map(function (company) {{
+            const selected = company.ticker === window.workOsActiveTicker ? ' selected' : '';
+            return '<option value="' + escapeWorkOsHtml(company.ticker) + '"' + selected + '>' +
+              escapeWorkOsHtml(company.ticker + ' · ' + company.name) + '</option>';
+          }}).join('');
+        }}
+        const ticker = String(window.workOsActiveTicker || (companies[0] || {{}}).ticker || '').toUpperCase();
+        const response = await fetch(endpoint + '?fragment=work-os&tickers=' + encodeURIComponent(ticker), {{
+          headers: {{ Accept: 'text/html' }}
+        }});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        mount.innerHTML = await response.text();
+        if (typeof window.initExplorePanel !== 'function') throw new Error('Explore initializer unavailable');
+        window.initExplorePanel();
+        mount.dataset.loadedEndpoint = endpoint;
+      }} catch (error) {{
+        mount.innerHTML = '<div class="k-well" role="alert">Fact &amp; Metric Playground is temporarily unavailable. No prototype values are being shown.</div>';
+      }} finally {{
+        mount.removeAttribute('aria-busy');
+        workOsFactPlaygroundLoading = null;
+      }}
+    }})();
+    return workOsFactPlaygroundLoading;
+  }}
+
+  const workOsFactTicker = document.getElementById('workOsFactTicker');
+  if (workOsFactTicker) workOsFactTicker.addEventListener('change', function () {{
+    const root = document.getElementById('vx-root');
+    if (!root || !workOsFactTicker.value) return;
+    root.dispatchEvent(new CustomEvent('work-os-explore-tickers', {{
+      detail: {{ tickers: [workOsFactTicker.value] }}
+    }}));
+  }});
+
   window.navigateTo = function (screenId, options) {{
     const target = WORK_OS_ENDPOINTS[screenId] ? screenId : 'screen-cockpit';
     if (target === 'screen-workspace' && workOsPortfolioHydration && !(options && options.companyReady)) {{
@@ -849,6 +1078,7 @@ def _production_runtime(generated_at: datetime) -> str:
       workOsRenderCompanyDesk(locationTicker || window.workOsActiveTicker);
     }}
     if (target === 'screen-brief-library') workOsRenderBriefLibrary();
+    if (target === 'screen-analytics-playground') workOsRenderFactPlayground();
     originalNavigateTo(target);
     const currentUrl = window.location.pathname + window.location.search + window.location.hash;
     if (!(options && options.fromHistory) && currentUrl !== workOsScreenUrl(target)) {{
@@ -878,11 +1108,16 @@ def _production_runtime(generated_at: datetime) -> str:
   document.addEventListener('click', function (event) {{
     const trigger = event.target instanceof Element ? event.target.closest('[data-research-chat]') : null;
     if (!trigger) return;
+    const readerScoped = !!(briefReader && briefReader.contains(trigger) && workOsReaderContext);
+    const chatTicker = readerScoped ? workOsReaderContext.ticker : window.workOsActiveTicker;
+    const originSuffix = readerScoped ? ':artifact:' + workOsReaderContext.artifact_id : '';
     window.openWorkOsCopilot({{
-      company_ticker: window.workOsActiveTicker || null,
+      company_ticker: chatTicker || null,
       category: 'research',
-      origin_key: 'work-os:' + String(trigger.getAttribute('data-research-chat') || 'company'),
-      coverage_role_at_creation: (workOsCompanyByTicker(window.workOsActiveTicker) || {{}}).coverage_role || 'unknown',
+      origin_key: 'work-os:' + String(trigger.getAttribute('data-research-chat') || 'company') + originSuffix,
+      coverage_role_at_creation: readerScoped
+        ? (workOsReaderContext.coverage_role || 'unknown')
+        : ((workOsCompanyByTicker(window.workOsActiveTicker) || {{}}).coverage_role || 'unknown'),
       lifecycle_at_creation: 'active'
     }});
   }});
@@ -1020,6 +1255,15 @@ def _add_production_contract(
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
+    html = _FACT_PLAYGROUND_SECTION_RE.sub(
+        render_fact_playground_shell() + "\n\n      ", html, count=1
+    )
+    html = _FACT_PLAYGROUND_RUNTIME_RE.sub(
+        "\n\n    // Governed Fact Playground is mounted from /api/panel/explore.\n\n    // EMBEDDED DCF SLIDERS INSIDE REPORT",
+        html,
+        count=1,
+    )
+    html = html.replace("      updateFactPlaygroundTable();\n", "", 1)
     html = _OPERATIONS_SECTION_RE.sub(
         render_operations_settings_shell(db_path=db_path) + "\n      ", html, count=1
     )
@@ -1093,7 +1337,16 @@ def _add_production_contract(
         f'<style id="work-os-controls-css">{palette_css("dark")}{controls_css("dark")}</style>'
     )
     return html.replace(
-        "</body>", controls + "\n" + reader + "\n" + runtime + "\n" + copilot + "\n</body>", 1
+        "</body>",
+        controls
+        + "\n"
+        + reader
+        + f'\n<script id="work-os-explore-runtime">{EXPLORE_PANEL_JS}</script>\n'
+        + runtime
+        + "\n"
+        + copilot
+        + "\n</body>",
+        1,
     )
 
 

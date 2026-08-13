@@ -24,7 +24,9 @@ memo); these source-level assertions are the CI guard.
 from __future__ import annotations
 
 import inspect
+import json
 import re
+import subprocess
 import sys
 from io import StringIO
 from pathlib import Path
@@ -88,6 +90,79 @@ def test_primitive_provides_focus_trap_and_restore() -> None:
     assert "ev.key === 'Tab'" in CC_OVERLAY_JS
     assert "focusableIn" in CC_OVERLAY_JS
     assert "s.opener" in CC_OVERLAY_JS  # restoreFocus path
+
+
+def test_reopen_invalidates_stale_animated_close_completion() -> None:
+    assert "s.closeGeneration += 1" in CC_OVERLAY_JS
+    assert "s.cancelCloseAnimation()" in CC_OVERLAY_JS
+    assert "s.closeGeneration !== closeGeneration || s.isOpen" in CC_OVERLAY_JS
+    stale_guard = CC_OVERLAY_JS.index("s.closeGeneration !== closeGeneration || s.isOpen")
+    hide = CC_OVERLAY_JS.index("el.hidden = true", stale_guard)
+    on_close = CC_OVERLAY_JS.index("s.opts.onClose", stale_guard)
+    restore = CC_OVERLAY_JS.index("s.opts.restoreFocus", stale_guard)
+    assert stale_guard < hide < on_close < restore
+
+
+def test_overlay_runtime_preserves_scrim_and_external_focus_across_handoffs() -> None:
+    """Execute the real JS state machine; string guards cannot prove races."""
+
+    harness = r"""
+const classes = () => { const s = new Set(); return {
+  add: (...xs) => xs.forEach(x => s.add(x)), remove: (...xs) => xs.forEach(x => s.delete(x)),
+  contains: x => s.has(x)
+}; };
+const listeners = new Map();
+const elements = new Map();
+function element(id) {
+  const e = { id, hidden: true, style: {}, dataset: {}, classList: classes(),
+    addEventListener: (n, f) => { const key=id+':'+n; const a=listeners.get(key)||[]; a.push(f); listeners.set(key,a); },
+    removeEventListener: () => {}, setAttribute: () => {}, appendChild: () => {},
+    querySelectorAll: () => [], contains: x => x === e,
+    focus: () => { document.activeElement = e; }
+  };
+  elements.set(id, e); return e;
+}
+const document = {
+  activeElement: null, body: { appendChild: e => { if (e.id) elements.set(e.id,e); } },
+  getElementById: id => elements.get(id) || null,
+  querySelector: q => q === '.k-scrim' ? elements.get('cc-overlay-scrim') || null : null,
+  createElement: () => element(''), addEventListener: () => {}
+};
+const window = { matchMedia: () => ({ matches: false }), getComputedStyle: e => ({ zIndex: e.style.zIndex || '300' }) };
+global.document = document; global.window = window; global.getComputedStyle = window.getComputedStyle;
+eval(OVERLAY_SOURCE);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+(async () => {
+  const opener = element('opener');
+  const aEl = element('a'), aClose = element('a-close');
+  const bEl = element('b'), bClose = element('b-close');
+  opener.focus();
+  const a = window.CCOverlay.register(aEl, { group:'g', scrim:true, restoreFocus:true, motion:'fade', closeId:'a-close' });
+  const b = window.CCOverlay.register(bEl, { group:'g', scrim:true, restoreFocus:true, motion:'fade', closeId:'b-close' });
+  a.open(); b.open(); await sleep(280);
+  const scrim = document.getElementById('cc-overlay-scrim');
+  if (!b.isOpen() || bEl.hidden || scrim.hidden || document.activeElement !== bClose) throw new Error('group handoff lost active overlay state');
+  b.close(); await sleep(280);
+  if (document.activeElement !== opener) throw new Error('group handoff did not restore external opener');
+
+  const cEl = element('c'), cClose = element('c-close');
+  opener.focus();
+  const c = window.CCOverlay.register(cEl, { group:'c', scrim:true, restoreFocus:true, motion:'fade', closeId:'c-close' });
+  c.open(); c.close(); await sleep(20); c.open(); await sleep(280); c.close(); await sleep(280);
+  if (document.activeElement !== opener || !cEl.hidden) throw new Error('rapid reopen lost original opener');
+  process.stdout.write('ok');
+})().catch(error => { process.stderr.write(error.stack); process.exit(1); });
+"""
+    script = "const OVERLAY_SOURCE = " + json.dumps(CC_OVERLAY_JS) + ";\n" + harness
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "ok"
 
 
 # ---------------------------------------------------------------------------

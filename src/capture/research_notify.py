@@ -386,9 +386,24 @@ def dispatch_callback(
         return "ran"
 
     if kind == "rp" and verb in PROPOSAL_VERBS:
-        status = act_on_proposal(obj_id, verb, db_path=db_path)
         applied = ""
-        if verb == "approve":
+        proposal = get_proposal(obj_id, db_path=db_path)
+        if verb == "approve" and proposal is not None and proposal.kind == "question":
+            from research.question_artifact import approve_question_proposal
+
+            try:
+                note = approve_question_proposal(obj_id, db_path=db_path)
+                status = "approved"
+                applied = f"open question #{note.id} persisted for {note.ticker or 'portfolio'}"
+            except Exception:
+                status = "pending"
+        else:
+            status = act_on_proposal(obj_id, verb, db_path=db_path)
+        if (
+            verb == "approve"
+            and not applied
+            and not (proposal is not None and proposal.kind == "question")
+        ):
             from research.apply import apply_approved_proposal
 
             try:
