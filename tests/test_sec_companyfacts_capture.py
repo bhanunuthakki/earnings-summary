@@ -496,7 +496,7 @@ def test_current_schema_companyfacts_fact_admission_is_ordered(
 
         assert stats.facts_inserted == 2
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
-            "0009_add_ir_approval_store"
+            "0010_add_rehearsal_io_indexes"
         )
         snapshot_documents = conn.execute(
             "SELECT id, doc_type, accession_number, sha256 FROM documents"

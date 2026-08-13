@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0009_add_ir_approval_store"
+_ACTIVE_HEAD = "0010_add_rehearsal_io_indexes"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

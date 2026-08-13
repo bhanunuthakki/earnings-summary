@@ -56,7 +56,7 @@ from provenance.financial_fact_resolution import (
 )
 
 REVISION = "0008_add_fmp_recovery"
-ACTIVE_REVISION = "0009_add_ir_approval_store"
+ACTIVE_REVISION = "0010_add_rehearsal_io_indexes"
 NOW = datetime(2026, 8, 12, 9, 0, 0)
 CONTENT = "c" * 64
 
@@ -798,6 +798,61 @@ def test_legacy_fact_rehydration_rejects_content_mismatch_without_capture(
                 (document_id,),
             ).fetchone()[0]
             == 0
+        )
+    finally:
+        connection.close()
+
+
+def test_legacy_fact_rehydration_rejects_cross_ticker_fact_without_capture(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / "RBRK_income_statement_quarterly.json"
+    raw_path.write_text(
+        json.dumps([{"date": "2026-07-31", "symbol": "RBRK", "period": "Q2", "revenue": 1}]),
+        encoding="utf-8",
+    )
+    db_path, document_id, _ = _upgrade_legacy_fmp_fixture(
+        migrated_db,
+        project_root / "data" / "runtime.db",
+        project_root=project_root,
+        raw_path=raw_path,
+    )
+    connection = _connection(db_path)
+    try:
+        connection.execute(
+            "UPDATE financial_facts SET ticker='WIX' WHERE source_doc_id=?",
+            (document_id,),
+        )
+        connection.commit()
+        link_count_before = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+                (document_id,),
+            ).fetchone()[0]
+        )
+        connection.execute("BEGIN IMMEDIATE")
+        with pytest.raises(ValueError, match="different ticker"):
+            rehydrate_document_fact_observations(
+                connection,
+                document_id=document_id,
+                ticker="RBRK",
+                content_sha256=hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+                inserted_count=0,
+                recorded_at=NOW,
+            )
+        connection.rollback()
+        assert (
+            int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM fact_observation_revisions WHERE source_document_id=?",
+                    (document_id,),
+                ).fetchone()[0]
+            )
+            == link_count_before
         )
     finally:
         connection.close()

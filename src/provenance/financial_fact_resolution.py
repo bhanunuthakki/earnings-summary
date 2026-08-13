@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, TypeAlias, cast
+from typing import Final, Literal, TypeAlias, cast
 from urllib.parse import unquote, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,6 +48,14 @@ _TIER_RANK = {
     "yfinance_fallback": 10,
     "s1_provisional": 0,
 }
+DOCUMENT_FACT_REHYDRATION_SQL: Final = (
+    "SELECT fact.id, fact.ticker, link.fact_row_id "
+    "FROM financial_facts AS fact "
+    "LEFT JOIN fact_observation_revisions AS link "
+    "ON link.source_document_id=? "
+    "AND link.fact_table='financial_facts' AND link.fact_row_id=fact.id "
+    "WHERE fact.source_doc_id=? ORDER BY fact.id"
+)
 
 
 class _CutoverModel(BaseModel):
@@ -215,26 +223,21 @@ def rehydrate_document_fact_observations(
         inserted_count=0,
     )
     rows = conn.execute(
-        "SELECT fact.id, fact.ticker, link.fact_row_id "
-        "FROM financial_facts AS fact "
-        "LEFT JOIN fact_observation_revisions AS link "
-        "ON link.fact_table='financial_facts' AND link.fact_row_id=fact.id "
-        "WHERE fact.source_doc_id=? ORDER BY fact.id",
-        (document_id,),
+        DOCUMENT_FACT_REHYDRATION_SQL,
+        (document_id, document_id),
     ).fetchall()
-    fact_ids: list[int] = []
-    missing_ids: list[int] = []
+    fact_ids: set[int] = set()
+    linked_ids: set[int] = set()
     for row in rows:
         if str(row["ticker"]).upper() != normalized_ticker:
             raise ValueError("document owns a financial fact for a different ticker")
         fact_id = int(row["id"])
-        if fact_id not in fact_ids:
-            fact_ids.append(fact_id)
-        if row["fact_row_id"] is None and fact_id not in missing_ids:
-            missing_ids.append(fact_id)
+        fact_ids.add(fact_id)
+        if row["fact_row_id"] is not None:
+            linked_ids.add(fact_id)
 
     captured_count = 0
-    for fact_id in missing_ids:
+    for fact_id in sorted(fact_ids - linked_ids):
         if capture_fact_row_observation(
             conn,
             fact_table="financial_facts",
