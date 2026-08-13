@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from pipeline.data_policy_settings_panel import render_data_policy_settings_panel
+from pipeline.data_policy_settings_panel import (
+    render_data_policy_settings_panel,
+    render_operations_settings_shell,
+)
 from pipeline.ir_approval_panel import (
     IrApprovalPanelState,
     IrCandidatePolicyState,
@@ -229,10 +234,18 @@ def test_projection_shows_pending_rejected_and_selected_candidates_without_writi
     assert "Current owner decision" in html
     assert "select exact" in html
     assert "Revision 2" in html
-    assert "Review actions are not enabled on this read-only surface" in html
+    assert "Approve or reject policy-current candidates with a reason" in html
+    assert "observation hash is not a document-byte identity" in html
     assert "overflow-wrap:anywhere" in html
     assert "<form" not in html
-    assert "<button" not in html
+    assert 'data-ir-approval-action="approve"' in html
+    assert 'data-ir-approval-action="reject"' in html
+    assert 'data-ir-approval-action="select_exact"' in html
+    assert "Unavailable until captured document bytes have a server-owned hash" in html
+    assert "data-ir-approval-reason" in html
+    assert "JSON.stringify({reason: reason})" in html
+    assert "selected_content_sha256" not in html
+    assert "k-btn-primary" not in html
 
 
 def test_approved_candidate_remains_pending_until_exact_selection(
@@ -311,6 +324,10 @@ def test_candidate_policy_binding_is_stale_only_on_hash_mismatch(
     assert "STALE policy binding" in html
     assert "Rejected" in html
     assert "2026-04-30" in html
+    stale_card = html.split('data-ir-approval-candidate="' + "8" * 64 + '"', 1)[1].split(
+        "</article>", 1
+    )[0]
+    assert stale_card.count(" disabled") == 3
 
 
 def test_untrusted_candidate_and_decision_text_is_escaped(
@@ -337,7 +354,7 @@ def test_untrusted_candidate_and_decision_text_is_escaped(
 
     html = render_ir_approval_panel(read_ir_approval_review(db))
 
-    assert "<script>" not in html
+    assert '<script>alert("title")</script>' not in html
     assert "<img" not in html
     assert 'onmouseover="alert(1)' not in html
     assert "&lt;script&gt;" in html
@@ -363,4 +380,62 @@ def test_data_policy_settings_includes_read_only_ir_review_queue(
     assert 'data-ir-approval-panel="review-queue"' in html
     assert "IR document review queue" in html
     assert "Quarterly results" in html
-    assert "<form" not in html
+    assert 'data-ir-approval-action="approve"' in html
+
+
+def test_work_os_shell_binds_one_delegated_action_listener_that_survives_panel_refresh(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = tmp_path / "shell.db"
+    _create_store(db, migrated_db)
+    _insert_candidate(
+        db,
+        candidate_id="c" * 64,
+        ticker="RBRK",
+        title="Shell hydration candidate",
+        url="https://ir.rubrik.com/shell.pdf",
+        period="2026-04-30",
+    )
+
+    html = render_operations_settings_shell(db_path=db)
+
+    assert html.count("window.__irApprovalActionsBound") == 2  # guard read + write
+    assert "document.addEventListener('click'" in html
+    assert "button.closest('[data-ir-approval-candidate]')" in html
+    assert "panel.outerHTML = result.payload.panel_html" in html
+    assert "card.querySelectorAll('[data-ir-approval-action]')" in html
+    assert "card.getAttribute('aria-busy') === 'true'" in html
+    assert "card.setAttribute('aria-busy', 'true')" in html
+    assert "card.removeAttribute('aria-busy')" in html
+    assert "actionButtons.forEach(function (control) { control.disabled = true; })" in html
+    assert "previouslyEnabled.forEach(function (control) { control.disabled = false; })" in html
+    assert "card.addEventListener" not in html
+    assert "button.addEventListener" not in html
+
+
+def test_ir_action_script_parses_in_node(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    node = shutil.which("node")
+    if node is None:
+        return
+    db = tmp_path / "node.db"
+    _create_store(db, migrated_db)
+    _insert_candidate(
+        db,
+        candidate_id="d" * 64,
+        ticker="RBRK",
+        title="Node parse candidate",
+        url="https://ir.rubrik.com/node.pdf",
+        period="2026-04-30",
+    )
+    html = render_ir_approval_panel(read_ir_approval_review(db))
+    script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+
+    result = subprocess.run(
+        [node, "--check", "-"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

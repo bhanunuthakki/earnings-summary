@@ -239,7 +239,8 @@ def test_panel_is_legible_read_only_and_names_owner_approved_ir_sources() -> Non
     assert "Telemetry unavailable" in html
     assert "Save" not in html
     assert "Run now" not in html
-    assert "fetch(" not in html
+    assert "fetch('/api/ir-approval/candidates/'" in html
+    assert "fetch('http" not in html
     assert "<form" not in html
 
 

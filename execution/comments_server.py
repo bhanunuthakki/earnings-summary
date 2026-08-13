@@ -73,6 +73,10 @@ from comments_server_content_routes import (  # noqa: E402
     register_content_routes,
 )
 from comments_server_dcf_routes import DcfRouteContext, register_dcf_routes  # noqa: E402
+from comments_server_ir_approval_routes import (  # noqa: E402
+    IrApprovalRouteContext,
+    register_ir_approval_routes,
+)
 from comments_server_journal_routes import (  # noqa: E402
     JournalRouteContext,
     register_journal_routes,
@@ -2533,6 +2537,10 @@ def create_app(
     register_settings_routes(
         app,
         SettingsRouteContext(db_path=db_path),
+    )
+    register_ir_approval_routes(
+        app,
+        IrApprovalRouteContext(db_path=db_path, owner_actor=DEFAULT_USER_ID),
     )
     register_journal_routes(
         app,
