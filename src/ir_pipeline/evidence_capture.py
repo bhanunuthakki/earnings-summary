@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,6 +27,7 @@ from ir_pipeline._net import (
     ensure_safe_public_url,
 )
 from ir_pipeline.authority import IRAuthorityEvidence, PublisherEndpointRule
+from ir_pipeline.discover.generic import robots_policy
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -53,6 +56,10 @@ CaptureOutcome = Literal[
     "auth_hard_stop",
 ]
 RobotsCheck = Callable[[str, str], bool]
+RobotsPredicate = Callable[[str], bool]
+RobotsPolicyResolver = Callable[[str], tuple[RobotsPredicate, float]]
+Sleeper = Callable[[float], None]
+_MAX_EXACT_ROBOTS_DELAY_SECONDS = 12.0
 
 
 class IRDocumentCaptureError(RuntimeError):
@@ -216,6 +223,8 @@ def fetch_exact_ir_bytes(
     *,
     session: SessionLike,
     robots_allows: RobotsCheck | None = None,
+    robots_policy_resolver: RobotsPolicyResolver | None = None,
+    sleeper: Sleeper = time.sleep,
 ) -> ExactIRFetchResult:
     """Fetch/checkpoint one approved exact URL, without database mutation."""
 
@@ -251,18 +260,24 @@ def fetch_exact_ir_bytes(
     checkpoint = _load_checkpoint(checkpoint_path, request.task_id)
     entries = {item.expected_document_id: item for item in checkpoint.entries}
     prior = entries.get(candidate.expected_document_id)
-    if prior is None or prior.outcome == "transient_deferred":
+    if prior is None or prior.outcome in {"transient_deferred", "robots_denied"}:
         network_fetched = True
         try:
             ensure_safe_public_url(request.exact_url)
         except UnsafeURLError as exc:
             raise IRDocumentCaptureError("exact IR URL is not public") from exc
+        authorizer = _exact_robots_authorizer(
+            request,
+            robots_allows=robots_allows,
+            robots_policy_resolver=robots_policy_resolver,
+            sleeper=sleeper,
+        )
         entry = _fetch_one(
             session,
             candidate,
             capture_request,
             run_root,
-            robots_allows=robots_allows or _robots_allows,
+            robots_allows=authorizer,
         )
         entries[candidate.expected_document_id] = entry
         _write_checkpoint(checkpoint_path, request.task_id, entries)
@@ -299,6 +314,40 @@ def fetch_exact_ir_bytes(
         storage_uri=target.resolve().as_uri(),
         network_fetched=network_fetched,
     )
+
+
+def _exact_robots_authorizer(
+    request: ExactIRFetchRequest,
+    *,
+    robots_allows: RobotsCheck | None,
+    robots_policy_resolver: RobotsPolicyResolver | None,
+    sleeper: Sleeper,
+) -> RobotsCheck:
+    if robots_allows is not None:
+        return robots_allows
+    resolver = robots_policy_resolver or robots_policy
+    predicate, raw_delay = resolver(request.authority_url)
+    try:
+        delay = float(raw_delay)
+        if not math.isfinite(delay) or delay < 0:
+            raise ValueError("invalid robots crawl delay")
+        delay = min(delay, _MAX_EXACT_ROBOTS_DELAY_SECONDS)
+    except (TypeError, ValueError, OverflowError):
+        return lambda _url, _user_agent: False
+    slept = False
+
+    def _allows(url: str, _user_agent: str) -> bool:
+        nonlocal slept
+        try:
+            allowed = predicate(url)
+        except Exception:
+            return False
+        if allowed and delay and not slept:
+            sleeper(delay)
+            slept = True
+        return allowed
+
+    return _allows
 
 
 class _RawCandidate(_ClosedModel):
