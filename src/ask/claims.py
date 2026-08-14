@@ -261,7 +261,7 @@ def _reconcile(
         return None
     return [
         Claim(
-            text=sentences[idx][:_CLAIM_TEXT_CHARS],
+            text=sentences[idx] if strict else sentences[idx][:_CLAIM_TEXT_CHARS],
             cites=tuple(sorted(cites)),
             supported=supported,
         )

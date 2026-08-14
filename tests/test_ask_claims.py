@@ -345,3 +345,35 @@ def test_strict_grounding_rejects_an_omitted_substantive_clause(
             db_path=tmp_path / "x.db",
             strict=True,
         )
+
+
+def test_strict_grounding_preserves_a_full_long_anchored_span(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer = "Revenue " + ("expanded materially " * 16) + "in the quarter [1]."
+    assert len(answer) > 240
+    _patch_map(
+        monkeypatch,
+        {
+            "claims": [
+                {
+                    "quote": answer[:80],
+                    "cites": [1],
+                    "supported": True,
+                }
+            ]
+        },
+    )
+
+    payload = build_citations_payload(
+        answer,
+        [_item(1)],
+        db_path=tmp_path / "x.db",
+        strict=True,
+    )
+
+    assert payload is not None
+    claims = payload["claims"]
+    assert isinstance(claims, list)
+    assert claims[0]["text"] == answer
