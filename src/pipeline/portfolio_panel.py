@@ -55,6 +55,7 @@ from bear_lint import (
     BearLintReport,
     build_bear_lint,
 )
+from compute.thesis_evaluation_episodes import episode_history_source
 from integrations.portfolio_tracker_client import (
     TAX_BUCKETS,
     AllocationBucket,
@@ -1262,11 +1263,12 @@ def _thesis_rollup_panel(db_path: Path) -> str:
             return ""
         latest: dict[str, str] = {}
         try:
+            source = episode_history_source(conn)
             rows = conn.execute(
-                "SELECT ticker, overall_status FROM thesis_evaluations "
-                "ORDER BY ticker, evaluated_at DESC"
+                f"SELECT ticker, overall_status FROM {source.relation} "
+                f"ORDER BY ticker, {source.latest_checked_column} DESC"  # nosec B608 -- trusted closed relation
             ).fetchall()
-        except sqlite3.Error:
+        except (sqlite3.Error, ValueError):
             return ""
         for r in rows:
             t = str(r[0]).upper()

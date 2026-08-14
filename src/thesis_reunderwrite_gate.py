@@ -45,6 +45,8 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
+from compute.thesis_evaluation_episodes import episode_history_source
+
 _BREACHED_STATUSES: frozenset[str] = frozenset({"warn", "breach"})
 _WS_RX = re.compile(r"\s+")
 
@@ -108,12 +110,13 @@ def breach_onset(conn: sqlite3.Connection, ticker: str) -> str | None:
     stays non-OK). ``None`` when the table/ticker has no history — the caller
     falls back to ``thesis_state.last_updated``."""
     try:
+        source = episode_history_source(conn)
         rows = conn.execute(
-            "SELECT evaluated_at, overall_status FROM thesis_evaluations "
-            "WHERE ticker = ? ORDER BY evaluated_at DESC",
+            f"SELECT evaluated_at, overall_status FROM {source.relation} "
+            f"WHERE ticker = ? ORDER BY {source.first_seen_column} DESC",  # nosec B608 -- trusted closed relation
             (ticker,),
         ).fetchall()
-    except sqlite3.OperationalError:
+    except (sqlite3.OperationalError, ValueError):
         return None
     onset: str | None = None
     for row in rows:

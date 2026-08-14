@@ -15,7 +15,7 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0014_add_ask_grounding_traces"
+ACTIVE_HEAD = "0015_add_ask_grounding_traces"
 
 
 def _config(path: Path) -> Config:

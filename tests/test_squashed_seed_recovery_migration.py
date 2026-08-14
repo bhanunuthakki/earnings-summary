@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0014_add_ask_grounding_traces"
+_ACTIVE_HEAD = "0015_add_ask_grounding_traces"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

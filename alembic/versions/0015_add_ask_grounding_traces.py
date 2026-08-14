@@ -1,7 +1,7 @@
 """Add append-only operational Ask grounding traces.
 
-Revision ID: 0014_add_ask_grounding_traces
-Revises: 0013_add_readme_update_budgets
+Revision ID: 0015_add_ask_grounding_traces
+Revises: 0014_add_thesis_evaluation_episodes
 Create Date: 2026-08-14
 """
 
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0014_add_ask_grounding_traces"
-down_revision = "0013_add_readme_update_budgets"
+revision = "0015_add_ask_grounding_traces"
+down_revision = "0014_add_thesis_evaluation_episodes"
 branch_labels = None
 depends_on = None
 

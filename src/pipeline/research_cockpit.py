@@ -54,6 +54,7 @@ from cockpit_fundamentals import (
 from cockpit_fundamentals import (
     read_materialized_fundamentals,
 )
+from compute.thesis_evaluation_episodes import episode_history_source
 from dcf.latest import latest_dcf_rows
 from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
@@ -762,10 +763,12 @@ def _latest_evaluations(
 ) -> dict[str, tuple[str | None, str | None, dict[str, str]]]:
     """ticker -> (rule summary for the badge hover, evaluated_at,
     kpi_name -> worst rule status) from the latest thesis evaluation."""
+    source = episode_history_source(conn)
     rows = _safe_rows(
         conn,
-        "SELECT ticker, evaluated_at, rule_evaluations_json "
-        "FROM thesis_evaluations ORDER BY ticker, evaluated_at DESC",
+        f"SELECT ticker,{source.latest_checked_column} AS evaluated_at,"
+        f"rule_evaluations_json FROM {source.relation} "
+        f"ORDER BY ticker,{source.latest_checked_column} DESC",  # nosec B608 -- trusted closed relation
     )
     out: dict[str, tuple[str | None, str | None, dict[str, str]]] = {}
     for r in rows:
