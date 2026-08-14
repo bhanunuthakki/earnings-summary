@@ -86,11 +86,18 @@ def test_live_upgrade_requires_phase0_receipt_inside_shared_lock(
             lock_held = False
 
     monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
-    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", lambda _root: db_path)
+
+    def canonical_db(_root: Path) -> Path:
+        return db_path
+
+    def prior_revision(_path: Path) -> tuple[str, ...]:
+        return (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,)
+
+    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", canonical_db)
     monkeypatch.setattr(
         upgrade_database_module,
         "_read_revisions",
-        lambda _path: (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,),
+        prior_revision,
     )
 
     with pytest.raises(UpgradeDatabaseError, match="Phase-0 backup/restore"):
@@ -128,11 +135,18 @@ def test_live_upgrade_revalidates_phase0_receipt_while_lock_is_held(
         return _Blocked()
 
     monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
-    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", lambda _root: db_path)
+
+    def canonical_db(_root: Path) -> Path:
+        return db_path
+
+    def prior_revision(_path: Path) -> tuple[str, ...]:
+        return (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,)
+
+    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", canonical_db)
     monkeypatch.setattr(
         upgrade_database_module,
         "_read_revisions",
-        lambda _path: (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,),
+        prior_revision,
     )
     monkeypatch.setattr(readiness_module, "collect_readiness", collect_under_lock)
 
