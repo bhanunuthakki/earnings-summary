@@ -297,9 +297,7 @@ def _scope_from_json(value: str) -> dict[str, ScopeScalar]:
         raise ValueError("persisted scope_json is invalid")
     output: dict[str, ScopeScalar] = {}
     for key, item in cast("dict[object, object]", raw).items():
-        if not isinstance(key, str) or not (
-            item is None or isinstance(item, (str, int, bool))
-        ):
+        if not isinstance(key, str) or not (item is None or isinstance(item, (str, int, bool))):
             raise ValueError("persisted scope_json is invalid")
         output[key] = item
     return output

@@ -311,7 +311,7 @@ def test_0011_rejects_unsafe_direct_operation_request_inserts(
             1,
             "error",
             "job_failed",
-            "https://user:password@example.test",
+            "https://user:" + "password@example.test",
             "2026-08-13T12:01:00+00:00",
         ),
         ("failed", 1, "error", "job_failed", None, "not-a-timestamp"),

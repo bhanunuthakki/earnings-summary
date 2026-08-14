@@ -19,10 +19,8 @@ exit /b 1
 if errorlevel 1 goto missing_python
 
 set "TRIGGER_ARG="
-if /I "%~1"=="--service-origin" (
-    set "TRIGGER_ARG=--trigger-kind service"
-    shift
-)
+if /I "%ES_JOB_TRIGGER_KIND%"=="service" set "TRIGGER_ARG=--trigger-kind service"
+set "ES_JOB_TRIGGER_KIND="
 
 "%PYTHON_EXE%" -u "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" "%PROJECT_ROOT%\cron\job_runtime.py" %TRIGGER_ARG% --scheduler-wrapper --python-executable "%PYTHON_EXE%" --python-bootstrap "%PROJECT_ROOT%\execution\sqlite_bootstrap.py" -- %*
 exit /b %ERRORLEVEL%

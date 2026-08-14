@@ -34,6 +34,7 @@ def test_pipeline_attempt_inherits_operation_id(monkeypatch: pytest.MonkeyPatch)
         );
         """
     )
+
     def accept_schema(_conn: sqlite3.Connection) -> None:
         return None
 
@@ -50,9 +51,7 @@ def test_pipeline_attempt_inherits_operation_id(monkeypatch: pytest.MonkeyPatch)
     )
 
 
-def test_source_call_inherits_operation_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_source_call_inherits_operation_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "source.db"
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -63,6 +62,7 @@ def test_source_call_inherits_operation_id(
     conn.execute("CREATE TABLE operation_requests (operation_id TEXT PRIMARY KEY)")
     conn.commit()
     conn.close()
+
     def connect_test_db(*_args: object, **_kwargs: object) -> sqlite3.Connection:
         return sqlite3.connect(db_path)
 

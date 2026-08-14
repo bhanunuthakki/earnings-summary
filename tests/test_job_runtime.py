@@ -626,9 +626,12 @@ def test_capture_poller_main_uses_validated_service_origin(
     assert captured["scope"] == {"job": "capture-poller", "origin": "service"}
     with pytest.raises(SystemExit):
         main([*base, "refresh_cache", "portfolio-db", "execution/refresh_cache.py"])
-    assert '--service-origin "capture-poller"' in (
-        PROJECT_ROOT / "cron" / "run_capture_poller.bat"
-    ).read_text(encoding="utf-8")
+    wrapper = (PROJECT_ROOT / "cron" / "run_capture_poller.bat").read_text(encoding="utf-8")
+    assert 'set "ES_JOB_TRIGGER_KIND=service"' in wrapper
+    assert 'run_python.bat" "capture-poller" "capture-poller"' in wrapper
+    shared_wrapper = (PROJECT_ROOT / "cron" / "run_python.bat").read_text(encoding="utf-8")
+    assert 'if /I "%ES_JOB_TRIGGER_KIND%"=="service"' in shared_wrapper
+    assert 'set "ES_JOB_TRIGGER_KIND="' in shared_wrapper
 
 
 @pytest.mark.parametrize(
