@@ -141,8 +141,8 @@ def test_checkpoint_rejects_backdating_invalid_basis_and_false_verification() ->
         )
 
     with pytest.raises(ValidationError, match="cannot verify"):
-        OwnerDecisionCheckpointPayload(
-            **{
+        OwnerDecisionCheckpointPayload.model_validate(
+            {
                 **base.model_dump(mode="python"),
                 "holdings_basis": HoldingsBasis(
                     source="materialized_holdings_snapshot",
@@ -166,8 +166,8 @@ def test_checkpoint_requires_one_typed_ledger_entry_per_changed_ticker() -> None
     }
 
     with pytest.raises(ValidationError, match="exactly one"):
-        OwnerDecisionCheckpointPayload(
-            **{
+        OwnerDecisionCheckpointPayload.model_validate(
+            {
                 **base.model_dump(mode="python"),
                 "legs": (changed_leg,),
                 "ledger_entries": (entry, entry),
@@ -175,8 +175,8 @@ def test_checkpoint_requires_one_typed_ledger_entry_per_changed_ticker() -> None
         )
 
     with pytest.raises(ValidationError, match="entry_kind"):
-        OwnerDecisionCheckpointPayload(
-            **{
+        OwnerDecisionCheckpointPayload.model_validate(
+            {
                 **base.model_dump(mode="python"),
                 "legs": (changed_leg,),
                 "ledger_entries": ({**entry, "entry_kind": "observation"},),
@@ -184,8 +184,8 @@ def test_checkpoint_requires_one_typed_ledger_entry_per_changed_ticker() -> None
         )
 
     with pytest.raises(ValidationError, match="body"):
-        OwnerDecisionCheckpointPayload(
-            **{
+        OwnerDecisionCheckpointPayload.model_validate(
+            {
                 **base.model_dump(mode="python"),
                 "legs": (changed_leg,),
                 "ledger_entries": ({**entry, "body": "   "},),
@@ -198,16 +198,16 @@ def test_sizing_intent_must_match_its_decision_leg() -> None:
     intent = base.sizing_intents[0]
 
     with pytest.raises(ValidationError, match="ticker must match"):
-        OwnerDecisionCheckpointPayload(
-            **{
+        OwnerDecisionCheckpointPayload.model_validate(
+            {
                 **base.model_dump(mode="python"),
                 "sizing_intents": (intent.model_copy(update={"ticker": "AVDV"}),),
             }
         )
 
     with pytest.raises(ValidationError, match="target band must match"):
-        OwnerDecisionCheckpointPayload(
-            **{
+        OwnerDecisionCheckpointPayload.model_validate(
+            {
                 **base.model_dump(mode="python"),
                 "sizing_intents": (
                     intent.model_copy(
@@ -218,8 +218,8 @@ def test_sizing_intent_must_match_its_decision_leg() -> None:
         )
 
     with pytest.raises(ValidationError, match="must repeat"):
-        OwnerDecisionCheckpointPayload(
-            **{
+        OwnerDecisionCheckpointPayload.model_validate(
+            {
                 **base.model_dump(mode="python"),
                 "sizing_intents": (
                     intent.model_copy(update={"target_band": None, "intent_value": 99}),
@@ -228,8 +228,8 @@ def test_sizing_intent_must_match_its_decision_leg() -> None:
         )
 
     with pytest.raises(ValidationError, match="own alternative"):
-        OwnerDecisionCheckpointPayload(
-            **{
+        OwnerDecisionCheckpointPayload.model_validate(
+            {
                 **base.model_dump(mode="python"),
                 "legs": (base.legs[0].model_copy(update={"alternative_leg_id": "wix"}),),
             }
