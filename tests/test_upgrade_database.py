@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -16,6 +17,17 @@ from upgrade_database import ACTIVE_HEAD, UpgradeDatabaseError, upgrade_database
 from execution import portfolio_readiness_receipt as readiness_module
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _authoritative_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_root: Path,
+) -> None:
+    monkeypatch.setattr(
+        upgrade_database_module,
+        "authoritative_managed_runtime_root",
+        lambda: runtime_root.resolve(),
+    )
 
 
 def test_upgrade_requires_safe_sqlite_before_touching_database(
@@ -94,6 +106,7 @@ def test_live_upgrade_requires_phase0_receipt_inside_shared_lock(
     monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
 
     runtime_root = tmp_path / "runtime"
+    _authoritative_runtime(monkeypatch, runtime_root)
 
     def canonical_db(root: Path) -> Path:
         assert root == runtime_root.resolve()
@@ -125,6 +138,7 @@ def test_live_upgrade_revalidates_phase0_receipt_while_lock_is_held(
     receipt_path.write_text("{}", encoding="utf-8")
     lock_held = False
     runtime_root = tmp_path / "runtime"
+    _authoritative_runtime(monkeypatch, runtime_root)
     fetch_events: list[str] = []
 
     @contextmanager
@@ -198,6 +212,55 @@ def test_explicit_database_outside_runtime_requires_isolated_opt_in(tmp_path: Pa
         upgrade_database(db_path, repo_root=ROOT, runtime_root=runtime_root)
 
     assert not db_path.exists()
+
+
+def test_candidate_runtime_cannot_relabel_authoritative_live_db_as_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative_runtime = tmp_path / "managed-runtime"
+    candidate_runtime = tmp_path / "candidate-worktree"
+    live_db = authoritative_runtime / "data" / "portfolio.db"
+    live_db.parent.mkdir(parents=True)
+    live_db.write_bytes(b"live-database-sentinel")
+    before = live_db.read_bytes()
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+    _authoritative_runtime(monkeypatch, authoritative_runtime)
+
+    with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
+        upgrade_database(
+            live_db,
+            repo_root=ROOT,
+            runtime_root=candidate_runtime,
+            allow_isolated_db=True,
+        )
+
+    assert live_db.read_bytes() == before
+
+
+def test_candidate_runtime_cannot_relabel_environment_configured_live_db_as_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative_runtime = tmp_path / "managed-runtime"
+    candidate_runtime = tmp_path / "candidate-worktree"
+    live_db = tmp_path / "configured-live.db"
+    live_db.write_bytes(b"configured-live-database-sentinel")
+    candidate_alias = tmp_path / "candidate-visible-alias.db"
+    os.link(live_db, candidate_alias)
+    before = live_db.read_bytes()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(live_db))
+    _authoritative_runtime(monkeypatch, authoritative_runtime)
+
+    with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
+        upgrade_database(
+            candidate_alias,
+            repo_root=ROOT,
+            runtime_root=candidate_runtime,
+            allow_isolated_db=True,
+        )
+
+    assert live_db.read_bytes() == before
 
 
 def _revision(db_path: Path) -> str:

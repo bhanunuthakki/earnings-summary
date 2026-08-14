@@ -37,6 +37,7 @@ from sqlite_runtime import (
 ACTIVE_BASE = "0001_initial_schema"
 ACTIVE_HEAD = "0013_add_readme_update_budgets"
 OPERATION_EVENTS_CONTRACT_REVISION = "0012_close_operation_event_detail_reason"
+_MANAGED_RUNTIME_REPOSITORY = "earnings-summary"
 
 _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "tracked_companies": frozenset({"ticker", "processing_tier"}),
@@ -68,6 +69,25 @@ class UpgradeReceipt(BaseModel):
     to_revision: str
     backup_path: str | None
     completed_at: str
+
+
+def authoritative_managed_runtime_root() -> Path:
+    """Return the closed laptop runtime identity, independent of CLI arguments."""
+
+    return (
+        Path.home() / ".gemini" / "antigravity" / "runtime" / _MANAGED_RUNTIME_REPOSITORY
+    ).resolve()
+
+
+def _same_database_path(left: Path, right: Path) -> bool:
+    """Compare canonical paths and existing hard-link identities fail-closed."""
+
+    if left == right:
+        return True
+    try:
+        return left.samefile(right)
+    except OSError:
+        return False
 
 
 def _config(repo_root: Path, db_path: Path, *, archived: bool) -> Config:
@@ -280,8 +300,17 @@ def upgrade_database(
     db_path = db_path.resolve()
     repo_root = repo_root.resolve()
     runtime_root = runtime_root.resolve()
-    canonical_portfolio_db = portfolio_db_path(runtime_root).resolve()
-    live_database = db_path == canonical_portfolio_db
+    authoritative_runtime = authoritative_managed_runtime_root()
+    authoritative_live_db = portfolio_db_path(authoritative_runtime).resolve()
+    live_database = _same_database_path(db_path, authoritative_live_db)
+    if live_database and runtime_root != authoritative_runtime:
+        raise UpgradeDatabaseError(
+            "live portfolio DB runtime_root does not match the authoritative managed runtime"
+        )
+    if live_database and allow_isolated_db:
+        raise UpgradeDatabaseError(
+            "authoritative live portfolio DB cannot be treated as an isolated database"
+        )
     if not live_database and not allow_isolated_db:
         raise UpgradeDatabaseError(
             "target database does not match the runtime database; "
