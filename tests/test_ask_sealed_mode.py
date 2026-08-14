@@ -219,3 +219,18 @@ def test_only_exact_fail_closed_no_answer_is_claim_exempt() -> None:
             set(),
             engine._ClaimAuditOutput(claims=()),
         )
+
+
+def test_sealed_answer_prompt_matches_the_exact_span_delivery_gate() -> None:
+    rendered = engine._SEALED_ANSWER_TEMPLATE.render(
+        system_context="context",
+        thread_text="thread",
+        evidence_block="[1] evidence",
+        question="question",
+    )
+
+    assert "Every non-empty clause or sentence" in rendered
+    assert "directly supported" in rendered
+    assert "matching visible" in rendered
+    assert "Omit greetings, headings, questions, pure" in rendered
+    assert "I don't have enough sealed evidence to answer that." in rendered
