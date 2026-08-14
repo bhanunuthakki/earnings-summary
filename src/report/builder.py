@@ -50,6 +50,7 @@ def build_report(
     force_budget_bypass: bool = False,
     force_refresh: bool = False,
     conn: sqlite3.Connection | None = None,
+    generation_date: date | None = None,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -171,7 +172,7 @@ def build_report(
     suppressed_sections = sorted(suppressed_sections_for_ticker(ticker, repo_root))
     return ReportSpec(
         ticker=ticker,
-        generation_date=date.today(),
+        generation_date=generation_date or date.today(),
         repo_root=str(repo_root),
         flavor=flavor,
         llm_enabled=enable_llm,

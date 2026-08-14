@@ -62,14 +62,14 @@ class VersionSummary:
     last_scored_at: str | None
 
 
-def _open(db_path: Path | str) -> sqlite3.Connection | None:
+def _open(db_path: Path | str, *, read_only: bool = False) -> sqlite3.Connection | None:
     p = Path(db_path)
     if not p.exists():
         return None
     try:
         conn = connect_sqlite(
             p,
-            role=SQLiteConnectionRole.WRITER,
+            role=(SQLiteConnectionRole.READ_ONLY if read_only else SQLiteConnectionRole.WRITER),
             # Calibration is an optional compatibility bridge introduced long
             # before the current head; _table_exists gates the narrow write.
             schema_preflight=False,
@@ -160,7 +160,7 @@ def summarize_by_prompt_version(
     summary carries count/avg/min/max plus p25/p50/p75 and the latest
     ``scored_at`` ISO timestamp in the group.
     """
-    conn = _open(db_path)
+    conn = _open(db_path, read_only=True)
     if conn is None or not _table_exists(conn):
         return []
     try:
@@ -236,7 +236,7 @@ def daily_avg_scores(
     Used by the dashboard sparkline. Returns an empty dict when the DB / table
     is missing so the consumer can degrade gracefully.
     """
-    conn = _open(db_path)
+    conn = _open(db_path, read_only=True)
     if conn is None or not _table_exists(conn):
         return {}
     try:

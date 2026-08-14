@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
-from user_state._db import now_iso, open_conn, parse_dt
+from user_state._db import now_iso, open_conn, open_read_conn, parse_dt
 
 MEMO_KINDS: tuple[str, ...] = ("next_dollar", "swap_check", "socratic", "position_review")
 SCORE_STATUSES: tuple[str, ...] = ("pending", "scored", "unscoreable")
@@ -122,7 +122,7 @@ def list_memos(
         where.append("ticker = ?")
         params.append(ticker.upper())
     params.append(int(limit))
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         rows = conn.execute(
             f"SELECT * FROM advisor_memos WHERE {' AND '.join(where)} "
@@ -136,7 +136,7 @@ def list_memos(
 
 def get_memo(memo_id: int, *, db_path: Path | str | None = None) -> AdvisorMemoRow | None:
     """One memo by id, or None."""
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         row = conn.execute("SELECT * FROM advisor_memos WHERE id = ?", (memo_id,)).fetchone()
         return None if row is None else _row_to_dc(row)
