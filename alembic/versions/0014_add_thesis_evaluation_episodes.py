@@ -317,6 +317,27 @@ def upgrade() -> None:
         FROM thesis_evaluation_episodes AS episode
         JOIN thesis_evaluation_episode_members AS anchor
           ON anchor.episode_id=episode.episode_id AND anchor.membership_role='anchor'
+        UNION ALL
+        SELECT
+            raw.id AS id,
+            raw.ticker AS ticker,
+            raw.evaluated_at AS evaluated_at,
+            raw.overall_status AS overall_status,
+            raw.rule_evaluations_json AS rule_evaluations_json,
+            raw.run_id AS run_id,
+            raw.soft_rule_results_json AS soft_rule_results_json,
+            NULL AS episode_id,
+            'legacy_unmapped' AS fingerprint_policy_version,
+            NULL AS evidence_as_of,
+            raw.evaluated_at AS last_seen_at,
+            raw.evaluated_at AS last_checked_at,
+            0 AS duplicate_run_count,
+            1 AS occurrence_count,
+            'partial' AS provenance_completeness
+        FROM thesis_evaluations AS raw
+        LEFT JOIN thesis_evaluation_episode_members AS member
+          ON member.evaluation_id=raw.id
+        WHERE member.evaluation_id IS NULL
         """
     )
     for table in (
