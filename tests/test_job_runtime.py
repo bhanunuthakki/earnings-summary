@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -30,6 +31,26 @@ from runtime.job_runtime import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+class _RequestFields(TypedDict):
+    idempotency_key: str
+    actor: str
+    trace_id: str
+    scope: dict[str, str]
+
+
+def _request_fields(job_name: str, *, trace_id: str = "a" * 32) -> _RequestFields:
+    return {
+        "idempotency_key": f"unit:{job_name}",
+        "actor": "operator",
+        "trace_id": trace_id,
+        "scope": {"job": job_name},
+    }
+
+
+def _no_schema_drift(_repo_root: Path, _job_name: str) -> None:
+    return None
 
 
 _PORTFOLIO_DB_POLICY = {
@@ -502,14 +523,24 @@ def test_scheduler_wrapper_preserves_script_arguments(
         job_name: str,
         write_sets: list[str],
         command: list[str],
+        idempotency_key: str,
+        actor: str,
+        trace_id: str,
+        scope: dict[str, object],
         allow_schema_drift: bool,
+        trigger_kind: str,
     ) -> int:
         captured.update(
             repo_root=repo_root,
             job_name=job_name,
             write_sets=write_sets,
             command=command,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            trace_id=trace_id,
+            scope=scope,
             allow_schema_drift=allow_schema_drift,
+            trigger_kind=trigger_kind,
         )
         return 0
 
@@ -535,7 +566,17 @@ def test_scheduler_wrapper_preserves_script_arguments(
         )
         == 0
     )
-    assert captured == {
+    assert {
+        key: captured[key]
+        for key in (
+            "repo_root",
+            "job_name",
+            "write_sets",
+            "command",
+            "allow_schema_drift",
+            "trigger_kind",
+        )
+    } == {
         "repo_root": tmp_path.resolve(),
         "job_name": "morning_pipeline",
         "write_sets": ["morning-orchestration"],
@@ -549,7 +590,45 @@ def test_scheduler_wrapper_preserves_script_arguments(
             "two words",
         ],
         "allow_schema_drift": False,
+        "trigger_kind": "scheduled",
     }
+    assert captured["actor"] == "task_scheduler"
+    assert captured["scope"] == {"job": "morning_pipeline", "origin": "scheduled"}
+    assert isinstance(captured["idempotency_key"], str)
+    assert isinstance(captured["trace_id"], str)
+
+
+def test_capture_poller_main_uses_validated_service_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_job(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(job_runtime, "run_job", fake_run_job)
+    base = [
+        "--repo-root",
+        str(tmp_path),
+        "--trigger-kind",
+        "service",
+        "--scheduler-wrapper",
+        "--python-executable",
+        "py",
+        "--python-bootstrap",
+        "execution/sqlite_bootstrap.py",
+        "--",
+    ]
+    assert main([*base, "capture-poller", "capture-poller", "execution/capture_poller.py"]) == 0
+    assert captured["trigger_kind"] == "service"
+    assert captured["actor"] == "managed_service"
+    assert captured["scope"] == {"job": "capture-poller", "origin": "service"}
+    with pytest.raises(SystemExit):
+        main([*base, "refresh_cache", "portfolio-db", "execution/refresh_cache.py"])
+    assert '--service-origin "capture-poller"' in (
+        PROJECT_ROOT / "cron" / "run_capture_poller.bat"
+    ).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -576,14 +655,24 @@ def test_interactive_cli_applies_policy_only_to_implicit_defaults(
         job_name: str,
         write_sets: list[str],
         command: list[str],
+        idempotency_key: str,
+        actor: str,
+        trace_id: str,
+        scope: dict[str, object],
         allow_schema_drift: bool,
+        trigger_kind: str,
     ) -> int:
         captured.update(
             repo_root=repo_root,
             job_name=job_name,
             write_sets=write_sets,
             command=command,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            trace_id=trace_id,
+            scope=scope,
             allow_schema_drift=allow_schema_drift,
+            trigger_kind=trigger_kind,
         )
         return 0
 
@@ -595,6 +684,7 @@ def test_interactive_cli_applies_policy_only_to_implicit_defaults(
 
     assert main(argv) == 0
     assert captured["write_sets"] == expected
+    assert captured["trigger_kind"] == "manual"
 
 
 def test_scheduled_and_interactive_known_job_contend_on_same_lane(tmp_path: Path) -> None:
@@ -614,6 +704,7 @@ def test_run_job_writes_machine_readable_health(tmp_path: Path) -> None:
         job_name="unit-job",
         write_sets=["portfolio-db"],
         command=[sys.executable, "-c", "print('ok')"],
+        **_request_fields("unit-job"),
     )
     assert code == 0
     directory = tmp_path / ".tmp" / "job_health" / "unit-job"
@@ -622,10 +713,176 @@ def test_run_job_writes_machine_readable_health(tmp_path: Path) -> None:
     record = json.loads(records[0].read_text(encoding="utf-8"))
     latest = json.loads((directory / "latest.json").read_text(encoding="utf-8"))
     assert latest == record
-    assert latest["schema_version"] == "1"
+    assert latest["schema_version"] == "2"
+    assert latest["trigger_kind"] == "manual"
+    assert latest["operation_id"].startswith("operation:")
+    assert latest["journal_state"] == "unavailable"
+    assert latest["journal_detail_code"] == "request_unavailable"
+    assert latest["journal_reason"]
     assert record["status"] == "ok"
     assert record["severity"] == "info"
     assert record["write_sets"] == ["portfolio-db"]
+
+
+def test_run_job_propagates_complete_journal_context_and_service_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operation_id = "operation:" + "a" * 64
+    trace_id = "b" * 32
+    terminal: dict[str, object] = {}
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+
+    def accept(**_kwargs: object) -> job_runtime._JournalHandle:
+        return job_runtime._JournalHandle(operation_id, trace_id, True)
+
+    def mark_started(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        job_runtime,
+        "_accept_operation_journal",
+        accept,
+    )
+    monkeypatch.setattr(job_runtime, "_mark_operation_journal_started", mark_started)
+
+    def finish(**kwargs: object) -> None:
+        terminal.update(kwargs)
+
+    def child(
+        _command: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        scheduler_owner: tuple[int, str | None] | None,
+    ) -> int:
+        del cwd, scheduler_owner
+        assert env["ES_OPERATION_ID"] == operation_id
+        assert env["ES_TRACE_ID"] == trace_id
+        assert env["ES_STAGE"] == "unit-service"
+        return 0
+
+    monkeypatch.setattr(job_runtime, "_finish_operation_journal", finish)
+    monkeypatch.setattr(job_runtime, "_run_managed_child", child)
+    assert (
+        run_job(
+            repo_root=tmp_path,
+            job_name="unit-service",
+            write_sets=["unit-lane"],
+            command=[sys.executable, "-c", "pass"],
+            **_request_fields("unit-service", trace_id=trace_id),
+            trigger_kind="service",
+        )
+        == 0
+    )
+    assert terminal["operation_id"] == operation_id
+    receipt = json.loads(
+        (tmp_path / ".tmp" / "job_health" / "unit-service" / "latest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt["journal_state"] == "complete"
+    assert receipt["trigger_kind"] == "service"
+
+
+def test_lock_skipped_request_has_terminal_but_no_started_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operation_id = "operation:" + "c" * 64
+    trace_id = "d" * 32
+    events: list[tuple[str, object]] = []
+    monkeypatch.setenv("ES_JOB_LOCK_WAIT_S", "0")
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+
+    def accept(**_kwargs: object) -> job_runtime._JournalHandle:
+        return job_runtime._JournalHandle(operation_id, trace_id, True)
+
+    def started(**kwargs: object) -> None:
+        events.append(("started", kwargs))
+
+    def terminal_event(**kwargs: object) -> None:
+        events.append(("terminal", kwargs))
+
+    def child_must_not_run(
+        _command: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        scheduler_owner: tuple[int, str | None] | None,
+    ) -> int:
+        del cwd, env, scheduler_owner
+        pytest.fail("lock-skipped job must not run child")
+
+    monkeypatch.setattr(
+        job_runtime,
+        "_accept_operation_journal",
+        accept,
+    )
+    monkeypatch.setattr(job_runtime, "_mark_operation_journal_started", started)
+    monkeypatch.setattr(job_runtime, "_finish_operation_journal", terminal_event)
+    monkeypatch.setattr(job_runtime, "_run_managed_child", child_must_not_run)
+    with JobLock(tmp_path, "holder", ["unit-lane"], wait_s=0):
+        assert (
+            run_job(
+                repo_root=tmp_path,
+                job_name="contender",
+                write_sets=["unit-lane"],
+                command=[sys.executable, "-c", "pass"],
+                **_request_fields("contender", trace_id=trace_id),
+            )
+            == 75
+        )
+    assert [kind for kind, _payload in events] == ["terminal"]
+    terminal = events[0][1]
+    assert isinstance(terminal, dict)
+    assert terminal["status"] == "skipped_locked"
+
+
+def test_journal_failure_never_changes_child_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+
+    def fail_journal(**_kwargs: object) -> job_runtime._JournalHandle:
+        raise RuntimeError("journal unavailable")
+
+    monkeypatch.setattr(job_runtime, "_accept_operation_journal", fail_journal)
+
+    def child(
+        _command: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        scheduler_owner: tuple[int, str | None] | None,
+    ) -> int:
+        del cwd, scheduler_owner
+        assert "ES_OPERATION_ID" not in env
+        assert len(env["ES_TRACE_ID"]) == 32
+        assert env["ES_STAGE"] == "refresh_cache"
+        return 3
+
+    monkeypatch.setattr(job_runtime, "_run_managed_child", child)
+    assert (
+        run_job(
+            repo_root=tmp_path,
+            job_name="refresh_cache",
+            write_sets=["fmp-refresh"],
+            command=[sys.executable, "-c", "pass"],
+            **_request_fields("refresh_cache"),
+            trigger_kind="scheduled",
+        )
+        == 3
+    )
+    receipt = json.loads(
+        (tmp_path / ".tmp" / "job_health" / "refresh_cache" / "latest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt["status"] == "partial"
+    assert receipt["exit_code"] == 3
+    assert receipt["journal_state"] == "unavailable"
+    assert receipt["journal_detail_code"] == "request_unavailable"
+    assert "RuntimeError" in receipt["journal_reason"]
+    assert receipt["trigger_kind"] == "scheduled"
 
 
 @pytest.mark.parametrize(
@@ -668,6 +925,7 @@ def test_refresh_cache_contained_exits_do_not_mask_failures_or_unrelated_jobs(
         job_name=job_name,
         write_sets=["fmp-refresh"],
         command=[sys.executable, "-c", "pass"],
+        **_request_fields(job_name),
     )
 
     assert code == child_exit

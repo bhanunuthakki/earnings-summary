@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import AbstractContextManager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
@@ -45,6 +45,7 @@ _CONTEXT_LOCK_CLAIMS: ContextVar[dict[str, tuple[str, int]] | None] = ContextVar
 _ALLOW_NESTED_LOCKS: ContextVar[bool] = ContextVar("allow_nested_job_locks", default=False)
 _SCHEDULER_OWNER: tuple[int, str | None] | None = None
 _CREATE_SUSPENDED = getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
+_SERVICE_ORIGIN_JOBS: frozenset[str] = frozenset({"capture-poller"})
 
 # Closed scheduler compatibility policy. These wrappers historically declared
 # the coarse portfolio-db write set even though most of their wall time is
@@ -613,6 +614,19 @@ class HealthRecord:
     exit_code: int
     severity: str
     detail: str | None = None
+    operation_id: str | None = None
+    trigger_kind: str | None = None
+    journal_state: str | None = None
+    journal_detail_code: str | None = None
+    journal_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _JournalHandle:
+    operation_id: str
+    trace_id: str
+    accepted: bool
+    started: bool = False
 
 
 class JobLock(AbstractContextManager["JobLock"]):
@@ -860,7 +874,7 @@ def _write_health(repo_root: Path, record: HealthRecord) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     stamp = record.ended_at.replace(":", "-").replace("+", "_")
     path = directory / f"{stamp}.json"
-    payload = json.dumps({"schema_version": "1", **asdict(record)}, sort_keys=True) + "\n"
+    payload = json.dumps({"schema_version": "2", **asdict(record)}, sort_keys=True) + "\n"
     path.write_text(payload, encoding="utf-8")
 
     latest = directory / "latest.json"
@@ -912,13 +926,138 @@ def _child_health_semantics(job_name: str, exit_code: int) -> tuple[str, str, st
     return "failed", "error", None
 
 
+def _safe_journal_reason(value: object) -> str:
+    """Return a bounded credential-redacted receipt reason, never raw telemetry."""
+
+    from log_redact import redact
+
+    raw = f"{type(value).__name__}: {value}" if isinstance(value, BaseException) else str(value)
+    return (redact(raw).strip() or "operation journal unavailable")[:240]
+
+
+def _planned_journal_handle(*, idempotency_key: str, trace_id: str) -> _JournalHandle:
+    from operations.journal import make_operation_id
+
+    operation_id = make_operation_id(idempotency_key)
+    return _JournalHandle(operation_id=operation_id, trace_id=trace_id, accepted=False)
+
+
+def _accept_operation_journal(
+    *,
+    repo_root: Path,
+    idempotency_key: str,
+    actor: str,
+    job_name: str,
+    write_sets: list[str],
+    trigger_kind: str,
+    trace_id: str,
+    scope: Mapping[str, str | int | bool | None],
+    command: list[str],
+    started_at: datetime,
+    planned: _JournalHandle,
+) -> _JournalHandle:
+    """Persist request acceptance before lock acquisition, without a started event."""
+
+    from operations.journal import (
+        OperationRequestInput,
+        accept_operation_request,
+        make_command_sha256,
+    )
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    conn = connect_sqlite(
+        portfolio_db_path(repo_root),
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
+    try:
+        request = accept_operation_request(
+            conn,
+            OperationRequestInput(
+                idempotency_key=idempotency_key,
+                actor=actor,
+                job_name=job_name,
+                trigger_kind=trigger_kind,
+                write_sets=tuple(sorted(set(write_sets))),
+                trace_id=trace_id,
+                stage=job_name,
+                scope=scope,
+                command_sha256=make_command_sha256(command),
+                requested_at=started_at,
+            ),
+        )
+    finally:
+        conn.close()
+    if request.operation_id != planned.operation_id:
+        raise RuntimeError("operation journal returned a foreign operation identity")
+    return _JournalHandle(request.operation_id, request.trace_id, True)
+
+
+def _mark_operation_journal_started(
+    *, repo_root: Path, operation_id: str, started_at: datetime
+) -> None:
+    """Persist started only after all mutable write-set locks are held."""
+
+    from operations.journal import mark_operation_started
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    conn = connect_sqlite(
+        portfolio_db_path(repo_root),
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
+    try:
+        mark_operation_started(conn, operation_id=operation_id, occurred_at=started_at)
+    finally:
+        conn.close()
+
+
+def _finish_operation_journal(
+    *,
+    repo_root: Path,
+    operation_id: str,
+    status: str,
+    exit_code: int,
+    severity: str,
+    ended_at: datetime,
+    detail_reason: str | None,
+) -> None:
+    """Persist the terminal event. Callers own the fail-open boundary."""
+
+    from operations.journal import finish_operation
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    conn = connect_sqlite(
+        portfolio_db_path(repo_root),
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
+    try:
+        finish_operation(
+            conn,
+            operation_id=operation_id,
+            status=status,
+            exit_code=exit_code,
+            severity=severity,
+            occurred_at=ended_at,
+            detail_reason=detail_reason,
+        )
+    finally:
+        conn.close()
+
+
 def run_job(
     *,
     repo_root: Path,
     job_name: str,
     write_sets: list[str],
     command: list[str],
+    idempotency_key: str,
+    actor: str,
+    trace_id: str,
+    scope: Mapping[str, str | int | bool | None],
     allow_schema_drift: bool = False,
+    trigger_kind: str = "manual",
 ) -> int:
     """Run command under locks and write a durable JSON health record.
 
@@ -928,10 +1067,14 @@ def run_job(
     """
     if not command:
         raise ValueError("job command is required")
+    from operations.journal import TriggerKind
+
+    trigger = TriggerKind(trigger_kind)
     from runtime.secrets import load_project_env
 
     load_project_env(repo_root)
     started = datetime.now(UTC)
+    planned_journal = _planned_journal_handle(idempotency_key=idempotency_key, trace_id=trace_id)
     # Preflight AFTER load_project_env: EARNINGS_SUMMARY_DB_PATH may come from
     # the project env file, and checking the wrong database proves nothing.
     blocked = None if allow_schema_drift else _schema_preflight(repo_root, job_name)
@@ -951,15 +1094,76 @@ def run_job(
                 exit_code=SCHEMA_DRIFT_EXIT_CODE,
                 severity="error",
                 detail=blocked,
+                operation_id=planned_journal.operation_id,
+                trigger_kind=trigger.value,
+                journal_state="unavailable",
+                journal_detail_code="schema_drift",
+                journal_reason=_safe_journal_reason(blocked),
             ),
         )
         return SCHEMA_DRIFT_EXIT_CODE
+    journal_detail_code: str | None = None
+    journal_reason: str | None = None
+    try:
+        journal = _accept_operation_journal(
+            repo_root=repo_root,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            job_name=job_name,
+            write_sets=write_sets,
+            trigger_kind=trigger.value,
+            trace_id=trace_id,
+            scope=scope,
+            command=command,
+            started_at=started,
+            planned=planned_journal,
+        )
+    except Exception as exc:
+        # The journal reports its own availability in the v2 receipt. It is
+        # telemetry, never authority over the scheduled child's outcome.
+        journal = planned_journal
+        journal_detail_code = "request_unavailable"
+        journal_reason = _safe_journal_reason(exc)
     try:
         with JobLock(repo_root, job_name, write_sets) as lock:
-            child_env = {
+            if journal.accepted:
+                try:
+                    _mark_operation_journal_started(
+                        repo_root=repo_root,
+                        operation_id=journal.operation_id,
+                        started_at=datetime.now(UTC),
+                    )
+                except Exception as exc:
+                    journal_detail_code = "start_unavailable"
+                    journal_reason = _safe_journal_reason(exc)
+                else:
+                    journal = _JournalHandle(
+                        operation_id=journal.operation_id,
+                        trace_id=journal.trace_id,
+                        accepted=True,
+                        started=True,
+                    )
+            base_child_env = {
                 **os.environ,
                 "EARNINGS_SUMMARY_JOB_LOCK_PROOF": lock.inheritance_proof(),
             }
+            # Never leak an inherited operation identity into a new top-level
+            # job. If the request row was committed, propagate all three
+            # fields; otherwise preserve only trace/stage for LLM correlation.
+            base_child_env.pop("ES_OPERATION_ID", None)
+            if journal.accepted:
+                from operations import context as operation_context
+
+                with operation_context.activate(
+                    operation_id=journal.operation_id,
+                    trace_id=journal.trace_id,
+                    stage=job_name,
+                ):
+                    child_env = operation_context.child_env(base_child_env)
+            else:
+                child_env = base_child_env
+                child_env["ES_TRACE_ID"] = journal.trace_id
+                child_env["ES_STAGE"] = job_name
             managed_command = ensure_managed_python_argv(repo_root, command)
             exit_code = _run_managed_child(
                 managed_command,
@@ -979,6 +1183,26 @@ def run_job(
         severity = "error"
         detail = str(exc)
     ended = datetime.now(UTC)
+    journal_state = "unavailable"
+    if journal.accepted:
+        try:
+            _finish_operation_journal(
+                repo_root=repo_root,
+                operation_id=journal.operation_id,
+                status=status,
+                exit_code=exit_code,
+                severity=severity,
+                ended_at=ended,
+                detail_reason=detail,
+            )
+        except Exception as exc:
+            journal_state = "unavailable"
+            if journal_detail_code is None:
+                journal_detail_code = "terminal_unavailable"
+                journal_reason = _safe_journal_reason(exc)
+        else:
+            if journal_detail_code is None:
+                journal_state = "complete"
     _write_health(
         repo_root,
         HealthRecord(
@@ -990,6 +1214,11 @@ def run_job(
             exit_code=exit_code,
             severity=severity,
             detail=detail,
+            operation_id=journal.operation_id,
+            trigger_kind=trigger.value,
+            journal_state=journal_state,
+            journal_detail_code=journal_detail_code,
+            journal_reason=journal_reason,
         ),
     )
     return exit_code
@@ -1004,6 +1233,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write-set", action="append", default=[])
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--scheduler-wrapper", action="store_true")
+    parser.add_argument("--trigger-kind", choices=("scheduled", "service"))
     parser.add_argument(
         "--allow-schema-drift",
         action="store_true",
@@ -1029,6 +1259,9 @@ def main(argv: list[str] | None = None) -> int:
         if len(command) < 3:
             parser.error("--scheduler-wrapper requires JOB WRITE_SET SCRIPT [SCRIPT_ARGS ...]")
         job_name, write_set, *script_command = command
+        trigger_kind = args.trigger_kind or "scheduled"
+        if trigger_kind == "service" and job_name not in _SERVICE_ORIGIN_JOBS:
+            parser.error("service origin is not approved for this job")
         command = [
             args.python_executable,
             "-u",
@@ -1038,6 +1271,8 @@ def main(argv: list[str] | None = None) -> int:
         ]
         write_sets = _scheduler_write_sets(job_name, [write_set])
     else:
+        if args.trigger_kind is not None:
+            parser.error("--trigger-kind requires --scheduler-wrapper")
         if args.job is None:
             parser.error("--job is required")
         job_name = args.job
@@ -1046,6 +1281,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.write_set
             else _scheduler_write_sets(job_name, ["portfolio-db"])
         )
+        trigger_kind = "manual"
     previous_owner = _SCHEDULER_OWNER
     if args.scheduler_wrapper and os.name == "nt":
         # sqlite_bootstrap runpy-executes this module in the same process. Its
@@ -1053,12 +1289,24 @@ def main(argv: list[str] | None = None) -> int:
         owner_pid = os.getppid()
         _SCHEDULER_OWNER = (owner_pid, _process_start_identity(owner_pid))
     try:
+        invocation_id = uuid4().hex
         return run_job(
             repo_root=args.repo_root.resolve(),
             job_name=job_name,
             write_sets=write_sets,
             command=command,
+            idempotency_key=f"job-runtime/v2:{trigger_kind}:{job_name}:{invocation_id}",
+            actor=(
+                "managed_service"
+                if trigger_kind == "service"
+                else "task_scheduler"
+                if trigger_kind == "scheduled"
+                else "operator"
+            ),
+            trace_id=invocation_id,
+            scope={"job": job_name, "origin": trigger_kind},
             allow_schema_drift=args.allow_schema_drift,
+            trigger_kind=trigger_kind,
         )
     finally:
         _SCHEDULER_OWNER = previous_owner

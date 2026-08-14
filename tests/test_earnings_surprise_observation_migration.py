@@ -15,7 +15,7 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0010_add_rehearsal_io_indexes"
+ACTIVE_HEAD = "0011_add_operations_journal"
 
 
 def _config(path: Path) -> Config:

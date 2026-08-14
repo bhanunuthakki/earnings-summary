@@ -12,7 +12,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0010_add_rehearsal_io_indexes"
+HEAD = "0011_add_operations_journal"
 RETAINED_TABLES = {
     "archive_generations",
     "ask_exchange_artifacts",

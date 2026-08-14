@@ -10,7 +10,7 @@ from alembic.config import Config
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "0010_add_rehearsal_io_indexes"
+REVISION = "0011_add_operations_journal"
 
 
 def _config(path: Path) -> Config:

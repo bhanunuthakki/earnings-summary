@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ObservationState = Literal["current", "missing", "stale", "invalid"]
 SchedulerTaskState = Literal["Ready", "Running", "Disabled", "Unknown", "Missing"]
@@ -140,7 +140,7 @@ class ServiceObservation(ObservationEnvelope):
 
 
 class JobHealthRow(FrozenModel):
-    schema_version: Literal["1"]
+    schema_version: Literal["1", "2"]
     job: str
     write_sets: tuple[str, ...]
     started_at: datetime
@@ -149,6 +149,14 @@ class JobHealthRow(FrozenModel):
     exit_code: int
     severity: JobHealthSeverity
     detail: str | None = None
+    operation_id: str | None = None
+    trigger_kind: Literal["manual", "scheduled", "service"] | None = None
+    journal_state: Literal["complete", "unavailable"] | None = None
+    journal_detail_code: (
+        Literal["request_unavailable", "start_unavailable", "terminal_unavailable", "schema_drift"]
+        | None
+    ) = None
+    journal_reason: str | None = Field(default=None, min_length=1, max_length=240)
 
     @field_validator("started_at", "ended_at")
     @classmethod
@@ -156,6 +164,34 @@ class JobHealthRow(FrozenModel):
         if value.tzinfo is None:
             raise ValueError("job health timestamps must be timezone-aware")
         return value
+
+    @model_validator(mode="after")
+    def _versioned_correlation(self) -> JobHealthRow:
+        correlation = (
+            self.operation_id,
+            self.trigger_kind,
+            self.journal_state,
+            self.journal_detail_code,
+            self.journal_reason,
+        )
+        if self.schema_version == "1":
+            if any(value is not None for value in correlation):
+                raise ValueError("v1 job health receipts cannot contain v2 correlation fields")
+            return self
+        if any(value is None for value in correlation[:3]):
+            raise ValueError("v2 job health receipts require complete operation correlation")
+        if self.operation_id is None or not (
+            self.operation_id.startswith("operation:")
+            and len(self.operation_id) == 74
+            and all(character in "0123456789abcdef" for character in self.operation_id[10:])
+        ):
+            raise ValueError("v2 operation_id is not canonical")
+        detail = (self.journal_detail_code, self.journal_reason)
+        if self.journal_state == "complete" and any(value is not None for value in detail):
+            raise ValueError("complete operation journals cannot contain an unavailable reason")
+        if self.journal_state == "unavailable" and any(value is None for value in detail):
+            raise ValueError("unavailable operation journals require a closed reason")
+        return self
 
 
 class JobReceiptObservation(ObservationEnvelope):

@@ -13,7 +13,7 @@ from provenance.financial_fact_resolution import DOCUMENT_FACT_REHYDRATION_SQL
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0009_add_ir_approval_store"
-HEAD = "0010_add_rehearsal_io_indexes"
+REVISION = "0010_add_rehearsal_io_indexes"
 FACT_INDEX = "ix_financial_facts_source_doc_id_id"
 LINK_INDEX = "ix_fact_observation_revisions_source_fact_observation"
 
@@ -82,7 +82,7 @@ def test_upgrade_adds_exact_rehydration_indexes_and_downgrade_removes_them(
     path = migrated_db(tmp_path / "rehearsal-io.db", target=PRIOR_HEAD)
     config = _config(path)
 
-    _upgrade_increment(config, HEAD)
+    _upgrade_increment(config, REVISION)
     with sqlite3.connect(path) as conn:
         assert _index_columns(conn, FACT_INDEX) == ["source_doc_id", "id"]
         assert _index_columns(conn, LINK_INDEX) == [
@@ -104,7 +104,7 @@ def test_rehydration_query_uses_both_indexes_without_table_scan(
 ) -> None:
     path = migrated_db(tmp_path / "rehydration-plan.db", target=PRIOR_HEAD)
     _seed_representative_facts(path, fact_count=3_300)
-    _upgrade_increment(_config(path), HEAD)
+    _upgrade_increment(_config(path), REVISION)
 
     with sqlite3.connect(path) as conn:
         plan = [

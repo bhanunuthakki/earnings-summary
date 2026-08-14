@@ -19,6 +19,7 @@ from hashlib import sha256
 from typing import TypeAlias
 
 from models.runs import StageName, StageStatus
+from operations.context import current as current_operation_context
 from schema_compat import require_current_for_write
 
 JsonScalar: TypeAlias = str | int | float | bool | None
@@ -282,11 +283,47 @@ def start_run(
                 "(pipeline_key, directive, ticker_scope, first_started_at) VALUES (?, ?, ?, ?)",
                 (pipeline_key, directive, scope, _iso_datetime(current)),
             )
-            conn.execute(
+            attempt_columns = _columns(conn, "pipeline_attempts")
+            active_operation = current_operation_context()
+            operation_id = (
+                active_operation.operation_id
+                if active_operation is not None and "operation_id" in attempt_columns
+                else None
+            )
+            if operation_id is not None:
+                persisted = conn.execute(
+                    "SELECT 1 FROM operation_requests WHERE operation_id=?",
+                    (operation_id,),
+                ).fetchone()
+                operation_id = operation_id if persisted is not None else None
+            attempt_sql = (
                 "INSERT INTO pipeline_attempts "
+                "(attempt_id, pipeline_key, started_at, ended_at, status, error_summary, "
+                "operation_id) VALUES (?, ?, ?, NULL, ?, NULL, ?)"
+                if "operation_id" in attempt_columns
+                else "INSERT INTO pipeline_attempts "
                 "(attempt_id, pipeline_key, started_at, ended_at, status, error_summary) "
-                "VALUES (?, ?, ?, NULL, ?, NULL)",
-                (run_id, pipeline_key, _iso_datetime(current), StageStatus.IN_PROGRESS.value),
+                "VALUES (?, ?, ?, NULL, ?, NULL)"
+            )
+            attempt_values = (
+                (
+                    run_id,
+                    pipeline_key,
+                    _iso_datetime(current),
+                    StageStatus.IN_PROGRESS.value,
+                    operation_id,
+                )
+                if "operation_id" in attempt_columns
+                else (
+                    run_id,
+                    pipeline_key,
+                    _iso_datetime(current),
+                    StageStatus.IN_PROGRESS.value,
+                )
+            )
+            conn.execute(
+                attempt_sql,
+                attempt_values,
             )
             conn.execute(
                 "INSERT INTO ingestion_runs "
