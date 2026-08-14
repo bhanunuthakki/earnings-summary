@@ -16,6 +16,8 @@ import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from compute.thesis_evaluation_episodes import episode_history_source
+
 
 @dataclass(slots=True)
 class AnalysisRow:
@@ -50,9 +52,9 @@ class LlmCallRow:
 
 @dataclass(slots=True)
 class AnalysisLog:
-    rows: list[AnalysisRow] = field(default_factory=list)
-    recent_alerts: list[AlertRow] = field(default_factory=list)
-    recent_llm_calls: list[LlmCallRow] = field(default_factory=list)
+    rows: list[AnalysisRow] = field(default_factory=lambda: list[AnalysisRow]())
+    recent_alerts: list[AlertRow] = field(default_factory=lambda: list[AlertRow]())
+    recent_llm_calls: list[LlmCallRow] = field(default_factory=lambda: list[LlmCallRow]())
     llm_cost_30d_usd: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
@@ -97,13 +99,16 @@ def _has(conn: sqlite3.Connection, table: str) -> bool:
 def _thesis_eval_row(conn: sqlite3.Connection, t: str, log: AnalysisLog) -> None:
     if not _has(conn, "thesis_evaluations"):
         return
+    source = episode_history_source(conn)
     latest = conn.execute(
-        "SELECT overall_status, evaluated_at FROM thesis_evaluations "
-        "WHERE UPPER(ticker)=? ORDER BY evaluated_at DESC LIMIT 1",
+        f"SELECT overall_status,{source.latest_checked_column} AS evaluated_at "
+        f"FROM {source.relation} WHERE UPPER(ticker)=? "
+        f"ORDER BY {source.latest_checked_column} DESC LIMIT 1",  # nosec B608 -- trusted closed relation
         (t,),
     ).fetchone()
     n = conn.execute(
-        "SELECT COUNT(*) FROM thesis_evaluations WHERE UPPER(ticker)=?", (t,)
+        f"SELECT COUNT(*) FROM {source.relation} WHERE UPPER(ticker)=?",  # nosec B608 -- trusted closed relation
+        (t,),
     ).fetchone()[0]
     if latest is None:
         log.rows.append(AnalysisRow("Thesis evaluation", None, "never run"))

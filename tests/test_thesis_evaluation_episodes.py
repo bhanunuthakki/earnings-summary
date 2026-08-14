@@ -80,6 +80,7 @@ def _seed_raw(connection: sqlite3.Connection, *, run_id: str, severity: EpisodeS
         "VALUES ('WIX','2026-08-14T09:00:00+00:00',?,'[]',?)",
         (severity.value, run_id),
     )
+    assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
 
 
@@ -106,9 +107,8 @@ def _check(
 
 def test_forward_semantic_input_is_order_stable() -> None:
     first = _semantic_input()
-    second = ForwardSemanticInput(
-        **{
-            **first.model_dump(),
+    second = first.model_copy(
+        update={
             "hard_rules": tuple(reversed(first.hard_rules)),
             "accepted_observations": tuple(reversed(first.accepted_observations)),
         }

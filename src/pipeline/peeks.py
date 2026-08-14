@@ -47,6 +47,7 @@ from typing import NamedTuple, cast
 
 from alerts import AlertRow, get_alert, list_alerts, list_queued_actions_for_alert
 from compute.metrics_engine.io import latest_ttm_value
+from compute.thesis_evaluation_episodes import episode_history_source
 from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
@@ -392,12 +393,13 @@ def _latest_pe_ttm(conn: sqlite3.Connection, ticker: str) -> float | None:
 
 def _latest_overall_status(conn: sqlite3.Connection, ticker: str) -> str | None:
     try:
+        source = episode_history_source(conn)
         row = conn.execute(
-            "SELECT overall_status FROM thesis_evaluations "
-            "WHERE ticker = ? ORDER BY evaluated_at DESC LIMIT 1",
+            f"SELECT overall_status FROM {source.relation} WHERE ticker = ? "
+            f"ORDER BY {source.latest_checked_column} DESC LIMIT 1",  # nosec B608 -- trusted closed relation
             (ticker,),
         ).fetchone()
-    except sqlite3.Error:
+    except (sqlite3.Error, ValueError):
         return None
     if row is None or row[0] is None:
         return None

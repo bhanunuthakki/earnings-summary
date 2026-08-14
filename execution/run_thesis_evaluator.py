@@ -43,10 +43,6 @@ from thesis_reunderwrite_gate import ReUnderwriteBlockedError  # noqa: E402
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _MATERIAL_TABLE_QUERIES = {
-    "thesis_state": (
-        "PRAGMA table_info(thesis_state)",
-        "SELECT * FROM thesis_state WHERE UPPER(ticker) = ?",
-    ),
     "kpi_definitions": (
         "PRAGMA table_info(kpi_definitions)",
         "SELECT * FROM kpi_definitions WHERE UPPER(ticker) = ?",
@@ -54,10 +50,6 @@ _MATERIAL_TABLE_QUERIES = {
     "fact_overrides": (
         "PRAGMA table_info(fact_overrides)",
         "SELECT * FROM fact_overrides WHERE UPPER(ticker) = ?",
-    ),
-    "thesis_evaluations": (
-        "PRAGMA table_info(thesis_evaluations)",
-        "SELECT * FROM thesis_evaluations WHERE UPPER(ticker) = ?",
     ),
     "decisions": (
         "PRAGMA table_info(decisions)",

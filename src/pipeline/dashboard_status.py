@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import comments
+from compute.thesis_evaluation_episodes import episode_history_source
 from models.companies import Company
 from pipeline.queries import BRIEFED_LIST_TYPES, tracked_companies_for_user
 from provenance.selection import selected_transcripts_relation
@@ -168,9 +169,10 @@ def _open_comments_count(repo_root: Path, ticker: str) -> int:
 
 
 def _latest_breach_status(conn: sqlite3.Connection, ticker: str) -> str | None:
+    source = episode_history_source(conn)
     cur = conn.execute(
-        "SELECT overall_status FROM thesis_evaluations "
-        "WHERE ticker = ? ORDER BY evaluated_at DESC LIMIT 1",
+        f"SELECT overall_status FROM {source.relation} WHERE ticker = ? "
+        f"ORDER BY {source.latest_checked_column} DESC LIMIT 1",  # nosec B608 -- trusted closed relation
         (ticker.upper(),),
     )
     row = cur.fetchone()

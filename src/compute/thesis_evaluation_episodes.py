@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
@@ -185,9 +186,33 @@ class EpisodeWriteResult(_FrozenModel):
     replayed: bool = False
 
 
+@dataclass(frozen=True)
+class EpisodeHistorySource:
+    """Trusted relation and clock columns for old and episode schemas."""
+
+    relation: str
+    first_seen_column: str
+    latest_checked_column: str
+
+
 def _episode_id(*, ticker: str, semantic_sha256: str, severity: EpisodeSeverity) -> str:
     key = "\n".join((_POLICY_VERSION, ticker, semantic_sha256, severity.value))
     return f"{_EPISODE_PREFIX}{_sha256(key)}"
+
+
+def forward_episode_id(*, semantic: ForwardSemanticInput, severity: EpisodeSeverity) -> str:
+    """Return the deterministic identity used by ``record_forward_episode``.
+
+    Callers use this read-only helper to decide whether the first raw execution
+    row must be inserted as the episode anchor.  The store still rechecks the
+    semantic uniqueness and result determinism inside the write transaction.
+    """
+
+    return _episode_id(
+        ticker=semantic.ticker,
+        semantic_sha256=semantic.semantic_input_sha256,
+        severity=severity,
+    )
 
 
 def _check_id(*, ticker: str, run_id: str) -> str:
@@ -269,11 +294,7 @@ def record_forward_episode(
     evaluator nondeterminism.  The caller owns commit/rollback.
     """
 
-    episode_id = _episode_id(
-        ticker=semantic.ticker,
-        semantic_sha256=semantic.semantic_input_sha256,
-        severity=check.severity,
-    )
+    episode_id = forward_episode_id(semantic=semantic, severity=check.severity)
     check_id = _check_id(ticker=semantic.ticker, run_id=check.run_id)
     rule_json = _projection_json(check.rule_evaluations)
     if rule_json is None:
@@ -477,9 +498,23 @@ def episode_history_relation(connection: sqlite3.Connection) -> str:
     raise EpisodeStoreError("no thesis evaluation history relation is available")
 
 
+def episode_history_source(connection: sqlite3.Connection) -> EpisodeHistorySource:
+    """Return the closed read model used by every owner-facing consumer."""
+
+    relation = episode_history_relation(connection)
+    return EpisodeHistorySource(
+        relation=relation,
+        first_seen_column="evaluated_at",
+        latest_checked_column=(
+            "last_checked_at" if relation == "v_thesis_evaluation_history" else "evaluated_at"
+        ),
+    )
+
+
 __all__ = [
     "AcceptedObservationInput",
     "EpisodeCheckInput",
+    "EpisodeHistorySource",
     "EpisodeIdempotencyConflictError",
     "EpisodeNondeterminismError",
     "EpisodeSeverity",
@@ -489,5 +524,7 @@ __all__ = [
     "ProvenanceCompleteness",
     "SemanticRuleInput",
     "episode_history_relation",
+    "episode_history_source",
+    "forward_episode_id",
     "record_forward_episode",
 ]

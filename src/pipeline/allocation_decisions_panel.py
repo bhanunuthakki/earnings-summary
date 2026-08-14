@@ -57,6 +57,7 @@ from typing import cast
 
 from attribution import SkillDecomposition, decompose_alpha
 from calibration_guard import confidence_note, is_confident
+from compute.thesis_evaluation_episodes import episode_history_source
 from decision_calibration import (
     CalibrationStats,
     CohortPeriod,
@@ -457,9 +458,11 @@ def portfolio_holdings(conn: sqlite3.Connection) -> list[tuple[str, str | None]]
 
 
 def latest_verdicts(conn: sqlite3.Connection) -> dict[str, str]:
+    source = episode_history_source(conn)
     rows = _safe_rows(
         conn,
-        "SELECT ticker, overall_status FROM thesis_evaluations ORDER BY ticker, evaluated_at DESC",
+        f"SELECT ticker, overall_status FROM {source.relation} "
+        f"ORDER BY ticker, {source.latest_checked_column} DESC",  # nosec B608 -- trusted closed relation
     )
     out: dict[str, str] = {}
     for r in rows:
