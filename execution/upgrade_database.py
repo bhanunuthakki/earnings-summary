@@ -12,6 +12,7 @@ then run the active cleanup/recovery migrations.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import sqlite3
 from collections.abc import Callable
@@ -38,6 +39,7 @@ ACTIVE_BASE = "0001_initial_schema"
 ACTIVE_HEAD = "0013_add_readme_update_budgets"
 OPERATION_EVENTS_CONTRACT_REVISION = "0012_close_operation_event_detail_reason"
 _MANAGED_RUNTIME_REPOSITORY = "earnings-summary"
+_WINDOWS_CSIDL_PROFILE = 0x0028
 
 _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "tracked_companies": frozenset({"ticker", "processing_tier"}),
@@ -71,11 +73,38 @@ class UpgradeReceipt(BaseModel):
     completed_at: str
 
 
+def trusted_account_home() -> Path:
+    """Resolve the OS account home without consulting process environment."""
+
+    if os.name == "nt":
+        # ``Path.home()`` trusts USERPROFILE/HOME, so it cannot anchor a guard
+        # whose callers may control their environment. SHGetFolderPathW asks
+        # the Windows shell for the current account's registered profile.
+        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        profile = ctypes.create_unicode_buffer(32_768)
+        result = shell32.SHGetFolderPathW(
+            None,
+            _WINDOWS_CSIDL_PROFILE,
+            None,
+            0,
+            profile,
+        )
+        if result != 0 or not profile.value:
+            raise UpgradeDatabaseError(
+                f"Windows account profile lookup failed with HRESULT 0x{result & 0xFFFFFFFF:08x}"
+            )
+        return Path(profile.value).resolve()
+
+    import pwd
+
+    return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+
+
 def authoritative_managed_runtime_root() -> Path:
-    """Return the closed laptop runtime identity, independent of CLI arguments."""
+    """Return the closed laptop runtime identity, independent of caller input."""
 
     return (
-        Path.home() / ".gemini" / "antigravity" / "runtime" / _MANAGED_RUNTIME_REPOSITORY
+        trusted_account_home() / ".gemini" / "antigravity" / "runtime" / _MANAGED_RUNTIME_REPOSITORY
     ).resolve()
 
 
@@ -88,6 +117,21 @@ def _same_database_path(left: Path, right: Path) -> bool:
         return left.samefile(right)
     except OSError:
         return False
+
+
+def authoritative_managed_database_paths(runtime_root: Path) -> tuple[Path, ...]:
+    """Return every DB identity that must retain live-cutover protections.
+
+    The default managed-runtime path is always protected. A configured DB is
+    protected in addition, never instead, so EARNINGS_SUMMARY_DB_PATH cannot
+    redirect the guard away from the real managed database.
+    """
+
+    default_database = (runtime_root / "data" / "portfolio.db").resolve()
+    configured_database = portfolio_db_path(runtime_root).resolve()
+    if _same_database_path(default_database, configured_database):
+        return (default_database,)
+    return (default_database, configured_database)
 
 
 def _config(repo_root: Path, db_path: Path, *, archived: bool) -> Config:
@@ -301,8 +345,10 @@ def upgrade_database(
     repo_root = repo_root.resolve()
     runtime_root = runtime_root.resolve()
     authoritative_runtime = authoritative_managed_runtime_root()
-    authoritative_live_db = portfolio_db_path(authoritative_runtime).resolve()
-    live_database = _same_database_path(db_path, authoritative_live_db)
+    authoritative_live_databases = authoritative_managed_database_paths(authoritative_runtime)
+    live_database = any(
+        _same_database_path(db_path, protected_db) for protected_db in authoritative_live_databases
+    )
     if live_database and runtime_root != authoritative_runtime:
         raise UpgradeDatabaseError(
             "live portfolio DB runtime_root does not match the authoritative managed runtime"

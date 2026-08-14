@@ -30,6 +30,21 @@ def _authoritative_runtime(
     )
 
 
+def test_authoritative_runtime_ignores_process_home_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted_home = upgrade_database_module.trusted_account_home()
+    monkeypatch.setenv("HOME", str(tmp_path / "spoof-home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "spoof-userprofile"))
+
+    assert upgrade_database_module.trusted_account_home() == trusted_home
+    assert (
+        upgrade_database_module.authoritative_managed_runtime_root()
+        == (trusted_home / ".gemini" / "antigravity" / "runtime" / "earnings-summary").resolve()
+    )
+
+
 def test_upgrade_requires_safe_sqlite_before_touching_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -230,6 +245,59 @@ def test_candidate_runtime_cannot_relabel_authoritative_live_db_as_isolated(
     with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
         upgrade_database(
             live_db,
+            repo_root=ROOT,
+            runtime_root=candidate_runtime,
+            allow_isolated_db=True,
+        )
+
+    assert live_db.read_bytes() == before
+
+
+def test_environment_redirect_cannot_unprotect_default_managed_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative_runtime = tmp_path / "managed-runtime"
+    candidate_runtime = tmp_path / "candidate-worktree"
+    live_db = authoritative_runtime / "data" / "portfolio.db"
+    live_db.parent.mkdir(parents=True)
+    live_db.write_bytes(b"default-live-database-sentinel")
+    before = live_db.read_bytes()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "decoy.db"))
+    _authoritative_runtime(monkeypatch, authoritative_runtime)
+
+    with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
+        upgrade_database(
+            live_db,
+            repo_root=ROOT,
+            runtime_root=candidate_runtime,
+            allow_isolated_db=True,
+        )
+
+    assert live_db.read_bytes() == before
+
+
+def test_candidate_runtime_cannot_relabel_symlink_to_live_db_as_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative_runtime = tmp_path / "managed-runtime"
+    candidate_runtime = tmp_path / "candidate-worktree"
+    live_db = authoritative_runtime / "data" / "portfolio.db"
+    live_db.parent.mkdir(parents=True)
+    live_db.write_bytes(b"symlinked-live-database-sentinel")
+    candidate_alias = tmp_path / "candidate-visible-symlink.db"
+    try:
+        candidate_alias.symlink_to(live_db)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+    before = live_db.read_bytes()
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+    _authoritative_runtime(monkeypatch, authoritative_runtime)
+
+    with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
+        upgrade_database(
+            candidate_alias,
             repo_root=ROOT,
             runtime_root=candidate_runtime,
             allow_isolated_db=True,
