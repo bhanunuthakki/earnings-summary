@@ -126,7 +126,68 @@ def test_upgrade_database_bridges_archived_revision_with_verified_backup(
     assert _revision(backup_path) == "0273_post_earnings_readout_budget"
 
 
-def test_managed_wrapper_upgrades_exact_0010_with_backup_and_journal_schema(
+def test_archived_bridge_rejects_closed_detail_lookalike_before_revision_mutation(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lookalike-closed-journal.db"
+    upgrade_database(db_path, repo_root=ROOT)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            DROP TRIGGER trg_operation_events_no_update;
+            DROP TRIGGER trg_operation_events_no_delete;
+            DROP INDEX ix_operation_events_operation_id;
+            DROP TABLE operation_events;
+            CREATE TABLE operation_events (
+                event_id TEXT NOT NULL PRIMARY KEY,
+                operation_id TEXT NOT NULL,
+                event_kind TEXT NOT NULL,
+                event_sha256 TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                status TEXT,
+                exit_code INTEGER,
+                severity TEXT,
+                detail_code TEXT,
+                detail_reason TEXT,
+                CONSTRAINT ck_lookalike_detail CHECK (
+                    detail_reason IS NULL OR detail_reason='terminal_detail_withheld'
+                )
+            );
+            UPDATE alembic_version
+            SET version_num='0273_post_earnings_readout_budget';
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    backup_path = tmp_path / "lookalike.before.db"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "execution" / "sqlite_bootstrap.py"),
+            str(ROOT / "execution" / "upgrade_database.py"),
+            "--db-path",
+            str(db_path),
+            "--repo-root",
+            str(ROOT),
+            "--backup-path",
+            str(backup_path),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "operation_events" in result.stderr
+    assert _revision(db_path) == "0273_post_earnings_readout_budget"
+    assert _revision(backup_path) == "0273_post_earnings_readout_budget"
+
+
+def test_managed_wrapper_upgrades_exact_0010_to_0012_with_backup_and_closed_journal_schema(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db_path = migrated_db(tmp_path / "exact-0010.db", target="0010_add_rehearsal_io_indexes")
@@ -163,6 +224,10 @@ def test_managed_wrapper_upgrades_exact_0010_with_backup_and_journal_schema(
             "operation_events",
             "ix_llm_calls_trace_id_called_at",
         }
+        event_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='operation_events'"
+        ).fetchone()[0]
+        assert "terminal_detail_withheld" in event_sql
     finally:
         conn.close()
 

@@ -10,7 +10,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from log_redact import redact  # noqa: E402
+from log_redact import redact, sanitize_operational_text  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -55,6 +55,72 @@ def test_bearer_word_not_overmatched() -> None:
     assert redact("the bearer of the news") == "the bearer of the news"
 
 
+def test_basic_word_not_overmatched() -> None:
+    assert redact("a basic analysis remains readable") == "a basic analysis remains readable"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+        "https" + "://owner:" + "password" + "@example.test/private",
+        "x-api-key: top-secret-value",
+        "x_api_key=top-secret-value",
+        "x api key = top-secret-value",
+        "api-key: top-secret-value",
+        "api key = top-secret-value",
+    ],
+)
+def test_basic_and_flexible_api_key_forms_are_masked(raw: str) -> None:
+    output = redact(raw)
+    assert "password" not in output
+    assert "top-secret-value" not in output
+    assert "dXNlcjpwYXNzd29yZA==" not in output
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "Authorization: " + "Basic " + "ALPHABETONLYCREDENTIAL",
+        "Proxy-Authorization: " + "Basic " + "ALPHABETONLYCREDENTIAL",
+        "x-api-key: prefix ALPHABETONLYCREDENTIAL suffix; next=visible",
+        ("api" + "_key") + ' = "prefix ALPHABETONLYCREDENTIAL suffix"; next=visible',
+        "password = prefix ALPHABETONLYCREDENTIAL suffix, next=visible",
+    ],
+)
+def test_header_and_assignment_values_are_fully_masked(raw: str) -> None:
+    output = redact(raw)
+
+    assert "ALPHABETONLYCREDENTIAL" not in output
+    if "next=visible" in raw:
+        assert "next=visible" in output
+
+
+def test_bearer_headers_and_standalone_b64token_are_fully_masked() -> None:
+    credential = "ALPHABETONLY" + "~+TAILONLY/=="
+    samples = (
+        "Authorization: " + "Bearer " + credential + "\ntrace=safe",
+        "Proxy-Authorization: " + "Bearer " + credential + "\ntrace=safe",
+        "request failed Bearer " + credential + "; trace=safe",
+    )
+
+    for raw in samples:
+        output = redact(raw)
+        assert credential not in output
+        assert "TAILONLY" not in output
+        assert "trace=safe" in output
+
+
+@pytest.mark.parametrize("delimiter", [")", "]", "}", '"', "'", ":", ";"])
+def test_standalone_bearer_stops_at_any_non_b64token_delimiter(delimiter: str) -> None:
+    credential = "ALPHABETONLY" + "~+TAILONLY/=="
+
+    output = redact("request failed Bearer " + credential + delimiter + " suffix=safe")
+
+    assert "TAILONLY" not in output
+    assert delimiter + " suffix=safe" in output
+
+
 @pytest.mark.parametrize(
     "key",
     ["api_key", "apikey", "token", "secret", "password", "access_token", "auth_token"],
@@ -87,6 +153,37 @@ def test_clean_text_unchanged() -> None:
         "nothing sensitive here, just NU Q1 2026 revenue"
     )
     assert redact("monkey=banana") == "monkey=banana"
+
+
+def test_operational_text_persisted_mode_removes_urls_paths_credentials_and_bounds() -> None:
+    sentinel = "PERSISTED-RAW-CREDENTIAL-7319"
+    output = sanitize_operational_text(
+        f"failed https://example.test/private?x-api-key={sentinel} "
+        + r"C:\private\owner\job.py "
+        + "x" * 500,
+        mode="persisted",
+    )
+    assert sentinel not in output
+    assert "https://example.test" not in output
+    assert "C:\\private" not in output
+    assert "[url]" in output
+    assert "[path]" in output
+    assert len(output) <= 240
+
+
+def test_operational_text_presentation_mode_preserves_public_urls_only() -> None:
+    sentinel = "PRESENTATION-RAW-CREDENTIAL-7319"
+    output = sanitize_operational_text(
+        f"https://example.test/public?api_key={sentinel}; "
+        + "file:///C:/private/owner/job.py; "
+        + r"C:\private\owner\job.py",
+        mode="presentation",
+    )
+    assert sentinel not in output
+    assert "https://example.test/public?api_key=***" in output
+    assert "file://[path]" in output
+    assert "C:\\private" not in output
+    assert len(output) <= 240
 
 
 @pytest.mark.parametrize(

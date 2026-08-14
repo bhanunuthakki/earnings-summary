@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Protocol, cast
 from uuid import uuid4
 
+from log_redact import sanitize_operational_text
 from runtime.python_process import ensure_managed_python_argv
 
 
@@ -874,7 +875,14 @@ def _write_health(repo_root: Path, record: HealthRecord) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     stamp = record.ended_at.replace(":", "-").replace("+", "_")
     path = directory / f"{stamp}.json"
-    payload = json.dumps({"schema_version": "2", **asdict(record)}, sort_keys=True) + "\n"
+    record_payload = cast("dict[str, object]", asdict(record))
+    if record.detail is not None:
+        record_payload["detail"] = sanitize_operational_text(record.detail, mode="persisted")
+    if record.journal_reason is not None:
+        record_payload["journal_reason"] = sanitize_operational_text(
+            record.journal_reason, mode="persisted"
+        )
+    payload = json.dumps({"schema_version": "2", **record_payload}, sort_keys=True) + "\n"
     path.write_text(payload, encoding="utf-8")
 
     latest = directory / "latest.json"
@@ -929,10 +937,10 @@ def _child_health_semantics(job_name: str, exit_code: int) -> tuple[str, str, st
 def _safe_journal_reason(value: object) -> str:
     """Return a bounded credential-redacted receipt reason, never raw telemetry."""
 
-    from log_redact import redact
-
     raw = f"{type(value).__name__}: {value}" if isinstance(value, BaseException) else str(value)
-    return (redact(raw).strip() or "operation journal unavailable")[:240]
+    return (
+        sanitize_operational_text(raw, mode="persisted").strip() or "operation journal unavailable"
+    )
 
 
 def _planned_journal_handle(*, idempotency_key: str, trace_id: str) -> _JournalHandle:
