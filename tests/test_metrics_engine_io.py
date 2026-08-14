@@ -15,8 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from compute.metrics_engine.io import compute_for_ticker, resolve_classification
-from compute.metrics_engine.registry import ReasonCode
+from compute.metrics_engine.engine import ComputedValue
+from compute.metrics_engine.inputs import CanonicalConcept
+from compute.metrics_engine.io import (
+    _persist_attempt,  # pyright: ignore[reportPrivateUsage]
+    compute_for_ticker,
+    resolve_classification,
+)
+from compute.metrics_engine.registry import REGISTRY, ReasonCode
 from models.companies import AccountingStandard, BusinessModelClass
 from models.facts import FactLocator, LocatorKind
 from sources.price import LivePrice
@@ -155,6 +161,86 @@ def _insert_fact(
         "VALUES (?, ?, ?, ?, ?, 'USD', 'actual', ?)",
         (ticker, period_end, fpt, line_item, value, source_doc_id),
     )
+
+
+@pytest.mark.parametrize(
+    ("source_types", "formula_key", "lineage", "expected_detail"),
+    [
+        (
+            ("sec_companyfacts",),
+            "gross_margin",
+            [
+                (CanonicalConcept.REVENUE, datetime(2026, 6, 30), 1),
+                (CanonicalConcept.GROSS_PROFIT, datetime(2026, 6, 30), 1),
+            ],
+            "companyfacts_input_requires_derivation_seal",
+        ),
+        (
+            ("fmp", "sec_companyfacts"),
+            "gross_margin",
+            [
+                (CanonicalConcept.REVENUE, datetime(2026, 6, 30), 1),
+                (CanonicalConcept.GROSS_PROFIT, datetime(2026, 6, 30), 2),
+            ],
+            "companyfacts_input_requires_derivation_seal",
+        ),
+        (
+            ("fmp",),
+            "pe_ttm",
+            [
+                (CanonicalConcept.EPS_DILUTED, datetime(2026, 6, 30), 1),
+                (CanonicalConcept.PRICE, datetime(2026, 8, 14, tzinfo=UTC), None),
+            ],
+            "vendor_price_has_no_immutable_observation",
+        ),
+    ],
+)
+def test_cutover_defers_unsealed_derived_kpi_before_fact_insert(
+    conn: sqlite3.Connection,
+    source_types: tuple[str, ...],
+    formula_key: str,
+    lineage: list[tuple[CanonicalConcept, datetime, int | None]],
+    expected_detail: str,
+) -> None:
+    """A cutover DB records the attempt but never fabricates a derived observation."""
+
+    for expected_id, source_type in enumerate(source_types, start=1):
+        document_id = _insert_doc(conn, "TEST", datetime(2026, 6, 30))
+        assert document_id == expected_id
+        conn.execute(
+            "UPDATE documents SET source_type = ? WHERE id = ?",
+            (source_type, document_id),
+        )
+    conn.execute(
+        "CREATE TABLE fact_observation_revisions ("
+        "fact_table TEXT NOT NULL, fact_row_id INTEGER NOT NULL, logical_key TEXT NOT NULL)"
+    )
+    formula = REGISTRY[(formula_key, 1)]
+
+    for _ in range(2):
+        _persist_attempt(
+            conn,
+            ticker="TEST",
+            period_end=datetime(2026, 6, 30),
+            fiscal_period_type="TTM" if formula.period_grid == "ttm" else "Q2",
+            formula=formula,
+            formula_id=1,
+            result=ComputedValue(value=Decimal("12.5")),
+            lineage=lineage,
+        )
+
+    attempt = conn.execute(
+        "SELECT status, reason_code, reason_detail, kpi_fact_id FROM metric_computation_attempts"
+    ).fetchone()
+    assert attempt is not None
+    assert tuple(attempt) == (
+        "not_computable",
+        ReasonCode.UNSEALED_LINEAGE.value,
+        expected_detail,
+        None,
+    )
+    assert conn.execute("SELECT COUNT(*) FROM metric_computation_attempts").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
 
 
 # 8 consecutive calendar quarters (2 years), revenue growing 10% YoY on
