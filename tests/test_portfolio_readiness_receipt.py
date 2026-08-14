@@ -102,12 +102,49 @@ def test_backup_restore_receipt_binds_source_snapshot_and_verifier(tmp_path: Pat
     assert receipt.verified is True
     assert receipt.source_db_resolved_path == str(source.resolve())
     assert receipt.source_db_revision == readiness.ACTIVE_HEAD
+    assert receipt.source_db_file_token is not None
     assert receipt.restored_db_revision == readiness.ACTIVE_HEAD
     assert receipt.snapshot_sha256 == _sha(tmp_path / "snapshot.db")
     assert receipt.verifier_code_sha256 == backup_receipt.verifier_code_sha256()
     assert backup_receipt.evidence_id_is_valid(receipt)
     assert receipt.authorizes_downstream_write is False
     assert receipt.downstream_locked_revalidation_required is True
+
+
+def test_backup_restore_receipt_rejects_a_later_wal_only_commit(tmp_path: Path) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    writer = sqlite3.connect(source)
+    try:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("CREATE TABLE facts (value TEXT NOT NULL)")
+        writer.execute("INSERT INTO facts(value) VALUES ('old')")
+        writer.commit()
+
+        snapshot = tmp_path / "snapshot.db"
+        create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+        receipt = backup_receipt.collect_backup_restore_receipt(
+            source_db=source,
+            snapshot_db=snapshot,
+        )
+        assert receipt.verified is True
+        main_identity = (source.stat().st_size, source.stat().st_mtime_ns)
+
+        writer.execute("UPDATE facts SET value = 'new'")
+        writer.commit()
+        assert (source.stat().st_size, source.stat().st_mtime_ns) == main_identity
+        assert source.with_name(source.name + "-wal").is_file()
+
+        reasons = backup_receipt.validate_receipt_for_source(
+            receipt,
+            source_db=source,
+            source_revision=readiness.ACTIVE_HEAD,
+            require_current_identity=True,
+        )
+        assert "backup_restore_source_identity_stale" in reasons
+        assert "backup_restore_source_content_stale" in reasons
+    finally:
+        writer.close()
 
 
 @pytest.mark.parametrize(
