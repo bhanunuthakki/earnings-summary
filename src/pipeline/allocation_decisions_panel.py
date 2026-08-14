@@ -57,7 +57,7 @@ from typing import cast
 
 from attribution import SkillDecomposition, decompose_alpha
 from calibration_guard import confidence_note, is_confident
-from compute.thesis_evaluation_episodes import episode_history_source
+from compute.thesis_evaluation_episodes import EpisodeStoreError, episode_history_source
 from decision_calibration import (
     CalibrationStats,
     CohortPeriod,
@@ -458,7 +458,13 @@ def portfolio_holdings(conn: sqlite3.Connection) -> list[tuple[str, str | None]]
 
 
 def latest_verdicts(conn: sqlite3.Connection) -> dict[str, str]:
-    source = episode_history_source(conn)
+    try:
+        source = episode_history_source(conn)
+    except EpisodeStoreError:
+        # Minimal/unversioned fixtures and optional read surfaces may omit the
+        # thesis history relation entirely. A real migrated runtime is guarded
+        # by schema preflight before this read.
+        return {}
     rows = _safe_rows(
         conn,
         f"SELECT ticker, overall_status FROM {source.relation} "

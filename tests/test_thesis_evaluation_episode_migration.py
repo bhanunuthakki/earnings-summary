@@ -132,6 +132,26 @@ def test_0014_backfill_keeps_unresolved_as_a_real_episode(
         ).fetchone() == ("unresolved", "partial")
 
 
+def test_0014_view_keeps_unmapped_legacy_writes_visible(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    database = migrated_db(tmp_path / "unmapped.db", target=HEAD)
+    with sqlite3.connect(database) as connection:
+        cursor = connection.execute(
+            "INSERT INTO thesis_evaluations "
+            "(ticker,evaluated_at,overall_status,rule_evaluations_json) "
+            "VALUES ('NU','2026-08-14T12:00:00','ok','[]')"
+        )
+        raw_id = int(cursor.lastrowid or 0)
+        row = connection.execute(
+            "SELECT id,ticker,overall_status,fingerprint_policy_version,"
+            "occurrence_count FROM v_thesis_evaluation_history WHERE id=?",
+            (raw_id,),
+        ).fetchone()
+    assert row == (raw_id, "NU", "ok", "legacy_unmapped", 1)
+
+
 def test_0014_downgrade_removes_episode_projection_without_touching_raw_history(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
