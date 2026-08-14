@@ -17,6 +17,8 @@ from compute.thesis_episode_attention import (
     acknowledge_episode,
     act_on_episode,
     complete_delivery,
+    deliver_due_episode_alerts,
+    deliver_episode_alert,
     ensure_episode_alert,
     get_attention,
     reserve_delivery,
@@ -157,6 +159,7 @@ def test_due_review_cycle_delivers_once_and_failed_send_can_retry(
     complete_delivery(
         connection,
         first.receipt_id,
+        attempt_token=first.attempt_token,
         status=DeliveryStatus.FAILED,
         completed_at=cycle_time,
         failure_reason="provider unavailable",
@@ -172,6 +175,7 @@ def test_due_review_cycle_delivers_once_and_failed_send_can_retry(
     complete_delivery(
         connection,
         retry.receipt_id,
+        attempt_token=retry.attempt_token,
         status=DeliveryStatus.DELIVERED,
         completed_at=cycle_time + timedelta(minutes=6),
         external_ref="message-1",
@@ -188,6 +192,112 @@ def test_due_review_cycle_delivers_once_and_failed_send_can_retry(
         )
         is False
     )
+
+
+def test_expired_reservation_is_reclaimed_and_old_attempt_cannot_complete(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _database(tmp_path, migrated_db)
+    _seed_episode(connection, "episode-1")
+    first = reserve_delivery(
+        connection,
+        "episode-1",
+        channel="telegram",
+        surface="coach",
+        reserved_at=NOW,
+        lease_for=timedelta(minutes=5),
+    )
+    assert first is not None and first.claimed is True
+    assert (
+        should_prompt(
+            connection,
+            "episode-1",
+            channel="telegram",
+            surface="coach",
+            now=NOW + timedelta(minutes=4),
+        )
+        is False
+    )
+    assert (
+        should_prompt(
+            connection,
+            "episode-1",
+            channel="telegram",
+            surface="coach",
+            now=NOW + timedelta(minutes=6),
+        )
+        is True
+    )
+
+    retry = reserve_delivery(
+        connection,
+        "episode-1",
+        channel="telegram",
+        surface="coach",
+        reserved_at=NOW + timedelta(minutes=6),
+    )
+    assert retry is not None and retry.claimed is True
+    assert retry.attempt_count == 2
+    assert retry.attempt_token != first.attempt_token
+    with pytest.raises(AttentionError, match="stale"):
+        complete_delivery(
+            connection,
+            retry.receipt_id,
+            attempt_token=first.attempt_token,
+            status=DeliveryStatus.DELIVERED,
+            completed_at=NOW + timedelta(minutes=7),
+        )
+    complete_delivery(
+        connection,
+        retry.receipt_id,
+        attempt_token=retry.attempt_token,
+        status=DeliveryStatus.DELIVERED,
+        completed_at=NOW + timedelta(minutes=7),
+        external_ref="message-2",
+    )
+
+
+def test_due_review_scan_uses_real_delivery_receipt_and_is_once_per_cycle(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _database(tmp_path, migrated_db)
+    _seed_episode(connection, "episode-1")
+    due = NOW + timedelta(days=7)
+    acknowledge_episode(connection, "episode-1", acknowledged_at=NOW, next_review_at=due)
+
+    delivered_at = due + timedelta(seconds=1)
+    assert deliver_due_episode_alerts(connection, now=delivered_at) == 1
+    assert deliver_due_episode_alerts(connection, now=delivered_at + timedelta(minutes=1)) == 0
+    receipt = connection.execute(
+        "SELECT status,external_ref,attempt_count FROM thesis_evaluation_episode_delivery_receipts"
+    ).fetchone()
+    assert receipt is not None
+    assert tuple(receipt) == ("delivered", "alert:1", 1)
+    alert_summary = connection.execute(
+        "SELECT COUNT(*),review_cycle_id FROM alerts WHERE status='pending'"
+    ).fetchone()
+    assert alert_summary is not None
+    assert tuple(alert_summary) == (1, f"review:{due.isoformat()}")
+
+
+def test_local_inbox_delivery_keeps_ok_episode_quiet(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _database(tmp_path, migrated_db)
+    _seed_episode(connection, "episode-ok")
+    connection.execute(
+        "UPDATE thesis_evaluation_episodes SET overall_status='ok' WHERE episode_id='episode-ok'"
+    )
+    assert deliver_episode_alert(connection, "episode-ok", delivered_at=NOW) is None
+    assert tuple(connection.execute("SELECT COUNT(*) FROM alerts").fetchone()) == (0,)
+    assert tuple(
+        connection.execute(
+            "SELECT COUNT(*) FROM thesis_evaluation_episode_delivery_receipts"
+        ).fetchone()
+    ) == (0,)
 
 
 def test_new_episode_supersedes_unresolved_prior_but_not_acted_episode(

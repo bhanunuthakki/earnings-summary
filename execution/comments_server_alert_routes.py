@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from flask import Blueprint, Flask, Response, redirect, request
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
@@ -23,6 +24,25 @@ class AppContext:
     default_user_id: str
     referer_back_path: Callable[[str], str | None]
     approve_consequence_href: Callable[[str], str | None]
+
+
+class _AcknowledgePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str | None = Field(default=None, max_length=1000)
+    next_review_at: datetime | None = None
+
+    @field_validator("note")
+    @classmethod
+    def _normalize_note(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip() or None
+
+    @field_validator("next_review_at")
+    @classmethod
+    def _require_aware_due(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("next_review_at must include a timezone")
+        return value
 
 
 def create_alert_blueprint(context: AppContext) -> Blueprint:
@@ -269,7 +289,10 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
     def acknowledge_thesis_episode_api(episode_id: str):
         if request.method == "OPTIONS":
             return ("", 204)
-        if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
+        referer = request.headers.get("Referer", "")
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site" or (
+            referer and referer_back_path(referer) is None
+        ):
             return ({"error": "cross-site acknowledgement rejected"}, 403)
 
         from compute.thesis_episode_attention import (
@@ -278,15 +301,21 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
         )
         from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
-        note = str(payload.get("note") or request.values.get("note") or "").strip() or None
-        due_raw = str(
-            payload.get("next_review_at") or request.values.get("next_review_at") or ""
-        ).strip()
+        raw_json = request.get_json(silent=True)
+        if raw_json is not None and not isinstance(raw_json, dict):
+            return ({"error": "acknowledgement payload must be a JSON object"}, 400)
+        raw_payload: dict[str, object]
+        if raw_json is None:
+            raw_payload = {
+                "note": request.values.get("note") or None,
+                "next_review_at": request.values.get("next_review_at") or None,
+            }
+        else:
+            raw_payload = cast("dict[str, object]", raw_json)
         try:
-            due = datetime.fromisoformat(due_raw) if due_raw else None
-        except ValueError:
-            return ({"error": "next_review_at must be an ISO-8601 timestamp"}, 400)
+            payload = _AcknowledgePayload.model_validate(raw_payload)
+        except ValidationError:
+            return ({"error": "invalid acknowledgement payload"}, 400)
         connection = connect_sqlite(
             db_path,
             role=SQLiteConnectionRole.WRITER,
@@ -297,8 +326,8 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
                 connection,
                 episode_id,
                 acknowledged_at=datetime.now(UTC),
-                note=note,
-                next_review_at=due,
+                note=payload.note,
+                next_review_at=payload.next_review_at,
             )
             connection.commit()
         except AttentionError as exc:

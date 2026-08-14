@@ -44,7 +44,7 @@ from compute.soft_rule_evaluator import (
     evaluate_soft_rules,
     load_soft_rules,
 )
-from compute.thesis_episode_attention import ensure_episode_alert, supersede_prior
+from compute.thesis_episode_attention import deliver_episode_alert, supersede_prior
 from compute.thesis_evaluation_episodes import (
     AcceptedObservationInput,
     EpisodeCheckInput,
@@ -1118,10 +1118,10 @@ def persist_verdict(
                 new_episode_id=episode_write.episode_id,
                 superseded_at=_aware_utc(verdict.evaluated_at),
             )
-            ensure_episode_alert(
+            deliver_episode_alert(
                 conn,
                 episode_write.episode_id,
-                fired_at=_aware_utc(verdict.evaluated_at),
+                delivered_at=_aware_utc(verdict.evaluated_at),
             )
         if holdings_dir is not None:
             with contextlib.suppress(FileNotFoundError):

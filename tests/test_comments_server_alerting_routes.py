@@ -443,6 +443,43 @@ def test_thesis_episode_acknowledgement_route_is_idempotent_and_cross_site_safe(
         ).fetchone() == ("acknowledged", "Reviewed")
 
 
+def test_thesis_episode_acknowledgement_rejects_malformed_or_unbounded_input(
+    client: FlaskClient,
+) -> None:
+    assert (
+        client.post(
+            "/api/thesis-episodes/episode-route/acknowledge",
+            json=["not", "an", "object"],
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/thesis-episodes/episode-route/acknowledge",
+            json={"note": "x" * 1001},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/thesis-episodes/episode-route/acknowledge",
+            json={"next_review_at": "2026-09-14T12:00:00"},
+        ).status_code
+        == 400
+    )
+
+
+def test_thesis_episode_acknowledgement_rejects_cross_site_referer(
+    client: FlaskClient,
+) -> None:
+    response = client.post(
+        "/api/thesis-episodes/episode-route/acknowledge",
+        json={"note": "Reviewed"},
+        headers={"Referer": "https://attacker.example/review"},
+    )
+    assert response.status_code == 403
+
+
 # ----------------------------------------------------------------------------
 # Dismiss-with-reason (alerts lane, v1, 0142): the "why?" affordance's
 # deferred round-trip — a second POST to the SAME endpoint, alert already

@@ -56,11 +56,16 @@ def upgrade() -> None:
             status TEXT NOT NULL
                 CHECK(status IN ('reserved','delivered','failed')),
             reserved_at TEXT NOT NULL,
+            reservation_expires_at TEXT NOT NULL,
+            attempt_token TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
             delivered_at TEXT,
             failed_at TEXT,
             external_ref TEXT,
             failure_reason TEXT,
             UNIQUE(episode_id,review_cycle_id,channel,surface),
+            CHECK(length(attempt_token)=64 AND attempt_token NOT GLOB '*[^0-9a-f]*'),
+            CHECK(attempt_count >= 1),
             CHECK(
                 (status='reserved' AND delivered_at IS NULL AND failed_at IS NULL)
                 OR (status='delivered' AND delivered_at IS NOT NULL AND failed_at IS NULL)
@@ -71,7 +76,7 @@ def upgrade() -> None:
     )
     op.execute(
         "CREATE INDEX ix_thesis_episode_delivery_status ON "
-        "thesis_evaluation_episode_delivery_receipts(status,reserved_at)"
+        "thesis_evaluation_episode_delivery_receipts(status,reservation_expires_at)"
     )
     op.execute(
         "CREATE INDEX ix_alerts_thesis_episode ON "

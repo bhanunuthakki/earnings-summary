@@ -71,9 +71,11 @@ def test_0015_adds_attention_links_and_delivery_uniqueness(
         } <= episode_columns
         connection.execute(
             "INSERT INTO thesis_evaluation_episode_delivery_receipts "
-            "(receipt_id,episode_id,review_cycle_id,channel,surface,status,reserved_at) "
+            "(receipt_id,episode_id,review_cycle_id,channel,surface,status,reserved_at,"
+            "reservation_expires_at,attempt_token,attempt_count) "
             "VALUES ('receipt-1','episode-1','initial','telegram','coach','reserved',"
-            "'2026-08-14T12:00:00+00:00')"
+            "'2026-08-14T12:00:00+00:00','2026-08-14T12:15:00+00:00',?,1)",
+            ("a" * 64,),
         )
         connection.commit()
         with sqlite3.connect(database) as competing:
@@ -82,8 +84,11 @@ def test_0015_adds_attention_links_and_delivery_uniqueness(
                 competing.execute(
                     "INSERT INTO thesis_evaluation_episode_delivery_receipts "
                     "(receipt_id,episode_id,review_cycle_id,channel,surface,status,"
-                    "reserved_at) VALUES ('receipt-2','episode-1','initial','telegram',"
-                    "'coach','reserved','2026-08-14T12:01:00+00:00')"
+                    "reserved_at,reservation_expires_at,attempt_token,attempt_count) "
+                    "VALUES ('receipt-2','episode-1','initial','telegram',"
+                    "'coach','reserved','2026-08-14T12:01:00+00:00',"
+                    "'2026-08-14T12:16:00+00:00',?,1)",
+                    ("b" * 64,),
                 )
             except sqlite3.IntegrityError:
                 pass

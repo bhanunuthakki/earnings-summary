@@ -105,3 +105,77 @@ def test_identical_evaluator_checks_append_receipts_not_owner_history(
     assert summary is not None
     assert summary.total_evaluations == 1
     assert summary.last_evaluated_at == second_at
+
+
+def test_new_non_ok_episode_creates_one_receipted_inbox_carrier(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _open_database(tmp_path, migrated_db)
+    holdings = tmp_path / "holdings-warning"
+    holdings.mkdir()
+    (holdings / "ZZW.json").write_text(
+        json.dumps(
+            {
+                "ticker": "ZZW",
+                "thesis": "A missing breaker must remain visible.",
+                "break_rules": [
+                    {
+                        "rule_id": "missing-kpi",
+                        "kpi_name": "Metric not yet captured",
+                        "comparator": "lt",
+                        "threshold": "1",
+                        "unit": "percent",
+                        "narrative": "Missing data is unresolved, not healthy.",
+                    }
+                ],
+                "business_model_rules": [],
+                "break_rules_soft": [
+                    {
+                        "name": "missing-soft-kpi",
+                        "predicate": {
+                            "type": "series_below",
+                            "params": {
+                                "metric": "Metric not yet captured",
+                                "source": "kpi",
+                                "threshold": 1,
+                                "periods": 1,
+                            },
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    first_at = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+    second_at = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    _seed_run(connection, "warning-run-1", first_at.isoformat())
+    first = evaluate_ticker_thesis(connection, ticker="ZZW", holdings_dir=holdings)
+    persist_verdict(
+        connection,
+        replace(first, evaluated_at=first_at),
+        run_id="warning-run-1",
+        holdings_dir=holdings,
+    )
+    _seed_run(connection, "warning-run-2", second_at.isoformat())
+    second = evaluate_ticker_thesis(connection, ticker="ZZW", holdings_dir=holdings)
+    persist_verdict(
+        connection,
+        replace(second, evaluated_at=second_at),
+        run_id="warning-run-2",
+        holdings_dir=holdings,
+    )
+
+    assert first.overall_status.value == "warn"
+    assert tuple(
+        connection.execute(
+            "SELECT COUNT(*) FROM alerts WHERE ticker='ZZW' AND trigger_kind='thesis_drift'"
+        ).fetchone()
+    ) == (1,)
+    assert tuple(
+        connection.execute(
+            "SELECT status,channel,surface,external_ref FROM "
+            "thesis_evaluation_episode_delivery_receipts"
+        ).fetchone()
+    ) == ("delivered", "local", "inbox", "alert:1")

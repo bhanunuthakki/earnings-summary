@@ -628,11 +628,44 @@ def run_governor(
     conn = open_conn(db_path)
     try:
         muted = {str(r[0]) for r in conn.execute("SELECT class_ FROM coach_mutes").fetchall()}
+        coach_ping_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(coach_pings)").fetchall()
+        }
+        has_episode_link = "thesis_evaluation_episode_id" in coach_ping_columns
         for moment in moments:
-            prior = conn.execute(
-                "SELECT id, status FROM coach_pings WHERE class_ = ? AND key = ?",
-                (moment.class_, moment.key),
-            ).fetchone()
+            if has_episode_link:
+                prior = conn.execute(
+                    "SELECT id,status,thesis_evaluation_episode_id FROM coach_pings "
+                    "WHERE class_ = ? AND key = ?",
+                    (moment.class_, moment.key),
+                ).fetchone()
+            else:
+                prior = conn.execute(
+                    "SELECT id,status FROM coach_pings WHERE class_ = ? AND key = ?",
+                    (moment.class_, moment.key),
+                ).fetchone()
+            prior_id = None if prior is None else int(prior[0])
+            linked_episode_id = None if prior is None or not has_episode_link else prior[2]
+            if linked_episode_id is not None and prior_id is not None:
+                try:
+                    from compute.thesis_episode_attention import get_attention
+
+                    episode_attention = get_attention(
+                        conn,
+                        str(linked_episode_id),
+                        now=stamp.replace(tzinfo=UTC),
+                    )
+                except Exception:
+                    episode_attention = None
+                if episode_attention is None or not episode_attention.actionable:
+                    settled_status = "skipped_stale" if episode_attention is None else "acted"
+                    conn.execute(
+                        "UPDATE coach_pings SET status=?,updated_at=? "
+                        "WHERE id=? AND status='send_failed'",
+                        (settled_status, stamp.isoformat(), prior_id),
+                    )
+                    conn.commit()
+                    continue
             if prior is not None and str(prior[1]) != "send_failed":
                 continue  # anti-nag: a moment is considered exactly once, forever
             tally["seen"] += 1
