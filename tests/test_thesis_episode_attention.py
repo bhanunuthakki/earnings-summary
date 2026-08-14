@@ -17,6 +17,7 @@ from compute.thesis_episode_attention import (
     acknowledge_episode,
     act_on_episode,
     complete_delivery,
+    ensure_episode_alert,
     get_attention,
     reserve_delivery,
     should_prompt,
@@ -285,6 +286,29 @@ def test_linked_alert_dismiss_acknowledges_episode_and_fire_is_idempotent(
             "SELECT attention_state,acknowledgement_note "
             "FROM thesis_evaluation_episodes WHERE episode_id='episode-1'"
         ).fetchone() == ("acknowledged", "Reviewed")
+
+
+def test_episode_alert_is_one_carrier_per_actionable_review_cycle(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _database(tmp_path, migrated_db)
+    _seed_episode(connection, "episode-1")
+
+    first = ensure_episode_alert(connection, "episode-1", fired_at=NOW)
+    second = ensure_episode_alert(
+        connection,
+        "episode-1",
+        fired_at=NOW + timedelta(minutes=1),
+    )
+
+    assert first is not None and second == first
+    assert tuple(
+        connection.execute(
+            "SELECT COUNT(*),thesis_evaluation_episode_id,review_cycle_id "
+            "FROM alerts WHERE trigger_kind='thesis_drift'"
+        ).fetchone()
+    ) == (1, "episode-1", "initial")
 
 
 def test_linked_coach_ack_delegates_but_brief_delivery_does_not(

@@ -89,6 +89,12 @@ def test_identical_evaluator_checks_append_receipts_not_owner_history(
         ).fetchone()[0]
         == 2
     )
+    assert tuple(
+        connection.execute(
+            "SELECT COUNT(*) FROM alerts WHERE thesis_evaluation_episode_id IN "
+            "(SELECT episode_id FROM thesis_evaluation_episodes WHERE ticker='ZZZ')"
+        ).fetchone()
+    ) == (1,)
 
     history = fetch_history(connection, "ZZZ")
     assert len(history) == 1

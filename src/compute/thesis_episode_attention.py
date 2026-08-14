@@ -8,6 +8,7 @@ never commits; callers own the surrounding transaction and writer lock.
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -251,6 +252,71 @@ def supersede_prior(
     return len(prior_ids)
 
 
+def ensure_episode_alert(
+    connection: sqlite3.Connection,
+    episode_id: str,
+    *,
+    fired_at: datetime,
+    user_id: str = "bhanu",
+) -> int | None:
+    """Ensure one actionable Inbox carrier for an episode/review cycle."""
+
+    from alerts.store import compute_signature_sha
+
+    stamp = _aware_utc(fired_at)
+    attention = get_attention(connection, episode_id, now=stamp)
+    if not attention.actionable:
+        return None
+    signature = compute_signature_sha(
+        "thesis_drift",
+        attention.ticker,
+        {
+            "episode_id": episode_id,
+            "review_cycle_id": attention.review_cycle_id,
+        },
+    )
+    existing = connection.execute(
+        "SELECT id FROM alerts WHERE user_id=? AND signature_sha=? AND status<>'expired'",
+        (user_id, signature),
+    ).fetchone()
+    if existing is not None:
+        return int(existing[0])
+    episode = connection.execute(
+        "SELECT overall_status,provenance_completeness,evidence_as_of "
+        "FROM thesis_evaluation_episodes WHERE episode_id=?",
+        (episode_id,),
+    ).fetchone()
+    if episode is None:
+        raise AttentionError(f"unknown thesis episode: {episode_id}")
+    evidence_json = json.dumps(
+        {
+            "episode_id": episode_id,
+            "review_cycle_id": attention.review_cycle_id,
+            "overall_status": str(episode[0]),
+            "provenance_completeness": str(episode[1]),
+            "evidence_as_of": None if episode[2] is None else str(episode[2]),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    cursor = connection.execute(
+        "INSERT INTO alerts "
+        "(user_id,ticker,trigger_kind,fired_at,status,evidence_json,signature_sha,"
+        "thesis_evaluation_episode_id,review_cycle_id) "
+        "VALUES (?,?,'thesis_drift',?,'pending',?,?,?,?)",
+        (
+            user_id,
+            attention.ticker,
+            stamp.isoformat(),
+            evidence_json,
+            signature,
+            episode_id,
+            attention.review_cycle_id,
+        ),
+    )
+    return int(cursor.lastrowid or 0)
+
+
 def should_prompt(
     connection: sqlite3.Connection,
     episode_id: str,
@@ -389,6 +455,7 @@ __all__ = [
     "acknowledge_episode",
     "act_on_episode",
     "complete_delivery",
+    "ensure_episode_alert",
     "get_attention",
     "reserve_delivery",
     "should_prompt",
