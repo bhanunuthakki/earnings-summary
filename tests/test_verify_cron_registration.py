@@ -25,7 +25,12 @@ _NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 
 
 def _write_task_xml(
-    path: Path, uri: str, start_time: str = "03:00:00", enabled: bool = True
+    path: Path,
+    uri: str,
+    start_time: str = "03:00:00",
+    *,
+    trigger_enabled: bool = True,
+    settings_enabled: bool = True,
 ) -> None:
     content = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="{_NS}">
@@ -35,7 +40,7 @@ def _write_task_xml(
   <Triggers>
     <CalendarTrigger>
       <StartBoundary>2026-06-12T{start_time}</StartBoundary>
-      <Enabled>{"true" if enabled else "false"}</Enabled>
+      <Enabled>{"true" if trigger_enabled else "false"}</Enabled>
       <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
     </CalendarTrigger>
   </Triggers>
@@ -44,7 +49,7 @@ def _write_task_xml(
       <LogonType>InteractiveToken</LogonType>
     </Principal>
   </Principals>
-  <Settings><Enabled>true</Enabled></Settings>
+  <Settings><Enabled>{"true" if settings_enabled else "false"}</Enabled></Settings>
   <Actions Context="Author">
     <Exec><Command>C:\\foo.bat</Command></Exec>
   </Actions>
@@ -88,7 +93,12 @@ def test_parse_xml_extracts_uri_and_time(tmp_path: Path) -> None:
 
 def test_parse_xml_disabled_flag(tmp_path: Path) -> None:
     p = tmp_path / "disabled.task.xml"
-    _write_task_xml(p, r"\earnings-summary\disabled_task", enabled=False)
+    _write_task_xml(
+        p,
+        r"\earnings-summary\disabled_task",
+        trigger_enabled=True,
+        settings_enabled=False,
+    )
     task = _parse_xml(p)
     assert task is not None
     assert task.enabled is False
@@ -209,6 +219,51 @@ def test_compare_disabled_task(tmp_path: Path) -> None:
 
     assert report.has_problems
     assert any("disabled" in d.lower() for d in report.disabled)
+
+
+def test_compare_source_disabled_task_requires_live_disabled_state(tmp_path: Path) -> None:
+    task_name = r"\earnings-summary\held"
+    _write_task_xml(
+        tmp_path / "held.task.xml",
+        task_name,
+        settings_enabled=False,
+    )
+
+    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+        mock_q.return_value = {
+            task_name.lower(): {
+                "name": task_name,
+                "next_run": "N/A",
+                "status": "Ready",
+            }
+        }
+        report, _xml_tasks = compare(tmp_path)
+
+    assert report.has_problems
+    assert report.ok == []
+    assert report.disabled == [f"{task_name} (XML disabled, Status='Ready')"]
+
+
+def test_compare_source_disabled_task_accepts_live_disabled_state(tmp_path: Path) -> None:
+    task_name = r"\earnings-summary\held"
+    _write_task_xml(
+        tmp_path / "held.task.xml",
+        task_name,
+        settings_enabled=False,
+    )
+
+    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+        mock_q.return_value = {
+            task_name.lower(): {
+                "name": task_name,
+                "next_run": "N/A",
+                "status": "Disabled",
+            }
+        }
+        report, _xml_tasks = compare(tmp_path)
+
+    assert not report.has_problems
+    assert report.ok == [f"{task_name} (xml disabled, scheduler disabled)"]
 
 
 def test_capture_poller_disabled_is_ok_when_service_is_running(tmp_path: Path) -> None:

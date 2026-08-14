@@ -144,7 +144,7 @@ def _parse_xml(path: Path) -> _XmlTask | None:
         if len(parts) == 2:
             start_time = parts[1]
 
-    enabled_el = root.find(f".//{ns}Enabled")
+    enabled_el = root.find(f".//{ns}Settings/{ns}Enabled")
     enabled = (enabled_el is None) or (enabled_el.text or "true").lower() != "false"
 
     # A repeating trigger (e.g. hourly: Repetition Interval=PT1H) fires at
@@ -390,9 +390,11 @@ def compare(
         status = task_info["status"]
 
         if not xt.enabled:
-            # XML says disabled — if it's also not registered that's fine;
-            # if it IS registered, flag as a "disabled in XML" note.
-            report.ok.append(f"{xt.task_name} (xml disabled, registered)")
+            # A held task is healthy only while Scheduler also keeps it disabled.
+            if status.casefold() != "disabled":
+                report.disabled.append(f"{xt.task_name} (XML disabled, Status={status!r})")
+                continue
+            report.ok.append(f"{xt.task_name} (xml disabled, scheduler disabled)")
             continue
 
         if status not in _HEALTHY_STATUSES:

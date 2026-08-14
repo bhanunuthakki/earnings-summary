@@ -426,7 +426,7 @@ def test_ingest_ignores_fetched_at_drift(tmp_path: Path) -> None:
     assert result.updated == 0
     # The new fetched_at IS written to the row (we just don't count it as a change)
     row = conn.execute("SELECT fetched_at FROM earnings_surprises").fetchone()
-    assert row["fetched_at"] == "2026-05-14T12:00:00Z"
+    assert row["fetched_at"] == "2026-05-14T12:00:00+00:00"
 
 
 def test_ingest_unique_index_enforces_release_date(tmp_path: Path) -> None:
