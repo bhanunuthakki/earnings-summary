@@ -1,576 +1,152 @@
 # Earnings Summary
 
-A research-grade pipeline that turns raw filings, earnings calls, IR documents, and market data into a **per-ticker analyst workspace** — a self-contained HTML report with tabbed views over thesis, financials, segments, earnings, news, valuation, bear case, and provenance. The system ingests data on a daily cron, evaluates it against per-ticker break rules, regenerates only when material has changed, and exposes a commentable + chattable interface for iterating with the analyst.
+## Overview
 
-Active universe lives in `tracked_companies` (DB-driven, not hardcoded) with four list types: `portfolio` (P1 tier, daily refresh), `watchlist` (P2, weekly), `evaluation` (P2, weekly with 7-day skip), and `archived`. Per-ticker thesis specs live as JSON in [`micro_thesis/holdings/`](micro_thesis/holdings/).
+Earnings Summary is a solo-built, pull-only, localhost equity-research platform. Its primary interface is the Work OS command center: a local Flask application for reviewing portfolio and company research, inspecting operational state, refreshing permitted work, and managing comments, decisions, and governed research proposals.
 
-The **dashboard command center** — `python execution/sqlite_bootstrap.py execution/comments_server.py` → `http://127.0.0.1:7421` — is the primary interface: portfolio + per-ticker status, cross-ticker analytics (budget, decisions, trigger ladder), a per-ticker drill-down (artifacts, analyses-ran, thesis, live position), refreshes with per-step/force overrides, and comment + thesis editing with a preview→apply diff. It also deep-links each ticker into the companion **portfolio-tracker** app. See [HOW_TO_USE_REPORTS.md → Command center](HOW_TO_USE_REPORTS.md#command-center-start-here).
+Start with the command center at `http://127.0.0.1:7421`. The main operator workflow is to review the portfolio overview and inbox, drill into a company, inspect evidence, freshness, thesis, valuation, and open loops, run an appropriate refresh when needed, and explicitly review any proposed durable change. Rendered research reports remain useful browser artifacts, but the Work OS is the front door for current work.
 
-This README is the system overview + user manual. Two companion docs:
+The platform combines deterministic collection and computation with evidence-aware synthesis across company, portfolio, earnings, filings, investor relations, transcripts, valuation, risk, research, and operations. The canonical domain vocabulary—including coverage roles, research levels, lifecycle, and schedule classes—lives in [DEFINITIONS.md](DEFINITIONS.md).
 
-- **[HOW_TO_USE_REPORTS.md](HOW_TO_USE_REPORTS.md)** — day-to-day analyst workflow: the command center, slash-keyword shortcuts, comment processor, refresh-vs-rebuild matrix, onboarding a new ticker.
-- **[cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md)** — one-time Windows Task Scheduler install for every cron.
+> This repository is designed for local operation. Declared scheduler configuration is not evidence that a task is installed, enabled, healthy, recently run, or produced fresh output on this machine.
 
----
+Useful references: [the operator guide](HOW_TO_USE_REPORTS.md), [the data-pipeline contract](directives/data_pipeline_dag.md), [the directives index](directives/README.md), and [the Windows scheduler runbook](cron/SETUP_WINDOWS_SCHEDULER.md).
 
-## Table of contents
+## Quick start
 
-1. [Architecture at a glance](#architecture-at-a-glance)
-2. [Repository layout](#repository-layout)
-3. [Setup](#setup)
-4. [The deliverable: workspace report](#the-deliverable-workspace-report)
-5. [User-facing components](#user-facing-components)
-6. [Cron jobs and automation](#cron-jobs-and-automation)
-7. [When the report auto-updates](#when-the-report-auto-updates)
-8. [How data is picked and validated](#how-data-is-picked-and-validated)
-9. [Common workflows](#common-workflows)
-10. [State, idempotency, and resumption](#state-idempotency-and-resumption)
-11. [Pre-push checklist](#pre-push-checklist)
-12. [Security](#security)
+Requirements: Python 3.11 or later. From the repository root, activate your preferred virtual environment and install runtime plus development dependencies:
 
----
-
-## Architecture at a glance
-
-**Three layers**, enforced by [GEMINI.md](GEMINI.md):
-
-1. **Directives** (`directives/`) — Layer 1 SOPs. One Markdown file per task type. Immutable without authorization. These define schemas, refresh cadences, idempotency keys, and failure-mode policy.
-2. **Orchestration** — Layer 2. Routes between executions, reads stdout/stderr, manages state. No business logic.
-3. **Execution** (`execution/`) — Layer 3 single-purpose Python CLIs with typed Pydantic I/O. ~85 scripts, each a single CLI entrypoint.
-
-**The canonical 8-stage pipeline** ([`directives/data_pipeline_dag.md`](directives/data_pipeline_dag.md)):
-
-```
-INGEST → TRANSCRIBE → PARSE → VALIDATE → PERSIST → COMPUTE → SYNTHESIZE → PUBLISH
-```
-
-Each stage is idempotent, resumable from `stage_transitions`, and writes typed outputs to either the DB or `.tmp/`.
-
-**Three trigger modes** drive when work happens:
-
-- **Cron** — 44 declared tasks (see `cron/task_manifest.json` for the authoritative set and `cron/TASKS.generated.md` for the generated inventory): a daily data chain, daily standalones (morning pipeline, macro, DB backup), an hourly catch-up, and weekly/monthly jobs. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
-- **Comment-driven** — when the analyst applies a comment with `--apply`, the comment processor edits holdings JSON, re-runs the affected stages synchronously, and rebuilds the brief inline.
-- **Manual CLI** — every step has a direct invocation. `.bat` launchers wrap the most common ones for cmd.exe.
-
-**Data flow** (single-ticker view):
-
-```
-                      (manual: _inbox/PDFs)
-                              │
-INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ── transcripts (yt-dlp + whisper)
-         │                    │
-        triggers (migration 0026): financial_facts/segment_dimensions/kpi_facts INSERT
-                              │     ↓
-         tracked_companies.brief_dirty = 1
-                              ↓
-[Daily 06:30 cron]   daily_fetch_and_brief.py
-                              ↓
-                Gate A (tier-cadence) → Gate B (material-change hash) → Gate C (eval-cadence)
-                              ↓
-              thesis_evaluator → refresh_dcf → build_artifacts (workspace HTML + MD + JSON + DCF xlsx)
-```
-
----
-
-## Repository layout
-
-| Path | Purpose |
-|---|---|
-| `src/db.py`, `src/parser.py`, `src/intake.py`, `src/ir_uploads.py`, `src/comments.py`, `src/ask/` | Core utilities — DB session, document parsing, _inbox intake, IR upload registry, comments, and durable Ask sessions |
-| `src/llm/` | LLM wiring: `cli.py` (backend dispatch — model-first: the resolved model id picks the backend — over the Claude CLI subprocess wrapper), `anchors.py` (reusable thesis + bear-case context blocks), `gemini_backend.py` (consumer-subscription Gemini CLI — a second backend, model-first family dispatch), `model_ladder.py` (real-API-price cost ranking — the total order behind "cheaper"), `model_eval.py` + `model_overrides.py` (the cheapest-at-parity eval loop + DB-backed pin overrides), `fallback.py` (API-billed emergency path when a Claude call fails), `ledger.py` (call accounting). Gemini is now a **primary** backend for selected cheap-at-parity purposes — not merely a failure fallback. |
-| `src/report/` | Report generator. `builder.py` produces a typed `ReportSpec`; `models.py` defines the section schemas; `sections/` builds each section; `renderers/` emits HTML/Markdown/JSON/Excel + the workspace tabbed renderer + the chat/comments overlay |
-| `src/report/renderers/workspace_*.py` | The analyst workspace renderer — splits into `workspace_html.py` (tab layout), `workspace_styles.py`, `workspace_script.py`, `workspace_data.py` (data hand-off to JS), `workspace_charts.py`, `workspace_comments.py`, `workspace_chat.py` |
-| `src/report/sections/` | One file per report section: `snapshot`, `thesis`, `financials`, `segments`, `earnings`, `recent_developments`, `valuation`, `bear_case`, `qa_roster`, `saydo`, `ir_docs`, `filing_intelligence`, `portfolio_position`, `exec_compensation`, `evaluation_snapshot`, `etf_holdings`, `provenance`, `appendix`, `synthesis` |
-| `src/compute/` | Deterministic financial computations: `income_statement`, `balance_sheet`, `cashflow`, `as_reported`, `segments`, `segment_definitions`, `segment_oi_10k`, `segment_crosstabs_llm`, `company_description`, `say_do` + `say_do_extractor`, `thesis_evaluator`, `soft_rule_evaluator`, `kpi_extract_summaries`, `valuation_basis`, `dcf`, `earnings_surprise` |
-| `src/dcf/` | DCF subsystem: `workbook_reader` (extract FCF stream from xlsx), `valuation` (PV/share + over-under %), `forecast` (auto-derive forecast assumptions from history), `live_price` (FMP profile lookup), `seeder` + `refresher` (workbook lifecycle), `persist` (upsert `dcf_runs`) |
-| `src/pipeline/` | Pipeline plumbing: `source_routing`, `run_accounting`, `queries`, `kpi_persistence`, `sec_xbrl`, `quarterly_refresh`, `restatement_detector`, `validation_engine`, `tier_runner`, `segment_junction_writer`, `dashboard_html`/`dashboard_status`, `analytical_dashboard`, `refresh_eval` |
-| `src/synthesis/lenses/` | LLM "lenses" — one per analytical perspective: `five_min_reread`, `thesis_drift_qoq`, `bull_case`, `cross_portfolio_synthesis`, `mgmt_credibility_score`, `reverse_dcf`, `macro_scenario`, `portfolio_macro_stress`, `catalyst_calendar`, `customer_concentration_risk`, `filing_diff_narrative`, `footnote_anomaly`, `underweighted_facts`, `llm_calibration` |
-| `src/timeseries/` | Time-series intelligence layer: `loaders` (tier-aware fact loaders + restatement chains + as-of-date time travel), `primitives` (trend/inflection/zscore/decompose/correlation/YoY acceleration), `signal_writer` |
-| `src/sources/` | External-source adapters: `earnings_calendar` (FMP + yfinance), `price` (live quote), `registry` |
-| `src/table_extractors/` | Document table extractors: `customer_concentration`, `lease_commitments`, `investor_decks` |
-| `src/models/` | Pydantic schemas: `documents`, `facts`, `kpis`, `fmp_payloads`, `patents`, `runs`, `validation`, `companies`, `instruments`, `ir_uploads`, `artifacts` |
-| `execution/` | ~85 CLI entrypoints. See [User-facing components](#user-facing-components) and [Cron jobs](#cron-jobs-and-automation) for the active subset |
-| `directives/` | Layer 1 SOPs. Highlights: `data_pipeline_dag.md`, `data_provenance.md`, `quarterly_refresh.md`, `intake_documents.md`, `report_comments_and_chat.md`, `platform_backlog.md` (cross-workspace bug/feature tracker) |
-| `micro_thesis/holdings/` | Per-ticker thesis JSONs (schema v2: thesis + tier-1/2/3 KPIs + break rules + WACC + MoS bar + DCF defaults + business_model_rules) |
-| `micro_thesis/sources/` | Per-ticker drop folders for review documents |
-| `micro_thesis/diligence/` | P2 diligence markdown per evaluation candidate |
-| `dcf/` | Canonical per-ticker DCF workbooks (`<TICKER>.xlsx`, user-edited; system refreshes historicals only) |
-| `data/ticker_specific/<TICKER>/` | Per-ticker custom research feeds (e.g. NVO patent timeline) consumed by §10 Bear Case prompt |
-| `data/historical/fmp/` | FMP JSON cache (per ticker × endpoint) — gitignored, reproducible |
-| `data/sec/` | SEC XBRL cache |
-| `data/bear_case/`, `data/valuation_basis/`, `data/company_description/`, `data/qa_topics/` | LLM-output caches (SHA256-keyed; rebuilt on input change) |
-| `data/surprise/`, `data/report_comments/` | Surprise ledger + per-report comment stores |
-| `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments, durable Ask sessions/exchanges, and governed proposal decisions. Migrations in `alembic/versions/` (run `alembic heads` for the current revision) |
-| `cron/` | Canonical `task_manifest.json`, generated registration/inventory artifacts, and the 44 Windows Task Scheduler XML + `.bat` pairs |
-| `tests/` | Pytest suite — compute modules + pipeline contracts |
-| `evals/` | LLM eval harness — rubrics, goldens, weekly rung configs (see `directives/model_eval_loop.md`) |
-| `templates/industry/` | Industry onboarding templates (`bank`, `software_saas`, `pharma`, …) consumed by `execution/onboard_ticker.py` |
-| `examples/` | Reference artifacts and seed data (e.g. `seed_ir_urls.sql`) |
-| `docs/` | Design docs (`docs/design/`), hardening audit reports (`docs/hardening/`), guided tour + QA walkthrough |
-| `design-system/`, `.design-sync/` | The extracted design-system package + its claude.ai/design sync state |
-| `scripts/` | Repo tooling (design-token codegen) |
-| `scratch/` | Ad-hoc analysis scripts and one-offs, excluded from CI gates: `archive/` (completed one-offs, see its README), `plans/` (historical plan docs still cited by code comments), `proposals/` (KPI-seeder YAML flow), `reports/` (one-off deep-dive memos), plus the still-referenced seeder/backfill scripts and the `sweep.py` ops driver |
-| `transcripts/raw/`, `transcripts/processed/` | Earnings transcript flow (gitignored) |
-| `ir_documents/` | IR PDFs filed by ticker × period (gitignored) |
-| `output/research/<TICKER>/` | Generated brief artifacts (`<DATE>_workspace.html` etc.) — primary deliverable |
-| `output/earnings_calendar.html` | Portfolio + watchlist earnings calendar |
-| `output/dashboard/` | Portfolio analytical dashboard outputs |
-| `.tmp/` | Ephemeral state — parsed payloads, indexes, pressure-test audits, lens cache, cron logs (gitignored) |
-
----
-
-## Setup
-
-Requires Python ≥3.11.
-
-```bash
+```powershell
 pip install -r requirements.txt
-pip install -e ".[dev]"      # adds pytest, alembic, ruff, pyright, basedpyright
+pip install -e ".[dev]"
+```
+
+Initialize a new SQLite database or safely upgrade an existing one through the guarded bootstrap seam:
+
+```powershell
 python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path data/portfolio.db --repo-root .
-python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply  # bootstrap the mutable thesis mirror from holdings JSON
 ```
 
-Create `.env` with whichever providers you need:
+The upgrader uses the shared write lock, validates SQLite integrity, backs up versioned databases before mutation, and refuses to guess a baseline for a non-empty unversioned database. Do not replace it with an ad-hoc migration command for an operator database.
 
-```env
-ANTHROPIC_API_KEY=...        # Claude CLI (metered API billing — the default for this project)
-GEMINI_API_KEY=...           # automatic fallback when the Claude CLI fails
-FMP_API_KEY=...              # fundamentals, statements, calendar, transcripts
-FMP_TIER=premium|starter|basic|free  # rate limits — defaults to "basic" (250/day) if unset; free = /stable-only (the v3/v4 fallback rungs are dropped — they 403 globally on free)
+Start the Work OS with the same bootstrap seam:
+
+```powershell
+python execution/sqlite_bootstrap.py execution/comments_server.py --port 7421 --repo-root .
 ```
 
-Claude calls go through the `claude` CLI as a subprocess (see [src/llm/cli.py](src/llm/cli.py)). The CLI honors whichever auth is configured — set `ANTHROPIC_API_KEY` for metered billing, or `claude auth login` for Pro/Max subscription. For this repo, **API key is the documented default** — don't unset it.
+Open `http://127.0.0.1:7421` in a browser. On Windows, [start_comments_server.bat](start_comments_server.bat) is an alternative launcher that locates a managed `venv` or `.venv` and starts the same local server.
 
-Then install the cron tasks: see [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md).
+Use the command center for normal operator work. Its documented surface includes portfolio and ticker views, on-demand refreshes, report comments, research conversation, and proposal review. [How to use the workspace reports](HOW_TO_USE_REPORTS.md#command-center-start-here) is the source of truth for supported screens and request shapes.
 
----
+Optional capabilities have separate dependencies or access configuration:
 
-## The deliverable: workspace report
+- Install `.[ir]` and Chromium only for IR-document discovery that needs browser rendering.
+- Install `.[gsheets]` only for the DCF-to-Google-Sheets round trip.
+- Configure only the provider credentials needed for intended work. Pass secrets through environment variables, never command-line arguments.
 
-Every ticker gets a per-day workspace at `output/research/<TICKER>/<YYYY-MM-DD>_workspace.html` — a self-contained HTML file that opens in any browser via `file://`. Tabs and their data sources:
+## How it works
 
-| Tab | What it shows | Data source |
-|---|---|---|
-| **Thesis** (portfolio/watchlist flavor) | Investment lede + tier-1 KPI status table + break-rule evaluation + competitive watchlist | `micro_thesis/holdings/<T>.json` + `kpi_facts` + `thesis_evaluations` |
-| **Eval Screen** (evaluation flavor) | 3y quick-categorization data table | `financial_facts` + `key_metrics` |
-| **Earnings** | Per-quarter analytical notes (newest first) + Q&A roster + commentary | `transcripts` + LLM-summarized `.tmp/<T>_Q<n>_<Y>_summary.txt` |
-| **News** | Last 7 days, ranked by thesis KPI impact, each item tags which tier-1 KPI it touches | Claude WebSearch / WebFetch with thesis anchor injected |
-| **Say · Do** | Print-vs-guide for most recent quarter pair + trajectory verdict bar | `management_commitments` (extracted from transcripts) + Q-on-Q outcome match |
-| **Financials** | 12-quarter YoY% heatmap (line items, segments, geographies, OI, tracked KPIs) + 12Q level table + segment drill-down | tier-aware load from `financial_facts` + `segment_dimensions` |
-| **Valuation** | Diagnostic multiple (Opus-picked, override-able), current value, 12Q sparkline, range, rich/cheap verdict, DCF over-under %, trim/sell trigger badge | `valuation_basis` cache + `dcf_runs` + live FMP price |
-| **Bear case** | `most_underweighted` callout + named failure modes — each card has Evidence / Leading indicator / Quant impact / Refutation | LLM call grounded on thesis anchor + per-ticker enhancements |
-| **Company** | Business overview + revenue mechanics + segments + geographies + IR doc summaries | `data/company_description/<T>.json` overlaid with current segment shares |
-| **Position** (when held) | Shares, cost basis, P&L, transactions, open vs closed decisions | `portfolio_positions` + `decisions` |
-| **Sources** (Provenance) | Coverage matrix, validation issues, source-doc audit, restatement chain links | `quarterly_artifacts` + `documents` + `validation_issues` |
+The project separates directive, orchestration, and deterministic execution:
 
-A matching `<DATE>_report.md` + `<DATE>_sections.json` are also emitted on every build. The workspace HTML is the only HTML report — the legacy non-tabbed `<DATE>_report.html` renderer was retired.
+1. [Directives](directives/README.md) define task intent, constraints, cadence, idempotency, and failure handling.
+2. Orchestration sequences work and handles outcomes without becoming a second business-logic layer.
+3. [Execution entrypoints](execution/) perform typed, single-purpose work such as fetches, transformations, validation, builds, audits, and maintenance.
 
----
+The canonical processing model is [INGEST → TRANSCRIBE → PARSE → VALIDATE → PERSIST → COMPUTE → SYNTHESIZE → PUBLISH](directives/data_pipeline_dag.md). Typed models govern stage boundaries. Validation failures should stop unsafe persistence rather than be guessed around; transient failures follow bounded retry policy, while authentication and schema-contract failures halt. Intermediate state belongs in `.tmp/`, and runs are designed to be idempotent and resumable.
 
-## User-facing components
+SQLite is the local durable state store, with schema changes under [alembic/versions](alembic/versions). The coverage model is database-driven: a tracked instrument has independent coverage role, lifecycle, instrument kind, and derived schedule class. Governed portfolio and evaluation work therefore differs from watchlist monitoring, screened index members, catalog records, and archived rows. Review the [Coverage Role Resource Contract](DEFINITIONS.md) before changing onboarding, routing, or scheduled-work behavior.
 
-Every direct interaction with the system goes through one of these.
+### Work OS and reports
 
-### 1. Workspace HTML report
+The Work OS provides status and cross-ticker analysis, per-ticker drill-down, refresh actions, and comment or thesis workflows in one local application. The per-ticker experience is intended to bring together identity, freshness, artifacts, analyses, decisions, thesis, and position context. Reports provide a durable reading and commenting surface; the operator guide explains how they connect to the command center and how proposals are reviewed before durable state changes.
 
-Open `output/research/<TICKER>/<YYYY-MM-DD>_workspace.html` in any browser (double-click in Explorer, drag into Chrome). Self-contained — no server needed for read-only viewing. Tabs as listed above.
+The repository also contains a local research-conversation path. A model response alone is not authorization to mutate canonical thesis or KPI state: governed proposals are reviewed through an explicit approval or keep-current decision.
 
-**Inline commenting** lights up when the comments server is running (see §2). Until then, the report is read-only with no overlay.
+### LLM routing
 
-### 2. Comments + Ask server (Flask, localhost:7421)
+LLM calls are centralized through `call_llm`; product code should not make direct provider calls. For normal purpose-routed traffic, the documented default is Codex-first: purpose tiers resolve to the Codex membership transport. On an operational Codex failure, the system falls back to the Claude subscription transport and records that fallback. Explicit Claude, Gemini, or OpenRouter model-family requests remain explicit rather than being silently translated.
 
-Start it with `start_comments_server.bat` (or `python execution/sqlite_bootstrap.py execution/comments_server.py`). Endpoints under `localhost:7421`:
+`LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude` is the documented reversible rollback switch; the documented default is Codex. Web-grounded calls use the same ordering, with a grounding gate before a result is accepted. Purpose selection, model pins, budget enforcement, ledgering, and evaluation governance are centralized; see [LLM Calls](directives/llm_calls.md).
 
-- `GET /` — **Command center** (unified 3-theme tabbed shell). The **Overview** tab — the Research cockpit (one attention-ranked row per holding: thesis health · valuation · events) + a tier-coverage strip + the inbox stream + an upcoming-earnings strip — is server-inlined for instant first paint; every other tab lazy-loads via `GET /api/panel/<name>` on first activation. `/analytical` and `/ticker/<T>` remain as standalone deep-link targets. Sources: `tracked_companies`, `fmp_endpoint_status`, `transcripts`, `output/research/` mtime, `report_comments`, `thesis_evaluations`, plus inbox + expected-earnings tables.
-- `GET /reports/<ticker>` — Serves the latest `<DATE>_workspace.html` for the ticker.
-- `POST /comments` — Create a new comment with `(ticker, report_date, anchor, text, selected_text, intent)`.
-- `GET /comments?ticker=&report_date=` — List comments.
-- `PATCH /comments/<id>` — Update status / resolution / intent.
-- `DELETE /comments/<id>` — Hard delete.
-- `POST /api/ask` and `POST /api/ask/stream` — Durable Ask turns, including governed fact/research artifacts and SSE progress.
-- `GET/PATCH/DELETE /api/ask/sessions[/<id>]` — List, load, rename, or delete SQLite-backed Ask history.
-- `GET /api/research/proposals/<id>` and `POST /api/research/proposals/<id>/decision` — Review an exact thesis/KPI diff and explicitly approve or reject it with revision and idempotency checks.
-- `/chat/<ticker>` and `/chat/<ticker>/apply` — Retired compatibility tombstones (`410`) that point to the unified Work OS Copilot.
-- `POST /actions/refresh` — Trigger an on-demand per-ticker refresh dispatcher (`stale` or `full` mode; SSE-streamed line-by-line).
-- `GET /healthz` — Health check.
+> Provider access is optional and can be metered. The Claude CLI may use an authenticated subscription or `ANTHROPIC_API_KEY`; Gemini fallback may use `GEMINI_API_KEY` or `GOOGLE_API_KEY`; and the Anthropic SDK supports the separate message-batches lane. Configure only what the work requires.
 
-This is the comment + Ask subset; the server also hosts the dashboard, discovery, viewspec, peek, and per-ticker/source/DCF pages — see the `@app.route` decorators in [execution/comments_server.py](execution/comments_server.py) (or [HOW_TO_USE_REPORTS.md §What's where](HOW_TO_USE_REPORTS.md)) for the full surface.
+For JSON-expecting LLM work, use the established structured-output boundary rather than treating an invalid response as an empty result. New or materially changed LLM purposes must follow the purpose registration, prompt-version, and evaluation workflow in [LLM Calls](directives/llm_calls.md).
 
-Comments persist to `data/report_comments/<T>/<YYYY-MM-DD>.json`; Ask history persists in SQLite (`ask_sessions`, `ask_turns`, `ask_exchanges`, and typed exchange artifacts). Posting comments or using Ask needs the server running; viewing existing comments + highlights works offline.
+## Operations
 
-**Slash-keyword intents** (see [HOW_TO_USE_REPORTS.md §Slash-keywords](HOW_TO_USE_REPORTS.md#slash-keyword-shortcuts-fastest-path--skip-the-dropdown) for the full table):
+The Work OS is the normal place to inspect and initiate work. Prefer its per-ticker refresh and review workflows over manually assembling long script chains. The documented refresh dispatcher supports stale or full modes and selected steps; its jobs are single-flight per ticker. Read [the command-center refresh guidance](HOW_TO_USE_REPORTS.md#refreshes--with-overrides) before using force or budget-bypass controls.
 
-| Prefix | Routes to | What the processor does |
-|---|---|---|
-| `/kpi` | `drop_kpi` | Removes the KPI from `micro_thesis/holdings/<T>.json` |
-| `/thesis` or `/update` | `edit_thesis` | Opus revises the thesis paragraph |
-| `/ask` or `/q` | `ask_question` | Opus answers with full thesis + bear-case context |
-| `/fix` | `fix_data` | Logs a TODO in `directives/data_fixes.md` |
-| `/rewrite` | `rewrite_section` | Emits cache-invalidation instructions for the targeted section |
-| `/platform`, `/feature`, `/bug` | `platform_change` | Lands as a tagged entry in [`directives/platform_backlog.md`](directives/platform_backlog.md) — the canonical cross-workspace bug/feature tracker. NOT routed into a single-ticker brief edit |
+Automation is declared in [cron/task_manifest.json](cron/task_manifest.json); [cron/TASKS.generated.md](cron/TASKS.generated.md) is the generated human-readable inventory. Treat the manifest as the source of truth for declared task definitions, not as evidence of live registration or execution.
 
-### 3. Earnings calendar HTML
+Validate scheduler artifact generation against the manifest with:
 
-`output/earnings_calendar.html`, regenerated by `python execution/sqlite_bootstrap.py execution/build_earnings_calendar.py`. One self-contained page covering every portfolio + watchlist ticker, split into:
-
-- **Upcoming** (next 90 days) — sorted by date, portfolio rows pinned + amber-shaded
-- **Recently reported** (last 45 days)
-- **No calendar data** (collapsed)
-
-Each row links to the most recent brief. Overwritten in place on every run.
-
-### 4. Analytical dashboard
-
-`output/dashboard/<DATE>_portfolio_dashboard.html`, built by `python execution/sqlite_bootstrap.py execution/build_analytical_dashboard.py`. Cross-ticker view: portfolio-wide synthesis, per-holding 5-min rereads, decisions ledger (hit-rate strip + graded outcomes), trigger ladder (SELL/TRIM/HOLD/ADD), cross-ticker insider activity (90d, conviction-scored), prediction outcomes (SayDo / bear-case / risk-factor materialization), LLM budget panel. Regenerated by the **weekly_synthesis** cron (Sunday 23:00).
-
-### 5. `.bat` launchers (repo root — cmd.exe-friendly)
-
-| Launcher | Wraps | Use |
-|---|---|---|
-| `build_report.bat <T> [--enable-llm]` | `execution/build_artifacts.py` | Build the workspace report. `--enable-llm` re-runs bear case + news + valuation + company description |
-| `refresh_fmp.bat <T> [LIMIT]` | `execution/fetch_fmp_historical_data.py` | Pull fresh FMP financial data |
-| `refresh_transcripts.bat <T>` | `execution/backfill_transcripts.py` | Owner-requested text-transcript backfill, bounded to the canonical last 5 reported quarters |
-| `refresh_news.bat <T> [DAYS]` | `execution/refresh_news.py` | Force-refresh §News with fresh WebSearch |
-| `start_comments_server.bat` | `execution/comments_server.py` | Flask server on `:7421` (dashboard + comments + chat) |
-| `process_comments.bat <T> [--apply] [--clear]` | `execution/process_report_comments.py` | Drain open comments → edits + LLM calls + rebuild |
-
-Every `.bat` self-locates the repo, so you can run them from any cwd. They forward all args after `<T>` to the underlying script.
-
-### 6. Direct Python CLIs
-
-Every step is also a direct Python entrypoint. See [HOW_TO_USE_REPORTS.md §Full CLI reference](HOW_TO_USE_REPORTS.md#full-cli-reference) for the user-invocable subset. Cron-only scripts are in §[Cron jobs](#cron-jobs-and-automation) below.
-
----
-
-## Cron jobs and automation
-
-44 declared tasks — see `cron/task_manifest.json` for the authoritative set and generated inventory; the load-bearing ones are tabled below. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
-
-### Daily chain (02:00 → 06:30)
-
-The six daily tasks feed the 06:30 brief. The transcript jobs run before the protected 03:00–05:00 LLM window so they are not predictably starved by the morning pipeline's writer lock.
-
-| Task | Cadence | Script | What it does |
-|---|---|---|---|
-| `refresh_cache` | Daily 03:00 | `execution/refresh_cache.py run` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (`free`=250/day & /stable-only — propagates `FMP_TIER=free` so the fetcher drops the v3/v4 fallback rungs that 403 globally on free; `basic`=250/day; `starter`=unlimited @ 5/sec; `premium`=unlimited @ 12/sec). Drains highest-priority stale endpoints up to the daily cap. Failed endpoints (403 / Legacy) get a 30-day retry window — a downgrade builds a backlog automatically; an upgrade catches up over following days. Force-stale hints from `schedule_pre_earnings_refresh` override cadence for tickers reporting in the next 7 days |
-| `backfill_transcripts` | Daily 02:00 | `execution/backfill_transcripts.py` | Portfolio-only automatic text-transcript backfill, bounded to the canonical last 5 reported fiscal quarters; explicitly named evaluation work is on demand. Stored watchlist/index/ETF/unknown roles fail closed before network access. Ingest and commitment extraction preserve the existing evidence and SHA-256 idempotency contracts. |
-| `scan_ir_transcripts` | Daily 02:15 | `execution/scan_ir_transcripts.py` | Portfolio-only automatic re-check for the latest reported quarter inside the 14-day post-earnings window; explicitly named evaluation work is on demand. Idempotent on exact DB/path/SHA transcript evidence. |
-| `fetch_fmp_earnings_calendar` | Daily 05:45 | `execution/fetch_fmp_earnings_calendar.py --all` then `execution/refresh_expected_earnings.py` | Step 1 refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker (on free/basic tier FMP refuses — 402 since 2026-06-10 — and the cache stays at its last good state). Step 2 materializes the **canonical `expected_earnings` table** through the `next_earnings_date` stack in [src/sources/earnings_calendar.py](src/sources/earnings_calendar.py) (FMP cache → yfinance fallback); the Home rail's upcoming-earnings strip, cockpit, and portfolio-tracker bridge all read that table |
-| `backfill_earnings_surprises` | Daily 06:15 | `execution/backfill_earnings_surprises.py` + `ingest_earnings_surprises.py` | Two-stage: merges `<TICKER>_earnings_calendar.json` (FMP primary, EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Stage-2 gate prevents partial ingestion if stage-1 fails |
-| `daily_fetch_and_brief` | Daily 06:30 | `execution/daily_fetch_and_brief.py --enable-llm` | **The drainer.** Picks up every ticker with `brief_dirty=1`, applies three gates (see §[When the report auto-updates](#when-the-report-auto-updates)), runs `thesis_evaluator → match_commitments → refresh_dcf → build_artifacts` for un-skipped tickers, clears the flag |
-
-### Daily standalones (not in the 02:00→06:30 chain)
-
-| Task | Cadence | Script | What it does |
-|---|---|---|---|
-| `backup_db` | Daily 02:45 | `cron/backup_db.py` | Consistent, sync-safe snapshot of `data/portfolio.db` via the SQLite online-backup API (safe while the DB is live) — Drive no longer backs the scratch tree |
-| `run_morning_pipeline` | Daily 04:00 | `execution/run_morning_pipeline.py --max-cost-usd 10` | Executes the typed 20-stage manifest in `src/pipeline/morning_manifest.py`: preflight; news and state reconciliation; fundamentals, DCF, fit, factor, risk, guard, and wealth materializations; triggers and standup; pre/post-earnings artifacts; feed; validation. Day + manifest-scoped atomic checkpoints resume only compatible successful stages. |
-| `fetch_macro_series` | Daily 05:35 | `execution/fetch_macro_series.py` then conditionally `compute_macro_sensitivities.py --portfolio` | Upserts the 12-series macro registry from timeout-bounded Yahoo candidates (direct FMP macro calls disabled pending shared recovery admission); recomputes only when all requested series are fresh or explicitly cached-degraded within 45 days |
-
-### Hourly catch-up
-
-| Task | Cadence | Script | What it does |
-|---|---|---|---|
-| `onboard_pending` | Hourly at :17 | `execution/onboard_pending_tickers.py` | Idempotent belt-and-suspenders for tickers that bypassed `db.track_company`'s auto-onboard hook (raw SQL / external API inserts). Detects 5 pending reasons (no instrument_type, no financial_facts, no dcf_run, etc.) and runs the appropriate fetch chain. No-op when nothing is pending |
-
-### Weekly + monthly + quarterly
-
-| Task | Cadence | Script | What it does |
-|---|---|---|---|
-| `weekly_p2_lens_refresh` | Sunday 02:00 | `execution/run_due_lenses.py --cadence weekly` | Regenerates P2-tier (watchlist + evaluation) lens artifacts drifted past their cadence. Idempotent via `artifact_store` cached-inputs hash — stable tickers cost nothing |
-| `model_eval_sweep` | Sunday 02:00 | `execution/run_weekly_model_eval.py` | **Cheapest-at-parity sweep + reversible auto-switch.** Harvests a rotating sample of real prompts, evaluates each cheaper candidate per active purpose against the incumbent (brand-blind pairwise judge), then writes a `model_pin_override` after a SWITCH_DOWN streak (reverts on a KEEP streak) — a conservative, fully-audited model downgrade loop |
-| `weekly_synthesis` | Sunday 23:00 | 5-step pipeline | (1) `refresh_dirty_artifacts.py --manifest-only` to drain dirty LLM artifacts; (2) per-portfolio `run_lens.py --all`; (3) `cross_portfolio_synthesis` Opus lens; (4) `build_analytical_dashboard.py`; (5) `grade_bear_cases.py --all-portfolio` for predictions whose target_period has passed |
-| `monthly_p3_refresh` | 1st of month, 03:00 | `execution/run_due_lenses.py --cadence monthly` | P3-tier (index constituents / ETFs / no-tier) lens refresh. P3 lens set is minimal (`five_min_reread` only) so runtime stays bounded even with 2k+ index constituents |
-| `verify_cron` | Thursday 07:00 | `execution/verify_cron_registration.py` | Weekly drift check that every expected task is still registered under `\earnings-summary\` in Task Scheduler |
-| `fetch_13f` | Quarterly (16th of Feb/May/Aug/Nov) | `execution/fetch_13f.py` then `recalibrate_investor_weights.py` then `run_discovery.py` | **EDGAR 13F-HR miner.** After each quarter's filings land: polls 13F holdings for rostered investors, recalibrates per-investor discovery weights from hit-rate history, then re-scores the discovery candidate set |
-
-### Supplementary / not on a cron
-
-| Script | Trigger | What it does |
-|---|---|---|
-| `schedule_pre_earnings_refresh.py` | Called from `refresh_cache.py` daily startup (~23h TTL) | Polls FMP for tickers reporting in next 7 days, falls back to per-ticker `next_earnings_date()` for FMP-universe misses. Writes force-stale hints to `.tmp/cacher/forced_stale.json` (14-day TTL covering pre-print + post-print window). Cacher reads these on every audit and prioritizes marked tickers |
-| `refresh_dirty_artifacts.py` | Embedded in `weekly_synthesis`; also runs ad-hoc | Drains `llm_artifacts.dirty=1` (set by migration 0043 triggers when upstream facts change). Groups by `(ticker, purpose)`, invokes the purpose-specific regenerator, clears dirty |
-| `refresh_dispatch.py` | Manual / dashboard `/actions/refresh` | Per-ticker dispatcher with `--mode full` or `--mode stale` (skip FMP if pulled in last 7d). Line-buffered output for SSE streaming |
-
-### Cron chain map
-
-```
-02:00  backfill_transcripts ──► transcripts/processed/* + transcripts + management_commitments
-02:15  scan_ir_transcripts ───► issuer IR transcript discovery + ingest
-02:45  backup_db ───────────► consistent data/portfolio.db snapshot (standalone)
-03:00  refresh_cache ───────► FMP cache files + financial_facts/* writes
-         │                    └─► (SQL trigger 0026) brief_dirty=1
-         ▼
-04:00  run_morning_pipeline ──► typed 20-stage manifest → atomic checkpoint/resume → validation gate
-         │
-         ▼
-05:35  fetch_macro_series ──► macro_series + compute_macro_sensitivities (standalone)
-05:45  fetch_fmp_earnings_calendar ──► data/historical/fmp/<T>_earnings_calendar.json
-         │                             └─► refresh_expected_earnings ──► expected_earnings table
-         │                                 (canonical calendar: home strip, cockpit, portfolio-tracker)
-         │
-         ▼
-06:15  backfill_earnings_surprises ──► data/surprise/<T>_surprises.json + earnings_surprises
-         │
-         ▼
-06:30  daily_fetch_and_brief ──► drains brief_dirty queue, gates A/B/C, regenerates briefs
-
-[hourly :17]   onboard_pending  (idempotent catch-up)
-[Sun 02:00]    weekly_p2_lens_refresh
-[Sun 02:00]    model_eval_sweep (cheapest-at-parity sweep → reversible auto-switch)
-[Sun 23:00]    weekly_synthesis (drain dirty → per-ticker lenses → portfolio synthesis → dashboard → grading)
-[Thu 07:00]    verify_cron (registration drift check)
-[1st 03:00]    monthly_p3_refresh
-[quarterly]    fetch_13f (16th Feb/May/Aug/Nov: 13F miner → recalibrate weights → run_discovery)
+```powershell
+python execution/sqlite_bootstrap.py execution/generate_cron_artifacts.py --check
 ```
 
-(Several more declared tasks are omitted from this map; `cron/task_manifest.json` and its generated inventory are authoritative.)
+Compare the declared manifest with the live Windows Task Scheduler state with:
 
----
-
-## When the report auto-updates
-
-Two refresh paths, with different latency and gating:
-
-### Path A — data-driven (queued)
-
-```
-new fact lands in financial_facts/kpi_facts/segment_dimensions/dcf_runs
-                          ↓
-        (AFTER INSERT trigger from migration 0026)
-                          ↓
-        tracked_companies.brief_dirty = 1   (instant, same txn)
-                          ↓
-        [Daily 06:30 cron] daily_fetch_and_brief.py
-                          ↓
-        Gate A (tier-cadence) → Gate B (material-change hash) → Gate C (eval-cadence)
-                          ↓
-        thesis_evaluator → refresh_dcf → build_artifacts ──► fresh <DATE>_workspace.html
-                          ↓
-        brief_dirty = 0   +   last_brief_hash + last_built_at recorded
+```powershell
+python execution/sqlite_bootstrap.py execution/verify_cron_registration.py
 ```
 
-**SQL triggers** ([alembic/versions/0026_brief_dirty_triggers.py](alembic/versions/0026_brief_dirty_triggers.py)) fire on `financial_facts`, `kpi_facts`, `segment_dimensions`, and `dcf_runs` INSERT/UPDATE. Each one sets `tracked_companies.brief_dirty = 1` for the affected ticker in the same transaction. Not covered (intentionally): `thesis_evaluations` (would self-loop), `management_commitments`, `transcripts` (builder reads files directly).
+Installation and registration are separate operator actions described in [the Windows Task Scheduler runbook](cron/SETUP_WINDOWS_SCHEDULER.md). The runbook also documents wrappers, logging, backup and restore practices, and schedule definitions. Use the verifier rather than inferring live state from repository files.
 
-**The three gates** in [`execution/daily_fetch_and_brief.py`](execution/daily_fetch_and_brief.py):
+Run only one process per mutable database state, cursor, output artifact, or write set. Scheduled and interactive work must honor the same run-lock boundaries. If a multi-step pipeline fails, inspect its recorded outcome and `.tmp/` state, then resume from the applicable checkpoint rather than casually restarting work that may already have persisted valid results.
 
-- **Gate A — tier cadence** (`tracked_companies.processing_tier`)
-  - P1 (portfolio): always rebuilds
-  - P2 (watchlist): rebuilds only if `last_built_at > 7 days`
-  - P3 (evaluation / none): rebuilds only if `last_built_at > 30 days`
-  - Bypassed by `--ignore-tier` or explicit `--ticker`
-- **Gate B — material-change hash** (`_compute_brief_hash`). Hash inputs: `MAX(financial_facts.period_end)`, `MAX(kpi_facts.period_end)`, transcript count, commitment count, holdings JSON bytes, DCF workbook mtime. If `current_hash == last_brief_hash` AND `last_built_at < 7 days ago` → skip with reason `no_material_change`. TTL configurable via `--no-change-ttl-days` (default 7)
-- **Gate C — evaluation cadence**. If `list_type='evaluation'` AND `last_built_at < eval_cadence_days` (default 7) → skip with reason `evaluation_cadence`
+For report-oriented work, use [HOW_TO_USE_REPORTS.md](HOW_TO_USE_REPORTS.md). It is the maintained operator reference for command-center actions, local reports, comments, proposal review, and manual refreshes; this README intentionally does not duplicate its volatile command inventory.
 
-### Path B — comment-driven (synchronous)
+## Development
 
-When the analyst posts a comment and runs `process_comments.bat <T> --apply`, the processor:
+Read [AGENTS.md](AGENTS.md) before changing code. It defines the repository architecture, deterministic-execution boundary, concurrency rules, UI contracts, data-handling expectations, and repository-specific operating constraints.
 
-1. Classifies intent (Haiku auto-classify or slash-keyword override)
-2. Sequences edits (Opus determines apply order)
-3. Routes by intent: `edit_thesis` / `drop_kpi` / `edit_structured` mutate `micro_thesis/holdings/<T>.json`; `ask_question` answers in-thread; `fix_data` appends to `directives/data_fixes.md`
-4. If any holdings-mutating intent applied, runs a **synthesis coherence pass**, then immediately chains: `seed_kpi_definitions → extract_kpis_from_summaries(earnings,ir) → run_thesis_evaluator → build_artifacts`
+Keep changes narrow and preserve the separation between `src/` business logic and thin `execution/` CLIs. Reuse existing primitives for network access, parsing, storage, and LLM calls. Put deterministic transformations in code rather than orchestration prose. Execution scripts are expected to validate typed inputs and outputs, keep structured logs separate from stdout data, and remain idempotent for the same inputs.
 
-The brief regenerates inline — no `brief_dirty` flag involved, no waiting for the daily cron.
+Use the [Makefile](Makefile) as the canonical developer command surface. During active work, run:
 
-### Path C — pre-earnings boost
-
-[`schedule_pre_earnings_refresh.py`](execution/schedule_pre_earnings_refresh.py) runs daily inside `refresh_cache`. For tickers reporting in the next 7 days, it writes force-stale hints to `.tmp/cacher/forced_stale.json` keyed by ticker with a 14-day TTL (pre + post window). On its next audit, `refresh_cache` prioritizes time-sensitive endpoints (`ratings`, `dcf`, `price_target`, `ttm_metrics`, `profile`, `market_cap`) for marked tickers ahead of normal cadence. Their writes flip `brief_dirty=1`, and the daily 06:30 worker rebuilds.
-
-### Cache invalidation matrix
-
-| Cache file | Written by | Read by | Invalidation trigger | TTL / key |
-|---|---|---|---|---|
-| `data/bear_case/<T>.json` | `src/report/sections/bear_case.py` (LLM call) | `build_artifacts` §10 Bear Case | `process_report_comments.py` clears on `edit_thesis` / `edit_structured`; rebuild with `--enable-llm` always re-runs if stale | 40-day TTL |
-| `data/valuation_basis/<T>.json` | Opus call picking diagnostic multiple | §6 Valuation tab | Delete the file + rebuild with `--enable-llm` to re-pick. `valuation_multiple_override` in holdings JSON pins it manually | No TTL — sha256 of (multiples table + thesis) |
-| `data/company_description/<T>.json` | `extract_company_description.py` | §8 Company tab | Implicit: sha256 over 10-K + thesis + recent earnings/IR docs changes. Or `--refresh` flag forces re-call | sha256 of inputs |
-| `data/qa_topics/<T>.json` | Q&A roster extractor | §2 Earnings tab Q&A panel | Rebuild with `--enable-llm` | sha256 of latest transcript |
-| `.tmp/news_cache/<T>_<hash>.json` | `src/sources/news.py` (WebSearch + WebFetch) | §3 News tab | `--refresh-news` flag bypasses; or `refresh_news.bat <T>` | 7-day TTL (configurable via `--news-cache-ttl-days`) |
-| `data/segment_definitions/<T>.json` | `src/compute/segment_definitions.py` | Segment drill-down tooltips | sha256 of latest form_10k JSON changes | sha256 of source |
-| `.tmp/cacher/forced_stale.json` | `schedule_pre_earnings_refresh.py` | `refresh_cache.py` audit pass | Daily rewrite; 14-day TTL per hint | per-hint expiry |
-
-### Manual override matrix
-
-| Situation | Right command |
-|---|---|
-| Just edited the thesis JSON | `build_report.bat <T> --enable-llm` |
-| Want to re-prompt the bear case on the same data | delete `data/bear_case/<T>.json`, then `build_report.bat <T> --enable-llm` |
-| News feels stale | `refresh_news.bat <T>` |
-| Just edited the HTML rendering / CSS | `build_report.bat <T>` (no `--enable-llm` — fast, reuses caches) |
-| New quarter just landed | `refresh_fmp.bat <T>` → `refresh_transcripts.bat <T>` → `build_report.bat <T> --enable-llm` |
-| Want everything fresh for one ticker | `cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker <T> --mode full` |
-| Quarterly catch-all for everyone | `python execution/sqlite_bootstrap.py execution/quarterly_refresh.py` |
-
-The full refresh-vs-rebuild table is in [HOW_TO_USE_REPORTS.md §When to refresh vs rebuild](HOW_TO_USE_REPORTS.md#when-to-refresh-vs-rebuild).
-
----
-
-## How data is picked and validated
-
-For any `(ticker, metric, period_end)`, multiple sources may report a value. The system picks one deterministically, never silently merges, and surfaces disagreements.
-
-### 1. Source-quality tier ranking
-
-Defined in [`src/timeseries/loaders.py`](src/timeseries/loaders.py) — `SOURCE_QUALITY_TIER_RANK`:
-
-| Tier | Rank | Sources |
-|---|---|---|
-| `sec_official` | 4 | SEC XBRL filings (10-K, 10-Q) — highest authority |
-| `fmp_normalized` | 3 | FMP API + IR doc parses + manual CSV/entry |
-| `llm_extracted` | 2 | LLM-extracted values from prose (transcripts, decks) |
-| `yfinance_fallback` | 1 | yfinance — last resort |
-
-The loader picks one row per logical key via a correlated subquery: `ORDER BY tier_rank DESC, id DESC LIMIT 1`. SEC values always beat FMP for the same period; ties go to the newest insert. Backfill mapping from legacy `source_type` to tier is in migration 0054.
-
-### 2. Restatement chains
-
-When a new write lands on an existing logical key AND the source document is a **later filing** (e.g., FY 10-K supersedes an earlier 10-Q for the same period), [`src/pipeline/restatement_detector.py`](src/pipeline/restatement_detector.py) sets the incumbent's `supersedes_id` pointing at the new row. Both rows survive — the loader picks the newer one by default via the tier + id ordering. Use `--as-of-date YYYY-MM-DD` to time-travel: the loader excludes rows backed by documents fetched after that date, so you can reproduce historical briefs deterministically.
-
-### 3. The four validation rules
-
-[`execution/run_validation_engine.py`](execution/run_validation_engine.py) calls [`src/pipeline/validation_engine.py`](src/pipeline/validation_engine.py) which runs four rule families and emits rows to `validation_issues`:
-
-| Rule | What it checks | Trigger | Severity |
-|---|---|---|---|
-| `PLAUSIBLE_RANGE` (financial) | Hard bounds per line_item (e.g., `total_assets >= 0`, `weighted_avg_shares >= 0`) | Value outside bound | WARN |
-| `PLAUSIBLE_RANGE` (KPI) | Unit-specific bounds: percent `[-1000, 1000]`, ratio `[-100, 100]`, bps `[-100000, 100000]`, count `[0, 10B]` | Value outside unit bound | WARN |
-| `MAGNITUDE_JUMP` | Sequential same-line ratio `>5x` (e.g., Q1 in millions, Q2 in thousands) on `revenue`, `operating_income`, `net_income` | Catches unit errors | WARN |
-| `SOURCE_DISAGREEMENT` | Two different `source_type`s reporting the same `(ticker, period, line_item)` diverge by `>0.5%` | Surfaces FMP-vs-SEC discrepancies | WARN |
-
-Designed `HALT` severity (for >3 orders of magnitude — the "revenue 10x off" rule from [GEMINI.md](GEMINI.md)) is wired but not currently emitted by live rules. KPI persistence ([`src/pipeline/kpi_persistence.py`](src/pipeline/kpi_persistence.py)) re-checks ranges before INSERT and writes a WARN row on violation.
-
-### 4. The `validation_issues` table
-
-Schema (migration 0006): `(id, run_id, source_doc_id, ticker, severity, rule, raw_value, expected, raised_at, resolved_at)`. Indexed on `(severity, resolved_at)` for fast dashboard queries.
-
-Consumers:
-- **§11 Provenance** in every workspace report queries open issues (`resolved_at IS NULL`), caps at 50 rows, renders as a collapsible table per ticker
-- The portfolio dashboard at `localhost:7421/` could in future expose a per-ticker open-issue count column
-
-### 5. Per-cell lineage
-
-Every fact row carries `source_doc_id` + `extracted_by` + `supersedes_id` (migration 0054). For any value rendered in a report, you can trace:
-
-```
-financial_facts.id ──► source_doc_id ──► documents.{doc_type, file_path, sha256, fetched_at, source_quality_tier}
-                  └── extracted_by ──► "fmp" | "sec_xbrl" | "llm:claude-sonnet-4-6" | "manual_csv"
-                  └── supersedes_id ──► earlier version (if restated); follow forward via latest_in_chain()
+```powershell
+make check-fast
 ```
 
-§11 Provenance surfaces this for every line item in the report. The `documents` table is the authoritative source-doc audit log.
+Before handoff or pre-push, run the complete gate:
 
-### 6. LLM-extracted data validation
-
-KPI extraction ([`src/compute/kpi_extract_summaries.py`](src/compute/kpi_extract_summaries.py)) writes through a Pydantic-validated `KpiExtractionManifest` with explicit `confidence` ∈ [0.0, 1.0], a `Unit` enum, and per-unit range checks before persistence.
-
-Segment cross-tab extraction ([`src/compute/segment_crosstabs_llm.py`](src/compute/segment_crosstabs_llm.py)) enforces a strict JSON contract with axis-name aliasing ("products" → `PRODUCT`, "region" → `GEOGRAPHY`) and validates that every cell's `(period_end, fiscal_period_type)` exists in `segment_periods` for the same ticker (FK in the junction writer).
-
-### 7. Range checks for currency
-
-Values are stored as strings cast to Decimal, with no USD scaling — INR / JPY / KRW filers report much larger nominal numbers and would false-positive a fixed bound. `MAGNITUDE_JUMP` catches unit errors via sequential 5x ratios instead.
-
----
-
-## Common workflows
-
-The full analyst workflow lives in **[HOW_TO_USE_REPORTS.md](HOW_TO_USE_REPORTS.md)** — slash-keyword shortcuts, refresh-vs-rebuild table, onboarding a new ticker, comment hygiene, troubleshooting. This section is the quick command map.
-
-### Build the workspace report
-
-```cmd
-build_report.bat META --enable-llm
-:: ↳ output/research/META/<YYYY-MM-DD>_workspace.html
+```powershell
+make check
 ```
 
-Omit `--enable-llm` for a fast rebuild that reuses cached LLM outputs. Pass `--flavor evaluation --allow-untracked` to screen a new name without onboarding it.
+The complete test suite is available through:
 
-### Refresh data for one ticker
-
-```cmd
-refresh_fmp.bat NVO 20            :: 20 quarters of FMP fundamentals
-refresh_transcripts.bat NVO       :: owner-requested last 5 reported quarters of text Q&A
-refresh_news.bat NVO 14           :: 14-day news lookback
-cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker NVO --mode full
+```powershell
+make test
 ```
 
-### Onboard a new ticker
+The repository has intentional pre-existing whole-tree lint and type-check baselines. The enforceable local gates focus on changed files, formatting, type checks, and tests; the [Makefile](Makefile) defines the exact target behavior. For frontend or report-renderer changes, follow the additional UI-control and golden-render requirements in [AGENTS.md](AGENTS.md).
 
-```cmd
-:: 1. Create micro_thesis/holdings/<NEW>.json (copy an existing one)
-python execution/sqlite_bootstrap.py execution/onboard_ticker.py --ticker NEW --list-type portfolio
-cron\run_python.bat "manual-full-refresh" "portfolio-db" execution\refresh_dispatch.py --ticker NEW --mode full
+When changing data collection or schema behavior, preserve provenance, validate source data, and make failure paths explicit. Do not silently merge conflicting sources, infer currencies or periods, or bypass the guarded database path. Before removing legacy code, check transitive reachability from current entrypoints so a local cleanup does not sever active imports.
+
+### Keeping this README current
+
+Preview a repository-evidence-based README candidate without writing `README.md`:
+
+```powershell
+python execution/sqlite_bootstrap.py execution/update_readme.py
 ```
 
-### Comment workflow
+After review and approval, perform the guarded atomic write:
 
-```cmd
-start_comments_server.bat                          :: leave running on :7421
-:: ...open the workspace HTML in browser, comment + chat...
-process_comments.bat NU --apply                    :: drain comments → edits + rebuild
+```powershell
+python execution/sqlite_bootstrap.py execution/update_readme.py --apply
 ```
 
-### Evaluate a candidate (P2)
-
-```cmd
-build_report.bat AMD --enable-llm --flavor evaluation --allow-untracked
-:: ...build a DCF workbook in dcf/AMD.xlsx...
-python execution/sqlite_bootstrap.py execution/refresh_dcf.py --ticker AMD
-:: ...edit micro_thesis/holdings/AMD.json...
-python execution/sqlite_bootstrap.py execution/pressure_test_thesis.py --ticker AMD
-python execution/sqlite_bootstrap.py execution/build_investment_decision_card.py --ticker AMD
-```
-
-The evaluation now concludes with the **Investment Decision Card** (PRD §8.1) at
-the top of the workspace — hypothesis, what's priced in, portfolio fit, the
-strongest opposing case, evidence readiness, and a Pass / Watch / Research-further
-/ Promote disposition. The old `start_diligence.py` / `build_diligence.py` /
-`check_initiation_gate.py` trio it replaced was retired 2026-07-25 (PRD §8.3): it
-was disconnected from `discovery_build`, and its required `micro_thesis/diligence/`
-directory never existed on this install.
-
-### Per-ticker enhancements
-
-Drop a JSON in `data/ticker_specific/<TICKER>/<feature>.json` (e.g., NVO patent timeline, drug pipeline milestones). The §10 Bear Case prompt picks it up automatically. See [`directives/per_ticker_enhancements.md`](directives/per_ticker_enhancements.md).
-
-### Output retention sweep
-
-```cmd
-python execution/sqlite_bootstrap.py execution/sweep_output_history.py --dry-run
-python execution/sqlite_bootstrap.py execution/sweep_output_history.py --keep 10 --ticker META
-```
-
-Groups files in `output/research/<TICKER>/` by `YYYY-MM-DD_` prefix; deletes everything older than the latest N distinct dates per ticker. Files without a date prefix survive any sweep.
-
----
-
-## State, idempotency, and resumption
-
-- Every pipeline run has `run_id = {directive}_{ticker_scope}_{period_end}_{started_at_iso}`.
-- Stage-level idempotency key: `(run_id, ticker, period_end, stage)` in `stage_transitions`.
-- Resumption: re-run the relevant CLI. It queries `stage_transitions` for the run and proceeds from the first stage where `status != ok`. See [`directives/data_pipeline_dag.md` §Resumption](directives/data_pipeline_dag.md).
-- Per-source idempotency keys: [`directives/data_provenance.md` §4](directives/data_provenance.md).
-- All ephemeral state lives in `.tmp/`; deliverables live in `output/research/<TICKER>/` and `data/`. Never mix.
-- Source-call provenance: every external HTTP call (FMP, yfinance, SEC XBRL) writes one row to `source_calls` with `(source_name, kind, ticker, called_at, status, latency_ms)`. Write-many / read-rarely; intended for future intelligent routing.
-
----
-
-## Pre-push checklist
-
-```bash
-ruff format .
-ruff check . --fix
-pyright
-basedpyright
-pytest
-```
-
-Strict typing is enforced (`pyright` strict + `basedpyright` all). No `Any`, no `# noqa`, no substring-matching for classification — see [GEMINI.md](GEMINI.md) for the full code standards.
-
----
+The updater collects a bounded allowlist of repository evidence, retains candidates and judgments under `.tmp/readme_updater/`, validates repository-local Markdown links, and refuses to overwrite a README changed after evidence collection.
 
 ## Security
 
-- `.env`, `credentials.json`, `token.json`, and any `*.pem` are gitignored and must never be logged or echoed.
-- API keys pass via environment variables only — never CLI args (they leak into shell history + process lists).
-- FMP fetchers route exception strings through [`src/log_redact.py`](src/log_redact.py) before logging, since `requests.HTTPError.__str__` embeds the full URL (with `apikey=...`). Every new integration that talks to a credentialed HTTP endpoint should import the same helper.
-- Ask discussion and evidence retrieval are read-only. A thesis or KPI change is stored as a governed proposal and can mutate canonical state only after the analyst reviews the exact diff and explicitly approves it through the revision-checked, idempotent proposal decision endpoint.
+Keep `.env`, `credentials.json`, and `token.json` out of version control and logs. Supply secrets through environment variables; never put them in CLI arguments, checked-in configuration, generated artifacts, issue text, or exception output.
+
+Use [src/log_redact.py](src/log_redact.py) as the canonical secret-redaction helper when handling credential-bearing URLs, provider errors, or exceptions. Network and document-processing paths handle untrusted material: preserve source provenance, validate parsed data, respect source policy and rate limits, and halt on authentication or schema-contract failures instead of retrying blindly.
+
+The command server is intended for loopback use. Its CORS behavior is restricted to local origins; changing the bind interface requires an explicit `COMMENTS_SERVER_CORS_WHITELIST`. Review the server options in [execution/comments_server.py](execution/comments_server.py) before changing its host or access posture.
+
+Back up and verify a production-like SQLite database before schema work. The guarded upgrader is the supported seam for database changes. Backup, restore, and scheduler operations are operationally consequential: use their documented runbooks and verification commands, and do not treat a checked-in configuration file as proof of a successful live operation.

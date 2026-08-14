@@ -98,6 +98,8 @@ META_PURPOSES: frozenset[str] = frozenset(
         "query_criteria_derive",
         "prompt_variant_propose",
         "prompt_reflect_rewrite",
+        "readme_update",
+        "readme_update_judge",
     }
 )
 _OBSERVED_META_PURPOSES: frozenset[str] = frozenset(
