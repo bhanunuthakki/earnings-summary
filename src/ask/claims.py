@@ -67,6 +67,7 @@ STRICT_NO_ANSWER = "I don't have enough sourced evidence to answer that."
 # answer made no claims" — only an explicitly empty claims list means that.
 _MAX_CLAIMS = 40
 _CLAIM_TEXT_CHARS = 240
+_CLAIM_QUOTE_CHARS = 100_000
 _MIN_QUOTE_CHARS = 12
 
 _MARKER_RX = re.compile(r"\[(\d{1,2})\]")
@@ -74,16 +75,15 @@ _MARKER_RX = re.compile(r"\[(\d{1,2})\]")
 # newline (markdown bullets/paragraphs break sentences too).
 _SENTENCE_SPLIT_RX = re.compile(r"(?<=[.!?])\s+|\n+")
 _NORM_STRIP_RX = re.compile(r"\[\d{1,2}\]|[*_`#]+")
-_COORDINATED_CLAUSE_RX = re.compile(
-    r"\](?:,)?\s+(?=(?:and|but|while|whereas)\b)",
-    re.IGNORECASE,
+_CITED_CLAUSE_BOUNDARY_RX = re.compile(
+    r"(?:\[\d{1,2}\])+(?:,)?\s+(?=[^\s\[\].!?;,])",
 )
 
 
 class _ClaimWire(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    quote: str = Field(min_length=_MIN_QUOTE_CHARS, max_length=_CLAIM_TEXT_CHARS)
+    quote: str = Field(min_length=_MIN_QUOTE_CHARS, max_length=_CLAIM_QUOTE_CHARS)
     cites: list[int] = Field(max_length=30)
     supported: bool = True
 
@@ -162,8 +162,8 @@ def required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
     """Partition every non-whitespace answer clause into an exact audit span."""
 
     spans: list[tuple[int, int, str]] = []
-    coordinated_ends = {
-        len(answer[: match.end()].rstrip()) for match in _COORDINATED_CLAUSE_RX.finditer(answer)
+    cited_clause_ends = {
+        len(answer[: match.end()].rstrip()) for match in _CITED_CLAUSE_BOUNDARY_RX.finditer(answer)
     }
     start: int | None = None
     for index, char in enumerate(answer):
@@ -173,7 +173,7 @@ def required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
             continue
         boundary = (
             char == "\n"
-            or index + 1 in coordinated_ends
+            or index + 1 in cited_clause_ends
             or (char in ".!?;" and (index + 1 == len(answer) or answer[index + 1].isspace()))
         )
         if not boundary:
@@ -193,14 +193,22 @@ def required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
     return tuple(spans)
 
 
-def _anchor_sentence(quote: str, sentences: list[str], normed: list[str]) -> int | None:
+def _anchor_sentence(
+    quote: str,
+    sentences: list[str],
+    normed: list[str],
+    *,
+    exact: bool = False,
+) -> int | None:
     """Index of the sentence the quote was copied from; None when it anchors
     nowhere (a paraphrase or hallucinated quote — dropped by contract)."""
     q = normalize_text(quote)
     if len(q) < _MIN_QUOTE_CHARS:
         return None
     for i, s in enumerate(normed):
-        if q in s or (len(s) >= _MIN_QUOTE_CHARS and s in q):
+        if (exact and q == s) or (
+            not exact and (q in s or (len(s) >= _MIN_QUOTE_CHARS and s in q))
+        ):
             return i
     return None
 
@@ -241,7 +249,7 @@ def _reconcile(
         if not isinstance(quote, str) or not quote.strip():
             dropped += 1
             continue
-        idx = _anchor_sentence(quote, sentences, normed)
+        idx = _anchor_sentence(quote, sentences, normed, exact=strict)
         if idx is None:
             dropped += 1
             continue
@@ -281,12 +289,19 @@ def _reconcile(
     ]
 
 
-def _build_prompt(final_text: str, items: list[EvidenceItem]) -> str:
+def _build_prompt(final_text: str, items: list[EvidenceItem], *, strict: bool = False) -> str:
     evidence_lines = "\n".join(
         f"[{item.n}] " + spotlight(item.text, source=f"claim-audit evidence {item.n} ({item.kind})")
         for item in items
     )
     answer_block = spotlight(final_text, source="candidate Ask answer")
+    quote_rule = (
+        '- "quote" must copy the entire audited span exactly, including all words and '
+        "citation markers. Never shorten, paraphrase, or combine spans."
+        if strict
+        else '- "quote" must be copied from the answer text (you may shorten to the first '
+        "~15 words). Never paraphrase."
+    )
     return f"""You audit one finished answer from a portfolio research assistant for
 citation grounding. You get the ANSWER and the NUMBERED EVIDENCE it was
 allowed to cite. Output ONLY a JSON object — no prose, no markdown fences.
@@ -305,8 +320,7 @@ Rules:
   comparison, recommendation, greeting, question, opinion, or meta commentary
   still requires an audit entry. If a span is not supported by the numbered
   evidence, include it with "supported": false. Never skip it.
-- "quote" must be copied from the answer text (you may shorten to the first
-  ~15 words). Never paraphrase.
+{quote_rule}
 - "cites" may only contain numbers from the evidence list, and only when
   that evidence actually states what the claim says. Keep the answer's own
   [n] markers when they are correct; add a number the answer omitted only
@@ -353,7 +367,7 @@ def extract_claim_map(
         return None
     try:
         payload = call_llm_structured(
-            _build_prompt(text, items),
+            _build_prompt(text, items, strict=strict),
             purpose=PURPOSE,
             scope="ask",
             expect="object",

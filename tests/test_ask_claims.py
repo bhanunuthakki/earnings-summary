@@ -358,7 +358,7 @@ def test_strict_grounding_preserves_a_full_long_anchored_span(
         {
             "claims": [
                 {
-                    "quote": answer[:80],
+                    "quote": answer,
                     "cites": [1],
                     "supported": True,
                 }
@@ -460,6 +460,70 @@ def test_strict_grounding_accepts_a_supported_comma_separated_list(
     payload = build_citations_payload(
         answer,
         [_item(1)],
+        db_path=tmp_path / "x.db",
+        strict=True,
+    )
+
+    assert payload is not None
+    assert payload["grounding"] == "per_claim"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Revenue grew [1] or the CEO was arrested [1].",
+        "Revenue grew [1] because the CEO was arrested [1].",
+        "Revenue grew and the CEO was arrested [1].",
+    ],
+)
+def test_strict_grounding_rejects_a_partial_compound_span(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+) -> None:
+    _patch_map(
+        monkeypatch,
+        {
+            "claims": [
+                {
+                    "quote": "Revenue grew [1]" if "[1]" in answer[:20] else "Revenue grew",
+                    "cites": [1],
+                    "supported": True,
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(GroundedCitationError):
+        build_citations_payload(
+            answer,
+            [_item(1)],
+            db_path=tmp_path / "x.db",
+            strict=True,
+        )
+
+
+def test_strict_grounding_keeps_adjacent_multi_citations_in_one_span(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer = "Revenue, gross margin, and EPS increased [1][2]."
+    _patch_map(
+        monkeypatch,
+        {
+            "claims": [
+                {
+                    "quote": answer,
+                    "cites": [1, 2],
+                    "supported": True,
+                }
+            ]
+        },
+    )
+
+    payload = build_citations_payload(
+        answer,
+        [_item(1), replace(_item(1), n=2)],
         db_path=tmp_path / "x.db",
         strict=True,
     )
