@@ -12,9 +12,17 @@ import json
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, validate_call
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+    validate_call,
+)
 
 from models.documents import DocType, SourceType
 
@@ -64,7 +72,26 @@ class DegradationBehavior(StrEnum):
     OWNER_INPUT_REQUIRED = "owner_input_required"
 
 
-_STRICT_FROZEN = ConfigDict(extra="forbid", frozen=True, strict=True)
+_STRICT_FROZEN = ConfigDict(
+    extra="forbid",
+    frozen=True,
+    strict=True,
+    revalidate_instances="always",
+)
+_NonBlankId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+]
+
+
+def _canonical_digest(payload: object) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 class SourceClassification(BaseModel):
@@ -148,11 +175,12 @@ class ParentEvidenceReference(BaseModel):
 
     source_type: SourceType
     document_type: DocType
-    source_document_id: str = Field(min_length=1, max_length=128)
-    observation_id: str = Field(min_length=1, max_length=128)
-    resolution_revision_id: str = Field(min_length=1, max_length=128)
+    source_document_id: _NonBlankId
+    observation_id: _NonBlankId
+    resolution_revision_id: _NonBlankId
     published_at: datetime
     ingested_at: datetime
+    sealed_at: datetime | None
 
     @model_validator(mode="after")
     def _valid_clocks(self) -> Self:
@@ -160,6 +188,10 @@ class ParentEvidenceReference(BaseModel):
         _require_aware(self.ingested_at, field="ingested_at")
         if self.ingested_at < self.published_at:
             raise ValueError("parent ingested_at must not precede published_at")
+        if self.sealed_at is not None:
+            _require_aware(self.sealed_at, field="sealed_at")
+            if self.sealed_at < self.ingested_at:
+                raise ValueError("parent sealed_at must not precede ingested_at")
         return self
 
 
@@ -168,17 +200,33 @@ class TransformationLineage(BaseModel):
 
     model_config = _STRICT_FROZEN
 
+    derivation_seal_id: _NonBlankId
     parents: tuple[ParentEvidenceReference, ...] = Field(min_length=1)
-    formula_id: str = Field(min_length=1, max_length=128)
-    formula_version: str = Field(min_length=1, max_length=128)
+    ordered_inputs_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    formula_id: _NonBlankId
+    formula_version: _NonBlankId
     formula_definition_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     formula_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
-    def _unique_parent_observations(self) -> Self:
+    def _canonical_seal(self) -> Self:
         observation_ids = tuple(parent.observation_id for parent in self.parents)
         if len(observation_ids) != len(set(observation_ids)):
             raise ValueError("derived lineage cannot repeat a parent observation")
+        expected = _canonical_digest(
+            {
+                "derivation_seal_id": self.derivation_seal_id,
+                "formula_config_sha256": self.formula_config_sha256,
+                "formula_definition_sha256": self.formula_definition_sha256,
+                "formula_id": self.formula_id,
+                "formula_version": self.formula_version,
+                "parents": [parent.model_dump(mode="json") for parent in self.parents],
+            }
+        )
+        if self.ordered_inputs_sha256 is None:
+            object.__setattr__(self, "ordered_inputs_sha256", expected)
+        elif self.ordered_inputs_sha256 != expected:
+            raise ValueError("ordered_inputs_sha256 must match canonical derivation inputs")
         return self
 
 
@@ -189,8 +237,8 @@ class AdmissionEvidence(BaseModel):
 
     source_type: SourceType
     document_type: DocType
-    source_document_id: str = Field(min_length=1, max_length=128)
-    observation_or_projection_version: str = Field(min_length=1, max_length=128)
+    source_document_id: _NonBlankId
+    observation_or_projection_version: _NonBlankId
     currency: str | None
     fiscal_period: str | None
     published_at: datetime | None
@@ -279,6 +327,8 @@ class SourceRegimeContract(BaseModel):
             raise ValueError("contract must contain exactly one policy for every source domain")
         if self.dcf_input_domains != _DCF_INPUT_DOMAINS:
             raise ValueError("contract must declare the canonical DCF input domains")
+        if self.policies != _canonical_policies(self.regime):
+            raise ValueError("contract policies must match the canonical registered regime")
         return self
 
     @validate_call(config=_STRICT_FROZEN)
@@ -338,6 +388,11 @@ class SourceRegimeContract(BaseModel):
             parent_classification = classification_for_source_type(parent.source_type)
             if parent_classification.lifecycle is EvidenceLifecycle.DERIVED:
                 raise ValueError("derived source cannot use another derived primary parent")
+            if (
+                parent_classification.lifecycle is EvidenceLifecycle.PROVISIONAL
+                and not policy.allow_provisional
+            ):
+                raise ValueError("derived source has an excluded provisional parent")
             parent_grant = next(
                 (
                     item
@@ -362,6 +417,13 @@ class SourceRegimeReceiptIdentity(BaseModel):
     regime: SourceRegime
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @model_validator(mode="after")
+    def _canonical_identity(self) -> Self:
+        canonical = _CONTRACTS.get(self.regime)
+        if canonical is not None and self.contract_sha256 != contract_sha256(canonical):
+            raise ValueError("receipt identity must match the canonical registered contract")
+        return self
+
 
 def _enforce_cutoff(
     rule: AsOfRule,
@@ -385,10 +447,13 @@ def _enforce_parent_cutoff(
     parent: ParentEvidenceReference,
     cutoff: datetime,
 ) -> None:
-    parent_clock = (
-        parent.ingested_at if rule is AsOfRule.OBSERVED_BY_CUTOFF else parent.published_at
-    )
-    if parent_clock > cutoff:
+    if rule is AsOfRule.PUBLISHED_BY_CUTOFF:
+        parent_clock = parent.published_at
+    elif rule is AsOfRule.OBSERVED_BY_CUTOFF:
+        parent_clock = parent.ingested_at
+    else:
+        parent_clock = parent.sealed_at
+    if parent_clock is None or parent_clock > cutoff:
         raise ValueError("derived parent evidence was unavailable at cutoff")
 
 
@@ -415,78 +480,80 @@ _FMP_REPORTED = (
     DocType.FMP_AS_REPORTED_CASHFLOW,
     DocType.FMP_AS_REPORTED_FINANCIAL,
 )
-_DOCS_BY_DOMAIN_SOURCE: dict[tuple[SourceDomain, SourceType], tuple[DocType, ...]] = {
-    (SourceDomain.REPORTED_FACT, SourceType.SEC_XBRL): (
-        DocType.SEC_COMPANYFACTS_SNAPSHOT,
-        *_SEC_FILINGS,
-    ),
-    (SourceDomain.REPORTED_FACT, SourceType.SEC_S1): (DocType.SEC_S1,),
-    (SourceDomain.REPORTED_FACT, SourceType.IR_DOC): _IR_FINANCIAL,
-    (SourceDomain.REPORTED_FACT, SourceType.FMP): _FMP_REPORTED,
-    (SourceDomain.COMPANY_KPI, SourceType.SEC_XBRL): (
-        DocType.SEC_COMPANYFACTS_SNAPSHOT,
-        *_SEC_FILINGS,
-    ),
-    (SourceDomain.COMPANY_KPI, SourceType.IR_DOC): _IR_FINANCIAL,
-    (SourceDomain.COMPANY_KPI, SourceType.FMP): (
-        DocType.FMP_KEY_METRICS,
-        DocType.FMP_FINANCIAL_RATIOS,
-        DocType.FMP_FINANCIAL_GROWTH,
-        DocType.FMP_OWNER_EARNINGS,
-        DocType.FMP_ENTERPRISE_VALUES,
-    ),
-    (SourceDomain.SEGMENT, SourceType.SEC_XBRL): (
-        DocType.SEC_COMPANYFACTS_SNAPSHOT,
-        *_SEC_FILINGS,
-    ),
-    (SourceDomain.SEGMENT, SourceType.IR_DOC): _IR_FINANCIAL,
-    (SourceDomain.SEGMENT, SourceType.FMP): (
-        DocType.FMP_SEGMENT_PRODUCT,
-        DocType.FMP_SEGMENT_GEOGRAPHIC,
-    ),
-    (SourceDomain.FILING, SourceType.SEC_XBRL): _SEC_FILINGS,
-    (SourceDomain.FILING, SourceType.SEC_S1): (DocType.SEC_S1,),
-    (SourceDomain.FILING, SourceType.FMP): (
-        DocType.FMP_10K_JSON,
-        DocType.FMP_10Q_JSON,
-        DocType.FMP_FINANCIAL_REPORTS_DATES,
-    ),
-    (SourceDomain.ESTIMATE, SourceType.FMP): (
-        DocType.FMP_ANALYST_ESTIMATES,
-        DocType.FMP_EARNINGS_CALENDAR,
-        DocType.FMP_PRICE_TARGET_CONSENSUS,
-    ),
-    (SourceDomain.PRICE, SourceType.FMP): (
-        DocType.FMP_HISTORICAL_PRICE,
-        DocType.FMP_HISTORICAL_MARKET_CAP,
-    ),
-    (SourceDomain.TRANSCRIPT, SourceType.IR_DOC): (
-        DocType.IR_TRANSCRIPT,
-        DocType.EARNINGS_CALL_TRANSCRIPT,
-    ),
-    (SourceDomain.TRANSCRIPT, SourceType.TRANSCRIPT_AUDIO): (DocType.EARNINGS_CALL_AUDIO,),
-    (SourceDomain.OWNER_STATE, SourceType.MANUAL_ENTRY): (DocType.ANALYST_COMMENT,),
-    (SourceDomain.MANUAL_OVERRIDE, SourceType.MANUAL_CSV): (DocType.ANALYST_COMMENT,),
-    (SourceDomain.MANUAL_OVERRIDE, SourceType.MANUAL_ENTRY): (DocType.ANALYST_COMMENT,),
-    (SourceDomain.FOREIGN_INTERIM, SourceType.SEC_XBRL): (
-        DocType.SEC_6K,
-        DocType.SEC_20F,
-        DocType.SEC_40F,
-    ),
-    (SourceDomain.FOREIGN_INTERIM, SourceType.IR_DOC): _IR_FINANCIAL,
-    (SourceDomain.FOREIGN_INTERIM, SourceType.FMP): _FMP_REPORTED,
-    (SourceDomain.DERIVED_FACT, SourceType.SEC_XBRL): (
-        DocType.SEC_COMPANYFACTS_SNAPSHOT,
-        *_SEC_FILINGS,
-    ),
-    (SourceDomain.DERIVED_FACT, SourceType.SEC_S1): (DocType.SEC_S1,),
-    (SourceDomain.DERIVED_FACT, SourceType.IR_DOC): _IR_FINANCIAL,
-    (SourceDomain.DERIVED_FACT, SourceType.FMP): (
-        *_FMP_REPORTED,
-        DocType.FMP_DCF,
-        DocType.FMP_DCF_LEVERED,
-    ),
-}
+_DOCS_BY_DOMAIN_SOURCE = MappingProxyType(
+    {
+        (SourceDomain.REPORTED_FACT, SourceType.SEC_XBRL): (
+            DocType.SEC_COMPANYFACTS_SNAPSHOT,
+            *_SEC_FILINGS,
+        ),
+        (SourceDomain.REPORTED_FACT, SourceType.SEC_S1): (DocType.SEC_S1,),
+        (SourceDomain.REPORTED_FACT, SourceType.IR_DOC): _IR_FINANCIAL,
+        (SourceDomain.REPORTED_FACT, SourceType.FMP): _FMP_REPORTED,
+        (SourceDomain.COMPANY_KPI, SourceType.SEC_XBRL): (
+            DocType.SEC_COMPANYFACTS_SNAPSHOT,
+            *_SEC_FILINGS,
+        ),
+        (SourceDomain.COMPANY_KPI, SourceType.IR_DOC): _IR_FINANCIAL,
+        (SourceDomain.COMPANY_KPI, SourceType.FMP): (
+            DocType.FMP_KEY_METRICS,
+            DocType.FMP_FINANCIAL_RATIOS,
+            DocType.FMP_FINANCIAL_GROWTH,
+            DocType.FMP_OWNER_EARNINGS,
+            DocType.FMP_ENTERPRISE_VALUES,
+        ),
+        (SourceDomain.SEGMENT, SourceType.SEC_XBRL): (
+            DocType.SEC_COMPANYFACTS_SNAPSHOT,
+            *_SEC_FILINGS,
+        ),
+        (SourceDomain.SEGMENT, SourceType.IR_DOC): _IR_FINANCIAL,
+        (SourceDomain.SEGMENT, SourceType.FMP): (
+            DocType.FMP_SEGMENT_PRODUCT,
+            DocType.FMP_SEGMENT_GEOGRAPHIC,
+        ),
+        (SourceDomain.FILING, SourceType.SEC_XBRL): _SEC_FILINGS,
+        (SourceDomain.FILING, SourceType.SEC_S1): (DocType.SEC_S1,),
+        (SourceDomain.FILING, SourceType.FMP): (
+            DocType.FMP_10K_JSON,
+            DocType.FMP_10Q_JSON,
+            DocType.FMP_FINANCIAL_REPORTS_DATES,
+        ),
+        (SourceDomain.ESTIMATE, SourceType.FMP): (
+            DocType.FMP_ANALYST_ESTIMATES,
+            DocType.FMP_EARNINGS_CALENDAR,
+            DocType.FMP_PRICE_TARGET_CONSENSUS,
+        ),
+        (SourceDomain.PRICE, SourceType.FMP): (
+            DocType.FMP_HISTORICAL_PRICE,
+            DocType.FMP_HISTORICAL_MARKET_CAP,
+        ),
+        (SourceDomain.TRANSCRIPT, SourceType.IR_DOC): (
+            DocType.IR_TRANSCRIPT,
+            DocType.EARNINGS_CALL_TRANSCRIPT,
+        ),
+        (SourceDomain.TRANSCRIPT, SourceType.TRANSCRIPT_AUDIO): (DocType.EARNINGS_CALL_AUDIO,),
+        (SourceDomain.OWNER_STATE, SourceType.MANUAL_ENTRY): (DocType.ANALYST_COMMENT,),
+        (SourceDomain.MANUAL_OVERRIDE, SourceType.MANUAL_CSV): (DocType.ANALYST_COMMENT,),
+        (SourceDomain.MANUAL_OVERRIDE, SourceType.MANUAL_ENTRY): (DocType.ANALYST_COMMENT,),
+        (SourceDomain.FOREIGN_INTERIM, SourceType.SEC_XBRL): (
+            DocType.SEC_6K,
+            DocType.SEC_20F,
+            DocType.SEC_40F,
+        ),
+        (SourceDomain.FOREIGN_INTERIM, SourceType.IR_DOC): _IR_FINANCIAL,
+        (SourceDomain.FOREIGN_INTERIM, SourceType.FMP): _FMP_REPORTED,
+        (SourceDomain.DERIVED_FACT, SourceType.SEC_XBRL): (
+            DocType.SEC_COMPANYFACTS_SNAPSHOT,
+            *_SEC_FILINGS,
+        ),
+        (SourceDomain.DERIVED_FACT, SourceType.SEC_S1): (DocType.SEC_S1,),
+        (SourceDomain.DERIVED_FACT, SourceType.IR_DOC): _IR_FINANCIAL,
+        (SourceDomain.DERIVED_FACT, SourceType.FMP): (
+            *_FMP_REPORTED,
+            DocType.FMP_DCF,
+            DocType.FMP_DCF_LEVERED,
+        ),
+    }
+)
 
 
 def _grants(
@@ -553,59 +620,62 @@ def _owner_policies() -> tuple[DomainSourcePolicy, DomainSourcePolicy]:
     )
 
 
-def _contract(
-    regime: SourceRegime, authorities: tuple[EvidenceAuthority, ...]
-) -> SourceRegimeContract:
+_AUTHORITIES_BY_REGIME = MappingProxyType(
+    {
+        SourceRegime.OFFICIAL_PRIMARY: (_REGULATOR, _ISSUER),
+        SourceRegime.NORMALIZED_VENDOR_ONLY: (_VENDOR,),
+        SourceRegime.COMBINED: (_REGULATOR, _ISSUER, _VENDOR),
+    }
+)
+
+
+def _canonical_policies(regime: SourceRegime) -> tuple[DomainSourcePolicy, ...]:
+    authorities = _AUTHORITIES_BY_REGIME[regime]
     official = _REGULATOR in authorities or _ISSUER in authorities
+    return (
+        _policy(
+            SourceDomain.REPORTED_FACT,
+            *authorities,
+            allow_provisional=official,
+        ),
+        _policy(SourceDomain.COMPANY_KPI, *authorities, allow_derived=True),
+        _policy(SourceDomain.SEGMENT, *authorities, allow_derived=True),
+        _policy(SourceDomain.FILING, *authorities, allow_provisional=official),
+        _policy(
+            SourceDomain.ESTIMATE,
+            _VENDOR,
+            as_of_rule=AsOfRule.OBSERVED_BY_CUTOFF,
+        ),
+        _policy(
+            SourceDomain.PRICE,
+            _VENDOR,
+            as_of_rule=AsOfRule.OBSERVED_BY_CUTOFF,
+        ),
+        _policy(SourceDomain.TRANSCRIPT, *authorities, allow_derived=True),
+        *_owner_policies(),
+        _policy(SourceDomain.FOREIGN_INTERIM, *authorities, allow_derived=True),
+        _policy(
+            SourceDomain.DERIVED_FACT,
+            *authorities,
+            allow_provisional=official,
+            allow_derived=True,
+        ),
+    )
+
+
+def _contract(regime: SourceRegime) -> SourceRegimeContract:
     return SourceRegimeContract(
         regime=regime,
         dcf_input_domains=_DCF_INPUT_DOMAINS,
-        policies=(
-            _policy(
-                SourceDomain.REPORTED_FACT,
-                *authorities,
-                allow_provisional=official,
-            ),
-            _policy(SourceDomain.COMPANY_KPI, *authorities, allow_derived=True),
-            _policy(SourceDomain.SEGMENT, *authorities, allow_derived=True),
-            _policy(SourceDomain.FILING, *authorities, allow_provisional=official),
-            _policy(
-                SourceDomain.ESTIMATE,
-                _VENDOR,
-                as_of_rule=AsOfRule.OBSERVED_BY_CUTOFF,
-            ),
-            _policy(
-                SourceDomain.PRICE,
-                _VENDOR,
-                as_of_rule=AsOfRule.OBSERVED_BY_CUTOFF,
-            ),
-            _policy(SourceDomain.TRANSCRIPT, *authorities, allow_derived=True),
-            *_owner_policies(),
-            _policy(SourceDomain.FOREIGN_INTERIM, *authorities, allow_derived=True),
-            _policy(
-                SourceDomain.DERIVED_FACT,
-                *authorities,
-                allow_provisional=official,
-                allow_derived=True,
-            ),
-        ),
+        policies=_canonical_policies(regime),
     )
 
 
 _CONTRACTS = MappingProxyType(
     {
-        SourceRegime.OFFICIAL_PRIMARY: _contract(
-            SourceRegime.OFFICIAL_PRIMARY,
-            (_REGULATOR, _ISSUER),
-        ),
-        SourceRegime.NORMALIZED_VENDOR_ONLY: _contract(
-            SourceRegime.NORMALIZED_VENDOR_ONLY,
-            (_VENDOR,),
-        ),
-        SourceRegime.COMBINED: _contract(
-            SourceRegime.COMBINED,
-            (_REGULATOR, _ISSUER, _VENDOR),
-        ),
+        SourceRegime.OFFICIAL_PRIMARY: _contract(SourceRegime.OFFICIAL_PRIMARY),
+        SourceRegime.NORMALIZED_VENDOR_ONLY: _contract(SourceRegime.NORMALIZED_VENDOR_ONLY),
+        SourceRegime.COMBINED: _contract(SourceRegime.COMBINED),
     }
 )
 
@@ -629,13 +699,7 @@ def contract_sha256(contract: SourceRegimeContract) -> str:
             for source_type in sorted(SourceType, key=lambda item: item.value)
         },
     }
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
+    return _canonical_digest(payload)
 
 
 def receipt_identity(contract: SourceRegimeContract) -> SourceRegimeReceiptIdentity:

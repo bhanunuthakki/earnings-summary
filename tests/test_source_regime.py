@@ -16,8 +16,10 @@ from provenance.source_regime import (
     EvidenceLifecycle,
     ParentEvidenceReference,
     SourceDomain,
+    SourceGrant,
     SourceRegime,
     SourceRegimeContract,
+    SourceRegimeReceiptIdentity,
     TransformationLineage,
     classification_for_source_type,
     contract_for,
@@ -68,6 +70,7 @@ def _lineage(
     document_type: DocType = DocType.IR_PRESENTATION,
 ) -> TransformationLineage:
     return TransformationLineage(
+        derivation_seal_id="derivation-seal-1",
         parents=(
             ParentEvidenceReference(
                 source_type=source_type,
@@ -77,6 +80,7 @@ def _lineage(
                 resolution_revision_id="parent-resolution-1",
                 published_at=_PUBLISHED,
                 ingested_at=_INGESTED,
+                sealed_at=_SEALED,
             ),
         ),
         formula_id="adjusted-ebitda",
@@ -300,6 +304,54 @@ def test_derived_admission_requires_sealed_persisted_lineage() -> None:
         )
 
 
+def test_derivation_seal_binds_ordered_inputs_and_formula() -> None:
+    lineage = _lineage()
+
+    assert lineage.ordered_inputs_sha256 is not None
+    assert len(lineage.ordered_inputs_sha256) == 64
+    with pytest.raises(ValidationError, match="must match canonical derivation inputs"):
+        TransformationLineage(
+            derivation_seal_id=lineage.derivation_seal_id,
+            parents=lineage.parents,
+            ordered_inputs_sha256="b" * 64,
+            formula_id=lineage.formula_id,
+            formula_version=lineage.formula_version,
+            formula_definition_sha256=lineage.formula_definition_sha256,
+            formula_config_sha256=lineage.formula_config_sha256,
+        )
+
+
+def test_whitespace_and_unvalidated_lineage_instances_fail_closed() -> None:
+    with pytest.raises(ValidationError):
+        ParentEvidenceReference(
+            source_type=SourceType.IR_DOC,
+            document_type=DocType.IR_PRESENTATION,
+            source_document_id=" ",
+            observation_id=" ",
+            resolution_revision_id=" ",
+            published_at=_PUBLISHED,
+            ingested_at=_INGESTED,
+            sealed_at=_SEALED,
+        )
+
+    valid = _lineage()
+    unvalidated = TransformationLineage.model_construct(
+        derivation_seal_id=valid.derivation_seal_id,
+        parents=(),
+        ordered_inputs_sha256=valid.ordered_inputs_sha256,
+        formula_id=valid.formula_id,
+        formula_version=valid.formula_version,
+        formula_definition_sha256=valid.formula_definition_sha256,
+        formula_config_sha256=valid.formula_config_sha256,
+    )
+    with pytest.raises(ValidationError, match="at least 1 item"):
+        _evidence(
+            SourceType.LLM_EXTRACTED,
+            DocType.ANALYST_COMMENT,
+            lineage=unvalidated,
+        )
+
+
 def test_non_derived_source_rejects_fake_transformation_lineage() -> None:
     with pytest.raises(ValueError, match="must not declare transformation lineage"):
         contract_for(SourceRegime.COMBINED).admits(
@@ -384,6 +436,41 @@ def test_contract_is_deeply_immutable_and_constructor_is_closed() -> None:
             regime=SourceRegime.COMBINED,
             policies=(),
             dcf_input_domains=(),
+        )
+
+    canonical_price = contract.policy_for(SourceDomain.PRICE)
+    forged_price = DomainSourcePolicy(
+        domain=SourceDomain.PRICE,
+        authority_precedence=canonical_price.authority_precedence,
+        source_grants=(
+            SourceGrant(
+                source_type=SourceType.FMP,
+                document_types=(DocType.SEC_10K,),
+            ),
+        ),
+        allow_provisional=canonical_price.allow_provisional,
+        allow_derived=canonical_price.allow_derived,
+        as_of_rule=canonical_price.as_of_rule,
+        degradation=canonical_price.degradation,
+    )
+    forged_policies = tuple(
+        forged_price if policy.domain is SourceDomain.PRICE else policy
+        for policy in contract.policies
+    )
+    with pytest.raises(ValidationError, match="canonical registered regime"):
+        SourceRegimeContract(
+            regime=SourceRegime.COMBINED,
+            policies=forged_policies,
+            dcf_input_domains=contract.dcf_input_domains,
+        )
+
+
+def test_receipt_identity_cannot_be_forged_for_a_registered_regime() -> None:
+    with pytest.raises(ValidationError, match="canonical registered contract"):
+        SourceRegimeReceiptIdentity(
+            schema_version="source-regime-contract@2",
+            regime=SourceRegime.COMBINED,
+            contract_sha256="b" * 64,
         )
 
 
