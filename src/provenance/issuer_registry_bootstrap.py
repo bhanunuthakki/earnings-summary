@@ -29,6 +29,7 @@ from provenance.issuer_registry import (
     LegacyIssuerBindingRevision,
     ReportingScopeRevision,
     Security,
+    ensure_sec_cik_evidence_binding,
     identifier_candidate_digest,
     normalize_identifier,
 )
@@ -1272,6 +1273,17 @@ def _persist_selected_ticker(
         assertion=assertion,
         recorded_at=recorded_at,
     )
+    recorded_sec_cik = f"sec-cik-{normalized_cik}"
+    has_recorded_sec_evidence = conn.execute(
+        "SELECT 1 FROM evidence_document_versions WHERE issuer_id = ? LIMIT 1",
+        (recorded_sec_cik,),
+    ).fetchone()
+    if has_recorded_sec_evidence is not None:
+        created += ensure_sec_cik_evidence_binding(
+            conn,
+            recorded_issuer_id=recorded_sec_cik,
+            recorded_at=recorded_at,
+        )
     created += _persist_reporting_boundary(
         conn,
         issuer_id=issuer_id,
