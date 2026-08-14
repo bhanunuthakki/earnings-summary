@@ -271,7 +271,9 @@ def _act_count(db: Path, panel_id: str) -> int:
         conn.close()
 
 
-def test_action_routes_bump_act_counters(ctx: tuple[FlaskClient, Path, Path]) -> None:
+def test_action_routes_bump_act_counters(
+    ctx: tuple[FlaskClient, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
     client, db, _root = ctx
     row = create_note(
         body="a musing",
@@ -283,6 +285,11 @@ def test_action_routes_bump_act_counters(ctx: tuple[FlaskClient, Path, Path]) ->
     )
     assert client.post(f"/api/onmymind/{row.id}/save", json={}).status_code == 200
     assert _act_count(db, "act:om:save") == 1
+    # This test owns activation counters, not the async answer tap. Keep the
+    # capture deterministic so no daemon LLM worker outlives its monkeypatches
+    # and races a later test's transport stub.
+    monkeypatch.setenv("LEDGER_ANSWER", "0")
     resp = client.post("/api/capture/text", json={"text": "plain thought, no question"})
     assert resp.status_code == 200
+    assert resp.get_json()["answering"] is False
     assert _act_count(db, "act:capture") == 1

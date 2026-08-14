@@ -2230,6 +2230,42 @@ def test_admission_ttl_and_canonical_listener_are_governed(tmp_path: Path) -> No
         GcRecoveryAdmissionReceipt.model_validate(payload)
 
 
+def test_gc_recovery_service_inventory_tracks_dynamic_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current, baseline, archive = _paths(tmp_path)
+    _database(current)
+    _database(baseline)
+    _archive(archive)
+    admission, _admission_sha = _admission(current, baseline, archive)
+    receipt = GcRecoveryAdmissionReceipt.model_validate_json(admission.read_bytes())
+    services = ("es-dashboard", "es-poller", "es-worker")
+    monkeypatch.setattr(recovery_module, "managed_service_names", lambda: services)
+    payload = receipt.model_dump()
+    payload["expected_service_names"] = services
+    payload["stopped_service_names"] = services
+    validated = GcRecoveryAdmissionReceipt.model_validate(payload)
+    assert validated.expected_service_names == services
+
+    quiescence = RecoveryQuiescenceRegistry(
+        schema_version="gc-recovery-quiescence/v1",
+        captured_at=receipt.captured_at,
+        tasks=(
+            QuiescedTaskObservation(path=r"\earnings-summary\x", state="Disabled", enabled=False),
+        ),
+        services=tuple(QuiescedServiceObservation(name=name, state="Stopped") for name in services),
+        listeners=(
+            QuiescedListenerObservation(
+                host="127.0.0.1",
+                port=7421,
+                listening=False,
+                pid=None,
+            ),
+        ),
+    )
+    assert tuple(service.name for service in quiescence.services) == services
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows write-denial semantics")
 def test_new_output_is_write_denied_through_final_publication_checks(
     tmp_path: Path,

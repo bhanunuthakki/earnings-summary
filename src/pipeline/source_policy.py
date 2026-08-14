@@ -795,3 +795,9 @@ def issuer_policy(identifier: str) -> IssuerAcquisitionPolicy:
     if policy is None:
         raise ValueError(f"unknown issuer acquisition policy: {identifier!r}")
     return policy
+
+
+def issuer_policies() -> tuple[IssuerAcquisitionPolicy, ...]:
+    """Return canonical issuer policies once each, in reviewed order."""
+
+    return _reviewed_policies()
