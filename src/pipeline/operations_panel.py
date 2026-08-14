@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from html import escape
 from pathlib import PurePosixPath, PureWindowsPath
@@ -10,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from log_redact import sanitize_operational_text
 from operations.models import (
     JobReceiptObservation,
     ObservationEnvelope,
@@ -20,9 +20,6 @@ from operations.models import (
 )
 
 Tone = Literal["ok", "warn", "bad"]
-_URL = re.compile(r"(?i)\b(?:https?|file)://[^\s<>\"'\u00b7;]+")
-_WINDOWS_PATH = re.compile(r"(?i)(?<![\w])(?:[a-z]:[\\/]|\\\\)[^<>\r\n\"'\u00b7;]*")
-_POSIX_PATH = re.compile(r"(?<![\w:])/(?!/)[^<>\r\n\"'\u00b7;]*")
 _BAD_JOB_STATUSES = frozenset({"failed", "blocked_schema_drift"})
 
 
@@ -87,19 +84,7 @@ def _clock(value: datetime | None, *, prefix: str) -> str:
 def _safe(value: object) -> str:
     """Redact absolute paths before values cross the presentation boundary."""
 
-    protected: list[str] = []
-
-    def protect_url(match: re.Match[str]) -> str:
-        url = match.group(0)
-        protected.append("file://[path]" if url.casefold().startswith("file://") else url)
-        return f"\x00URL{len(protected) - 1}\x00"
-
-    text = _URL.sub(protect_url, str(value))
-    text = _WINDOWS_PATH.sub("[path]", text)
-    text = _POSIX_PATH.sub("[path]", text)
-    for index, url in enumerate(protected):
-        text = text.replace(f"\x00URL{index}\x00", url)
-    return text
+    return sanitize_operational_text(value, mode="presentation")
 
 
 def _absolute_path(value: str) -> bool:

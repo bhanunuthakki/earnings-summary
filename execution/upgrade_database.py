@@ -14,9 +14,10 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, cast
 
 from _lib import log_event
 from alembic.config import Config
@@ -33,7 +34,7 @@ from sqlite_runtime import (
 )
 
 ACTIVE_BASE = "0001_initial_schema"
-ACTIVE_HEAD = "0011_add_operations_journal"
+ACTIVE_HEAD = "0012_close_operation_event_detail_reason"
 
 _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "tracked_companies": frozenset({"ticker", "processing_tier"}),
@@ -41,6 +42,13 @@ _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "llm_calls": frozenset({"purpose", "called_at"}),
     "llm_budgets": frozenset({"purpose", "on_exceed"}),
 }
+
+_ContractRows = tuple[tuple[object, ...], ...]
+_ContractQuery = Callable[[str, tuple[object, ...]], _ContractRows]
+
+
+class _OperationEventsContractValidator(Protocol):
+    def __call__(self, query: _ContractQuery, *, closed: bool) -> None: ...
 
 
 class UpgradeDatabaseError(RuntimeError):
@@ -173,11 +181,11 @@ def _validate_legacy_schema(db_path: Path) -> None:
         )
 
 
-def _reanchor_at_active_baseline(db_path: Path, expected_archived_head: str) -> None:
+def _replace_single_revision(db_path: Path, *, expected: str, target: str) -> None:
     revisions = _read_revisions(db_path)
-    if revisions != (expected_archived_head,):
+    if revisions != (expected,):
         raise UpgradeDatabaseError(
-            f"archived upgrade did not reach its single head: expected={expected_archived_head!r} "
+            f"database did not carry the expected single revision: expected={expected!r} "
             f"actual={list(revisions)!r}"
         )
     conn = connect_sqlite(
@@ -189,12 +197,69 @@ def _reanchor_at_active_baseline(db_path: Path, expected_archived_head: str) -> 
         with conn:
             updated = conn.execute(
                 "UPDATE alembic_version SET version_num=? WHERE version_num=?",
-                (ACTIVE_BASE, expected_archived_head),
+                (target, expected),
             )
             if updated.rowcount != 1:
                 raise UpgradeDatabaseError("failed to re-anchor the single Alembic revision row")
     finally:
         conn.close()
+
+
+def _require_exact_closed_operation_events_contract(
+    db_path: Path,
+    *,
+    active: Config,
+) -> None:
+    script = ScriptDirectory.from_config(active)
+    revision = script.get_revision(ACTIVE_HEAD)
+    candidate = getattr(revision.module, "require_operation_events_contract", None)
+    if not callable(candidate):
+        raise UpgradeDatabaseError("active operation-events contract validator is unavailable")
+    validate = cast(_OperationEventsContractValidator, candidate)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+
+    def query(sql: str, parameters: tuple[object, ...]) -> _ContractRows:
+        return tuple(tuple(row) for row in conn.execute(sql, parameters).fetchall())
+
+    try:
+        validate(query, closed=True)
+    except RuntimeError as exc:
+        raise UpgradeDatabaseError(
+            f"operation_events exact 0012 contract rejected: {exc}"
+        ) from None
+    finally:
+        conn.close()
+
+
+def _reanchor_at_active_baseline(
+    db_path: Path,
+    *,
+    active: Config,
+    expected_archived_head: str,
+) -> None:
+    if "operation_events" in _user_tables(db_path):
+        # Compatibility for an exact-current schema whose revision metadata
+        # was restored/restamped to the archived graph. Migration 0012 owns
+        # the only non-idempotent shape delta, so let its exact contract guard
+        # normalize operation_events back to 0011 before replaying the graph.
+        _require_exact_closed_operation_events_contract(db_path, active=active)
+        _replace_single_revision(
+            db_path,
+            expected=expected_archived_head,
+            target=ACTIVE_HEAD,
+        )
+        command.downgrade(active, "0011_add_operations_journal")
+        _replace_single_revision(
+            db_path,
+            expected="0011_add_operations_journal",
+            target=ACTIVE_BASE,
+        )
+        return
+    _replace_single_revision(
+        db_path,
+        expected=expected_archived_head,
+        target=ACTIVE_BASE,
+    )
 
 
 def upgrade_database(
@@ -265,7 +330,11 @@ def upgrade_database(
             archived_head = archived_heads[0]
             command.upgrade(archived, "head")
             _validate_legacy_schema(db_path)
-            _reanchor_at_active_baseline(db_path, archived_head)
+            _reanchor_at_active_baseline(
+                db_path,
+                active=active,
+                expected_archived_head=archived_head,
+            )
             command.upgrade(active, "head")
             status = "bridged"
 

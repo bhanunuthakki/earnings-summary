@@ -484,3 +484,213 @@ def test_presentation_redaction_is_conservative_and_url_aware(tmp_path: Path) ->
     assert "https://example.test/public/path" in html
     assert "file://[path]" in html
     assert html.count("[path]") >= 5
+
+
+def test_presentation_redacts_credentials_from_foreign_job_receipt(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    step = registry.job_steps[-1]
+    sentinel = "FOREIGN-RAW-CREDENTIAL-7319"
+    foreign = JobReceiptObservation(
+        state="current",
+        observed_at=OBSERVED_AT,
+        evidence_source="foreign:job-receipt",
+        evidence_recorded_at=OBSERVED_AT,
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT,
+            ended_at=OBSERVED_AT,
+            status="failed",
+            exit_code=1,
+            severity="error",
+            detail=(
+                f"request failed: https://example.test/private?api_key={sentinel}; "
+                r"C:\private\owner\job.py"
+            ),
+        ),
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "job_receipts": tuple(
+                foreign if item.job == step.job else item for item in snapshot.job_receipts
+            )
+        }
+    )
+
+    view = build_operations_panel_view(registry, snapshot)
+    receipt = next(
+        item.receipt for task in view.tasks for item in task.steps if item.job == step.job
+    )
+    html = render_operations_panel(view)
+
+    assert sentinel not in receipt.detail
+    assert sentinel not in html
+    assert "C:\\private" not in receipt.detail
+    assert "[path]" in receipt.detail
+
+
+def test_presentation_masks_complete_header_and_assignment_values(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    step = registry.job_steps[-1]
+    sentinel = "ALPHABETONLYCREDENTIAL"
+    foreign = JobReceiptObservation(
+        state="current",
+        observed_at=OBSERVED_AT,
+        evidence_source="foreign:job-receipt",
+        evidence_recorded_at=OBSERVED_AT,
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT,
+            ended_at=OBSERVED_AT,
+            status="failed",
+            exit_code=1,
+            severity="error",
+            detail=(
+                "Proxy-Authorization: "
+                + "Basic "
+                + sentinel
+                + f"; x-api-key: prefix {sentinel} suffix; retry=closed; "
+                + f'{"api" + "_key"} = "prefix {sentinel} suffix"'
+            ),
+        ),
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "job_receipts": tuple(
+                foreign if item.job == step.job else item for item in snapshot.job_receipts
+            )
+        }
+    )
+
+    view = build_operations_panel_view(registry, snapshot)
+    receipt = next(
+        item.receipt for task in view.tasks for item in task.steps if item.job == step.job
+    )
+    html = render_operations_panel(view)
+
+    assert sentinel not in receipt.detail
+    assert sentinel not in html
+    assert "retry=closed" in receipt.detail
+
+
+def test_presentation_masks_bearer_b64token_and_preserves_safe_suffix(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    step = registry.job_steps[-1]
+    credential = "ALPHABETONLY" + "~+TAILONLY/=="
+    foreign = JobReceiptObservation(
+        state="current",
+        observed_at=OBSERVED_AT,
+        evidence_source="foreign:job-receipt",
+        evidence_recorded_at=OBSERVED_AT,
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT,
+            ended_at=OBSERVED_AT,
+            status="failed",
+            exit_code=1,
+            severity="error",
+            detail=(
+                "Proxy-Authorization: "
+                + "Bearer "
+                + credential
+                + "\nrequest failed Bearer "
+                + credential
+                + "; retry=closed"
+            ),
+        ),
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "job_receipts": tuple(
+                foreign if item.job == step.job else item for item in snapshot.job_receipts
+            )
+        }
+    )
+
+    view = build_operations_panel_view(registry, snapshot)
+    receipt = next(
+        item.receipt for task in view.tasks for item in task.steps if item.job == step.job
+    )
+    html = render_operations_panel(view)
+
+    assert credential not in receipt.detail
+    assert credential not in html
+    assert "TAILONLY" not in receipt.detail
+    assert "TAILONLY" not in html
+    assert "retry=closed" in receipt.detail
+
+
+@pytest.mark.parametrize("delimiter", [")", "]", "}", '"', "'", ":", ";"])
+def test_presentation_preserves_non_b64token_bearer_delimiter(
+    tmp_path: Path, delimiter: str
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    step = registry.job_steps[-1]
+    credential = "ALPHABETONLY" + "~+TAILONLY/=="
+    foreign = JobReceiptObservation(
+        state="current",
+        observed_at=OBSERVED_AT,
+        evidence_source="foreign:job-receipt",
+        evidence_recorded_at=OBSERVED_AT,
+        job=step.job,
+        receipt=JobHealthRow(
+            schema_version="1",
+            job=step.job,
+            write_sets=step.effective_lane,
+            started_at=OBSERVED_AT,
+            ended_at=OBSERVED_AT,
+            status="failed",
+            exit_code=1,
+            severity="error",
+            detail="request failed Bearer " + credential + delimiter + " suffix=safe",
+        ),
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "job_receipts": tuple(
+                foreign if item.job == step.job else item for item in snapshot.job_receipts
+            )
+        }
+    )
+
+    view = build_operations_panel_view(registry, snapshot)
+    receipt = next(
+        item.receipt for task in view.tasks for item in task.steps if item.job == step.job
+    )
+    html = render_operations_panel(view)
+
+    assert "TAILONLY" not in receipt.detail
+    assert "TAILONLY" not in html
+    assert delimiter + " suffix=safe" in receipt.detail

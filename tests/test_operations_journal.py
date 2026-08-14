@@ -138,7 +138,7 @@ def test_request_trace_and_terminal_conflicts_are_loud_without_mutation() -> Non
         )
 
 
-def test_terminal_detail_is_redacted_bounded_and_status_is_closed() -> None:
+def test_terminal_detail_is_closed_bounded_and_status_is_closed() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     _schema(conn)
@@ -151,10 +151,9 @@ def test_terminal_detail_is_redacted_bounded_and_status_is_closed() -> None:
         exit_code=1,
         severity="error",
         occurred_at=now,
-        detail_reason="api_key=supersecret " + "x" * 500,
+        detail_reason="worker failed",
     )
-    assert terminal.detail_reason is not None
-    assert "supersecret" not in terminal.detail_reason
+    assert terminal.detail_reason == "terminal_detail_withheld"
     assert len(terminal.detail_reason) <= 240
     with pytest.raises(ValueError):
         finish_operation(
@@ -173,6 +172,40 @@ def test_terminal_detail_is_redacted_bounded_and_status_is_closed() -> None:
             exit_code=cast(int, 1.5),
             severity="error",
             occurred_at=now,
+        )
+
+
+def test_reader_rejects_noncanonical_persisted_terminal_detail() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    _schema(conn)
+    now = datetime(2026, 8, 13, tzinfo=UTC)
+    operation = accept_operation_request(conn, _request("poisoned-detail", now))
+    finish_operation(
+        conn,
+        operation_id=operation.operation_id,
+        status="failed",
+        exit_code=1,
+        severity="error",
+        occurred_at=now,
+        detail_reason="worker failed",
+    )
+    conn.execute(
+        "UPDATE operation_events SET detail_reason='legacy free text' "
+        "WHERE operation_id=? AND event_kind='terminal'",
+        (operation.operation_id,),
+    )
+    conn.commit()
+
+    with pytest.raises(ValueError, match="detail_reason"):
+        finish_operation(
+            conn,
+            operation_id=operation.operation_id,
+            status="failed",
+            exit_code=1,
+            severity="error",
+            occurred_at=now,
+            detail_reason="worker failed",
         )
 
 
