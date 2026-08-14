@@ -429,7 +429,13 @@ def _job_receipts(
             detail = str(exc)
             record = None
         else:
-            if observed_at - record.ended_at > timedelta(seconds=ttl_seconds):
+            if record.schema_version == "2" and record.journal_state == "unavailable":
+                state = "invalid"
+                detail = (
+                    f"operation journal unavailable: {record.journal_detail_code}: "
+                    f"{record.journal_reason}"
+                )
+            elif observed_at - record.ended_at > timedelta(seconds=ttl_seconds):
                 state = "stale"
                 detail = f"latest receipt exceeds owned TTL of {ttl_seconds} seconds"
             else:

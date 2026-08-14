@@ -24,6 +24,7 @@ cd /d "%PROJECT_ROOT%"
 REM Continuous-worker exception: a portfolio-db lock here would starve every
 REM bounded job; capture-poller provides singleton/runtime health while each
 REM short SQLite write still uses the centralized connection policy.
+set "ES_JOB_TRIGGER_KIND=service"
 call "%PROJECT_ROOT%\cron\run_python.bat" "capture-poller" "capture-poller" execution\capture_poller.py >> "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 

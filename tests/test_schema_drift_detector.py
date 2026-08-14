@@ -19,6 +19,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -37,6 +38,24 @@ from telemetry_health import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+class _JournalRequest(TypedDict):
+    idempotency_key: str
+    actor: str
+    trace_id: str
+    scope: dict[str, str]
+
+
+def _journal_request(job_name: str) -> _JournalRequest:
+    """Supply the strict direct-library operation identity for one test job."""
+
+    return {
+        "idempotency_key": f"schema-drift-test:{job_name}",
+        "actor": "operator",
+        "trace_id": f"schema-drift-test:{job_name}",
+        "scope": {"job": job_name},
+    }
 
 
 def _checkout(root: Path, chain: list[str]) -> Path:
@@ -217,6 +236,7 @@ def test_drifted_database_blocks_the_job_before_any_work_runs(
         job_name="onboard-pending",
         write_sets=["portfolio-db"],
         command=[sys.executable, "-c", f"open({str(witness)!r}, 'w').write('ran')"],
+        **_journal_request("onboard-pending"),
     )
 
     assert code == SCHEMA_DRIFT_EXIT_CODE
@@ -240,6 +260,7 @@ def test_blocked_exit_code_is_distinct_from_failure_and_lock_contention(
             job_name="refresh-cache",
             write_sets=["portfolio-db"],
             command=[sys.executable, "-c", "raise SystemExit(1)"],
+            **_journal_request("refresh-cache"),
         )
         == SCHEMA_DRIFT_EXIT_CODE
     )
@@ -258,6 +279,7 @@ def test_backup_and_restore_still_run_while_drifted(
                 job_name=job,
                 write_sets=["portfolio-db"],
                 command=[sys.executable, "-c", "print('ok')"],
+                **_journal_request(job),
             )
             == 0
         )
@@ -273,6 +295,7 @@ def test_allow_schema_drift_is_an_explicit_escape_hatch(
             job_name="onboard-pending",
             write_sets=["portfolio-db"],
             command=[sys.executable, "-c", "print('ok')"],
+            **_journal_request("onboard-pending"),
             allow_schema_drift=True,
         )
         == 0
@@ -291,6 +314,7 @@ def test_aligned_database_does_not_block_anything(
         job_name="onboard-pending",
         write_sets=["portfolio-db"],
         command=[sys.executable, "-c", "print('ok')"],
+        **_journal_request("onboard-pending"),
     )
 
     assert code == 0

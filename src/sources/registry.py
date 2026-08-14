@@ -49,6 +49,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
+from operations.context import current as current_operation_context
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
@@ -75,6 +76,22 @@ def set_db_path(path: Path) -> None:
     """Override the DB path used by `log_call`. Used by tests and worktree runs."""
     global _DB_PATH
     _DB_PATH = path
+
+
+def _persisted_operation_id(conn: sqlite3.Connection, *, operation_columns: set[str]) -> str | None:
+    """Return only a context identity backed by this database's journal."""
+
+    active = current_operation_context()
+    if active is None or "operation_id" not in operation_columns:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM operation_requests WHERE operation_id=?",
+            (active.operation_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    return active.operation_id if row is not None else None
 
 
 class CallStatus(StrEnum):
@@ -110,25 +127,40 @@ def log_call(
     try:
         conn = connect_sqlite(_DB_PATH, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
-            conn.execute(
+            operation_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(source_calls)")
+            }
+            operation_id = _persisted_operation_id(conn, operation_columns=operation_columns)
+            base_values = (
+                source_name,
+                kind,
+                ticker.upper() if ticker else None,
+                datetime.now().isoformat(timespec="seconds"),
+                latency_ms,
+                status_str,
+                http_code,
+                record_count,
+                (notes or "")[:256] or None,
+            )
+            sql = (
                 """
+                INSERT INTO source_calls
+                    (source_name, kind, ticker, called_at, latency_ms,
+                     status, http_code, record_count, notes, operation_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                if "operation_id" in operation_columns
+                else """
                 INSERT INTO source_calls
                     (source_name, kind, ticker, called_at, latency_ms,
                      status, http_code, record_count, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    source_name,
-                    kind,
-                    ticker.upper() if ticker else None,
-                    datetime.now().isoformat(timespec="seconds"),
-                    latency_ms,
-                    status_str,
-                    http_code,
-                    record_count,
-                    (notes or "")[:256] or None,
-                ),
+                """
             )
+            values = (
+                (*base_values, operation_id) if "operation_id" in operation_columns else base_values
+            )
+            conn.execute(sql, values)
             conn.commit()
         finally:
             conn.close()
@@ -187,14 +219,27 @@ def log_calls_batch(calls: list[PendingSourceCall]) -> None:
     try:
         conn = connect_sqlite(_DB_PATH, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
+            operation_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(source_calls)")
+            }
+            operation_id = _persisted_operation_id(conn, operation_columns=operation_columns)
             conn.executemany(
                 """
+                INSERT INTO source_calls
+                    (source_name, kind, ticker, called_at, latency_ms,
+                     status, http_code, record_count, notes, operation_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                if "operation_id" in operation_columns
+                else """
                 INSERT INTO source_calls
                     (source_name, kind, ticker, called_at, latency_ms,
                      status, http_code, record_count, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                rows,
+                [(*row, operation_id) for row in rows]
+                if "operation_id" in operation_columns
+                else rows,
             )
             conn.commit()
         finally:

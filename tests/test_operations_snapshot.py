@@ -61,6 +61,54 @@ def _job_receipt(path: Path, *, job: str, lane: tuple[str, ...], ended: datetime
     )
 
 
+def test_job_health_model_accepts_historical_v1_and_correlated_v2() -> None:
+    from operations.models import JobHealthRow
+
+    base = {
+        "job": "unit-job",
+        "write_sets": ["unit-lane"],
+        "started_at": "2026-08-13T00:00:00+00:00",
+        "ended_at": "2026-08-13T00:01:00+00:00",
+        "status": "ok",
+        "exit_code": 0,
+        "severity": "info",
+        "detail": None,
+    }
+    assert JobHealthRow.model_validate({"schema_version": "1", **base}).operation_id is None
+    v2 = JobHealthRow.model_validate(
+        {
+            "schema_version": "2",
+            **base,
+            "operation_id": "operation:" + "a" * 64,
+            "trigger_kind": "scheduled",
+            "journal_state": "complete",
+        }
+    )
+    assert v2.trigger_kind == "scheduled"
+    unavailable = JobHealthRow.model_validate(
+        {
+            "schema_version": "2",
+            **base,
+            "operation_id": "operation:" + "b" * 64,
+            "trigger_kind": "service",
+            "journal_state": "unavailable",
+            "journal_detail_code": "terminal_unavailable",
+            "journal_reason": "OperationalError: database is locked",
+        }
+    )
+    assert unavailable.journal_detail_code == "terminal_unavailable"
+    with pytest.raises(ValidationError):
+        JobHealthRow.model_validate(
+            {
+                "schema_version": "2",
+                **base,
+                "operation_id": "operation:" + "c" * 64,
+                "trigger_kind": "scheduled",
+                "journal_state": "unavailable",
+            }
+        )
+
+
 def test_snapshot_is_caller_connection_only_truthful_and_creates_no_files(
     tmp_path: Path,
 ) -> None:
@@ -274,6 +322,40 @@ def test_job_receipt_future_clock_is_invalid(tmp_path: Path) -> None:
     snapshot = collect_operations_snapshot(registry, repo_root=tmp_path, conn=conn, observed_at=now)
     receipt = next(item for item in snapshot.job_receipts if item.job == step.job)
     assert receipt.state == "invalid"
+
+
+def test_current_v2_journal_failure_is_attention_first_invalid(tmp_path: Path) -> None:
+    conn = sqlite3.connect(":memory:")
+    registry = build_operations_registry(PROJECT_ROOT)
+    now = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    step = registry.job_steps[0]
+    latest = health_receipt_directory(tmp_path, step.job) / "latest.json"
+    latest.parent.mkdir(parents=True)
+    latest.write_text(
+        json.dumps(
+            {
+                "schema_version": "2",
+                "job": step.job,
+                "write_sets": list(step.effective_lane),
+                "started_at": (now - timedelta(minutes=2)).isoformat(),
+                "ended_at": (now - timedelta(minutes=1)).isoformat(),
+                "status": "ok",
+                "exit_code": 0,
+                "severity": "info",
+                "detail": None,
+                "operation_id": "operation:" + "d" * 64,
+                "trigger_kind": "scheduled",
+                "journal_state": "unavailable",
+                "journal_detail_code": "terminal_unavailable",
+                "journal_reason": "OperationalError: database is locked",
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshot = collect_operations_snapshot(registry, repo_root=tmp_path, conn=conn, observed_at=now)
+    receipt = next(item for item in snapshot.job_receipts if item.job == step.job)
+    assert receipt.state == "invalid"
+    assert "terminal_unavailable" in (receipt.detail or "")
 
 
 @pytest.mark.parametrize(

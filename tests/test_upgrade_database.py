@@ -4,7 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -124,6 +124,131 @@ def test_upgrade_database_bridges_archived_revision_with_verified_backup(
     assert receipt["backup_path"] == str(backup_path.resolve())
     assert _revision(db_path) == ACTIVE_HEAD
     assert _revision(backup_path) == "0273_post_earnings_readout_budget"
+
+
+def test_managed_wrapper_upgrades_exact_0010_with_backup_and_journal_schema(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "exact-0010.db", target="0010_add_rehearsal_io_indexes")
+    backup_path = tmp_path / "exact-0010.before.db"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "execution" / "sqlite_bootstrap.py"),
+            str(ROOT / "execution" / "upgrade_database.py"),
+            "--db-path",
+            str(db_path),
+            "--repo-root",
+            str(ROOT),
+            "--backup-path",
+            str(backup_path),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(result.stdout)
+    assert receipt["status"] == "upgraded"
+    assert receipt["from_revision"] == "0010_add_rehearsal_io_indexes"
+    assert receipt["to_revision"] == ACTIVE_HEAD
+    assert receipt["backup_path"] == str(backup_path.resolve())
+    assert _revision(db_path) == ACTIVE_HEAD
+    assert _revision(backup_path) == "0010_add_rehearsal_io_indexes"
+    conn = sqlite3.connect(db_path)
+    try:
+        assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master")} >= {
+            "operation_requests",
+            "operation_events",
+            "ix_llm_calls_trace_id_called_at",
+        }
+    finally:
+        conn.close()
+
+
+def test_managed_upgrade_rejects_weaker_preexisting_same_column_journal_table(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "weak-journal.db", target="0010_add_rehearsal_io_indexes")
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE operation_requests (
+                operation_id TEXT PRIMARY KEY,
+                idempotency_key_sha256 TEXT NOT NULL UNIQUE,
+                request_sha256 TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                job_name TEXT NOT NULL,
+                trigger_kind TEXT NOT NULL,
+                trace_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                scope_json TEXT NOT NULL,
+                command_sha256 TEXT NOT NULL,
+                write_sets_json TEXT NOT NULL,
+                requested_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "execution" / "sqlite_bootstrap.py"),
+            str(ROOT / "execution" / "upgrade_database.py"),
+            "--db-path",
+            str(db_path),
+            "--repo-root",
+            str(ROOT),
+            "--backup-path",
+            str(tmp_path / "weak-journal.before.db"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "operation_requests constraints do not match migration 0011" in result.stderr
+    assert _revision(db_path) == "0010_add_rehearsal_io_indexes"
+
+
+def test_managed_upgrade_rejects_partial_preexisting_owned_llm_index(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "partial-llm-index.db", target="0010_add_rehearsal_io_indexes")
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE INDEX ix_llm_calls_trace_id_called_at "
+            "ON llm_calls(trace_id,called_at) WHERE trace_id IS NOT NULL"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "execution" / "sqlite_bootstrap.py"),
+            str(ROOT / "execution" / "upgrade_database.py"),
+            "--db-path",
+            str(db_path),
+            "--repo-root",
+            str(ROOT),
+            "--backup-path",
+            str(tmp_path / "partial-llm-index.before.db"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "ix_llm_calls_trace_id_called_at does not match migration 0011" in result.stderr
+    assert _revision(db_path) == "0010_add_rehearsal_io_indexes"
 
 
 def test_upgrade_database_rejects_nonempty_unversioned_db(tmp_path: Path) -> None:
