@@ -118,11 +118,11 @@ def test_fmp_operational_state_reads_current_recovery_state_without_mutation(
     assert state.corpus_ticker_count == 1
     assert state.last_corpus_at == "2026-08-11T12:00:00"
     assert db.stat().st_mtime_ns == before
-    shell = render_work_os_shell(db_path=db)
-    assert "Degraded" in shell
-    assert "rate_limited" in shell
-    assert "1 companies" in shell
-    assert corpus_hash not in shell
+    settings_html = render_data_policy_settings_panel(db_path=db)
+    assert "Degraded" in settings_html
+    assert "rate_limited" in settings_html
+    assert "1 companies" in settings_html
+    assert corpus_hash not in settings_html
 
 
 def test_closed_circuit_without_a_success_is_permitted_but_never_live(tmp_path: Path) -> None:
@@ -244,27 +244,16 @@ def test_panel_is_legible_read_only_and_names_owner_approved_ir_sources() -> Non
     assert "<form" not in html
 
 
-def test_work_os_exposes_an_accessible_settings_tab_without_demo_health_claims() -> None:
+def test_work_os_exposes_operations_and_related_settings_without_legacy_embedded_tabs() -> None:
     html = render_work_os_shell()
 
-    assert 'id="opsTabQueue"' in html
-    assert 'id="opsTabSettings"' in html
-    assert (
-        'id="opsTabQueue" class="k-chip k-chip-btn k-chip-tab is-on" '
-        'role="tab" aria-selected="true" aria-controls="opsPaneQueue" '
-        'style="min-block-size:var(--touch-target-size);" tabindex="0"' in html
-    )
-    assert (
-        'id="opsTabSettings" class="k-chip k-chip-btn k-chip-tab" '
-        'role="tab" aria-selected="false" aria-controls="opsPaneSettings" '
-        'style="min-block-size:var(--touch-target-size);" tabindex="-1"' in html
-    )
-    assert 'role="tablist" aria-label="Operations hub views"' in html
-    assert 'role="tabpanel" aria-labelledby="opsTabSettings"' in html
-    assert 'data-settings-panel="data-collection"' in html
-    assert "window.switchOpsTab = function" in html
-    assert "aria-selected" in html
-    assert "event.key !== 'ArrowLeft' && event.key !== 'ArrowRight'" in html
+    assert 'id="screen-execution-queue"' in html
+    assert '"screen-execution-queue": "/api/panel/operations"' in html
+    assert "workOsLoadScreen(target, operations)" in html
+    assert "window.workOsOpenRelatedView = function" in html
+    assert 'id="opsTabQueue"' not in html
+    assert 'id="opsTabSettings"' not in html
+    assert 'data-settings-panel="data-collection"' not in html
     assert "Pipeline Health" not in html
     assert "100% Sync" not in html
     assert "78% Free" not in html

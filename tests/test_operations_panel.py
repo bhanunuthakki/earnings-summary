@@ -72,6 +72,10 @@ def test_operations_renderer_has_exactly_three_roving_tabs_and_related_views(
     assert ">Data provenance</button>" in html
     assert "workOsOpenRelatedView('/api/panel/data_policy_settings', 'Settings')" in html
     assert "workOsOpenRelatedView('/api/panel/provenance', 'Data provenance')" in html
+    assert "event.key === 'ArrowRight'" in html
+    assert "event.key === 'ArrowLeft'" in html
+    assert "event.key === 'Home'" in html
+    assert "event.key === 'End'" in html
     assert 'aria-selected="true"' in tablist
     assert 'tabindex="0"' in tablist
     assert 'tabindex="-1"' in tablist
