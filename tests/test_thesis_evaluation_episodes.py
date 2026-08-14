@@ -15,6 +15,7 @@ from compute.thesis_evaluation_episodes import (
     EpisodeIdempotencyConflictError,
     EpisodeNondeterminismError,
     EpisodeSeverity,
+    EpisodeStoreError,
     ForwardSemanticInput,
     ProvenanceCompleteness,
     SemanticRuleInput,
@@ -268,3 +269,12 @@ def test_compatibility_helper_falls_back_to_raw_relation() -> None:
         "rule_evaluations_json TEXT,run_id TEXT,soft_rule_results_json TEXT)"
     )
     assert episode_history_relation(connection) == "thesis_evaluations"
+
+
+def test_compatibility_helper_fails_closed_when_episode_view_is_missing() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE thesis_evaluations (id INTEGER PRIMARY KEY)")
+    connection.execute("CREATE TABLE thesis_evaluation_episodes (episode_id TEXT PRIMARY KEY)")
+
+    with pytest.raises(EpisodeStoreError, match="episode schema exists"):
+        episode_history_relation(connection)

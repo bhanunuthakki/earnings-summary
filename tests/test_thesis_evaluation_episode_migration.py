@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 
 from alembic import command
@@ -152,6 +153,30 @@ def test_0014_view_keeps_unmapped_legacy_writes_visible(
     assert row == (raw_id, "NU", "ok", "legacy_unmapped", 1)
 
 
+def test_0014_raw_history_is_insertable_but_immutable(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    database = migrated_db(tmp_path / "immutable.db", target=HEAD)
+    with sqlite3.connect(database) as connection:
+        cursor = connection.execute(
+            "INSERT INTO thesis_evaluations "
+            "(ticker,evaluated_at,overall_status,rule_evaluations_json) "
+            "VALUES ('WIX','2026-08-14T12:00:00','warn','[]')"
+        )
+        raw_id = int(cursor.lastrowid or 0)
+        with pytest.raises(sqlite3.IntegrityError, match="thesis_evaluations append-only"):
+            connection.execute(
+                "UPDATE thesis_evaluations SET overall_status='ok' WHERE id=?", (raw_id,)
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="thesis_evaluations append-only"):
+            connection.execute("DELETE FROM thesis_evaluations WHERE id=?", (raw_id,))
+
+        assert connection.execute(
+            "SELECT overall_status FROM thesis_evaluations WHERE id=?", (raw_id,)
+        ).fetchone() == ("warn",)
+
+
 def test_0014_downgrade_removes_episode_projection_without_touching_raw_history(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -183,3 +208,11 @@ def test_0014_downgrade_removes_episode_projection_without_touching_raw_history(
         assert "thesis_evaluation_episode_check_receipts" not in names
         assert "v_thesis_evaluation_history" not in names
         assert connection.execute("SELECT COUNT(*) FROM thesis_evaluations").fetchone() == (1,)
+        triggers = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'trg_thesis_evaluations_no_%'"
+            )
+        }
+        assert triggers == set()

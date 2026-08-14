@@ -328,6 +328,12 @@ def load_holdings_spec(holdings_dir: Path, ticker: str) -> HoldingsSpec:
     if not path.exists():
         raise FileNotFoundError(f"Holdings spec not found: {path}")
     payload = _read_holdings_payload(path)
+    return _holdings_spec_from_payload(payload, path=path)
+
+
+def _holdings_spec_from_payload(payload: dict[str, JsonValue], *, path: Path) -> HoldingsSpec:
+    """Validate one already-read holdings snapshot into its typed rule spec."""
+
     ticker_value = payload.get("ticker")
     thesis_value = payload.get("thesis")
     if not isinstance(ticker_value, str) or not isinstance(thesis_value, str):
@@ -650,7 +656,7 @@ def evaluate_ticker_thesis(
     """
     holdings_path = holdings_dir / f"{ticker.upper()}.json"
     payload = _read_holdings_payload(holdings_path)
-    spec = load_holdings_spec(holdings_dir, ticker)
+    spec = _holdings_spec_from_payload(payload, path=holdings_path)
     evaluations: list[RuleEvaluation] = []
     for rule in (*spec.break_rules, *spec.business_model_rules):
         history = _fetch_kpi_history(conn, ticker, rule.kpi_name, rule.consecutive_periods)

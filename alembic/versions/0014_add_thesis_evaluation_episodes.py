@@ -341,6 +341,7 @@ def upgrade() -> None:
         """
     )
     for table in (
+        "thesis_evaluations",
         "thesis_evaluation_episode_members",
         "thesis_evaluation_episode_check_receipts",
     ):
@@ -357,6 +358,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS v_thesis_evaluation_history")
     for table in (
+        "thesis_evaluations",
         "thesis_evaluation_episode_members",
         "thesis_evaluation_episode_check_receipts",
     ):
