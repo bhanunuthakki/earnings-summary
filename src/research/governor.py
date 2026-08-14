@@ -638,7 +638,7 @@ def run_governor(
                 str(row[1])
                 for row in conn.execute("PRAGMA table_info(thesis_evaluation_episodes)").fetchall()
             }
-        has_attention_schema = {
+        required_attention_columns = {
             "episode_id",
             "ticker",
             "attention_state",
@@ -648,7 +648,8 @@ def run_governor(
             "acted_on_decision_id",
             "superseded_by_episode_id",
             "attention_updated_at",
-        }.issubset(attention_columns)
+        }
+        has_attention_schema = required_attention_columns.issubset(attention_columns)
         for moment in moments:
             if has_episode_link:
                 prior = conn.execute(
@@ -664,25 +665,24 @@ def run_governor(
             prior_id = None if prior is None else int(prior[0])
             linked_episode_id = None if prior is None or not has_episode_link else prior[2]
             if linked_episode_id is not None and prior_id is not None:
-                if has_attention_schema:
-                    from compute.thesis_episode_attention import get_attention
-
-                    episode_attention = get_attention(
-                        conn,
-                        str(linked_episode_id),
-                        now=stamp.replace(tzinfo=UTC),
+                if not has_attention_schema:
+                    missing = sorted(required_attention_columns - attention_columns)
+                    raise RuntimeError(
+                        "incomplete thesis episode attention schema for linked coach ping; "
+                        f"missing columns: {', '.join(missing)}"
                     )
-                else:
-                    # A partially upgraded legacy schema cannot evaluate the
-                    # linked episode. This is the only compatibility fallback;
-                    # malformed attention data and code defects propagate.
-                    episode_attention = None
-                if episode_attention is None or not episode_attention.actionable:
-                    settled_status = "skipped_stale" if episode_attention is None else "acted"
+                from compute.thesis_episode_attention import get_attention
+
+                episode_attention = get_attention(
+                    conn,
+                    str(linked_episode_id),
+                    now=stamp.replace(tzinfo=UTC),
+                )
+                if not episode_attention.actionable:
                     conn.execute(
                         "UPDATE coach_pings SET status=?,updated_at=? "
                         "WHERE id=? AND status='send_failed'",
-                        (settled_status, stamp.isoformat(), prior_id),
+                        ("acted", stamp.isoformat(), prior_id),
                     )
                     conn.commit()
                     continue

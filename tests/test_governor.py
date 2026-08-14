@@ -404,6 +404,54 @@ def test_linked_attention_defect_fails_visibly_and_keeps_retry_state(
         ).fetchone() == ("send_failed",)
 
 
+def test_linked_partial_attention_schema_fails_visibly_and_keeps_retry_state(
+    db_head: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import research.governor as governor_mod
+
+    episode_id = "episode-governor-partial-schema"
+    moment = Moment("falsifier_breach", "alert:905", "WIX", "review", "decision:5")
+    with sqlite3.connect(db_head) as connection:
+        stamp = datetime(2026, 7, 10, 12, 0, tzinfo=UTC).isoformat()
+        connection.execute(
+            "INSERT INTO coach_pings "
+            '(class_,"key",ticker,body,status,source_ref,created_at,updated_at,'
+            "thesis_evaluation_episode_id,review_cycle_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,'initial')",
+            (
+                moment.class_,
+                moment.key,
+                moment.ticker,
+                moment.body,
+                "send_failed",
+                moment.source_ref,
+                stamp,
+                stamp,
+                episode_id,
+            ),
+        )
+        connection.execute(
+            "ALTER TABLE thesis_evaluation_episodes DROP COLUMN acknowledgement_note"
+        )
+        connection.commit()
+
+    monkeypatch.setattr(
+        governor_mod,
+        "collect_moments",
+        _fake_collect_moments_factory([moment]),
+    )
+
+    with pytest.raises(RuntimeError, match="incomplete thesis episode attention schema"):
+        run_governor(db_head, send_fn=lambda _ping_id, _moment: True, now=_NOW)
+
+    with sqlite3.connect(db_head) as connection:
+        assert connection.execute(
+            "SELECT status FROM coach_pings WHERE thesis_evaluation_episode_id=?",
+            (episode_id,),
+        ).fetchone() == ("send_failed",)
+
+
 def test_no_send_channel_still_parks_in_digest(db: Path) -> None:
     """send_fn=None (dry-run / no bot configured) is NOT a send failure — the
     quiet digest is the delivery surface, and once-forever holds."""
