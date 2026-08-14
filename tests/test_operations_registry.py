@@ -5,9 +5,24 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from evals.capture_quality_specs import CAPTURE_QUALITY_SPECS
+from evals.coverage import GOLDEN_PURPOSES, META_PURPOSES, OUTCOME_PURPOSES
+from evals.rubric_judge import AUDIT_SPECS
+from llm.cli import LLM_MODELS
+from llm.prompt_versions import registered_purposes
 from operations.registry import build_operations_registry
+from pipeline.fmp_recovery import CircuitState, ReceiptStatus, WorkState
+from pipeline.source_policy import (
+    DISPLAY_ROLE_ORDER,
+    SOURCE_POLICY_CONFIG,
+    CollectionMode,
+    CollectionSource,
+    ListType,
+    issuer_policies,
+)
 from runtime.service_registry import ServiceRole, managed_service_for_role, managed_service_names
 from scheduler_manifest import load_manifest
+from schema_compat import expected_head
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,6 +31,9 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
     registry = build_operations_registry(PROJECT_ROOT)
     manifest = load_manifest(PROJECT_ROOT / "cron" / "task_manifest.json")
     assert len(registry.scheduled_tasks) == len(manifest.tasks)
+    assert tuple(
+        (task.task_name, task.xml, task.wrapper) for task in registry.scheduled_tasks
+    ) == tuple((task.task_name, task.xml, task.wrapper) for task in manifest.tasks)
     task_names = {task.task_name for task in registry.scheduled_tasks}
     assert r"\earnings-summary\run_morning_pipeline" in task_names
     assert {step.job for step in registry.job_steps} >= {
@@ -46,20 +64,47 @@ def test_registry_projects_canonical_services_llm_sources_and_schema() -> None:
     assert tuple(service.name for service in registry.services) == managed_service_names()
     assert tuple(service.role for service in registry.services) == ("dashboard", "capture_poller")
     assert managed_service_for_role(ServiceRole.CAPTURE_POLLER).name == "es-poller"
-    assert set(registry.llm_purposes) >= {pin.purpose for pin in registry.llm_model_pins}
-    assert {mode.mode for mode in registry.eval_modes} == {
-        "audit",
-        "capture_audit",
-        "golden",
-        "meta",
-        "outcome",
+    assert registry.llm_purposes == tuple(sorted(set(LLM_MODELS) | set(registered_purposes())))
+    assert tuple((pin.purpose, pin.model) for pin in registry.llm_model_pins) == tuple(
+        sorted(LLM_MODELS.items())
+    )
+    assert {mode.mode: mode.purposes for mode in registry.eval_modes} == {
+        "golden": tuple(sorted(GOLDEN_PURPOSES)),
+        "audit": tuple(sorted(AUDIT_SPECS)),
+        "capture_audit": tuple(sorted(CAPTURE_QUALITY_SPECS)),
+        "outcome": tuple(sorted(OUTCOME_PURPOSES)),
+        "meta": tuple(sorted(META_PURPOSES)),
     }
-    assert registry.source_policy.policy_version
-    assert {issuer.ticker_aliases[0] for issuer in registry.source_policy.issuers} == {
-        "RBRK",
-        "WIX",
+    assert registry.source_policy.policy_version == SOURCE_POLICY_CONFIG.policy_version
+    assert registry.source_policy.roles == tuple(role.value for role in ListType)
+    assert registry.source_policy.display_roles == tuple(role.value for role in DISPLAY_ROLE_ORDER)
+    assert registry.source_policy.sources == tuple(source.value for source in CollectionSource)
+    assert registry.source_policy.collection_modes == tuple(mode.value for mode in CollectionMode)
+    assert tuple(
+        (
+            item.issuer_id,
+            item.ticker_aliases,
+            item.policy_sha256,
+            item.adapter,
+            item.canonical_json,
+        )
+        for item in registry.source_policy.issuers
+    ) == tuple(
+        (
+            policy.issuer_id,
+            policy.ticker_aliases,
+            policy.policy_sha256,
+            policy.ir.adapter_key.value,
+            policy.canonical_json(),
+        )
+        for policy in issuer_policies()
+    )
+    assert {item.queue: item.states for item in registry.queue_states} == {
+        "fmp_work": tuple(state.value for state in WorkState),
+        "fmp_circuit": tuple(state.value for state in CircuitState),
+        "fmp_receipt": tuple(state.value for state in ReceiptStatus),
     }
-    assert registry.expected_alembic_head
+    assert registry.expected_alembic_head == expected_head(PROJECT_ROOT)
 
 
 def test_models_are_frozen_and_reject_extra_fields() -> None:
