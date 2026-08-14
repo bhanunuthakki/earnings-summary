@@ -37,6 +37,20 @@ def test_work_os_shell_preserves_the_prototype_navigation_and_layers() -> None:
     assert (
         len(re.findall(r'<button type="button"[^>]+class="k-btn k-btn-quiet nav-item', html)) == 8
     )
+    operations_nav = html.split('id="nav-execution-queue"', 1)[1].split("</button>", 1)[0]
+    assert '<span class="nav-text">Operations</span>' in operations_nav
+    assert "Execution Queue & Operations Hub" not in html
+    assert "Operations & Execution Governance Hub" not in html
+
+
+def test_operations_related_views_stay_inside_the_shell_context() -> None:
+    html = render_work_os_shell()
+    related = html.split("window.workOsOpenRelatedView =", 1)[1].split("</script>", 1)[0]
+
+    assert "window.workOsOpenRelatedView =" in html
+    assert 'href="/api/panel/data_policy_settings"' not in html
+    assert "workOsLoadScreen('related-operations', body, endpoint)" in related
+    assert "fetch(" not in related
 
 
 def test_counterread_brand_is_the_accessible_home_control() -> None:
@@ -162,7 +176,7 @@ def test_work_os_shell_uses_live_backend_mounts_without_removing_old_endpoints()
         "screen-brief-library": "/api/work-os/briefs",
         "screen-analytics-playground": "/api/panel/explore",
         "screen-audit-log": "/api/panel/portfolio_record",
-        "screen-execution-queue": "/api/panel/provenance",
+        "screen-execution-queue": "/api/panel/operations",
     }
     for screen_id, endpoint in expected.items():
         assert f'"{screen_id}": "{endpoint}"' in html
@@ -224,15 +238,20 @@ function target() {{
 {runtime}
 (async () => {{
   const pending = [];
-  global.fetch = (_url, options) => new Promise((resolve, reject) => {{
+  const pendingUrls = [];
+  global.fetch = (url, options) => new Promise((resolve, reject) => {{
     options.signal.addEventListener('abort', () => {{
       const error = new Error('aborted'); error.name = 'AbortError'; reject(error);
     }});
+    pendingUrls.push(url);
     pending.push(resolve);
   }});
   const mount = target();
-  const first = workOsLoadScreen('screen-a', mount);
-  const second = workOsLoadScreen('screen-a', mount);
+  const first = workOsLoadScreen('related-operations', mount, '/api/related-first');
+  const second = workOsLoadScreen('related-operations', mount, '/api/related-second');
+  if (pendingUrls[0] !== '/api/related-first' || pendingUrls[1] !== '/api/related-second') {{
+    throw new Error('related endpoint override was not governed');
+  }}
   pending[1]({{ok:true, text:async()=>'<p>second</p>'}});
   await second;
   if (mount.innerHTML !== '<p>second</p>') throw new Error('second response not mounted');

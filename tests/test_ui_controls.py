@@ -653,6 +653,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/mobile_inbox_panel.py",
         "pipeline/model_eval_panel.py",
         "pipeline/open_loops.py",
+        "pipeline/operations_panel.py",
         "pipeline/peeks.py",
         "pipeline/portfolio_console_panel.py",
         "pipeline/portfolio_panel.py",
