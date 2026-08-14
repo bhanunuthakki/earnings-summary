@@ -11,6 +11,10 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
+from compute.metrics_engine.inputs import CanonicalConcept
+from compute.metrics_engine.io import (
+    _unsealed_lineage_reason,  # pyright: ignore[reportPrivateUsage]
+)
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -536,6 +540,16 @@ def test_staged_companyfacts_fact_requires_match_and_captures_proof_atomically(
         assert tuple(proof) == (
             "match-companyfacts-fact-1",
             "0236-companyfacts-match-v1",
+        )
+        # Metrics admission must read the canonical evidence source kind, not
+        # trust the legacy documents.source_type compatibility label.
+        conn.execute("UPDATE documents SET source_type = 'legacy_cache' WHERE id = 2")
+        assert (
+            _unsealed_lineage_reason(
+                conn,
+                [(CanonicalConcept.REVENUE, datetime(2026, 6, 30), 2)],
+            )
+            == "companyfacts_input_requires_derivation_seal"
         )
         audit = audit_connection(
             conn,

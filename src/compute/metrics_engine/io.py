@@ -321,6 +321,100 @@ def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool
     return any(r[1] == column for r in conn.execute(f"PRAGMA table_info({table})").fetchall())
 
 
+def _sqlite_object_exists(conn: sqlite3.Connection, name: str, object_type: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?",
+            (object_type, name),
+        ).fetchone()
+        is not None
+    )
+
+
+def _document_source_kind(conn: sqlite3.Connection, document_id: int) -> str | None:
+    """Return the canonical evidence source kind for one legacy document.
+
+    The cutover can link a document through either the scoped compatibility
+    binding or the older direct ``legacy_document_id`` bridge.  Minimal
+    pre-cutover fixtures have neither evidence relation, so ``source_type``
+    remains a compatibility-only fallback.
+    """
+
+    queries: list[tuple[str, tuple[int]]] = []
+    if _sqlite_object_exists(conn, "v_legacy_document_evidence_bindings_current", "view"):
+        queries.append(
+            (
+                "SELECT source.source_kind "
+                "FROM v_legacy_document_evidence_bindings_current AS binding "
+                "JOIN evidence_document_versions AS version "
+                "ON version.document_version_id = binding.document_version_id "
+                "JOIN evidence_source_observations AS source "
+                "ON source.observation_id = version.observation_id "
+                "WHERE binding.legacy_document_id = ? LIMIT 1",
+                (document_id,),
+            )
+        )
+    if _sqlite_object_exists(conn, "evidence_document_versions", "table"):
+        queries.append(
+            (
+                "SELECT source.source_kind "
+                "FROM evidence_document_versions AS version "
+                "JOIN evidence_source_observations AS source "
+                "ON source.observation_id = version.observation_id "
+                "WHERE version.legacy_document_id = ? "
+                "ORDER BY version.version_sequence DESC LIMIT 1",
+                (document_id,),
+            )
+        )
+    queries.append(
+        (
+            "SELECT source_type FROM documents WHERE id = ?",
+            (document_id,),
+        )
+    )
+    for sql, params in queries:
+        row = conn.execute(sql, params).fetchone()
+        if row is not None and row[0] is not None:
+            return str(row[0])
+    return None
+
+
+def _unsealed_lineage_reason(conn: sqlite3.Connection, lineage: list[LineageEntry]) -> str | None:
+    """Explain why a computed KPI cannot enter the legacy fact plane safely.
+
+    Once the immutable observation cutover is installed, a vendor quote has
+    no observation identity and a CompanyFacts input needs a real derivation
+    seal.  That V2 publication work belongs to the provenance follow-up; the
+    scheduled metrics engine must defer these rows instead of manufacturing a
+    filing-anchored pseudo-observation or failing after insertion.
+    """
+
+    if not _table_has_column(conn, "fact_observation_revisions", "logical_key"):
+        return None
+    if any(doc_id is None for _, _, doc_id in lineage):
+        return "vendor_price_has_no_immutable_observation"
+    document_ids = {doc_id for _, _, doc_id in lineage if doc_id is not None}
+    if any(_document_source_kind(conn, doc_id) == "sec_companyfacts" for doc_id in document_ids):
+        return "companyfacts_input_requires_derivation_seal"
+    return None
+
+
+def _apply_lineage_admission(
+    conn: sqlite3.Connection,
+    result: ComputedValue | NotComputable,
+    lineage: list[LineageEntry],
+) -> ComputedValue | NotComputable:
+    if not isinstance(result, ComputedValue):
+        return result
+    unsealed_reason = _unsealed_lineage_reason(conn, lineage)
+    if unsealed_reason is None:
+        return result
+    return NotComputable(
+        reason_code=ReasonCode.UNSEALED_LINEAGE,
+        reason_detail=unsealed_reason,
+    )
+
+
 def resolve_classification(
     conn: sqlite3.Connection, ticker: str
 ) -> tuple[BusinessModelClass, AccountingStandard]:
@@ -724,15 +818,22 @@ def _existing_attempt(
     period_end: datetime,
     fiscal_period_type: str,
     formula_id: int,
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str, str | None, str | None] | None:
     row = conn.execute(
-        "SELECT input_fingerprint, engine_version FROM metric_computation_attempts "
+        "SELECT input_fingerprint, engine_version, status, reason_code, reason_detail "
+        "FROM metric_computation_attempts "
         "WHERE ticker = ? AND period_end = ? AND fiscal_period_type = ? AND formula_id = ?",
         (ticker.upper(), period_end, fiscal_period_type, formula_id),
     ).fetchone()
     if row is None:
         return None
-    return str(row["input_fingerprint"]), str(row["engine_version"])
+    return (
+        str(row["input_fingerprint"]),
+        str(row["engine_version"]),
+        str(row["status"]),
+        None if row["reason_code"] is None else str(row["reason_code"]),
+        None if row["reason_detail"] is None else str(row["reason_detail"]),
+    )
 
 
 def _lineage_json(formula: FormulaDef, lineage: list[LineageEntry]) -> str:
@@ -775,6 +876,8 @@ def _persist_attempt(
     kpi_fact_id: int | None = None
     reason_code: str | None = None
     reason_detail: str | None = None
+
+    result = _apply_lineage_admission(conn, result, lineage)
 
     if isinstance(result, ComputedValue):
         status = "ok"
@@ -977,12 +1080,20 @@ def compute_for_ticker(
                         method_flags=(*result.method_flags, f"price_source_{price_source}"),
                     )
 
+            result = _apply_lineage_admission(conn, result, lineage)
             fingerprint = _input_fingerprint(lineage)
+            expected_attempt = (
+                fingerprint,
+                ENGINE_VERSION,
+                "ok" if isinstance(result, ComputedValue) else "not_computable",
+                None if isinstance(result, ComputedValue) else result.reason_code.value,
+                None if isinstance(result, ComputedValue) else result.reason_detail,
+            )
             if not force:
                 existing = _existing_attempt(
                     conn, ticker, cell.period_end, fiscal_period_type, formula_id
                 )
-                if existing is not None and existing == (fingerprint, ENGINE_VERSION):
+                if existing is not None and existing == expected_attempt:
                     skipped += 1
                     continue
 
