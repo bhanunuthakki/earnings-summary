@@ -263,7 +263,10 @@ def _reconcile(
         # Inline markers are authoritative — the map only RECOVERS cites for
         # sentences the answer left unmarked, never overrides visible ones.
         cites = inline if inline else map_cites
-        supported = bool(cites) and (entry_map.get("supported") is not False)
+        visible_cites_validated = not strict or not inline or inline.issubset(map_cites)
+        supported = (
+            bool(cites) and visible_cites_validated and (entry_map.get("supported") is not False)
+        )
         prev = by_sentence.get(idx)
         if prev is None:
             by_sentence[idx] = (cites, supported)

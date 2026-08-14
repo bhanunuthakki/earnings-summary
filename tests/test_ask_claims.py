@@ -530,3 +530,30 @@ def test_strict_grounding_keeps_adjacent_multi_citations_in_one_span(
 
     assert payload is not None
     assert payload["grounding"] == "per_claim"
+
+
+def test_strict_grounding_rejects_a_visible_citation_the_auditor_did_not_validate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer = "Revenue grew 24% [1]."
+    _patch_map(
+        monkeypatch,
+        {
+            "claims": [
+                {
+                    "quote": answer,
+                    "cites": [2],
+                    "supported": True,
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(GroundedCitationError, match="unsupported factual claim"):
+        build_citations_payload(
+            answer,
+            [_item(1), replace(_item(1), n=2, text="Revenue grew 24%.")],
+            db_path=tmp_path / "x.db",
+            strict=True,
+        )
