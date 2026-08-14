@@ -302,6 +302,15 @@ LLM_MODELS: dict[str, str] = {
     # from judged failure evidence — judgment-tier work, Opus-pinned like its
     # edit-splice predecessor.
     "prompt_reflect_rewrite": "claude-opus-4-8",
+    # Project README maintenance (readme_updater.py): one bounded, on-demand
+    # drafting call over allowlisted repository evidence, followed by a
+    # mandatory independent judgment call. Drafting uses the balanced
+    # analytical tier; the release judge uses the strongest judgment tier.
+    # Both ride meta_eval scope, are capture-denied, and have a hard two-
+    # candidate run budget in the orchestrator (structured repairs remain
+    # attributable attempts in the central ledger).
+    "readme_update": DEFAULT_MODEL,
+    "readme_update_judge": "claude-opus-4-8",
     # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
     # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
     # research_code_spec drafts an inert, human-reviewed code-change spec. Both are

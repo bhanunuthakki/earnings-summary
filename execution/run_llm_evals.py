@@ -106,6 +106,7 @@ GOLDEN_PURPOSES = (
     "disclosure_item_specificity_triage",
 )
 AUDIT_PURPOSES = (
+    "readme_update",
     "bear_case",
     "transcript_summary",
     "advisor_next_dollar",

@@ -98,6 +98,10 @@ from process_report_comments import (  # noqa: E402
 )
 from pydantic import ValidationError  # noqa: E402
 from refresh_dispatch import STEP_NAMES  # noqa: E402
+from update_readme import (  # noqa: E402
+    collect_repository_evidence,
+    current_candidate_violations,
+)
 
 import comments  # noqa: E402
 import ticker_validation  # noqa: E402
@@ -159,6 +163,10 @@ from logging_config import (  # noqa: E402
 )
 from operations.models import OperationsRegistry  # noqa: E402
 from operations.paths import scheduler_receipt_path, service_receipt_path  # noqa: E402
+from operations.readme_governance import (  # noqa: E402
+    ReadmeGovernanceStatus,
+    collect_readme_governance_status,
+)
 from operations.registry import build_operations_registry  # noqa: E402
 from operations.snapshot import collect_operations_snapshot  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
@@ -178,6 +186,7 @@ from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 from pipeline.work_os_overview import render_overview_panel  # noqa: E402
 from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
+from readme_updater import evidence_sha256  # noqa: E402
 from research.proposal_approval import (  # noqa: E402
     AskProposalDecisionV1,
     ProposalConflictError,
@@ -220,6 +229,7 @@ _MAX_USER_INPUT_CHARS = 8_000
 _STREAM_QUEUE_MAXSIZE = 64
 _CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 _BROWSER_USER_AGENT_RX = re.compile(r"(?:mozilla|chrome|chromium|safari|firefox|edg)/", re.I)
+_README_RUN_ID_RX = re.compile(r"[0-9a-f]{32}\Z")
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -557,10 +567,21 @@ def create_app(
     # that same window so HTTP revalidation can stop *before* the route builder,
     # rather than paying the full build merely to discover the ETag is unchanged.
     panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
-    declared_operations = operations_registry or build_operations_registry(
-        (code_root or PROJECT_ROOT).resolve()
-    )
+    resolved_code_root = (code_root or PROJECT_ROOT).resolve()
+    declared_operations = operations_registry or build_operations_registry(resolved_code_root)
+    app.config["CODE_ROOT"] = resolved_code_root
     app.config["OPERATIONS_REGISTRY"] = declared_operations
+
+    def _collect_current_readme_status() -> ReadmeGovernanceStatus:
+        evidence = collect_repository_evidence(resolved_code_root)
+        return collect_readme_governance_status(
+            resolved_code_root,
+            current_evidence_sha256=evidence_sha256(evidence),
+            candidate_validator=lambda markdown: current_candidate_violations(
+                markdown, resolved_code_root
+            ),
+        )
+
     # Dedicated pool so a long-running LLM subprocess doesn't pin a Flask
     # request thread for the full 10-60s of a chat turn. Pool size caps
     # the number of concurrent chats; chunks flow back via per-request
@@ -1852,7 +1873,13 @@ def create_app(
                 service_receipt_path=service_receipt_path(repo_root),
             )
             return Response(
-                render_operations_panel(build_operations_panel_view(declared_operations, snapshot)),
+                render_operations_panel(
+                    build_operations_panel_view(
+                        declared_operations,
+                        snapshot,
+                        readme_status=_collect_current_readme_status(),
+                    )
+                ),
                 mimetype="text/html",
             )
 
@@ -4449,6 +4476,70 @@ def create_app(
             job = job_registry.start(ticker=slot_ticker, kind=kind, argv=argv)
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/api/readme-governance/status", methods=["GET"])
+    def readme_governance_status():
+        """Return the bounded status projection, never candidate prose or paths."""
+
+        status = _collect_current_readme_status()
+        return status.model_dump(mode="json")
+
+    @app.route("/actions/readme-update", methods=["POST", "OPTIONS"])
+    def start_readme_update():
+        """Preview-and-judge or apply one exact approved README candidate."""
+
+        if request.method == "OPTIONS":
+            return ("", 204)
+        raw_body = request.get_json(silent=True)
+        if not isinstance(raw_body, dict):
+            return ({"error": "JSON request body must be an object"}, 400)
+        body = cast("dict[str, object]", raw_body)
+        action = str(body.get("action", "")).strip()
+        argv = managed_python_argv(
+            resolved_code_root,
+            resolved_code_root / "execution" / "update_readme.py",
+            "--repo-root",
+            str(resolved_code_root),
+            "--db",
+            str(db_path),
+        )
+        if action == "preview":
+            kind = "readme-preview"
+        elif action == "apply":
+            run_id = str(body.get("run_id", "")).strip()
+            if _README_RUN_ID_RX.fullmatch(run_id) is None:
+                return ({"error": "valid README updater run_id required"}, 400)
+            status = _collect_current_readme_status()
+            if (
+                not status.can_apply
+                or status.state != "approved_preview"
+                or status.run_id != run_id
+            ):
+                return ({"error": "README candidate is not the current approved preview"}, 409)
+            argv.extend(["--apply-run", run_id])
+            kind = "readme-apply"
+        else:
+            return ({"error": "action must be 'preview' or 'apply'"}, 400)
+        try:
+            job = job_registry.start(
+                ticker="_REPO",
+                kind=kind,
+                argv=argv,
+                cwd=str(resolved_code_root),
+                write_sets=["portfolio-db", "readme-updater"],
+            )
+        except RegistryConflict as exc:
+            return ({"error": str(exc)}, 409)
         return (
             {
                 "job_id": job.job_id,

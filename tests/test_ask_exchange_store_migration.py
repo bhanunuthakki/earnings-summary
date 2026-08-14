@@ -10,7 +10,7 @@ from alembic.config import Config
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "0012_close_operation_event_detail_reason"
+REVISION = "0013_add_readme_update_budgets"
 
 
 def _config(path: Path) -> Config:

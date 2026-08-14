@@ -17,14 +17,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sqlite3
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from readme_receipt import StoredReadmeReceipt
+from readme_updater import RepositoryEvidence, evidence_sha256
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -34,6 +38,8 @@ log = logging.getLogger(__name__)
 # bites pathological files, and the truncation is marked so the judge (and the
 # persisted transcript) can see it happened.
 MAX_CONTENT_CHARS = 30_000
+_README_RUN_ID = re.compile(r"[0-9a-f]{32}\Z")
+_REPARSE_POINT = 0x400
 
 # Mirrors _SUMMARY_RX in src/report/sections/earnings.py (the §5 reader of the
 # same files). Replicated rather than imported: that module pulls the pydantic
@@ -93,6 +99,89 @@ def _parse_naive_utc(value: object) -> datetime | None:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(UTC).replace(tzinfo=None)
     return parsed
+
+
+def _read_readme_artifact(path: Path, limit: int) -> bytes:
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise ValueError("README eval artifacts must be single-link regular files")
+    if int(getattr(before, "st_file_attributes", 0)) & _REPARSE_POINT:
+        raise ValueError("README eval artifacts may not be reparse points")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("README eval artifact changed while opening")
+        payload = os.read(fd, limit + 1)
+        if len(payload) > limit:
+            raise ValueError("README eval artifact exceeds its bounded read limit")
+        return payload
+    finally:
+        os.close(fd)
+
+
+def load_readme_update_corpus(repo_root: Path) -> list[AuditItem]:
+    """Load exact schema-v2 candidate/evidence pairs, newest first."""
+
+    runs_root = repo_root / ".tmp" / "readme_updater"
+    if not runs_root.is_dir():
+        return []
+    try:
+        resolved_runs_root = runs_root.resolve(strict=True)
+    except OSError:
+        return []
+    runs = sorted(
+        (
+            path
+            for path in runs_root.iterdir()
+            if path.is_dir() and _README_RUN_ID.fullmatch(path.name)
+        ),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    items: list[AuditItem] = []
+    for run in runs[:100]:
+        try:
+            run_lstat = run.lstat()
+            if (
+                run.is_symlink()
+                or int(getattr(run_lstat, "st_file_attributes", 0)) & _REPARSE_POINT
+                or run.resolve(strict=True).parent != resolved_runs_root
+            ):
+                continue
+            receipt = StoredReadmeReceipt.model_validate_json(
+                _read_readme_artifact(run / "receipt.json", 1_000_000)
+            )
+            evidence = RepositoryEvidence.model_validate_json(
+                _read_readme_artifact(run / "evidence.json", 110_000)
+            )
+            candidate = _read_readme_artifact(run / "candidate.md", 250_000).decode("utf-8")
+            if (
+                receipt.run_id != run.name
+                or evidence_sha256(evidence) != receipt.evidence_sha256
+                or candidate != receipt.result.markdown
+            ):
+                continue
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        items.append(
+            AuditItem(
+                item_id=f"readme-update:{receipt.run_id}",
+                label=f"readme_update/run:{receipt.run_id}",
+                ticker=None,
+                content=json.dumps(
+                    {
+                        "repository_evidence": evidence.model_dump(mode="json"),
+                        "readme_candidate": candidate,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                produced_at=_mtime_naive_utc(run / "receipt.json"),
+            )
+        )
+    return items
 
 
 def load_bear_case_corpus(repo_root: Path) -> list[AuditItem]:
@@ -401,7 +490,8 @@ def load_calibration_coach_corpus(repo_root: Path) -> list[AuditItem]:
         card = cast("dict[str, object]", raw)
         biases = card.get("biases")
         experiment = card.get("experiment")
-        has_coach = (isinstance(biases, list) and biases) or isinstance(experiment, dict)
+        has_biases = isinstance(biases, list) and len(cast("list[object]", biases)) > 0
+        has_coach = has_biases or isinstance(experiment, dict)
         prose = card.get("prose")
         if not has_coach or not isinstance(prose, str) or not prose.strip():
             continue
@@ -810,6 +900,7 @@ def load_senior_partner_brief_corpus(repo_root: Path) -> list[AuditItem]:
 # audit purpose = one rubric file + one loader + one entry (+ registry/model
 # wiring asserted by tests).
 CORPUS_LOADERS: dict[str, CorpusLoader] = {
+    "readme_update": load_readme_update_corpus,
     "bear_case": load_bear_case_corpus,
     "transcript_summary": load_transcript_summary_corpus,
     "advisor_next_dollar": load_advisor_next_dollar_corpus,

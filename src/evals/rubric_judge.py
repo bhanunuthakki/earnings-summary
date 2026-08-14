@@ -77,6 +77,7 @@ class AuditSpec:
 # The three PR-2 purposes. Adding one = a rubric file + a corpus loader in
 # evals.corpora + an entry here.
 AUDIT_SPECS: dict[str, AuditSpec] = {
+    "readme_update": AuditSpec("readme_update", RUBRICS_DIR / "readme_update.md"),
     "bear_case": AuditSpec("bear_case", RUBRICS_DIR / "bear_case.md"),
     "transcript_summary": AuditSpec("transcript_summary", RUBRICS_DIR / "transcript_summary.md"),
     "advisor_next_dollar": AuditSpec("advisor_next_dollar", RUBRICS_DIR / "advisor_next_dollar.md"),

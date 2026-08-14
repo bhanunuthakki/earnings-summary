@@ -34,7 +34,8 @@ from sqlite_runtime import (
 )
 
 ACTIVE_BASE = "0001_initial_schema"
-ACTIVE_HEAD = "0012_close_operation_event_detail_reason"
+ACTIVE_HEAD = "0013_add_readme_update_budgets"
+OPERATION_EVENTS_CONTRACT_REVISION = "0012_close_operation_event_detail_reason"
 
 _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "tracked_companies": frozenset({"ticker", "processing_tier"}),
@@ -211,7 +212,7 @@ def _require_exact_closed_operation_events_contract(
     active: Config,
 ) -> None:
     script = ScriptDirectory.from_config(active)
-    revision = script.get_revision(ACTIVE_HEAD)
+    revision = script.get_revision(OPERATION_EVENTS_CONTRACT_REVISION)
     candidate = getattr(revision.module, "require_operation_events_contract", None)
     if not callable(candidate):
         raise UpgradeDatabaseError("active operation-events contract validator is unavailable")

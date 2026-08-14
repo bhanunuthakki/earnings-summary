@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0012_close_operation_event_detail_reason"
+_ACTIVE_HEAD = "0013_add_readme_update_budgets"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
@@ -109,7 +109,7 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
         "risk_free_rate": 0.043,
         "tax_rate": 0.24,
     }
-    assert budget_count == (66,)
+    assert budget_count == (68,)
     # Sealed full-set receipts, derived from the pre-squash migration chain.
     digests = {
         "budgets": _digest_rows(budgets),
@@ -119,7 +119,7 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
     assert (
         digests
         == {
-            "budgets": "e7d9d3699bcf7fdef916f9838f979ee35cc5c5f6529d4ef068b67ff253ac6f9f",  # pragma: allowlist secret
+            "budgets": "ab5e04a15524e8bb1a7a17ad0e944fbb5c5af6fb5c63d7006edb403e3b64fd18",  # pragma: allowlist secret
             "discovery": "1055bb386366234b8485dde8a6ca08163b1680889f1beee3c1a5b430dc3980d2",  # pragma: allowlist secret
             "kpi_routes": "f10c7aa845b032970758a7051a933d2ab27a497d81b353dc44dfca8e9adf8999",  # pragma: allowlist secret
         }
@@ -150,7 +150,7 @@ def test_fresh_upgrade_restores_migration_owned_defaults(
             ).fetchone()
             is None
         )
-        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (66,)
+        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (68,)
 
 
 def test_upgrade_preserves_operator_owned_values(
@@ -306,7 +306,7 @@ def test_upgrade_repairs_representative_partial_0002_schema(tmp_path: Path) -> N
         assert conn.execute(
             "SELECT ticker,processing_tier,brief_dirty FROM tracked_companies WHERE id=1"
         ).fetchone() == ("NU", "P3", 0)
-        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (66,)
+        assert conn.execute("SELECT COUNT(*) FROM llm_budgets").fetchone() == (68,)
         assert conn.execute("SELECT COUNT(*) FROM discovery_sources").fetchone() == (39,)
         assert conn.execute("SELECT COUNT(*) FROM kpi_definitions").fetchone() == (27,)
         assert conn.execute(
