@@ -183,6 +183,48 @@ def test_checkpoint_requires_one_typed_ledger_entry_per_changed_ticker() -> None
             }
         )
 
+    with pytest.raises(ValidationError, match="body"):
+        OwnerDecisionCheckpointPayload(
+            **{
+                **base.model_dump(mode="python"),
+                "legs": (changed_leg,),
+                "ledger_entries": ({**entry, "body": "   "},),
+            }
+        )
+
+
+def test_sizing_intent_must_match_its_decision_leg() -> None:
+    base = _payload()
+    intent = base.sizing_intents[0]
+
+    with pytest.raises(ValidationError, match="ticker must match"):
+        OwnerDecisionCheckpointPayload(
+            **{
+                **base.model_dump(mode="python"),
+                "sizing_intents": (intent.model_copy(update={"ticker": "AVDV"}),),
+            }
+        )
+
+    with pytest.raises(ValidationError, match="target band must match"):
+        OwnerDecisionCheckpointPayload(
+            **{
+                **base.model_dump(mode="python"),
+                "sizing_intents": (
+                    intent.model_copy(
+                        update={"target_band": TargetBand(minimum_pct=4.5, maximum_pct=5)}
+                    ),
+                ),
+            }
+        )
+
+    with pytest.raises(ValidationError, match="own alternative"):
+        OwnerDecisionCheckpointPayload(
+            **{
+                **base.model_dump(mode="python"),
+                "legs": (base.legs[0].model_copy(update={"alternative_leg_id": "wix"}),),
+            }
+        )
+
 
 def test_late_intent_mismatch_rolls_back_checkpoint_and_decision(
     tmp_path: Path, migrated_db: Callable[..., Path]

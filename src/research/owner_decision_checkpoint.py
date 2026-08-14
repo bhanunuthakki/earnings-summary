@@ -200,6 +200,14 @@ class SizingIntentSpec(BaseModel):
             raise ValueError("ticker is required")
         return clean
 
+    @field_validator("leg_id", "intent_kind", "narrative")
+    @classmethod
+    def _nonempty(cls, value: str) -> str:
+        clean = value.strip()
+        if not clean:
+            raise ValueError("sizing intent fields must be non-empty")
+        return clean
+
 
 class LedgerEntrySpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -215,6 +223,14 @@ class LedgerEntrySpec(BaseModel):
         clean = value.strip().upper()
         if not clean:
             raise ValueError("ticker is required")
+        return clean
+
+    @field_validator("body")
+    @classmethod
+    def _nonempty_body(cls, value: str) -> str:
+        clean = value.strip()
+        if not clean:
+            raise ValueError("accepted thesis update body must be non-empty")
         return clean
 
 
@@ -254,6 +270,8 @@ class OwnerDecisionCheckpointPayload(BaseModel):
             if leg.alternative_leg_id is not None and leg.alternative_leg_id not in known:
                 raise ValueError(f"unknown alternative_leg_id {leg.alternative_leg_id!r}")
             if leg.alternative_leg_id is not None:
+                if leg.alternative_leg_id == leg.leg_id:
+                    raise ValueError("a decision leg cannot be its own alternative")
                 alternative = next(
                     item for item in self.legs if item.leg_id == leg.alternative_leg_id
                 )
@@ -262,6 +280,21 @@ class OwnerDecisionCheckpointPayload(BaseModel):
         for intent in self.sizing_intents:
             if intent.leg_id not in known:
                 raise ValueError(f"sizing intent references unknown leg {intent.leg_id!r}")
+            leg = next(item for item in self.legs if item.leg_id == intent.leg_id)
+            if intent.ticker != leg.ticker:
+                raise ValueError("sizing intent ticker must match its decision leg")
+            if intent.target_band is not None and intent.target_band != leg.target_band:
+                raise ValueError("sizing intent target band must match its decision leg")
+            if (
+                intent.target_band is not None
+                and intent.intent_value is not None
+                and not (
+                    intent.target_band.minimum_pct
+                    <= intent.intent_value
+                    <= intent.target_band.maximum_pct
+                )
+            ):
+                raise ValueError("sizing intent value must fall within its target band")
         changed_tickers = {leg.ticker for leg in self.legs if leg.thesis_changed}
         ledger_tickers = [entry.ticker for entry in self.ledger_entries]
         if set(ledger_tickers) != changed_tickers or len(ledger_tickers) != len(changed_tickers):
