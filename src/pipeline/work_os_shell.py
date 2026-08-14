@@ -19,8 +19,8 @@ from pathlib import Path
 
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
-from pipeline.data_policy_settings_panel import render_operations_settings_shell
 from pipeline.explore_panel import EXPLORE_PANEL_JS
+from pipeline.operations_panel import render_operations_shell
 from pipeline.work_os_copilot import render_work_os_copilot
 from pipeline.work_os_research import (
     render_brief_library_shell,
@@ -78,8 +78,8 @@ SCREEN_SPECS: tuple[ScreenSpec, ...] = (
     ScreenSpec(
         "screen-execution-queue",
         "nav-execution-queue",
-        "Execution Queue & Operations",
-        "/api/panel/provenance",
+        "Operations",
+        "/api/panel/operations",
     ),
 )
 
@@ -105,6 +105,7 @@ _LEGACY_HASHES: dict[str, str] = {
     "decisions": "screen-audit-log",
     "system": "screen-execution-queue",
     "provenance": "screen-execution-queue",
+    "settings": "screen-execution-queue",
     "actions": "screen-execution-queue",
 }
 
@@ -309,34 +310,6 @@ def _production_runtime(generated_at: datetime) -> str:
   const companyPickerList = document.getElementById('companyPickerList');
   const companyPickerStatus = document.getElementById('companyPickerStatus');
 
-  window.switchOpsTab = function (tabId) {{
-    const selected = tabId === 'settings' ? 'settings' : 'queue';
-    const pairs = [
-      {{ button: document.getElementById('opsTabQueue'), pane: document.getElementById('opsPaneQueue'), id: 'queue' }},
-      {{ button: document.getElementById('opsTabSettings'), pane: document.getElementById('opsPaneSettings'), id: 'settings' }}
-    ];
-    pairs.forEach(function (pair) {{
-      const active = pair.id === selected;
-      if (pair.button) {{
-        pair.button.className = 'k-chip k-chip-btn k-chip-tab' + (active ? ' is-on' : '');
-        pair.button.setAttribute('aria-selected', active ? 'true' : 'false');
-        pair.button.tabIndex = active ? 0 : -1;
-      }}
-      if (pair.pane) pair.pane.hidden = !active;
-    }});
-    const status = document.getElementById('workOsLiveStatus');
-    if (status) status.textContent = selected === 'settings'
-      ? 'Data collection settings shown' : 'Operations summary shown';
-  }};
-  document.querySelectorAll('[role="tab"][aria-controls^="opsPane"]').forEach(function (tab) {{
-    tab.addEventListener('keydown', function (event) {{
-      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-      event.preventDefault();
-      const next = tab.id === 'opsTabQueue' ? 'settings' : 'queue';
-      window.switchOpsTab(next);
-      document.getElementById(next === 'settings' ? 'opsTabSettings' : 'opsTabQueue')?.focus();
-    }});
-  }});
   const drillOverlay = drillDrawer && window.CCOverlay.register(drillDrawer, {{
     modal: true, priority: window.CCOverlay.PRIORITY.DRAWER, scrim: true,
     trapFocus: true, restoreFocus: true, motion: 'slide-right',
@@ -1085,6 +1058,12 @@ def _production_runtime(generated_at: datetime) -> str:
     if (target === 'screen-brief-library') workOsRenderBriefLibrary();
     if (target === 'screen-analytics-playground') workOsRenderFactPlayground();
     originalNavigateTo(target);
+    if (target === 'screen-execution-queue') {{
+      const operations = document.getElementById(target);
+      if (operations && operations.dataset.loadedEndpoint !== workOsEndpoint(target)) {{
+        workOsLoadScreen(target, operations);
+      }}
+    }}
     const currentUrl = window.location.pathname + window.location.search + window.location.hash;
     if (!(options && options.fromHistory) && currentUrl !== workOsScreenUrl(target)) {{
       window.history.pushState({{ screenId: target }}, '', workOsScreenUrl(target));
@@ -1204,9 +1183,10 @@ def _production_runtime(generated_at: datetime) -> str:
     workOsRequests.delete(target);
   }}
 
-  async function workOsLoadScreen(screenId, target) {{
-    const endpoint = workOsEndpoint(screenId);
-    if (!endpoint || !target || !workOsTargetVisible(target)) return;
+  async function workOsLoadScreen(screenId, target, endpointOverride) {{
+    const endpoint = endpointOverride || workOsEndpoint(screenId);
+    if (!endpoint || !workOsTrustedFragmentEndpoint(endpoint) ||
+        !target || !workOsTargetVisible(target)) return;
     const prior = workOsRequests.get(target);
     if (prior) {{
       prior.abortReason = 'superseded';
@@ -1227,6 +1207,8 @@ def _production_runtime(generated_at: datetime) -> str:
     workOsRequests.set(target, requestState);
     target.setAttribute('aria-busy', 'true');
     target.dataset.workOsScreenId = screenId;
+    if (endpointOverride) target.dataset.workOsEndpoint = endpoint;
+    else delete target.dataset.workOsEndpoint;
     const status = document.getElementById('workOsLiveStatus');
     if (status) status.textContent = 'Loading live ' + screenId.replace('screen-', '') + ' data';
     try {{
@@ -1267,7 +1249,11 @@ def _production_runtime(generated_at: datetime) -> str:
     if (!retry) return;
     const target = retry.closest('[data-work-os-screen-id]');
     if (target && target.dataset.workOsScreenId) {{
-      workOsLoadScreen(target.dataset.workOsScreenId, target);
+      workOsLoadScreen(
+        target.dataset.workOsScreenId,
+        target,
+        target.dataset.workOsEndpoint || undefined
+      );
     }}
   }});
 
@@ -1285,6 +1271,19 @@ def _production_runtime(generated_at: datetime) -> str:
       workOsLoadScreen(screenId, body);
     }}
   }}
+
+  window.workOsOpenRelatedView = function (endpoint, title) {{
+    if (!workOsTrustedFragmentEndpoint(endpoint)) return;
+    openDrillDrawer('live-detail');
+    const body = document.getElementById('drawerBody');
+    const heading = document.getElementById('drawerTitle');
+    const subtitle = document.getElementById('drawerSubtitle');
+    if (heading) heading.textContent = title;
+    if (subtitle) subtitle.textContent = 'Related Operations view';
+    if (!body) return;
+    body.innerHTML = '<div class="k-well" role="status">Loading related view…</div>';
+    workOsLoadScreen('related-operations', body, endpoint);
+  }};
 
 </script>
 """
@@ -1354,6 +1353,13 @@ def _add_production_contract(
     html: str, generated_at: datetime, *, db_path: Path | None = None
 ) -> str:
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
+    html = html.replace("Execution Queue & Operations Hub", "Operations")
+    html = html.replace("Operations & Execution Governance Hub", "Operations")
+    html = html.replace(
+        '<span class="nav-text">Execution Queue & Operations</span>',
+        '<span class="nav-text">Operations</span>',
+        1,
+    )
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
     html = _FACT_PLAYGROUND_SECTION_RE.sub(
@@ -1365,9 +1371,7 @@ def _add_production_contract(
         count=1,
     )
     html = html.replace("      updateFactPlaygroundTable();\n", "", 1)
-    html = _OPERATIONS_SECTION_RE.sub(
-        render_operations_settings_shell(db_path=db_path) + "\n      ", html, count=1
-    )
+    html = _OPERATIONS_SECTION_RE.sub(render_operations_shell() + "\n      ", html, count=1)
     html = html.replace(
         '<div class="card-grid-stat-4col">',
         '<div class="card-grid-stat-4col" id="workOsPortfolioStats">',

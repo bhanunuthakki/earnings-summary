@@ -157,8 +157,16 @@ from logging_config import (  # noqa: E402
     new_correlation_id,
     set_correlation_id,
 )
+from operations.models import OperationsRegistry  # noqa: E402
+from operations.paths import scheduler_receipt_path, service_receipt_path  # noqa: E402
+from operations.registry import build_operations_registry  # noqa: E402
+from operations.snapshot import collect_operations_snapshot  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
+from pipeline.operations_panel import (  # noqa: E402
+    build_operations_panel_view,
+    render_operations_panel,
+)
 from pipeline.research_cockpit import build_cockpit_rows  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
     build_ticker_command_center,
@@ -532,6 +540,8 @@ def create_app(
     *,
     db_path: Path | None = None,
     registry: Registry | None = None,
+    operations_registry: OperationsRegistry | None = None,
+    code_root: Path | None = None,
     chat_executor: concurrent.futures.Executor | None = None,
 ) -> Flask:
     app = _RedactingFlask(__name__)
@@ -547,6 +557,10 @@ def create_app(
     # that same window so HTTP revalidation can stop *before* the route builder,
     # rather than paying the full build merely to discover the ETag is unchanged.
     panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
+    declared_operations = operations_registry or build_operations_registry(
+        (code_root or PROJECT_ROOT).resolve()
+    )
+    app.config["OPERATIONS_REGISTRY"] = declared_operations
     # Dedicated pool so a long-running LLM subprocess doesn't pin a Flask
     # request thread for the full 10-60s of a chat turn. Pool size caps
     # the number of concurrent chats; chunks flow back via per-request
@@ -1827,6 +1841,20 @@ def create_app(
             # The document shell paints immediately; Today assembles as a
             # cacheable fragment instead of blocking the initial HTML TTFB.
             return _overview_fragment_response()
+
+        if name == "operations":
+            snapshot = collect_operations_snapshot(
+                declared_operations,
+                repo_root=repo_root,
+                conn=get_read_db(),
+                observed_at=datetime.now(UTC),
+                scheduler_receipt_path=scheduler_receipt_path(repo_root),
+                service_receipt_path=service_receipt_path(repo_root),
+            )
+            return Response(
+                render_operations_panel(build_operations_panel_view(declared_operations, snapshot)),
+                mimetype="text/html",
+            )
 
         if name == "portfolio":
             # Portfolio → Performance: tracker analytics + live positions /
