@@ -66,7 +66,7 @@ SCREEN_SPECS: tuple[ScreenSpec, ...] = (
     ScreenSpec(
         "screen-analytics-playground",
         "nav-analytics-playground",
-        "Fact & Metric Playground",
+        "Facts & Analytics",
         "/api/panel/explore",
     ),
     ScreenSpec(
@@ -1030,7 +1030,7 @@ def _production_runtime(generated_at: datetime) -> str:
         window.initExplorePanel();
         mount.dataset.loadedEndpoint = endpoint;
       }} catch (error) {{
-        mount.innerHTML = '<div class="k-well" role="alert">Fact &amp; Metric Playground is temporarily unavailable. No prototype values are being shown.</div>';
+        mount.innerHTML = '<div class="k-well" role="alert">Facts &amp; Analytics is temporarily unavailable. No prototype values are being shown.</div>';
       }} finally {{
         mount.removeAttribute('aria-busy');
         workOsFactPlaygroundLoading = null;
@@ -1366,7 +1366,7 @@ def _add_production_contract(
         render_fact_playground_shell() + "\n\n      ", html, count=1
     )
     html = _FACT_PLAYGROUND_RUNTIME_RE.sub(
-        "\n\n    // Governed Fact Playground is mounted from /api/panel/explore.\n\n    // EMBEDDED DCF SLIDERS INSIDE REPORT",
+        "\n\n    // Governed Facts & Analytics is mounted from /api/panel/explore.\n\n    // EMBEDDED DCF SLIDERS INSIDE REPORT",
         html,
         count=1,
     )

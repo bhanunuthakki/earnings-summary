@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
@@ -82,10 +83,22 @@ class HoldingsBasis(BaseModel):
     embedded_positions: tuple[HoldingBasisPosition, ...]
     basis_note: str | None = None
 
+    @field_validator("as_of")
+    @classmethod
+    def _valid_as_of(cls, value: str) -> str:
+        clean = value.strip()
+        if not clean:
+            raise ValueError("holdings basis as_of is required")
+        try:
+            datetime.fromisoformat(clean.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("holdings basis as_of must be an ISO-8601 timestamp") from exc
+        return clean
+
     @model_validator(mode="after")
     def _unique_tickers(self) -> HoldingsBasis:
         tickers = [position.ticker for position in self.embedded_positions]
-        if not self.source.strip() or not self.as_of.strip():
+        if not self.source.strip():
             raise ValueError("holdings basis source and as_of are required")
         if len(tickers) != len(set(tickers)):
             raise ValueError("holdings basis tickers must be unique")
@@ -130,7 +143,6 @@ class DecisionLeg(BaseModel):
     alternative_leg_id: str | None = None
     target_verification: TargetVerification = "not_applicable"
     target_delta_mismatch: str | None = None
-    made_at: str | None = None
 
     @field_validator("ticker")
     @classmethod
@@ -193,7 +205,7 @@ class LedgerEntrySpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     ticker: str
-    entry_kind: str = "thesis_update"
+    entry_kind: Literal["thesis_update"] = "thesis_update"
     body: str
     source_alert_id: int | None = Field(default=None, ge=1)
 
@@ -229,7 +241,16 @@ class OwnerDecisionCheckpointPayload(BaseModel):
             raise ValueError("decision leg IDs must be unique")
         known = set(leg_ids)
         for leg in self.legs:
-            self.holdings_basis.position(leg.ticker)
+            holding = self.holdings_basis.position(leg.ticker)
+            if leg.target_verification == "verified":
+                if leg.target_band is None:
+                    raise ValueError("verified targets require a target band")
+                if holding.availability != "observed" or holding.weight_pct is None:
+                    raise ValueError("unavailable holdings cannot verify a target")
+                if not (
+                    leg.target_band.minimum_pct <= holding.weight_pct <= leg.target_band.maximum_pct
+                ):
+                    raise ValueError("verified target must contain the observed holdings weight")
             if leg.alternative_leg_id is not None and leg.alternative_leg_id not in known:
                 raise ValueError(f"unknown alternative_leg_id {leg.alternative_leg_id!r}")
             if leg.alternative_leg_id is not None:
@@ -242,10 +263,10 @@ class OwnerDecisionCheckpointPayload(BaseModel):
             if intent.leg_id not in known:
                 raise ValueError(f"sizing intent references unknown leg {intent.leg_id!r}")
         changed_tickers = {leg.ticker for leg in self.legs if leg.thesis_changed}
-        ledger_tickers = {entry.ticker for entry in self.ledger_entries}
-        if ledger_tickers != changed_tickers:
+        ledger_tickers = [entry.ticker for entry in self.ledger_entries]
+        if set(ledger_tickers) != changed_tickers or len(ledger_tickers) != len(changed_tickers):
             raise ValueError(
-                "ledger entries must exist exactly for decision legs marked thesis_changed"
+                "exactly one thesis_update ledger entry is required for each changed ticker"
             )
         return self
 
@@ -426,7 +447,7 @@ def _link_or_create_decision(
                 leg.proposed_delta_pct,
                 None if leg.falsifier == "not_provided" else leg.falsifier,
                 leg.why_now[:512],
-                leg.made_at or stamp,
+                stamp,
                 stamp,
                 "owner_checkpoint",
                 checkpoint_id,
@@ -511,6 +532,9 @@ def confirm_owner_decision_checkpoint(
 ) -> CheckpointConfirmation:
     """Confirm ``payload`` atomically, with collision-safe idempotency."""
 
+    # Revalidate at the persistence boundary so ``model_copy``/``model_construct``
+    # cannot bypass the checkpoint's cross-field invariants.
+    payload = OwnerDecisionCheckpointPayload.model_validate(payload.model_dump(mode="python"))
     canonical = canonical_payload_json(payload)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     conn = open_conn(db_path)

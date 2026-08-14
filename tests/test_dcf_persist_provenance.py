@@ -165,6 +165,57 @@ def test_reused_hash_cannot_hide_a_changed_calculation() -> None:
     assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 4
 
 
+def test_pacific_information_date_accepts_next_utc_day_before_midnight() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    row = _row()
+    assert row.provenance is not None
+    provenance = dataclasses.replace(
+        row.provenance,
+        inputs_as_of=datetime(2026, 8, 14, 2, 0, tzinfo=UTC),
+    )
+    boundary = dataclasses.replace(
+        row,
+        valuation_date=date(2026, 8, 13),
+        provenance=provenance,
+    )
+
+    assert upsert(conn, boundary) is True
+
+
+def test_pacific_information_date_rejects_later_local_day() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    row = _row()
+    assert row.provenance is not None
+    provenance = dataclasses.replace(
+        row.provenance,
+        inputs_as_of=datetime(2026, 8, 14, 8, 0, tzinfo=UTC),
+    )
+    boundary = dataclasses.replace(
+        row,
+        valuation_date=date(2026, 8, 13),
+        provenance=provenance,
+    )
+
+    with pytest.raises(ValueError, match="later than the Pacific valuation date"):
+        upsert(conn, boundary)
+
+
+def test_pacific_information_date_rejects_naive_cutoff() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    row = _row()
+    assert row.provenance is not None
+    provenance = dataclasses.replace(
+        row.provenance,
+        inputs_as_of=datetime(2026, 8, 13, 17, 0),
+    )
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        upsert(conn, dataclasses.replace(row, provenance=provenance))
+
+
 def test_provenance_none_keeps_existing_callers_working() -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)

@@ -52,6 +52,7 @@ worry about (and none is wanted — the win is intra-conversation reuse).
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from collections import OrderedDict
@@ -59,7 +60,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Generic, TypeVar, cast
 
+from provenance.evidence_revision import current_evidence_revision
 from sqlite_freshness import SQLiteFileToken, sqlite_file_token
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -219,11 +222,12 @@ def gather_key(
     repo_root: Path,
     scope_tickers: list[str],
     norm_question: str,
-    db_token: SQLiteFileToken | int,
+    db_token: tuple[object, ...] | int,
 ) -> tuple[object, ...]:
     """The full-retrieval memo key. ``cache_key`` scopes it to one session so
     two conversations never share a memo;
-    ``db_token`` is the DB mtime so any write busts every entry."""
+    ``db_token`` is scoped to the evidence tables, so chat/audit writes do
+    not evict a valid retrieval while fact/document changes still do."""
     scope = tuple(sorted({t.strip().upper() for t in scope_tickers if t.strip()}))
     return (cache_key, str(repo_root), scope, norm_question, db_token)
 
@@ -242,6 +246,28 @@ def put_gather(key: tuple[object, ...], items: list[object]) -> None:
 def db_mtime_token(db_path: Path) -> SQLiteFileToken:
     """A cheap main-file plus WAL freshness token; all zeros when absent."""
     return sqlite_file_token(db_path) or (0, 0, 0, 0)
+
+
+def evidence_db_token(db_path: Path) -> tuple[object, ...]:
+    """Cheap revision coordinates for the tables that can change Ask evidence.
+
+    Governed fact-observation capture, legacy append sequences, and the current
+    transcript view supply the primary coordinates. The few mutable owner-state
+    stores also include their latest update/action timestamp. Partial
+    historical fixtures fall back to the conservative file/WAL token.
+    """
+
+    if not db_path.exists():
+        return db_mtime_token(db_path)
+    conn = None
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        return current_evidence_revision(conn)
+    except (sqlite3.Error, RuntimeError):
+        return db_mtime_token(db_path)
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +297,7 @@ __all__ = [
     "cached_file_parse",
     "clear_all",
     "db_mtime_token",
+    "evidence_db_token",
     "gather_key",
     "get_gather",
     "get_route",

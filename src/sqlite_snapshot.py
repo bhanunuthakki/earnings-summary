@@ -191,14 +191,63 @@ def create_snapshot(
     )
 
 
+def verify_snapshot_matches_source(
+    request: SnapshotRequest,
+    *,
+    manifest_path: Path | None = None,
+) -> SnapshotResult:
+    """Cryptographically re-prove an existing snapshot against current source content.
+
+    The comparison uses a fresh SQLite backup, so committed WAL pages participate
+    even when the main database file's size and mtime have not changed. Neither the
+    source nor the published snapshot is mutated.
+    """
+
+    if not request.source_path.is_file():
+        raise FileNotFoundError(f"source database does not exist: {request.source_path}")
+    source_observation = _file_observation(request.source_path)
+    wal_before = _optional_file_state(_wal_path(request.source_path))
+    source_conn = connect_sqlite(request.source_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        source_conn.execute("BEGIN")
+        source = SourceSnapshotObservation(
+            **source_observation.model_dump(),
+            alembic_revision=_alembic_revision(source_conn),
+        )
+        result = _existing_replay(
+            request,
+            source,
+            source_conn,
+            None,
+            manifest_path=manifest_path,
+        )
+        if result is None:
+            raise SnapshotConflictError(
+                f"snapshot destination does not exist: {request.destination_path}"
+            )
+        if wal_before != _optional_file_state(_wal_path(request.source_path)):
+            raise RuntimeError("source WAL changed during snapshot verification; retry")
+        return result
+    finally:
+        if source_conn.in_transaction:
+            source_conn.rollback()
+        source_conn.close()
+
+
 def _existing_replay(
     request: SnapshotRequest,
     source: SourceSnapshotObservation,
     source_conn: sqlite3.Connection,
     logger: SnapshotLogger | None,
+    *,
+    manifest_path: Path | None = None,
 ) -> SnapshotResult | None:
     destination_path = request.destination_path
-    manifest_path = _manifest_path(destination_path)
+    manifest_path = (
+        manifest_path.expanduser().resolve()
+        if manifest_path is not None
+        else _manifest_path(destination_path)
+    )
     destination_exists = destination_path.exists()
     manifest_exists = manifest_path.exists()
     if not destination_exists and not manifest_exists:
@@ -324,6 +373,18 @@ def _file_observation(path: Path) -> FileObservation:
         mtime_ns=stat.st_mtime_ns,
         observed_at=datetime.now(UTC),
     )
+
+
+def _wal_path(source_path: Path) -> Path:
+    return source_path.with_name(source_path.name + "-wal")
+
+
+def _optional_file_state(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_size, stat.st_mtime_ns
 
 
 def _same_file_state(first: FileObservation, second: FileObservation) -> bool:

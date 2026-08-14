@@ -16,7 +16,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import build_all_redesigned_dcf  # noqa: E402
 import refresh_dcf  # noqa: E402
 
-from dcf.universe import dcf_universe  # noqa: E402
+from dcf.universe import BRIEFED_LIST_TYPES, dcf_universe  # noqa: E402
+from pipeline.queries import BRIEFED_LIST_TYPE_VALUES  # noqa: E402
+
+
+def test_dcf_universe_uses_canonical_briefed_list_types() -> None:
+    assert BRIEFED_LIST_TYPES is BRIEFED_LIST_TYPE_VALUES
 
 
 def _make_repo(tmp_path: Path, rows: list[tuple[str, str] | tuple[str, str, str]]) -> Path:

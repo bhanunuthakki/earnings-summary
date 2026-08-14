@@ -15,7 +15,7 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0016_add_owner_decision_checkpoints"
+ACTIVE_HEAD = "0017_add_owner_decision_checkpoints"
 
 
 def _config(path: Path) -> Config:

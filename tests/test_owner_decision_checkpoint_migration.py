@@ -12,8 +12,8 @@ from alembic.config import Config
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0015_add_thesis_episode_attention"
-HEAD = "0016_add_owner_decision_checkpoints"
+PRIOR_HEAD = "0016_add_ask_grounding_traces"
+HEAD = "0017_add_owner_decision_checkpoints"
 
 
 def _config(path: Path) -> Config:
@@ -23,7 +23,7 @@ def _config(path: Path) -> Config:
     return config
 
 
-def test_0016_adds_collision_safe_append_only_checkpoint_tables(
+def test_0017_adds_collision_safe_append_only_checkpoint_tables(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     database = migrated_db(tmp_path / "checkpoint-migration.db", target=HEAD)

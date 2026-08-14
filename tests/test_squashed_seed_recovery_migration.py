@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0016_add_owner_decision_checkpoints"
+_ACTIVE_HEAD = "0017_add_owner_decision_checkpoints"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

@@ -3201,6 +3201,7 @@ def create_app(
                     "role": t.role,
                     "text": t.text,
                     "citations": t.citations,
+                    "grounding_trace_id": t.grounding_trace_id,
                     "model": t.model,
                     "created_at": t.created_at,
                 }

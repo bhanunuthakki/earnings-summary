@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from research.owner_decision_checkpoint import (
     CheckpointConflictError,
@@ -116,6 +117,71 @@ def test_same_event_with_changed_payload_conflicts_and_rolls_back(
         assert connection.execute(
             "SELECT COUNT(*) FROM owner_decision_checkpoint_decisions"
         ).fetchone() == (1,)
+
+
+def test_checkpoint_rejects_backdating_invalid_basis_and_false_verification() -> None:
+    base = _payload()
+    leg = base.legs[0]
+
+    with pytest.raises(ValidationError, match="made_at"):
+        DecisionLeg.model_validate(
+            {
+                **leg.model_dump(mode="python"),
+                "made_at": "2020-01-01T00:00:00",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="ISO-8601"):
+        HoldingsBasis(
+            source="materialized_holdings_snapshot",
+            as_of="not-a-timestamp",
+            embedded_positions=(
+                HoldingBasisPosition(ticker="AVDV", availability="missing_from_snapshot"),
+            ),
+        )
+
+    with pytest.raises(ValidationError, match="cannot verify"):
+        OwnerDecisionCheckpointPayload(
+            **{
+                **base.model_dump(mode="python"),
+                "holdings_basis": HoldingsBasis(
+                    source="materialized_holdings_snapshot",
+                    as_of="2026-08-14T12:00:00",
+                    embedded_positions=(
+                        HoldingBasisPosition(ticker="WIX", availability="missing_from_snapshot"),
+                    ),
+                ),
+                "legs": (leg.model_copy(update={"target_verification": "verified"}),),
+            }
+        )
+
+
+def test_checkpoint_requires_one_typed_ledger_entry_per_changed_ticker() -> None:
+    base = _payload()
+    changed_leg = base.legs[0].model_copy(update={"thesis_changed": True})
+    entry = {
+        "ticker": "WIX",
+        "entry_kind": "thesis_update",
+        "body": "Accepted owner thesis update",
+    }
+
+    with pytest.raises(ValidationError, match="exactly one"):
+        OwnerDecisionCheckpointPayload(
+            **{
+                **base.model_dump(mode="python"),
+                "legs": (changed_leg,),
+                "ledger_entries": (entry, entry),
+            }
+        )
+
+    with pytest.raises(ValidationError, match="entry_kind"):
+        OwnerDecisionCheckpointPayload(
+            **{
+                **base.model_dump(mode="python"),
+                "legs": (changed_leg,),
+                "ledger_entries": ({**entry, "entry_kind": "observation"},),
+            }
+        )
 
 
 def test_late_intent_mismatch_rolls_back_checkpoint_and_decision(

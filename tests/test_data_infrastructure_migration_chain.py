@@ -12,11 +12,12 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0016_add_owner_decision_checkpoints"
+HEAD = "0017_add_owner_decision_checkpoints"
 RETAINED_TABLES = {
     "archive_generations",
     "ask_exchange_artifacts",
     "ask_exchanges",
+    "ask_grounding_traces",
     "ask_session_contexts",
     "canonical_resolution_operation_ledger",
     "document_processing_operation_ledger",

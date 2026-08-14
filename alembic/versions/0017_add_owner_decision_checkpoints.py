@@ -1,15 +1,15 @@
 """Add atomic, idempotent owner-decision checkpoint envelopes.
 
-Revision ID: 0016_add_owner_decision_checkpoints
-Revises: 0015_add_thesis_episode_attention
+Revision ID: 0017_add_owner_decision_checkpoints
+Revises: 0016_add_ask_grounding_traces
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0016_add_owner_decision_checkpoints"
-down_revision = "0015_add_thesis_episode_attention"
+revision = "0017_add_owner_decision_checkpoints"
+down_revision = "0016_add_ask_grounding_traces"
 branch_labels = None
 depends_on = None
 

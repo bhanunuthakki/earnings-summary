@@ -1763,6 +1763,14 @@ def test_workspace_uses_the_six_prototype_brief_groups(
     assert shell.count('aria-current="page"') == 1
 
 
+def test_company_brief_home_surfaces_reported_commitment_score(
+    portfolio_parts: dict[str, str],
+) -> None:
+    shell = portfolio_parts["shell"]
+    assert "100% met/exceeded" in shell
+    assert "1 reported KPI" in shell
+
+
 @pytest.mark.parametrize("part", _part_names(PORTFOLIO_PANES))
 def test_portfolio_golden(part: str, portfolio_parts: dict[str, str]) -> None:
     _check_golden("portfolio", part, portfolio_parts[part])
