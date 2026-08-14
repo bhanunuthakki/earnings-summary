@@ -351,6 +351,8 @@ class SourceRegimeContract(BaseModel):
     ) -> bool:
         """Fail closed unless evidence, clocks, document kind, and lineage comply."""
 
+        if self is not _CONTRACTS.get(self.regime):
+            raise ValueError("admission requires the canonical registered contract instance")
         _require_aware(cutoff, field="cutoff")
         policy = self.policy_for(domain)
         classification = classification_for_source_type(evidence.source_type)

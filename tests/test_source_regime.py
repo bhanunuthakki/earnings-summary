@@ -463,6 +463,19 @@ def test_contract_is_deeply_immutable_and_constructor_is_closed() -> None:
             policies=forged_policies,
             dcf_input_domains=contract.dcf_input_domains,
         )
+    forged_contract = contract.model_copy(update={"policies": forged_policies})
+    constructed_contract = SourceRegimeContract.model_construct(
+        regime=SourceRegime.COMBINED,
+        policies=forged_policies,
+        dcf_input_domains=contract.dcf_input_domains,
+    )
+    for bypassed_contract in (forged_contract, constructed_contract):
+        with pytest.raises(ValueError, match="canonical registered contract instance"):
+            bypassed_contract.admits(
+                domain=SourceDomain.PRICE,
+                evidence=_evidence(SourceType.FMP, DocType.SEC_10K),
+                cutoff=_CUTOFF,
+            )
 
 
 def test_receipt_identity_cannot_be_forged_for_a_registered_regime() -> None:
