@@ -126,7 +126,13 @@ def _git_sha(root: Path) -> str:
     return sha
 
 
-def _fresh_origin_main(root: Path) -> OriginMainObservation:
+def fetch_origin_main(root: Path) -> OriginMainObservation:
+    """Fetch and seal the current origin/main identity.
+
+    Callers that also need a database lock must invoke this before acquiring
+    the lock, then inject the returned observation into ``collect_readiness``.
+    """
+
     completed = subprocess.run(
         [
             "git",
@@ -239,7 +245,7 @@ def collect_readiness(
     mode: ReadinessMode = "operational",
     git_sha_resolver: GitShaResolver = _git_sha,
     git_status_resolver: GitStatusResolver = _relevant_changes,
-    origin_resolver: OriginResolver = _fresh_origin_main,
+    origin_resolver: OriginResolver = fetch_origin_main,
     ancestry_resolver: GitAncestryResolver = _is_ancestor,
 ) -> PortfolioReadinessReceipt:
     """Collect an immutable readiness verdict from point-in-time evidence."""

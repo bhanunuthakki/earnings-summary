@@ -268,8 +268,10 @@ def upgrade_database(
     db_path: Path,
     *,
     repo_root: Path,
+    runtime_root: Path,
     backup_path: Path | None = None,
     phase0_backup_restore_receipt: Path | None = None,
+    allow_isolated_db: bool = False,
 ) -> UpgradeReceipt:
     """Upgrade ``db_path`` and return a validated receipt."""
 
@@ -277,6 +279,23 @@ def upgrade_database(
 
     db_path = db_path.resolve()
     repo_root = repo_root.resolve()
+    runtime_root = runtime_root.resolve()
+    canonical_portfolio_db = portfolio_db_path(runtime_root).resolve()
+    live_database = db_path == canonical_portfolio_db
+    if not live_database and not allow_isolated_db:
+        raise UpgradeDatabaseError(
+            "target database does not match the runtime database; "
+            "isolated databases require explicit allow_isolated_db=True"
+        )
+
+    origin_observation = None
+    if live_database and phase0_backup_restore_receipt is not None:
+        # Fetching is network I/O and must not monopolize the portfolio DB
+        # lock. The sealed observation is consumed by the locked recheck.
+        from execution import portfolio_readiness_receipt as readiness_module
+
+        origin_observation = readiness_module.fetch_origin_main(repo_root)
+
     with hold_run_lock(db_path, owner="upgrade_database", timeout_s=30.0):
         # Revision/schema classification and the mutation it authorizes must be
         # one locked operation. Otherwise a concurrent writer can change the
@@ -301,23 +320,26 @@ def upgrade_database(
                 completed_at=datetime.now(UTC).isoformat(),
             )
 
-        canonical_portfolio_db = portfolio_db_path(repo_root).resolve()
-        if existed and db_path == canonical_portfolio_db:
+        if existed and live_database:
             if phase0_backup_restore_receipt is None:
                 raise UpgradeDatabaseError(
                     "live portfolio DB upgrade requires a Phase-0 backup/restore receipt"
                 )
-            # Import lazily: the readiness module reads ACTIVE_HEAD from this
-            # module. Revalidation runs *inside* the same database lock as the
-            # backup and Alembic mutation, closing the point-in-time TOCTOU gap.
-            from execution.portfolio_readiness_receipt import collect_readiness
+            if origin_observation is None:
+                raise UpgradeDatabaseError("live portfolio DB origin evidence is unavailable")
 
-            readiness = collect_readiness(
+            # Revalidation runs inside the same database lock as the backup and
+            # Alembic mutation, closing the point-in-time TOCTOU gap. Origin was
+            # fetched before the lock; this resolver performs no network I/O.
+            from execution import portfolio_readiness_receipt as readiness_module
+
+            readiness = readiness_module.collect_readiness(
                 checkout_root=repo_root,
-                runtime_root=repo_root,
+                runtime_root=runtime_root,
                 db_path=db_path,
                 backup_restore_receipt_path=phase0_backup_restore_receipt,
                 mode="migration",
+                origin_resolver=lambda _root: origin_observation,
             )
             if not readiness.ready:
                 raise UpgradeDatabaseError(
@@ -385,6 +407,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--runtime-root",
+        type=Path,
+        required=True,
+        help="Actual managed runtime checkout whose canonical portfolio DB is being evaluated.",
+    )
     parser.add_argument("--backup-path", type=Path)
     parser.add_argument(
         "--phase0-backup-restore-receipt",
@@ -394,13 +422,20 @@ def main() -> int:
             "inside the shared writer lock."
         ),
     )
+    parser.add_argument(
+        "--allow-isolated-db",
+        action="store_true",
+        help="Explicitly permit a non-runtime database for tests or rehearsals.",
+    )
     args = parser.parse_args()
     try:
         receipt = upgrade_database(
             args.db_path,
             repo_root=args.repo_root,
+            runtime_root=args.runtime_root,
             backup_path=args.backup_path,
             phase0_backup_restore_receipt=args.phase0_backup_restore_receipt,
+            allow_isolated_db=args.allow_isolated_db,
         )
     except (OSError, RuntimeError, sqlite3.Error, CommandError) as exc:
         log_event("database_upgrade_failed", error=f"{type(exc).__name__}: {exc}")

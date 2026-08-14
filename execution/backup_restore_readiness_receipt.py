@@ -27,6 +27,9 @@ from provenance.verifier_identity import verifier_source_artifact_sha256  # noqa
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from sqlite_snapshot import SnapshotManifest  # noqa: E402
 
+_SUPPORTED_SNAPSHOT_SCHEMA_VERSION = "sqlite-reader-snapshot/v1"
+_SUPPORTED_SNAPSHOT_CODE_CONFIG_VERSIONS = frozenset({"sqlite-reader-snapshot/v1"})
+
 
 class BackupRestoreReadinessReceipt(BaseModel):
     """Point-in-time evidence that one restored snapshot matches its source."""
@@ -204,6 +207,10 @@ def collect_backup_restore_receipt(
         reasons.append("snapshot_manifest_invalid")
 
     if manifest is not None:
+        if manifest.schema_version != _SUPPORTED_SNAPSHOT_SCHEMA_VERSION:
+            reasons.append("snapshot_manifest_schema_unsupported")
+        if manifest.code_config_version not in _SUPPORTED_SNAPSHOT_CODE_CONFIG_VERSIONS:
+            reasons.append("snapshot_manifest_code_unsupported")
         if Path(manifest.source.path).resolve() != source:
             reasons.append("manifest_source_path_mismatch")
         if Path(manifest.snapshot.path).resolve() != snapshot:
