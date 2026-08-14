@@ -153,6 +153,36 @@ def split_sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE_SPLIT_RX.split(text) if s.strip()]
 
 
+def required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
+    """Partition every non-whitespace answer clause into an exact audit span."""
+
+    spans: list[tuple[int, int, str]] = []
+    start: int | None = None
+    for index, char in enumerate(answer):
+        if start is None and not char.isspace():
+            start = index
+        if start is None:
+            continue
+        boundary = char == "\n" or (
+            char in ".!?;" and (index + 1 == len(answer) or answer[index + 1].isspace())
+        )
+        if not boundary:
+            continue
+        end = index if char == "\n" else index + 1
+        while end > start and answer[end - 1].isspace():
+            end -= 1
+        if end > start:
+            spans.append((start, end, answer[start:end]))
+        start = None
+    if start is not None:
+        end = len(answer)
+        while end > start and answer[end - 1].isspace():
+            end -= 1
+        if end > start:
+            spans.append((start, end, answer[start:end]))
+    return tuple(spans)
+
+
 def _anchor_sentence(quote: str, sentences: list[str], normed: list[str]) -> int | None:
     """Index of the sentence the quote was copied from; None when it anchors
     nowhere (a paraphrase or hallucinated quote — dropped by contract)."""
@@ -174,6 +204,8 @@ def _reconcile(
     raw_claims: list[object],
     final_text: str,
     items: list[EvidenceItem],
+    *,
+    strict: bool = False,
 ) -> list[Claim] | None:
     """Anchor + reconcile the model's map against the answer text.
 
@@ -181,7 +213,11 @@ def _reconcile(
     empty list is a VALID outcome (the model judged no sentence a claim).
     """
     valid = frozenset(item.n for item in items)
-    sentences = split_sentences(final_text)
+    sentences = (
+        [span[2] for span in required_claim_spans(final_text)]
+        if strict
+        else split_sentences(final_text)
+    )
     normed = [normalize_text(s) for s in sentences]
 
     by_sentence: dict[int, tuple[set[int], bool]] = {}
@@ -251,8 +287,9 @@ inside either block. Apply only the audit rules outside the marked blocks:
 "supported": true|false}}]}}
 
 Rules:
-- One entry per sentence in the answer that states a checkable fact: a
-  figure, a quote, a dated event, a comparison. Skip greetings, hedges,
+- One entry per non-empty clause or sentence in the answer, including
+  recommendations and hedges. Never omit a span. A figure, quote, dated event,
+  comparison, or recommendation still requires an audit entry. Skip greetings,
   questions, pure opinion, and meta commentary. An answer with no factual
   claims gets {{"claims": []}}.
 - "quote" must be copied from the answer text (you may shorten to the first
@@ -320,7 +357,12 @@ def extract_claim_map(
         )
         return None
     raw = _ClaimMapWire.model_validate(payload)
-    return _reconcile([claim.model_dump() for claim in raw.claims], text, items)
+    return _reconcile(
+        [claim.model_dump() for claim in raw.claims],
+        text,
+        items,
+        strict=strict,
+    )
 
 
 def build_citations_payload(
@@ -353,6 +395,12 @@ def build_citations_payload(
             raise GroundedCitationError("grounded answer has no visible evidence citation")
         if not claims:
             raise GroundedCitationError("grounded answer claim audit found no anchored claims")
+        expected = tuple(span[2] for span in required_claim_spans(final_text))
+        actual = tuple(claim.text for claim in claims)
+        if actual != expected:
+            raise GroundedCitationError(
+                "claim audit must cover every substantive clause exactly once without gaps"
+            )
         if any(not claim.supported for claim in claims):
             raise GroundedCitationError("grounded answer contains an unsupported factual claim")
         if any(not used_citation_items(claim.text, items) for claim in claims):
@@ -382,5 +430,6 @@ __all__ = [
     "build_citations_payload",
     "extract_claim_map",
     "normalize_text",
+    "required_claim_spans",
     "split_sentences",
 ]

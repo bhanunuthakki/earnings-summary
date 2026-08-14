@@ -444,6 +444,9 @@ def complete_exchange(
 ) -> AskExchange:
     """Atomically persist the answer turn and artifacts, then mark completion."""
 
+    if artifacts.grounding_trace_id != grounding_trace_id:
+        raise ExchangeStateError("Ask exchange trace identities disagree")
+
     _validate_request_id(request_id)
     _validate_turn_text("assistant_text", assistant_text)
     _validate_revision(expected_revision)

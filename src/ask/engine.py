@@ -74,7 +74,7 @@ from ask.audit_store import (
     persist_answer_audit,
     retrieval_query_sha256,
 )
-from ask.claims import build_citations_payload
+from ask.claims import build_citations_payload, required_claim_spans
 from ask.commands import COMMAND_PREFIXES, run_chat_command
 from ask.context import ContextPack, tracked_tickers
 from ask.followup import (
@@ -922,7 +922,7 @@ def _validate_claim_audit_output(
 ) -> None:
     """Deterministic delivery gate over a schema-decoded auditor verdict."""
 
-    expected_spans = _required_claim_spans(answer)
+    expected_spans = required_claim_spans(answer)
     actual_spans = tuple(
         (claim.char_start, claim.char_end, claim.quote) for claim in audited.claims
     )
@@ -942,36 +942,6 @@ def _validate_claim_audit_output(
         )
     if any(not claim.supported for claim in audited.claims):
         raise ValueError("sealed answer contains an unsupported substantive claim")
-
-
-def _required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
-    """Partition all non-whitespace answer text into exact clause/sentence spans."""
-
-    spans: list[tuple[int, int, str]] = []
-    start: int | None = None
-    for index, char in enumerate(answer):
-        if start is None and not char.isspace():
-            start = index
-        if start is None:
-            continue
-        boundary = char == "\n" or (
-            char in ".!?;" and (index + 1 == len(answer) or answer[index + 1].isspace())
-        )
-        if not boundary:
-            continue
-        end = index if char == "\n" else index + 1
-        while end > start and answer[end - 1].isspace():
-            end -= 1
-        if end > start:
-            spans.append((start, end, answer[start:end]))
-        start = None
-    if start is not None:
-        end = len(answer)
-        while end > start and answer[end - 1].isspace():
-            end -= 1
-        if end > start:
-            spans.append((start, end, answer[start:end]))
-    return tuple(spans)
 
 
 def _shadow_retrieval(
