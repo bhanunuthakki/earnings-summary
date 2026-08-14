@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import pairwise
 
+from compute.thesis_evaluation_episodes import episode_history_source
 from models.kpis import BreachStatus
 
 
@@ -22,6 +23,7 @@ class EvaluationSnapshot:
     evaluated_at: datetime
     status: BreachStatus
     run_id: str | None
+    checked_at: datetime
 
 
 @dataclass(frozen=True)
@@ -47,11 +49,12 @@ class StreakSummary:
 
 
 def fetch_history(conn: sqlite3.Connection, ticker: str) -> list[EvaluationSnapshot]:
-    """Return all evaluations for a ticker, oldest-first."""
+    """Return distinct semantic episodes for a ticker, oldest-first."""
+    source = episode_history_source(conn)
     cur = conn.execute(
-        "SELECT evaluated_at, overall_status, run_id "
-        "FROM thesis_evaluations WHERE ticker = ? "
-        "ORDER BY evaluated_at ASC",
+        f"SELECT evaluated_at, overall_status, run_id, "
+        f"{source.latest_checked_column} AS checked_at "
+        f"FROM {source.relation} WHERE ticker = ? ORDER BY evaluated_at ASC",  # nosec B608 -- source is selected from a closed trusted helper
         (ticker.upper(),),
     )
     out: list[EvaluationSnapshot] = []
@@ -59,11 +62,15 @@ def fetch_history(conn: sqlite3.Connection, ticker: str) -> list[EvaluationSnaps
         ts = row["evaluated_at"]
         if isinstance(ts, str):
             ts = datetime.fromisoformat(ts)
+        checked_at = row["checked_at"]
+        if isinstance(checked_at, str):
+            checked_at = datetime.fromisoformat(checked_at)
         out.append(
             EvaluationSnapshot(
                 evaluated_at=ts,
                 status=BreachStatus(row["overall_status"]),
                 run_id=row["run_id"],
+                checked_at=checked_at,
             )
         )
     return out
@@ -108,7 +115,7 @@ def streak_summary(conn: sqlite3.Connection, ticker: str) -> StreakSummary | Non
         current_status=current,
         streak_length=len(streak),
         streak_started_at=streak[0].evaluated_at,
-        last_evaluated_at=history[-1].evaluated_at,
+        last_evaluated_at=history[-1].checked_at,
         total_evaluations=len(history),
     )
 
@@ -116,8 +123,11 @@ def streak_summary(conn: sqlite3.Connection, ticker: str) -> StreakSummary | Non
 def portfolio_summary(
     conn: sqlite3.Connection,
 ) -> list[StreakSummary]:
-    """Return per-ticker streak summary across every ticker in thesis_evaluations."""
-    cur = conn.execute("SELECT DISTINCT ticker FROM thesis_evaluations ORDER BY ticker")
+    """Return per-ticker streak summary across semantic evaluation episodes."""
+    source = episode_history_source(conn)
+    cur = conn.execute(
+        f"SELECT DISTINCT ticker FROM {source.relation} ORDER BY ticker"  # nosec B608 -- trusted closed relation
+    )
     tickers = [row["ticker"] for row in cur.fetchall()]
     out: list[StreakSummary] = []
     for ticker in tickers:

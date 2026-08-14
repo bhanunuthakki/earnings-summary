@@ -15,12 +15,15 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Literal, cast
 
+from pydantic import JsonValue, TypeAdapter
+
 from compute.kpi_resolver import (
     ANNUAL_FACT_PERIOD_TYPES,
     normalize_kpi_name,
     reporting_cadence_for,
     resolve_kpi_definition_name,
 )
+from compute.thesis_evaluation_episodes import episode_history_source
 from report.kpi_naming import kpi_qualifier
 from report.models import (
     BreakRuleEvaluation,
@@ -35,6 +38,8 @@ from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_signals_for_metrics,
 )
+
+_EVALUATION_ROWS = TypeAdapter(list[dict[str, JsonValue]])
 
 
 def build(
@@ -419,19 +424,21 @@ def _load_break_rule_state(
             db_conn.close()
         return ("unknown", [], [], None)
     cursor = db_conn.cursor()
+    source = episode_history_source(db_conn)
     has_soft_col = any(
         c["name"] == "soft_rule_results_json"
-        for c in cursor.execute("PRAGMA table_info(thesis_evaluations)").fetchall()
+        for c in cursor.execute(f"PRAGMA table_info({source.relation})").fetchall()
     )
     soft_select = ", soft_rule_results_json" if has_soft_col else ""
     cursor.execute(
         f"""
-        SELECT evaluated_at, overall_status, rule_evaluations_json{soft_select}
-        FROM thesis_evaluations
+        SELECT {source.latest_checked_column} AS evaluated_at,
+               overall_status, rule_evaluations_json{soft_select}
+        FROM {source.relation}
         WHERE ticker = ?
-        ORDER BY evaluated_at DESC
+        ORDER BY {source.latest_checked_column} DESC
         LIMIT 1
-        """,
+        """,  # nosec B608 -- source is selected from a closed trusted helper
         (ticker.upper(),),
     )
     row = cursor.fetchone()
@@ -441,23 +448,21 @@ def _load_break_rule_state(
         return ("unknown", [], [], None)
     overall = _coerce_status(str(row["overall_status"]))
     evaluated_at = _parse_datetime(row["evaluated_at"])
-    payload = json.loads(row["rule_evaluations_json"])
+    payload = _EVALUATION_ROWS.validate_json(row["rule_evaluations_json"])
     evaluations = [_parse_evaluation(item) for item in payload]
     soft_evaluations: list[SoftRuleEvaluation] = []
     if has_soft_col:
         soft_raw = row["soft_rule_results_json"]
         if soft_raw:
             try:
-                soft_payload = json.loads(soft_raw)
+                soft_payload = _EVALUATION_ROWS.validate_json(soft_raw)
             except (TypeError, ValueError):
                 soft_payload = []
-            soft_evaluations = [
-                _parse_soft_evaluation(item) for item in soft_payload if isinstance(item, dict)
-            ]
+            soft_evaluations = [_parse_soft_evaluation(item) for item in soft_payload]
     return (overall, evaluations, soft_evaluations, evaluated_at)
 
 
-def _parse_soft_evaluation(raw: dict[str, object]) -> SoftRuleEvaluation:
+def _parse_soft_evaluation(raw: dict[str, JsonValue]) -> SoftRuleEvaluation:
     """Parse one persisted soft-rule result row. Status defaults to green for
     forward-compatibility: any status string this renderer doesn't recognize
     is treated as 'not fired' so a brief generated against a newer schema
@@ -475,7 +480,7 @@ def _parse_soft_evaluation(raw: dict[str, object]) -> SoftRuleEvaluation:
     else:
         status = "green"
     details_raw = raw.get("details")
-    details: dict[str, object] = details_raw if isinstance(details_raw, dict) else {}
+    details = cast("dict[str, object]", details_raw) if isinstance(details_raw, dict) else {}
     return SoftRuleEvaluation(
         rule_name=str(raw.get("rule_name", "")),
         status=status,
@@ -502,23 +507,27 @@ def _parse_datetime(v: object) -> datetime | None:
     return None
 
 
-def _parse_evaluation(raw: dict[str, object]) -> BreakRuleEvaluation:
+def _parse_evaluation(raw: dict[str, JsonValue]) -> BreakRuleEvaluation:
     obs_raw = raw.get("observations") or []
+    observation_rows = (
+        [cast("dict[str, JsonValue]", item) for item in obs_raw if isinstance(item, dict)]
+        if isinstance(obs_raw, list)
+        else []
+    )
     observations = [
         BreakRuleObservation(
             period_end=str(o.get("period_end", ""))[:10],
             value=float(str(o.get("value", "0"))),
             unit=str(o.get("unit", "")),
         )
-        for o in obs_raw
-        if isinstance(o, dict)
+        for o in observation_rows
     ]
     return BreakRuleEvaluation(
         rule_id=str(raw.get("rule_id", "")),
         kpi_name=str(raw.get("kpi_name", "")),
         comparator=str(raw.get("comparator", "")),
         threshold=float(str(raw.get("threshold", "0"))),
-        consecutive_periods=int(raw.get("consecutive_periods", 1) or 1),
+        consecutive_periods=int(str(raw.get("consecutive_periods", 1) or 1)),
         tier=_coerce_tier(raw.get("tier")),
         status=_coerce_status(str(raw.get("status", "unknown"))),  # type: ignore[arg-type]
         detail=str(raw.get("detail", "")),

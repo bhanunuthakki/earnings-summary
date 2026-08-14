@@ -19,17 +19,18 @@ the `derived: "delta"` metric-spec opt-in — see
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 
 from compute.kpi_resolver import (
     ANNUAL_FACT_PERIOD_TYPES,
@@ -42,6 +43,16 @@ from compute.soft_rule_evaluator import (
     SoftRuleStatus,
     evaluate_soft_rules,
     load_soft_rules,
+)
+from compute.thesis_evaluation_episodes import (
+    AcceptedObservationInput,
+    EpisodeCheckInput,
+    EpisodeSeverity,
+    ForwardSemanticInput,
+    ProvenanceCompleteness,
+    SemanticRuleInput,
+    forward_episode_id,
+    record_forward_episode,
 )
 from models.facts import Unit
 from models.kpis import BreachStatus
@@ -122,9 +133,9 @@ class HoldingsSpec(BaseModel):
 
     ticker: str
     thesis: str
-    break_rules: list[BreakRule] = Field(default_factory=list)
-    business_model_rules: list[BreakRule] = Field(default_factory=list)
-    soft_rules: list[SoftRule] = Field(default_factory=list)
+    break_rules: list[BreakRule] = Field(default_factory=lambda: list[BreakRule]())
+    business_model_rules: list[BreakRule] = Field(default_factory=lambda: list[BreakRule]())
+    soft_rules: list[SoftRule] = Field(default_factory=lambda: list[SoftRule]())
 
 
 @dataclass(frozen=True)
@@ -161,6 +172,143 @@ class ThesisVerdict:
     rule_evaluations: tuple[RuleEvaluation, ...]
     evaluated_at: datetime
     soft_rule_results: tuple[SoftRuleResult, ...] = ()
+    semantic_input: ForwardSemanticInput | None = None
+
+
+_THESIS_EVALUATOR_SEMANTIC_VERSION = "thesis-evaluator/v1"
+_RULESET_VERSION = "holdings-break-rules/v1"
+_HOLDINGS_PAYLOAD_ADAPTER = TypeAdapter(dict[str, JsonValue])
+_RULE_PROJECTION_ADAPTER = TypeAdapter(list[dict[str, JsonValue]])
+
+
+def _canonical_json(value: JsonValue) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _sha256_json(value: JsonValue) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _read_holdings_payload(path: Path) -> dict[str, JsonValue]:
+    with open(path, encoding="utf-8") as handle:
+        return _HOLDINGS_PAYLOAD_ADAPTER.validate_python(json.load(handle))
+
+
+def _thesis_content_payload(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """Project only owner-belief fields into the semantic thesis identity."""
+
+    nuance_raw = payload.get("nuance")
+    nuance: dict[str, JsonValue] = {}
+    if isinstance(nuance_raw, dict):
+        for key in ("bear_case", "adversarial_take", "stress_test"):
+            value = nuance_raw.get(key)
+            if isinstance(value, str):
+                nuance[key] = value
+
+    qualitative_raw = payload.get("thesis_breakers_qualitative")
+    qualitative: list[JsonValue] = []
+    if isinstance(qualitative_raw, list):
+        for value in sorted(str(item) for item in qualitative_raw if isinstance(item, str)):
+            qualitative.append(value)
+
+    tier_one_raw = payload.get("tier_1_kpis")
+    tier_one: list[JsonValue] = []
+    if isinstance(tier_one_raw, list):
+        for value in tier_one_raw:
+            if not isinstance(value, dict):
+                continue
+            name = value.get("name")
+            condition = value.get("break_condition")
+            if isinstance(name, str) and isinstance(condition, str):
+                tier_one.append({"name": name, "break_condition": condition})
+    tier_one.sort(key=_canonical_json)
+
+    projected: dict[str, JsonValue] = {
+        "thesis": str(payload.get("thesis", "")),
+        "key_driver": str(payload.get("key_driver", "")),
+        "nuance": nuance,
+        "thesis_breakers_qualitative": qualitative,
+        "tier_1_kpis": tier_one,
+    }
+    return projected
+
+
+def _semantic_rule(rule: BreakRule) -> SemanticRuleInput:
+    return SemanticRuleInput(
+        rule_id=rule.rule_id,
+        definition={
+            "tier": rule.tier.value,
+            "kpi_name": rule.kpi_name,
+            "comparator": rule.comparator.value,
+            "threshold": str(rule.threshold),
+            "unit": rule.unit.value,
+            "consecutive_periods": rule.consecutive_periods,
+            "narrative": rule.narrative,
+        },
+    )
+
+
+def _build_semantic_input(
+    *,
+    payload: dict[str, JsonValue],
+    spec: HoldingsSpec,
+    evaluations: list[RuleEvaluation],
+    soft_results: list[SoftRuleResult],
+) -> ForwardSemanticInput:
+    observations: list[AcceptedObservationInput] = []
+    for evaluation in evaluations:
+        for observation in evaluation.observations:
+            observations.append(
+                AcceptedObservationInput(
+                    metric_identity=(f"hard:{evaluation.rule.rule_id}:{evaluation.rule.kpi_name}"),
+                    period_end=observation.period_end.isoformat(),
+                    observed_value=str(observation.value),
+                    accepted_value=str(observation.value),
+                    unit=observation.unit.value,
+                    currency=None,
+                    material_source_semantics=("current-evaluator-selection",),
+                    restatement_semantics="source-provenance-not-retained",
+                )
+            )
+    for result in soft_results:
+        details_json = _canonical_json(cast("dict[str, JsonValue]", result.details))
+        details_sha = hashlib.sha256(details_json.encode("utf-8")).hexdigest()
+        last_period = result.details.get("last_period")
+        observations.append(
+            AcceptedObservationInput(
+                metric_identity=f"soft:{result.rule_name}",
+                period_end=str(last_period) if last_period else "unresolved-period",
+                observed_value=details_sha,
+                accepted_value=details_sha,
+                unit="soft-evidence-sha256",
+                currency=None,
+                material_source_semantics=("soft-evaluator-projection",),
+                restatement_semantics="source-provenance-not-retained",
+            )
+        )
+    return ForwardSemanticInput(
+        ticker=spec.ticker,
+        thesis_content_sha256=_sha256_json(_thesis_content_payload(payload)),
+        ruleset_version=_RULESET_VERSION,
+        evaluator_semantic_version=_THESIS_EVALUATOR_SEMANTIC_VERSION,
+        hard_rules=tuple(
+            _semantic_rule(rule) for rule in (*spec.break_rules, *spec.business_model_rules)
+        ),
+        soft_rules=tuple(
+            SemanticRuleInput(
+                rule_id=rule.name,
+                definition=cast("dict[str, JsonValue]", rule.model_dump(mode="json")),
+            )
+            for rule in spec.soft_rules
+        ),
+        accepted_observations=tuple(observations),
+    )
 
 
 def load_holdings_spec(holdings_dir: Path, ticker: str) -> HoldingsSpec:
@@ -179,24 +327,41 @@ def load_holdings_spec(holdings_dir: Path, ticker: str) -> HoldingsSpec:
     path = holdings_dir / f"{ticker.upper()}.json"
     if not path.exists():
         raise FileNotFoundError(f"Holdings spec not found: {path}")
-    with open(path, encoding="utf-8") as f:
-        payload = json.load(f)
-    universal_raw = payload.get("break_rules", []) or []
-    business_raw = payload.get("business_model_rules", []) or []
-    soft_raw = payload.get("break_rules_soft", []) or []
-    universal_rules = [_load_rule(r, RuleTier.UNIVERSAL) for r in universal_raw]
-    business_rules = [_load_rule(r, RuleTier.BUSINESS_MODEL) for r in business_raw]
-    soft_rules = load_soft_rules(soft_raw if isinstance(soft_raw, list) else [])
+    payload = _read_holdings_payload(path)
+    return _holdings_spec_from_payload(payload, path=path)
+
+
+def _holdings_spec_from_payload(payload: dict[str, JsonValue], *, path: Path) -> HoldingsSpec:
+    """Validate one already-read holdings snapshot into its typed rule spec."""
+
+    ticker_value = payload.get("ticker")
+    thesis_value = payload.get("thesis")
+    if not isinstance(ticker_value, str) or not isinstance(thesis_value, str):
+        raise ValueError(f"Holdings spec requires string ticker and thesis: {path}")
+
+    def rule_rows(key: str) -> list[dict[str, JsonValue]]:
+        value = payload.get(key)
+        if value is None:
+            return []
+        if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
+            raise ValueError(f"Holdings spec {key} must be an array of objects: {path}")
+        return [cast("dict[str, JsonValue]", row) for row in value]
+
+    universal_rules = [_load_rule(row, RuleTier.UNIVERSAL) for row in rule_rows("break_rules")]
+    business_rules = [
+        _load_rule(row, RuleTier.BUSINESS_MODEL) for row in rule_rows("business_model_rules")
+    ]
+    soft_rules = load_soft_rules(cast("list[object]", rule_rows("break_rules_soft")))
     return HoldingsSpec(
-        ticker=payload["ticker"],
-        thesis=payload["thesis"],
+        ticker=ticker_value,
+        thesis=thesis_value,
         break_rules=universal_rules,
         business_model_rules=business_rules,
         soft_rules=soft_rules,
     )
 
 
-def _load_rule(raw: dict[str, object], tier: RuleTier) -> BreakRule:
+def _load_rule(raw: dict[str, JsonValue], tier: RuleTier) -> BreakRule:
     """Validate one rule dict, forcing the tier based on its parent array.
 
     `raw` may not be a dict at runtime (malformed JSON) — Pydantic raises a
@@ -489,7 +654,9 @@ def evaluate_ticker_thesis(
     business-model rules (`spec.business_model_rules`); the §2 renderer relies
     on this order to keep catastrophic breakers visually first.
     """
-    spec = load_holdings_spec(holdings_dir, ticker)
+    holdings_path = holdings_dir / f"{ticker.upper()}.json"
+    payload = _read_holdings_payload(holdings_path)
+    spec = _holdings_spec_from_payload(payload, path=holdings_path)
     evaluations: list[RuleEvaluation] = []
     for rule in (*spec.break_rules, *spec.business_model_rules):
         history = _fetch_kpi_history(conn, ticker, rule.kpi_name, rule.consecutive_periods)
@@ -501,8 +668,14 @@ def evaluate_ticker_thesis(
         thesis=spec.thesis,
         overall_status=overall,
         rule_evaluations=tuple(evaluations),
-        evaluated_at=datetime.now(),
+        evaluated_at=datetime.now(UTC),
         soft_rule_results=tuple(soft_results),
+        semantic_input=_build_semantic_input(
+            payload=payload,
+            spec=spec,
+            evaluations=evaluations,
+            soft_results=soft_results,
+        ),
     )
 
 
@@ -559,6 +732,97 @@ def _serialize_rule_evaluations(verdict: ThesisVerdict) -> str:
         for e in verdict.rule_evaluations
     ]
     return json.dumps(payload, separators=(",", ":"))
+
+
+def _episode_schema_active(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT type FROM sqlite_master WHERE name='thesis_evaluation_episodes'"
+    ).fetchone()
+    return row is not None and str(row[0]) == "table"
+
+
+def _episode_rule_projection(verdict: ThesisVerdict) -> tuple[dict[str, JsonValue], ...]:
+    parsed = _RULE_PROJECTION_ADAPTER.validate_json(_serialize_rule_evaluations(verdict))
+    return tuple(parsed)
+
+
+def _episode_soft_projection(
+    verdict: ThesisVerdict,
+) -> tuple[dict[str, JsonValue], ...] | None:
+    if not verdict.soft_rule_results:
+        return None
+    return tuple(
+        {
+            "rule_name": result.rule_name,
+            "status": result.status.value,
+            "evidence": result.evidence,
+            "details": cast("dict[str, JsonValue]", result.details),
+        }
+        for result in verdict.soft_rule_results
+    )
+
+
+def _aware_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _episode_evidence_as_of(verdict: ThesisVerdict) -> datetime | None:
+    observed: list[datetime] = [
+        _aware_utc(observation.period_end)
+        for evaluation in verdict.rule_evaluations
+        for observation in evaluation.observations
+    ]
+    for result in verdict.soft_rule_results:
+        raw = result.details.get("last_period")
+        if not isinstance(raw, str):
+            continue
+        try:
+            observed.append(_aware_utc(datetime.fromisoformat(raw)))
+        except ValueError:
+            continue
+    return max(observed) if observed else None
+
+
+def _insert_raw_evaluation(
+    conn: sqlite3.Connection,
+    verdict: ThesisVerdict,
+    *,
+    run_id: str | None,
+) -> int:
+    has_soft_col = any(
+        row[1] == "soft_rule_results_json"
+        for row in conn.execute("PRAGMA table_info(thesis_evaluations)").fetchall()
+    )
+    if has_soft_col:
+        cursor = conn.execute(
+            "INSERT INTO thesis_evaluations "
+            "(ticker, evaluated_at, overall_status, rule_evaluations_json, "
+            "soft_rule_results_json, run_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                verdict.ticker,
+                verdict.evaluated_at,
+                verdict.overall_status.value,
+                _serialize_rule_evaluations(verdict),
+                _serialize_soft_rule_results(verdict),
+                run_id,
+            ),
+        )
+    else:
+        cursor = conn.execute(
+            "INSERT INTO thesis_evaluations "
+            "(ticker, evaluated_at, overall_status, rule_evaluations_json, run_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                verdict.ticker,
+                verdict.evaluated_at,
+                verdict.overall_status.value,
+                _serialize_rule_evaluations(verdict),
+                run_id,
+            ),
+        )
+    if cursor.lastrowid is None:
+        raise RuntimeError("thesis evaluation insert did not return an anchor row id")
+    return int(cursor.lastrowid)
 
 
 def refresh_thesis_mirror(
@@ -641,7 +905,7 @@ def _is_corruption_stub(raw_json: object) -> bool:
     return status == _STUB_REGENERATED_STATUS
 
 
-def persist_verdict(
+def _persist_verdict_legacy(
     conn: sqlite3.Connection,
     verdict: ThesisVerdict,
     *,
@@ -759,3 +1023,104 @@ def persist_verdict(
         with contextlib.suppress(FileNotFoundError):
             refresh_thesis_mirror(conn, verdict.ticker, holdings_dir)
     conn.commit()
+
+
+def persist_verdict(
+    conn: sqlite3.Connection,
+    verdict: ThesisVerdict,
+    *,
+    run_id: str | None = None,
+    holdings_dir: Path | None = None,
+    override: bool = False,
+) -> None:
+    """Persist one current verdict and one owner-facing semantic episode.
+
+    Versioned episode schemas retain one raw anchor for a materially distinct
+    thesis/rules/evidence result, then record later identical scheduler checks
+    as idempotent receipts. Pre-episode hand-built fixtures retain the legacy
+    append-per-call behavior.
+    """
+
+    if not _episode_schema_active(conn):
+        _persist_verdict_legacy(
+            conn,
+            verdict,
+            run_id=run_id,
+            holdings_dir=holdings_dir,
+            override=override,
+        )
+        return
+    if run_id is None:
+        raise ValueError("run_id is required when semantic thesis episodes are active")
+    if verdict.semantic_input is None:
+        raise ValueError("semantic_input is required when semantic thesis episodes are active")
+
+    prior = conn.execute(
+        "SELECT thesis, breach_status, raw_json FROM thesis_state WHERE ticker = ?",
+        (verdict.ticker,),
+    ).fetchone()
+    if prior is not None and not _is_corruption_stub(prior["raw_json"]):
+        gate = evaluate_gate(
+            conn,
+            ticker=verdict.ticker,
+            prior_thesis=prior["thesis"],
+            prior_breach_status=prior["breach_status"],
+            new_thesis=verdict.thesis,
+        )
+        if gate.is_reunderwrite and gate.blocked and not override:
+            raise ReUnderwriteBlockedError(verdict.ticker, onset=gate.onset)
+        if gate.is_reunderwrite and gate.blocked and override:
+            log.warning(
+                {
+                    "event": "thesis_reunderwrite_gate_overridden",
+                    "ticker": verdict.ticker,
+                    "onset": gate.onset,
+                    "run_id": run_id,
+                }
+            )
+
+    try:
+        conn.execute(
+            "INSERT INTO thesis_state "
+            "(ticker, thesis, breach_status, last_updated, raw_json, ingested_at) "
+            "VALUES (?, ?, ?, ?, '{}', ?) "
+            "ON CONFLICT(ticker) DO UPDATE SET "
+            "    breach_status = excluded.breach_status, "
+            "    last_updated  = excluded.last_updated",
+            (
+                verdict.ticker,
+                verdict.thesis,
+                verdict.overall_status.value,
+                verdict.evaluated_at,
+                verdict.evaluated_at,
+            ),
+        )
+        semantic = verdict.semantic_input
+        severity = EpisodeSeverity(verdict.overall_status.value)
+        episode_id = forward_episode_id(semantic=semantic, severity=severity)
+        existing = conn.execute(
+            "SELECT 1 FROM thesis_evaluation_episodes WHERE episode_id=?",
+            (episode_id,),
+        ).fetchone()
+        raw_id = _insert_raw_evaluation(conn, verdict, run_id=run_id) if existing is None else None
+        record_forward_episode(
+            conn,
+            semantic=semantic,
+            check=EpisodeCheckInput(
+                run_id=run_id,
+                checked_at=_aware_utc(verdict.evaluated_at),
+                evidence_as_of=_episode_evidence_as_of(verdict),
+                severity=severity,
+                provenance_completeness=ProvenanceCompleteness.PARTIAL,
+                rule_evaluations=_episode_rule_projection(verdict),
+                soft_rule_results=_episode_soft_projection(verdict),
+                raw_evaluation_id=raw_id,
+            ),
+        )
+        if holdings_dir is not None:
+            with contextlib.suppress(FileNotFoundError):
+                refresh_thesis_mirror(conn, verdict.ticker, holdings_dir)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise

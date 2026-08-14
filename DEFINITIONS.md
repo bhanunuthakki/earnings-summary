@@ -78,6 +78,22 @@ Cron invariants: every selector excludes archived rows; a cadence runs only its 
 
 Precise verbs matter: **Build Evaluation** moves a watchlist, index, or catalog name to evaluation; **Position Detected** moves it to portfolio; the legacy Investment Decision Card transport verb `promote` records its decision while retaining evaluation coverage; discovery dismissal changes queue state only unless a separate coverage action is invoked.
 
+## Thesis Evaluation Episode
+
+**Definition.** One owner-facing assessment of one ticker under one materially distinct thesis, rule set, accepted evidence set, evaluator semantic version, and deterministic result. Re-running the evaluator with the same semantic inputs checks the same episode; it does not create another learning event.
+**Lives in.** `thesis_evaluation_episodes`, with immutable raw-run membership in `thesis_evaluation_episode_members` and idempotent execution evidence in `thesis_evaluation_episode_check_receipts`.
+**Not to be confused with.** A raw `thesis_evaluations` row or pipeline run. Those preserve executions; the Thesis Evaluation Episode is the deduplicated analytical unit shown to the owner.
+
+## Evidence Acknowledgement
+
+**Definition.** The owner's episode-specific statement that the evidence in one Thesis Evaluation Episode has been reviewed. It suppresses repeated action prompting for that episode while preserving its analytical warning and provenance.
+**Not to be confused with.** Dismissing an alert, marking a Coach Ping delivered, or changing the company thesis. Those may delegate to or accompany an Evidence Acknowledgement, but none is equivalent by itself.
+
+## Owner Decision Checkpoint
+
+**Definition.** The immutable, canonical-hash-committed point-in-time payload the owner confirms before one consequential portfolio decision is persisted. It freezes the proposed action, holdings basis and availability, thesis state, alternatives, source event, and provenance needed to reconstruct the decision later.
+**Not to be confused with.** An unconfirmed decision draft, a brokerage order, or a mutable latest holdings snapshot. Confirmation may atomically create an Owner Decision and sizing intent, but the checkpoint never executes a trade.
+
 ## CANONICAL ACTIONS
 
 These are the owner-facing verbs that are allowed to mutate durable state. A label names the consequence, not merely the gesture: prefer **Applied — thesis updated** over **Done** or **Saved**. Every persistent action surface owes the same feedback contract: call `CCAction.busy(...)` immediately, call `CCAction.release(...)` on failure while retaining the actionable item, and call `CCAction.receipt(...)` on success before any `CCAction.leave(...)` removal. An endpoint response is not, by itself, a visible receipt.

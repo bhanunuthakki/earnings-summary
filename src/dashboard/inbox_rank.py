@@ -49,6 +49,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeGuard, cast
 
+from compute.thesis_evaluation_episodes import episode_history_source
 from signals.store import SIGNAL_CONSENSUS_RATING
 from sqlite_freshness import SQLiteFileToken, sqlite_file_token
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -389,11 +390,12 @@ def _compute_thesis_tones(
     except sqlite3.Error:
         return {}
     try:
+        source = episode_history_source(db_conn)
         rows = db_conn.execute(
-            "SELECT ticker, overall_status FROM thesis_evaluations "
-            "ORDER BY ticker, evaluated_at DESC"
+            f"SELECT ticker, overall_status FROM {source.relation} "
+            f"ORDER BY ticker, {source.latest_checked_column} DESC"  # nosec B608 -- trusted closed relation
         ).fetchall()
-    except sqlite3.Error:
+    except (sqlite3.Error, ValueError):
         return {}
     finally:
         if owns_connection:
