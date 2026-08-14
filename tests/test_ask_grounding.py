@@ -9,9 +9,11 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
+import ask.grounding as grounding_module
 from ask.grounding import (
     GroundingRetrievalError,
     StrictEvidenceConnection,
@@ -21,6 +23,41 @@ from ask.grounding import (
     used_citation_items,
 )
 from pipeline.confidence import IssuesByTicker
+
+
+class _ScoredFilingSections(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection | None,
+        repo_root: Path,
+        terms: list[str],
+        ticker: str,
+        paths: list[tuple[str, int, Path]],
+        *,
+        strict: bool = False,
+    ) -> list[tuple[int, dict[str, object]]]: ...
+
+
+class _ScoredTranscriptLines(Protocol):
+    def __call__(
+        self,
+        repo_root: Path,
+        terms: list[str],
+        ticker: str,
+        docs: list[tuple[int, str, str, str]],
+        *,
+        strict: bool = False,
+    ) -> list[tuple[int, dict[str, object]]]: ...
+
+
+_score_filing_sections = cast(
+    "_ScoredFilingSections",
+    getattr(grounding_module, "_scored_filing_sections"),
+)
+_score_transcript_lines = cast(
+    "_ScoredTranscriptLines",
+    getattr(grounding_module, "_scored_transcript_lines"),
+)
 
 _DDL = """
 CREATE TABLE documents (
@@ -200,6 +237,35 @@ def test_strict_read_connection_cannot_hide_channel_sql_errors() -> None:
             strict.execute("SELECT * FROM missing_grounding_table")
     finally:
         strict.close()
+
+
+def test_strict_filing_retrieval_exposes_a_corrupt_source(tmp_path: Path) -> None:
+    filing = tmp_path / "TST_form_10k_2025.json"
+    filing.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(GroundingRetrievalError, match="filing evidence could not be read"):
+        _score_filing_sections(
+            None,
+            tmp_path,
+            ["revenue"],
+            "TST",
+            [("10k", 2025, filing)],
+            strict=True,
+        )
+
+
+def test_strict_transcript_retrieval_exposes_an_unreadable_source(tmp_path: Path) -> None:
+    with pytest.raises(
+        GroundingRetrievalError,
+        match="transcript evidence could not be read",
+    ):
+        _score_transcript_lines(
+            tmp_path,
+            ["revenue"],
+            "TST",
+            [(1, "missing-transcript.txt", "Q1", "2026-03-31")],
+            strict=True,
+        )
 
 
 def test_fact_channel_matches_kpis_and_line_items(repo: Path) -> None:

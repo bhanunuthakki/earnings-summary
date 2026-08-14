@@ -1154,6 +1154,8 @@ def _scored_filing_sections(
     terms: list[str],
     ticker: str,
     paths: list[tuple[str, int, Path]],
+    *,
+    strict: bool = False,
 ) -> list[tuple[int, dict[str, object]]]:
     """Keyword-score every section across the given filing files. The per-file
     read+flatten+squash is memoized (``turn_cache``); only the scoring re-runs
@@ -1161,6 +1163,10 @@ def _scored_filing_sections(
     scored: list[tuple[int, dict[str, object]]] = []
     for form, year, path in paths:
         parsed = turn_cache.cached_file_parse(path, _parse_filing_sections)
+        if parsed is None:
+            if strict:
+                raise GroundingRetrievalError(f"filing evidence could not be read: {path.name}")
+            continue
         if not parsed:
             continue
         doc_id = _filing_doc_id(conn, repo_root, path)
@@ -1196,6 +1202,8 @@ def _filing_evidence(
     repo_root: Path,
     terms: list[str],
     tickers: list[str],
+    *,
+    strict: bool = False,
 ) -> list[dict[str, object]]:
     if not terms:
         return []
@@ -1203,7 +1211,12 @@ def _filing_evidence(
     for ticker in tickers:
         scored.extend(
             _scored_filing_sections(
-                conn, repo_root, terms, ticker, _latest_filing_paths(repo_root, ticker, conn)
+                conn,
+                repo_root,
+                terms,
+                ticker,
+                _latest_filing_paths(repo_root, ticker, conn),
+                strict=strict,
             )
         )
     scored.sort(key=lambda s: s[0], reverse=True)
@@ -1274,6 +1287,8 @@ def _scored_transcript_lines(
     terms: list[str],
     ticker: str,
     docs: list[tuple[int, str, str, str]],
+    *,
+    strict: bool = False,
 ) -> list[tuple[int, dict[str, object]]]:
     """Keyword-score every substantive line across the given transcript docs.
     The per-file read+squash is memoized (``turn_cache``); only the scoring
@@ -1282,6 +1297,12 @@ def _scored_transcript_lines(
     for doc_id, file_path, fpt, period_end in docs:
         path = repo_root / file_path
         parsed = turn_cache.cached_file_parse(path, _parse_transcript_lines)
+        if parsed is None:
+            if strict:
+                raise GroundingRetrievalError(
+                    f"transcript evidence could not be read: {Path(file_path).name}"
+                )
+            continue
         if not parsed:
             continue
         call_label = _period_label(period_end, fpt)
@@ -1333,13 +1354,21 @@ def _transcript_evidence(
     repo_root: Path,
     terms: list[str],
     tickers: list[str],
+    *,
+    strict: bool = False,
 ) -> list[dict[str, object]]:
     if conn is None or not terms:
         return []
     scored: list[tuple[int, dict[str, object]]] = []
     for ticker in tickers:
         scored.extend(
-            _scored_transcript_lines(repo_root, terms, ticker, _transcript_docs(conn, ticker))
+            _scored_transcript_lines(
+                repo_root,
+                terms,
+                ticker,
+                _transcript_docs(conn, ticker),
+                strict=strict,
+            )
         )
     return _dedupe_transcript_hits(scored, _MAX_TRANSCRIPT_ITEMS)
 
@@ -1436,9 +1465,9 @@ def gather_evidence(
                     for it in _fact_evidence(conn, question_squashed, tickers, issues_by_ticker)
                     if str(it["label"]) not in pinned
                 )
-            raw.extend(_filing_evidence(conn, repo_root, terms, tickers))
+            raw.extend(_filing_evidence(conn, repo_root, terms, tickers, strict=strict))
             if conn is not None:
-                raw.extend(_transcript_evidence(conn, repo_root, terms, tickers))
+                raw.extend(_transcript_evidence(conn, repo_root, terms, tickers, strict=strict))
         finally:
             if conn is not None:
                 conn.close()

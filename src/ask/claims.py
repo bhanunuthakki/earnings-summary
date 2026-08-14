@@ -74,6 +74,10 @@ _MARKER_RX = re.compile(r"\[(\d{1,2})\]")
 # newline (markdown bullets/paragraphs break sentences too).
 _SENTENCE_SPLIT_RX = re.compile(r"(?<=[.!?])\s+|\n+")
 _NORM_STRIP_RX = re.compile(r"\[\d{1,2}\]|[*_`#]+")
+_COORDINATED_CLAUSE_RX = re.compile(
+    r"\](?:,)?\s+(?=(?:and|but|while|whereas)\b)",
+    re.IGNORECASE,
+)
 
 
 class _ClaimWire(BaseModel):
@@ -158,14 +162,19 @@ def required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
     """Partition every non-whitespace answer clause into an exact audit span."""
 
     spans: list[tuple[int, int, str]] = []
+    coordinated_ends = {
+        len(answer[: match.end()].rstrip()) for match in _COORDINATED_CLAUSE_RX.finditer(answer)
+    }
     start: int | None = None
     for index, char in enumerate(answer):
         if start is None and not char.isspace():
             start = index
         if start is None:
             continue
-        boundary = char == "\n" or (
-            char in ",.!?;" and (index + 1 == len(answer) or answer[index + 1].isspace())
+        boundary = (
+            char == "\n"
+            or index + 1 in coordinated_ends
+            or (char in ".!?;" and (index + 1 == len(answer) or answer[index + 1].isspace()))
         )
         if not boundary:
             continue

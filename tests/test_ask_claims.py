@@ -410,3 +410,59 @@ def test_strict_grounding_rejects_an_unsupported_coordinated_clause(
             db_path=tmp_path / "x.db",
             strict=True,
         )
+
+
+def test_strict_grounding_rejects_an_omitted_cited_conjunction_clause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer = "Revenue grew [1] and the CEO was arrested [1]."
+    _patch_map(
+        monkeypatch,
+        {
+            "claims": [
+                {
+                    "quote": "Revenue grew [1]",
+                    "cites": [1],
+                    "supported": True,
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(GroundedCitationError, match="every substantive clause"):
+        build_citations_payload(
+            answer,
+            [_item(1)],
+            db_path=tmp_path / "x.db",
+            strict=True,
+        )
+
+
+def test_strict_grounding_accepts_a_supported_comma_separated_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer = "Revenue, gross margin, and EPS increased [1]."
+    _patch_map(
+        monkeypatch,
+        {
+            "claims": [
+                {
+                    "quote": answer,
+                    "cites": [1],
+                    "supported": True,
+                }
+            ]
+        },
+    )
+
+    payload = build_citations_payload(
+        answer,
+        [_item(1)],
+        db_path=tmp_path / "x.db",
+        strict=True,
+    )
+
+    assert payload is not None
+    assert payload["grounding"] == "per_claim"
