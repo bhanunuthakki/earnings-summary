@@ -367,7 +367,11 @@ def upgrade_database(
     if live_database and phase0_backup_restore_receipt is not None:
         # Fetching is network I/O and must not monopolize the portfolio DB
         # lock. The sealed observation is consumed by the locked recheck.
-        from execution import portfolio_readiness_receipt as readiness_module
+        # ``sqlite_bootstrap.py execution/upgrade_database.py`` installs the
+        # execution directory itself as the import root.  Keep sibling CLI
+        # imports top-level so the governed path entrypoint and pytest's
+        # execution import root resolve the same module.
+        import portfolio_readiness_receipt as readiness_module
 
         origin_observation = readiness_module.fetch_origin_main(repo_root)
 
@@ -406,7 +410,7 @@ def upgrade_database(
             # Revalidation runs inside the same database lock as the backup and
             # Alembic mutation, closing the point-in-time TOCTOU gap. Origin was
             # fetched before the lock; this resolver performs no network I/O.
-            from execution import portfolio_readiness_receipt as readiness_module
+            import portfolio_readiness_receipt as readiness_module
 
             readiness = readiness_module.collect_readiness(
                 checkout_root=repo_root,

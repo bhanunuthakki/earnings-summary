@@ -29,6 +29,13 @@ for import_root in (SRC, EXECUTION):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
+# The managed launcher executes this file as a top-level sibling module while
+# tests and other library callers may import it through ``execution``.  Keep a
+# single module object so monkeypatches, frozen origin observations, and typed
+# receipt classes cannot diverge between those two supported entrypoints.
+sys.modules.setdefault("execution.portfolio_readiness_receipt", sys.modules[__name__])
+sys.modules.setdefault("portfolio_readiness_receipt", sys.modules[__name__])
+
 from backup_restore_readiness_receipt import (  # noqa: E402
     BackupRestoreReadinessReceipt,
     validate_receipt_for_source,
