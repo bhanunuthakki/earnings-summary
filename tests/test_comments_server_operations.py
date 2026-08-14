@@ -208,3 +208,97 @@ def test_operations_route_projects_cached_scheduler_receipt_states(
 
     assert response.status_code == 200
     assert expected in response.get_data(as_text=True)
+
+
+def test_readme_update_action_dispatches_preview_and_exact_approved_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code_root = tmp_path / "code"
+    runtime_root = tmp_path / "runtime"
+    code_root.mkdir()
+    runtime_root.mkdir()
+    (code_root / "README.md").write_text("# Current\n", encoding="utf-8")
+    registry = build_operations_registry(PROJECT_ROOT)
+    jobs = Mock()
+    jobs.start.return_value = Mock(
+        job_id="job_readme",
+        ticker="_REPO",
+        kind="readme-preview",
+        started_at=datetime(2026, 8, 13, tzinfo=UTC),
+    )
+
+    def fake_managed_python_argv(*args: object) -> list[str]:
+        return [str(arg) for arg in args]
+
+    monkeypatch.setattr(comments_server, "managed_python_argv", fake_managed_python_argv)
+
+    app = comments_server.create_app(
+        runtime_root,
+        code_root=code_root,
+        db_path=runtime_root / "portfolio.db",
+        registry=jobs,
+        operations_registry=registry,
+    )
+    client = app.test_client()
+
+    preview = client.post("/actions/readme-update", json={"action": "preview"})
+
+    assert preview.status_code == 201
+    preview_call = jobs.start.call_args
+    assert preview_call.kwargs["ticker"] == "_REPO"
+    assert preview_call.kwargs["kind"] == "readme-preview"
+    assert preview_call.kwargs["write_sets"] == ["portfolio-db", "readme-updater"]
+    assert "--apply-run" not in preview_call.kwargs["argv"]
+
+    run_id = "d" * 32
+    monkeypatch.setattr(
+        comments_server,
+        "collect_readme_governance_status",
+        Mock(return_value=Mock(state="approved_preview", run_id=run_id, can_apply=True)),
+    )
+    jobs.start.return_value.kind = "readme-apply"
+    applied = client.post("/actions/readme-update", json={"action": "apply", "run_id": run_id})
+
+    assert applied.status_code == 201
+    apply_call = jobs.start.call_args
+    assert apply_call.kwargs["kind"] == "readme-apply"
+    assert apply_call.kwargs["argv"][-2:] == ["--apply-run", run_id]
+    assert apply_call.kwargs["write_sets"] == ["portfolio-db", "readme-updater"]
+
+
+def test_readme_apply_route_rejects_unknown_or_stale_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    jobs = Mock()
+    monkeypatch.setattr(
+        comments_server,
+        "collect_readme_governance_status",
+        Mock(return_value=Mock(state="stale", run_id="e" * 32, can_apply=False)),
+    )
+    client = comments_server.create_app(
+        tmp_path, registry=jobs, operations_registry=registry
+    ).test_client()
+
+    invalid = client.post(
+        "/actions/readme-update", json={"action": "apply", "run_id": "../receipt"}
+    )
+    stale = client.post("/actions/readme-update", json={"action": "apply", "run_id": "e" * 32})
+
+    assert invalid.status_code == 400
+    assert stale.status_code == 409
+    jobs.start.assert_not_called()
+
+
+def test_readme_update_action_rejects_non_object_json(tmp_path: Path) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    jobs = Mock()
+    client = comments_server.create_app(
+        tmp_path, registry=jobs, operations_registry=registry
+    ).test_client()
+
+    response = client.post("/actions/readme-update", json=["preview"])
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "JSON request body must be an object"
+    jobs.start.assert_not_called()

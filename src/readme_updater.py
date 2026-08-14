@@ -8,6 +8,7 @@ be represented as an approved update.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Callable
@@ -16,7 +17,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from llm.prompt_registry import PromptTemplate, register
-from llm.structured import call_llm_structured
+from llm.structured import (
+    StructuredCallResult,
+    call_llm_structured_with_raw,
+    parse_json_payload,
+)
 from llm.untrusted import spotlight
 
 GENERATOR_PURPOSE = "readme_update"
@@ -63,13 +68,25 @@ class RepositoryEvidence(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     project_name: str
-    tracked_paths: tuple[str, ...]
-    source_packages: tuple[str, ...]
-    execution_entrypoints: tuple[str, ...]
+    tracked_paths: tuple[str, ...] = Field(max_length=600)
+    source_packages: tuple[str, ...] = Field(max_length=200)
+    execution_entrypoints: tuple[str, ...] = Field(max_length=400)
     test_file_count: int = Field(ge=0)
-    cron_tasks: tuple[dict[str, str | None], ...]
-    sources: tuple[EvidenceSource, ...]
-    cli_contracts: tuple[CliContract, ...] = ()
+    cron_tasks: tuple[dict[str, str | None], ...] = Field(max_length=100)
+    sources: tuple[EvidenceSource, ...] = Field(max_length=32)
+    cli_contracts: tuple[CliContract, ...] = Field(default=(), max_length=32)
+
+
+def evidence_sha256(evidence: RepositoryEvidence) -> str:
+    """Stable identity for the exact repository facts supplied to both roles."""
+
+    payload = json.dumps(
+        evidence.model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 class ReadmeDraft(BaseModel):
@@ -122,6 +139,12 @@ class ReadmeUpdateAttempt(BaseModel):
     deterministic_violations: tuple[str, ...]
     judgment: ReadmeJudge
     approved: bool
+    generator_prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generator_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    judge_prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    judge_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generator_raw_response: str = Field(min_length=1, max_length=250_000)
+    judge_raw_response: str = Field(min_length=1, max_length=50_000)
 
 
 class ReadmeUpdateResult(BaseModel):
@@ -253,6 +276,15 @@ README CANDIDATE
 )
 
 
+def prompt_identities() -> dict[str, tuple[str, str]]:
+    """Purpose -> registered template id/version for receipt verification."""
+
+    return {
+        GENERATOR_PURPOSE: (_GENERATOR_TEMPLATE.template_id, _GENERATOR_TEMPLATE.version),
+        JUDGE_PURPOSE: (_JUDGE_TEMPLATE.template_id, _JUDGE_TEMPLATE.version),
+    }
+
+
 def _evidence_block(evidence: RepositoryEvidence) -> str:
     payload = evidence.model_dump_json(indent=2)
     return spotlight(payload, source="allowlisted repository evidence")
@@ -340,11 +372,54 @@ def judgment_passes(judgment: ReadmeJudge) -> bool:
     )
 
 
+def _governed_call_with_raw(
+    prompt: str,
+    *,
+    purpose: str,
+    scope: str | None,
+    run_id: str | None,
+    db_path: str | None,
+    schema: TypeAdapter[object],
+    **_kwargs: object,
+) -> StructuredCallResult[object]:
+    return call_llm_structured_with_raw(
+        prompt,
+        purpose=purpose,
+        scope=scope,
+        run_id=run_id,
+        db_path=db_path,
+        schema=schema,
+        repair_prompt=lambda _error: prompt,
+    )
+
+
+def _exchange_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def parse_readme_draft_response(raw: str) -> ReadmeDraft:
+    return _DRAFT_ADAPTER.validate_python(parse_json_payload(raw, expect="object"))
+
+
+def parse_readme_judge_response(raw: str) -> ReadmeJudge:
+    return _JUDGE_ADAPTER.validate_python(parse_json_payload(raw, expect="object"))
+
+
+def prior_feedback_for_attempt(attempt: ReadmeUpdateAttempt) -> str:
+    return json.dumps(
+        {
+            "deterministic_violations": attempt.deterministic_violations,
+            "judgment": attempt.judgment.model_dump(mode="json"),
+        },
+        sort_keys=True,
+    )
+
+
 def run_update_cycle(
     *,
     evidence: RepositoryEvidence,
     current_readme: str,
-    caller: Callable[..., object] = call_llm_structured,
+    caller: Callable[..., StructuredCallResult[object]] = _governed_call_with_raw,
     max_revisions: int = MAX_REVISIONS_PER_RUN,
     db_path: str | None = None,
     run_id: str | None = None,
@@ -360,7 +435,7 @@ def run_update_cycle(
         if attempt_number > MAX_CANDIDATES_PER_RUN:
             raise RuntimeError("README updater per-purpose run budget exceeded")
 
-        draft_raw = caller(
+        generator_exchange = caller(
             build_generator_prompt(evidence, current_readme, prior_feedback),
             purpose=GENERATOR_PURPOSE,
             scope="meta_eval",
@@ -371,10 +446,10 @@ def run_update_cycle(
             required_keys=("markdown_lines", "change_summary", "evidence_gaps"),
             max_escalation_tier=0,
         )
-        draft = _DRAFT_ADAPTER.validate_python(draft_raw)
+        draft = _DRAFT_ADAPTER.validate_python(generator_exchange.value)
         violations = candidate_violations(draft.markdown, evidence.cli_contracts)
 
-        judge_raw = caller(
+        judge_exchange = caller(
             build_judge_prompt(evidence, draft.markdown),
             purpose=JUDGE_PURPOSE,
             scope="meta_eval",
@@ -394,7 +469,7 @@ def run_update_cycle(
             ),
             max_escalation_tier=0,
         )
-        judgment = _JUDGE_ADAPTER.validate_python(judge_raw)
+        judgment = _JUDGE_ADAPTER.validate_python(judge_exchange.value)
         approved = not violations and judgment_passes(judgment)
         attempts.append(
             ReadmeUpdateAttempt(
@@ -403,18 +478,18 @@ def run_update_cycle(
                 deterministic_violations=violations,
                 judgment=judgment,
                 approved=approved,
+                generator_prompt_sha256=_exchange_sha256(generator_exchange.prompt),
+                generator_response_sha256=_exchange_sha256(generator_exchange.raw_response),
+                judge_prompt_sha256=_exchange_sha256(judge_exchange.prompt),
+                judge_response_sha256=_exchange_sha256(judge_exchange.raw_response),
+                generator_raw_response=generator_exchange.raw_response,
+                judge_raw_response=judge_exchange.raw_response,
             )
         )
         if approved:
             return ReadmeUpdateResult(approved=True, attempts=tuple(attempts))
 
-        prior_feedback = json.dumps(
-            {
-                "deterministic_violations": violations,
-                "judgment": judgment.model_dump(mode="json"),
-            },
-            sort_keys=True,
-        )
+        prior_feedback = prior_feedback_for_attempt(attempts[-1])
 
     return ReadmeUpdateResult(approved=False, attempts=tuple(attempts))
 
@@ -432,6 +507,11 @@ __all__ = [
     "build_generator_prompt",
     "build_judge_prompt",
     "candidate_violations",
+    "evidence_sha256",
     "judgment_passes",
+    "parse_readme_draft_response",
+    "parse_readme_judge_response",
+    "prior_feedback_for_attempt",
+    "prompt_identities",
     "run_update_cycle",
 ]

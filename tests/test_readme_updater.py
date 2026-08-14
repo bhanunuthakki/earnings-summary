@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -8,6 +9,7 @@ from typing import Literal, cast
 
 import pytest
 
+from llm.structured import StructuredCallResult
 from readme_updater import (
     GENERATOR_PURPOSE,
     JUDGE_PURPOSE,
@@ -16,11 +18,16 @@ from readme_updater import (
     ReadmeDraft,
     ReadmeJudge,
     ReadmeJudgeIssue,
+    ReadmeUpdateAttempt,
+    ReadmeUpdateResult,
     RepositoryEvidence,
+    build_generator_prompt,
     build_judge_prompt,
     candidate_violations,
     run_update_cycle,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _evidence() -> RepositoryEvidence:
@@ -122,17 +129,50 @@ def _judge(verdict: Literal["pass", "revise"], *, issue: bool = False) -> Readme
     )
 
 
+def _exchange(prompt: str, value: ReadmeDraft | ReadmeJudge) -> StructuredCallResult[object]:
+    return StructuredCallResult(
+        value=value,
+        raw_response=value.model_dump_json(),
+        prompt=prompt,
+    )
+
+
+def _attempt(
+    evidence: RepositoryEvidence,
+    starting_readme: str,
+    draft: ReadmeDraft,
+    judgment: ReadmeJudge,
+) -> ReadmeUpdateAttempt:
+    generator_raw = draft.model_dump_json()
+    judge_raw = judgment.model_dump_json()
+    generator_prompt = build_generator_prompt(evidence, starting_readme)
+    judge_prompt = build_judge_prompt(evidence, draft.markdown)
+    return ReadmeUpdateAttempt(
+        attempt=1,
+        draft=draft,
+        deterministic_violations=(),
+        judgment=judgment,
+        approved=True,
+        generator_prompt_sha256=hashlib.sha256(generator_prompt.encode()).hexdigest(),
+        generator_response_sha256=hashlib.sha256(generator_raw.encode()).hexdigest(),
+        judge_prompt_sha256=hashlib.sha256(judge_prompt.encode()).hexdigest(),
+        judge_response_sha256=hashlib.sha256(judge_raw.encode()).hexdigest(),
+        generator_raw_response=generator_raw,
+        judge_raw_response=judge_raw,
+    )
+
+
 def test_update_cycle_judges_every_candidate_and_revises_once() -> None:
     calls: list[tuple[str, str]] = []
 
-    def caller(prompt: str, **kwargs: object) -> object:
+    def caller(prompt: str, **kwargs: object) -> StructuredCallResult[object]:
         purpose = cast("str", kwargs["purpose"])
         calls.append((purpose, prompt))
         if purpose == GENERATOR_PURPOSE:
-            return _draft("first" if len(calls) == 1 else "revised")
+            return _exchange(prompt, _draft("first" if len(calls) == 1 else "revised"))
         if len([name for name, _ in calls if name == JUDGE_PURPOSE]) == 1:
-            return _judge("revise", issue=True)
-        return _judge("pass")
+            return _exchange(prompt, _judge("revise", issue=True))
+        return _exchange(prompt, _judge("pass"))
 
     result = run_update_cycle(
         evidence=_evidence(),
@@ -156,12 +196,12 @@ def test_update_cycle_judges_every_candidate_and_revises_once() -> None:
 def test_update_cycle_fails_closed_when_judge_never_passes() -> None:
     judged = 0
 
-    def caller(_prompt: str, **kwargs: object) -> object:
+    def caller(prompt: str, **kwargs: object) -> StructuredCallResult[object]:
         nonlocal judged
         if kwargs["purpose"] == GENERATOR_PURPOSE:
-            return _draft("candidate")
+            return _exchange(prompt, _draft("candidate"))
         judged += 1
-        return _judge("revise", issue=True)
+        return _exchange(prompt, _judge("revise", issue=True))
 
     result = run_update_cycle(
         evidence=_evidence(),
@@ -229,7 +269,7 @@ def test_apply_requires_the_readme_hash_to_remain_unchanged(tmp_path: Path) -> N
             readme_path=readme,
             expected_sha256=expected_sha,
             markdown=_markdown("candidate"),
-            staging_path=tmp_path / "candidate.pending",
+            staging_directory=tmp_path,
         )
 
 
@@ -248,7 +288,7 @@ def test_concurrent_applies_serialize_and_one_refuses_stale_bytes(tmp_path: Path
                 readme_path=readme,
                 expected_sha256=expected_sha,
                 markdown=_markdown(label),
-                staging_path=tmp_path / f"{label}.pending",
+                staging_directory=tmp_path,
             )
         except RuntimeError as exc:
             return str(exc)
@@ -264,6 +304,139 @@ def test_concurrent_applies_serialize_and_one_refuses_stale_bytes(tmp_path: Path
     final = readme.read_text(encoding="utf-8")
     assert ("candidate-a" in final) ^ ("candidate-b" in final)
     assert not readme.with_name("README.md.write.lock").exists()
+
+
+def test_apply_stored_candidate_uses_exact_approved_receipt_and_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from execution import update_readme
+    from readme_updater import evidence_sha256, prompt_identities
+
+    original = _markdown("original")
+    candidate = _markdown("candidate")
+    readme = tmp_path / "README.md"
+    readme.write_text(original, encoding="utf-8", newline="\n")
+    run_id = "f" * 32
+    run_dir = tmp_path / ".tmp" / "readme_updater" / run_id
+    run_dir.mkdir(parents=True)
+    evidence = _evidence()
+    attempt = _attempt(evidence, original, _draft("candidate"), _judge("pass"))
+    result = ReadmeUpdateResult(
+        approved=True,
+        attempts=(attempt,),
+    )
+    (run_dir / "candidate.md").write_text(candidate, encoding="utf-8", newline="\n")
+    (run_dir / "evidence.json").write_text(evidence.model_dump_json(indent=2), encoding="utf-8")
+    identities = prompt_identities()
+    calls = []
+    for index, (purpose, prompt_sha, response_sha) in enumerate(
+        (
+            (GENERATOR_PURPOSE, attempt.generator_prompt_sha256, attempt.generator_response_sha256),
+            (JUDGE_PURPOSE, attempt.judge_prompt_sha256, attempt.judge_response_sha256),
+        ),
+        start=1,
+    ):
+        calls.append(
+            {
+                "id": index,
+                "purpose": purpose,
+                "template_id": identities[purpose][0],
+                "template_version": identities[purpose][1],
+                "prompt_sha256": prompt_sha,
+                "response_sha256": response_sha,
+                "model": "test-model",
+                "provider": "test",
+                "transport": "test",
+            }
+        )
+    (run_dir / "receipt.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "2",
+                "run_id": run_id,
+                "starting_readme_sha256": hashlib.sha256(original.encode()).hexdigest(),
+                "starting_readme": original,
+                "evidence_sha256": evidence_sha256(evidence),
+                "release_approved": True,
+                "link_violations": [],
+                "llm_calls": calls,
+                "result": result.model_dump(mode="json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def collect(_root: Path) -> RepositoryEvidence:
+        return evidence
+
+    def verify(_db: Path, _run_id: str, _calls: object) -> None:
+        return None
+
+    monkeypatch.setattr(update_readme, "collect_repository_evidence", collect)
+    monkeypatch.setattr(update_readme, "_verify_llm_attestations", verify)
+
+    assert update_readme.apply_stored_candidate(repo_root=tmp_path, run_id=run_id) is True
+    assert readme.read_text(encoding="utf-8") == candidate
+    assert update_readme.apply_stored_candidate(repo_root=tmp_path, run_id=run_id) is False
+
+    receipt_path = run_dir / "receipt.json"
+    receipt_payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt_payload["release_approved"] = False
+    receipt_path.write_text(json.dumps(receipt_payload), encoding="utf-8")
+    readme.write_text(original, encoding="utf-8", newline="\n")
+    with pytest.raises(ValueError, match="release gate"):
+        update_readme.apply_stored_candidate(repo_root=tmp_path, run_id=run_id)
+
+
+def test_apply_stored_candidate_rejects_path_escape(tmp_path: Path) -> None:
+    from execution.update_readme import apply_stored_candidate
+
+    with pytest.raises(ValueError, match="run id"):
+        apply_stored_candidate(repo_root=tmp_path, run_id="../receipt")
+
+
+def test_cli_receipt_persists_the_final_link_release_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from execution import update_readme
+
+    (tmp_path / "README.md").write_text(_markdown("current"), encoding="utf-8", newline="\n")
+    candidate = _markdown("candidate") + "\n[Broken local link](missing.md)\n"
+    evidence = _evidence()
+    draft = ReadmeDraft(
+        markdown_lines=tuple(candidate.splitlines()),
+        change_summary=("Candidate with bad link.",),
+        evidence_gaps=(),
+    )
+    result = ReadmeUpdateResult(
+        approved=True,
+        attempts=(_attempt(evidence, _markdown("current"), draft, _judge("pass")),),
+    )
+
+    def collect(_root: Path) -> RepositoryEvidence:
+        return evidence
+
+    def run(**_kwargs: object) -> ReadmeUpdateResult:
+        return result
+
+    monkeypatch.setattr(update_readme, "collect_repository_evidence", collect)
+    monkeypatch.setattr(update_readme, "run_update_cycle", run)
+
+    def attestations(_db: Path, _run_id: str) -> tuple[()]:
+        return ()
+
+    monkeypatch.setattr(update_readme, "_collect_llm_attestations", attestations)
+
+    exit_code = update_readme.main(
+        ["--repo-root", str(tmp_path), "--db", str(tmp_path / "ledger.db")]
+    )
+
+    assert exit_code == 3
+    receipts = tuple((tmp_path / ".tmp" / "readme_updater").glob("*/receipt.json"))
+    assert len(receipts) == 1
+    payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert payload["release_approved"] is False
+    assert payload["link_violations"] == ["local link target does not exist: missing.md"]
 
 
 def test_evidence_collection_is_bounded_and_excludes_secret_files(tmp_path: Path) -> None:
@@ -298,8 +471,61 @@ def test_evidence_collection_is_bounded_and_excludes_secret_files(tmp_path: Path
     assert evidence.test_file_count == 1
 
 
+def test_real_repository_evidence_persisted_bytes_fit_reader_contract() -> None:
+    from execution.update_readme import collect_repository_evidence, serialize_evidence
+
+    evidence = collect_repository_evidence(PROJECT_ROOT)
+    payload = serialize_evidence(evidence)
+
+    assert len(payload) <= 110_000
+    assert RepositoryEvidence.model_validate_json(payload) == evidence
+
+
+def test_evidence_collection_rejects_allowlisted_hardlink_to_private_state(
+    tmp_path: Path,
+) -> None:
+    from execution.update_readme import collect_repository_evidence
+
+    private = tmp_path / ".env"
+    private.write_text("SECRET=never-read", encoding="utf-8")
+    try:
+        (tmp_path / "AGENTS.md").hardlink_to(private)
+    except (OSError, NotImplementedError):
+        pytest.skip("hardlinks are unavailable on this filesystem")
+
+    with pytest.raises(ValueError, match="linked or non-regular evidence"):
+        collect_repository_evidence(tmp_path)
+
+
+def test_apply_uses_fresh_exclusive_staging_name(tmp_path: Path) -> None:
+    from execution.update_readme import apply_approved_readme
+
+    readme = tmp_path / "README.md"
+    original = _markdown("original")
+    readme.write_text(original, encoding="utf-8")
+    private = tmp_path / "private.txt"
+    private.write_text("keep-me", encoding="utf-8")
+    planted = tmp_path / "README.md.pending"
+    try:
+        planted.hardlink_to(private)
+    except (OSError, NotImplementedError):
+        pytest.skip("hardlinks are unavailable on this filesystem")
+
+    applied = apply_approved_readme(
+        readme_path=readme,
+        expected_sha256=hashlib.sha256(readme.read_bytes()).hexdigest(),
+        markdown=_markdown("candidate"),
+        staging_directory=tmp_path,
+    )
+
+    assert applied is True
+    assert private.read_text(encoding="utf-8") == "keep-me"
+    assert planted.read_text(encoding="utf-8") == "keep-me"
+
+
 def test_llm_purposes_are_versioned_isolated_and_model_pinned() -> None:
     from evals.coverage import META_PURPOSES
+    from evals.rubric_judge import AUDIT_SPECS
     from llm.capture import CAPTURE_DENYLIST
     from llm.cli import DEFAULT_MODEL, LLM_MODELS
     from llm.prompt_versions import registered_purposes
@@ -307,5 +533,6 @@ def test_llm_purposes_are_versioned_isolated_and_model_pinned() -> None:
     assert LLM_MODELS[GENERATOR_PURPOSE] == DEFAULT_MODEL
     assert LLM_MODELS[JUDGE_PURPOSE] == "claude-opus-4-8"
     assert {GENERATOR_PURPOSE, JUDGE_PURPOSE} <= registered_purposes()
-    assert {GENERATOR_PURPOSE, JUDGE_PURPOSE} <= META_PURPOSES
+    assert GENERATOR_PURPOSE in AUDIT_SPECS
+    assert JUDGE_PURPOSE in META_PURPOSES
     assert {GENERATOR_PURPOSE, JUDGE_PURPOSE} <= CAPTURE_DENYLIST

@@ -18,6 +18,7 @@ from operations.models import (
     ScheduledTaskDefinition,
     ServiceState,
 )
+from operations.readme_governance import ReadmeGovernanceStatus
 
 Tone = Literal["ok", "warn", "bad"]
 _URL = re.compile(r"(?i)\b(?:https?|file)://[^\s<>\"'\u00b7;]+")
@@ -75,6 +76,7 @@ class OperationsPanelView(_ViewModel):
     runtime_summary_tone: Tone
     tasks: tuple[TaskView, ...]
     runtime_rows: tuple[RuntimeRowView, ...]
+    readme_status: ReadmeGovernanceStatus | None = None
 
 
 def _clock(value: datetime | None, *, prefix: str) -> str:
@@ -295,7 +297,10 @@ def _runtime_rows(
 
 
 def build_operations_panel_view(
-    registry: OperationsRegistry, snapshot: OperationsSnapshot
+    registry: OperationsRegistry,
+    snapshot: OperationsSnapshot,
+    *,
+    readme_status: ReadmeGovernanceStatus | None = None,
 ) -> OperationsPanelView:
     """Join declared task ownership to bounded observations without doing I/O."""
 
@@ -410,6 +415,7 @@ def build_operations_panel_view(
             sorted(tasks, key=lambda task: (task.attention_rank, task.task_name.casefold()))
         ),
         runtime_rows=runtime_rows,
+        readme_status=readme_status,
     )
 
 
@@ -514,6 +520,46 @@ def _runtime(view: OperationsPanelView) -> str:
     )
 
 
+def _governance(view: OperationsPanelView) -> str:
+    status = view.readme_status
+    labels = {
+        "not_run": "Not run",
+        "approved_preview": "Approved preview",
+        "applied": "Current",
+        "rejected": "Needs revision",
+        "stale": "Stale",
+        "invalid": "Invalid",
+    }
+    state = status.state if status is not None else "invalid"
+    tone = status.tone if status is not None else "bad"
+    state_label = labels[state]
+    run_id = status.run_id if status is not None and status.run_id is not None else ""
+    current_sha = (
+        status.current_sha256[:12]
+        if status is not None and status.current_sha256 is not None
+        else "Unavailable"
+    )
+    run_label = run_id[:12] if run_id else "No judged run"
+    apply_disabled = "" if status is not None and status.can_apply else " disabled"
+    return (
+        '<article class="k-well" data-readme-governance="true">'
+        '<div class="k-toolbar"><div>'
+        '<div class="k-card-row-title">README stewardship</div>'
+        '<div class="k-card-meta">Project evidence, independent judgment, and guarded atomic apply</div>'
+        f'</div><span class="k-pill k-pill-{tone}" data-readme-state>{_html(state_label)}</span></div>'
+        "<p>Preview first. The generator collects bounded repository evidence and every candidate is independently judged. Apply accepts only that exact approved run and refuses a stale README.</p>"
+        '<div class="ops-readme-facts">'
+        f'<div><span class="k-label">README SHA</span><div data-readme-sha>{_html(current_sha)}</div></div>'
+        f'<div><span class="k-label">Latest judged run</span><div data-readme-run>{_html(run_label)}</div></div>'
+        "</div>"
+        '<div class="ops-governance-actions">'
+        '<button type="button" class="k-btn k-btn-primary" data-readme-action="preview">Preview &amp; judge</button>'
+        f'<button type="button" class="k-btn k-btn-quiet" data-readme-action="apply" data-run-id="{_html(run_id)}"{apply_disabled}>Apply approved candidate</button>'
+        '<span class="k-card-meta" role="status" aria-live="polite" data-readme-action-status></span>'
+        "</div></article>"
+    )
+
+
 def render_operations_panel(view: OperationsPanelView) -> str:
     """Render only the supplied projection; no database, filesystem, or network access."""
 
@@ -531,8 +577,11 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     .ops-task-list {{ display: grid; gap: var(--sp-3); }}
     .ops-task-card, .ops-task-card ol {{ display: grid; gap: var(--sp-3); }}
     .ops-task-facts {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }}
+    .ops-readme-facts {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }}
+    .ops-governance-actions {{ display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); }}
+    .ops-governance-actions .k-btn {{ min-block-size: var(--touch-target-size); }}
     @media (max-width: 48rem) {{
-      .ops-job-tools, .ops-task-facts {{ grid-template-columns: 1fr; }}
+      .ops-job-tools, .ops-task-facts, .ops-readme-facts {{ grid-template-columns: 1fr; }}
       .operations-related .k-btn, .operations-filter .k-chip {{ flex: 1 1 auto; }}
     }}
     .operations-panel [role="tabpanel"] {{ display: grid; gap: var(--sp-3); }}
@@ -551,10 +600,12 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     <button type="button" class="k-chip k-chip-btn k-chip-tab is-on" style="min-block-size:var(--touch-target-size);" id="operations-tab-overview" role="tab" aria-selected="true" aria-controls="operations-pane-overview" tabindex="0">Overview</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab" style="min-block-size:var(--touch-target-size);" id="operations-tab-jobs" role="tab" aria-selected="false" aria-controls="operations-pane-jobs" tabindex="-1">Jobs</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab" style="min-block-size:var(--touch-target-size);" id="operations-tab-runtime" role="tab" aria-selected="false" aria-controls="operations-pane-runtime" tabindex="-1">Runtime &amp; Recovery</button>
+    <button type="button" class="k-chip k-chip-btn k-chip-tab" style="min-block-size:var(--touch-target-size);" id="operations-tab-governance" role="tab" aria-selected="false" aria-controls="operations-pane-governance" tabindex="-1">Governance</button>
   </div>
   <div id="operations-pane-overview" role="tabpanel" aria-labelledby="operations-tab-overview">{_overview(view)}</div>
   <div id="operations-pane-jobs" role="tabpanel" aria-labelledby="operations-tab-jobs" hidden>{_jobs(view)}</div>
   <div id="operations-pane-runtime" role="tabpanel" aria-labelledby="operations-tab-runtime" hidden>{_runtime(view)}</div>
+  <div id="operations-pane-governance" role="tabpanel" aria-labelledby="operations-tab-governance" hidden>{_governance(view)}</div>
 </section>
 <script>
 (() => {{
@@ -615,6 +666,81 @@ def render_operations_panel(view: OperationsPanelView) -> str:
   }});
   if (search) search.addEventListener('input', applyJobFilter);
   applyJobFilter();
+
+  const readmeButtons = Array.from(root.querySelectorAll('[data-readme-action]'));
+  const readmeStatus = root.querySelector('[data-readme-action-status]');
+  const applyReadme = root.querySelector('[data-readme-action="apply"]');
+  let readmeCanApply = Boolean(applyReadme && !applyReadme.disabled);
+  const setReadmeButtons = (busy) => readmeButtons.forEach((candidate) => {{
+    candidate.disabled = busy || (candidate.dataset.readmeAction === 'apply' && !readmeCanApply);
+  }});
+  const refreshReadmeStatus = () => fetch('/api/readme-governance/status')
+    .then((response) => response.json().then((body) => ({{ok: response.ok, body}})))
+    .then((result) => {{
+      if (!result.ok) throw new Error(result.body.error || 'Status refresh failed');
+      const body = result.body;
+      const labels = {{
+        not_run: 'Not run', approved_preview: 'Approved preview', applied: 'Current',
+        rejected: 'Needs revision', stale: 'Stale', invalid: 'Invalid'
+      }};
+      const pill = root.querySelector('[data-readme-state]');
+      if (pill) {{
+        pill.textContent = labels[body.state] || 'Invalid';
+        pill.className = 'k-pill k-pill-' + body.tone;
+      }}
+      const sha = root.querySelector('[data-readme-sha]');
+      if (sha) sha.textContent = body.current_sha256 ? body.current_sha256.slice(0, 12) : 'Unavailable';
+      const run = root.querySelector('[data-readme-run]');
+      if (run) run.textContent = body.run_id ? body.run_id.slice(0, 12) : 'No judged run';
+      if (applyReadme) {{
+        applyReadme.dataset.runId = body.run_id || '';
+        readmeCanApply = Boolean(body.can_apply);
+      }}
+      setReadmeButtons(false);
+    }});
+  const runReadmeAction = (button) => {{
+    const action = button.dataset.readmeAction || '';
+    if (action === 'apply' && !window.confirm('Apply this exact judged README candidate?')) return;
+    const payload = {{action}};
+    if (action === 'apply') payload.run_id = button.dataset.runId || '';
+    if (action === 'apply') {{
+      readmeCanApply = false;
+      button.dataset.runId = '';
+    }}
+    setReadmeButtons(true);
+    if (readmeStatus) readmeStatus.textContent = action === 'preview' ? 'Generating and judging…' : 'Applying approved candidate…';
+    fetch('/actions/readme-update', {{
+      method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload)
+    }}).then((response) => response.json().then((body) => ({{ok: response.ok, body}})))
+      .then((result) => {{
+        if (!result.ok) throw new Error(result.body.error || 'README action failed');
+        const stream = new EventSource(result.body.stream_url);
+        stream.onmessage = (event) => {{
+          let message;
+          try {{ message = JSON.parse(event.data); }} catch (_) {{ return; }}
+          if (message.event !== 'done') return;
+          stream.close();
+          refreshReadmeStatus().then(() => {{
+            if (readmeStatus) readmeStatus.textContent = message.exit_code === 0 ? 'Complete.' : 'Stopped without applying. Review the judged status.';
+          }}).catch((error) => {{
+            readmeCanApply = false;
+            setReadmeButtons(false);
+            if (readmeStatus) readmeStatus.textContent = error.message;
+          }});
+        }};
+        stream.onerror = () => {{
+          stream.close();
+          readmeCanApply = false;
+          setReadmeButtons(false);
+          if (readmeStatus) readmeStatus.textContent = 'Status stream interrupted.';
+        }};
+      }}).catch((error) => {{
+        readmeCanApply = false;
+        setReadmeButtons(false);
+        if (readmeStatus) readmeStatus.textContent = error.message;
+      }});
+  }};
+  readmeButtons.forEach((button) => button.addEventListener('click', () => runReadmeAction(button)));
 }})();
 </script>
     """

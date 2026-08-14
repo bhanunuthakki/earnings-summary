@@ -68,6 +68,8 @@ _LLM_BUDGETS: tuple[tuple[str, float, str], ...] = (
     ("post_earnings_readout", 5, "skip"),
     ("pre_earnings_brief", 5, "skip"),
     ("prompt_variant_propose", 5, "warn"),
+    ("readme_update", 5, "block"),
+    ("readme_update_judge", 5, "block"),
     ("query_criteria_derive", 5, "warn"),
     ("recent_developments", 80, "warn"),
     ("research_adversarial_assess", 10, "skip"),

@@ -56,16 +56,17 @@ def test_operations_projection_groups_every_declared_task_wrapper_and_step(
     assert all(step.execution_rails for task in view.tasks for step in task.steps)
 
 
-def test_operations_renderer_has_exactly_three_roving_tabs_and_related_views(
+def test_operations_renderer_has_governance_tab_and_related_views(
     tmp_path: Path,
 ) -> None:
     html = render_operations_panel(_view(tmp_path))
     tablist = html.split('role="tablist"', 1)[1].split("</div>", 1)[0]
 
-    assert tablist.count('role="tab"') == 3
+    assert tablist.count('role="tab"') == 4
     assert ">Overview</button>" in tablist
     assert ">Jobs</button>" in tablist
     assert ">Runtime &amp; Recovery</button>" in tablist
+    assert ">Governance</button>" in tablist
     assert ">Settings</a>" not in tablist
     assert ">Data provenance</a>" not in tablist
     assert ">Settings</button>" in html
@@ -81,9 +82,18 @@ def test_operations_renderer_has_exactly_three_roving_tabs_and_related_views(
     assert 'tabindex="-1"' in tablist
     assert "var(--touch-target-size)" in tablist
     assert 'data-operations-task-card="true"' in html
+    assert 'id="operations-pane-governance"' in html
+    assert "README stewardship" in html
+    assert 'data-readme-action="preview"' in html
+    assert 'data-readme-action="apply"' in html
+    assert "Preview &amp; judge" in html
+    assert "Apply approved candidate" in html
+    assert "fetch('/actions/readme-update'" in html
+    assert "readmeCanApply = false" in html
+    assert "new EventSource" in html
 
 
-def test_operations_renderer_is_read_only_truthful_and_sanitizes_evidence(
+def test_operations_health_views_remain_read_only_truthful_and_sanitize_evidence(
     tmp_path: Path,
 ) -> None:
     view = _view(tmp_path)
@@ -96,9 +106,10 @@ def test_operations_renderer_is_read_only_truthful_and_sanitizes_evidence(
     assert str(tmp_path) not in html
     assert "canonical job receipt" in html
     assert "No runtime receipt supplied" in html
-    assert "<form" not in html
-    assert 'method="post"' not in html.casefold()
-    assert "/actions/" not in html
+    health_views = html.split('id="operations-pane-governance"', 1)[0]
+    assert "<form" not in health_views
+    assert 'method="post"' not in health_views.casefold()
+    assert "/actions/" not in health_views
     assert "Run now" not in html
 
 
