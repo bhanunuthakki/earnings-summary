@@ -135,7 +135,10 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # (/api/ask, /api/cockpit, /api/cron-health). +1 lazy shared-reader stylesheet.
     # +1 governed IR owner-decision action route.
     # +2 governed Work OS question draft/approval routes.
-    assert len(rules) == 160
+    # +2 governed README status/preview-or-apply routes.
+    assert len(rules) == 162
+    assert rules["readme_governance_status"] == "/api/readme-governance/status"
+    assert rules["start_readme_update"] == "/actions/readme-update"
     assert rules["ir_approval_action"] == ("/api/ir-approval/candidates/<candidate_id>/<action>")
     assert rules["question_proposals_api"] == "/api/work-os/question-proposals"
     assert rules["approve_question_proposal_api"] == (

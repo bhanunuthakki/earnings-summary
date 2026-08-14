@@ -29,6 +29,12 @@ python execution/sqlite_bootstrap.py execution/upgrade_database.py --db-path dat
 
 The upgrader uses the shared write lock, validates SQLite integrity, backs up versioned databases before mutation, and refuses to guess a baseline for a non-empty unversioned database. Do not replace it with an ad-hoc migration command for an operator database.
 
+On a fresh install, mirror the checked-in holding theses into the database after the schema upgrade:
+
+```powershell
+python execution/sqlite_bootstrap.py execution/sync_thesis_state.py --apply
+```
+
 Start the Work OS with the same bootstrap seam:
 
 ```powershell
