@@ -44,6 +44,7 @@ from compute.soft_rule_evaluator import (
     evaluate_soft_rules,
     load_soft_rules,
 )
+from compute.thesis_episode_attention import deliver_episode_alert, supersede_prior
 from compute.thesis_evaluation_episodes import (
     AcceptedObservationInput,
     EpisodeCheckInput,
@@ -1103,7 +1104,7 @@ def persist_verdict(
             (episode_id,),
         ).fetchone()
         raw_id = _insert_raw_evaluation(conn, verdict, run_id=run_id) if existing is None else None
-        record_forward_episode(
+        episode_write = record_forward_episode(
             conn,
             semantic=semantic,
             check=EpisodeCheckInput(
@@ -1117,6 +1118,17 @@ def persist_verdict(
                 raw_evaluation_id=raw_id,
             ),
         )
+        if episode_write.created:
+            supersede_prior(
+                conn,
+                new_episode_id=episode_write.episode_id,
+                superseded_at=_aware_utc(verdict.evaluated_at),
+            )
+            deliver_episode_alert(
+                conn,
+                episode_write.episode_id,
+                delivered_at=_aware_utc(verdict.evaluated_at),
+            )
         if holdings_dir is not None:
             with contextlib.suppress(FileNotFoundError):
                 refresh_thesis_mirror(conn, verdict.ticker, holdings_dir)

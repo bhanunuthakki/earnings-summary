@@ -281,8 +281,12 @@ def test_active_signature_is_unique(db_path: Path) -> None:
     the surviving active alert. (A re-fire becomes possible again only once the
     prior alert expires — see ``test_find_by_signature_skips_expired``.)"""
     first = _fire(db_path, signature="sig-dedup", fired_at=datetime(2026, 1, 1, tzinfo=UTC))
-    with pytest.raises(sqlite3.IntegrityError):
-        _fire(db_path, signature="sig-dedup", fired_at=datetime(2026, 5, 1, tzinfo=UTC))
+    duplicate = _fire(
+        db_path,
+        signature="sig-dedup",
+        fired_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    assert duplicate.id == first.id
     found = store.find_by_signature(signature_sha="sig-dedup", db_path=db_path)
     assert found is not None
     assert found.id == first.id

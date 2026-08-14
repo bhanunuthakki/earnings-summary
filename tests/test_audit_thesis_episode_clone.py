@@ -24,6 +24,7 @@ from sqlite_snapshot import SnapshotRequest, create_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0013_add_readme_update_budgets"
+EPISODE_HEAD = "0014_add_thesis_evaluation_episodes"
 
 
 def _evidence_id(payload: object) -> str:
@@ -90,7 +91,7 @@ def _source_and_clone(tmp_path: Path, migrated_db: Callable[..., Path]) -> tuple
         clone_db=clone,
         output_path=custody_receipt,
     )
-    migrated_db(clone, target="head", upgrade_existing=True)
+    migrated_db(clone, target=EPISODE_HEAD, upgrade_existing=True)
     return snapshot.manifest_path, clone, custody_receipt
 
 
