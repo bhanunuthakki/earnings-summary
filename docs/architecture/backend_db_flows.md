@@ -153,8 +153,9 @@ flowchart LR
     sections --> publication
     subgraph retrieval["Search and Ask retrieval"]
         views["Facts & Analytics / numeric Ask\nvalidated ViewSpec over canonical fact tables\nperiod, unit, and source per cell"]
-        operational["Default narrative Ask\nticker-filtered SQL facts plus lexical filings/transcripts"]
-        op_trace["Operational grounding trace\nquestion hash, scope, locators, evidence hashes\nno prompt or passage duplication"]
+        operational["Default narrative Ask\nticker-filtered SQL facts plus lexical filings/transcripts\ntool-free, spotlighted evidence"]
+        op_trace["Operational grounding trace\nquestion hash, scope, locators, evidence hashes\nanswer FK and durable replay; no passage duplication"]
+        evidence_cache["Per-session evidence cache\nscoped fact/document revision token\nchat and audit writes do not evict"]
         corpus["Search corpus projection"]
         fts["SQLite FTS5"]
         vectors["Optional Lance vector projection"]
@@ -162,7 +163,7 @@ flowchart LR
         audit["Ask session, answer, and citation audit"]
     end
     facts --> views --> op_trace
-    evidence --> operational --> op_trace
+    evidence --> evidence_cache --> operational --> op_trace
     facts --> operational
     op_trace --> audit
     evidence --> corpus

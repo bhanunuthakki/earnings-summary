@@ -29,12 +29,13 @@ from pathlib import Path
 from typing import cast
 
 from clock import now_naive_utc
+from pipeline.queries import BRIEFED_LIST_TYPE_VALUES
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The "briefed" active universe — portfolio + evaluation (mirrors
 # db.BRIEFED_LIST_TYPES; duplicated as a literal to keep this module import-light
 # and test-isolated, like the batch orchestrator's roster SQL).
-BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
+BRIEFED_LIST_TYPES = BRIEFED_LIST_TYPE_VALUES
 
 
 def _now_iso() -> str:

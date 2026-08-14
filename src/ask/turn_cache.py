@@ -52,6 +52,7 @@ worry about (and none is wanted — the win is intra-conversation reuse).
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from collections import OrderedDict
@@ -60,6 +61,7 @@ from pathlib import Path
 from typing import Generic, TypeVar, cast
 
 from sqlite_freshness import SQLiteFileToken, sqlite_file_token
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -219,11 +221,12 @@ def gather_key(
     repo_root: Path,
     scope_tickers: list[str],
     norm_question: str,
-    db_token: SQLiteFileToken | int,
+    db_token: tuple[object, ...] | int,
 ) -> tuple[object, ...]:
     """The full-retrieval memo key. ``cache_key`` scopes it to one session so
     two conversations never share a memo;
-    ``db_token`` is the DB mtime so any write busts every entry."""
+    ``db_token`` is scoped to the evidence tables, so chat/audit writes do
+    not evict a valid retrieval while fact/document changes still do."""
     scope = tuple(sorted({t.strip().upper() for t in scope_tickers if t.strip()}))
     return (cache_key, str(repo_root), scope, norm_question, db_token)
 
@@ -242,6 +245,51 @@ def put_gather(key: tuple[object, ...], items: list[object]) -> None:
 def db_mtime_token(db_path: Path) -> SQLiteFileToken:
     """A cheap main-file plus WAL freshness token; all zeros when absent."""
     return sqlite_file_token(db_path) or (0, 0, 0, 0)
+
+
+def evidence_db_token(db_path: Path) -> tuple[object, ...]:
+    """Cheap revision coordinates for the tables that can change Ask evidence.
+
+    Evidence stores are append/version oriented, so their latest row identity
+    is the stable generation. The few mutable owner-state stores also include
+    their latest update/action timestamp. Partial historical fixtures fall
+    back to the conservative file/WAL token.
+    """
+
+    if not db_path.exists():
+        return db_mtime_token(db_path)
+    conn = None
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        row = conn.execute(
+            "SELECT "
+            "(SELECT MAX(id) FROM financial_facts),"
+            "(SELECT MAX(id) FROM kpi_facts),"
+            "(SELECT MAX(id) FROM documents),"
+            "(SELECT MAX(id) FROM transcripts),"
+            "(SELECT MAX(id) FROM position_sizing_intent),"
+            "(SELECT MAX(updated_at) FROM position_sizing_intent),"
+            "(SELECT MAX(id) FROM decisions),"
+            "(SELECT MAX(COALESCE(outcome_at,user_acted_at,made_at,created_at)) FROM decisions),"
+            "(SELECT MAX(id) FROM analyst_notes),"
+            "(SELECT MAX(updated_at) FROM analyst_notes),"
+            "(SELECT MAX(id) FROM disclosure_events),"
+            "(SELECT MAX(id) FROM macro_series),"
+            "(SELECT MAX(id) FROM macro_sensitivities),"
+            "(SELECT MAX(id) FROM insight_notes),"
+            "(SELECT MAX(id) FROM dcf_runs),"
+            "(SELECT MAX(id) FROM llm_artifacts),"
+            "(SELECT MAX(id) FROM tracked_companies),"
+            "(SELECT MAX(id) FROM fact_overrides),"
+            "(SELECT MAX(id) FROM validation_issues),"
+            "(SELECT MAX(id) FROM kpi_definitions)"
+        ).fetchone()
+        return tuple(row) if row is not None else db_mtime_token(db_path)
+    except (sqlite3.Error, RuntimeError):
+        return db_mtime_token(db_path)
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +319,7 @@ __all__ = [
     "cached_file_parse",
     "clear_all",
     "db_mtime_token",
+    "evidence_db_token",
     "gather_key",
     "get_gather",
     "get_route",

@@ -67,6 +67,7 @@ class AskTurnRow:
     role: str  # 'user' | 'assistant'
     text: str
     citations: Sequence[object] | None  # decoded from citations_json
+    grounding_trace_id: str | None
     model: str | None
     created_at: str
 
@@ -242,6 +243,7 @@ def append_turn(
     role: str,
     text: str,
     citations: Sequence[object] | None = None,
+    grounding_trace_id: str | None = None,
     model: str | None = None,
     db_path: Path,
 ) -> int:
@@ -250,12 +252,20 @@ def append_turn(
     citations_json = json.dumps(citations) if citations is not None else None
     conn = _open(db_path)
     try:
-        cursor = conn.execute(
-            "INSERT INTO ask_turns"
-            " (session_id, role, text, citations_json, model, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, role, text, citations_json, model, now),
-        )
+        if grounding_trace_id is None:
+            cursor = conn.execute(
+                "INSERT INTO ask_turns"
+                " (session_id, role, text, citations_json, model, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, role, text, citations_json, model, now),
+            )
+        else:
+            cursor = conn.execute(
+                "INSERT INTO ask_turns"
+                " (session_id, role, text, citations_json, grounding_trace_id, model, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_id, role, text, citations_json, grounding_trace_id, model, now),
+            )
         conn.execute(
             "UPDATE ask_sessions SET updated_at = ? WHERE id = ?",
             (now, session_id),
@@ -303,6 +313,7 @@ def append_assistant_turn_if_user_tail(
     user_text: str,
     text: str,
     citations: Sequence[object] | None = None,
+    grounding_trace_id: str | None = None,
     model: str | None = None,
     db_path: Path,
 ) -> int:
@@ -317,10 +328,16 @@ def append_assistant_turn_if_user_tail(
     citations_json = json.dumps(citations) if citations is not None else None
     conn = _open(db_path)
     try:
+        columns = "session_id,role,text,citations_json,model,created_at"
+        select_values = "?, 'assistant', ?, ?, ?, ?"
+        values: tuple[object, ...] = (session_id, text, citations_json, model, now)
+        if grounding_trace_id is not None:
+            columns = "session_id,role,text,citations_json,grounding_trace_id,model,created_at"
+            select_values = "?, 'assistant', ?, ?, ?, ?, ?"
+            values = (session_id, text, citations_json, grounding_trace_id, model, now)
         cursor = conn.execute(
             "INSERT INTO ask_turns "
-            "(session_id,role,text,citations_json,model,created_at) "
-            "SELECT ?, 'assistant', ?, ?, ?, ? "
+            f"({columns}) SELECT {select_values} "
             "WHERE EXISTS ("
             "SELECT 1 FROM ask_turns tail "
             "WHERE tail.id=? AND tail.session_id=? AND tail.role='user' "
@@ -328,11 +345,7 @@ def append_assistant_turn_if_user_tail(
             "SELECT MAX(latest.id) FROM ask_turns latest "
             "WHERE latest.session_id=?))",
             (
-                session_id,
-                text,
-                citations_json,
-                model,
-                now,
+                *values,
                 user_turn_id,
                 session_id,
                 user_text,
@@ -407,12 +420,17 @@ def _row_to_turn(row: sqlite3.Row) -> AskTurnRow:
         except (json.JSONDecodeError, TypeError):
             citations = None
     raw_model = row["model"]
+    try:
+        raw_trace_id = row["grounding_trace_id"]
+    except IndexError:
+        raw_trace_id = None
     return AskTurnRow(
         id=int(row["id"]),
         session_id=str(row["session_id"]),
         role=str(row["role"]),
         text=str(row["text"]),
         citations=citations,
+        grounding_trace_id=str(raw_trace_id) if raw_trace_id else None,
         model=str(raw_model) if raw_model else None,
         created_at=str(row["created_at"]),
     )

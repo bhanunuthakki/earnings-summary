@@ -27,6 +27,7 @@ from ask.exchange_store import (
     put_session_context,
     replay_exchange_events,
 )
+from ask.grounding_trace import persist_grounding_trace
 from ask.store import append_turn, load_turns
 from execution import comments_server
 from viewspec.nl_compile import NLCompileResult
@@ -154,7 +155,25 @@ def test_replay_reconstructs_artifact_events_and_one_terminal_final(
 ) -> None:
     db_path = _database(tmp_path, migrated_db)
     exchange = _begin(db_path)
+    trace = persist_grounding_trace(
+        db_path,
+        question="What changed?",
+        scope_tickers=("NU",),
+        route="narrative",
+        strategy="sql_facts_and_lexical_documents",
+        outcome="no_evidence",
+        items=(),
+        session_id="session-1",
+    )
     source: list[dict[str, object]] = [
+        {
+            "type": "retrieval",
+            "trace_id": trace.trace_id,
+            "route": "narrative",
+            "strategy": "sql_facts_and_lexical_documents",
+            "outcome": "no_evidence",
+            "item_count": 0,
+        },
         {"type": "final", "text": "Answer", "route": "narrative"},
         {"type": "citations", "items": [{"href": "/source/7"}]},
         {"type": "diff_proposal", "proposal_ref": "proposal:7", "diff": {}},
@@ -173,11 +192,39 @@ def test_replay_reconstructs_artifact_events_and_one_terminal_final(
 
     assert [event["type"] for event in replayed] == [
         "artifacts",
+        "retrieval",
         "citations",
         "proposal_ref",
         "final",
     ]
+    assert replayed[1]["trace_id"] == trace.trace_id
+    assert load_turns("session-1", db_path=db_path)[-1].grounding_trace_id == trace.trace_id
     assert replayed[-1]["text"] == "Answer"
+
+
+def test_grounded_exchange_releases_no_answer_when_trace_binding_fails(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = _database(tmp_path, migrated_db)
+    exchange = _begin(db_path)
+    source: list[dict[str, object]] = [
+        {
+            "type": "retrieval",
+            "trace_id": "ask-grounding:" + ("f" * 64),
+            "route": "narrative",
+            "strategy": "sql_facts_and_lexical_documents",
+            "outcome": "ready",
+            "item_count": 1,
+        },
+        {"type": "delta", "text": "Uncommitted answer"},
+        {"type": "final", "text": "Uncommitted answer", "route": "narrative"},
+    ]
+
+    output = list(orchestrate_exchange_events(iter(source), exchange=exchange, db_path=db_path))
+
+    assert [event["type"] for event in output] == ["retrieval", "error"]
+    assert all(event.get("text") != "Uncommitted answer" for event in output)
 
 
 def test_external_engine_mode_does_not_duplicate_narrative_or_shadow_turns(

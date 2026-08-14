@@ -110,7 +110,12 @@ def db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def client(db_path: Path, tmp_path: Path) -> FlaskClient:
+def client(db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
+    # This module exercises the legacy panel-routing contract against its
+    # intentionally partial pre-grounding fixture.  Grounded-by-default
+    # behavior and the current migrated schema are covered separately by
+    # test_ask_grounded_default.py.
+    monkeypatch.setenv("ASK_RETRIEVAL_MODE", "legacy")
     assert db_path.exists()
     return comments_server.create_app(tmp_path).test_client()
 

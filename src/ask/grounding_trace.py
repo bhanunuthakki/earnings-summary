@@ -23,7 +23,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from viewspec.engine import ViewResult
 
 GroundingRoute = Literal["data", "narrative"]
-GroundingOutcome = Literal["ready", "no_evidence"]
+GroundingOutcome = Literal["ready", "no_evidence", "retrieval_error"]
 GroundingStrategy = Literal["sql_viewspec", "sql_facts_and_lexical_documents"]
 
 

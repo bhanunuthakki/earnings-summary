@@ -83,7 +83,12 @@ from ask.followup import (
     parse_need_request,
     run_followup_rounds,
 )
-from ask.grounding import EvidenceItem, build_evidence_block, gather_evidence
+from ask.grounding import (
+    EvidenceItem,
+    GroundingRetrievalError,
+    build_evidence_block,
+    gather_evidence,
+)
 from ask.grounding_trace import (
     GroundingTrace,
     GroundingTraceError,
@@ -554,6 +559,7 @@ def _data_events(
         return
 
     n_rows = len(view.rows)
+    grounding_trace_id: str | None = None
     if grounded:
         try:
             trace_items = view_trace_items(view)
@@ -570,6 +576,7 @@ def _data_events(
         except GroundingTraceError as exc:
             yield {"type": "error", "error": str(exc), "code": "grounding_trace_failed"}
             return
+        grounding_trace_id = trace.trace_id
         yield _retrieval_event(trace, route=ROUTE_DATA, strategy="sql_viewspec")
     refined = " (refined the previous view)" if turn.context_spec else ""
     if n_rows == 0:
@@ -597,9 +604,20 @@ def _data_events(
                 session_id=turn.session_id, role="user", text=turn.text, db_path=db_path
             )
             _store_append_turn(
-                session_id=turn.session_id, role="assistant", text=data_label, db_path=db_path
+                session_id=turn.session_id,
+                role="assistant",
+                text=data_label,
+                grounding_trace_id=grounding_trace_id,
+                db_path=db_path,
             )
         except Exception:
+            if grounded:
+                yield {
+                    "type": "error",
+                    "error": "grounded answer could not be bound to its retrieval trace",
+                    "code": "grounding_answer_binding_failed",
+                }
+                return
             log.warning({"event": "ask_store_data_turn_failed", "sid": turn.session_id})
     yield {"type": "fragment", "html": fragment, "spec": spec_dict}
     yield {"type": "final", "text": message, "route": ROUTE_DATA}
@@ -609,6 +627,7 @@ def _gate_events(
     events: Iterable[dict[str, object]],
     *,
     sniff: bool,
+    buffer_all: bool = False,
 ) -> Generator[
     dict[str, object],
     None,
@@ -627,7 +646,7 @@ def _gate_events(
     held: list[dict[str, object]] = []
     trailing: list[dict[str, object]] = []
     final_text: str | None = None
-    decided = "undecided" if sniff else "stream"
+    decided = "buffer" if buffer_all else ("undecided" if sniff else "stream")
     head = ""
     for ev in events:
         kind = ev.get("type")
@@ -1376,13 +1395,41 @@ def _grounded_narrative_events(
         pack.default_tickers
     )
     retrieval_query = _retrieval_text(text, turn)
-    evidence = gather_evidence(
-        retrieval_query,
-        repo_root=repo_root,
-        db_path=db_path,
-        scope_tickers=scope_tickers,
-        cache_key=_turn_cache_key(turn, pack),
-    )
+    try:
+        evidence = gather_evidence(
+            retrieval_query,
+            repo_root=repo_root,
+            db_path=db_path,
+            scope_tickers=scope_tickers,
+            cache_key=_turn_cache_key(turn, pack),
+            strict=True,
+        )
+    except GroundingRetrievalError:
+        try:
+            trace = persist_grounding_trace(
+                db_path,
+                question=retrieval_query,
+                scope_tickers=tuple(scope_tickers),
+                route="narrative",
+                strategy="sql_facts_and_lexical_documents",
+                outcome="retrieval_error",
+                items=(),
+                session_id=turn.session_id,
+            )
+        except GroundingTraceError as exc:
+            yield {"type": "error", "error": str(exc), "code": "grounding_trace_failed"}
+            return
+        yield _retrieval_event(
+            trace,
+            route=ROUTE_NARRATIVE,
+            strategy="sql_facts_and_lexical_documents",
+        )
+        yield {
+            "type": "error",
+            "error": "grounded evidence retrieval failed",
+            "code": "grounding_retrieval_failed",
+        }
+        return
     try:
         trace = persist_grounding_trace(
             db_path,
@@ -1465,7 +1512,11 @@ def _narrative_events(
             cache_key=_turn_cache_key(turn, pack),
         )
     )
-    evidence_block = build_evidence_block(evidence, strict=strict_grounding)
+    evidence_block = (
+        build_evidence_block(evidence, strict=True)
+        if strict_grounding
+        else build_evidence_block(evidence)
+    )
     armed = followup_armed(db_path) and not strict_grounding
     if emit_stage:
         stage: dict[str, object] = {"type": "stage", "stage": "answering", "route": ROUTE_NARRATIVE}
@@ -1474,6 +1525,8 @@ def _narrative_events(
         yield stage
 
     base_context = pack.system_context or "You are a portfolio research assistant."
+    if strict_grounding:
+        base_context = _strict_grounded_context(base_context)
     system_context = base_context
     if evidence_block:
         system_context = system_context + "\n\n" + evidence_block
@@ -1504,18 +1557,24 @@ def _narrative_events(
 
     if strict_grounding and not evidence:
         final_text = "I don't have enough sourced evidence to answer that."
-        yield {"type": "delta", "text": final_text}
-        yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
         if turn.session_id and turn.persistence_mode != "external_exchange":
             try:
                 _store_append_turn(
                     session_id=turn.session_id,
                     role="assistant",
                     text=final_text,
+                    grounding_trace_id=retrieval_trace_id,
                     db_path=db_path,
                 )
             except Exception:
-                log.warning({"event": "ask_store_asst_turn_failed", "sid": turn.session_id})
+                yield {
+                    "type": "error",
+                    "error": "grounded answer could not be bound to its retrieval trace",
+                    "code": "grounding_answer_binding_failed",
+                }
+                return
+        yield {"type": "delta", "text": final_text}
+        yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
         return
 
     thread_text = "\n\n".join(f"[{h['role'].upper()}] {h['text']}" for h in history)
@@ -1526,9 +1585,22 @@ def _narrative_events(
         + "\n\n---\n\nUSER:\n"
         + text
     )
+    transport_events = (
+        narrative_transport.stream_llm_text(
+            full_prompt,
+            purpose=pack.narrative_purpose,
+            allow_read=False,
+        )
+        if strict_grounding
+        else narrative_transport.stream_llm_text(
+            full_prompt,
+            purpose=pack.narrative_purpose,
+        )
+    )
     final_text, held, _trailing = yield from _gate_events(
-        narrative_transport.stream_llm_text(full_prompt, purpose=pack.narrative_purpose),
+        transport_events,
         sniff=armed,
+        buffer_all=strict_grounding,
     )
     if final_text is None:  # error frame already yielded / defensive no-final
         return
@@ -1554,37 +1626,73 @@ def _narrative_events(
             return
         final_text = outcome.final_text
         items_all, rounds, new_count = outcome.items, outcome.rounds, outcome.new_items
-        # The follow-up answer arrives whole (call_llm is single-shot) —
-        # one delta keeps stream-rendering clients working.
-        yield {"type": "delta", "text": final_text}
-    else:
-        yield from held  # deltas withheld while the head looked like JSON
-    yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
-    if armed:
-        yield _grounding_event(rounds, items_all, new_count)
 
-    # S8 per-claim citations over the FULL augmented evidence — round-2
-    # items get the same claims→cites audit as round-1.
+    # Strict grounded output stays buffered until its claim audit proves that
+    # every factual claim is supported and visibly cited.
     citations_items: list[object] | None = None
+    payload: dict[str, object] | None = None
     if items_all:
-        payload = build_citations_payload(final_text, items_all, db_path=db_path)
+        try:
+            payload = build_citations_payload(
+                final_text,
+                items_all,
+                db_path=db_path,
+                strict=strict_grounding,
+            )
+        except Exception:
+            yield {
+                "type": "error",
+                "error": "grounded answer failed citation verification",
+                "code": "grounding_citation_failed",
+            }
+            return
         if payload is not None:
             maybe_items = payload.get("items")
             if isinstance(maybe_items, list) and maybe_items:
                 citations_items = cast("list[object]", maybe_items)
-            citation_event: dict[str, object] = {"type": "citations", **payload}
-            if retrieval_trace_id is not None:
-                citation_event["trace_id"] = retrieval_trace_id
-            yield citation_event
 
-    # Persist the assistant turn after a successful response.
-    if turn.session_id and turn.persistence_mode != "external_exchange":
+    assistant_persisted = False
+    if strict_grounding and turn.session_id and turn.persistence_mode != "external_exchange":
         try:
             _store_append_turn(
                 session_id=turn.session_id,
                 role="assistant",
                 text=final_text,
                 citations=citations_items,
+                grounding_trace_id=retrieval_trace_id,
+                db_path=db_path,
+            )
+            assistant_persisted = True
+        except Exception:
+            yield {
+                "type": "error",
+                "error": "grounded answer could not be bound to its retrieval trace",
+                "code": "grounding_answer_binding_failed",
+            }
+            return
+
+    if needs is not None:
+        yield {"type": "delta", "text": final_text}
+    else:
+        yield from held
+    yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
+    if armed:
+        yield _grounding_event(rounds, items_all, new_count)
+    if payload is not None:
+        citation_event: dict[str, object] = {"type": "citations", **payload}
+        if retrieval_trace_id is not None:
+            citation_event["trace_id"] = retrieval_trace_id
+        yield citation_event
+
+    # Persist the assistant turn after a successful response.
+    if not assistant_persisted and turn.session_id and turn.persistence_mode != "external_exchange":
+        try:
+            _store_append_turn(
+                session_id=turn.session_id,
+                role="assistant",
+                text=final_text,
+                citations=citations_items,
+                grounding_trace_id=retrieval_trace_id,
                 db_path=db_path,
             )
         except Exception:
@@ -1593,6 +1701,19 @@ def _narrative_events(
     diff = narrative_transport.extract_diff(final_text)
     if diff is not None:
         yield {"type": "diff_proposal", "diff": diff}
+
+
+def _strict_grounded_context(base_context: str) -> str:
+    """Remove the legacy Read-tool invitation from the tool-free product mode."""
+
+    return re.sub(
+        r"Answer from this context first\. When you need specifics, use the Read tool.*?"
+        r"(?=When the analyst asks you to \*\*edit\*\* something)",
+        "Answer only from the numbered evidence retrieved for this turn. "
+        "Do not use files, tools, memory, or prior model output as factual evidence.\n\n",
+        base_context,
+        flags=re.DOTALL,
+    )
 
 
 def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from ask import turn_cache
 from ask.grounding import EvidenceItem
 from ask.grounding_trace import (
     GroundingTraceError,
@@ -14,6 +15,7 @@ from ask.grounding_trace import (
     persist_grounding_trace,
     view_trace_items,
 )
+from ask.store import append_turn, create_session, load_turns
 from report.models import CellSource
 from viewspec.engine import ViewCell, ViewResult, ViewRow
 from viewspec.spec import MetricRef, ViewSpec
@@ -155,3 +157,40 @@ def test_trace_persistence_fails_closed_when_schema_is_missing(tmp_path: Path) -
             items=(),
             session_id=None,
         )
+
+
+def test_trace_binds_to_answer_without_invalidating_evidence_cache(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = migrated_db(tmp_path / "bound-trace.db")
+    before = turn_cache.evidence_db_token(db_path)
+    session = create_session(db_path=db_path)
+    trace = persist_grounding_trace(
+        db_path,
+        question="What changed?",
+        scope_tickers=("WIX",),
+        route="narrative",
+        strategy="sql_facts_and_lexical_documents",
+        outcome="no_evidence",
+        items=(),
+        session_id=session.id,
+    )
+    append_turn(
+        session_id=session.id,
+        role="assistant",
+        text="No sourced evidence.",
+        grounding_trace_id=trace.trace_id,
+        db_path=db_path,
+    )
+
+    turns = load_turns(session.id, db_path=db_path)
+    assert turns[-1].grounding_trace_id == trace.trace_id
+    assert turn_cache.evidence_db_token(db_path) == before
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO kpi_definitions(ticker,name,unit,primary_source) VALUES (?,?,?,?)",
+            ("WIX", "Bookings", "USD", "issuer"),
+        )
+    assert turn_cache.evidence_db_token(db_path) != before

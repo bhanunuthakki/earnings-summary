@@ -18,7 +18,7 @@ depends_on = None
 def upgrade() -> None:
     op.execute(
         """
-        CREATE TABLE IF NOT EXISTS ask_grounding_traces (
+        CREATE TABLE ask_grounding_traces (
             trace_id TEXT PRIMARY KEY,
             idempotency_key TEXT NOT NULL UNIQUE,
             session_id TEXT,
@@ -36,7 +36,7 @@ def upgrade() -> None:
             CONSTRAINT ck_ask_grounding_trace_strategy
               CHECK(strategy IN ('sql_viewspec','sql_facts_and_lexical_documents')),
             CONSTRAINT ck_ask_grounding_trace_outcome
-              CHECK(outcome IN ('ready','no_evidence')),
+              CHECK(outcome IN ('ready','no_evidence','retrieval_error')),
             CONSTRAINT ck_ask_grounding_trace_count CHECK(item_count >= 0),
             CONSTRAINT ck_ask_grounding_trace_json
               CHECK(json_valid(scope_json) AND json_type(scope_json)='array'
@@ -51,19 +51,24 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_ask_grounding_traces_session_created "
+        "CREATE INDEX ix_ask_grounding_traces_session_created "
         "ON ask_grounding_traces(session_id,created_at)"
     )
     op.execute(
+        "ALTER TABLE ask_turns ADD COLUMN grounding_trace_id TEXT "
+        "REFERENCES ask_grounding_traces(trace_id) ON DELETE RESTRICT"
+    )
+    op.execute("CREATE INDEX ix_ask_turns_grounding_trace_id ON ask_turns(grounding_trace_id)")
+    op.execute(
         """
-        CREATE TRIGGER IF NOT EXISTS trg_ask_grounding_traces_append_only_update
+        CREATE TRIGGER trg_ask_grounding_traces_append_only_update
         BEFORE UPDATE ON ask_grounding_traces
         BEGIN SELECT RAISE(ABORT, 'Ask grounding traces are append-only'); END
         """
     )
     op.execute(
         """
-        CREATE TRIGGER IF NOT EXISTS trg_ask_grounding_traces_append_only_delete
+        CREATE TRIGGER trg_ask_grounding_traces_append_only_delete
         BEFORE DELETE ON ask_grounding_traces
         BEGIN SELECT RAISE(ABORT, 'Ask grounding traces are append-only'); END
         """
@@ -71,7 +76,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS trg_ask_grounding_traces_append_only_delete")
-    op.execute("DROP TRIGGER IF EXISTS trg_ask_grounding_traces_append_only_update")
-    op.execute("DROP INDEX IF EXISTS ix_ask_grounding_traces_session_created")
-    op.execute("DROP TABLE IF EXISTS ask_grounding_traces")
+    op.execute("DROP TRIGGER trg_ask_grounding_traces_append_only_delete")
+    op.execute("DROP TRIGGER trg_ask_grounding_traces_append_only_update")
+    op.execute("DROP INDEX ix_ask_turns_grounding_trace_id")
+    op.execute("ALTER TABLE ask_turns DROP COLUMN grounding_trace_id")
+    op.execute("DROP INDEX ix_ask_grounding_traces_session_created")
+    op.execute("DROP TABLE ask_grounding_traces")

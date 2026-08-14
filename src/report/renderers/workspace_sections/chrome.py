@@ -41,6 +41,7 @@ from report.renderers.workspace_sections._shared import (
 )
 from report.renderers.workspace_sections.earnings import _ws_period_sort_key
 from report.renderers.workspace_sections.synthesis import _LENS_LABELS
+from report.sections.p3_data import SayDoVerdictRow
 from ui.controls import fact_anchor_attrs, pill_tone_class
 from user_state.notes import AnalystNoteRow
 
@@ -73,7 +74,11 @@ _DISPOSITION_VERBS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _identity(body: StringIO, spec: ReportSpec) -> None:
+def _identity(
+    body: StringIO,
+    spec: ReportSpec,
+    saydo_verdicts: list[SayDoVerdictRow] | None = None,
+) -> None:
     snap = spec.snapshot
     val = snap.valuation
     body.write('<div class="l1-identity">')
@@ -96,6 +101,10 @@ def _identity(body: StringIO, spec: ReportSpec) -> None:
     if val.valuation_date is not None:
         body.write('<span class="meta-pip">·</span>')
         body.write(f"<span>DCF dated {fmt_date(val.valuation_date.isoformat())}</span>")
+    score_marker = _saydo_score_marker(saydo_verdicts or [])
+    if score_marker:
+        body.write('<span class="meta-pip">·</span>')
+        body.write(score_marker)
     body.write("</div></div>")  # /identity-left
 
     # Valuation strip on the right.
@@ -117,6 +126,18 @@ def _identity(body: StringIO, spec: ReportSpec) -> None:
         body.write('<div class="val-divider"></div>')
         _val_stat(body, "Trigger", val.trigger_status.upper(), mono_sm=True)
     body.write("</div></div>")  # /identity-right, /l1-identity
+
+
+def _saydo_score_marker(rows: list[SayDoVerdictRow]) -> str:
+    """Compact Company Brief marker from the already-loaded verdict ledger."""
+    graded = [row for row in rows if row.outcome]
+    if not graded:
+        return ""
+    met_or_exceeded = sum(1 for row in graded if str(row.outcome).casefold() in {"met", "exceeded"})
+    percent = round(100 * met_or_exceeded / len(graded))
+    noun = "KPI" if len(graded) == 1 else "KPIs"
+    label = f"{percent}% met/exceeded · {len(graded)} reported {noun}"
+    return f'<span class="k-pill">{_esc(label)}</span>'
 
 
 def _val_stat(

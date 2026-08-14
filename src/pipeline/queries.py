@@ -78,6 +78,12 @@ ANALYZED_LIST_TYPES: frozenset[ListType] = frozenset(
 # eval-flavor). Watchlist names are a holding pen — no auto-brief. Use this for
 # brief-producing pipelines: company description, build_artifacts.py defaults.
 BRIEFED_LIST_TYPES: frozenset[ListType] = frozenset({ListType.PORTFOLIO, ListType.EVALUATION})
+BRIEFED_LIST_TYPE_VALUES: tuple[str, ...] = tuple(
+    sorted(list_type.value for list_type in BRIEFED_LIST_TYPES)
+)
+ANALYZED_LIST_TYPE_VALUES: tuple[str, ...] = tuple(
+    sorted(list_type.value for list_type in ANALYZED_LIST_TYPES)
+)
 
 
 def tracked_companies_for_user(
