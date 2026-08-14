@@ -15,8 +15,11 @@ real sqlite DB so the SQL stays honest.
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sqlite3
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -150,6 +153,31 @@ def _clear_all_obligations(db_path: Path) -> None:
         conn.close()
 
 
+def _write_valid_bear_cache(repo_root: Path) -> None:
+    path = repo_root / "data" / "bear_case" / "ABNB.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "failure_modes": [
+                    {
+                        "hypothesis": "Demand slows",
+                        "evidence_in_data": "Nights decelerate",
+                        "leading_indicator": "Bookings",
+                        "quantitative_impact": "Revenue below plan",
+                        "refutation_criteria": "Bookings reaccelerate",
+                    }
+                ],
+                "most_underweighted": "Competition",
+                "out_of_scope_flags": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    refreshed_at = time.time() + 0.01
+    os.utime(path, (refreshed_at, refreshed_at))
+
+
 class _FakeCompleted:
     """Stand-in for subprocess.CompletedProcess. Only the fields the executor
     actually reads (returncode, stderr) are populated."""
@@ -187,6 +215,10 @@ def _dict_log_events(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]
         if isinstance(record.msg, dict):
             events.append(cast("dict[str, object]", record.msg))
     return events
+
+
+def _projection_ok(*args: object, **kwargs: object) -> None:
+    del args, kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +273,7 @@ def test_execute_invokes_correct_subprocess(
 
     fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(executor, "_project_native_job", _projection_ok)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -265,8 +298,8 @@ def test_execute_invokes_correct_subprocess(
         str(repo_root / "execution" / "build_artifacts.py"),
         "--ticker",
         "GOOG",
-        "--enable-llm",
-        "--force-refresh",
+        "--regenerate-purpose",
+        "bear_case",
     )
     expected_desc = (
         sys.executable,
@@ -283,22 +316,20 @@ def test_execute_invokes_correct_subprocess(
 def test_execute_dedupes_shared_cli_for_one_ticker(
     executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Multiple dirty purposes for the same ticker that map to the SAME CLI
-    (e.g. qa_topics + saydo_filter both go through build_artifacts --enable-llm)
-    should invoke that subprocess exactly once."""
+    """Multiple rows for the same exact ticker/purpose invoke one subprocess."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
     conn = _make_portfolio_db(db_path)
     try:
-        _insert_dirty(conn, ticker="NU", purpose="valuation_basis")
-        _insert_dirty(conn, ticker="NU", purpose="qa_topics")
+        _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
         _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
     finally:
         conn.close()
 
     fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(executor, "_project_native_job", _projection_ok)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -321,7 +352,8 @@ def test_execute_dedupes_shared_cli_for_one_ticker(
         str(repo_root / "execution" / "build_artifacts.py"),
         "--ticker",
         "NU",
-        "--enable-llm",
+        "--regenerate-purpose",
+        "saydo_filter",
     ]
 
 
@@ -331,9 +363,18 @@ def test_execute_dedupes_shared_cli_for_one_ticker(
 
 
 def test_bear_case_regenerator_bypasses_the_on_disk_cache(executor: Any) -> None:
-    """Dirty bear-case work must force the canonical builder past its file cache."""
+    """Dirty report work must force only its exact native-purpose cache."""
     argv = executor._PURPOSE_TO_REGENERATOR["bear_case"]
-    assert argv[-1] == "--force-refresh"
+    assert argv[-2:] == ["--regenerate-purpose", "bear_case"]
+
+
+@pytest.mark.parametrize(
+    "purpose",
+    ["bear_case", "exec_comp_alignment", "qa_topics", "saydo_filter", "valuation_basis"],
+)
+def test_report_regenerator_names_the_exact_native_purpose(executor: Any, purpose: str) -> None:
+    argv = executor._PURPOSE_TO_REGENERATOR[purpose]
+    assert argv[-2:] == ["--regenerate-purpose", purpose]
 
 
 def test_zero_exit_without_clearing_obligation_fails_closed(
@@ -378,6 +419,145 @@ def test_zero_exit_without_clearing_obligation_fails_closed(
     assert '"no_progress": 1' in receipt
     events = _dict_log_events(caplog)
     assert any(event.get("event") == "drain_no_progress" for event in events)
+
+
+def test_zero_exit_projects_a_fresh_typed_native_cache_before_progress_check(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
+        old_id = int(conn.execute("SELECT id FROM llm_artifacts").fetchone()[0])
+    finally:
+        conn.close()
+
+    fake_run = _CapturingFakeRun(
+        returncode=0,
+        on_run=lambda: _write_valid_bear_cache(repo_root),
+    )
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    assert executor.main() == 0
+    conn = sqlite3.connect(db_path)
+    try:
+        old = conn.execute(
+            "SELECT superseded_by_id FROM llm_artifacts WHERE id = ?", (old_id,)
+        ).fetchone()
+        current = conn.execute(
+            """
+            SELECT purpose, dirty, superseded_by_id
+            FROM llm_artifacts WHERE id = ?
+            """,
+            (old[0],),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert old[0] is not None
+    assert current == ("bear_case", 0, None)
+
+
+def test_native_projection_failure_cannot_be_hidden_by_clearing_the_old_row(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
+    finally:
+        conn.close()
+
+    fake_run = _CapturingFakeRun(
+        returncode=0,
+        on_run=lambda: _clear_all_obligations(db_path),
+    )
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    assert executor.main() == 1
+
+
+def test_duplicate_native_obligations_share_one_producer_and_one_successor(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
+        _insert_dirty(conn, ticker="ABNB", purpose="bear_case")
+        predecessor_ids = [
+            int(row[0])
+            for row in conn.execute("SELECT id FROM llm_artifacts ORDER BY id").fetchall()
+        ]
+    finally:
+        conn.close()
+
+    fake_run = _CapturingFakeRun(
+        returncode=0,
+        on_run=lambda: _write_valid_bear_cache(repo_root),
+    )
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    assert executor.main() == 0
+    assert len(fake_run.calls) == 1
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT superseded_by_id FROM llm_artifacts WHERE id IN (?, ?)",
+            predecessor_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    assert all(row[0] is not None for row in rows)
+    successors = {int(row[0]) for row in rows}
+    assert len(successors) == 1
 
 
 @pytest.mark.parametrize("failure_mode", ["stderr", "exception"])
@@ -498,32 +678,35 @@ def test_deduped_job_requires_every_original_obligation_to_progress(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """One shared child cannot hide a second purpose that remained dirty."""
+    """One shared child cannot hide a second exact-row obligation."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
     db_path = repo_root / "data" / "portfolio.db"
     conn = _make_portfolio_db(db_path)
     try:
-        _insert_dirty(conn, ticker="NU", purpose="qa_topics")
+        _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
         _insert_dirty(conn, ticker="NU", purpose="saydo_filter")
         unresolved_id = int(
-            conn.execute("SELECT id FROM llm_artifacts WHERE purpose = 'saydo_filter'").fetchone()[
-                0
-            ]
+            conn.execute(
+                "SELECT MAX(id) FROM llm_artifacts WHERE purpose = 'saydo_filter'"
+            ).fetchone()[0]
         )
     finally:
         conn.close()
 
-    def _clear_only_qa_topics() -> None:
+    def _clear_only_first_row() -> None:
         update_conn = sqlite3.connect(str(db_path))
         try:
-            update_conn.execute("UPDATE llm_artifacts SET dirty = 0 WHERE purpose = 'qa_topics'")
+            update_conn.execute(
+                "UPDATE llm_artifacts SET dirty = 0 WHERE id = (SELECT MIN(id) FROM llm_artifacts)"
+            )
             update_conn.commit()
         finally:
             update_conn.close()
 
-    fake_run = _CapturingFakeRun(returncode=0, on_run=_clear_only_qa_topics)
+    fake_run = _CapturingFakeRun(returncode=0, on_run=_clear_only_first_row)
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(executor, "_project_native_job", _projection_ok)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -646,6 +829,7 @@ def test_cost_check_runs_before_each_job(
 
     fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(executor, "_project_native_job", _projection_ok)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -733,6 +917,7 @@ def test_unmapped_purpose_logs_warning_and_skips(
 
     fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(executor, "_project_native_job", _projection_ok)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -759,8 +944,8 @@ def test_unmapped_purpose_logs_warning_and_skips(
         str(repo_root / "execution" / "build_artifacts.py"),
         "--ticker",
         "META",
-        "--enable-llm",
-        "--force-refresh",
+        "--regenerate-purpose",
+        "bear_case",
     ]
     no_regen_warnings = [
         r
@@ -842,6 +1027,7 @@ def test_expired_artifact_drives_execute_path(
 
     fake_run = _CapturingFakeRun(returncode=0, on_run=lambda: _clear_all_obligations(db_path))
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(executor, "_project_native_job", _projection_ok)
     monkeypatch.setattr(
         sys,
         "argv",

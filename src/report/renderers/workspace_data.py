@@ -135,6 +135,9 @@ def filter_important_print_vs_guide(
     card: SayDoCard,
     rows: list[PrintVsGuideRow],
     enable_llm: bool,
+    *,
+    force_refresh: bool = False,
+    strict_refresh: bool = False,
 ) -> list[PrintVsGuideRow]:
     """LLM-judged filter: keep only the strategically important commitments.
 
@@ -168,14 +171,21 @@ def filter_important_print_vs_guide(
         load_owner_profile_anchor(repo_root),  # inert until a fact is affirmed
     )
     cache_key = _saydo_filter_cache_key(card, payload, anchor_block)
-    cached = _load_saydo_filter_cache(repo_root, ticker, cache_key)
+    cached = None if force_refresh else _load_saydo_filter_cache(repo_root, ticker, cache_key)
     if cached is None:
         try:
             quarter_label = f"{card.current_quarter} {card.current_year}"
             raw = generate_saydo_filter(ticker, quarter_label, payload, anchor_block=anchor_block)
             cached = _parse_saydo_filter_response(raw)
+            if strict_refresh:
+                valid_ids = {str(i) for i in range(len(rows))}
+                selected_ids = set(cached)
+                if not selected_ids or not selected_ids.issubset(valid_ids):
+                    raise ValueError("saydo_filter returned invalid commitment ids")
             _save_saydo_filter_cache(repo_root, ticker, cache_key, cached)
         except Exception:
+            if strict_refresh:
+                raise
             # Soft-fail: show all rows (truncated) so the panel still renders.
             return rows[:8]
     kept_ids = set(cached)

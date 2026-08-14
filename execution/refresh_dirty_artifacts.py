@@ -8,9 +8,9 @@ has elapsed. This script:
   1. Reads up to --limit dirty/expired artifacts via drain_dirty().
   2. Groups by (ticker, purpose) and prints a refresh manifest (default mode).
   3. With --execute: invokes the purpose-specific regenerator script for each
-     (ticker, command) pair, subprocess-isolated. Each regenerator writes a
-     fresh artifact via llm_artifact_store.upsert (which clears dirty=0 and
-     stamps a new expires_at), so the queue drains as the run progresses.
+     (ticker, command) pair, subprocess-isolated. Legacy native JSON caches are
+     then schema-validated and projected through llm_artifact_store.upsert;
+     native or direct-store producers must satisfy the exact queued rows.
   4. With --max-cost-usd N: queries the llm_calls ledger for cost accrued
      since this run started; halts gracefully (exit 0) when the cap is
      reached so daily cron never blows the budget.
@@ -40,6 +40,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm_artifact_store import Artifact, drain_dirty  # noqa: E402
 from log_redact import redact  # noqa: E402
+from native_artifact_projection import (  # noqa: E402
+    PROJECTABLE_NATIVE_PURPOSES,
+    NativeArtifactProjectionError,
+    project_native_artifact,
+)
 from runtime.python_process import managed_python_argv  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -52,11 +57,9 @@ log = logging.getLogger("refresh_dirty_artifacts")
 #   * Manifest mode prints the command line so an operator can pipe it.
 #   * Execute mode subprocess-invokes the command with timeout + capture.
 #
-# Most purposes fold into `build_artifacts.py --enable-llm`, since the brief
-# builder calls llm_client (which writes the artifact via upsert as a side
-# effect of generating the section). Standalone extractors are preferred
-# where they exist because they're cheaper per call than rebuilding the
-# whole brief.
+# Report-side purposes use `build_artifacts.py --regenerate-purpose`, which
+# exits after the named producer and does not render or invoke unrelated LLM
+# sections. Standalone extractors remain preferred where they already exist.
 #
 # If a purpose is missing from this mapping, the drain logs a warning and
 # skips that artifact rather than crashing — graceful degradation as new
@@ -67,36 +70,40 @@ _PURPOSE_TO_REGENERATOR: dict[str, list[str]] = {
         "execution/build_artifacts.py",
         "--ticker",
         "{ticker}",
-        "--enable-llm",
-        "--force-refresh",
+        "--regenerate-purpose",
+        "bear_case",
     ],
     "qa_topics": [
         "python",
         "execution/build_artifacts.py",
         "--ticker",
         "{ticker}",
-        "--enable-llm",
+        "--regenerate-purpose",
+        "qa_topics",
     ],
     "saydo_filter": [
         "python",
         "execution/build_artifacts.py",
         "--ticker",
         "{ticker}",
-        "--enable-llm",
+        "--regenerate-purpose",
+        "saydo_filter",
     ],
     "valuation_basis": [
         "python",
         "execution/build_artifacts.py",
         "--ticker",
         "{ticker}",
-        "--enable-llm",
+        "--regenerate-purpose",
+        "valuation_basis",
     ],
     "exec_comp_alignment": [
         "python",
         "execution/build_artifacts.py",
         "--ticker",
         "{ticker}",
-        "--enable-llm",
+        "--regenerate-purpose",
+        "exec_comp_alignment",
     ],
     "company_description": [
         "python",
@@ -161,6 +168,8 @@ class _ArtifactObligation:
 
     artifact_id: int
     purpose: str
+    scope: str
+    fiscal_period: str | None
     was_expired: bool
 
 
@@ -172,6 +181,7 @@ class _PendingJob:
     purposes: list[str]
     obligations: list[_ArtifactObligation]
     argv: list[str]
+    queued_at: datetime
 
 
 def _aggregate_breakdown(
@@ -261,6 +271,8 @@ def _build_pending_jobs(
         obligation = _ArtifactObligation(
             artifact_id=art.id,
             purpose=purpose,
+            scope=art.scope,
+            fiscal_period=art.fiscal_period,
             was_expired=expires_at is not None and expires_at < queued_at,
         )
         existing_index = job_indexes.get(key)
@@ -277,6 +289,7 @@ def _build_pending_jobs(
                 purposes=[purpose],
                 obligations=[obligation],
                 argv=argv,
+                queued_at=queued_at,
             )
         )
     return jobs
@@ -328,6 +341,39 @@ def _run_subprocess(job: _PendingJob, cwd: Path) -> dict[str, object]:
         "exit_code": proc.returncode,
         "stderr_tail": stderr_tail,
     }
+
+
+def _project_native_job(
+    job: _PendingJob,
+    *,
+    repo_root: Path,
+    db_path: Path,
+) -> str | None:
+    """Project every freshly written native cache owned by this exact job."""
+    grouped: dict[tuple[str, str, str | None], list[int]] = defaultdict(list)
+    for obligation in job.obligations:
+        if obligation.purpose in PROJECTABLE_NATIVE_PURPOSES:
+            grouped[(obligation.purpose, obligation.scope, obligation.fiscal_period)].append(
+                obligation.artifact_id
+            )
+    for (purpose, scope, fiscal_period), obligation_ids in sorted(
+        grouped.items(),
+        key=lambda item: (item[0][0], item[0][1], item[0][2] or ""),
+    ):
+        try:
+            project_native_artifact(
+                ticker=job.ticker,
+                purpose=purpose,
+                repo_root=repo_root,
+                db_path=db_path,
+                queued_at=job.queued_at,
+                scope=scope,
+                fiscal_period=fiscal_period,
+                obligation_ids=tuple(sorted(obligation_ids)),
+            )
+        except NativeArtifactProjectionError as exc:
+            return redact(f"{purpose}: {exc}")
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,12 +584,17 @@ def _execute_jobs(
             failed += 1
             log.warning({"event": "drain_subprocess_failed", **result})
         else:
+            projection_error = _project_native_job(
+                job,
+                repo_root=repo_root,
+                db_path=db_path,
+            )
             progress = _check_job_progress(
                 job,
                 db_path=db_path,
                 checked_at=datetime.now(UTC),
             )
-            if not progress.satisfied:
+            if projection_error is not None or not progress.satisfied:
                 failed += 1
                 no_progress += 1
                 log.warning(
@@ -552,7 +603,7 @@ def _execute_jobs(
                         **result,
                         "obligation_ids": [item.artifact_id for item in job.obligations],
                         "unresolved_artifact_ids": list(progress.unresolved_artifact_ids),
-                        "verification_error": progress.error,
+                        "verification_error": projection_error or progress.error,
                     }
                 )
             else:

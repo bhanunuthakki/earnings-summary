@@ -249,6 +249,7 @@ def build(
     enable_llm: bool = False,
     max_quarters: int = 5,
     force_budget_bypass: bool = False,
+    force_refresh: bool = False,
 ) -> QARosterSection:
     """Parse the most recent ``max_quarters`` transcripts into per-quarter rosters.
 
@@ -281,7 +282,13 @@ def build(
             # latest quarter is what the user is looking at first anyway.
             continue
         if enable_llm and ticker and repo_root is not None and topics_skip is None:
-            entries = _apply_llm_topics(ticker, repo_root, transcript, entries)
+            entries = _apply_llm_topics(
+                ticker,
+                repo_root,
+                transcript,
+                entries,
+                force_refresh=force_refresh,
+            )
         rosters.append(
             QARosterQuarter(quarter=transcript.quarter, year=transcript.year, entries=entries)
         )
@@ -683,6 +690,8 @@ def _apply_llm_topics(
     repo_root: Path,
     transcript: TranscriptEntry,
     entries: list[QAEntry],
+    *,
+    force_refresh: bool = False,
 ) -> list[QAEntry]:
     """Replace regex-derived ``entry.topic`` and ``entry.tag`` with LLM picks.
 
@@ -696,7 +705,7 @@ def _apply_llm_topics(
         for i, e in enumerate(entries)
     ]
     cache_key = _topics_cache_key(transcript, payload)
-    cached = _load_topics_cache(repo_root, ticker, cache_key)
+    cached = None if force_refresh else _load_topics_cache(repo_root, ticker, cache_key)
     if cached is None:
         try:
             quarter_label = f"{transcript.quarter} {transcript.year}"
@@ -708,6 +717,8 @@ def _apply_llm_topics(
             # — they affect the whole build, not just these Q&A labels.
             if is_hard_stop(exc):
                 raise
+            if force_refresh:
+                raise RuntimeError("targeted qa_topics refresh failed") from exc
             # Soft-fail: keep regex-derived labels. The exception was logged in
             # generate_qa_topics; no second log here keeps the noise down.
             return entries

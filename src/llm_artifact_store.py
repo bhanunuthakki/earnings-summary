@@ -84,6 +84,12 @@ class UpsertRequest:
     parent_artifact_ids: list[int] = field(default_factory=list[int])
     expires_at: datetime | None = None
     llm_call_id: int | None = None
+    # Dirty-drain callers can bind every exact queued predecessor to the same
+    # successor in this transaction. Other producers leave this empty.
+    supersede_artifact_ids: list[int] = field(default_factory=list[int])
+    # Native-cache projection proves a new producer run and therefore must
+    # persist a post-queue version even when its bytes match an older artifact.
+    force_new_version: bool = False
 
 
 def compute_input_sha256(*, prompt_version: str, cache_inputs: list[bytes | str]) -> str:
@@ -338,13 +344,20 @@ def upsert(
             if existing is not None and existing["expires_at"]
             else None
         )
-        if existing is not None and _cache_state_is_reusable(
-            dirty=bool(existing["dirty"]),
-            expires_at=existing_expires,
-            current_input_sha256=str(existing["input_sha256"]),
-            expected_input_sha256=input_sha,
+        if (
+            not req.force_new_version
+            and existing is not None
+            and _cache_state_is_reusable(
+                dirty=bool(existing["dirty"]),
+                expires_at=existing_expires,
+                current_input_sha256=str(existing["input_sha256"]),
+                expected_input_sha256=input_sha,
+            )
         ):
-            return (int(existing["id"]), True)
+            existing_id = int(existing["id"])
+            _supersede_exact_obligations(conn, req=req, successor_id=existing_id)
+            conn.commit()
+            return (existing_id, True)
 
         # Either no existing row, hash drift, or dirty â€” insert a new row and
         # supersede any prior current row.
@@ -394,13 +407,70 @@ def upsert(
                 "UPDATE llm_artifacts SET superseded_by_id = ? WHERE id = ?",
                 (new_id, int(existing["id"])),
             )
+        _supersede_exact_obligations(conn, req=req, successor_id=new_id)
         conn.commit()
         return (new_id, False)
     except sqlite3.Error as exc:
+        conn.rollback()
         log.warning({"event": "artifact_upsert_failed", "error": str(exc)})
         return (None, False)
     finally:
         conn.close()
+
+
+def _supersede_exact_obligations(
+    conn: sqlite3.Connection,
+    *,
+    req: UpsertRequest,
+    successor_id: int,
+) -> None:
+    """Bind exact same-scope queue rows to ``successor_id`` before commit."""
+    predecessor_ids = sorted(
+        {artifact_id for artifact_id in req.supersede_artifact_ids if artifact_id != successor_id}
+    )
+    if not predecessor_ids:
+        return
+    for predecessor_id in predecessor_ids:
+        conn.execute(
+            """
+            UPDATE llm_artifacts
+            SET superseded_by_id = ?
+            WHERE id = ?
+              AND COALESCE(ticker, '') = COALESCE(?, '')
+              AND scope = ?
+              AND purpose = ?
+              AND COALESCE(fiscal_period, '') = COALESCE(?, '')
+              AND superseded_by_id IS NULL
+            """,
+            (
+                successor_id,
+                predecessor_id,
+                req.ticker,
+                req.scope,
+                req.purpose,
+                req.fiscal_period,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT id, ticker, scope, purpose, fiscal_period, superseded_by_id
+            FROM llm_artifacts
+            WHERE id = ?
+            """,
+            (predecessor_id,),
+        ).fetchone()
+        if (
+            row is None
+            or (row["ticker"] or None) != (req.ticker or None)
+            or str(row["scope"]) != req.scope
+            or str(row["purpose"]) != req.purpose
+            or (row["fiscal_period"] or None) != (req.fiscal_period or None)
+            or int(row["superseded_by_id"] or 0) != successor_id
+        ):
+            raise sqlite3.IntegrityError(
+                f"artifact obligation {predecessor_id} was not atomically bound to "
+                f"successor {successor_id}"
+            )
 
 
 # Purposes whose output depends on financial_facts / kpi_facts /
