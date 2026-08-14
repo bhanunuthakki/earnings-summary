@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -10,13 +11,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
+from pydantic import ValidationError
 
-from alembic import command
 from execution.audit_thesis_episode_clone import (
+    AuditExpectations,
     CloneMigrationReceipt,
     audit_clone_migration,
     main,
+    write_pre_migration_clone_receipt,
 )
 from sqlite_snapshot import SnapshotRequest, create_snapshot
 
@@ -24,11 +26,15 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0013_add_readme_update_budgets"
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path.as_posix()}")
-    return config
+def _evidence_id(payload: object) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _seed_wix(path: Path) -> None:
@@ -68,7 +74,7 @@ def _seed_wix(path: Path) -> None:
         connection.commit()
 
 
-def _source_and_clone(tmp_path: Path, migrated_db: Callable[..., Path]) -> tuple[Path, Path]:
+def _source_and_clone(tmp_path: Path, migrated_db: Callable[..., Path]) -> tuple[Path, Path, Path]:
     live_like = tmp_path / "live-like.db"
     migrated_db(live_like, target=PRIOR_HEAD)
     _seed_wix(live_like)
@@ -78,8 +84,14 @@ def _source_and_clone(tmp_path: Path, migrated_db: Callable[..., Path]) -> tuple
     )
     clone = tmp_path / "migrated-clone.db"
     shutil.copy2(source_snapshot, clone)
-    command.upgrade(_config(clone), "head")
-    return snapshot.manifest_path, clone
+    custody_receipt = tmp_path / "pre-migration-clone-receipt.json"
+    write_pre_migration_clone_receipt(
+        source_snapshot_manifest=snapshot.manifest_path,
+        clone_db=clone,
+        output_path=custody_receipt,
+    )
+    migrated_db(clone, target="head", upgrade_existing=True)
+    return snapshot.manifest_path, clone, custody_receipt
 
 
 def test_clone_receipt_proves_wix_rows_unchanged_and_grouped(
@@ -87,11 +99,12 @@ def test_clone_receipt_proves_wix_rows_unchanged_and_grouped(
     migrated_db: Callable[..., Path],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    manifest, clone = _source_and_clone(tmp_path, migrated_db)
+    manifest, clone, custody_receipt = _source_and_clone(tmp_path, migrated_db)
 
     receipt = audit_clone_migration(
         source_snapshot_manifest=manifest,
         migrated_clone_db=clone,
+        pre_migration_clone_receipt=custody_receipt,
     )
 
     assert receipt.verified is True
@@ -100,7 +113,26 @@ def test_clone_receipt_proves_wix_rows_unchanged_and_grouped(
     assert receipt.clone_raw_row_count == 34
     assert receipt.raw_rows_unchanged is True
     assert receipt.legacy_episode_count == 2
+    assert receipt.expectations.expected_raw_rows == 34
+    assert receipt.expectations.expected_legacy_episodes == 2
+    assert receipt.expectations.expected_group_sizes == (8, 26)
+    assert receipt.actual_group_sizes == (8, 26)
+    assert (
+        receipt.pre_migration_clone.clone_before_migration.sha256
+        == receipt.pre_migration_clone.source_snapshot.sha256
+        == receipt.source.snapshot.sha256
+    )
+    assert receipt.pre_migration_clone.manifest_sha256 == receipt.source.manifest_sha256
+    assert receipt.evidence_id == _evidence_id(
+        receipt.model_dump(mode="json", exclude={"evidence_id"})
+    )
     assert sorted(episode.occurrence_count for episode in receipt.legacy_episodes) == [8, 26]
+    assert receipt.semantic_identity_matches_source is True
+    assert receipt.exact_membership_mapping is True
+    assert receipt.membership_structure_valid is True
+    assert receipt.per_episode_counts_match is True
+    assert len(receipt.memberships) == 34
+    assert all(member.mapping_matches for member in receipt.memberships)
     assert receipt.membership_count == 34
     assert receipt.distinct_membership_count == 34
     assert receipt.every_source_row_mapped_once is True
@@ -114,6 +146,8 @@ def test_clone_receipt_proves_wix_rows_unchanged_and_grouped(
                 str(manifest),
                 "--migrated-clone-db",
                 str(clone),
+                "--pre-migration-clone-receipt",
+                str(custody_receipt),
             ]
         )
         == 0
@@ -126,7 +160,7 @@ def test_clone_receipt_fails_closed_on_an_extra_raw_row(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    manifest, clone = _source_and_clone(tmp_path, migrated_db)
+    manifest, clone, custody_receipt = _source_and_clone(tmp_path, migrated_db)
     with sqlite3.connect(clone) as connection:
         connection.execute(
             "INSERT INTO thesis_evaluations "
@@ -138,6 +172,7 @@ def test_clone_receipt_fails_closed_on_an_extra_raw_row(
     receipt = audit_clone_migration(
         source_snapshot_manifest=manifest,
         migrated_clone_db=clone,
+        pre_migration_clone_receipt=custody_receipt,
     )
 
     assert receipt.verified is False
@@ -150,11 +185,144 @@ def test_clone_receipt_rejects_source_snapshot_as_migrated_clone(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    manifest, _clone = _source_and_clone(tmp_path, migrated_db)
+    manifest, _clone, custody_receipt = _source_and_clone(tmp_path, migrated_db)
     source_path = Path(json.loads(manifest.read_text(encoding="utf-8"))["snapshot"]["path"])
 
     with pytest.raises(ValueError, match="distinct file"):
         audit_clone_migration(
             source_snapshot_manifest=manifest,
             migrated_clone_db=source_path,
+            pre_migration_clone_receipt=custody_receipt,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["membership", "semantic_hash", "count"])
+def test_clone_receipt_fails_closed_on_semantic_or_membership_corruption(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    mutation: str,
+) -> None:
+    manifest, clone, custody_receipt = _source_and_clone(tmp_path, migrated_db)
+    with sqlite3.connect(clone) as connection:
+        if mutation == "membership":
+            connection.execute("DROP TRIGGER trg_thesis_evaluation_episode_members_no_update")
+            rows = connection.execute(
+                "SELECT episode_id,evaluation_id FROM thesis_evaluation_episode_members "
+                "WHERE membership_role='anchor' ORDER BY episode_id"
+            ).fetchall()
+            assert len(rows) == 2
+            connection.execute(
+                "UPDATE thesis_evaluation_episode_members SET evaluation_id=? "
+                "WHERE episode_id=? AND evaluation_id=?",
+                (-1, str(rows[0][0]), int(rows[0][1])),
+            )
+            connection.execute(
+                "UPDATE thesis_evaluation_episode_members SET evaluation_id=? "
+                "WHERE episode_id=? AND evaluation_id=?",
+                (int(rows[0][1]), str(rows[1][0]), int(rows[1][1])),
+            )
+            connection.execute(
+                "UPDATE thesis_evaluation_episode_members SET evaluation_id=? "
+                "WHERE episode_id=? AND evaluation_id=-1",
+                (int(rows[1][1]), str(rows[0][0])),
+            )
+        elif mutation == "semantic_hash":
+            connection.execute(
+                "UPDATE thesis_evaluation_episodes SET semantic_input_sha256=? "
+                "WHERE episode_id=(SELECT episode_id FROM thesis_evaluation_episodes "
+                "ORDER BY episode_id LIMIT 1)",
+                ("a" * 64,),
+            )
+        else:
+            connection.execute(
+                "UPDATE thesis_evaluation_episodes SET duplicate_run_count=duplicate_run_count+1 "
+                "WHERE episode_id=(SELECT episode_id FROM thesis_evaluation_episodes "
+                "ORDER BY episode_id LIMIT 1)"
+            )
+        connection.commit()
+
+    receipt = audit_clone_migration(
+        source_snapshot_manifest=manifest,
+        migrated_clone_db=clone,
+        pre_migration_clone_receipt=custody_receipt,
+    )
+
+    assert receipt.verified is False
+    if mutation == "membership":
+        assert receipt.exact_membership_mapping is False
+    elif mutation == "semantic_hash":
+        assert receipt.semantic_identity_matches_source is False
+    else:
+        assert receipt.per_episode_counts_match is False
+
+
+@pytest.mark.parametrize("field", ["schema_version", "code_config_version"])
+def test_clone_receipt_rejects_unsupported_snapshot_manifest_contract(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    field: str,
+) -> None:
+    live_like = migrated_db(tmp_path / "live-like.db", target=PRIOR_HEAD)
+    source_snapshot = tmp_path / "source-snapshot.db"
+    snapshot = create_snapshot(
+        SnapshotRequest(source_path=live_like, destination_path=source_snapshot)
+    )
+    manifest_payload = json.loads(snapshot.manifest_path.read_text(encoding="utf-8"))
+    manifest_payload[field] = "unsupported/v999"
+    snapshot.manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+    clone = tmp_path / "clone.db"
+    shutil.copy2(source_snapshot, clone)
+
+    with pytest.raises(ValueError, match="unsupported snapshot manifest"):
+        write_pre_migration_clone_receipt(
+            source_snapshot_manifest=snapshot.manifest_path,
+            clone_db=clone,
+            output_path=tmp_path / "custody.json",
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"expected_raw_rows": 0, "expected_legacy_episodes": 1, "expected_group_sizes": (1,)},
+        {
+            "expected_raw_rows": 1,
+            "expected_legacy_episodes": 0,
+            "expected_group_sizes": (1,),
+        },
+        {
+            "expected_raw_rows": 34,
+            "expected_legacy_episodes": 2,
+            "expected_group_sizes": (0, 34),
+        },
+        {
+            "expected_raw_rows": 34,
+            "expected_legacy_episodes": 2,
+            "expected_group_sizes": (7, 26),
+        },
+    ],
+)
+def test_audit_expectations_are_positive_bounded_and_coherent(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        AuditExpectations.model_validate(payload)
+
+
+def test_clone_receipt_rejects_resealed_custody_for_a_different_manifest(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    manifest, clone, custody_receipt = _source_and_clone(tmp_path, migrated_db)
+    payload = json.loads(custody_receipt.read_text(encoding="utf-8"))
+    payload["manifest_sha256"] = "b" * 64
+    evidence_payload = {key: value for key, value in payload.items() if key != "evidence_id"}
+    payload["evidence_id"] = _evidence_id(evidence_payload)
+    custody_receipt.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not bound to this manifest and clone"):
+        audit_clone_migration(
+            source_snapshot_manifest=manifest,
+            migrated_clone_db=clone,
+            pre_migration_clone_receipt=custody_receipt,
         )
