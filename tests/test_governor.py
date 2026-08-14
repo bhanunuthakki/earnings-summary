@@ -284,6 +284,126 @@ def test_acknowledged_linked_episode_suppresses_send_failed_retry(
         ).fetchone() == ("acted",)
 
 
+def test_late_failed_send_callback_cannot_overwrite_linked_acknowledgement(
+    db_head: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import research.governor as governor_mod
+    from compute.thesis_episode_attention import acknowledge_episode
+
+    episode_id = "episode-governor-callback-race"
+    moment = Moment("falsifier_breach", "alert:903", "WIX", "review", "decision:3")
+    with sqlite3.connect(db_head) as connection:
+        stamp = datetime(2026, 7, 10, 12, 0, tzinfo=UTC).isoformat()
+        connection.execute(
+            "INSERT INTO thesis_evaluation_episodes "
+            "(episode_id,ticker,fingerprint_policy_version,semantic_input_json,"
+            "semantic_input_sha256,evaluator_semantic_version,result_sha256,"
+            "overall_status,provenance_completeness,first_evaluated_at,last_seen_at,"
+            "last_checked_at,duplicate_run_count,rule_evaluations_json,created_at) "
+            "VALUES (?, 'WIX','legacy_v0','{}',?,'legacy/v0',?,'warn','partial',"
+            "?,?,?,0,'[]',?)",
+            (episode_id, "c" * 64, "d" * 64, stamp, stamp, stamp, stamp),
+        )
+        connection.execute(
+            "INSERT INTO coach_pings "
+            '(class_,"key",ticker,body,status,source_ref,created_at,updated_at,'
+            "thesis_evaluation_episode_id,review_cycle_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,'initial')",
+            (
+                moment.class_,
+                moment.key,
+                moment.ticker,
+                moment.body,
+                "send_failed",
+                moment.source_ref,
+                stamp,
+                stamp,
+                episode_id,
+            ),
+        )
+        connection.commit()
+
+    monkeypatch.setattr(
+        governor_mod,
+        "collect_moments",
+        _fake_collect_moments_factory([moment]),
+    )
+    monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
+
+    def acknowledge_then_fail(_ping_id: int, _moment: Moment) -> bool:
+        with sqlite3.connect(db_head) as connection:
+            acknowledge_episode(
+                connection,
+                episode_id,
+                acknowledged_at=datetime(2026, 7, 10, 12, 2, tzinfo=UTC),
+            )
+            connection.commit()
+        return False
+
+    tally = run_governor(db_head, send_fn=acknowledge_then_fail, now=_NOW)
+
+    assert tally["seen"] == 1
+    assert tally["sent"] == 0
+    assert tally["send_failed"] == 0
+    with sqlite3.connect(db_head) as connection:
+        assert connection.execute(
+            "SELECT status FROM coach_pings WHERE thesis_evaluation_episode_id=?",
+            (episode_id,),
+        ).fetchone() == ("acted",)
+
+
+def test_linked_attention_defect_fails_visibly_and_keeps_retry_state(
+    db_head: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import compute.thesis_episode_attention as attention_mod
+    import research.governor as governor_mod
+
+    episode_id = "episode-governor-defect"
+    moment = Moment("falsifier_breach", "alert:904", "WIX", "review", "decision:4")
+    with sqlite3.connect(db_head) as connection:
+        stamp = datetime(2026, 7, 10, 12, 0, tzinfo=UTC).isoformat()
+        connection.execute(
+            "INSERT INTO coach_pings "
+            '(class_,"key",ticker,body,status,source_ref,created_at,updated_at,'
+            "thesis_evaluation_episode_id,review_cycle_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,'initial')",
+            (
+                moment.class_,
+                moment.key,
+                moment.ticker,
+                moment.body,
+                "send_failed",
+                moment.source_ref,
+                stamp,
+                stamp,
+                episode_id,
+            ),
+        )
+        connection.commit()
+
+    monkeypatch.setattr(
+        governor_mod,
+        "collect_moments",
+        _fake_collect_moments_factory([moment]),
+    )
+
+    def broken_attention(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("attention decoder defect")
+
+    monkeypatch.setattr(attention_mod, "get_attention", broken_attention)
+
+    with pytest.raises(RuntimeError, match="attention decoder defect"):
+        run_governor(db_head, send_fn=lambda _ping_id, _moment: True, now=_NOW)
+
+    with sqlite3.connect(db_head) as connection:
+        assert connection.execute(
+            "SELECT status FROM coach_pings WHERE thesis_evaluation_episode_id=?",
+            (episode_id,),
+        ).fetchone() == ("send_failed",)
+
+
 def test_no_send_channel_still_parks_in_digest(db: Path) -> None:
     """send_fn=None (dry-run / no bot configured) is NOT a send failure — the
     quiet digest is the delivery surface, and once-forever holds."""

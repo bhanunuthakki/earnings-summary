@@ -632,6 +632,23 @@ def run_governor(
             str(row[1]) for row in conn.execute("PRAGMA table_info(coach_pings)").fetchall()
         }
         has_episode_link = "thesis_evaluation_episode_id" in coach_ping_columns
+        attention_columns: set[str] = set()
+        if has_episode_link:
+            attention_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(thesis_evaluation_episodes)").fetchall()
+            }
+        has_attention_schema = {
+            "episode_id",
+            "ticker",
+            "attention_state",
+            "acknowledged_at",
+            "acknowledgement_note",
+            "next_review_at",
+            "acted_on_decision_id",
+            "superseded_by_episode_id",
+            "attention_updated_at",
+        }.issubset(attention_columns)
         for moment in moments:
             if has_episode_link:
                 prior = conn.execute(
@@ -647,7 +664,7 @@ def run_governor(
             prior_id = None if prior is None else int(prior[0])
             linked_episode_id = None if prior is None or not has_episode_link else prior[2]
             if linked_episode_id is not None and prior_id is not None:
-                try:
+                if has_attention_schema:
                     from compute.thesis_episode_attention import get_attention
 
                     episode_attention = get_attention(
@@ -655,7 +672,10 @@ def run_governor(
                         str(linked_episode_id),
                         now=stamp.replace(tzinfo=UTC),
                     )
-                except Exception:
+                else:
+                    # A partially upgraded legacy schema cannot evaluate the
+                    # linked episode. This is the only compatibility fallback;
+                    # malformed attention data and code defects propagate.
                     episode_attention = None
                 if episode_attention is None or not episode_attention.actionable:
                     settled_status = "skipped_stale" if episode_attention is None else "acted"
@@ -719,13 +739,37 @@ def run_governor(
                 else:
                     delivered, fallback = bool(send_fn(ping_id, moment)), "send_failed"
                 if not delivered:
-                    conn.execute(
-                        "UPDATE coach_pings SET status = ?, updated_at = ? WHERE id = ?",
+                    completed = conn.execute(
+                        "UPDATE coach_pings SET status = ?, updated_at = ? "
+                        "WHERE id = ? AND status = 'sent'",
                         (fallback, iso, ping_id),
                     )
                     conn.commit()
-                    status = fallback
-            tally[status] += 1
+                    if completed.rowcount == 1:
+                        status = fallback
+                    else:
+                        current = conn.execute(
+                            "SELECT status FROM coach_pings WHERE id=?", (ping_id,)
+                        ).fetchone()
+                        if current is None:
+                            raise RuntimeError(
+                                f"coach ping {ping_id} disappeared during delivery completion"
+                            )
+                        current_status = str(current[0])
+                        if current_status == "sent":
+                            raise RuntimeError(
+                                f"coach ping {ping_id} delivery completion lost its CAS"
+                            )
+                        if current_status not in tally and current_status not in {
+                            "acted",
+                            "dismissed",
+                        }:
+                            raise RuntimeError(
+                                f"coach ping {ping_id} has unexpected status {current_status!r}"
+                            )
+                        status = current_status
+            if status in tally:
+                tally[status] += 1
     finally:
         conn.close()
     return tally
