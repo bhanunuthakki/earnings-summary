@@ -110,6 +110,36 @@ def test_backup_restore_receipt_binds_source_snapshot_and_verifier(tmp_path: Pat
     assert receipt.downstream_locked_revalidation_required is True
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    (
+        ("schema_version", "sqlite-reader-snapshot/v999", "snapshot_manifest_schema_unsupported"),
+        ("code_config_version", "unknown-producer/v1", "snapshot_manifest_code_unsupported"),
+    ),
+)
+def test_backup_restore_receipt_rejects_unsupported_manifest_contract(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    reason: str,
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    snapshot = tmp_path / "snapshot.db"
+    result = create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+    manifest_path = result.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[field] = value
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    receipt = backup_receipt.collect_backup_restore_receipt(
+        source_db=source,
+        snapshot_db=snapshot,
+    )
+
+    assert receipt.verified is False
+    assert reason in receipt.blocking_reasons
+
+
 def test_collect_readiness_clears_only_for_aligned_lineage_and_restore(
     tmp_path: Path,
 ) -> None:

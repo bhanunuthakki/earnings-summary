@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime
@@ -9,7 +10,9 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 
+import compute.thesis_evaluator as thesis_evaluator_module
 from compute.thesis_evaluator import (
     BreakRule,
     Comparator,
@@ -410,6 +413,60 @@ def test_evaluate_ticker_thesis_end_to_end(conn: sqlite3.Connection, tmp_path: P
     assert verdict.ticker == "MELI"
     assert verdict.overall_status == BreachStatus.OK
     assert len(verdict.rule_evaluations) == 2
+
+
+def test_evaluate_ticker_thesis_uses_one_holdings_snapshot(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rules and semantic binding must come from the same file observation."""
+
+    path = tmp_path / "WIX.json"
+    first: dict[str, JsonValue] = {
+        "ticker": "WIX",
+        "thesis": "first snapshot",
+        "break_rules": [],
+    }
+    second: dict[str, JsonValue] = {
+        "ticker": "WIX",
+        "thesis": "mutated snapshot",
+        "break_rules": [],
+    }
+    path.write_text(json.dumps(first), encoding="utf-8")
+    calls = 0
+
+    def changing_reader(_path: Path) -> dict[str, JsonValue]:
+        nonlocal calls
+        calls += 1
+        return first if calls == 1 else second
+
+    monkeypatch.setattr(thesis_evaluator_module, "_read_holdings_payload", changing_reader)
+
+    verdict = evaluate_ticker_thesis(conn, ticker="WIX", holdings_dir=tmp_path)
+
+    assert calls == 1
+    assert verdict.thesis == "first snapshot"
+    assert verdict.semantic_input is not None
+    expected_projection: dict[str, JsonValue] = {
+        "key_driver": "",
+        "nuance": {},
+        "thesis": "first snapshot",
+        "thesis_breakers_qualitative": [],
+        "tier_1_kpis": [],
+    }
+    assert (
+        verdict.semantic_input.thesis_content_sha256
+        == hashlib.sha256(
+            json.dumps(
+                expected_projection,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+    )
 
 
 def test_evaluate_ticker_thesis_bubbles_breach(conn: sqlite3.Connection, tmp_path: Path) -> None:

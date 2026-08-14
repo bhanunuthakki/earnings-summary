@@ -490,6 +490,13 @@ def episode_history_relation(connection: sqlite3.Connection) -> str:
     ).fetchone()
     if row is not None and str(row[0]) == "view":
         return "v_thesis_evaluation_history"
+    episode_schema = connection.execute(
+        "SELECT type FROM sqlite_master WHERE name='thesis_evaluation_episodes'"
+    ).fetchone()
+    if episode_schema is not None:
+        raise EpisodeStoreError(
+            "episode schema exists but v_thesis_evaluation_history is unavailable"
+        )
     raw = connection.execute(
         "SELECT type FROM sqlite_master WHERE name='thesis_evaluations'"
     ).fetchone()

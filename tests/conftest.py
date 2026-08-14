@@ -503,9 +503,15 @@ def migrated_db(
         reanchor_to_active_head: bool = False,
         upgrade_from: str | None = None,
         before_upgrade: Callable[[Path], None] | None = None,
+        upgrade_existing: bool = False,
     ) -> Path:
         if (upgrade_from is None) != (before_upgrade is None):
             raise ValueError("upgrade_from and before_upgrade must be provided together")
+        if upgrade_existing and (upgrade_from is not None or archived or reanchor_to_active_head):
+            raise ValueError("upgrade_existing cannot be combined with migration build options")
+        if upgrade_existing:
+            command.upgrade(_config(dest, archived=False), target)
+            return dest
         if upgrade_from is not None and archived:
             raise ValueError("seeded upgrades are supported only on the active graph")
         if upgrade_from is not None:
