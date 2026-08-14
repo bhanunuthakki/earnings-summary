@@ -283,15 +283,17 @@ class OwnerDecisionCheckpointPayload(BaseModel):
             leg = next(item for item in self.legs if item.leg_id == intent.leg_id)
             if intent.ticker != leg.ticker:
                 raise ValueError("sizing intent ticker must match its decision leg")
-            if intent.target_band is not None and intent.target_band != leg.target_band:
+            if leg.target_band is not None and intent.target_band is None:
+                raise ValueError("sizing intent must repeat its decision leg target band")
+            if intent.target_band != leg.target_band:
                 raise ValueError("sizing intent target band must match its decision leg")
             if (
-                intent.target_band is not None
+                leg.target_band is not None
                 and intent.intent_value is not None
                 and not (
-                    intent.target_band.minimum_pct
+                    leg.target_band.minimum_pct
                     <= intent.intent_value
-                    <= intent.target_band.maximum_pct
+                    <= leg.target_band.maximum_pct
                 )
             ):
                 raise ValueError("sizing intent value must fall within its target band")

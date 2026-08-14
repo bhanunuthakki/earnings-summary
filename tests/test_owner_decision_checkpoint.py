@@ -217,6 +217,16 @@ def test_sizing_intent_must_match_its_decision_leg() -> None:
             }
         )
 
+    with pytest.raises(ValidationError, match="must repeat"):
+        OwnerDecisionCheckpointPayload(
+            **{
+                **base.model_dump(mode="python"),
+                "sizing_intents": (
+                    intent.model_copy(update={"target_band": None, "intent_value": 99}),
+                ),
+            }
+        )
+
     with pytest.raises(ValidationError, match="own alternative"):
         OwnerDecisionCheckpointPayload(
             **{
@@ -248,6 +258,7 @@ def test_late_intent_mismatch_rolls_back_checkpoint_and_decision(
                     intent_value=0,
                     narrative="mismatch",
                     existing_sizing_intent_id=7,
+                    target_band=base.legs[0].target_band,
                 ),
             )
         }
