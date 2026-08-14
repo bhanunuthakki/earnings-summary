@@ -10,7 +10,7 @@ from alembic.config import Config
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "0014_add_thesis_evaluation_episodes"
+REVISION = "0015_add_thesis_episode_attention"
 
 
 def _config(path: Path) -> Config:

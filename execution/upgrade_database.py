@@ -35,7 +35,7 @@ from sqlite_runtime import (
 )
 
 ACTIVE_BASE = "0001_initial_schema"
-ACTIVE_HEAD = "0014_add_thesis_evaluation_episodes"
+ACTIVE_HEAD = "0015_add_thesis_episode_attention"
 OPERATION_EVENTS_CONTRACT_REVISION = "0012_close_operation_event_detail_reason"
 
 _LEGACY_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {

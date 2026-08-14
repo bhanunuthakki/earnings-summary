@@ -1,0 +1,243 @@
+"""Lifecycle and anti-nag contracts for thesis evaluation episodes."""
+
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from compute.thesis_episode_attention import (
+    AttentionError,
+    AttentionState,
+    DeliveryStatus,
+    acknowledge_episode,
+    act_on_episode,
+    complete_delivery,
+    get_attention,
+    reserve_delivery,
+    should_prompt,
+    supersede_prior,
+)
+
+NOW = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+
+
+def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    database = tmp_path / "attention.db"
+    migrated_db(database, target="head")
+    connection = sqlite3.connect(database)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys=ON")
+    return connection
+
+
+def _seed_episode(
+    connection: sqlite3.Connection,
+    episode_id: str,
+    *,
+    ticker: str = "WIX",
+    semantic_digit: str = "a",
+) -> None:
+    connection.execute(
+        "INSERT INTO thesis_evaluation_episodes "
+        "(episode_id,ticker,fingerprint_policy_version,semantic_input_json,"
+        "semantic_input_sha256,thesis_content_sha256,ruleset_sha256,"
+        "evaluator_semantic_version,result_sha256,overall_status,"
+        "provenance_completeness,first_evaluated_at,last_seen_at,last_checked_at,"
+        "duplicate_run_count,rule_evaluations_json,created_at) "
+        "VALUES (?,?,'forward_v1','{}',?,?,?,?,?,'warn','partial',?,?,?,0,'[]',?)",
+        (
+            episode_id,
+            ticker,
+            semantic_digit * 64,
+            "b" * 64,
+            "c" * 64,
+            "test/v1",
+            "d" * 64,
+            NOW.isoformat(),
+            NOW.isoformat(),
+            NOW.isoformat(),
+            NOW.isoformat(),
+        ),
+    )
+
+
+def test_acknowledgement_is_global_quiet_without_writing_thesis_ledger(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _database(tmp_path, migrated_db)
+    _seed_episode(connection, "episode-1")
+    connection.execute(
+        "INSERT INTO alerts "
+        "(user_id,ticker,trigger_kind,fired_at,status,evidence_json,signature_sha,"
+        "thesis_evaluation_episode_id,review_cycle_id) "
+        "VALUES ('bhanu','WIX','thesis_drift',?,'pending','{}',?,?,'initial')",
+        (NOW.isoformat(), "1" * 64, "episode-1"),
+    )
+    connection.execute(
+        "INSERT INTO coach_pings "
+        '(class_,"key",ticker,body,status,created_at,updated_at,'
+        "thesis_evaluation_episode_id,review_cycle_id) "
+        "VALUES ('falsifier_breach','episode-1','WIX','review','sent',?,?,?,'initial')",
+        (NOW.isoformat(), NOW.isoformat(), "episode-1"),
+    )
+    ledger_before = connection.execute("SELECT COUNT(*) FROM thesis_ledger_entries").fetchone()[0]
+
+    due = NOW + timedelta(days=30)
+    attention = acknowledge_episode(
+        connection,
+        "episode-1",
+        acknowledged_at=NOW,
+        note="Reviewed; no action yet.",
+        next_review_at=due,
+    )
+    connection.commit()
+
+    assert attention.state is AttentionState.ACKNOWLEDGED
+    assert attention.actionable is False
+    assert (
+        should_prompt(
+            connection,
+            "episode-1",
+            channel="telegram",
+            surface="coach",
+            now=NOW,
+        )
+        is False
+    )
+    assert connection.execute("SELECT status FROM alerts").fetchone()[0] == "dismissed"
+    assert connection.execute("SELECT status FROM coach_pings").fetchone()[0] == "acted"
+    assert (
+        connection.execute("SELECT COUNT(*) FROM thesis_ledger_entries").fetchone()[0]
+        == ledger_before
+    )
+
+
+def test_due_review_cycle_delivers_once_and_failed_send_can_retry(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _database(tmp_path, migrated_db)
+    _seed_episode(connection, "episode-1")
+    due = NOW + timedelta(days=7)
+    acknowledge_episode(
+        connection,
+        "episode-1",
+        acknowledged_at=NOW,
+        next_review_at=due,
+    )
+
+    cycle_time = due + timedelta(seconds=1)
+    attention = get_attention(connection, "episode-1", now=cycle_time)
+    assert attention.actionable is True
+    assert attention.review_cycle_id == f"review:{due.isoformat()}"
+    first = reserve_delivery(
+        connection,
+        "episode-1",
+        channel="telegram",
+        surface="coach",
+        reserved_at=cycle_time,
+    )
+    assert first is not None and first.claimed is True
+    duplicate = reserve_delivery(
+        connection,
+        "episode-1",
+        channel="telegram",
+        surface="coach",
+        reserved_at=cycle_time,
+    )
+    assert duplicate is not None and duplicate.claimed is False
+
+    complete_delivery(
+        connection,
+        first.receipt_id,
+        status=DeliveryStatus.FAILED,
+        completed_at=cycle_time,
+        failure_reason="provider unavailable",
+    )
+    retry = reserve_delivery(
+        connection,
+        "episode-1",
+        channel="telegram",
+        surface="coach",
+        reserved_at=cycle_time + timedelta(minutes=5),
+    )
+    assert retry is not None and retry.claimed is True
+    complete_delivery(
+        connection,
+        retry.receipt_id,
+        status=DeliveryStatus.DELIVERED,
+        completed_at=cycle_time + timedelta(minutes=6),
+        external_ref="message-1",
+    )
+    connection.commit()
+
+    assert (
+        should_prompt(
+            connection,
+            "episode-1",
+            channel="telegram",
+            surface="coach",
+            now=cycle_time + timedelta(minutes=7),
+        )
+        is False
+    )
+
+
+def test_new_episode_supersedes_unresolved_prior_but_not_acted_episode(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _database(tmp_path, migrated_db)
+    _seed_episode(connection, "episode-old", semantic_digit="a")
+    _seed_episode(connection, "episode-acted", semantic_digit="b")
+    connection.execute(
+        "INSERT INTO decisions "
+        "(ticker,recommendation_kind,made_at,created_at,decided_by) "
+        "VALUES ('WIX','hold',?,?,'owner')",
+        (NOW.isoformat(), NOW.isoformat()),
+    )
+    decision_id = connection.execute("SELECT MAX(id) FROM decisions").fetchone()[0]
+    assert decision_id is not None
+    act_on_episode(
+        connection,
+        "episode-acted",
+        decision_id=int(decision_id),
+        acted_at=NOW,
+    )
+    _seed_episode(connection, "episode-new", semantic_digit="c")
+
+    assert (
+        supersede_prior(
+            connection,
+            new_episode_id="episode-new",
+            superseded_at=NOW + timedelta(minutes=1),
+        )
+        == 1
+    )
+    connection.commit()
+
+    old = get_attention(connection, "episode-old", now=NOW)
+    acted = get_attention(connection, "episode-acted", now=NOW)
+    assert old.state is AttentionState.SUPERSEDED
+    assert old.superseded_by_episode_id == "episode-new"
+    assert acted.state is AttentionState.ACTED_ON
+
+
+def test_attention_rejects_invalid_due_date_and_conflicting_completion(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    connection = _database(tmp_path, migrated_db)
+    _seed_episode(connection, "episode-1")
+    with pytest.raises(AttentionError, match="after"):
+        acknowledge_episode(
+            connection,
+            "episode-1",
+            acknowledged_at=NOW,
+            next_review_at=NOW,
+        )

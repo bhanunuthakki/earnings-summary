@@ -76,7 +76,7 @@ def test_0014_backfills_all_wix_rows_into_two_partial_legacy_episodes(
                 )
             connection.commit()
 
-    migrated_db(database, upgrade_from=PRIOR_HEAD, before_upgrade=seed)
+    migrated_db(database, target=HEAD, upgrade_from=PRIOR_HEAD, before_upgrade=seed)
 
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (HEAD,)
@@ -124,7 +124,7 @@ def test_0014_backfill_keeps_unresolved_as_a_real_episode(
             )
             connection.commit()
 
-    migrated_db(database, upgrade_from=PRIOR_HEAD, before_upgrade=seed)
+    migrated_db(database, target=HEAD, upgrade_from=PRIOR_HEAD, before_upgrade=seed)
 
     with sqlite3.connect(database) as connection:
         assert connection.execute(
@@ -148,7 +148,7 @@ def test_0014_downgrade_removes_episode_projection_without_touching_raw_history(
             )
             connection.commit()
 
-    migrated_db(database, upgrade_from=PRIOR_HEAD, before_upgrade=seed)
+    migrated_db(database, target=HEAD, upgrade_from=PRIOR_HEAD, before_upgrade=seed)
     command.downgrade(config, PRIOR_HEAD)
 
     with sqlite3.connect(database) as connection:
