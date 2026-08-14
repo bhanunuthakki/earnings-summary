@@ -99,7 +99,7 @@ def test_sealed_mode_fails_before_any_llm_without_authoritative_session(
 
 def test_invalid_mode_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ASK_RETRIEVAL_MODE", "permissive")
-    with pytest.raises(ValueError, match="legacy, shadow, or sealed"):
+    with pytest.raises(ValueError, match="grounded, legacy, shadow, or sealed"):
         engine.ask_retrieval_mode()
 
 
