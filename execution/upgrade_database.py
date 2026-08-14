@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict
 
 from alembic import command
 from run_lock import hold_run_lock
+from runtime.job_runtime import portfolio_db_path
 from sqlite_runtime import (
     SQLiteConnectionRole,
     connect_sqlite,
@@ -268,6 +269,7 @@ def upgrade_database(
     *,
     repo_root: Path,
     backup_path: Path | None = None,
+    phase0_backup_restore_receipt: Path | None = None,
 ) -> UpgradeReceipt:
     """Upgrade ``db_path`` and return a validated receipt."""
 
@@ -298,6 +300,30 @@ def upgrade_database(
                 backup_path=None,
                 completed_at=datetime.now(UTC).isoformat(),
             )
+
+        canonical_portfolio_db = portfolio_db_path(repo_root).resolve()
+        if existed and db_path == canonical_portfolio_db:
+            if phase0_backup_restore_receipt is None:
+                raise UpgradeDatabaseError(
+                    "live portfolio DB upgrade requires a Phase-0 backup/restore receipt"
+                )
+            # Import lazily: the readiness module reads ACTIVE_HEAD from this
+            # module. Revalidation runs *inside* the same database lock as the
+            # backup and Alembic mutation, closing the point-in-time TOCTOU gap.
+            from execution.portfolio_readiness_receipt import collect_readiness
+
+            readiness = collect_readiness(
+                checkout_root=repo_root,
+                runtime_root=repo_root,
+                db_path=db_path,
+                backup_restore_receipt_path=phase0_backup_restore_receipt,
+                mode="migration",
+            )
+            if not readiness.ready:
+                raise UpgradeDatabaseError(
+                    "live portfolio DB migration preconditions failed: "
+                    + ",".join(readiness.blocking_reasons)
+                )
 
         if from_revision is None and _user_tables(db_path):
             raise UpgradeDatabaseError(
@@ -360,12 +386,21 @@ def main() -> int:
     parser.add_argument("--db-path", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--backup-path", type=Path)
+    parser.add_argument(
+        "--phase0-backup-restore-receipt",
+        type=Path,
+        help=(
+            "Required when upgrading the canonical live portfolio DB; revalidated "
+            "inside the shared writer lock."
+        ),
+    )
     args = parser.parse_args()
     try:
         receipt = upgrade_database(
             args.db_path,
             repo_root=args.repo_root,
             backup_path=args.backup_path,
+            phase0_backup_restore_receipt=args.phase0_backup_restore_receipt,
         )
     except (OSError, RuntimeError, sqlite3.Error, CommandError) as exc:
         log_event("database_upgrade_failed", error=f"{type(exc).__name__}: {exc}")

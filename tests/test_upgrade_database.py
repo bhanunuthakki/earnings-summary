@@ -12,6 +12,8 @@ import pytest
 import upgrade_database as upgrade_database_module
 from upgrade_database import ACTIVE_HEAD, UpgradeDatabaseError, upgrade_database
 
+from execution import portfolio_readiness_receipt as readiness_module
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -64,6 +66,84 @@ def test_upgrade_classifies_database_only_after_lock_acquisition(
     receipt = upgrade_database(db_path, repo_root=ROOT)
 
     assert receipt.status == "already_current"
+
+
+def test_live_upgrade_requires_phase0_receipt_inside_shared_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    db_path.touch()
+    lock_held = False
+
+    @contextmanager
+    def fake_lock(*_args: object, **_kwargs: object) -> Generator[None]:
+        nonlocal lock_held
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
+    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", lambda _root: db_path)
+    monkeypatch.setattr(
+        upgrade_database_module,
+        "_read_revisions",
+        lambda _path: (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,),
+    )
+
+    with pytest.raises(UpgradeDatabaseError, match="Phase-0 backup/restore"):
+        upgrade_database(db_path, repo_root=ROOT)
+
+    assert lock_held is False
+
+
+def test_live_upgrade_revalidates_phase0_receipt_while_lock_is_held(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    db_path.touch()
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text("{}", encoding="utf-8")
+    lock_held = False
+
+    @contextmanager
+    def fake_lock(*_args: object, **_kwargs: object) -> Generator[None]:
+        nonlocal lock_held
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    class _Blocked:
+        ready = False
+        blocking_reasons = ("test_block",)
+
+    def collect_under_lock(**kwargs: object) -> _Blocked:
+        assert lock_held is True
+        assert kwargs["mode"] == "migration"
+        return _Blocked()
+
+    monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
+    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", lambda _root: db_path)
+    monkeypatch.setattr(
+        upgrade_database_module,
+        "_read_revisions",
+        lambda _path: (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,),
+    )
+    monkeypatch.setattr(readiness_module, "collect_readiness", collect_under_lock)
+
+    with pytest.raises(UpgradeDatabaseError, match="test_block"):
+        upgrade_database(
+            db_path,
+            repo_root=ROOT,
+            phase0_backup_restore_receipt=receipt_path,
+        )
+
+    assert lock_held is False
 
 
 def _revision(db_path: Path) -> str:
