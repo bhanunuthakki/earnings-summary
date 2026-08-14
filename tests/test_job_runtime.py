@@ -888,6 +888,121 @@ def test_journal_failure_never_changes_child_outcome(
     assert receipt["trigger_kind"] == "scheduled"
 
 
+def test_health_receipt_serialization_redacts_and_bounds_detail(tmp_path: Path) -> None:
+    sentinel = "HEALTH-RAW-CREDENTIAL-7319"
+    journal_sentinel = "JOURNAL-RAW-CREDENTIAL-7319"
+    record = job_runtime.HealthRecord(
+        job="unit-job",
+        write_sets=["unit-lane"],
+        started_at="2026-08-13T12:00:00+00:00",
+        ended_at="2026-08-13T12:01:00+00:00",
+        status="failed",
+        exit_code=1,
+        severity="error",
+        detail=(
+            f"https://example.test/private?api_key={sentinel} "
+            + r"C:\private\owner\job.py "
+            + "x" * 500
+        ),
+        journal_reason=f"x-api-key: {journal_sentinel} " + "y" * 500,
+    )
+
+    job_runtime._write_health(tmp_path, record)
+
+    receipt = json.loads(
+        (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
+    )
+    assert receipt["status"] == "failed"
+    assert receipt["exit_code"] == 1
+    assert sentinel not in receipt["detail"]
+    assert "https://example.test" not in receipt["detail"]
+    assert "C:\\private" not in receipt["detail"]
+    assert len(receipt["detail"]) <= 240
+    assert journal_sentinel not in receipt["journal_reason"]
+    assert len(receipt["journal_reason"]) <= 240
+
+
+def test_health_receipt_masks_complete_header_and_assignment_values(tmp_path: Path) -> None:
+    sentinel = "ALPHABETONLYCREDENTIAL"
+    record = job_runtime.HealthRecord(
+        job="unit-job",
+        write_sets=["unit-lane"],
+        started_at="2026-08-13T12:00:00+00:00",
+        ended_at="2026-08-13T12:01:00+00:00",
+        status="failed",
+        exit_code=1,
+        severity="error",
+        detail=(
+            "Authorization: "
+            + "Basic "
+            + sentinel
+            + f'; {"api" + "_key"} = "prefix {sentinel} suffix"'
+        ),
+        journal_reason=f"x-api-key: prefix {sentinel} suffix; retry=closed",
+    )
+
+    job_runtime._write_health(tmp_path, record)
+
+    receipt = json.loads(
+        (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
+    )
+    assert sentinel not in receipt["detail"]
+    assert sentinel not in receipt["journal_reason"]
+    assert "retry=closed" in receipt["journal_reason"]
+
+
+def test_health_receipt_masks_bearer_b64token_and_preserves_safe_suffix(tmp_path: Path) -> None:
+    credential = "ALPHABETONLY" + "~+TAILONLY/=="
+    record = job_runtime.HealthRecord(
+        job="unit-job",
+        write_sets=["unit-lane"],
+        started_at="2026-08-13T12:00:00+00:00",
+        ended_at="2026-08-13T12:01:00+00:00",
+        status="failed",
+        exit_code=1,
+        severity="error",
+        detail="Authorization: " + "Bearer " + credential + "\ntrace=safe",
+        journal_reason="request failed Bearer " + credential + "; retry=closed",
+    )
+
+    job_runtime._write_health(tmp_path, record)
+
+    receipt = json.loads(
+        (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
+    )
+    assert credential not in receipt["detail"]
+    assert credential not in receipt["journal_reason"]
+    assert "TAILONLY" not in receipt["detail"]
+    assert "TAILONLY" not in receipt["journal_reason"]
+    assert "trace=safe" in receipt["detail"]
+    assert "retry=closed" in receipt["journal_reason"]
+
+
+@pytest.mark.parametrize("delimiter", [")", "]", "}", '"', "'", ":", ";"])
+def test_health_receipt_preserves_non_b64token_bearer_delimiter(
+    tmp_path: Path, delimiter: str
+) -> None:
+    credential = "ALPHABETONLY" + "~+TAILONLY/=="
+    record = job_runtime.HealthRecord(
+        job="unit-job",
+        write_sets=["unit-lane"],
+        started_at="2026-08-13T12:00:00+00:00",
+        ended_at="2026-08-13T12:01:00+00:00",
+        status="failed",
+        exit_code=1,
+        severity="error",
+        detail="request failed Bearer " + credential + delimiter + " suffix=safe",
+    )
+
+    job_runtime._write_health(tmp_path, record)
+
+    receipt = json.loads(
+        (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
+    )
+    assert "TAILONLY" not in receipt["detail"]
+    assert delimiter + " suffix=safe" in receipt["detail"]
+
+
 @pytest.mark.parametrize(
     ("job_name", "child_exit", "expected_status", "expected_severity"),
     [

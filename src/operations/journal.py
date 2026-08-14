@@ -17,8 +17,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypeAlias, cast
 
-from log_redact import redact
-
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _LABEL = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 _OPERATION_ID = re.compile(r"operation:[0-9a-f]{64}\Z")
@@ -26,6 +24,7 @@ _EVENT_ID = re.compile(r"operation-event:[0-9a-f]{64}\Z")
 _MAX_PAGE_SIZE = 500
 _MAX_SCOPE_KEYS = 32
 _MAX_DETAIL_REASON = 240
+_NEUTRAL_DETAIL_REASON = "terminal_detail_withheld"
 _UNSAFE_LABEL_FRAGMENTS = (
     "argv",
     "env",
@@ -291,6 +290,10 @@ def _event_hash(
     )
 
 
+def _safe_detail_reason(value: str | None) -> str | None:
+    return _NEUTRAL_DETAIL_REASON if value else None
+
+
 def _scope_from_json(value: str) -> dict[str, ScopeScalar]:
     raw: object = json.loads(value)
     if not isinstance(raw, dict):
@@ -474,7 +477,7 @@ def _append_event(
     detail_reason: str | None,
 ) -> OperationEvent:
     detail_code = f"job_{status.value}" if status is not None else None
-    safe_reason = redact(detail_reason)[:_MAX_DETAIL_REASON] if detail_reason else None
+    safe_reason = _safe_detail_reason(detail_reason)
     stamp = _to_iso(occurred_at)
     event_id = _event_identity(operation_id, event_kind)
     event_hash = _event_hash(
@@ -551,7 +554,7 @@ def _event_from_row(row: sqlite3.Row | tuple[object, ...]) -> OperationEvent:
             raise ValueError("persisted terminal event is incomplete")
         if detail_code != f"job_{status.value}":
             raise ValueError("persisted terminal detail_code is invalid")
-        if detail_reason is not None and not 1 <= len(detail_reason) <= _MAX_DETAIL_REASON:
+        if detail_reason not in {None, _NEUTRAL_DETAIL_REASON}:
             raise ValueError("persisted terminal detail_reason is invalid")
     return OperationEvent(
         event_id=event_id,
