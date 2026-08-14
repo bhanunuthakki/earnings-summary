@@ -122,6 +122,11 @@ def observation_identity(record: EarningsSurpriseRecordV1) -> str:
     return _sha256(_canonical_json(_record_payload(record)))
 
 
+def observation_clock_lexeme(record: EarningsSurpriseRecordV1) -> str:
+    """Serialize the observation clock exactly as the projection trigger expects."""
+    return record.fetched_at.isoformat()
+
+
 def cache_generation_identity(raw_payload: object, *, cache_path: str) -> str:
     """Return a stable identity for the exact cache generation being consumed."""
     payload = {"cache_path": cache_path, "raw_payload": raw_payload}
@@ -201,7 +206,7 @@ def append_observation(
         record.num_analysts_revenue,
         record.source_name,
         record.source_url,
-        record.fetched_at.isoformat(),
+        observation_clock_lexeme(record),
         cache_path,
         record_ordinal,
         raw_json,
