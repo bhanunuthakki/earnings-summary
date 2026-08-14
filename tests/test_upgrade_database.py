@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import sqlite3
@@ -691,3 +692,11 @@ def test_upgrade_database_cli_emits_valid_json_receipt(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["status"] == "created"
     assert payload["to_revision"] == ACTIVE_HEAD
+
+
+def test_upgrade_database_path_entrypoint_uses_execution_import_root() -> None:
+    source = (ROOT / "execution" / "upgrade_database.py").read_text(encoding="utf-8")
+
+    assert "from execution import portfolio_readiness_receipt" not in source
+    assert source.count("import portfolio_readiness_receipt as readiness_module") == 2
+    assert importlib.import_module("portfolio_readiness_receipt") is readiness_module
