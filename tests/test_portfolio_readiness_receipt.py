@@ -6,6 +6,7 @@ import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -15,6 +16,13 @@ from sqlite_snapshot import SnapshotRequest, create_snapshot
 
 NOW = datetime(2026, 8, 14, tzinfo=UTC)
 SHA = "a" * 40
+
+
+class _AlignedKwargs(TypedDict):
+    git_sha_resolver: readiness.GitShaResolver
+    git_status_resolver: readiness.GitStatusResolver
+    origin_resolver: readiness.OriginResolver
+    ancestry_resolver: readiness.GitAncestryResolver
 
 
 def _revision_repo(root: Path, *, revision: str, prior: str | None = None) -> Path:
@@ -60,15 +68,26 @@ def _backup_receipt(source: Path, root: Path) -> Path:
     return path
 
 
-def _aligned_kwargs(checkout: Path, runtime: Path) -> dict[str, object]:
+def _aligned_kwargs(checkout: Path, runtime: Path) -> _AlignedKwargs:
+    del checkout, runtime
+
+    def git_sha_resolver(_root: Path) -> str:
+        return SHA
+
+    def git_status_resolver(_root: Path) -> tuple[str, ...]:
+        return ()
+
+    def origin_resolver(_root: Path) -> readiness.OriginMainObservation:
+        return readiness.OriginMainObservation(sha=SHA, fetched_at=NOW)
+
+    def ancestry_resolver(_root: Path, _ancestor: str, _descendant: str) -> bool:
+        return True
+
     return {
-        "git_sha_resolver": lambda _root: SHA,
-        "git_status_resolver": lambda _root: (),
-        "origin_resolver": lambda _root: readiness.OriginMainObservation(
-            sha=SHA,
-            fetched_at=NOW,
-        ),
-        "ancestry_resolver": lambda _root, _ancestor, _descendant: True,
+        "git_sha_resolver": git_sha_resolver,
+        "git_status_resolver": git_status_resolver,
+        "origin_resolver": origin_resolver,
+        "ancestry_resolver": ancestry_resolver,
     }
 
 
@@ -138,7 +157,11 @@ def test_collect_readiness_blocks_runtime_checkout_mismatch(tmp_path: Path) -> N
     restore_receipt = _backup_receipt(db_path, tmp_path / "backup")
 
     kwargs = _aligned_kwargs(checkout, runtime)
-    kwargs["git_sha_resolver"] = lambda root: SHA if root == checkout.resolve() else "b" * 40
+
+    def mismatched_sha(root: Path) -> str:
+        return SHA if root == checkout.resolve() else "b" * 40
+
+    kwargs["git_sha_resolver"] = mismatched_sha
     receipt = readiness.collect_readiness(
         checkout_root=checkout,
         runtime_root=runtime,
@@ -157,9 +180,11 @@ def test_collect_readiness_blocks_relevant_dirty_or_untracked_code(tmp_path: Pat
     db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=readiness.ACTIVE_HEAD)
     restore_receipt = _backup_receipt(db_path, tmp_path / "backup")
     kwargs = _aligned_kwargs(checkout, runtime)
-    kwargs["git_status_resolver"] = lambda root: (
-        ("?? execution/untracked.py",) if root == checkout.resolve() else ()
-    )
+
+    def dirty_status(root: Path) -> tuple[str, ...]:
+        return ("?? execution/untracked.py",) if root == checkout.resolve() else ()
+
+    kwargs["git_status_resolver"] = dirty_status
 
     receipt = readiness.collect_readiness(
         checkout_root=checkout,
@@ -200,10 +225,11 @@ def test_collect_readiness_requires_fresh_origin_main_identity(tmp_path: Path) -
     db_path = _versioned_db(runtime / "data" / "portfolio.db", revision=readiness.ACTIVE_HEAD)
     restore_receipt = _backup_receipt(db_path, tmp_path / "backup")
     kwargs = _aligned_kwargs(checkout, runtime)
-    kwargs["origin_resolver"] = lambda _root: readiness.OriginMainObservation(
-        sha="b" * 40,
-        fetched_at=NOW,
-    )
+
+    def other_origin(_root: Path) -> readiness.OriginMainObservation:
+        return readiness.OriginMainObservation(sha="b" * 40, fetched_at=NOW)
+
+    kwargs["origin_resolver"] = other_origin
 
     receipt = readiness.collect_readiness(
         checkout_root=checkout,
@@ -423,7 +449,10 @@ def test_cli_emits_machine_readable_json_and_blocking_exit(
             assert indent == 2
             return json.dumps({"ready": False, "blocking_reasons": ["test"]}, indent=2)
 
-    monkeypatch.setattr(readiness, "collect_readiness", lambda **_kwargs: _BlockedReceipt())
+    def blocked_collect(**_kwargs: object) -> _BlockedReceipt:
+        return _BlockedReceipt()
+
+    monkeypatch.setattr(readiness, "collect_readiness", blocked_collect)
 
     exit_code = readiness.main(
         [
