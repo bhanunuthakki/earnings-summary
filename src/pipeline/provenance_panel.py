@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 # (anchor id, navigation label, standalone panel id). The display order is the
 # product contract: Coverage remains prominent and leads.
 _SectionSpec = tuple[str, str, str]
-_SECTIONS: tuple[_SectionSpec, ...] = (
+PROVENANCE_SECTIONS: tuple[_SectionSpec, ...] = (
     ("coverage", "Coverage", "section_coverage"),
     ("validation", "Validation", "validation"),
     ("evals", "Evals", "evals"),
@@ -55,7 +55,7 @@ def render_provenance_panel(
     nav = "".join(
         f'<button type="button" class="k-chip k-chip-btn k-chip-tab" '
         f'data-prov-jump="prov-{anchor}">{escape(label)}</button>'
-        for anchor, label, _panel_id in _SECTIONS
+        for anchor, label, _panel_id in PROVENANCE_SECTIONS
     )
     toolbar = panel_toolbar(
         "Provenance",
@@ -76,7 +76,7 @@ def render_provenance_panel(
         f"<span>Loading {escape(label)}...</span>"
         "</div>"
         "</div></div>"
-        for anchor, label, panel_id in _SECTIONS
+        for anchor, label, panel_id in PROVENANCE_SECTIONS
     )
     return f'<div class="prov-console">{toolbar}{status}{body}</div><script>{_PROV_NAV_JS}</script>'
 

@@ -10,6 +10,7 @@ import pytest
 from operations.models import (
     JobHealthRow,
     JobReceiptObservation,
+    OperationsRegistry,
     OperationsSnapshot,
     SchedulerObservation,
     SchedulerTaskRow,
@@ -17,13 +18,19 @@ from operations.models import (
     ServiceRow,
     ServiceState,
 )
+from operations.readme_governance import ReadmeGovernanceStatus
 from operations.registry import build_operations_registry
 from operations.snapshot import collect_operations_snapshot
 from pipeline.operations_panel import (
+    OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS,
+    OPERATIONS_REGISTRY_SURFACE_DISPOSITIONS,
+    OPERATIONS_RELATED_VIEWS,
+    OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS,
     OperationsPanelView,
     build_operations_panel_view,
     render_operations_panel,
 )
+from pipeline.provenance_panel import PROVENANCE_SECTIONS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OBSERVED_AT = datetime(2026, 8, 13, 12, tzinfo=UTC)
@@ -40,20 +47,144 @@ def _view(tmp_path: Path) -> OperationsPanelView:
     return build_operations_panel_view(registry, snapshot)
 
 
+def _readme_status(
+    state: Literal["not_run", "approved_preview", "applied", "rejected", "stale", "invalid"],
+    tone: Literal["ok", "warn", "bad"],
+) -> ReadmeGovernanceStatus:
+    return ReadmeGovernanceStatus(
+        state=state,
+        tone=tone,
+        run_id=None if state == "not_run" else "a" * 32,
+        verdict=None if state == "not_run" else ("pass" if tone == "ok" else "revise"),
+        attempts=0 if state == "not_run" else 1,
+        current_sha256="b" * 64,
+        candidate_sha256=None if state == "not_run" else "c" * 64,
+        can_apply=state == "approved_preview",
+        recorded_at=None if state == "not_run" else OBSERVED_AT,
+    )
+
+
 def test_operations_projection_groups_every_declared_task_wrapper_and_step(
     tmp_path: Path,
 ) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
     view = _view(tmp_path)
 
-    assert len(view.tasks) == 43
-    assert sum(len(task.steps) for task in view.tasks) == 50
-    assert len({task.wrapper for task in view.tasks}) == 43
+    assert len(view.tasks) == len(registry.scheduled_tasks)
+    assert sum(len(task.steps) for task in view.tasks) == len(registry.job_steps)
+    assert {task.wrapper for task in view.tasks} == {
+        task.wrapper for task in registry.scheduled_tasks
+    }
     assert all(task.steps for task in view.tasks)
     capture = next(task for task in view.tasks if task.service_owned)
     assert capture.declared_owner == "Managed service"
     assert capture.scheduler_state == "N/A - service-owned"
     assert capture.runtime_owner.startswith("Managed service")
     assert all(step.execution_rails for task in view.tasks for step in task.steps)
+
+
+def test_operations_surface_dispositions_cover_every_registry_and_snapshot_field() -> None:
+    registry_fields = [item.field for item in OPERATIONS_REGISTRY_SURFACE_DISPOSITIONS]
+    snapshot_fields = [item.field for item in OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS]
+
+    assert len(registry_fields) == len(set(registry_fields))
+    assert len(snapshot_fields) == len(set(snapshot_fields))
+    assert set(registry_fields) == set(OperationsRegistry.model_fields)
+    assert set(snapshot_fields) == set(OperationsSnapshot.model_fields)
+    assert all(item.rationale.strip() for item in OPERATIONS_REGISTRY_SURFACE_DISPOSITIONS)
+    assert all(item.rationale.strip() for item in OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS)
+
+    derived_panel_fields = {
+        "observed_label",
+        "attention_count",
+        "runtime_summary_tone",
+        "tasks",
+        "runtime_rows",
+    }
+    auxiliary_fields = [item.field for item in OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS]
+    assert set(auxiliary_fields) == set(OperationsPanelView.model_fields) - derived_panel_fields
+
+
+def test_linked_dispositions_resolve_to_reachable_related_views_and_sections(
+    tmp_path: Path,
+) -> None:
+    related = {item.key: item for item in OPERATIONS_RELATED_VIEWS}
+    provenance_ids = {panel_id for _anchor, _label, panel_id in PROVENANCE_SECTIONS}
+    dispositions = (
+        *OPERATIONS_REGISTRY_SURFACE_DISPOSITIONS,
+        *OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS,
+        *OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS,
+    )
+
+    for disposition in dispositions:
+        assert (disposition.destination == "linked_view") == bool(disposition.targets)
+        for target in disposition.targets:
+            view_key, separator, section_id = target.partition(":")
+            assert view_key in related
+            if separator:
+                assert view_key == "provenance"
+                assert section_id in provenance_ids
+
+    html = render_operations_panel(_view(tmp_path))
+    for item in related.values():
+        assert f'data-operations-related="{item.key}"' in html
+        assert f"workOsOpenRelatedView('{item.endpoint}', '{item.label}')" in html
+
+
+@pytest.mark.parametrize(
+    ("state", "tone"),
+    (
+        ("not_run", "warn"),
+        ("stale", "warn"),
+        ("rejected", "warn"),
+        ("invalid", "bad"),
+    ),
+)
+def test_readme_governance_failures_contribute_to_headline_attention(
+    tmp_path: Path,
+    state: Literal["not_run", "stale", "rejected", "invalid"],
+    tone: Literal["warn", "bad"],
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    baseline = build_operations_panel_view(
+        registry, snapshot, readme_status=_readme_status("applied", "ok")
+    )
+    status = _readme_status(state, tone)
+
+    view = build_operations_panel_view(registry, snapshot, readme_status=status)
+    html = render_operations_panel(view)
+
+    assert view.attention_count == baseline.attention_count + 1
+    assert view.runtime_summary_tone == "warn"
+    assert "operational or governance observation(s) need attention" in html
+
+
+def test_missing_readme_governance_status_is_invalid_and_contributes_attention(
+    tmp_path: Path,
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    healthy = build_operations_panel_view(
+        registry, snapshot, readme_status=_readme_status("applied", "ok")
+    )
+
+    missing = build_operations_panel_view(registry, snapshot)
+    html = render_operations_panel(missing)
+
+    assert missing.attention_count == healthy.attention_count + 1
+    governance = html.split('id="operations-pane-governance"', 1)[1]
+    assert "Invalid" in governance
 
 
 def test_operations_renderer_has_governance_tab_and_related_views(
@@ -394,15 +525,71 @@ def test_invalid_runtime_receipts_do_not_turn_empty_observations_into_zero_claim
     )
 
     html = render_operations_panel(build_operations_panel_view(registry, snapshot))
-    services = html.split("Managed services", 1)[1].split("</article>", 1)[0]
     identity = html.split("Database identity", 1)[1].split("</article>", 1)[0]
+    runtime = html.split('id="operations-pane-runtime"', 1)[1]
 
-    assert f"{len(registry.services)} configured service(s)" in services
-    assert "Invalid" in services
-    assert "0 declared service(s)" not in services
+    for service in registry.services:
+        service_card = runtime.split(f"Managed service · {service.name}", 1)[1].split(
+            "</article>", 1
+        )[0]
+        assert service.purpose in service_card
+        assert "Invalid" in service_card
     assert "Unavailable" in identity
     assert "Invalid" in identity
     assert "0 attached schema(s)" not in identity
+
+
+def test_every_registered_service_is_visible_and_nonrunning_state_gets_attention(
+    tmp_path: Path,
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=OBSERVED_AT,
+    )
+    running_rows = tuple(
+        ServiceRow(name=service.name, state="Running", registry_match="expected")
+        for service in registry.services
+    )
+    running_snapshot = snapshot.model_copy(
+        update={
+            "services": ServiceObservation(
+                state="current",
+                observed_at=OBSERVED_AT,
+                evidence_source="service:receipt",
+                evidence_recorded_at=OBSERVED_AT,
+                values=running_rows,
+            )
+        }
+    )
+    running = build_operations_panel_view(
+        registry, running_snapshot, readme_status=_readme_status("applied", "ok")
+    )
+    dashboard = next(service for service in registry.services if service.role == "dashboard")
+    stopped_rows = tuple(
+        row.model_copy(update={"state": "Stopped"}) if row.name == dashboard.name else row
+        for row in running_rows
+    )
+    stopped_snapshot = running_snapshot.model_copy(
+        update={"services": running_snapshot.services.model_copy(update={"values": stopped_rows})}
+    )
+
+    stopped = build_operations_panel_view(
+        registry, stopped_snapshot, readme_status=_readme_status("applied", "ok")
+    )
+    html = render_operations_panel(stopped)
+    runtime = html.split('id="operations-pane-runtime"', 1)[1]
+
+    assert stopped.attention_count == running.attention_count + 1
+    for service in registry.services:
+        card = runtime.split(f"Managed service · {service.name}", 1)[1].split("</article>", 1)[0]
+        assert service.purpose in card
+    dashboard_card = runtime.split(f"Managed service · {dashboard.name}", 1)[1].split(
+        "</article>", 1
+    )[0]
+    assert "Stopped" in dashboard_card
 
 
 def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) -> None:

@@ -4,6 +4,14 @@
 
 <!-- One or two lines: what this changes and the reason. -->
 
+## Operations & Governance impact
+
+<!-- Select exactly one for changes that can affect operations, data governance, or operator actions. Add the reason/evidence inline. -->
+
+- [ ] None — reason:
+- [ ] Existing dynamic projection remains truthful — evidence:
+- [ ] Surface/registry/freshness/action contract updated — evidence:
+
 ## Frontend conformance (delete if this PR renders nothing)
 
 If this PR adds or changes **anything rendered to the frontend** (a row, section,
