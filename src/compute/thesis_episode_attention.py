@@ -267,6 +267,15 @@ def ensure_episode_alert(
     attention = get_attention(connection, episode_id, now=stamp)
     if not attention.actionable:
         return None
+    episode = connection.execute(
+        "SELECT overall_status,provenance_completeness,evidence_as_of "
+        "FROM thesis_evaluation_episodes WHERE episode_id=?",
+        (episode_id,),
+    ).fetchone()
+    if episode is None:
+        raise AttentionError(f"unknown thesis episode: {episode_id}")
+    if str(episode[0]) == "ok":
+        return None
     signature = compute_signature_sha(
         "thesis_drift",
         attention.ticker,
@@ -281,13 +290,6 @@ def ensure_episode_alert(
     ).fetchone()
     if existing is not None:
         return int(existing[0])
-    episode = connection.execute(
-        "SELECT overall_status,provenance_completeness,evidence_as_of "
-        "FROM thesis_evaluation_episodes WHERE episode_id=?",
-        (episode_id,),
-    ).fetchone()
-    if episode is None:
-        raise AttentionError(f"unknown thesis episode: {episode_id}")
     evidence_json = json.dumps(
         {
             "episode_id": episode_id,
