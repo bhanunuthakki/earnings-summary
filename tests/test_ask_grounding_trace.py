@@ -142,6 +142,51 @@ def test_view_trace_rejects_a_numeric_cell_without_source_provenance() -> None:
         view_trace_items(result)
 
 
+def test_view_trace_records_every_derived_value_contributor() -> None:
+    current = CellSource(
+        source="sec_companyfacts",
+        doc_id=29,
+        fact_id=41,
+        fact_table="financial_facts",
+    )
+    prior = CellSource(
+        source="sec_companyfacts",
+        doc_id=18,
+        fact_id=30,
+        fact_table="financial_facts",
+    )
+    result = ViewResult(
+        spec=ViewSpec(
+            tickers=("RBRK",),
+            metrics=(MetricRef(domain="fin", key="revenue"),),
+            transform="yoy",
+        ),
+        period_labels=["Q2'26"],
+        rows=[
+            ViewRow(
+                ticker="RBRK",
+                metric=MetricRef(domain="fin", key="revenue"),
+                label="RBRK revenue",
+                unit="USD",
+                cells=[
+                    ViewCell(
+                        value=24.0,
+                        raw=309_000_000.0,
+                        source=current,
+                        sources=(current, prior),
+                    )
+                ],
+            )
+        ],
+        warnings=[],
+    )
+
+    items = view_trace_items(result)
+
+    assert [item.fact_id for item in items] == [41, 30]
+    assert all(item.value == "24.0" for item in items)
+
+
 def test_trace_persistence_fails_closed_when_schema_is_missing(tmp_path: Path) -> None:
     db_path = tmp_path / "old.db"
     sqlite3.connect(db_path).close()
@@ -193,4 +238,11 @@ def test_trace_binds_to_answer_without_invalidating_evidence_cache(
             "INSERT INTO kpi_definitions(ticker,name,unit,primary_source) VALUES (?,?,?,?)",
             ("WIX", "Bookings", "USD", "issuer"),
         )
-    assert turn_cache.evidence_db_token(db_path) != before
+        conn.execute(
+            "INSERT INTO documents "
+            "(ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("WIX", "sec", "10-Q", "wix-q2.html", "a" * 64, "2026-08-14", "ok", 1),
+        )
+    selected_change = turn_cache.evidence_db_token(db_path)
+    assert selected_change != before

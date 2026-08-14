@@ -84,40 +84,46 @@ def view_trace_items(result: ViewResult) -> tuple[GroundingTraceItem, ...]:
     items: list[GroundingTraceItem] = []
     for row in result.rows:
         for period, cell in zip(result.period_labels, row.cells, strict=True):
-            source = cell.source
             if cell.raw is None:
                 continue
-            if source is None:
+            sources = cell.sources or ((cell.source,) if cell.source is not None else ())
+            if not sources:
                 raise GroundingTraceError("grounded numeric result is missing source provenance")
-            payload = {
-                "ticker": row.ticker,
-                "metric_ref": row.metric.token(),
-                "period": period,
-                "value": repr(cell.raw),
-                "unit": row.unit,
-                "source": source.source,
-                "source_doc_id": source.doc_id,
-                "fact_id": source.fact_id,
-                "fact_table": source.fact_table,
-                "source_url": _trace_source_url(source.source_url),
-            }
-            items.append(
-                GroundingTraceItem(
-                    ordinal=len(items) + 1,
-                    kind="fact",
-                    ticker=row.ticker,
-                    metric_ref=row.metric.token(),
-                    period=period,
-                    value=repr(cell.raw),
-                    unit=row.unit,
-                    source_doc_id=source.doc_id,
-                    fact_id=source.fact_id,
-                    fact_table=source.fact_table,
-                    href=(f"/source/{source.doc_id}" if source.doc_id is not None else None),
-                    source_url=_trace_source_url(source.source_url),
-                    evidence_sha256=_sha_json(payload),
+            displayed = cell.value if cell.value is not None else cell.raw
+            for contributor, source in enumerate(sources, start=1):
+                payload = {
+                    "ticker": row.ticker,
+                    "metric_ref": row.metric.token(),
+                    "transform": result.spec.transform,
+                    "period": period,
+                    "displayed_value": repr(displayed),
+                    "current_raw_value": repr(cell.raw),
+                    "unit": row.unit,
+                    "contributor": contributor,
+                    "contributor_count": len(sources),
+                    "source": source.source,
+                    "source_doc_id": source.doc_id,
+                    "fact_id": source.fact_id,
+                    "fact_table": source.fact_table,
+                    "source_url": _trace_source_url(source.source_url),
+                }
+                items.append(
+                    GroundingTraceItem(
+                        ordinal=len(items) + 1,
+                        kind="fact",
+                        ticker=row.ticker,
+                        metric_ref=row.metric.token(),
+                        period=period,
+                        value=repr(displayed),
+                        unit=row.unit,
+                        source_doc_id=source.doc_id,
+                        fact_id=source.fact_id,
+                        fact_table=source.fact_table,
+                        href=(f"/source/{source.doc_id}" if source.doc_id is not None else None),
+                        source_url=_trace_source_url(source.source_url),
+                        evidence_sha256=_sha_json(payload),
+                    )
                 )
-            )
     return tuple(items)
 
 

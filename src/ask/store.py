@@ -328,30 +328,46 @@ def append_assistant_turn_if_user_tail(
     citations_json = json.dumps(citations) if citations is not None else None
     conn = _open(db_path)
     try:
-        columns = "session_id,role,text,citations_json,model,created_at"
-        select_values = "?, 'assistant', ?, ?, ?, ?"
         values: tuple[object, ...] = (session_id, text, citations_json, model, now)
         if grounding_trace_id is not None:
-            columns = "session_id,role,text,citations_json,grounding_trace_id,model,created_at"
-            select_values = "?, 'assistant', ?, ?, ?, ?, ?"
             values = (session_id, text, citations_json, grounding_trace_id, model, now)
-        cursor = conn.execute(
-            "INSERT INTO ask_turns "
-            f"({columns}) SELECT {select_values} "
-            "WHERE EXISTS ("
-            "SELECT 1 FROM ask_turns tail "
-            "WHERE tail.id=? AND tail.session_id=? AND tail.role='user' "
-            "AND tail.text=? AND tail.id=("
-            "SELECT MAX(latest.id) FROM ask_turns latest "
-            "WHERE latest.session_id=?))",
-            (
-                *values,
-                user_turn_id,
-                session_id,
-                user_text,
-                session_id,
-            ),
-        )
+            cursor = conn.execute(
+                "INSERT INTO ask_turns "
+                "(session_id,role,text,citations_json,grounding_trace_id,model,created_at) "
+                "SELECT ?, 'assistant', ?, ?, ?, ?, ? "
+                "WHERE EXISTS ("
+                "SELECT 1 FROM ask_turns tail "
+                "WHERE tail.id=? AND tail.session_id=? AND tail.role='user' "
+                "AND tail.text=? AND tail.id=("
+                "SELECT MAX(latest.id) FROM ask_turns latest "
+                "WHERE latest.session_id=?))",
+                (
+                    *values,
+                    user_turn_id,
+                    session_id,
+                    user_text,
+                    session_id,
+                ),
+            )
+        else:
+            cursor = conn.execute(
+                "INSERT INTO ask_turns "
+                "(session_id,role,text,citations_json,model,created_at) "
+                "SELECT ?, 'assistant', ?, ?, ?, ? "
+                "WHERE EXISTS ("
+                "SELECT 1 FROM ask_turns tail "
+                "WHERE tail.id=? AND tail.session_id=? AND tail.role='user' "
+                "AND tail.text=? AND tail.id=("
+                "SELECT MAX(latest.id) FROM ask_turns latest "
+                "WHERE latest.session_id=?))",
+                (
+                    *values,
+                    user_turn_id,
+                    session_id,
+                    user_text,
+                    session_id,
+                ),
+            )
         if cursor.rowcount != 1 or cursor.lastrowid is None:
             conn.rollback()
             raise ValueError("authoritative Ask session advanced before final append")

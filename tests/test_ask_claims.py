@@ -377,3 +377,36 @@ def test_strict_grounding_preserves_a_full_long_anchored_span(
     claims = payload["claims"]
     assert isinstance(claims, list)
     assert claims[0]["text"] == answer
+
+
+def test_strict_grounding_rejects_an_unsupported_coordinated_clause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer = "Revenue grew [1], and the CEO was arrested [1]."
+    audit_payload: dict[str, object] = {
+        "claims": [
+            {
+                "quote": "Revenue grew [1],",
+                "cites": [1],
+                "supported": True,
+            },
+            {
+                "quote": "and the CEO was arrested [1].",
+                "cites": [],
+                "supported": False,
+            },
+        ]
+    }
+    _patch_map(
+        monkeypatch,
+        audit_payload,
+    )
+
+    with pytest.raises(GroundedCitationError, match="unsupported factual claim"):
+        build_citations_payload(
+            answer,
+            [_item(1)],
+            db_path=tmp_path / "x.db",
+            strict=True,
+        )

@@ -165,7 +165,7 @@ def required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
         if start is None:
             continue
         boundary = char == "\n" or (
-            char in ".!?;" and (index + 1 == len(answer) or answer[index + 1].isspace())
+            char in ",.!?;" and (index + 1 == len(answer) or answer[index + 1].isspace())
         )
         if not boundary:
             continue
@@ -252,7 +252,10 @@ def _reconcile(
             by_sentence[idx] = (cites, supported)
         else:
             prev[0].update(cites)
-            by_sentence[idx] = (prev[0], (prev[1] or supported) and bool(prev[0]))
+            merged_supported = (prev[1] and supported if strict else prev[1] or supported) and bool(
+                prev[0]
+            )
+            by_sentence[idx] = (prev[0], merged_supported)
 
     if raw_claims and not by_sentence:
         # Every entry was unusable — that's a failed extraction, not a

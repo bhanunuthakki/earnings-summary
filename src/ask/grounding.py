@@ -424,18 +424,46 @@ def _parse_period(period: str | None) -> tuple[int | None, int | None]:
 # ---------------------------------------------------------------------------
 
 
-def _connect(db_path: Path) -> sqlite3.Connection | None:
+class StrictEvidenceConnection:
+    """Translate channel SQL faults so best-effort legacy helpers cannot hide them."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def execute(
+        self,
+        sql: str,
+        parameters: tuple[object, ...] = (),
+    ) -> sqlite3.Cursor:
+        try:
+            return self._connection.execute(sql, parameters)
+        except sqlite3.Error as exc:
+            raise GroundingRetrievalError("grounded evidence query failed") from exc
+
+    def close(self) -> None:
+        self._connection.close()
+
+
+def _connect(db_path: Path, *, strict: bool = False) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.READ_ONLY,
+            schema_preflight=strict,
+        )
+    except Exception as exc:
+        if strict:
+            raise GroundingRetrievalError("grounding database preflight failed") from exc
+        if not isinstance(exc, sqlite3.Error):
+            raise
         return None
     # Row factory so the provenance.overrides read API (which indexes rows by
     # column name) works on this connection; every existing consumer here uses
     # integer indexing / unpacking, both of which sqlite3.Row also supports.
     conn.row_factory = sqlite3.Row
-    return conn
+    return cast("sqlite3.Connection", StrictEvidenceConnection(conn)) if strict else conn
 
 
 def _doc_meta(conn: sqlite3.Connection, doc_id: int) -> tuple[str | None, str | None, str | None]:
@@ -1384,7 +1412,7 @@ def gather_evidence(
             if strict:
                 raise GroundingRetrievalError("portfolio evidence retrieval failed") from exc
 
-        conn = _connect(db_path)
+        conn = _connect(db_path, strict=strict)
         if strict and conn is None:
             raise GroundingRetrievalError("grounding database is unavailable")
         try:
@@ -1655,6 +1683,7 @@ __all__ = [
     "EvidenceItem",
     "EvidenceNeed",
     "GroundingRetrievalError",
+    "StrictEvidenceConnection",
     "build_evidence_block",
     "gather_evidence",
     "gather_requested_evidence",

@@ -60,6 +60,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Generic, TypeVar, cast
 
+from provenance.evidence_revision import current_evidence_revision
 from sqlite_freshness import SQLiteFileToken, sqlite_file_token
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -250,10 +251,10 @@ def db_mtime_token(db_path: Path) -> SQLiteFileToken:
 def evidence_db_token(db_path: Path) -> tuple[object, ...]:
     """Cheap revision coordinates for the tables that can change Ask evidence.
 
-    Evidence stores are append/version oriented, so their latest row identity
-    is the stable generation. The few mutable owner-state stores also include
-    their latest update/action timestamp. Partial historical fixtures fall
-    back to the conservative file/WAL token.
+    Governed fact-observation capture, legacy append sequences, and the current
+    transcript view supply the primary coordinates. The few mutable owner-state
+    stores also include their latest update/action timestamp. Partial
+    historical fixtures fall back to the conservative file/WAL token.
     """
 
     if not db_path.exists():
@@ -261,30 +262,7 @@ def evidence_db_token(db_path: Path) -> tuple[object, ...]:
     conn = None
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-        row = conn.execute(
-            "SELECT "
-            "(SELECT MAX(id) FROM financial_facts),"
-            "(SELECT MAX(id) FROM kpi_facts),"
-            "(SELECT MAX(id) FROM documents),"
-            "(SELECT MAX(id) FROM transcripts),"
-            "(SELECT MAX(id) FROM position_sizing_intent),"
-            "(SELECT MAX(updated_at) FROM position_sizing_intent),"
-            "(SELECT MAX(id) FROM decisions),"
-            "(SELECT MAX(COALESCE(outcome_at,user_acted_at,made_at,created_at)) FROM decisions),"
-            "(SELECT MAX(id) FROM analyst_notes),"
-            "(SELECT MAX(updated_at) FROM analyst_notes),"
-            "(SELECT MAX(id) FROM disclosure_events),"
-            "(SELECT MAX(id) FROM macro_series),"
-            "(SELECT MAX(id) FROM macro_sensitivities),"
-            "(SELECT MAX(id) FROM insight_notes),"
-            "(SELECT MAX(id) FROM dcf_runs),"
-            "(SELECT MAX(id) FROM llm_artifacts),"
-            "(SELECT MAX(id) FROM tracked_companies),"
-            "(SELECT MAX(id) FROM fact_overrides),"
-            "(SELECT MAX(id) FROM validation_issues),"
-            "(SELECT MAX(id) FROM kpi_definitions)"
-        ).fetchone()
-        return tuple(row) if row is not None else db_mtime_token(db_path)
+        return current_evidence_revision(conn)
     except (sqlite3.Error, RuntimeError):
         return db_mtime_token(db_path)
     finally:

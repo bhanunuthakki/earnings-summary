@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from ask.grounding import (
+    GroundingRetrievalError,
+    StrictEvidenceConnection,
     build_evidence_block,
     gather_evidence,
     question_terms,
@@ -188,6 +190,16 @@ def _gather(repo: Path, question: str, tickers: list[str] | None = None):
 
 
 # ----------------------------------------------------------------------------
+
+
+def test_strict_read_connection_cannot_hide_channel_sql_errors() -> None:
+    raw = sqlite3.connect(":memory:")
+    strict = StrictEvidenceConnection(raw)
+    try:
+        with pytest.raises(GroundingRetrievalError, match="query failed"):
+            strict.execute("SELECT * FROM missing_grounding_table")
+    finally:
+        strict.close()
 
 
 def test_fact_channel_matches_kpis_and_line_items(repo: Path) -> None:
