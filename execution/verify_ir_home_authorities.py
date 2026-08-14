@@ -79,7 +79,7 @@ def select_candidates(tickers: tuple[str, ...]) -> tuple[IRHomeAuthorityCandidat
     )
 
 
-def _run(args: argparse.Namespace) -> IRHomeBatchResult:
+def run_authority_verification(args: argparse.Namespace) -> IRHomeBatchResult:
     candidates = (
         IR_HOME_AUTHORITY_CANDIDATES
         if args.all_candidates
@@ -105,11 +105,18 @@ def _run(args: argparse.Namespace) -> IRHomeBatchResult:
         schema_preflight=bool(args.apply),
     )
     try:
-        return verify_ir_home_candidates(
+        result = verify_ir_home_candidates(
             conn,
             request=request,
             session_factory=_session_factory,
         )
+        if args.apply:
+            conn.commit()
+        return result
+    except Exception:
+        if args.apply:
+            conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -137,9 +144,9 @@ def main(argv: list[str] | None = None) -> int:
                     f"evidence-blobs:{args.blob_root.resolve()}",
                 ],
             ):
-                result = _run(args)
+                result = run_authority_verification(args)
         else:
-            result = _run(args)
+            result = run_authority_verification(args)
     except Exception as exc:
         _event(
             "ir_home_authority_verification_failed",

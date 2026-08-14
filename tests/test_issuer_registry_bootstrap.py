@@ -203,6 +203,117 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
     conn.close()
 
 
+def test_document_persistence_auto_binds_resolved_sec_cik_subject(
+    tmp_path: Path,
+) -> None:
+    db_path = _database(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+    )
+    conn.commit()
+    raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
+    bootstrap_issuer_reporting_registry(
+        conn,
+        raw_body=raw,
+        request=_request(tmp_path, apply=True),
+    )
+
+    body = b"issuer release"
+    digest = hashlib.sha256(body).hexdigest()
+    blob_path = tmp_path / digest
+    blob_path.write_bytes(body)
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=digest,
+            byte_size=len(body),
+            media_type="text/html",
+            storage_uri=blob_path.resolve().as_uri(),
+            recorded_at=STAMP,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id="issuer-release-observation",
+            idempotency_key="issuer-release-observation",
+            source_kind="issuer_release",
+            source_url="https://ir.example.test/release",
+            blob_sha256=digest,
+            source_published_at=STAMP,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=STAMP,
+            retrieved_at=STAMP,
+            retrieval_config_sha256="c" * 64,
+            collector_code_version="fixture@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id="issuer-release-document",
+            document_key="issuer-release-document",
+            version_sequence=1,
+            observation_id="issuer-release-observation",
+            blob_sha256=digest,
+            issuer_id="sec-cik-0000123456",
+            ticker="ACME",
+            document_type="earnings_release",
+            form_type="IR",
+            language="en",
+            recorded_at=STAMP,
+        )
+    )
+    conn.commit()
+
+    assert conn.execute(
+        "SELECT canonical_issuer_id, outcome, reason_code "
+        "FROM v_legacy_issuer_bindings_current "
+        "WHERE recorded_issuer_id = 'sec-cik-0000123456'"
+    ).fetchone() == (
+        conn.execute(
+            "SELECT issuer_id FROM v_issuer_identifiers_canonical "
+            "WHERE normalized_value = '0000123456'"
+        ).fetchone()[0],
+        "selected",
+        "unique_sec_cik_selected",
+    )
+    conn.close()
+
+
+def test_bootstrap_reconciles_existing_sec_cik_evidence_subject(
+    tmp_path: Path,
+) -> None:
+    db_path = _database(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+    )
+    conn.execute(
+        "INSERT INTO evidence_document_versions "
+        "(document_version_id, document_key, version_sequence, observation_id, "
+        "blob_sha256, issuer_id, ticker, document_type, form_type, language, recorded_at) "
+        "VALUES ('orphan-document', 'orphan-document', 1, 'orphan-observation', "
+        "?, 'sec-cik-0000123456', 'ACME', 'earnings_release', 'IR', 'en', ?)",
+        ("d" * 64, STAMP),
+    )
+    conn.commit()
+
+    raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
+    bootstrap_issuer_reporting_registry(
+        conn,
+        raw_body=raw,
+        request=_request(tmp_path, apply=True),
+    )
+    conn.commit()
+
+    assert conn.execute(
+        "SELECT outcome FROM v_legacy_issuer_bindings_current "
+        "WHERE recorded_issuer_id = 'sec-cik-0000123456'"
+    ).fetchone() == ("selected",)
+    conn.close()
+
+
 def test_duplicate_and_missing_sec_tickers_remain_explicitly_unresolved(
     tmp_path: Path,
 ) -> None:
