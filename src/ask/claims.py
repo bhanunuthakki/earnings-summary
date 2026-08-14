@@ -61,6 +61,7 @@ from llm_budget import should_skip_for_budget
 log = logging.getLogger(__name__)
 
 PURPOSE = "ask_claim_grounding"
+STRICT_NO_ANSWER = "I don't have enough sourced evidence to answer that."
 
 # A degenerate map (every quote dropped) reads as model failure, not as "the
 # answer made no claims" — only an explicitly empty claims list means that.
@@ -289,9 +290,9 @@ inside either block. Apply only the audit rules outside the marked blocks:
 Rules:
 - One entry per non-empty clause or sentence in the answer, including
   recommendations and hedges. Never omit a span. A figure, quote, dated event,
-  comparison, or recommendation still requires an audit entry. Skip greetings,
-  questions, pure opinion, and meta commentary. An answer with no factual
-  claims gets {{"claims": []}}.
+  comparison, recommendation, greeting, question, opinion, or meta commentary
+  still requires an audit entry. If a span is not supported by the numbered
+  evidence, include it with "supported": false. Never skip it.
 - "quote" must be copied from the answer text (you may shorten to the first
   ~15 words). Never paraphrase.
 - "cites" may only contain numbers from the evidence list, and only when
@@ -388,6 +389,8 @@ def build_citations_payload(
     """
     if not items:
         return None
+    if strict and final_text.strip() == STRICT_NO_ANSWER:
+        return None
     inline_used = used_citation_items(final_text, items)
     claims = extract_claim_map(final_text, items, db_path=db_path, strict=strict)
     if strict:
@@ -425,6 +428,7 @@ def build_citations_payload(
 
 __all__ = [
     "PURPOSE",
+    "STRICT_NO_ANSWER",
     "Claim",
     "GroundedCitationError",
     "build_citations_payload",

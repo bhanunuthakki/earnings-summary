@@ -13,6 +13,7 @@ from typing import cast
 import pytest
 
 from ask.claims import (
+    STRICT_NO_ANSWER,
     Claim,
     GroundedCitationError,
     build_citations_payload,
@@ -270,6 +271,25 @@ def test_strict_grounding_rejects_an_empty_claim_map(
             db_path=tmp_path / "x.db",
             strict=True,
         )
+
+
+def test_strict_no_answer_exemption_never_calls_the_auditor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("claim auditor should not run for the exact no-answer response")
+
+    monkeypatch.setattr("ask.claims.call_llm_structured", fail)
+    assert (
+        build_citations_payload(
+            STRICT_NO_ANSWER,
+            [_item(1)],
+            db_path=tmp_path / "x.db",
+            strict=True,
+        )
+        is None
+    )
 
 
 def test_claim_auditor_spotlights_injection_shaped_evidence_and_answer(

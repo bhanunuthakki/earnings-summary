@@ -74,7 +74,7 @@ from ask.audit_store import (
     persist_answer_audit,
     retrieval_query_sha256,
 )
-from ask.claims import build_citations_payload, required_claim_spans
+from ask.claims import STRICT_NO_ANSWER, build_citations_payload, required_claim_spans
 from ask.commands import COMMAND_PREFIXES, run_chat_command
 from ask.context import ContextPack, tracked_tickers
 from ask.followup import (
@@ -1526,7 +1526,7 @@ def _narrative_events(
         history = sanitize_history(turn.history)
 
     if strict_grounding and not evidence:
-        final_text = "I don't have enough sourced evidence to answer that."
+        final_text = STRICT_NO_ANSWER
         if turn.session_id and turn.persistence_mode != "external_exchange":
             try:
                 _store_append_turn(
