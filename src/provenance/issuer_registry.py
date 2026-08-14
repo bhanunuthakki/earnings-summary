@@ -800,7 +800,7 @@ def ensure_sec_cik_evidence_binding(
         str(row[0])
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
-            f"AND name IN ({','.join('?' for _ in required_tables)})",
+            f"AND name IN ({','.join('?' for _ in required_tables)})",  # nosec B608 -- fixed internal table list; values remain bound
             required_tables,
         ).fetchall()
     }
