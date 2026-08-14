@@ -25,6 +25,7 @@ def build(
     repo_root: Path,
     enable_llm: bool,
     force_budget_bypass: bool = False,
+    force_refresh: bool = False,
     conn: sqlite3.Connection | None = None,
 ) -> ValuationBasisSection:
     if not enable_llm:
@@ -71,7 +72,12 @@ def build(
                     detail="No portfolio.db on disk; cannot compute valuation basis.",
                 ),
             )
-        result = compute_valuation.extract_for_ticker(ticker, repo_root, db_conn)
+        result = compute_valuation.extract_for_ticker(
+            ticker,
+            repo_root,
+            db_conn,
+            refresh=force_refresh,
+        )
     except Exception as e:
         # Hard stops (monthly budget cap, CLI not installed) propagate — the
         # LLM multiple-picker runs through call_llm inside the compute layer,
@@ -108,11 +114,11 @@ def build(
 def _to_section(r: compute_valuation.ValuationBasisResult) -> ValuationBasisSection:
     history = [
         ValuationBasisHistoricalPoint(
-            period_end=_as_date(h.period_end),
+            period_end=period_end,
             value=h.value,
         )
         for h in r.history
-        if h.period_end
+        if h.period_end and (period_end := _as_date(h.period_end)) is not None
     ]
     return ValuationBasisSection(
         status=SectionStatus.OK,
