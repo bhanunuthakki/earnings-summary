@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -14,7 +14,7 @@ class DcfInputProvenance:
     input_sha256: str
     workbook_sha256: str | None
     engine_version: str
-    inputs_as_of: date | datetime
+    inputs_as_of: datetime
     detail: dict[str, object] | None = None
 
     def as_json(self) -> str:

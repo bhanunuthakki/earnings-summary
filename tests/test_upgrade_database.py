@@ -479,7 +479,7 @@ def test_archived_bridge_rejects_closed_detail_lookalike_before_revision_mutatio
     assert _revision(backup_path) == "0273_post_earnings_readout_budget"
 
 
-def test_managed_wrapper_upgrades_exact_0010_to_0013_with_backup_and_closed_journal_schema(
+def test_managed_wrapper_upgrades_exact_0010_to_0014_with_backup_and_closed_journal_schema(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db_path = migrated_db(tmp_path / "exact-0010.db", target="0010_add_rehearsal_io_indexes")

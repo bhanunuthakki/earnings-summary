@@ -36,6 +36,7 @@ from net.client import (  # noqa: E402
     JsonValue,
     QueryValue,
 )
+from pipeline.queries import ANALYZED_LIST_TYPE_VALUES  # noqa: E402
 from runtime.secrets import load_project_env  # noqa: E402
 
 # Load API Key
@@ -47,7 +48,7 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY")
 # 9.1 GB fmp cache (2026-07-30 DB-size audit). Peers are covered by the
 # shallow contract in save_fmp_data.PEER_ENDPOINT_ALLOWLIST instead, so
 # --all now defaults to the active universe; override with --list-types.
-ACTIVE_LIST_TYPES = ("portfolio", "watchlist", "evaluation")
+ACTIVE_LIST_TYPES = ANALYZED_LIST_TYPE_VALUES
 
 
 def fetch_from_fmp(

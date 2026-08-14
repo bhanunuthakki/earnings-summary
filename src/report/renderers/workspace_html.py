@@ -352,7 +352,7 @@ def render_report_body(spec: ReportSpec) -> RenderedReportBody:
     )
     _tabs(body, groups, ticker=spec.ticker)
     body.write('<div class="l1-root">')
-    _identity(body, spec)
+    _identity(body, spec, p3.saydo_verdicts)
     _forgone_strip(body, spec.forgone_due_to_budget)
     _thesis_strip(body, spec.snapshot, spec.thesis)
     _reread_strip(body, spec.synthesis)

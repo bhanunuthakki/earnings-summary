@@ -624,6 +624,7 @@ def test_routes_emit_durable_ref_live_and_replay_and_expose_exact_detail(
             "completed_at": hydrated["exchange_artifacts"][0]["completed_at"],
             "artifacts": {
                 "schema_version": "exchange_artifacts.v1",
+                "grounding_trace_id": None,
                 "route": None,
                 "view_spec": None,
                 "proposal_ref": ref_payload,

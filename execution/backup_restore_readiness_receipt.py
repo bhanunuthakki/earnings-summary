@@ -24,8 +24,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from provenance.verifier_identity import verifier_source_artifact_sha256  # noqa: E402
+from sqlite_freshness import SQLiteFileToken, sqlite_file_token  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from sqlite_snapshot import SnapshotManifest  # noqa: E402
+from sqlite_snapshot import (  # noqa: E402
+    SnapshotManifest,
+    SnapshotRequest,
+    verify_snapshot_matches_source,
+)
 
 _SUPPORTED_SNAPSHOT_SCHEMA_VERSION = "sqlite-reader-snapshot/v1"
 _SUPPORTED_SNAPSHOT_CODE_CONFIG_VERSIONS = frozenset({"sqlite-reader-snapshot/v1"})
@@ -44,8 +49,10 @@ class BackupRestoreReadinessReceipt(BaseModel):
     source_db_revision: str | None
     source_db_byte_size: int | None = Field(default=None, ge=0)
     source_db_mtime_ns: int | None = Field(default=None, ge=0)
+    source_db_file_token: SQLiteFileToken | None = None
     snapshot_requested_path: str
     snapshot_resolved_path: str
+    snapshot_manifest_resolved_path: str
     snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     snapshot_byte_size: int | None = Field(default=None, ge=0)
     restored_db_revision: str | None
@@ -62,6 +69,7 @@ def verifier_code_sha256() -> str:
     return verifier_source_artifact_sha256(
         {
             "execution/backup_restore_readiness_receipt.py": Path(__file__),
+            "src/sqlite_freshness.py": PROJECT_ROOT / "src" / "sqlite_freshness.py",
             "src/sqlite_snapshot.py": PROJECT_ROOT / "src" / "sqlite_snapshot.py",
         }
     )
@@ -139,6 +147,18 @@ def validate_receipt_for_source(
                 or receipt.source_db_mtime_ns != source_stat.st_mtime_ns
             ):
                 reasons.append("backup_restore_source_identity_stale")
+        if receipt.source_db_file_token != sqlite_file_token(source):
+            reasons.append("backup_restore_source_identity_stale")
+        try:
+            verify_snapshot_matches_source(
+                SnapshotRequest(
+                    source_path=source,
+                    destination_path=Path(receipt.snapshot_resolved_path),
+                ),
+                manifest_path=Path(receipt.snapshot_manifest_resolved_path),
+            )
+        except Exception:
+            reasons.append("backup_restore_source_content_stale")
 
     snapshot = Path(receipt.snapshot_resolved_path)
     try:
@@ -173,6 +193,7 @@ def collect_backup_restore_receipt(
     source_revision: str | None = None
     source_size: int | None = None
     source_mtime: int | None = None
+    source_file_token: SQLiteFileToken | None = None
     snapshot_sha: str | None = None
     snapshot_size: int | None = None
     restored_revision: str | None = None
@@ -181,6 +202,7 @@ def collect_backup_restore_receipt(
     manifest: SnapshotManifest | None = None
 
     if source.is_file():
+        source_file_token = sqlite_file_token(source)
         stat = source.stat()
         source_size = stat.st_size
         source_mtime = stat.st_mtime_ns
@@ -225,6 +247,20 @@ def collect_backup_restore_receipt(
             reasons.append("manifest_integrity_mismatch")
         if len(manifest.verification.foreign_key_check) != foreign_keys:
             reasons.append("manifest_foreign_key_mismatch")
+        try:
+            verify_snapshot_matches_source(
+                SnapshotRequest(
+                    source_path=source,
+                    destination_path=snapshot,
+                    code_config_version=manifest.code_config_version,
+                ),
+                manifest_path=manifest_file,
+            )
+        except Exception:
+            reasons.append("source_identity_changed_since_snapshot")
+
+    if source_file_token != sqlite_file_token(source):
+        reasons.append("source_identity_changed_during_verification")
 
     if source_revision is not None and restored_revision != source_revision:
         reasons.append("restored_revision_mismatch")
@@ -242,8 +278,10 @@ def collect_backup_restore_receipt(
         source_db_revision=source_revision,
         source_db_byte_size=source_size,
         source_db_mtime_ns=source_mtime,
+        source_db_file_token=source_file_token,
         snapshot_requested_path=str(snapshot_requested),
         snapshot_resolved_path=str(snapshot),
+        snapshot_manifest_resolved_path=str(manifest_file),
         snapshot_sha256=snapshot_sha,
         snapshot_byte_size=snapshot_size,
         restored_db_revision=restored_revision,

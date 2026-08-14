@@ -26,7 +26,10 @@ def extract_diff(text: str) -> dict[str, object] | None:
 
 
 def stream_llm_text(
-    full_prompt: str, *, purpose: str = "ask_answer"
+    full_prompt: str,
+    *,
+    purpose: str = "ask_answer",
+    allow_read: bool = True,
 ) -> Iterator[dict[str, object]]:
     """Stream through the canonical LLM policy, budget, and ledger seam."""
     from llm.cli import stream_llm
@@ -35,7 +38,7 @@ def stream_llm_text(
         full_prompt,
         purpose=purpose,
         scope="ask",
-        allowed_tools=("Read",),
+        allowed_tools=("Read",) if allow_read else (),
     )
 
 

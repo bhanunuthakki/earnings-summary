@@ -350,6 +350,7 @@ def test_engine_yoy_and_periods_window(db: Path) -> None:
     assert values[2] == pytest.approx(25.0)  # 150 vs 120
     assert values[3] == pytest.approx((160 / 130 - 1) * 100)
     assert row.cells[0].raw == 120  # the underlying level rides along
+    assert {source.fact_id for source in row.cells[0].sources} == {1, 5}
 
 
 def test_engine_cagr(db: Path) -> None:
@@ -368,6 +369,7 @@ def test_engine_margin(db: Path) -> None:
     values = [c.value for c in row.cells]
     assert values[0] == pytest.approx(10.0)  # 12 / 120
     assert values[3] == pytest.approx(15.0)  # 24 / 160 (SEC-picked divisor)
+    assert {source.fact_id for source in row.cells[3].sources} == {9, 15}
 
 
 def test_engine_annual_cadence(db: Path) -> None:
@@ -389,6 +391,8 @@ def test_engine_segments_and_warnings(db: Path) -> None:
     assert row.cells[-1].source is not None
     assert row.cells[-1].source.source == "fmp_normalized"
     assert row.cells[-1].source.doc_id == 1
+    assert row.cells[-1].source.fact_table == "segment_dimensions"
+    assert row.cells[-1].source.fact_id is not None
     assert result.warnings == ["TST: no data for kpi:Nope"]
 
 

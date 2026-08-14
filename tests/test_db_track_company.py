@@ -18,6 +18,15 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from pipeline.queries import (  # noqa: E402
+    ANALYZED_LIST_TYPE_VALUES,
+    BRIEFED_LIST_TYPE_VALUES,
+)
+
+
+def test_db_list_type_contract_uses_the_canonical_query_authority() -> None:
+    assert db.ACTIVE_LIST_TYPES is ANALYZED_LIST_TYPE_VALUES
+    assert db.BRIEFED_LIST_TYPES is BRIEFED_LIST_TYPE_VALUES
 
 
 @pytest.fixture()

@@ -12,11 +12,12 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0015_add_thesis_episode_attention"
+HEAD = "0016_add_ask_grounding_traces"
 RETAINED_TABLES = {
     "archive_generations",
     "ask_exchange_artifacts",
     "ask_exchanges",
+    "ask_grounding_traces",
     "ask_session_contexts",
     "canonical_resolution_operation_ledger",
     "document_processing_operation_ledger",

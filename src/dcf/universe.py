@@ -19,13 +19,14 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from pipeline.queries import BRIEFED_LIST_TYPE_VALUES
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The lists that auto-produce a full brief (and thus a §Valuation DCF card).
 # Mirror of ``db.BRIEFED_LIST_TYPES`` / ``pipeline.queries.BRIEFED_LIST_TYPES``,
 # duplicated here on purpose so this lightweight helper does not load the
 # broader legacy DB facade merely to resolve list semantics.
-BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
+BRIEFED_LIST_TYPES = BRIEFED_LIST_TYPE_VALUES
 
 
 def dcf_universe(repo_root: Path) -> list[str]:

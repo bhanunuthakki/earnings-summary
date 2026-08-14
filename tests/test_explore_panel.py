@@ -110,7 +110,12 @@ def db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def client(db_path: Path, tmp_path: Path) -> FlaskClient:
+def client(db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
+    # This module exercises the legacy panel-routing contract against its
+    # intentionally partial pre-grounding fixture.  Grounded-by-default
+    # behavior and the current migrated schema are covered separately by
+    # test_ask_grounded_default.py.
+    monkeypatch.setenv("ASK_RETRIEVAL_MODE", "legacy")
     assert db_path.exists()
     return comments_server.create_app(tmp_path).test_client()
 
@@ -169,12 +174,15 @@ def test_explore_panel_is_copilot_handoff_first(db_path: Path) -> None:
     assert 'id="ask-q"' in html_out
     assert "ask-chip" in html_out  # suggestion chips seed the empty thread
     assert 'class="ask-advanced ask-builder-pop"' in html_out
+    assert "Numeric questions compile into deterministic SQL views" in html_out
+    assert "narrative\n questions use cited lexical evidence" in html_out
+    assert "period, unit, and source provenance" in html_out
     for builder_id in ("vx-run", "vx-pick-fin", "vx-save", "vx-tickers"):
         assert f'id="{builder_id}"' in html_out
 
 
 def test_explore_panel_removes_legacy_answer_card_editor() -> None:
-    """Fact Playground has no second conversation or answer-card actions."""
+    """Facts & Analytics has no second conversation or answer-card actions."""
     import inspect
 
     from pipeline import explore_panel

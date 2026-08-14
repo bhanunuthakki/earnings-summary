@@ -2,10 +2,9 @@
 
 Deterministic and LLM-free: every cell comes from the canonical tier-aware
 loaders in ``timeseries.loaders`` (the same row picks the reports use) and
-every fin/kpi cell carries the provenance of its winning fact row, so the
-renderer can chip each number. Segment cells render unchipped for now —
-the junction's provenance is period-level and joins documents through
-segment_periods; wire it when a surface needs it.
+every fin/kpi/segment cell carries the provenance of its winning fact row or
+period, so the renderer can chip each number. Derived cells retain every
+current/prior/base/denominator source coordinate used in the calculation.
 
 Cross-ticker alignment is by CALENDAR bucket: a quarterly view buckets
 each observation into (calendar year, calendar quarter) derived from its
@@ -36,7 +35,6 @@ from report.models import CellSource
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.loaders import (
     SourcedObservation,
-    load_financial_series,
     load_financial_series_with_provenance,
     load_kpi_series_with_provenance,
     load_segment_junction_series_with_provenance,
@@ -79,12 +77,39 @@ _Bucket = tuple[int, int]
 @dataclass(slots=True)
 class ViewCell:
     """One rendered cell: the transformed value, the underlying level, and
-    the provenance of the level's winning fact row (None for seg cells and
-    for buckets the transform could not compute)."""
+    the provenance of the current level's winning row. ``sources`` retains
+    every current/prior/base/denominator source used by a derived value."""
 
     value: float | None
     raw: float | None
     source: CellSource | None
+    sources: tuple[CellSource, ...] = ()
+
+
+def _cell_sources(cell: ViewCell | None) -> tuple[CellSource, ...]:
+    if cell is None:
+        return ()
+    if cell.sources:
+        return cell.sources
+    return (cell.source,) if cell.source is not None else ()
+
+
+def _dedupe_sources(*groups: tuple[CellSource, ...]) -> tuple[CellSource, ...]:
+    seen: set[tuple[object, ...]] = set()
+    out: list[CellSource] = []
+    for source in (item for group in groups for item in group):
+        key = (
+            source.fact_table,
+            source.fact_id,
+            source.doc_id,
+            source.source_url,
+            source.locator,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(source)
+    return tuple(out)
 
 
 @dataclass(slots=True)
@@ -192,7 +217,8 @@ def _load_row_data(
             )
         for ob in sourced:
             b = _to_bucket(ob.period_end.year, ob.period_end.month, cadence)
-            cells[b] = ViewCell(value=None, raw=ob.value, source=_cell_source(ob.provenance))
+            source = _cell_source(ob.provenance)
+            cells[b] = ViewCell(value=None, raw=ob.value, source=source, sources=(source,))
             if ob.unit:
                 unit = ob.unit
         # Override-only facts (a company-doc figure FMP never carried) are now
@@ -219,7 +245,8 @@ def _load_row_data(
     )
     for obs in seg_sourced:
         b = _to_bucket(obs.period_end.year, obs.period_end.month, cadence)
-        cells[b] = ViewCell(value=None, raw=obs.value, source=_cell_source(obs.provenance))
+        source = _cell_source(obs.provenance)
+        cells[b] = ViewCell(value=None, raw=obs.value, source=source, sources=(source,))
         if obs.unit:
             unit = obs.unit
     return cells, unit
@@ -253,8 +280,12 @@ def _inject_override_only(
         bucket = _to_bucket(year, month, cadence)
         if bucket in cells:  # the base row already carried (and overlaid) it
             continue
+        source = _cell_source(override_provenance(ov))
         cells[bucket] = ViewCell(
-            value=None, raw=float(ov.value), source=_cell_source(override_provenance(ov))
+            value=None,
+            raw=float(ov.value),
+            source=source,
+            sources=(source,),
         )
 
 
@@ -391,17 +422,29 @@ def execute_view(
             raw_rows.append((ticker, metric, cells, unit))
 
     # Margin divisor: fin:revenue per ticker, loaded once.
-    revenue_by_ticker: dict[str, dict[_Bucket, float]] = {}
+    revenue_by_ticker: dict[str, dict[_Bucket, ViewCell]] = {}
     if spec.transform == "margin":
         period_types = _ANNUAL_PERIOD_TYPES if spec.cadence == "annual" else _QUARTERLY_PERIOD_TYPES
         for ticker in spec.tickers:
-            rev = load_financial_series(
+            rev = load_financial_series_with_provenance(
                 ticker, "revenue", repo_root, db_path=db_path, period_types=period_types
             )
-            revenue_by_ticker[ticker] = {
-                _to_bucket(o.period_end.year, o.period_end.month, spec.cadence): o.value
-                for o in rev
-            }
+            revenue_cells: dict[_Bucket, ViewCell] = {}
+            for observation in rev:
+                source = _cell_source(observation.provenance)
+                revenue_cells[
+                    _to_bucket(
+                        observation.period_end.year,
+                        observation.period_end.month,
+                        spec.cadence,
+                    )
+                ] = ViewCell(
+                    value=None,
+                    raw=observation.value,
+                    source=source,
+                    sources=(source,),
+                )
+            revenue_by_ticker[ticker] = revenue_cells
             if not revenue_by_ticker[ticker]:
                 warnings.append(f"{ticker}: no fin:revenue series — margin cells empty")
 
@@ -417,6 +460,7 @@ def execute_view(
             cell = cells.get(b)
             raw = cell.raw if cell is not None else None
             src = cell.source if cell is not None else None
+            sources = _cell_sources(cell)
             value: float | None = None
             if raw is not None:
                 if spec.transform == "level":
@@ -426,16 +470,20 @@ def execute_view(
                     prior = prior_cell.raw if prior_cell is not None else None
                     if prior is not None and prior != 0:
                         value = (raw / prior - 1) * 100
+                        sources = _dedupe_sources(sources, _cell_sources(prior_cell))
                 elif spec.transform == "cagr":
                     base_cell = cells.get(_lookback(b, spec.cagr_years))
                     base = base_cell.raw if base_cell is not None else None
                     if base is not None and base > 0 and raw > 0:
                         value = ((raw / base) ** (1 / spec.cagr_years) - 1) * 100
+                        sources = _dedupe_sources(sources, _cell_sources(base_cell))
                 elif spec.transform == "margin":
-                    rev = revenue_by_ticker.get(ticker, {}).get(b)
+                    revenue_cell = revenue_by_ticker.get(ticker, {}).get(b)
+                    rev = revenue_cell.raw if revenue_cell is not None else None
                     if rev is not None and rev != 0:
                         value = raw / rev * 100
-            out_cells.append(ViewCell(value=value, raw=raw, source=src))
+                        sources = _dedupe_sources(sources, _cell_sources(revenue_cell))
+            out_cells.append(ViewCell(value=value, raw=raw, source=src, sources=sources))
         rows.append(
             ViewRow(
                 ticker=ticker,
