@@ -557,3 +557,30 @@ def test_strict_grounding_rejects_a_visible_citation_the_auditor_did_not_validat
             db_path=tmp_path / "x.db",
             strict=True,
         )
+
+
+def test_strict_grounding_rejects_a_visible_citation_outside_the_evidence_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer = "Revenue grew 24% [1][99]."
+    _patch_map(
+        monkeypatch,
+        {
+            "claims": [
+                {
+                    "quote": answer,
+                    "cites": [1],
+                    "supported": True,
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(GroundedCitationError, match="unsupported factual claim"):
+        build_citations_payload(
+            answer,
+            [_item(1)],
+            db_path=tmp_path / "x.db",
+            strict=True,
+        )

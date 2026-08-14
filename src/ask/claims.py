@@ -259,11 +259,16 @@ def _reconcile(
             for c in cast("list[object]", raw_cites):
                 if isinstance(c, int) and not isinstance(c, bool) and c in valid:
                     map_cites.add(c)
-        inline = set(_inline_cites(sentences[idx], valid))
+        raw_inline = {int(match.group(1)) for match in _MARKER_RX.finditer(sentences[idx])}
+        inline = raw_inline & valid
         # Inline markers are authoritative — the map only RECOVERS cites for
         # sentences the answer left unmarked, never overrides visible ones.
         cites = inline if inline else map_cites
-        visible_cites_validated = not strict or not inline or inline.issubset(map_cites)
+        visible_cites_validated = (
+            not strict
+            or not raw_inline
+            or (raw_inline.issubset(valid) and raw_inline.issubset(map_cites))
+        )
         supported = (
             bool(cites) and visible_cites_validated and (entry_map.get("supported") is not False)
         )
