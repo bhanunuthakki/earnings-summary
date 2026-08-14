@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 from typing import cast
@@ -259,6 +260,60 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
             "status": dismissed_alert.status,
             "dismiss_reason": dismissed_alert.dismiss_reason,
             "cancelled_actions": cancelled,
+        }
+
+    @blueprint.route(
+        "/api/thesis-episodes/<episode_id>/acknowledge",
+        methods=["POST", "OPTIONS"],
+    )
+    def acknowledge_thesis_episode_api(episode_id: str):
+        if request.method == "OPTIONS":
+            return ("", 204)
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
+            return ({"error": "cross-site acknowledgement rejected"}, 403)
+
+        from compute.thesis_episode_attention import (
+            AttentionError,
+            acknowledge_episode,
+        )
+        from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        note = str(payload.get("note") or request.values.get("note") or "").strip() or None
+        due_raw = str(
+            payload.get("next_review_at") or request.values.get("next_review_at") or ""
+        ).strip()
+        try:
+            due = datetime.fromisoformat(due_raw) if due_raw else None
+        except ValueError:
+            return ({"error": "next_review_at must be an ISO-8601 timestamp"}, 400)
+        connection = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
+        try:
+            attention = acknowledge_episode(
+                connection,
+                episode_id,
+                acknowledged_at=datetime.now(UTC),
+                note=note,
+                next_review_at=due,
+            )
+            connection.commit()
+        except AttentionError as exc:
+            connection.rollback()
+            status = 404 if "unknown thesis episode" in str(exc) else 409
+            return ({"error": str(exc)}, status)
+        finally:
+            connection.close()
+        return {
+            "ok": True,
+            "episode_id": attention.episode_id,
+            "state": attention.state.value,
+            "next_review_at": (
+                None if attention.next_review_at is None else attention.next_review_at.isoformat()
+            ),
         }
 
     @blueprint.route("/api/actions/<int:action_id>/uncancel", methods=["POST", "OPTIONS"])

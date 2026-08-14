@@ -12,6 +12,7 @@ upgrade to head), mirroring tests/test_dashboard_feed.py.
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -400,6 +401,46 @@ def test_dismiss_alert_route_rejects_cross_site(client: FlaskClient, db_path: Pa
     # Nothing mutated — the alert and its draft are both untouched.
     assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
+
+
+def test_thesis_episode_acknowledgement_route_is_idempotent_and_cross_site_safe(
+    client: FlaskClient,
+    db_path: Path,
+) -> None:
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "INSERT INTO thesis_evaluation_episodes "
+            "(episode_id,ticker,fingerprint_policy_version,semantic_input_json,"
+            "semantic_input_sha256,evaluator_semantic_version,result_sha256,"
+            "overall_status,provenance_completeness,first_evaluated_at,last_seen_at,"
+            "last_checked_at,duplicate_run_count,rule_evaluations_json,created_at) "
+            "VALUES ('episode-route','WIX','legacy_v0','{}',?,'legacy/v0',?,'warn',"
+            "'partial',?,?,?,0,'[]',?)",
+            ("a" * 64, "b" * 64, *([datetime.now(UTC).isoformat()] * 4)),
+        )
+        connection.commit()
+
+    rejected = client.post(
+        "/api/thesis-episodes/episode-route/acknowledge",
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+    assert rejected.status_code == 403
+
+    first = client.post(
+        "/api/thesis-episodes/episode-route/acknowledge",
+        json={"note": "Reviewed", "next_review_at": "2026-09-14T12:00:00+00:00"},
+    )
+    second = client.post(
+        "/api/thesis-episodes/episode-route/acknowledge",
+        json={"note": "Reviewed", "next_review_at": "2026-09-14T12:00:00+00:00"},
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.get_json()["state"] == "acknowledged"
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT attention_state,acknowledgement_note FROM "
+            "thesis_evaluation_episodes WHERE episode_id='episode-route'"
+        ).fetchone() == ("acknowledged", "Reviewed")
 
 
 # ----------------------------------------------------------------------------

@@ -85,7 +85,7 @@ import contextlib
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -224,7 +224,7 @@ def _tenet_challenge_moments(db_path: Path | str | None, *, now: datetime) -> li
             continue
         cost_raw = acc.get("est_cost_usd")
         cost = (
-            float(cast("float | int", cost_raw))
+            float(cost_raw)
             if isinstance(cost_raw, (int, float)) and not isinstance(cost_raw, bool)
             else None
         )
@@ -263,6 +263,8 @@ def _post_mortem_moments(db_path: Path | str | None, *, now: datetime) -> list[M
     drafted post-mortem is a one-shot receipt, not a recurring verdict) but
     kept for signature symmetry with the other collectors in this module."""
     del now
+    if db_path is None:
+        return []
     try:
         from synthesis.exit_postmortem import drafted_awaiting_glance
     except Exception:
@@ -561,6 +563,8 @@ def freshness_ok(
         if moment.class_ == "post_mortem":
             if kind != "position_entry":
                 return False
+            if db_path is None:
+                return False
             from synthesis.exit_postmortem import is_awaiting_glance
 
             return is_awaiting_glance(int(ref_id), db_path=db_path)
@@ -710,6 +714,24 @@ def record_dismissal(ping_id: int, *, db_path: Path | str | None = None) -> tupl
     stamp = now_naive_utc().isoformat()
     conn = open_conn(db_path)
     try:
+        try:
+            linked = conn.execute(
+                "SELECT thesis_evaluation_episode_id FROM coach_pings WHERE id=?",
+                (ping_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            linked = None
+        if linked is not None and linked[0] is not None:
+            from compute.thesis_episode_attention import acknowledge_episode
+
+            acknowledge_episode(
+                conn,
+                str(linked[0]),
+                acknowledged_at=datetime.fromisoformat(stamp).replace(tzinfo=UTC),
+                note="Dismissed from the coach prompt.",
+            )
+            conn.commit()
+            return True, None
         row = conn.execute(
             "SELECT class_ FROM coach_pings WHERE id = ? "
             "AND status IN ('sent','digest','routed_to_brief','acted')",
@@ -789,6 +811,24 @@ def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
     stamp = now_naive_utc().isoformat()
     conn = open_conn(db_path)
     try:
+        try:
+            linked = conn.execute(
+                "SELECT thesis_evaluation_episode_id FROM coach_pings WHERE id=?",
+                (ping_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            linked = None
+        if linked is not None and linked[0] is not None:
+            from compute.thesis_episode_attention import acknowledge_episode
+
+            acknowledge_episode(
+                conn,
+                str(linked[0]),
+                acknowledged_at=datetime.fromisoformat(stamp).replace(tzinfo=UTC),
+                note="Acknowledged from the coach prompt.",
+            )
+            conn.commit()
+            return True
         cur = conn.execute(
             "UPDATE coach_pings SET status = 'acted', updated_at = ? "
             "WHERE id = ? AND status IN ('sent', 'digest')",

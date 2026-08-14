@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from alerts.store import dismiss_alert, fire_alert
 from compute.thesis_episode_attention import (
     AttentionError,
     AttentionState,
@@ -241,3 +242,89 @@ def test_attention_rejects_invalid_due_date_and_conflicting_completion(
             acknowledged_at=NOW,
             next_review_at=NOW,
         )
+
+
+def test_linked_alert_dismiss_acknowledges_episode_and_fire_is_idempotent(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    database = tmp_path / "linked-alert.db"
+    migrated_db(database, target="head")
+    with sqlite3.connect(database) as connection:
+        _seed_episode(connection, "episode-1")
+        connection.commit()
+
+    first = fire_alert(
+        ticker="WIX",
+        trigger_kind="thesis_drift",
+        fired_at=NOW,
+        evidence_json='{"status":"warn"}',
+        signature_sha="1" * 64,
+        thesis_evaluation_episode_id="episode-1",
+        review_cycle_id="initial",
+        db_path=database,
+    )
+    duplicate = fire_alert(
+        ticker="WIX",
+        trigger_kind="thesis_drift",
+        fired_at=NOW + timedelta(minutes=1),
+        evidence_json='{"status":"warn"}',
+        signature_sha="1" * 64,
+        thesis_evaluation_episode_id="episode-1",
+        review_cycle_id="initial",
+        db_path=database,
+    )
+    assert duplicate.id == first.id
+
+    dismissed = dismiss_alert(first.id, db_path=database, reason="Reviewed")
+
+    assert dismissed.status == "dismissed"
+    assert dismissed.thesis_evaluation_episode_id == "episode-1"
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT attention_state,acknowledgement_note "
+            "FROM thesis_evaluation_episodes WHERE episode_id='episode-1'"
+        ).fetchone() == ("acknowledged", "Reviewed")
+
+
+def test_linked_coach_ack_delegates_but_brief_delivery_does_not(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from research.governor import mark_ping_acted, mark_pings_briefed
+
+    database = tmp_path / "linked-coach.db"
+    migrated_db(database, target="head")
+    with sqlite3.connect(database) as connection:
+        _seed_episode(connection, "episode-1", semantic_digit="a")
+        _seed_episode(connection, "episode-2", semantic_digit="b")
+        first = connection.execute(
+            "INSERT INTO coach_pings "
+            '(class_,"key",ticker,body,status,created_at,updated_at,'
+            "thesis_evaluation_episode_id,review_cycle_id) "
+            "VALUES ('falsifier_breach','episode-1','WIX','review','sent',?,?,"
+            "'episode-1','initial')",
+            (NOW.isoformat(), NOW.isoformat()),
+        )
+        second = connection.execute(
+            "INSERT INTO coach_pings "
+            '(class_,"key",ticker,body,status,created_at,updated_at,'
+            "thesis_evaluation_episode_id,review_cycle_id) "
+            "VALUES ('post_mortem','episode-2','WIX','review','routed_to_brief',?,?,"
+            "'episode-2','initial')",
+            (NOW.isoformat(), NOW.isoformat()),
+        )
+        first_id = int(first.lastrowid or 0)
+        second_id = int(second.lastrowid or 0)
+        connection.commit()
+
+    assert mark_ping_acted(first_id, db_path=database) is True
+    assert mark_pings_briefed([second_id], db_path=database) == 1
+
+    with sqlite3.connect(database) as connection:
+        states = dict(
+            connection.execute(
+                "SELECT episode_id,attention_state FROM thesis_evaluation_episodes"
+            ).fetchall()
+        )
+    assert states == {"episode-1": "acknowledged", "episode-2": "unreviewed"}
