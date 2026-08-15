@@ -7,11 +7,13 @@ No database, network, persistence, or acquisition entrypoint imports this module
 from __future__ import annotations
 
 import ctypes
+import errno
 import hashlib
 import os
 import re
+import secrets
 import stat
-import tempfile
+import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -72,6 +74,14 @@ class _OpenedRoot:
     path: Path
     descriptor: int
     metadata: os.stat_result
+
+
+@dataclass
+class _OwnedTemporary:
+    descriptor: int
+    identity: tuple[int, int]
+    name: str | None
+    installed_name: str | None = None
 
 
 def _has_reparse_attribute(metadata: os.stat_result) -> bool:
@@ -143,6 +153,189 @@ def _windows_open_no_follow(path: Path, *, directory: bool) -> int:
     except Exception:
         kernel32.CloseHandle(ctypes.c_void_p(handle_value))
         raise
+
+
+def _windows_create_owned_temporary(root: _OpenedRoot, *, digest: str) -> _OwnedTemporary:
+    class _UnicodeString(ctypes.Structure):
+        _fields_ = (
+            ("Length", ctypes.c_ushort),
+            ("MaximumLength", ctypes.c_ushort),
+            ("Buffer", ctypes.c_wchar_p),
+        )
+
+    class _ObjectAttributes(ctypes.Structure):
+        _fields_ = (
+            ("Length", ctypes.c_uint32),
+            ("RootDirectory", ctypes.c_void_p),
+            ("ObjectName", ctypes.POINTER(_UnicodeString)),
+            ("Attributes", ctypes.c_uint32),
+            ("SecurityDescriptor", ctypes.c_void_p),
+            ("SecurityQualityOfService", ctypes.c_void_p),
+        )
+
+    class _IoStatusBlock(ctypes.Structure):
+        _fields_ = (
+            ("Status", ctypes.c_void_p),
+            ("Information", ctypes.c_size_t),
+        )
+
+    ntdll = ctypes.WinDLL("ntdll")
+    create_file = ntdll.NtCreateFile
+    create_file.restype = ctypes.c_long
+    for _attempt in range(32):
+        name = f".{digest}.{secrets.token_hex(16)}.tmp"
+        name_buffer = ctypes.create_unicode_buffer(name)
+        unicode_name = _UnicodeString(
+            Length=len(name) * ctypes.sizeof(ctypes.c_wchar),
+            MaximumLength=(len(name) + 1) * ctypes.sizeof(ctypes.c_wchar),
+            Buffer=ctypes.cast(name_buffer, ctypes.c_wchar_p),
+        )
+        attributes = _ObjectAttributes(
+            Length=ctypes.sizeof(_ObjectAttributes),
+            RootDirectory=msvcrt.get_osfhandle(root.descriptor),
+            ObjectName=ctypes.pointer(unicode_name),
+            Attributes=0x00000040,  # OBJ_CASE_INSENSITIVE
+            SecurityDescriptor=None,
+            SecurityQualityOfService=None,
+        )
+        raw_handle = ctypes.c_void_p()
+        io_status = _IoStatusBlock()
+        status = create_file(
+            ctypes.byref(raw_handle),
+            0x0013019F,  # FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE
+            ctypes.byref(attributes),
+            ctypes.byref(io_status),
+            None,
+            0x00000080,  # FILE_ATTRIBUTE_NORMAL
+            0x00000001,  # FILE_SHARE_READ: deny replacement while owned
+            2,  # FILE_CREATE: no overwrite
+            0x00200060,  # OPEN_REPARSE_POINT | NON_DIRECTORY | SYNCHRONOUS_NONALERT
+            None,
+            0,
+        )
+        if status < 0:
+            error = _windows_error_from_ntstatus(status)
+            if error in (80, 183):
+                continue
+            raise OSError(error, os.strerror(error), name)
+        if raw_handle.value is None:
+            raise OSError("NtCreateFile returned an empty handle")
+        handle_value = int(raw_handle.value)
+        try:
+            descriptor = msvcrt.open_osfhandle(
+                handle_value,
+                os.O_RDWR | getattr(os, "O_BINARY", 0),
+            )
+        except Exception:
+            ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(handle_value))
+            raise
+        metadata = os.fstat(descriptor)
+        _require_regular(metadata, label="owned temporary", read_only=False)
+        return _OwnedTemporary(
+            descriptor=descriptor,
+            identity=_object_identity(metadata),
+            name=name,
+        )
+    raise TranscriptStagingError("owned temporary name allocation was exhausted")
+
+
+def _windows_error_from_ntstatus(status: int) -> int:
+    ntdll = ctypes.WinDLL("ntdll")
+    convert = ntdll.RtlNtStatusToDosError
+    convert.argtypes = (ctypes.c_long,)
+    convert.restype = ctypes.c_uint32
+    return int(convert(status))
+
+
+def _windows_set_read_only(descriptor: int) -> None:
+    class _FileBasicInfo(ctypes.Structure):
+        _fields_ = (
+            ("CreationTime", ctypes.c_longlong),
+            ("LastAccessTime", ctypes.c_longlong),
+            ("LastWriteTime", ctypes.c_longlong),
+            ("ChangeTime", ctypes.c_longlong),
+            ("FileAttributes", ctypes.c_uint32),
+        )
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_info = kernel32.GetFileInformationByHandleEx
+    set_info = kernel32.SetFileInformationByHandle
+    handle = ctypes.c_void_p(msvcrt.get_osfhandle(descriptor))
+    basic = _FileBasicInfo()
+    if not get_info(handle, 0, ctypes.byref(basic), ctypes.sizeof(basic)):
+        error = ctypes.get_last_error()
+        raise OSError(error, os.strerror(error))
+    basic.FileAttributes = (basic.FileAttributes & ~0x00000080) | 0x00000001
+    if not set_info(handle, 0, ctypes.byref(basic), ctypes.sizeof(basic)):
+        error = ctypes.get_last_error()
+        raise OSError(error, os.strerror(error))
+
+
+def _windows_rename_owned(
+    temporary: _OwnedTemporary,
+    *,
+    root: _OpenedRoot,
+    target_name: str,
+) -> None:
+    class _FileRenameInfo(ctypes.Structure):
+        _fields_ = (
+            ("ReplaceIfExists", ctypes.c_ubyte),
+            ("RootDirectory", ctypes.c_void_p),
+            ("FileNameLength", ctypes.c_uint32),
+            ("FileName", ctypes.c_wchar * (len(target_name) + 1)),
+        )
+
+    class _IoStatusBlock(ctypes.Structure):
+        _fields_ = (
+            ("Status", ctypes.c_void_p),
+            ("Information", ctypes.c_size_t),
+        )
+
+    ntdll = ctypes.WinDLL("ntdll")
+    set_info = ntdll.NtSetInformationFile
+    set_info.argtypes = (
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_int,
+    )
+    set_info.restype = ctypes.c_long
+    info = _FileRenameInfo()
+    info.ReplaceIfExists = 0
+    info.RootDirectory = msvcrt.get_osfhandle(root.descriptor)
+    info.FileNameLength = len(target_name) * ctypes.sizeof(ctypes.c_wchar)
+    info.FileName = target_name
+    handle = ctypes.c_void_p(msvcrt.get_osfhandle(temporary.descriptor))
+    io_status = _IoStatusBlock()
+    status = set_info(
+        handle,
+        ctypes.byref(io_status),
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+        10,  # FileRenameInformation
+    )
+    if status >= 0:
+        return
+    error = _windows_error_from_ntstatus(status)
+    if error in (80, 183):
+        raise FileExistsError(error, os.strerror(error), target_name)
+    raise OSError(error, os.strerror(error), target_name)
+
+
+def _windows_mark_owned_for_deletion(descriptor: int) -> None:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    set_info = kernel32.SetFileInformationByHandle
+    handle = ctypes.c_void_p(msvcrt.get_osfhandle(descriptor))
+    flags = ctypes.c_uint32(0x00000013)  # DELETE | POSIX_SEMANTICS | IGNORE_READONLY
+    if set_info(handle, 21, ctypes.byref(flags), ctypes.sizeof(flags)):
+        return
+    first_error = ctypes.get_last_error()
+    disposition = ctypes.c_int(1)
+    if set_info(handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)):
+        return
+    error = ctypes.get_last_error() or first_error
+    raise OSError(error, os.strerror(error))
 
 
 def _open_no_follow(path: Path, *, directory: bool = False) -> int:
@@ -244,58 +437,61 @@ def _write_all(descriptor: int, payload: bytes) -> None:
     os.fsync(descriptor)
 
 
-def _atomic_install_no_replace(temporary: Path, target: Path) -> None:
+def _lstat_under_root(
+    root: _OpenedRoot,
+    name: str,
+    *,
+    label: str,
+) -> os.stat_result:
     if os.name == "nt":
-        os.rename(temporary, target)
-        return
-    os.link(temporary, target)
-    temporary.unlink()
-
-
-def _cleanup_owned_temporary(*, root: _OpenedRoot, path: Path, identity: tuple[int, int]) -> None:
-    if path.parent != root.path or not path.name.endswith(".tmp"):
-        return
+        return _lstat(root.path / name, label=label)
     try:
-        observed = _lstat(path, label="owned temporary")
-        _require_regular(observed, label="owned temporary", read_only=False)
-        if _object_identity(observed) != identity:
-            return
-        path.chmod(stat.S_IWRITE)
-        descriptor = _open_no_follow(path)
-        try:
-            opened = os.fstat(descriptor)
-            _require_regular(opened, label="owned temporary", read_only=False)
-            if _object_identity(opened) != identity:
-                return
-            current = _lstat(path, label="owned temporary")
-            _require_regular(current, label="owned temporary", read_only=False)
-            if _object_identity(opened) != _object_identity(current):
-                return
-        finally:
-            os.close(descriptor)
-        if _object_identity(_lstat(path, label="owned temporary")) != identity:
-            return
-        path.unlink()
-    except (OSError, TranscriptStagingError):
-        return
+        metadata = os.stat(name, dir_fd=root.descriptor, follow_symlinks=False)
+    except OSError as exc:
+        raise TranscriptStagingError(f"{label} is unavailable") from exc
+    if stat.S_ISLNK(metadata.st_mode) or _has_reparse_attribute(metadata):
+        raise TranscriptStagingError(f"{label} must not be a symlink or reparse point")
+    return metadata
+
+
+def _open_under_root(root: _OpenedRoot, name: str) -> int:
+    if os.name == "nt":
+        return _open_no_follow(root.path / name)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        return os.open(name, flags, dir_fd=root.descriptor)
+    except OSError as exc:
+        raise TranscriptStagingError("path could not be opened without following links") from exc
 
 
 def _read_verified_target(
-    path: Path,
+    root: _OpenedRoot,
+    name: str,
     *,
     digest: str,
     expected_size: int,
     label: str,
 ) -> bytes:
-    payload, metadata = _read_handle_bound(
-        path,
-        label=label,
-        expected_size=expected_size,
-        max_bytes=expected_size,
-        read_only=True,
-    )
+    before = _lstat_under_root(root, name, label=label)
+    _require_regular(before, label=label, read_only=True)
+    descriptor = _open_under_root(root, name)
+    try:
+        opened = os.fstat(descriptor)
+        _require_regular(opened, label=label, read_only=True)
+        if _object_identity(before) != _object_identity(opened):
+            raise TranscriptStagingError(f"{label} identity changed while opening")
+        payload = _read_exact_descriptor(descriptor, expected_size=expected_size)
+        after = os.fstat(descriptor)
+        _require_regular(after, label=label, read_only=True)
+        if _stable_identity(opened) != _stable_identity(after):
+            raise TranscriptStagingError(f"{label} identity changed during read")
+        current = _lstat_under_root(root, name, label=label)
+        if _object_identity(after) != _object_identity(current):
+            raise TranscriptStagingError(f"{label} identity changed after read")
+    finally:
+        os.close(descriptor)
     if (
-        int(metadata.st_size) != expected_size
+        int(after.st_size) != expected_size
         or len(payload) != expected_size
         or hashlib.sha256(payload).hexdigest() != digest
     ):
@@ -304,35 +500,229 @@ def _read_verified_target(
     return payload
 
 
-def _commit_snapshot(*, root: _OpenedRoot, target: Path, payload: bytes, digest: str) -> None:
+def _read_exact_descriptor(descriptor: int, *, expected_size: int) -> bytes:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    remaining = expected_size + 1
+    while remaining > 0:
+        chunk = os.read(descriptor, min(1024 * 1024, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _create_owned_temporary(root: _OpenedRoot, *, digest: str) -> _OwnedTemporary:
+    if os.name == "nt":
+        try:
+            return _windows_create_owned_temporary(root, digest=digest)
+        except OSError as exc:
+            raise TranscriptStagingError("handle-owned temporary could not be created") from exc
+    temporary_flag = int(getattr(os, "O_TMPFILE", 0))
+    if not sys.platform.startswith("linux") or temporary_flag == 0:
+        raise TranscriptStagingError("this POSIX platform lacks handle-owned anonymous staging")
+    flags = os.O_RDWR | temporary_flag | getattr(os, "O_CLOEXEC", 0)
     try:
-        target.lstat()
-    except FileNotFoundError:
-        pass
+        descriptor = os.open(".", flags, 0o600, dir_fd=root.descriptor)
+    except OSError as exc:
+        raise TranscriptStagingError(
+            "staging root does not support handle-owned anonymous staging"
+        ) from exc
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or int(metadata.st_nlink) != 0:
+        os.close(descriptor)
+        raise TranscriptStagingError("anonymous staging handle is not an unlinked regular file")
+    return _OwnedTemporary(
+        descriptor=descriptor,
+        identity=_object_identity(metadata),
+        name=None,
+    )
+
+
+def _seal_owned_temporary(temporary: _OwnedTemporary) -> None:
+    if os.name == "nt":
+        _windows_set_read_only(temporary.descriptor)
+    else:
+        os.fchmod(temporary.descriptor, stat.S_IREAD)
+
+
+def _link_anonymous_posix(
+    temporary: _OwnedTemporary,
+    *,
+    root: _OpenedRoot,
+    target_name: str,
+) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    link_at = libc.linkat
+    link_at.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+    )
+    link_at.restype = ctypes.c_int
+    result = link_at(
+        temporary.descriptor,
+        b"",
+        root.descriptor,
+        os.fsencode(target_name),
+        0x1000,  # AT_EMPTY_PATH: link the exact open anonymous inode
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in (errno.ENOENT, errno.EPERM, errno.EINVAL):
+        result = link_at(
+            -100,  # AT_FDCWD for the procfs descriptor path
+            os.fsencode(f"/proc/self/fd/{temporary.descriptor}"),
+            root.descriptor,
+            os.fsencode(target_name),
+            0x400,  # AT_SYMLINK_FOLLOW: follow procfs to the exact open inode
+        )
+        if result == 0:
+            return
+        error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise FileExistsError(error, os.strerror(error), target_name)
+    raise OSError(error, os.strerror(error), target_name)
+
+
+def _atomic_install_no_replace(
+    temporary: _OwnedTemporary,
+    *,
+    root: _OpenedRoot,
+    target_name: str,
+) -> None:
+    if os.name == "nt":
+        _windows_rename_owned(temporary, root=root, target_name=target_name)
+    else:
+        _link_anonymous_posix(temporary, root=root, target_name=target_name)
+    temporary.installed_name = target_name
+
+
+def _validate_owned_temporary(
+    temporary: _OwnedTemporary,
+    *,
+    payload: bytes,
+    digest: str,
+    installed: bool,
+) -> None:
+    before = os.fstat(temporary.descriptor)
+    if not stat.S_ISREG(before.st_mode) or _has_reparse_attribute(before):
+        raise TranscriptStagingError("owned temporary must remain a regular direct file")
+    expected_links = 1 if installed or os.name == "nt" else 0
+    if int(before.st_nlink) != expected_links:
+        raise TranscriptStagingError("owned temporary link count changed")
+    if before.st_mode & _WRITE_MODE_MASK:
+        raise TranscriptStagingError("owned temporary must remain read-only")
+    observed = _read_exact_descriptor(
+        temporary.descriptor,
+        expected_size=len(payload),
+    )
+    after = os.fstat(temporary.descriptor)
+    if _stable_identity(before) != _stable_identity(after):
+        raise TranscriptStagingError("owned temporary identity changed during verification")
+    if (
+        _object_identity(after) != temporary.identity
+        or len(observed) != len(payload)
+        or observed != payload
+        or hashlib.sha256(observed).hexdigest() != digest
+    ):
+        raise TranscriptStagingError("owned temporary bytes do not match the authorized source")
+
+
+def _delete_owned_temporary(
+    temporary: _OwnedTemporary,
+    *,
+    root: _OpenedRoot,
+    descriptor: int,
+) -> None:
+    if os.name == "nt":
+        _windows_mark_owned_for_deletion(descriptor)
+    elif temporary.installed_name is not None:
+        current = _lstat_under_root(
+            root,
+            temporary.installed_name,
+            label="failed installed target",
+        )
+        if _object_identity(current) != temporary.identity:
+            raise OSError("installed target identity changed before cleanup")
+        os.unlink(temporary.installed_name, dir_fd=root.descriptor)
+
+
+def _close_owned_temporary(
+    temporary: _OwnedTemporary,
+    *,
+    root: _OpenedRoot,
+    preserve_installed: bool,
+) -> None:
+    descriptor = temporary.descriptor
+    temporary.descriptor = -1
+    cleanup_error: OSError | None = None
+    try:
+        if not preserve_installed:
+            _delete_owned_temporary(
+                temporary,
+                root=root,
+                descriptor=descriptor,
+            )
+    except OSError as exc:
+        cleanup_error = exc
+    try:
+        os.close(descriptor)
+    except OSError as exc:
+        cleanup_error = cleanup_error or exc
+    if cleanup_error is not None:
+        raise TranscriptStagingError(
+            "owned temporary cleanup could not be completed safely"
+        ) from cleanup_error
+
+
+def _commit_snapshot(*, root: _OpenedRoot, target: Path, payload: bytes, digest: str) -> None:
+    target_name = target.name
+    try:
+        _lstat_under_root(root, target_name, label="content-address collision")
+    except TranscriptStagingError as exc:
+        if not isinstance(exc.__cause__, FileNotFoundError):
+            raise
     else:
         _read_verified_target(
-            target,
+            root,
+            target_name,
             digest=digest,
             expected_size=len(payload),
             label="content-address collision",
         )
         return
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{digest}.", suffix=".tmp", dir=root.path
-    )
-    temporary = Path(temporary_name)
-    temporary_identity: tuple[int, int] | None = None
+
+    temporary = _create_owned_temporary(root, digest=digest)
+    preserve_installed = False
     try:
-        _write_all(descriptor, payload)
-        temporary_identity = _object_identity(os.fstat(descriptor))
-        os.close(descriptor)
-        descriptor = -1
-        temporary.chmod(stat.S_IREAD)
+        _write_all(temporary.descriptor, payload)
+        _seal_owned_temporary(temporary)
+        _validate_owned_temporary(
+            temporary,
+            payload=payload,
+            digest=digest,
+            installed=False,
+        )
         try:
-            _atomic_install_no_replace(temporary, target)
+            _atomic_install_no_replace(
+                temporary,
+                root=root,
+                target_name=target_name,
+            )
         except FileExistsError:
+            _close_owned_temporary(
+                temporary,
+                root=root,
+                preserve_installed=False,
+            )
             _read_verified_target(
-                target,
+                root,
+                target_name,
                 digest=digest,
                 expected_size=len(payload),
                 label="content-address collision",
@@ -342,20 +732,32 @@ def _commit_snapshot(*, root: _OpenedRoot, target: Path, payload: bytes, digest:
             raise TranscriptStagingError(
                 "content-addressed snapshot could not be committed"
             ) from exc
-        _read_verified_target(
-            target,
+        _validate_owned_temporary(
+            temporary,
+            payload=payload,
             digest=digest,
-            expected_size=len(payload),
-            label="content-address collision",
+            installed=True,
         )
+        if os.name != "nt":
+            installed_metadata = _lstat_under_root(
+                root,
+                target_name,
+                label="installed target",
+            )
+            _require_regular(installed_metadata, label="installed target", read_only=True)
+            if _object_identity(installed_metadata) != temporary.identity:
+                raise TranscriptStagingError(
+                    "installed target identity does not match owned handle"
+                )
+        preserve_installed = True
+    except OSError as exc:
+        raise TranscriptStagingError("owned snapshot operation failed") from exc
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        if temporary_identity is not None:
-            _cleanup_owned_temporary(
+        if temporary.descriptor >= 0:
+            _close_owned_temporary(
+                temporary,
                 root=root,
-                path=temporary,
-                identity=temporary_identity,
+                preserve_installed=preserve_installed,
             )
 
 
@@ -509,7 +911,8 @@ def read_staged_transcript(
         if validated.staged_path != expected_target:
             raise TranscriptStagingError("canonical staged path does not match the content digest")
         return _read_verified_target(
-            expected_target,
+            root,
+            expected_target.name,
             digest=expected_sha256,
             expected_size=expected_size_bytes,
             label="staged transcript",

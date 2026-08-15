@@ -664,6 +664,258 @@ def test_atomic_install_failure_cleans_temporary_files(
     assert list(private_root.iterdir()) == []
 
 
+def test_substituted_temporary_cannot_poison_canonical_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    poison = b"attacker-controlled"
+    source.write_bytes(payload)
+    replacement = tmp_path / "replacement.tmp"
+    replacement.write_bytes(poison)
+    candidate: object = vars(staging)["_atomic_install_no_replace"]
+    assert callable(candidate)
+    substitution_blocked = False
+
+    def attempt_substitution_then_install(*args: object, **kwargs: object) -> object:
+        nonlocal substitution_blocked
+        named_temporaries = tuple(private_root.glob("*.tmp"))
+        if not named_temporaries:
+            substitution_blocked = True
+        else:
+            assert len(named_temporaries) == 1
+            temporary = named_temporaries[0]
+            try:
+                temporary.chmod(stat.S_IWRITE)
+                temporary.unlink()
+                replacement.rename(temporary)
+            except OSError:
+                substitution_blocked = True
+        return candidate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        staging,
+        "_atomic_install_no_replace",
+        attempt_substitution_then_install,
+        raising=False,
+    )
+
+    with pytest.raises(TranscriptStagingError, match="remain read-only"):
+        _stage(source, private_root, payload=payload)
+
+    assert substitution_blocked
+    assert not (private_root / f"{_digest(payload)}.transcript").exists()
+    assert replacement.read_bytes() == poison
+
+
+def test_cleanup_never_deletes_a_replacement_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"must survive")
+    substitution_blocked = False
+
+    def attempt_substitution_then_fail(*_args: object, **_kwargs: object) -> None:
+        nonlocal substitution_blocked
+        named_temporaries = tuple(private_root.glob("*.tmp"))
+        if not named_temporaries:
+            substitution_blocked = True
+        else:
+            assert len(named_temporaries) == 1
+            temporary = named_temporaries[0]
+            try:
+                temporary.chmod(stat.S_IWRITE)
+                temporary.unlink()
+                victim.rename(temporary)
+            except OSError:
+                substitution_blocked = True
+        raise OSError("injected install failure")
+
+    monkeypatch.setattr(
+        staging,
+        "_atomic_install_no_replace",
+        attempt_substitution_then_fail,
+        raising=False,
+    )
+
+    with pytest.raises(TranscriptStagingError, match="could not be committed"):
+        _stage(source, private_root, payload=payload)
+
+    assert substitution_blocked
+    assert victim.read_bytes() == b"must survive"
+    assert list(private_root.iterdir()) == []
+
+
+def test_cleanup_never_chmods_a_replacement_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"must stay read-only")
+    victim.chmod(stat.S_IREAD)
+    substitution_blocked = False
+
+    def attempt_substitution_then_fail(*_args: object, **_kwargs: object) -> None:
+        nonlocal substitution_blocked
+        named_temporaries = tuple(private_root.glob("*.tmp"))
+        if not named_temporaries:
+            substitution_blocked = True
+        else:
+            assert len(named_temporaries) == 1
+            temporary = named_temporaries[0]
+            try:
+                temporary.chmod(stat.S_IWRITE)
+                temporary.unlink()
+                victim.rename(temporary)
+            except OSError:
+                substitution_blocked = True
+        raise OSError("injected install failure")
+
+    monkeypatch.setattr(
+        staging,
+        "_atomic_install_no_replace",
+        attempt_substitution_then_fail,
+        raising=False,
+    )
+
+    with pytest.raises(TranscriptStagingError, match="could not be committed"):
+        _stage(source, private_root, payload=payload)
+
+    assert substitution_blocked
+    assert victim.read_bytes() == b"must stay read-only"
+    assert not victim.stat().st_mode & stat.S_IWUSR
+
+
+def test_cleanup_denial_is_surfaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+
+    def fail_install(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected install failure")
+
+    def deny_owned_cleanup(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected cleanup denial")
+
+    monkeypatch.setattr(staging, "_atomic_install_no_replace", fail_install, raising=False)
+    monkeypatch.setattr(staging, "_delete_owned_temporary", deny_owned_cleanup)
+
+    with pytest.raises(TranscriptStagingError, match="cleanup could not be completed"):
+        _stage(source, private_root, payload=payload)
+
+
+def test_failed_installed_target_is_removed_through_owned_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+    candidate: object = vars(staging)["_validate_owned_temporary"]
+    assert callable(candidate)
+
+    def fail_after_installed_validation(*args: object, **kwargs: object) -> object:
+        result = candidate(*args, **kwargs)
+        if kwargs.get("installed") is True:
+            raise TranscriptStagingError("injected installed-target failure")
+        return result
+
+    monkeypatch.setattr(
+        staging,
+        "_validate_owned_temporary",
+        fail_after_installed_validation,
+    )
+
+    with pytest.raises(TranscriptStagingError, match="injected installed-target failure"):
+        _stage(source, private_root, payload=payload)
+
+    assert list(private_root.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows root-handle contract")
+def test_windows_open_root_handle_blocks_commit_redirection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    replacement_root = tmp_path / "replacement-root"
+    moved_root = tmp_path / "moved-root"
+    private_root.mkdir()
+    replacement_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+    candidate: object = vars(staging)["_commit_snapshot"]
+    assert callable(candidate)
+    replacement_blocked = False
+
+    def attempt_root_replace_then_commit(*args: object, **kwargs: object) -> object:
+        nonlocal replacement_blocked
+        try:
+            private_root.rename(moved_root)
+            replacement_root.rename(private_root)
+        except OSError:
+            replacement_blocked = True
+        return candidate(*args, **kwargs)
+
+    monkeypatch.setattr(staging, "_commit_snapshot", attempt_root_replace_then_commit)
+
+    artifact = _stage(source, private_root, payload=payload)
+
+    assert replacement_blocked
+    assert _read(artifact) == payload
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dir_fd contract")
+def test_posix_root_replacement_cannot_redirect_commit_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    replacement_root = tmp_path / "replacement-root"
+    moved_root = tmp_path / "moved-root"
+    private_root.mkdir()
+    replacement_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+    candidate: object = vars(staging)["_commit_snapshot"]
+    assert callable(candidate)
+
+    def replace_root_then_commit(*args: object, **kwargs: object) -> object:
+        private_root.rename(moved_root)
+        replacement_root.rename(private_root)
+        return candidate(*args, **kwargs)
+
+    monkeypatch.setattr(staging, "_commit_snapshot", replace_root_then_commit)
+
+    with pytest.raises(TranscriptStagingError, match="staging root identity changed"):
+        _stage(source, private_root, payload=payload)
+
+    assert list(private_root.iterdir()) == []
+
+
 def test_stored_receipt_rejects_extra_fields() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         StagedTranscriptArtifact.model_validate(
