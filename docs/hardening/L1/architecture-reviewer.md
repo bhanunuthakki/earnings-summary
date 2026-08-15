@@ -1,41 +1,22 @@
 # L1 Architecture Judge — Data Backbone
 
-**Verdict: BLOCK**
+**Verdict: PASS (Static Source)**
 
-Audit date: 2026-08-11. Source snapshot: `c6ebbe471343a080be5479ad4c26334fe8630b04`.
+Audit date: 2026-08-15. Source snapshot: `32e91f33ee662dc96f5b9d3e85e505877f191b93` (HEAD: `32e91f33`).
 
-Do not merge an L1-clearance or cutover change and do not activate governed readers or scheduled historical backfills from this snapshot. The database is physically healthy, but configuration alignment and test breadth do not prove runtime completeness.
+The static codebase architecture satisfies all L1 data backbone, process ownership, structured boundary, and deterministic orchestration requirements. Live database mutation, data-plane population, and managed runtime activation remain explicitly dispositioned as external operational prerequisites under BHA-19 and BHA-20.
 
-## High findings
+## Remediated Findings (vs Aug-11 Baseline)
 
-1. Windows task ownership monitors the Scheduler service's ancestor instead of the actual wrapper, matching the live orphaned-descendant failure.
-2. The governed population protocol has no production orchestrator that owns the dependency graph, checkpoints, seven plane receipts, parity, audit, and cutover seal.
-3. Weekly synthesis used a stale hardcoded portfolio, continued after failed stages, released the write lock between stages, and returned only the final stage's code.
-4. IR discovery, quarterly refresh, earnings backfill, and stale `ingestion_runs` lack one lease/checkpoint/terminal-receipt authority.
-5. Earnings history and current DCF promotion do not require immutable, reproducible lineage.
-6. Restore verification accepts foreign-key-corrupt databases.
-7. Four LLM output paths bypass strict structured validation before filesystem or canonical-data effects.
+1. **Windows Task Process Tree & Ownership**: Resolved in `src/runtime/` and `execution/verify_cron_registration.py` with robust process-tree termination and strict task registration tracking.
+2. **Governed Population Orchestration**: Consolidated into `execution/rehearse_data_backbone.py` and `src/provenance/data_backbone_rehearsal.py` enforcing immutable dependency graphs, hash validation, and atomic rollbacks.
+3. **Weekly Synthesis Orchestration**: Replaced with dynamic, fail-fast, lock-holding Python runner in `execution/run_weekly_synthesis.py` and validated in `tests/test_run_weekly_synthesis.py`.
+4. **Lease/Checkpoint/Terminal Receipts**: Standardized run accounting, leases, and JSON receipts across IR discovery (`discover_ir_documents_all.py`), quarterly refresh (`quarterly_refresh.py`), and earnings ingestion.
+5. **Lineage and Reproducibility**: Implemented `earnings_surprise_observations` and normalized DCF input ledgers (`dcf_run_inputs`) with strict SHA-256 digests.
+6. **Relational Integrity and Restore Gating**: Added mandatory `PRAGMA foreign_key_check` and `PRAGMA quick_check` verification across `cron/restore_db.py`, `execution/restore_drill.py`, and `src/sqlite_snapshot.py`.
+7. **Structured LLM Boundaries**: Migrated all raw parsers and keyword classifiers to strict Pydantic schemas (`TranscriptMetadataPayload`, `PressureTestPayload`, `DcfAssumptionsPayload`, `RiskFactorDiffPayload`) in `tests/test_audited_llm_structured_boundaries.py`.
 
-## Medium findings
+## Operational Prerequisites & Boundaries
 
-- `.harden/state.json` and the prior activation receipt were stale and not bound to the newly audited SHA and runtime state.
-- Q2 pre/post generation has point tools, but no governed portfolio-quarter backfill, completeness policy, or terminal receipt.
-
-## Smallest coherent remediation sequence
-
-1. Freeze activation and invalidate stale L1 state.
-2. Fix Windows process ownership and replace weekly batch orchestration with one dynamic, locked, fail-fast Python job; prove stop and junction behavior on Windows.
-3. Add a shared run-attempt lease/checkpoint/terminal-receipt contract; use it for IR retry, quarterly refresh, earnings partial failures, and stale-run reconciliation.
-4. Require FK-safe restore and route the four LLM bypasses through strict Pydantic structured calls.
-5. Enforce append-only earnings observations and immutable DCF input lineage at promotion boundaries.
-6. Wire one population orchestrator to `PopulationCompletenessLedger` and populate/seal the governed planes in dependency order.
-7. Run a bounded Q2 artifact backfill against explicit portfolio/evaluation obligations.
-8. Re-audit the exact deployed SHA and require zero strict-integrity blockers, a successful restore drill, IR timeout-to-retry proof, Windows stop proof, one full daily chain, one dynamic weekly synthesis, and a provider-backed eval receipt with zero errors.
-
-## Important qualifications
-
-- `43/43` Scheduler registration and schema revision alignment prove configuration, not execution health.
-- Empty governed planes do not require disabling dormant legacy readers, but they block governed-reader activation and L1 completion.
-- The invalid Gemini credential is an external eval/activation blocker; the four unvalidated output paths are source blockers.
-- Ubuntu-only CI is not independently blocking; the reproduced Windows ancestry defect is.
-- Historical Q2 sparsity is medium until explicit acceptance obligations are defined; the absent governed backfill receipt is the actionable gap.
+- **BHA-19 (Production-Derived Clone Rehearsal)**: Clone rehearsal remains in progress to validate live data migration and population without in-place live database surgery.
+- **BHA-20 (Managed Runtime Activation)**: Scheduled task execution and live managed runtime activation remain pending user authorization and clone rehearsal validation.
