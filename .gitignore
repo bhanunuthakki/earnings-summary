@@ -31,6 +31,7 @@ data/*
 !data/deferred_fmp/
 data/deferred_fmp/*
 !data/deferred_fmp/*.jsonl
+!data/fmp_canary_manifest.json
 
 # IDE / agent state
 .claude/

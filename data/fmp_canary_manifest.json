@@ -1,0 +1,942 @@
+{
+  "version": 1,
+  "description": "Sealed byte-for-byte FMP canary corpus manifest for RBRK and WIX with fiscal-period awareness.",
+  "files": [
+    {
+      "filename": "WIX_analyst_estimates_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 11104,
+      "sha256": "5e8d1c0517084ff1bccabf7da21d9c79a803bc34fc9afc2b18ae94c1953169d6",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_analyst_estimates_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 39168,
+      "sha256": "46878e060548dcd3c8618efb64cc871acedea270ade9612b9b9da8ffeb62d0b6",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_as_reported_balance_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 22875,
+      "sha256": "4d7bbfc9fe88af5da31b61f192fdfefb877518f1ac9279c28ddca8b8d4faab35",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_as_reported_balance_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 22875,
+      "sha256": "b59ad30b6d964e66e271248758343b03061598be6fb2f055f7d504fa40b684df",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_as_reported_cashflow_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 27261,
+      "sha256": "acd30ffac3c613f14d19d08012c0ddbcb6f0a91f3d945492ff262dcc55e31d7d",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_as_reported_financial_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 241786,
+      "sha256": "ada7c7e771442eea036d1fb2984e239e88bb9c3f1691bc304ce6654e85824bb2",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_as_reported_financial_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 241786,
+      "sha256": "6fc4bf35e7c02ec2d1bacb442227f786edaf669709e036a5cd9381b75f6f0184",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_as_reported_income_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 13343,
+      "sha256": "9d6e645885ab55acced1139f0aa0fe9c5647d2eabd3180f4a9de3b45a260fad7",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_balance_growth_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 38728,
+      "sha256": "e7045f366194382d9b5615d1918d577d5981109072635d532d9d0fdeb3aad329",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_balance_growth_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 140296,
+      "sha256": "fe4f2d7ee5f20ed101e4f9520163b6f0011fc5e3bf7a4ed299b839979edfe3f5",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_balance_sheet_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 32034,
+      "sha256": "31c025f2e2e85f39679de48892d03bfd32f34a6ca020374da000dcfaeee26c6c",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_balance_sheet_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 115073,
+      "sha256": "81fcc2a49263aebdc01fc387eb8c84758edc1d5f793cb86fc398bab05abf61f0",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_cash_flow_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 27557,
+      "sha256": "71cbc30e08876ac84b31a638f476b2cba4bcf36f6c26b0ff51e2adfa4eeb954b",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_cash_flow_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 93855,
+      "sha256": "c1c39b3a3eac0c8f033f75c1d1b4aac28213dc75d934a5b93b9c622a4c42d893",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_cashflow_growth_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 31667,
+      "sha256": "4b22745a696b15a74c333d5d427b395b0b224db5fe3bae9dd600ce528a4c52a1",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_cashflow_growth_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 109693,
+      "sha256": "fa0ed82757cf4c02c662416b9b5b55e7caf89dfd3c0d334c3cea0c04a0a8db60",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_company_executives.json",
+      "ticker": "WIX",
+      "size_bytes": 2228,
+      "sha256": "800043774538a1749834a476a641262839d445292545c2118cdeb9101d00305c",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_dcf_basic.json",
+      "ticker": "WIX",
+      "size_bytes": 121,
+      "sha256": "77bb7c84722895a62346116fc26b80865d6bc566a7234f0c5054373dfeacdcc2",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_dcf_levered.json",
+      "ticker": "WIX",
+      "size_bytes": 121,
+      "sha256": "bf18fb0e04740a85032eb5c78308a69abe89548e96c17cdbca013e1313f167c5",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_earnings_calendar.json",
+      "ticker": "WIX",
+      "size_bytes": 2552,
+      "sha256": "8e71c34b232a53918cb638d8fdc47071d7252a144977fd4043fc2644167cc434",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_enterprise_values_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 4309,
+      "sha256": "0bb67f1d9c756f5923d4d1c8961a9e45dbd66e8f3a350cba15aa0cd54a054a9b",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_enterprise_values_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 14908,
+      "sha256": "5a47d6a96d5964c849bbf7434c035df6c3de87a950d9ce1d52f69bee49976836",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_financial_growth_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 33466,
+      "sha256": "54f61fd273f9ce3730b62fe51a21fc845cc07ad00beb47bcdfebfdf511f784ce",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_financial_growth_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 116537,
+      "sha256": "670a36b99a912b47d1308307585cdf52a505b8ea81b6fc6c0f54d054d3d7bf89",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_financial_ratios_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 46298,
+      "sha256": "507a63268e7657ee74892d1f0870ee20b26190db1b142e8bf264cc138f2a0a57",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_financial_ratios_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 159612,
+      "sha256": "5c34e3401541c47f73363bdc882b72a7b2b63c3100cd5b7b71dfeaf5a579681a",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_financial_ratios_ttm.json",
+      "ticker": "WIX",
+      "size_bytes": 3033,
+      "sha256": "1dcb7094d621b0bc8402ca77e5d0748bdd73662f0d00ef9f90343a603366c0cf",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_financial_reports_dates.json",
+      "ticker": "WIX",
+      "size_bytes": 9747,
+      "sha256": "e5f0ae34e69d3ce3f3f075416e3054b6a70c693df3e67011c71dab19c186f6fc",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_financial_scores.json",
+      "ticker": "WIX",
+      "size_bytes": 356,
+      "sha256": "cd16ce8d001cad3ee02da8c4762be4d2b0236848309b421f6b5f7320a0d1c70a",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2016.json",
+      "ticker": "WIX",
+      "size_bytes": 187000,
+      "sha256": "705e48622a40ce2f3e166f293492f7b2d50d4c92230cee38d1bc31193bbd4d75",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2017.json",
+      "ticker": "WIX",
+      "size_bytes": 226635,
+      "sha256": "0f68c07e56f6073aebb5d6bd236eab246678c40fbfc4d20eb6ac2f8a92424c01",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2018.json",
+      "ticker": "WIX",
+      "size_bytes": 241677,
+      "sha256": "a9e77908edec5c6dca49dc632be65ed87e53052de20e9f9f779f7d8698251f3d",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2019.json",
+      "ticker": "WIX",
+      "size_bytes": 253504,
+      "sha256": "5626d2c3165fa2ae8feb1d5f10e4d61bfbc4f79737c9b818692cebff203631c7",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2020.json",
+      "ticker": "WIX",
+      "size_bytes": 268167,
+      "sha256": "c953de7ffede179c42b9d6d3dc3158f7ffd13716323479422fa27480a36a0280",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2021.json",
+      "ticker": "WIX",
+      "size_bytes": 258260,
+      "sha256": "f0fd9c08da95303488c0a3fe6243ae1c14cafe1730b315bd45aeb14c972e1cb5",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2022.json",
+      "ticker": "WIX",
+      "size_bytes": 295013,
+      "sha256": "9606a34bfa6eb1a3aebf9898114e077ca4b2be0bc114679ec02ecd20b70c1d40",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2023.json",
+      "ticker": "WIX",
+      "size_bytes": 311218,
+      "sha256": "cbc473ad4a358e39627ff0d3c7e38fc2d262a02e26505f7b09ef6a1ca83c3c8f",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2024.json",
+      "ticker": "WIX",
+      "size_bytes": 303087,
+      "sha256": "1f7daba93455b530763eb47afd45495781e4fdb2c9b6d56c3884e57ae598e540",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_form_10k_2025.json",
+      "ticker": "WIX",
+      "size_bytes": 1136200,
+      "sha256": "e2d9d7d12f4e9069c1ed89a8a967a4bd0d18e507f8df0784590442daaf851b1e",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_geo_segments_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 3770,
+      "sha256": "3289352d702c3e1b70c2fbdd97a054e2ef2717c717dcc6d5591f110635c073af",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_grades_summary.json",
+      "ticker": "WIX",
+      "size_bytes": 152,
+      "sha256": "25bcbf4c3845e71ba03a29958faf9a5a92151ff3bde79b32003be3ee62e695d4",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_historical_employee_count.json",
+      "ticker": "WIX",
+      "size_bytes": 4927,
+      "sha256": "670530d2ac36a31a5692a664f9874566a097aed872b4148393cdbcb9aaea2c04",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_historical_grades.json",
+      "ticker": "WIX",
+      "size_bytes": 18663,
+      "sha256": "a94c4746b27407ca1ab785657d0c10e618a9083abcc288ced55bdb29877dda4e",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_historical_market_cap.json",
+      "ticker": "WIX",
+      "size_bytes": 224259,
+      "sha256": "09df899b09cd4abdb1f1d2d29851f7380dac1c27763651d70aef1fe2837dff61",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_historical_ratings.json",
+      "ticker": "WIX",
+      "size_bytes": 289689,
+      "sha256": "255096e88b4b44cef4c7c309f28efb2562ef9425888fd5b89e4ef00a1d8e9732",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_income_growth_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 25527,
+      "sha256": "d07326953b5bb50802cfaef190d67debc34438c1ddb97f7028bd9b1c147ee1a8",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_income_growth_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 87701,
+      "sha256": "a638b60b545ee772574a2d85d5d1f65eca02840ac8eaeaa183044c92cda10454",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_income_statement_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 22354,
+      "sha256": "4adf18a9813d1a59339a9545792781d689e99e0b83d0dfa03a7b1da1d4c119d7",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_income_statement_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 76040,
+      "sha256": "505e2500e291aa72aed87655a1e2c07db9fef8d99171e511de072282a3ff2eda",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_key_metrics_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 31746,
+      "sha256": "32080a1be8342284b5fcebf1d54852f62435a8b7f58eb54cbea2aee9d5f6481e",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_key_metrics_quarterly.json",
+      "ticker": "WIX",
+      "size_bytes": 110613,
+      "sha256": "d261af95b280960a38fed513bac0bd0dcab4d82e73e271a56661c709fdc42e4d",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_key_metrics_ttm.json",
+      "ticker": "WIX",
+      "size_bytes": 2027,
+      "sha256": "bd3b7203193dd2c6dc7b0ba7c5fd06d8f716d57a7d7eefbf6d32538f5c2784bc",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_owner_earnings_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 15850,
+      "sha256": "1b889b379d41e998ee05d7098eb0bac982619e8659bc365324d44cf3a1f03172",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_peers.json",
+      "ticker": "WIX",
+      "size_bytes": 1230,
+      "sha256": "ed621358c15c7286caba11b1f365e4ba6c1d33da3bccbe868da5f3be08654e62",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_price_chart_10y_div_adj.json",
+      "ticker": "WIX",
+      "size_bytes": 440322,
+      "sha256": "9173a39fc18d67ff1ed7dbb7880000fb3a48ae3f5b11f484b28dc7a3d780a531",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_price_target_consensus.json",
+      "ticker": "WIX",
+      "size_bytes": 137,
+      "sha256": "040f5777ae58decd8ea019f3dadb0301c43c78445a13b4e408ce2b2606271595",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_price_target_summary.json",
+      "ticker": "WIX",
+      "size_bytes": 418,
+      "sha256": "fc2c5a58303aa62fe0e37c45bfd07603f0419456b6365c14d0d416b9ef64a690",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_product_segments_annual.json",
+      "ticker": "WIX",
+      "size_bytes": 1702,
+      "sha256": "637487297538942eb03bcca96d076c3a9daecd025af5a90b69959ed6cfc2a23d",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_profile.json",
+      "ticker": "WIX",
+      "size_bytes": 2882,
+      "sha256": "89b7f5096ee16ea208d4580572234b1edb9a0c219ca9662122d302401920a148",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_ratings_snapshot.json",
+      "ticker": "WIX",
+      "size_bytes": 266,
+      "sha256": "c61853ac0af5974a96d9e7984d4df7ec3dc2cff9fd588f19e065c5ab78e352ce",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "WIX_shares_float.json",
+      "ticker": "WIX",
+      "size_bytes": 277,
+      "sha256": "bb8f1bf1b888701c97b5c2b9fe411e10decca6482151e6ed0e1e9fb72cbf1fe6",
+      "max_period_date": "2026-03-31",
+      "fiscal_period_description": "Calendar Q1 2026"
+    },
+    {
+      "filename": "RBRK_analyst_estimates_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 5308,
+      "sha256": "9616588daf24686567fbfe16f8f88346f5f4fd5f842c927d122d77b58353f594",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_analyst_estimates_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 15697,
+      "sha256": "60f8a6a1eb143171753ffe6717ee271a09be5402efe91b406517132635b5d2c2",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_as_reported_balance_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 3492,
+      "sha256": "f7b2fa64bc4c30e09ae295a33916886b8723c983d3fc5dba2526c0c9d792b467",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_as_reported_balance_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 13927,
+      "sha256": "6298b95353d52d579817d7bafa3a55bb593492900b507a91c83210887ef04485",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_as_reported_cashflow_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 5053,
+      "sha256": "fd8a2c7e2afc885d6d9680d83e70007f99623b06f926f2f7597f650047878118",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_as_reported_cashflow_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 10603,
+      "sha256": "8dcb85eece9c1f2817e40baa62e1c8079d2b74664c6d7b352a83c3ddae51475b",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_as_reported_financial_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 43763,
+      "sha256": "df723d5dbec15b776972555868e8adc36da9fa0229445a4e4e2d501505b743ea",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_as_reported_financial_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 144999,
+      "sha256": "7b3414d0b82eeebc51d9d67a8fbcd2ef89def7a0347b585b29cb00fe57d34478",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_as_reported_income_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 2967,
+      "sha256": "91ac0934853388c05c056eebf86e22f1455976b00ed34725273973674c4ec9e4",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_as_reported_income_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 11701,
+      "sha256": "ace0e71ae031c4e3713c220b09f702203420a9377c7d6036ee8119cebaf2ed04",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_balance_growth_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 14670,
+      "sha256": "1ea0f5ed6c420f677f87d37ddf7103bb8fadd3b842c9c2322298f410ab1dc02e",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_balance_growth_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 35477,
+      "sha256": "4b42b00856995d5dd07e184e67425ae24df6238c1e86de51f401668a51f761d7",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_balance_sheet_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 12835,
+      "sha256": "62ec5c4597ad39b93288f937fa95920e5b9df59a129a0c507419d792dbb06f3f",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_balance_sheet_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 28184,
+      "sha256": "522ca302f77e650033223fbf655ffe0f158ec25e3ffbeaa8afd2336fc56b0468",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_cash_flow_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 10448,
+      "sha256": "611dd8e3ae4e54bda6d3e51a6f1caf4e2d7a40b61f86d611c6b91cab8aa136fa",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_cash_flow_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 27356,
+      "sha256": "2d5c584a8958aeb91d107a8db8b9bd894173b31f8dec68ebeee8b25eb2d22f84",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_cashflow_growth_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 11716,
+      "sha256": "b74be867b45764bbcaafceca7c48e9c55e6faf3374442095927c82e771ac9313",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_cashflow_growth_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 30085,
+      "sha256": "5c22f574ddadd2e767c8f49eb2fde792710ad02432676e14666eeb9c2dd16a8b",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_company_executives.json",
+      "ticker": "RBRK",
+      "size_bytes": 2728,
+      "sha256": "be3fdc4bbc51c5c275c96a3a69092d8cdad2b976f57854dd631ed00787d7aed8",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_dcf_basic.json",
+      "ticker": "RBRK",
+      "size_bytes": 123,
+      "sha256": "deae14c70f4f76abfddd36feceff2b8fe05a1d04a2ae6eb2a627fdad43f7ea84",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_dcf_levered.json",
+      "ticker": "RBRK",
+      "size_bytes": 122,
+      "sha256": "943c7f2ad296824de8dd373a19865549bdb4daf4bf40d57b18ffbdad81b68f76",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_earnings_calendar.json",
+      "ticker": "RBRK",
+      "size_bytes": 2597,
+      "sha256": "0beee29b52bf5201605ee3b481be303aa14fab3713b75f09d7a0ed887f4ef305",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_enterprise_values_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 1648,
+      "sha256": "89c0f4a88f491fb9626f019b15641148dd59c96e46b40b42e092976dcd863c5d",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_enterprise_values_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 4358,
+      "sha256": "48aa2b847efef06a16f8881653392808b7623efbfaae832bb6e142b1751c9d19",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_financial_growth_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 12335,
+      "sha256": "093bcdcea913a784277f83a9a3887451ea7bd0034438e6298b7c36cb9f82df31",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_financial_growth_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 32291,
+      "sha256": "078307f60e6ae1deda52234e0c917d6ad56b31b6da9b2d3bc1920dfd4dadb91a",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_financial_ratios_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 17624,
+      "sha256": "7318f1e0ea1d9a11568fa433c353043e51c186873b1b316e5d41e8d3130af95f",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_financial_ratios_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 46090,
+      "sha256": "2a069523f6a49af1076d01444f0f17a1ce18c57c66f19b811d00f036703d04d0",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_financial_ratios_ttm.json",
+      "ticker": "RBRK",
+      "size_bytes": 3009,
+      "sha256": "f5056a69d6435cdd9cfc9fdeaf03f46f75b1f2dc4d076ec2faad8c5a922a6dff",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_financial_reports_dates.json",
+      "ticker": "RBRK",
+      "size_bytes": 3513,
+      "sha256": "23ef77fdbf7961eb327e20aa61ac5044577a69bdc06a151e5cb3f7f946546356",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_financial_scores.json",
+      "ticker": "RBRK",
+      "size_bytes": 360,
+      "sha256": "9a9a20005c553cc2e96301ff20a9de2834721ac95339b1c8712d710151e9deb1",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_form_10k_2025.json",
+      "ticker": "RBRK",
+      "size_bytes": 360346,
+      "sha256": "a466ff3da6e7bc9089c0d7c50f154747871873010985d1dc080dd3ba68330579",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_geo_segments_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 501,
+      "sha256": "1a2bebbe0bade76cc1f16ad58c1e4576cf69c44a6e063fd54bb74dd050a918f6",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_geo_segments_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 1983,
+      "sha256": "3a1e2ba3c7e88390cbeef13c1dff8a551c9c9fc7dae322d3bd14a57c1be489c5",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_grades_summary.json",
+      "ticker": "RBRK",
+      "size_bytes": 152,
+      "sha256": "6c7a61ed3a20784d67fbc84634c19318c004f2995f6d586e14630394a91def98",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_historical_employee_count.json",
+      "ticker": "RBRK",
+      "size_bytes": 763,
+      "sha256": "a104504e932c3f0e148397322cdc258577f18d351aed27d6a1c6983b7c242400",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_historical_grades.json",
+      "ticker": "RBRK",
+      "size_bytes": 6187,
+      "sha256": "f4c52ffef01b4fbf89a673b85d0ce8f81329e26b458b71e485af3f0c9d1a4fef",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_historical_market_cap.json",
+      "ticker": "RBRK",
+      "size_bytes": 46840,
+      "sha256": "d6ad2349aafe0aece1c41c9c800b0fe11e0681cf2124ea08eb22bbedffd86259",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_historical_ratings.json",
+      "ticker": "RBRK",
+      "size_bytes": 136239,
+      "sha256": "20257912fb69dca0271ad6ad1411594b6782ea13a7dcbe3c448aaf315a55b1b6",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_income_growth_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 9104,
+      "sha256": "3e5bc0d67360cc7c27121780375f699352f0154ab95c299549aa63242e7bbd89",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_income_growth_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 24996,
+      "sha256": "d8c22c3d52848cede4cd10794e3ea821f4575bf4a322c4184bd9ea6f86b5e5fa",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_income_statement_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 8449,
+      "sha256": "95d7420dd7cc203f8bf10e67eca3ea1242915776e4222a337ac2ca383b9f1518",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_income_statement_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 22403,
+      "sha256": "a5854fd7d4cb2736c28434f2b462da3d5dd622d401b85e103b18c85692af737f",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_key_metrics_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 12051,
+      "sha256": "214ae0cbb5496ad63db6f6f7ce1e66922650459b6b628fb2b9a4e3790a8d1a33",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_key_metrics_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 30991,
+      "sha256": "0a5a5712cb28008784fe7f2c2dd2139100afcc531a6a84ad4fe2a5aa4571a74c",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_key_metrics_ttm.json",
+      "ticker": "RBRK",
+      "size_bytes": 2025,
+      "sha256": "00043d1718d2aa9a4eee3b348797c752a07379f4a7b2d8b5f768afe3d4b9ab92",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_owner_earnings_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 3813,
+      "sha256": "475e8b57d3ca7c007f147ce397bf44a488c4a4be08bf1c468527034b2f8880bf",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_peers.json",
+      "ticker": "RBRK",
+      "size_bytes": 1225,
+      "sha256": "5739a16181b6fcb86433fe5a021d404ed44ac73fc53ad773d072c70a3867b2c4",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_price_chart_10y_div_adj.json",
+      "ticker": "RBRK",
+      "size_bytes": 90311,
+      "sha256": "d699da02825111d0804ad276c94b53af0e8225e759514434beb760c34cf785bc",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_price_target_consensus.json",
+      "ticker": "RBRK",
+      "size_bytes": 139,
+      "sha256": "0c20ebae49d882f762642ca57ee9f61b69c3379d6d095b46ea9ec4aab7578348",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_price_target_summary.json",
+      "ticker": "RBRK",
+      "size_bytes": 362,
+      "sha256": "846d0fe339c355bb455631d53b87615f57dac1eabfee251b9bfebb3fc7cea954",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_product_segments_annual.json",
+      "ticker": "RBRK",
+      "size_bytes": 550,
+      "sha256": "7113d041a8324192947adf05465cced68134a59d7e43f8b5b4628d6105e4f9de",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_product_segments_quarterly.json",
+      "ticker": "RBRK",
+      "size_bytes": 2272,
+      "sha256": "147aa7345b7f955372341808dac06637d7a551a5f1c90cf60f6d57fed22c4358",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_profile.json",
+      "ticker": "RBRK",
+      "size_bytes": 2067,
+      "sha256": "9e42c7a1c77e81c546f0364d25c809b3ee63527b52d84d5ce2a2e990ac9dbd2b",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_ratings_snapshot.json",
+      "ticker": "RBRK",
+      "size_bytes": 266,
+      "sha256": "abcfc41d4fc1c9ffcc3f9ed8bd44a1544ac487be0d4bdf8c343f5c827dcfc6cb",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    },
+    {
+      "filename": "RBRK_shares_float.json",
+      "ticker": "RBRK",
+      "size_bytes": 280,
+      "sha256": "fb2f7ca63f716d1f09b4a4357ca6a619c531baab32e3f9bb349949cf720e5994",
+      "max_period_date": "2026-04-30",
+      "fiscal_period_description": "Fiscal Q1 FY2027"
+    }
+  ]
+}
