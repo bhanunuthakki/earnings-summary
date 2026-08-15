@@ -204,14 +204,15 @@ result_path.write_text(json.dumps(result), encoding='utf-8')
     )
     assert loopback.returncode == 0
     assert cleanup["sid"].casefold() not in loopback.stdout.casefold()
-    import winreg
+    if sys.platform == "win32":
+        import winreg
 
-    mapping = (
-        r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion"
-        rf"\AppContainer\Mappings\{cleanup['sid']}"
-    )
-    with pytest.raises(FileNotFoundError):
-        winreg.OpenKey(winreg.HKEY_CURRENT_USER, mapping).Close()
+        mapping = (
+            r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion"
+            rf"\AppContainer\Mappings\{cleanup['sid']}"
+        )
+        with pytest.raises(FileNotFoundError):
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, mapping).Close()
     assert json.loads((write_root / "probe.json").read_text(encoding="utf-8")) == {
         "cached_connect": "denied",
         "os_open": "denied",
@@ -612,6 +613,7 @@ def test_report_builder_accepts_explicit_generation_date(
     assert spec.generation_date == date(2026, 8, 1)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="sealed runtime qualification requires Windows")
 def test_offline_cli_repeats_byte_identically_from_isolated_snapshot(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:

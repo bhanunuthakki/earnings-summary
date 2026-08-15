@@ -278,6 +278,9 @@ def runtime_dependency_records(
 ) -> tuple[DependencyRecord, ...]:
     """Hash the effective imported runtime closure and normalized minimal env."""
 
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("runtime attestation requires Windows")
+
     isolated_repo = isolated_repo.resolve()
     private_write_root = private_write_root.resolve()
     runtime_roots = runtime_root_specs()
@@ -460,7 +463,7 @@ def runtime_native_dependency_records(
 ) -> tuple[DependencyRecord, ...]:
     """Hash the current process' complete loaded native module closure."""
 
-    if os.name != "nt":
+    if sys.platform != "win32":
         raise OfflineBoundaryError("native runtime attestation requires Windows")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     psapi = ctypes.WinDLL("psapi", use_last_error=True)
@@ -543,6 +546,8 @@ def runtime_native_dependency_records(
 
 
 def _windows_api_directory(function_name: str) -> Path:
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("Windows directory identity requires Windows")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     function = getattr(kernel32, function_name)
     function.argtypes = [wintypes.LPWSTR, wintypes.UINT]
@@ -559,6 +564,8 @@ def _windows_directory() -> Path:
 
 
 def _program_data_directory() -> Path:
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("ProgramData identity requires Windows")
     shell32 = ctypes.WinDLL("shell32", use_last_error=True)
     ole32 = ctypes.WinDLL("ole32", use_last_error=True)
     folder_id = _GUID()
@@ -605,6 +612,8 @@ def _require_trusted_windows_binary(path: Path) -> None:
 
 
 def _verify_windows_trust(*, action: _GUID, union_choice: int, choice: ctypes.c_void_p) -> int:
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("Windows trust verification requires Windows")
     trust_data = _WINTRUST_DATA()
     trust_data.cbStruct = ctypes.sizeof(_WINTRUST_DATA)
     trust_data.dwUIChoice = 2
@@ -624,6 +633,8 @@ def _verify_windows_trust(*, action: _GUID, union_choice: int, choice: ctypes.c_
 
 
 def _verify_windows_catalog_trust(path: Path, *, action: _GUID) -> bool:
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("Windows catalog verification requires Windows")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
     create_file = kernel32.CreateFileW

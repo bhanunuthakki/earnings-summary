@@ -139,10 +139,14 @@ class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):  # noqa: N801 - W
 
 
 def _win_error(stage: str) -> OfflineBoundaryError:
+    if sys.platform != "win32":
+        return OfflineBoundaryError(f"AppContainer {stage} is unavailable outside Windows")
     return OfflineBoundaryError(f"AppContainer {stage} failed ({ctypes.get_last_error()})")
 
 
 def _system_binary(name: str) -> Path:
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("AppContainer system binaries require Windows")
     buffer = ctypes.create_unicode_buffer(32_768)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     length = kernel32.GetSystemDirectoryW(buffer, len(buffer))
@@ -152,6 +156,8 @@ def _system_binary(name: str) -> Path:
 
 
 def _create_ephemeral_profile() -> _EphemeralProfile:
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("AppContainer profiles require Windows")
     userenv = ctypes.WinDLL("userenv", use_last_error=True)
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -219,6 +225,8 @@ def _create_ephemeral_profile() -> _EphemeralProfile:
 
 
 def _delete_ephemeral_profile(profile: _EphemeralProfile) -> None:
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("AppContainer profiles require Windows")
     userenv = ctypes.WinDLL("userenv", use_last_error=True)
     delete = userenv.DeleteAppContainerProfile
     delete.argtypes = [wintypes.LPCWSTR]
@@ -266,6 +274,8 @@ def _acl(sid: str, path: Path, rights: str | None) -> None:
 
 @contextmanager
 def _ephemeral_profile() -> Generator[_EphemeralProfile, None, None]:
+    if sys.platform != "win32":
+        raise OfflineBoundaryError("AppContainer profiles require Windows")
     profile = _create_ephemeral_profile()
     try:
         yield profile
@@ -307,7 +317,7 @@ def _environment_block(environment: Mapping[str, str]) -> ctypes.Array[ctypes.c_
 
 
 def is_current_process_appcontainer() -> bool:
-    if os.name != "nt":
+    if sys.platform != "win32":
         return False
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
@@ -360,7 +370,7 @@ def _run_appcontainer_worker_with_acl(
     environment: Mapping[str, str],
     timeout_seconds: int = 300,
 ) -> tuple[int, str, str]:
-    if os.name != "nt":
+    if sys.platform != "win32":
         raise OfflineBoundaryError("sealed offline rendering requires Windows AppContainer")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
