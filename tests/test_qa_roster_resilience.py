@@ -106,3 +106,57 @@ def test_build_applies_valid_llm_labels(tmp_path: Path, monkeypatch: pytest.Monk
     entry = section.quarters[0].entries[0]
     assert entry.topic == "Capex trajectory through 2027"
     assert entry.tag == "CAPEX"
+
+
+def test_force_refresh_bypasses_existing_topics_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _stale_cache(*args: object, **kwargs: object) -> list[dict[str, str]]:
+        del args, kwargs
+        return [{"id": "0", "topic": "stale", "tag": "STALE"}]
+
+    monkeypatch.setattr(
+        qa_roster,
+        "_load_topics_cache",
+        _stale_cache,
+    )
+    calls = 0
+
+    def _fresh(*args: object, **kwargs: object) -> str:
+        nonlocal calls
+        del args, kwargs
+        calls += 1
+        return '[{"id":"0","topic":"Fresh topic","tag":"FRESH"}]'
+
+    monkeypatch.setattr(qa_roster, "generate_qa_topics", _fresh)
+    section = qa_roster.build(
+        appendix=_appendix(),
+        ticker="NU",
+        repo_root=tmp_path,
+        enable_llm=True,
+        force_refresh=True,
+    )
+
+    assert calls == 1
+    assert section.quarters[0].entries[0].topic == "Fresh topic"
+
+
+def test_force_refresh_fails_when_fresh_topics_are_unparseable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _invalid(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        return "not-json"
+
+    monkeypatch.setattr(qa_roster, "generate_qa_topics", _invalid)
+
+    with pytest.raises(RuntimeError, match="targeted qa_topics refresh failed"):
+        qa_roster.build(
+            appendix=_appendix(),
+            ticker="NU",
+            repo_root=tmp_path,
+            enable_llm=True,
+            force_refresh=True,
+        )

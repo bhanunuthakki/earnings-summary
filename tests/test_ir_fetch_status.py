@@ -14,6 +14,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import ir_fetch_status as ifs  # noqa: E402
+from pipeline.queries import BRIEFED_LIST_TYPE_VALUES  # noqa: E402
+
+
+def test_ir_coverage_uses_canonical_briefed_list_types() -> None:
+    assert ifs.BRIEFED_LIST_TYPES is BRIEFED_LIST_TYPE_VALUES
 
 
 def _make_db(db: Path, *, with_status: bool = True, with_docs: bool = True) -> None:

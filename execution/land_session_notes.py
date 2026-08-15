@@ -16,9 +16,9 @@ Four item kinds, one invocation each (the skill loops):
     python execution/land_session_notes.py close-intent --ref seed:intent:leap-sleeve \\
         --verdict resolved-rejected --reason "deletes the NVO hedge" --session-ref <id>
 
-    # a position decision stated in the session (persists via the 0130 adapters)
-    python execution/land_session_notes.py decision --ticker NVO --direction buy \\
-        --conviction high --falsifier "GLP-1 share loss 2Q" --size-usd 31000
+    # a position decision stated in the session (typed, atomic, idempotent)
+    python execution/land_session_notes.py decision \\
+        --checkpoint-payload .tmp/owner-decision-checkpoint.json
 
     # a WHOLE deep-session transcript bridged for later distillation (B4) — the
     # 18:00 session_distill sweep reads it, NOT this script (LLM-free at land
@@ -37,7 +37,6 @@ import argparse
 import sys
 from datetime import timedelta
 from pathlib import Path
-from typing import cast
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -64,6 +63,15 @@ def main() -> int:
     parser.add_argument("--size-pct", type=float, default=None)
     parser.add_argument("--account", default=None)
     parser.add_argument("--instrument", default=None)
+    parser.add_argument(
+        "--checkpoint-payload",
+        type=Path,
+        default=None,
+        help=(
+            "decision kind: typed owner-decision checkpoint JSON; confirmation "
+            "atomically writes/links its decisions and sizing intents"
+        ),
+    )
     args = parser.parse_args()
     db_path = args.repo_root.resolve() / "data" / "portfolio.db"
     closed_by = f"claude_session:{args.session_ref or 'unattributed'}"
@@ -138,56 +146,27 @@ def main() -> int:
         return 0 if ok else 1
 
     # decision
-    from research.decision_capture import capture_decision
-    from research.decision_feed import link_decision_to_note, persist_owner_decision
-
-    def _persist(
-        *,
-        note_id: object = None,
-        db_path: object = None,
-        ticker: object = None,
-        direction: object = None,
-        size_pct: object = None,
-        conviction: object = None,
-        falsifier: object = None,
-    ) -> int:
-        """capture_decision's persist_fn contract, closing over the CLI extras
-        (size_usd / account / instrument / session provenance)."""
-        return persist_owner_decision(
-            ticker=str(ticker or ""),
-            direction=str(direction or ""),
-            size_pct=float(size_pct) if isinstance(size_pct, (int, float)) else None,
-            conviction=str(conviction) if conviction else None,
-            falsifier=str(falsifier) if falsifier else None,
-            size_usd=args.size_usd,
-            account=args.account,
-            instrument=args.instrument,
-            rationale=args.text,
-            user_notes=closed_by,
-            note_id=int(note_id) if isinstance(note_id, int) else None,
-            db_path=cast("Path | str | None", db_path),
+    if args.checkpoint_payload is not None:
+        from research.owner_decision_checkpoint import (
+            OwnerDecisionCheckpointPayload,
+            confirm_owner_decision_checkpoint,
         )
 
-    decision_id = capture_decision(
-        text=args.text or "",
-        ticker=args.ticker,
-        direction=args.direction,
-        size_pct=args.size_pct,
-        conviction=args.conviction,
-        falsifier=args.falsifier,
-        db_path=db_path,
-        persist_fn=_persist,
-        link_fn=link_decision_to_note,
-    )
-    if decision_id is None:
+        payload = OwnerDecisionCheckpointPayload.model_validate_json(
+            args.checkpoint_payload.read_text(encoding="utf-8")
+        )
+        if payload.source_channel != "claude_session":
+            raise ValueError("land_session_notes requires source_channel='claude_session'")
+        receipt = confirm_owner_decision_checkpoint(payload, db_path=db_path)
         print(
-            "land_session_notes: decision NOT captured (below threshold or "
-            "missing ticker/direction)",
+            "land_session_notes: owner checkpoint "
+            f"{receipt.checkpoint_id} confirmed decisions={list(receipt.decision_ids)} "
+            f"created={receipt.created}",
             file=sys.stderr,
         )
-        return 1
-    print(f"land_session_notes: decision {decision_id} captured", file=sys.stderr)
-    return 0
+        return 0
+    print("decision requires --checkpoint-payload", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from models.artifacts import (
     parse_tmp_artifact,
     parse_transcript_processed,
 )
+from pipeline.queries import ANALYZED_LIST_TYPE_VALUES, BRIEFED_LIST_TYPE_VALUES
 from runtime.python_process import managed_python_argv
 from sec_identity import sec_user_agent
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -100,9 +101,9 @@ _LIST_TYPES: frozenset[str] = frozenset(
 #
 # `BRIEFED_LIST_TYPES` — strict subset that auto-produces full briefs (portfolio
 # or eval flavor). Watchlist is a holding pen and not briefed by default.
-ACTIVE_LIST_TYPES: tuple[str, ...] = ("portfolio", "watchlist", "evaluation")
+ACTIVE_LIST_TYPES: tuple[str, ...] = ANALYZED_LIST_TYPE_VALUES
 ACTIVE_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in ACTIVE_LIST_TYPES) + ")"
-BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
+BRIEFED_LIST_TYPES: tuple[str, ...] = BRIEFED_LIST_TYPE_VALUES
 BRIEFED_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in BRIEFED_LIST_TYPES) + ")"
 PROCESSING_TIER_BY_LIST_TYPE: dict[str, str] = {
     "portfolio": "P1",

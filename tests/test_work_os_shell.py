@@ -22,6 +22,14 @@ def test_work_os_has_only_the_eight_persistent_destinations() -> None:
         "screen-audit-log",
         "screen-execution-queue",
     ]
+    assert (
+        next(
+            screen.label
+            for screen in SCREEN_SPECS
+            if screen.screen_id == "screen-analytics-playground"
+        )
+        == "Facts & Analytics"
+    )
 
 
 def test_work_os_shell_preserves_the_prototype_navigation_and_layers() -> None:

@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -44,22 +46,38 @@ import index_manager  # noqa: E402
 from aggregator_sources import (  # noqa: E402
     SOURCES,
     AggregatorHit,
-    fetch_qa_with_fallback,
+    AggregatorSource,
 )
 from alias_manager import resolve_ticker  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
-    ArtifactKind,
-    CollectionSource,
-    StoredCollectionAuthorization,
-    authorize_stored_collection_target,
-    reported_quarter_is_in_window,
+from pipeline.transcript_acquisition import (  # noqa: E402
+    COMBINED_SOURCE_REGIME_IDENTITY,
+    AuthorizedTranscriptArtifact,
+    TranscriptAcquisitionDeniedError,
+    authorize_transcript_request,
+    issuer_transcript_source_url_is_authorized,
+    load_authorized_transcript_replay,
+    persist_authorized_transcript_artifact,
+    project_root_for_database,
+    read_authorized_transcript,
+    stage_authorized_payload,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from transcript_qa import (  # noqa: E402
-    QaStatus,
     validate_synthesized_transcript,
 )
+from transcripts.acquisition_semantics import (  # noqa: E402
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    ExistingArtifactBehavior,
+    TranscriptAcquisitionAuthorization,
+    TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
+    TranscriptAuthorizationStatus,
+    TranscriptProvider,
+)
+from transcripts.immutable_staging import install_transcript_output  # noqa: E402
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
+STAGING_DIR = PROJECT_ROOT / ".tmp" / "transcript-acquisition"
 
 
 def _policy_today() -> date:
@@ -85,58 +103,86 @@ class FetchQaResult:
     output_path: Path
     source_name: str
     page_url: str
+    authorization: TranscriptAcquisitionAuthorization
+    acquired_artifact: AuthorizedTranscriptArtifact
 
 
-class TranscriptCollectionPolicyError(RuntimeError):
+class FetchQaAttemptStatus(StrEnum):
+    DENIED = "denied"
+    PROVIDER_MISS = "provider_miss"
+    ACQUIRED = "acquired"
+
+
+class FetchQaStatus(StrEnum):
+    DENIED = "denied"
+    PROVIDER_MISS = "provider_miss"
+    ACQUIRED = "acquired"
+    IDEMPOTENT_REPLAY = "idempotent_replay"
+
+
+@dataclass(frozen=True)
+class FetchQaAttempt:
+    provider: str
+    status: FetchQaAttemptStatus
+    idempotency_key: str
+
+
+@dataclass(frozen=True)
+class FetchQaOutcome:
+    status: FetchQaStatus
+    idempotency_key: str
+    attempts: tuple[FetchQaAttempt, ...]
+    result: FetchQaResult | None = None
+
+
+class TranscriptCollectionPolicyError(TranscriptAcquisitionDeniedError):
     """The stored role or reported-quarter window denied a network fetch."""
 
 
-def _authorize_fetch(
+def _request_for_source(
     spec: FetchQaSpec,
     *,
-    db_path: Path,
+    source: object,
     owner_requested: bool,
     as_of: date,
-) -> StoredCollectionAuthorization | None:
+) -> TranscriptAcquisitionRequest:
+    from aggregator_sources import AggregatorSource
+
+    if not isinstance(source, AggregatorSource):
+        raise TypeError("source must be an AggregatorSource")
     canonical = resolve_ticker(spec.ticker)
-    authorization = authorize_stored_collection_target(
-        db_path,
-        canonical,
-        requested=owner_requested,
-        source=CollectionSource.TRANSCRIPT,
-        artifact_kind=ArtifactKind.TEXT_TRANSCRIPT,
-    )
-    in_window = authorization.fiscal_year_end_month is not None and reported_quarter_is_in_window(
+    return TranscriptAcquisitionRequest(
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+        canonical_ticker=canonical,
         fiscal_year=spec.year,
         fiscal_quarter=spec.quarter,
-        fiscal_year_end_month=authorization.fiscal_year_end_month,
         as_of=as_of,
+        source_type=source.source_type,
+        document_type=source.document_type,
+        provider=source.provider,
+        owner_requested=owner_requested,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
     )
-    if authorization.allowed and in_window:
-        return authorization
-    reason = (
-        "reported_quarter_window_denied"
-        if authorization.allowed
-        else (
-            authorization.decision.reason.value
-            if authorization.decision is not None
-            else authorization.status.value
-        )
-    )
+
+
+def _log_denial(authorization: TranscriptAcquisitionAuthorization) -> None:
     sys.stderr.write(
         json.dumps(
             {
                 "event": "source_collection_policy_denied",
-                "ticker": canonical,
-                "source": CollectionSource.TRANSCRIPT.value,
-                "artifact_kind": ArtifactKind.TEXT_TRANSCRIPT.value,
-                "reason": reason,
+                "ticker": authorization.request.canonical_ticker,
+                "entrypoint": authorization.request.entrypoint.value,
+                "provider": authorization.request.provider.value,
+                "reason": authorization.reason.value,
+                "idempotency_key": authorization.idempotency_key,
             },
             sort_keys=True,
         )
         + "\n"
     )
-    return None
 
 
 def _build_header(spec: FetchQaSpec, hit: AggregatorHit) -> str:
@@ -153,18 +199,73 @@ def _build_header(spec: FetchQaSpec, hit: AggregatorHit) -> str:
     inside the hashed file content.
     """
     canonical = resolve_ticker(spec.ticker)
+    source_label = (
+        hit.source_name if hit.source_name == "issuer_ir" else f"aggregator_{hit.source_name}"
+    )
     return (
         f"=== SYNTHESIZED QUARTERLY UPDATE — Q&A SEGMENT ONLY ===\n"
-        f"Generated by execution/fetch_qa_transcript.py from a free aggregator.\n"
+        f"Generated by execution/fetch_qa_transcript.py from an authorized transcript source.\n"
         f"This file contains the QUESTION-AND-ANSWER segment only — prepared\n"
         f"remarks are reproducible from the press release + investor deck and\n"
         f"are excluded here to keep the input focused for say-do analysis.\n"
         f"\n"
         f"Ticker:    {canonical}\n"
         f"Period:    Q{spec.quarter} {spec.year}\n"
-        f"Source:    aggregator_{hit.source_name} ({hit.page_url})\n"
+        f"Source:    {source_label} ({hit.page_url})\n"
         f"\n"
         f"=== Q&A SEGMENT ===\n"
+    )
+
+
+def _replay_artifact(
+    conn: sqlite3.Connection,
+    *,
+    request: TranscriptAcquisitionRequest,
+    project_root: Path,
+) -> tuple[AuthorizedTranscriptArtifact, bytes] | None:
+    artifact = load_authorized_transcript_replay(
+        conn,
+        request=request,
+        project_root=project_root,
+        trusted_staging_root=STAGING_DIR,
+    )
+    if artifact is None:
+        return None
+    staged_bytes = read_authorized_transcript(
+        conn,
+        artifact,
+        project_root=project_root,
+        trusted_staging_root=STAGING_DIR,
+    )
+    return artifact, staged_bytes
+
+
+def _restore_replay(
+    spec: FetchQaSpec,
+    *,
+    output_path: Path,
+    artifact: AuthorizedTranscriptArtifact,
+    staged_bytes: bytes,
+) -> None:
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    install_transcript_output(
+        staged_bytes,
+        RAW_DIR,
+        output_path.name,
+        expected_sha256=artifact.sha256,
+        expected_size_bytes=artifact.size_bytes,
+    )
+    qa_result = validate_synthesized_transcript(output_path)
+    index_manager.register_transcript(
+        resolve_ticker(spec.ticker),
+        spec.year,
+        f"Q{spec.quarter}",
+        source="issuer_ir",
+        filepath=output_path.name,
+        has_qa=True,
+        qa_status=qa_result.status.value,
+        qa_details=qa_result.model_dump(mode="json"),
+        acquisition_receipt=artifact,
     )
 
 
@@ -175,75 +276,134 @@ def fetch_qa(
     db_path: Path,
     owner_requested: bool,
     as_of: date | None = None,
-) -> FetchQaResult | None:
+) -> FetchQaOutcome:
     canonical = resolve_ticker(spec.ticker)
-    authorization = _authorize_fetch(
-        spec,
-        db_path=db_path,
-        owner_requested=owner_requested,
-        as_of=_policy_today() if as_of is None else as_of,
-    )
-    if authorization is None:
-        return None
     qlabel = f"Q{spec.quarter}"
     output_path = RAW_DIR / f"{canonical}_{qlabel}_{spec.year}.txt"
+    effective_as_of = _policy_today() if as_of is None else as_of
+    attempts: list[FetchQaAttempt] = []
+    last_key = "transcript:" + "0" * 64
+    project_root = project_root_for_database(db_path)
+    authorized_sources: list[
+        tuple[AggregatorSource, TranscriptAcquisitionRequest, TranscriptAcquisitionAuthorization]
+    ] = []
+    with connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=False,
+    ) as conn:
+        for source in SOURCES:
+            request = _request_for_source(
+                spec,
+                source=source,
+                owner_requested=owner_requested,
+                as_of=effective_as_of,
+            )
+            authorization = authorize_transcript_request(conn, request)
+            last_key = authorization.idempotency_key
+            if authorization.status is TranscriptAuthorizationStatus.DENIED:
+                _log_denial(authorization)
+                attempts.append(FetchQaAttempt(source.name, FetchQaAttemptStatus.DENIED, last_key))
+                continue
+            replay = _replay_artifact(conn, request=request, project_root=project_root)
+            if replay is not None and not force:
+                artifact, staged_bytes = replay
+                _restore_replay(
+                    spec,
+                    output_path=output_path,
+                    artifact=artifact,
+                    staged_bytes=staged_bytes,
+                )
+                return FetchQaOutcome(
+                    FetchQaStatus.IDEMPOTENT_REPLAY,
+                    last_key,
+                    tuple(attempts),
+                )
+            authorized_sources.append((source, request, authorization))
 
-    if output_path.exists() and not force:
-        print(
-            f"[skip] {canonical} {qlabel} {spec.year}: transcript file already exists. "
-            f"Pass --force to overwrite."
+    for source, request, authorization in authorized_sources:
+        last_key = authorization.idempotency_key
+        hit = source.fetch_qa(canonical, spec.year, spec.quarter)
+        if hit is None:
+            attempts.append(
+                FetchQaAttempt(source.name, FetchQaAttemptStatus.PROVIDER_MISS, last_key)
+            )
+            continue
+        if authorization.request.provider is TranscriptProvider.ISSUER_IR and (
+            hit.source_name != "issuer_ir"
+            or not issuer_transcript_source_url_is_authorized(
+                canonical,
+                hit.page_url,
+                project_root=project_root,
+            )
+        ):
+            raise TranscriptAcquisitionDeniedError(
+                "returned issuer source URL is outside configured authority"
+            )
+        payload = (_build_header(spec, hit) + hit.qa_text).encode("utf-8")
+        acquired_artifact = stage_authorized_payload(
+            authorization,
+            payload=payload,
+            private_root=STAGING_DIR,
+            source_url=hit.page_url,
+            canonical_document_path=Path("transcripts") / "raw" / output_path.name,
         )
-        return None
+        with connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=False,
+        ) as conn:
+            if authorize_transcript_request(conn, request) != authorization:
+                raise TranscriptAcquisitionDeniedError(
+                    "transcript authorization changed before durable persistence"
+                )
+            staged_bytes = read_authorized_transcript(
+                conn,
+                acquired_artifact,
+                project_root=project_root,
+                trusted_staging_root=STAGING_DIR,
+            )
+            persist_authorized_transcript_artifact(
+                conn,
+                acquired_artifact,
+                project_root=project_root,
+                trusted_staging_root=STAGING_DIR,
+            )
+            conn.commit()
+        _restore_replay(
+            spec,
+            output_path=output_path,
+            artifact=acquired_artifact,
+            staged_bytes=staged_bytes,
+        )
+        attempts.append(FetchQaAttempt(source.name, FetchQaAttemptStatus.ACQUIRED, last_key))
+        result = FetchQaResult(
+            ticker=canonical,
+            year=spec.year,
+            quarter=spec.quarter,
+            output_path=output_path,
+            source_name=hit.source_name,
+            page_url=hit.page_url,
+            authorization=authorization,
+            acquired_artifact=acquired_artifact,
+        )
+        return FetchQaOutcome(FetchQaStatus.ACQUIRED, last_key, tuple(attempts), result)
 
-    hit, tried = fetch_qa_with_fallback(canonical, spec.year, spec.quarter)
-    if hit is None:
+    if attempts and all(item.status is FetchQaAttemptStatus.DENIED for item in attempts):
+        return FetchQaOutcome(FetchQaStatus.DENIED, last_key, tuple(attempts))
+    tried = [attempt.provider for attempt in attempts]
+    if attempts:
         print(
             f"[miss] {canonical} {qlabel} {spec.year}: no aggregator hit. "
             f"Tried: {', '.join(tried)}. "
             "No policy-approved audio/webcast fallback is available."
         )
-        return None
-
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(_build_header(spec, hit) + hit.qa_text, encoding="utf-8")
-
-    qa_result = validate_synthesized_transcript(output_path)
-    source_label = f"aggregator_{hit.source_name}"
-    index_manager.register_transcript(
-        canonical,
-        spec.year,
-        qlabel,
-        source=source_label,
-        filepath=output_path.name,
-        has_qa=True,  # this IS the Q&A
-        qa_status=qa_result.status.value,
-        qa_details=qa_result.model_dump(mode="json"),
-    )
-    if qa_result.status == QaStatus.OK:
-        print(
-            f"[done] {output_path.name}  source={source_label}  qa_chars={len(hit.qa_text)}  qa=ok"
-        )
-    else:
-        print(
-            f"[done-qa-failed] {output_path.name}  source={source_label}  "
-            f"issues={len(qa_result.issues)}"
-        )
-        for issue in qa_result.issues:
-            print(f"      - {issue}")
-
-    return FetchQaResult(
-        ticker=canonical,
-        year=spec.year,
-        quarter=spec.quarter,
-        output_path=output_path,
-        source_name=hit.source_name,
-        page_url=hit.page_url,
-    )
+    return FetchQaOutcome(FetchQaStatus.PROVIDER_MISS, last_key, tuple(attempts))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Fetch the Q&A segment of an earnings call from free aggregators."
+        description="Fetch the Q&A segment of an earnings call from authorized sources."
     )
     parser.add_argument("--ticker", required=True, help="Stock ticker (e.g. NOW)")
     parser.add_argument("--year", required=True, type=int)
@@ -262,12 +422,12 @@ def main() -> None:
     parser.add_argument(
         "--list-sources",
         action="store_true",
-        help="Print the configured aggregator chain and exit.",
+        help="Print the configured source chain and exit.",
     )
     args = parser.parse_args()
 
     if args.list_sources:
-        print("Aggregator fallback chain (priority order):")
+        print("Transcript source chain (policy checked in priority order):")
         for s in SOURCES:
             print(f"  - {s.name}")
         return

@@ -1,4 +1,4 @@
-"""Fact Playground panel with deterministic views and Copilot handoff.
+"""Facts & Analytics panel with deterministic views and Copilot handoff.
 
 Research prompts open the sole Work OS Copilot conversation surface.  This
 panel never calls an LLM or renders a second chat thread.  Its local builder
@@ -579,7 +579,7 @@ window.initExplorePanel = function () {
   });
 
   // ---- Research prompt handoff: Work OS Copilot is the sole conversation
-  // surface.  Fact Playground keeps only prompt entry and deterministic DIY
+  // surface. Facts & Analytics keeps only prompt entry and deterministic DIY
   // view controls; it never executes a research model itself. ----
   var askThread = el('ask-thread');
   var askInput = el('ask-q');
@@ -797,8 +797,9 @@ def render_explore_panel(
 <div id="vx-root">
 <div class="ask-thread" id="ask-thread">
   <div class="ask-hello">Send a research question to Work OS Copilot, the single
- conversation surface. Use DIY to build a deterministic table or chart directly from
- governed facts without an LLM.
+ conversation surface. Numeric questions compile into deterministic SQL views; narrative
+ questions use cited lexical evidence. Use DIY to build a table or chart directly from
+ governed facts without an answering LLM.
     <div class="ask-chips">
       <button type="button" class="k-chip"
         data-ask-q="{escape(first)} vs {escape(second)} revenue growth, last 8 quarters">
@@ -868,7 +869,7 @@ def render_explore_panel(
   </div>
 </div>
 <div id="vx-result"><div class="vx-none">Pick tickers + metrics and run. Saved views
- re-run from their chips; every fin/KPI number carries its source chip.</div></div>
+ re-run from their chips; every fin/KPI number carries period, unit, and source provenance.</div></div>
 <p class="vx-hint">Transforms: level = raw values &middot; yoy = % vs the same calendar
  bucket a year ago &middot; cagr = trailing N-year compound growth &middot; margin = value
  / revenue. Cross-ticker columns align on calendar buckets derived from each fiscal

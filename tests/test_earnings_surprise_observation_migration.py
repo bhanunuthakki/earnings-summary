@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
@@ -12,10 +13,12 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
+from earnings_surprise_store import EarningsSurpriseRecordV1, append_observation
+from execution.ingest_earnings_surprises import ingest_one_ticker
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0012_add_readme_update_budgets"
+ACTIVE_HEAD = "0018_add_transcript_acquisition_receipts"
 
 
 def _config(path: Path) -> Config:
@@ -267,6 +270,85 @@ def test_projection_trigger_requires_null_safe_equality_for_every_observed_field
                     """,
                     ("WIX", "2026-08-06", *(candidate[name] for name in columns), "a" * 64),
                 )
+
+
+def test_ingest_projects_the_exact_observation_clock_lexeme(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "earnings-ingest-clock.db", target="head")
+    cache_path = tmp_path / "data" / "surprise" / "WIX_surprises.json"
+    cache_path.parent.mkdir(parents=True)
+    source_record = {
+        "ticker": "WIX",
+        "release_date": "2026-08-06",
+        "eps_estimate": "2.1",
+        "eps_actual": "2.3",
+        "revenue_estimate": None,
+        "revenue_actual": None,
+        "eps_surprise_pct": "9.52",
+        "revenue_surprise_pct": None,
+        "num_analysts_eps": None,
+        "num_analysts_revenue": None,
+        "source_name": "fmp_calendar",
+        "source_url": "https://example.com/source",
+        "fetched_at": "2026-08-06T20:00:00Z",
+    }
+    cache_path.write_text(
+        json.dumps(
+            {
+                "ticker": "WIX",
+                "generated_at": "2026-08-06T20:00:00Z",
+                "record_count": 1,
+                "records": [source_record],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        record = EarningsSurpriseRecordV1.from_source(source_record, ticker_hint="WIX")
+        append_observation(
+            connection,
+            record=record,
+            raw_payload=source_record,
+            cache_path=str(cache_path),
+            record_ordinal=0,
+            recorded_at=datetime(2026, 8, 6, 20, 1, tzinfo=UTC),
+            ingestion_run_id="test:preexisting-clock",
+            cache_generation_id="test:preexisting-generation",
+        )
+        connection.commit()
+        preexisting_clock = connection.execute(
+            "SELECT fetched_at FROM earnings_surprise_observations"
+        ).fetchone()
+        assert preexisting_clock is not None
+        assert preexisting_clock["fetched_at"] == "2026-08-06T20:00:00+00:00"
+
+        result = ingest_one_ticker(
+            connection,
+            cache_path,
+            dry_run=False,
+            recorded_at=datetime(2026, 8, 6, 20, 1, tzinfo=UTC),
+            wall_clock=datetime(2026, 8, 6, 20, 1, tzinfo=UTC),
+            ingestion_run_id="test:clock-lexeme",
+        )
+        connection.commit()
+        row = connection.execute(
+            """
+            SELECT p.fetched_at AS projection_clock,
+                   o.fetched_at AS observation_clock
+            FROM earnings_surprises AS p
+            JOIN earnings_surprise_observations AS o
+              ON o.observation_id = p.source_observation_id
+            WHERE p.ticker = 'WIX' AND p.release_date = '2026-08-06'
+            """
+        ).fetchone()
+
+    assert result.errors == []
+    assert row is not None
+    assert row["projection_clock"] == row["observation_clock"]
+    assert row["projection_clock"] == "2026-08-06T20:00:00+00:00"
 
 
 def test_downgrade_removes_only_earnings_governance_surface(

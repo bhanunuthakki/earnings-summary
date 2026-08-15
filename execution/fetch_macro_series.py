@@ -1,9 +1,10 @@
 """Acquire macro series without bypassing provider governance.
 
-Yahoo candidates are timeout bounded. FMP candidates are deliberately disabled
-until macro work is admitted by the shared FMP circuit/budget/recovery service;
-this job never calls FMP directly. All values are validated in memory and then
-committed in one short, value-change-aware transaction.
+Yahoo and approved authoritative candidates are timeout bounded. FMP candidates
+are deliberately disabled until macro work is admitted by the shared FMP
+circuit/budget/recovery service; this job never calls FMP directly. All values
+are validated in memory and then committed in one short, value-change-aware
+transaction.
 """
 
 from __future__ import annotations
@@ -16,13 +17,18 @@ import sqlite3
 import sys
 import threading
 import time
-from collections.abc import Callable
-from datetime import UTC, date, datetime
+from calendar import monthrange
+from collections.abc import Callable, Mapping
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, urlopen
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -30,7 +36,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from log_redact import redact  # noqa: E402
-from macro_series import REGISTRY, ProviderSpec  # noqa: E402
+from macro_series import REGISTRY, MacroObservation, ProviderSpec, SeriesSpec  # noqa: E402
 from macro_store import (  # noqa: E402
     SeriesBatchWriteError,
     SeriesValue,
@@ -101,10 +107,116 @@ class MacroRefreshReceipt(_ReceiptModel):
     store_error: str | None = None
 
 
+class _NyFedEffrRow(_ReceiptModel):
+    effective_date: date = Field(alias="effectiveDate")
+    rate_type: Literal["EFFR"] = Field(alias="type")
+    percent_rate: float = Field(alias="percentRate", gt=0)
+    percent_percentile_1: float | None = Field(default=None, alias="percentPercentile1")
+    percent_percentile_25: float | None = Field(default=None, alias="percentPercentile25")
+    percent_percentile_75: float | None = Field(default=None, alias="percentPercentile75")
+    percent_percentile_99: float | None = Field(default=None, alias="percentPercentile99")
+    target_rate_from: float | None = Field(default=None, alias="targetRateFrom")
+    target_rate_to: float | None = Field(default=None, alias="targetRateTo")
+    revision_indicator: str | None = Field(default=None, alias="revisionIndicator")
+
+    @field_validator("effective_date", mode="before")
+    @classmethod
+    def _exact_business_date(cls, value: object) -> date:
+        if not isinstance(value, str) or len(value) != 10:
+            raise ValueError("effectiveDate must be an exact YYYY-MM-DD string")
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError:
+            raise ValueError("effectiveDate must be an exact YYYY-MM-DD string") from None
+        if parsed.isoformat() != value:
+            raise ValueError("effectiveDate must be an exact YYYY-MM-DD string")
+        if not _is_nyfed_business_date(parsed):
+            raise ValueError("effectiveDate must be a business date")
+        return parsed
+
+    @field_validator(
+        "percent_rate",
+        "percent_percentile_1",
+        "percent_percentile_25",
+        "percent_percentile_75",
+        "percent_percentile_99",
+        "target_rate_from",
+        "target_rate_to",
+        mode="before",
+    )
+    @classmethod
+    def _exact_finite_json_number(cls, value: object) -> float | None:
+        if value is None:
+            return None
+        if type(value) not in {int, float}:
+            raise ValueError("rate field must be a JSON number")
+        parsed = float(cast("int | float", value))
+        if not math.isfinite(parsed):
+            raise ValueError("rate field must be finite")
+        return parsed
+
+
+class _NyFedEffrPayload(_ReceiptModel):
+    ref_rates: tuple[_NyFedEffrRow, ...] = Field(alias="refRates")
+
+
+class MacroProviderFetchError(RuntimeError):
+    """A provider request failed without exposing untrusted exception details."""
+
+
 YFinanceLoader = Callable[..., list[tuple[date, float]]]
-DEFAULT_TIMEOUT_SECONDS = 12.0
+MacroProviderLoader = Callable[..., tuple[MacroObservation, ...]]
+DEFAULT_TIMEOUT_SECONDS = 10.0
 MAX_CACHED_AGE_DAYS = 45
+MAX_PROVIDER_RESPONSE_BYTES = 2_000_000
 FMP_STABLE = DEFAULT_FMP_BASE_URL
+_NYFED_EFFR_PROVIDER = ProviderSpec(
+    kind="nyfed_effr",
+    path="https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json",
+    params={"type": "rate"},
+    date_key="effectiveDate",
+    value_key="percentRate",
+    source="new_york_fed",
+)
+
+
+def _nth_weekday(year: int, month: int, weekday: int, occurrence: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (occurrence - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    last = date(year, month, monthrange(year, month)[1])
+    return last - timedelta(days=(last.weekday() - weekday) % 7)
+
+
+@lru_cache(maxsize=32)
+def _nyfed_holidays(year: int) -> frozenset[date]:
+    """Standard New York Fed closures, including Sunday-Monday observance."""
+    fixed = {
+        date(year, 1, 1),
+        date(year, 7, 4),
+        date(year, 11, 11),
+        date(year, 12, 25),
+    }
+    if year >= 2021:
+        fixed.add(date(year, 6, 19))
+    holidays = {
+        _nth_weekday(year, 1, 0, 3),
+        _nth_weekday(year, 2, 0, 3),
+        _last_weekday(year, 5, 0),
+        _nth_weekday(year, 9, 0, 1),
+        _nth_weekday(year, 10, 0, 2),
+        _nth_weekday(year, 11, 3, 4),
+        *fixed,
+    }
+    holidays.update(day + timedelta(days=1) for day in fixed if day.weekday() == 6)
+    return frozenset(holidays)
+
+
+def _is_nyfed_business_date(value: date) -> bool:
+    """Apply NY Fed closures without observing Saturday holidays on Friday."""
+    return value.weekday() < 5 and value not in _nyfed_holidays(value.year)
 
 
 def _resolve_url(provider: ProviderSpec) -> str:
@@ -211,6 +323,97 @@ def _default_yfinance_loader(symbol: str, *, timeout_seconds: float) -> list[tup
     return rows
 
 
+def _parse_nyfed_effr_payload(
+    payload: object,
+    *,
+    series: SeriesSpec,
+    observed_at: datetime,
+    start_date: date,
+    end_date: date,
+) -> tuple[MacroObservation, ...]:
+    """Validate the New York Fed response into the common macro observation schema."""
+
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise ValueError("observed_at must be timezone-aware")
+    observed_at = observed_at.astimezone(UTC)
+    if start_date > end_date:
+        raise ValueError("requested date range is inverted")
+    parsed = _NyFedEffrPayload.model_validate(payload)
+    by_date: dict[date, MacroObservation] = {}
+    for row in parsed.ref_rates:
+        if not start_date <= row.effective_date <= end_date:
+            raise ValueError("New York Fed returned a date outside the requested range")
+        point = MacroObservation(
+            series_id=series.series_id,
+            effective_date=row.effective_date,
+            observed_at=observed_at,
+            value=row.percent_rate,
+            units=series.units,
+            currency=None,
+            source="new_york_fed",
+        )
+        prior = by_date.get(point.effective_date)
+        if prior is not None and prior.value != point.value:
+            raise ValueError("New York Fed returned conflicting EFFR dates")
+        by_date[point.effective_date] = point
+    return tuple(by_date[key] for key in sorted(by_date))
+
+
+def _default_nyfed_effr_loader(
+    series: SeriesSpec,
+    provider: ProviderSpec,
+    *,
+    observed_at: datetime,
+    start_date: date,
+    end_date: date,
+    timeout_seconds: float,
+) -> tuple[MacroObservation, ...]:
+    """Fetch EFFR from its primary administrator with a bounded response."""
+
+    query = {
+        **provider.params,
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+    }
+    parsed_endpoint = urlsplit(provider.path)
+    if (
+        parsed_endpoint.scheme != "https"
+        or parsed_endpoint.netloc != "markets.newyorkfed.org"
+        or parsed_endpoint.path != "/api/rates/unsecured/effr/search.json"
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
+        raise MacroProviderFetchError("New York Fed EFFR endpoint is not the approved HTTPS URL")
+    request = Request(
+        f"{provider.path}?{urlencode(query)}",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "earnings-summary-macro/1.0",
+        },
+    )
+    try:
+        # The exact HTTPS origin and path are validated immediately above.
+        with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310
+            raw = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+    except (HTTPError, URLError, OSError, TimeoutError) as exc:
+        raise MacroProviderFetchError(f"New York Fed EFFR request failed: {redact(exc)}") from None
+    if len(raw) > MAX_PROVIDER_RESPONSE_BYTES:
+        raise MacroProviderFetchError("New York Fed EFFR response exceeded the size limit")
+    try:
+        payload = json.loads(raw)
+        return _parse_nyfed_effr_payload(
+            payload,
+            series=series,
+            observed_at=observed_at,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+        raise MacroProviderFetchError(
+            f"New York Fed EFFR response failed validation: {redact(exc)}"
+        ) from None
+
+
 def _bounded_yfinance_call(
     loader: YFinanceLoader,
     symbol: str,
@@ -239,6 +442,54 @@ def _bounded_yfinance_call(
     return (AttemptOutcome.OK if rows else AttemptOutcome.EMPTY), rows, latency_ms, None
 
 
+def _bounded_provider_call(
+    loader: MacroProviderLoader,
+    series: SeriesSpec,
+    provider: ProviderSpec,
+    *,
+    observed_at: datetime,
+    start_date: date,
+    end_date: date,
+    timeout_seconds: float,
+) -> tuple[AttemptOutcome, tuple[MacroObservation, ...], int, str | None]:
+    result: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            result.put(
+                (
+                    True,
+                    loader(
+                        series,
+                        provider,
+                        observed_at=observed_at,
+                        start_date=start_date,
+                        end_date=end_date,
+                        timeout_seconds=timeout_seconds,
+                    ),
+                )
+            )
+        except Exception as exc:  # provider boundary: converted to typed receipt
+            result.put((False, exc))
+
+    started = time.monotonic()
+    worker = threading.Thread(
+        target=invoke,
+        daemon=True,
+        name=f"macro-provider-{provider.kind}",
+    )
+    worker.start()
+    worker.join(timeout_seconds)
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if worker.is_alive():
+        return AttemptOutcome.TIMEOUT, (), latency_ms, "timeout"
+    ok, payload = result.get_nowait()
+    if not ok:
+        return AttemptOutcome.ERROR, (), latency_ms, type(cast("Exception", payload)).__name__
+    rows = cast("tuple[MacroObservation, ...]", payload)
+    return (AttemptOutcome.OK if rows else AttemptOutcome.EMPTY), rows, latency_ms, None
+
+
 def _validate_rows(
     rows: list[tuple[date, float]], provider: ProviderSpec, *, today: date
 ) -> tuple[SeriesValue, ...]:
@@ -258,6 +509,91 @@ def _validate_rows(
             raise ValueError("provider returned conflicting duplicate dates")
         staged[rate_date] = point
     return tuple(staged[key] for key in sorted(staged))
+
+
+def _validate_provider_observations(
+    observations: object,
+    *,
+    series: SeriesSpec,
+    provider: ProviderSpec,
+    observed_at: datetime,
+    start_date: date,
+    end_date: date,
+) -> tuple[SeriesValue, ...]:
+    """Reparse an injected provider result and bind it to trusted metadata."""
+    if not isinstance(observations, tuple):
+        raise ValueError("provider observations must be a tuple")
+    staged: dict[date, SeriesValue] = {}
+    for raw in cast("tuple[object, ...]", observations):
+        if not isinstance(raw, MacroObservation):
+            raise ValueError("provider returned an untyped observation")
+        if (
+            raw.series_id != series.series_id
+            or raw.source != provider.source
+            or raw.units != series.units
+            or raw.currency is not None
+            or raw.observed_at != observed_at
+        ):
+            raise ValueError("provider observation identity does not match trusted metadata")
+        if type(raw.effective_date) is not date:
+            raise ValueError("provider effective date must be a date")
+        if not _is_nyfed_business_date(raw.effective_date):
+            raise ValueError("provider effective date must be a business date")
+        if not start_date <= raw.effective_date <= end_date:
+            raise ValueError("provider effective date is outside the requested range")
+        if type(raw.value) not in {int, float}:
+            raise ValueError("provider value must be a number")
+        value = float(cast("int | float", raw.value))
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("provider value must be finite and positive")
+        rebound = MacroObservation.model_validate(
+            {
+                "series_id": series.series_id,
+                "effective_date": raw.effective_date,
+                "observed_at": observed_at,
+                "value": value,
+                "units": series.units,
+                "currency": None,
+                "source": provider.source,
+            },
+            strict=True,
+        )
+        point = SeriesValue(
+            series_id=rebound.series_id,
+            rate_date=rebound.effective_date,
+            value=rebound.value,
+            source=rebound.source,
+        )
+        prior = staged.get(point.rate_date)
+        if prior is not None and prior.value != point.value:
+            raise ValueError("provider returned conflicting duplicate dates")
+        staged[point.rate_date] = point
+    return tuple(staged[key] for key in sorted(staged))
+
+
+def _validated_provider_overrides(
+    series_ids: tuple[str, ...],
+    provider_overrides: Mapping[str, tuple[ProviderSpec, ...]] | None,
+) -> dict[str, tuple[ProviderSpec, ...]]:
+    if len(series_ids) != len(set(series_ids)):
+        raise ValueError("duplicate series ids are not allowed")
+    overrides = dict(provider_overrides or {})
+    unexpected = set(overrides).difference(series_ids)
+    if unexpected:
+        raise ValueError("provider override targets an unrequested series")
+    for series_id, providers in overrides.items():
+        if (
+            series_id != "fed_funds"
+            or len(providers) != 1
+            or providers[0] is not _NYFED_EFFR_PROVIDER
+            or providers[0].kind != "nyfed_effr"
+            or providers[0].path
+            != "https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json"
+            or providers[0].params != {"type": "rate"}
+            or providers[0].source != "new_york_fed"
+        ):
+            raise ValueError("injected provider request budget must be exactly one approved source")
+    return overrides
 
 
 def _fmp_disabled_reason(db_path: Path) -> str:
@@ -309,6 +645,8 @@ def refresh_series(
     series_ids: tuple[str, ...],
     db_path: Path,
     yfinance_loader: YFinanceLoader = _default_yfinance_loader,
+    provider_overrides: Mapping[str, tuple[ProviderSpec, ...]] | None = None,
+    provider_loaders: Mapping[str, MacroProviderLoader] | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     now: datetime | None = None,
     dry_run: bool = False,
@@ -316,8 +654,13 @@ def refresh_series(
     """Finish acquisition first, then persist all staged values atomically."""
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
-    stamp = now or datetime.now(UTC).replace(tzinfo=None)
+    overrides = _validated_provider_overrides(series_ids, provider_overrides)
+    stamp = now or datetime.now(UTC)
+    if stamp.tzinfo is None or stamp.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    stamp = stamp.astimezone(UTC)
     today = stamp.date()
+    loaders = dict(provider_loaders or {})
     staged: list[SeriesValue] = []
     raw_receipts: list[tuple[str, tuple[ProviderAttempt, ...], int, date | None]] = []
     call_receipts: list[source_calls.PendingSourceCall] = []
@@ -328,8 +671,9 @@ def refresh_series(
         attempts: list[ProviderAttempt] = []
         acquired = 0
         newest_acquired: date | None = None
-        for provider in spec.providers:
-            if provider.kind != "yfinance":
+        providers = (*overrides.get(series_id, ()), *spec.providers)
+        for provider in providers:
+            if provider.kind.startswith("fmp_"):
                 attempt = ProviderAttempt(
                     source="FMP",
                     provider=provider.path,
@@ -339,29 +683,59 @@ def refresh_series(
                 attempts.append(attempt)
                 call_receipts.append(_source_call(attempt, series_id))
                 continue
-            outcome, rows, latency_ms, reason = _bounded_yfinance_call(
-                yfinance_loader,
-                provider.path,
-                timeout_seconds=timeout_seconds,
-            )
             validated: tuple[SeriesValue, ...] = ()
-            if outcome is AttemptOutcome.OK:
-                try:
-                    pending = _validate_rows(rows, provider, today=today)
-                    validated = tuple(
-                        SeriesValue(
-                            series_id=series_id,
-                            rate_date=item.rate_date,
-                            value=item.value,
-                            source=item.source,
+            if provider.kind == "yfinance":
+                outcome, rows, latency_ms, reason = _bounded_yfinance_call(
+                    yfinance_loader,
+                    provider.path,
+                    timeout_seconds=timeout_seconds,
+                )
+                if outcome is AttemptOutcome.OK:
+                    try:
+                        pending = _validate_rows(rows, provider, today=today)
+                        validated = tuple(
+                            SeriesValue(
+                                series_id=series_id,
+                                rate_date=item.rate_date,
+                                value=item.value,
+                                source=item.source,
+                            )
+                            for item in pending
                         )
-                        for item in pending
+                    except ValueError as exc:
+                        outcome = AttemptOutcome.ERROR
+                        reason = redact(exc)
+            else:
+                loader = loaders.get(provider.kind)
+                if loader is None:
+                    outcome = AttemptOutcome.DISABLED
+                    latency_ms = None
+                    reason = "unregistered_provider"
+                else:
+                    outcome, observations, latency_ms, reason = _bounded_provider_call(
+                        loader,
+                        spec,
+                        provider,
+                        observed_at=stamp,
+                        start_date=today - timedelta(days=730),
+                        end_date=today,
+                        timeout_seconds=timeout_seconds,
                     )
-                except ValueError as exc:
-                    outcome = AttemptOutcome.ERROR
-                    reason = redact(exc)
+                    if outcome is AttemptOutcome.OK:
+                        try:
+                            validated = _validate_provider_observations(
+                                observations,
+                                series=spec,
+                                provider=provider,
+                                observed_at=stamp,
+                                start_date=today - timedelta(days=730),
+                                end_date=today,
+                            )
+                        except (ValidationError, ValueError) as exc:
+                            outcome = AttemptOutcome.ERROR
+                            reason = redact(exc)
             attempt = ProviderAttempt(
-                source="yfinance",
+                source=provider.source,
                 provider=provider.path,
                 outcome=outcome,
                 reason=reason,

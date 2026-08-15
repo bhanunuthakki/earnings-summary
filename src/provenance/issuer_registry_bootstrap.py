@@ -17,6 +17,7 @@ from typing import Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from pipeline.queries import ANALYZED_LIST_TYPE_VALUES
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
 from provenance.issuer_registry import (
@@ -29,6 +30,7 @@ from provenance.issuer_registry import (
     LegacyIssuerBindingRevision,
     ReportingScopeRevision,
     Security,
+    ensure_sec_cik_evidence_binding,
     identifier_candidate_digest,
     normalize_identifier,
 )
@@ -52,7 +54,7 @@ _COLLECTOR_VERSION = "issuer-registry-bootstrap@1"
 _FUND_COLLECTOR_VERSION = "sec-fund-registry-bootstrap@1"
 _POLICY_NAME = "unique_sec_ticker_to_cik"
 _POLICY_VERSION = "1"
-_ACTIVE_LIST_TYPES = frozenset({"portfolio", "watchlist", "evaluation"})
+_ACTIVE_LIST_TYPES = frozenset(ANALYZED_LIST_TYPE_VALUES)
 _LEGACY_TICKER_PREFIX = "legacy-ticker:"
 
 InclusionState = Literal["core", "monitored", "historical"]
@@ -1272,6 +1274,17 @@ def _persist_selected_ticker(
         assertion=assertion,
         recorded_at=recorded_at,
     )
+    recorded_sec_cik = f"sec-cik-{normalized_cik}"
+    has_recorded_sec_evidence = conn.execute(
+        "SELECT 1 FROM evidence_document_versions WHERE issuer_id = ? LIMIT 1",
+        (recorded_sec_cik,),
+    ).fetchone()
+    if has_recorded_sec_evidence is not None:
+        created += ensure_sec_cik_evidence_binding(
+            conn,
+            recorded_issuer_id=recorded_sec_cik,
+            recorded_at=recorded_at,
+        )
     created += _persist_reporting_boundary(
         conn,
         issuer_id=issuer_id,

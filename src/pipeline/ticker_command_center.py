@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import cast
 
 from alerts import AlertRow, QueuedActionRow, list_alerts, list_queued_actions_for_alert
+from compute.thesis_evaluation_episodes import episode_history_source
 from dashboard import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
@@ -88,9 +89,9 @@ class ThesisView:
     thesis: str | None = None
     verdict: str | None = None
     last_updated: str | None = None
-    tier1: list[ThesisKpi] = field(default_factory=list)
-    break_rules: list[ThesisBreakRule] = field(default_factory=list)
-    qualitative_breakers: list[str] = field(default_factory=list)
+    tier1: list[ThesisKpi] = field(default_factory=lambda: list[ThesisKpi]())
+    break_rules: list[ThesisBreakRule] = field(default_factory=lambda: list[ThesisBreakRule]())
+    qualitative_breakers: list[str] = field(default_factory=lambda: list[str]())
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -123,7 +124,7 @@ class PositionStrip:
     total_market_value: float | None = None
     total_unrealized_pnl: float | None = None
     total_unrealized_pct: float | None = None
-    accounts: list[PositionAccount] = field(default_factory=list)
+    accounts: list[PositionAccount] = field(default_factory=lambda: list[PositionAccount]())
     last_decision: str | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -155,9 +156,9 @@ class DecisionLite:
 @dataclass(slots=True)
 class TickerCommandCenter:
     identity: TickerIdentity
-    artifacts: list[Artifact] = field(default_factory=list)
+    artifacts: list[Artifact] = field(default_factory=lambda: list[Artifact]())
     analysis: AnalysisLog = field(default_factory=AnalysisLog)
-    recent_decisions: list[DecisionLite] = field(default_factory=list)
+    recent_decisions: list[DecisionLite] = field(default_factory=lambda: list[DecisionLite]())
     thesis: ThesisView = field(default_factory=ThesisView)
     position: PositionStrip = field(default_factory=PositionStrip)
     tracker_url: str | None = None
@@ -257,9 +258,10 @@ def _identity(conn: sqlite3.Connection | None, repo_root: Path, t: str) -> Ticke
             str(row["period_end"])[:10] if row and row["period_end"] else None
         )
     if _has(conn, "thesis_evaluations"):
+        source = episode_history_source(conn)
         row = conn.execute(
-            "SELECT overall_status FROM thesis_evaluations WHERE UPPER(ticker)=? "
-            "ORDER BY evaluated_at DESC LIMIT 1",
+            f"SELECT overall_status FROM {source.relation} WHERE UPPER(ticker)=? "
+            f"ORDER BY {source.latest_checked_column} DESC LIMIT 1",  # nosec B608 -- trusted closed relation
             (t,),
         ).fetchone()
         ident.breach_status = row["overall_status"] if row else None

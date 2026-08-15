@@ -5,12 +5,15 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
+from sqlalchemy.exc import OperationalError
 
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "0012_add_readme_update_budgets"
+ACTIVE_HEAD = "0018_add_transcript_acquisition_receipts"
+GROUNDING_REVISION = "0016_add_ask_grounding_traces"
 
 
 def _config(path: Path) -> Config:
@@ -41,7 +44,7 @@ def test_upgrade_is_idempotent_and_downgrade_removes_only_exchange_tables(
         }
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert revision == (REVISION,)
+    assert revision == (ACTIVE_HEAD,)
     assert {"ask_session_contexts", "ask_exchanges", "ask_exchange_artifacts"} <= tables
     assert {
         "uq_ask_exchanges_one_pending_per_session",
@@ -62,3 +65,18 @@ def test_upgrade_is_idempotent_and_downgrade_removes_only_exchange_tables(
             "ask_exchange_artifacts",
         }.isdisjoint(remaining)
         assert "ask_sessions" in remaining
+
+
+def test_grounding_trace_migration_fails_loudly_on_partial_schema(tmp_path: Path) -> None:
+    path = tmp_path / "ask-grounding-schema-drift.db"
+    config = _config(path)
+    command.upgrade(config, "0013_add_readme_update_budgets")
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE ask_grounding_traces (trace_id TEXT PRIMARY KEY)")
+
+    with pytest.raises(OperationalError, match="already exists"):
+        command.upgrade(config, GROUNDING_REVISION)
+
+    with sqlite3.connect(path) as connection:
+        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    assert revision == ("0015_add_thesis_episode_attention",)

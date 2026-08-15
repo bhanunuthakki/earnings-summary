@@ -24,7 +24,7 @@ flowchart TB
         routes["154 routes\ncore 111, DCF 7, content 24, alerts 6, settings 4, journal 2"]
         panels["Panel fragment renderer\n30-second, 256-entry cache plus ETag/304\nper-key single-flight"]
         telemetry["Panel latency telemetry\nobservational POST does not evict cache"]
-        ask["Ask orchestration\n4-worker pool, bounded pack and artifact reads"]
+        ask["Grounded Ask orchestration\nSQL-first numeric views; lexical narrative evidence\nappend-only retrieval traces"]
         jobs["Background job registry\nsingle-flight, at most 3 subprocesses, SSE status"]
         reports["Company brief builder\none borrowed read connection to HTML, Markdown, JSON"]
     end
@@ -152,12 +152,20 @@ flowchart LR
     artifacts --> publication
     sections --> publication
     subgraph retrieval["Search and Ask retrieval"]
+        views["Facts & Analytics / numeric Ask\nvalidated ViewSpec over canonical fact tables\nperiod, unit, and source per cell"]
+        operational["Default narrative Ask\nticker-filtered SQL facts plus lexical filings/transcripts\ntool-free, spotlighted evidence"]
+        op_trace["Operational grounding trace\nquestion hash, scope, locators, evidence hashes\nanswer FK and durable replay; no passage duplication"]
+        evidence_cache["Per-session evidence cache\nscoped fact/document revision token\nchat and audit writes do not evict"]
         corpus["Search corpus projection"]
         fts["SQLite FTS5"]
         vectors["Optional Lance vector projection"]
-        sealed["Sealed retrieval pack with citations"]
+        sealed["Optional promoted sealed retrieval\nnot required by the product default"]
         audit["Ask session, answer, and citation audit"]
     end
+    facts --> views --> op_trace
+    evidence --> evidence_cache --> operational --> op_trace
+    facts --> operational
+    op_trace --> audit
     evidence --> corpus
     facts --> corpus
     corpus --> fts
@@ -175,7 +183,7 @@ flowchart TB
     start["Database presented for upgrade"] --> runtime_gate["Require WAL-reset-safe SQLite runtime"]
     runtime_gate --> lock["Acquire shared write lock"]
     lock --> classify{"Revision and schema classification under lock"}
-    classify -->|"Fresh or active"| active["Active Alembic graph\n0001 initial schema → 0002 debt cleanup → 0003 baseline repair"]
+    classify -->|"Fresh or active"| active["Active Alembic graph\n0001 initial schema through 0014 Ask grounding traces"]
     classify -->|"Recognized archived revision"| bridge["Archived upgrade bridge"]
     classify -->|"Unknown or incompatible"| refuse["Fail closed\nno mutation"]
     bridge --> backup["SQLite online backup\nrefuse overwrite"]
@@ -184,7 +192,7 @@ flowchart TB
     archived --> validate["Validate expected schema"]
     validate --> reanchor["Re-anchor to active 0001"]
     reanchor --> active
-    active --> integrity["Verify active head 0003\nPRAGMA integrity_check plus foreign_key_check"]
+    active --> integrity["Verify active head 0014\nPRAGMA integrity_check plus foreign_key_check"]
     integrity --> ready["Runtime-ready database"]
     ready --> scheduled_backup["Scheduled online backup"]
     scheduled_backup --> encrypt["gzip plus AES-256-GCM"]

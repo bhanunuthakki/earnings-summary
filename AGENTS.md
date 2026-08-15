@@ -56,6 +56,11 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 - Directives must be refined, not bloated. When you learn something new (an API quirk, a rate limit, a date format), propose a consolidated edit rather than appending a running diary.
 - Request permission before editing a directive, validate the resulting procedure, then request separate permission before committing it.
 
+### Operations & Governance Surface Impact
+
+- A change that adds, removes, renames, or materially changes an operation, operational observation, or operator action must follow `directives/operations_governance_surface.md` before it is complete.
+- The change must leave a truthful surface update or an explicit tested no-surface-change disposition. Never infer health from configuration, silently leave a removed capability visible, or expose a mutating control merely because an execution path exists.
+
 ## File Organization & State
 
 ### Categories

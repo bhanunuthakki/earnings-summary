@@ -67,11 +67,11 @@ def _false(*_a: object, **_k: object) -> bool:
 
 
 def _fetch_hit(_spec: object, **_k: object) -> object:
-    return SimpleNamespace(source_name="issuer_ir")
+    return SimpleNamespace(status="acquired", result=SimpleNamespace(source_name="issuer_ir"))
 
 
 def _fetch_none(_spec: object, **_k: object) -> object | None:
-    return None
+    return SimpleNamespace(status="provider_miss", result=None)
 
 
 def _fetch_boom(_spec: object, **_k: object) -> object:

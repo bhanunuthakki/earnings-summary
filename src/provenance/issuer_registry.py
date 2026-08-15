@@ -771,6 +771,106 @@ def normalize_identifier(identifier_type: IdentifierType, value: str) -> str:
     return normalized.upper()
 
 
+def ensure_sec_cik_evidence_binding(
+    conn: sqlite3.Connection,
+    *,
+    recorded_issuer_id: str,
+    recorded_at: datetime,
+) -> int:
+    """Bind a deterministic ``sec-cik-*`` evidence subject when resolvable.
+
+    Evidence capture may precede issuer-registry bootstrap, so an absent
+    canonical CIK is left for the bootstrap reconciler. Once the registry has
+    selected a unique SEC CIK, however, evidence persistence must not leave the
+    recorded subject orphaned.
+    """
+
+    prefix = "sec-cik-"
+    if not recorded_issuer_id.startswith(prefix):
+        return 0
+    normalized_cik = recorded_issuer_id.removeprefix(prefix)
+    if len(normalized_cik) != 10 or not normalized_cik.isdigit():
+        raise ValueError("SEC-CIK evidence subject must end in exactly ten digits")
+    required_tables = (
+        "issuer_identifier_resolution_outcomes",
+        "issuer_identifier_assertions",
+        "legacy_issuer_binding_revisions",
+    )
+    present = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            f"AND name IN ({','.join('?' for _ in required_tables)})",  # nosec B608 -- fixed internal table list; values remain bound
+            required_tables,
+        ).fetchall()
+    }
+    if present != set(required_tables):
+        return 0
+    registry = IssuerRegistry(conn)
+    try:
+        canonical = registry.resolve_identifier(
+            "sec_cik",
+            normalized_cik,
+            knowledge_at=recorded_at,
+        )
+    except UnresolvedIssuerIdentityError:
+        return 0
+    if canonical.material_dissent:
+        raise UnresolvedIssuerIdentityError(
+            f"SEC CIK {normalized_cik!r} has material identity dissent"
+        )
+    current = conn.execute(
+        "SELECT binding_revision_id, revision, issuer_id, outcome, reason_code "
+        "FROM legacy_issuer_binding_revisions WHERE recorded_issuer_id = ? "
+        "ORDER BY revision DESC LIMIT 1",
+        (recorded_issuer_id,),
+    ).fetchone()
+    semantics = (canonical.issuer_id, "selected", "unique_sec_cik_selected")
+    if (
+        current is not None
+        and (
+            None if current[2] is None else str(current[2]),
+            str(current[3]),
+            str(current[4]),
+        )
+        == semantics
+    ):
+        return 0
+    revision = 1 if current is None else int(current[1]) + 1
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "recorded_issuer_id": recorded_issuer_id,
+                "issuer_id": canonical.issuer_id,
+                "revision": revision,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    record_id = f"sec-cik-binding:{digest}"
+    return int(
+        registry.persist(
+            LegacyIssuerBindingRevision(
+                binding_revision_id=record_id,
+                idempotency_key=record_id,
+                recorded_issuer_id=recorded_issuer_id,
+                revision=revision,
+                issuer_id=canonical.issuer_id,
+                outcome="selected",
+                decision_kind="deterministic",
+                reason_code="unique_sec_cik_selected",
+                reason_details=(("normalized_cik", normalized_cik),),
+                material_dissent=False,
+                effective_at=recorded_at,
+                knowledge_at=recorded_at,
+                recorded_at=recorded_at,
+                supersedes_binding_revision_id=None if current is None else str(current[0]),
+            )
+        ).created
+    )
+
+
 def evidence_document_relation(conn: sqlite3.Connection) -> str:
     """Return the canonical issuer projection when the 0227 cutover is present."""
 

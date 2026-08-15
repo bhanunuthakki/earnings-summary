@@ -1,7 +1,7 @@
 """Add fail-closed per-purpose budgets for README generation and judging.
 
-Revision ID: 0012_add_readme_update_budgets
-Revises: 0011_add_operations_journal
+Revision ID: 0013_add_readme_update_budgets
+Revises: 0012_close_operation_event_detail_reason
 Create Date: 2026-08-13
 """
 
@@ -13,12 +13,12 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0012_add_readme_update_budgets"
-down_revision = "0011_add_operations_journal"
+revision = "0013_add_readme_update_budgets"
+down_revision = "0012_close_operation_event_detail_reason"
 branch_labels = None
 depends_on = None
 
-_NOTE = "README updater governance migration 0012"
+_NOTE = "README updater governance migration 0013"
 _PURPOSES = ("readme_update", "readme_update_judge")
 
 

@@ -16,6 +16,7 @@ import threading
 from typing import TypeAlias, cast
 
 from alias_manager import resolve_ticker
+from pipeline.transcript_acquisition import AuthorizedTranscriptArtifact
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 CACHE_DIR = os.path.join(PROJECT_ROOT, ".tmp")
@@ -164,7 +165,23 @@ def has_transcript(ticker: str, year, quarter: str) -> dict | None:
     return index.get(_transcript_key(ticker, year, quarter))
 
 
-def register_transcript(
+def peek_transcript(ticker: str, year: int, quarter: str) -> IndexEntry | None:
+    """Read transcript metadata without creating or updating an index file."""
+
+    if not os.path.exists(TRANSCRIPT_INDEX_PATH):
+        return None
+    try:
+        with open(TRANSCRIPT_INDEX_PATH, encoding="utf-8") as handle:
+            payload = cast(object, json.load(handle))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    entry = cast(DocumentIndex, payload).get(_transcript_key(ticker, year, quarter))
+    return entry if isinstance(entry, dict) else None
+
+
+def _register_transcript(
     ticker: str,
     year,
     quarter: str,
@@ -173,6 +190,7 @@ def register_transcript(
     has_qa: bool | None = None,
     qa_status: str | None = None,
     qa_details: dict | None = None,
+    acquisition_receipt: IndexEntry | None = None,
 ) -> bool:
     index = _load(TRANSCRIPT_INDEX_PATH)
     key = _transcript_key(ticker, year, quarter)
@@ -195,6 +213,18 @@ def register_transcript(
     updated_qa_details = (
         qa_details if qa_details is not None else (existing.get("qa_details") if existing else None)
     )
+    existing_acquisition_receipt = (
+        cast(object, existing.get("acquisition_receipt")) if existing else None
+    )
+    updated_acquisition_receipt: IndexEntry | None = (
+        acquisition_receipt
+        if acquisition_receipt is not None
+        else (
+            cast(IndexEntry, existing_acquisition_receipt)
+            if isinstance(existing_acquisition_receipt, dict)
+            else None
+        )
+    )
 
     canonical_filepath = _canonicalize_transcript_filepath(filepath)
 
@@ -208,6 +238,7 @@ def register_transcript(
         "has_qa": updated_has_qa,
         "qa_status": updated_qa_status,
         "qa_details": updated_qa_details,
+        "acquisition_receipt": updated_acquisition_receipt,
         "qa_checked_at": (
             datetime.datetime.now().isoformat()
             if qa_status is not None
@@ -227,6 +258,43 @@ def register_transcript(
         processed=True,  # Legacy flow already processed
     )
     return True
+
+
+def register_transcript(
+    ticker: str,
+    year: int,
+    quarter: str,
+    source: str,
+    *,
+    acquisition_receipt: AuthorizedTranscriptArtifact,
+    filepath: str | None = None,
+    has_qa: bool | None = None,
+    qa_status: str | None = None,
+    qa_details: dict[str, object] | None = None,
+) -> bool:
+    """Register only transcript metadata carrying a validated acquisition receipt."""
+
+    artifact = AuthorizedTranscriptArtifact.model_validate(acquisition_receipt, strict=True)
+    request = artifact.authorization.request
+    expected_quarter = f"Q{request.fiscal_quarter}"
+    if (
+        resolve_ticker(ticker).upper() != request.canonical_ticker
+        or int(year) != request.fiscal_year
+        or quarter.upper() != expected_quarter
+        or source != "issuer_ir"
+    ):
+        raise ValueError("transcript index metadata does not match acquisition receipt")
+    return _register_transcript(
+        ticker,
+        year,
+        quarter,
+        source,
+        filepath=filepath,
+        has_qa=has_qa,
+        qa_status=qa_status,
+        qa_details=qa_details,
+        acquisition_receipt=artifact.model_dump(mode="json"),
+    )
 
 
 def update_transcript_qa(

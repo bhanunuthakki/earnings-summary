@@ -135,7 +135,11 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # (/api/ask, /api/cockpit, /api/cron-health). +1 lazy shared-reader stylesheet.
     # +1 governed IR owner-decision action route.
     # +2 governed Work OS question draft/approval routes.
-    assert len(rules) == 160
+    # +2 governed README status/preview-or-apply routes.
+    # +1 thesis-episode acknowledgement route.
+    assert len(rules) == 163
+    assert rules["readme_governance_status"] == "/api/readme-governance/status"
+    assert rules["start_readme_update"] == "/actions/readme-update"
     assert rules["ir_approval_action"] == ("/api/ir-approval/candidates/<candidate_id>/<action>")
     assert rules["question_proposals_api"] == "/api/work-os/question-proposals"
     assert rules["approve_question_proposal_api"] == (
@@ -178,6 +182,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
             "alerts.alerts_page",
             "alerts.approve_or_dismiss_action",
             "alerts.dismiss_alert_api",
+            "alerts.acknowledge_thesis_episode_api",
             "alerts.uncancel_action_api",
             "llm_budgets_api",
             "set_llm_budget",
@@ -221,6 +226,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
         "alerts.alerts_page": "/alerts",
         "alerts.approve_or_dismiss_action": "/approve",
         "alerts.dismiss_alert_api": "/api/alerts/<int:alert_id>/dismiss",
+        "alerts.acknowledge_thesis_episode_api": ("/api/thesis-episodes/<episode_id>/acknowledge"),
         "alerts.uncancel_action_api": "/api/actions/<int:action_id>/uncancel",
         "llm_budgets_api": "/api/llm-budgets",
         "set_llm_budget": "/api/llm-budgets/<purpose>",

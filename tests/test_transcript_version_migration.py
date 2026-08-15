@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from compute.transcript_ingest import insert_transcript, supersede_transcripts
+from compute import transcript_ingest
+from compute.transcript_ingest import supersede_transcripts
 from models.facts import FiscalPeriodType
+
+_insert_transcript = cast("Callable[..., int]", getattr(transcript_ingest, "_insert_transcript"))
 
 
 def _legacy_database(path: Path) -> None:
@@ -168,7 +173,7 @@ def test_upgrade_keeps_0214_selection_lifecycle_in_lockstep(
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    new_id = insert_transcript(
+    new_id = _insert_transcript(
         conn,
         document_id=2,
         ticker="NVDA",

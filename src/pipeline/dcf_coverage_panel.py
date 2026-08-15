@@ -36,6 +36,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from pipeline.queries import ANALYZED_LIST_TYPE_VALUES, BRIEFED_LIST_TYPE_VALUES
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 
@@ -45,8 +46,8 @@ STALE_DAYS = 30  # older than a month = loudly stale
 # Mirror of db.ACTIVE_LIST_TYPES / BRIEFED_LIST_TYPES, duplicated like
 # dcf.universe does on purpose: a read-only panel should not load the broader
 # legacy DB facade merely to resolve list semantics.
-_ACTIVE_LIST_TYPES: tuple[str, ...] = ("portfolio", "watchlist", "evaluation")
-_BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
+_ACTIVE_LIST_TYPES = ANALYZED_LIST_TYPE_VALUES
+_BRIEFED_LIST_TYPES = BRIEFED_LIST_TYPE_VALUES
 
 _PANEL_STYLE = """<style>
 .dcv-tick { font-weight:600; white-space:nowrap; }

@@ -2,33 +2,209 @@
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from html import escape
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
+from log_redact import sanitize_operational_text
 from operations.models import (
     JobReceiptObservation,
     ObservationEnvelope,
     OperationsRegistry,
     OperationsSnapshot,
     ScheduledTaskDefinition,
+    ServiceObservation,
+    ServiceRow,
     ServiceState,
 )
 from operations.readme_governance import ReadmeGovernanceStatus
+from pipeline.provenance_panel import PROVENANCE_SECTIONS
 
 Tone = Literal["ok", "warn", "bad"]
-_URL = re.compile(r"(?i)\b(?:https?|file)://[^\s<>\"'\u00b7;]+")
-_WINDOWS_PATH = re.compile(r"(?i)(?<![\w])(?:[a-z]:[\\/]|\\\\)[^<>\r\n\"'\u00b7;]*")
-_POSIX_PATH = re.compile(r"(?<![\w:])/(?!/)[^<>\r\n\"'\u00b7;]*")
 _BAD_JOB_STATUSES = frozenset({"failed", "blocked_schema_drift"})
 
 
 class _ViewModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class SurfaceDisposition(_ViewModel):
+    """UI ownership for one canonical operations field, never its data identity."""
+
+    field: str
+    destination: Literal[
+        "overview", "jobs", "runtime_recovery", "governance", "linked_view", "internal"
+    ]
+    targets: tuple[str, ...] = ()
+    rationale: str
+
+    @model_validator(mode="after")
+    def _linked_targets(self) -> SurfaceDisposition:
+        if (self.destination == "linked_view") != bool(self.targets):
+            raise ValueError("only linked-view dispositions require concrete targets")
+        return self
+
+
+class RelatedOperationsView(_ViewModel):
+    key: str
+    label: str
+    endpoint: str
+    section_ids: tuple[str, ...] = ()
+
+
+OPERATIONS_RELATED_VIEWS = (
+    RelatedOperationsView(
+        key="settings",
+        label="Settings",
+        endpoint="/api/panel/data_policy_settings",
+    ),
+    RelatedOperationsView(
+        key="provenance",
+        label="Data provenance",
+        endpoint="/api/panel/provenance",
+        section_ids=tuple(panel_id for _anchor, _label, panel_id in PROVENANCE_SECTIONS),
+    ),
+)
+
+
+OPERATIONS_REGISTRY_SURFACE_DISPOSITIONS = (
+    SurfaceDisposition(
+        field="registry_version",
+        destination="internal",
+        rationale="Binds snapshots to the registry contract without operator-facing content.",
+    ),
+    SurfaceDisposition(
+        field="scheduled_tasks",
+        destination="jobs",
+        rationale="Declares every Scheduler-owned or service-owned task row.",
+    ),
+    SurfaceDisposition(
+        field="job_steps",
+        destination="jobs",
+        rationale="Nests every canonical wrapper step and execution rail under its task.",
+    ),
+    SurfaceDisposition(
+        field="services",
+        destination="runtime_recovery",
+        rationale="Declares managed-service identities and purposes for runtime reconciliation.",
+    ),
+    SurfaceDisposition(
+        field="llm_model_pins",
+        destination="linked_view",
+        targets=("provenance:model_eval",),
+        rationale="The governed Evals and model-optimizer views own detailed model-pin evidence.",
+    ),
+    SurfaceDisposition(
+        field="llm_purposes",
+        destination="linked_view",
+        targets=("provenance:evals", "provenance:model_eval"),
+        rationale="The governed Evals and model-optimizer views own purpose coverage.",
+    ),
+    SurfaceDisposition(
+        field="eval_modes",
+        destination="linked_view",
+        targets=("provenance:evals",),
+        rationale="The governed Evals view owns mode-specific evaluation coverage.",
+    ),
+    SurfaceDisposition(
+        field="source_policy",
+        destination="linked_view",
+        targets=("settings", "provenance:section_coverage"),
+        rationale="Settings and Data provenance own detailed collection-policy evidence.",
+    ),
+    SurfaceDisposition(
+        field="queue_states",
+        destination="runtime_recovery",
+        rationale="Registered queue and circuit vocabularies validate runtime observations.",
+    ),
+    SurfaceDisposition(
+        field="expected_alembic_head",
+        destination="runtime_recovery",
+        rationale="The expected revision is reconciled against the observed database revision.",
+    ),
+)
+
+OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS = (
+    SurfaceDisposition(
+        field="snapshot_version",
+        destination="internal",
+        rationale="Versions the evidence envelope without making a health claim.",
+    ),
+    SurfaceDisposition(
+        field="observed_at",
+        destination="overview",
+        rationale="Anchors the visible snapshot time and cached-fragment truthfulness.",
+    ),
+    SurfaceDisposition(
+        field="registry_version",
+        destination="internal",
+        rationale="Proves which declared registry contract the snapshot reconciled.",
+    ),
+    SurfaceDisposition(
+        field="database_identity",
+        destination="runtime_recovery",
+        rationale="Shows which injected database supplied the bounded observations.",
+    ),
+    SurfaceDisposition(
+        field="schema_revision",
+        destination="runtime_recovery",
+        rationale="Shows expected versus actual schema heads and mismatch state.",
+    ),
+    SurfaceDisposition(
+        field="scheduler",
+        destination="jobs",
+        rationale="Reconciles cached Scheduler state against every declared task.",
+    ),
+    SurfaceDisposition(
+        field="services",
+        destination="runtime_recovery",
+        rationale="Reconciles cached managed-service state and freshness.",
+    ),
+    SurfaceDisposition(
+        field="job_receipts",
+        destination="jobs",
+        rationale="Shows per-step terminal status, evidence time, and receipt freshness.",
+    ),
+    SurfaceDisposition(
+        field="database_runs",
+        destination="linked_view",
+        targets=("provenance:cron_health",),
+        rationale="Data provenance and Cron Health own detailed ingestion-run history.",
+    ),
+    SurfaceDisposition(
+        field="source_calls",
+        destination="linked_view",
+        targets=("provenance:source_calls",),
+        rationale="Data provenance owns detailed source-call health and completeness.",
+    ),
+    SurfaceDisposition(
+        field="llm_calls",
+        destination="linked_view",
+        targets=("provenance:evals", "provenance:model_eval"),
+        rationale="Evals and model-optimizer views own detailed LLM-call governance.",
+    ),
+    SurfaceDisposition(
+        field="fmp_backlog",
+        destination="runtime_recovery",
+        rationale="Shows bounded backlog counts and unregistered state drift.",
+    ),
+    SurfaceDisposition(
+        field="fmp_circuit",
+        destination="runtime_recovery",
+        rationale="Shows provider circuit state, recency, and vocabulary drift.",
+    ),
+)
+
+OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS = (
+    SurfaceDisposition(
+        field="readme_status",
+        destination="governance",
+        rationale="README stewardship status and its guarded preview/apply actions are visible.",
+    ),
+)
 
 
 class EvidenceView(_ViewModel):
@@ -89,19 +265,7 @@ def _clock(value: datetime | None, *, prefix: str) -> str:
 def _safe(value: object) -> str:
     """Redact absolute paths before values cross the presentation boundary."""
 
-    protected: list[str] = []
-
-    def protect_url(match: re.Match[str]) -> str:
-        url = match.group(0)
-        protected.append("file://[path]" if url.casefold().startswith("file://") else url)
-        return f"\x00URL{len(protected) - 1}\x00"
-
-    text = _URL.sub(protect_url, str(value))
-    text = _WINDOWS_PATH.sub("[path]", text)
-    text = _POSIX_PATH.sub("[path]", text)
-    for index, url in enumerate(protected):
-        text = text.replace(f"\x00URL{index}\x00", url)
-    return text
+    return sanitize_operational_text(value, mode="presentation")
 
 
 def _absolute_path(value: str) -> bool:
@@ -253,6 +417,15 @@ def _runtime_rows(
         if snapshot.fmp_circuit.state == "current"
         else "Unavailable"
     )
+    service_rows = {row.name: row for row in snapshot.services.values}
+    service_runtime_rows: tuple[RuntimeRowView, ...] = tuple(
+        RuntimeRowView(
+            label=f"Managed service · {service.name}",
+            value=service.purpose,
+            evidence=_service_evidence(snapshot.services, service_rows.get(service.name)),
+        )
+        for service in registry.services
+    )
     return (
         RuntimeRowView(
             label="Database schema",
@@ -268,11 +441,7 @@ def _runtime_rows(
             ),
             evidence=_evidence(snapshot.database_identity),
         ),
-        RuntimeRowView(
-            label="Managed services",
-            value=f"{len(registry.services)} configured service(s)",
-            evidence=_evidence(snapshot.services),
-        ),
+        *service_runtime_rows,
         RuntimeRowView(
             label="FMP recovery backlog",
             value=backlog,
@@ -294,6 +463,14 @@ def _runtime_rows(
             evidence=_unavailable("Lock evidence", snapshot.observed_at),
         ),
     )
+
+
+def _service_evidence(observation: ServiceObservation, row: ServiceRow | None) -> EvidenceView:
+    evidence = _evidence(observation)
+    if observation.state != "current":
+        return evidence
+    state: ServiceState = row.state if row is not None else "Missing"
+    return evidence.model_copy(update={"state": state, "tone": _service_tone(state)})
 
 
 def build_operations_panel_view(
@@ -407,6 +584,8 @@ def build_operations_panel_view(
     attention = sum(task.attention for task in tasks) + sum(
         row.evidence.tone != "ok" for row in runtime_rows
     )
+    if readme_status is None or readme_status.tone != "ok":
+        attention += 1
     return OperationsPanelView(
         observed_label=_clock(snapshot.observed_at, prefix="Observed"),
         attention_count=attention,
@@ -449,7 +628,7 @@ def _overview(view: OperationsPanelView) -> str:
         f'<article class="k-well"><div class="k-label">Service-owned</div><div class="k-card-title">{service_owned}</div></article>'
         "</div>"
         '<div class="k-well k-well-warn"><div class="k-card-row-title">Attention is evidence-based</div>'
-        f"<p>{view.attention_count} task or runtime observation(s) need attention. Missing, stale, or invalid evidence never becomes a healthy claim.</p></div>"
+        f"<p>{view.attention_count} operational or governance observation(s) need attention. Missing, stale, or invalid evidence never becomes a healthy claim.</p></div>"
     )
 
 
@@ -563,6 +742,10 @@ def _governance(view: OperationsPanelView) -> str:
 def render_operations_panel(view: OperationsPanelView) -> str:
     """Render only the supplied projection; no database, filesystem, or network access."""
 
+    related_views = "".join(
+        f'''<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-operations-related="{_html(item.key)}" onclick="window.workOsOpenRelatedView('{escape(item.endpoint, quote=True)}', '{_html(item.label)}')">{_html(item.label)}</button>'''
+        for item in OPERATIONS_RELATED_VIEWS
+    )
     return f"""
 <section class="k-card k-card-stack operations-panel" aria-labelledby="operations-title">
   <style>
@@ -592,10 +775,7 @@ def render_operations_panel(view: OperationsPanelView) -> str:
       <div class="k-card-meta">Read-only declared ownership, runtime receipts, and recovery evidence · {_html(view.observed_label)}</div></div>
     <span class="k-pill k-pill-warn">{view.attention_count} need attention</span>
   </div>
-  <div class="operations-related" aria-label="Related Operations views">
-    <button type="button" class="k-btn k-btn-quiet k-btn-sm" onclick="window.workOsOpenRelatedView('/api/panel/data_policy_settings', 'Settings')">Settings</button>
-    <button type="button" class="k-btn k-btn-quiet k-btn-sm" onclick="window.workOsOpenRelatedView('/api/panel/provenance', 'Data provenance')">Data provenance</button>
-  </div>
+  <div class="operations-related" aria-label="Related Operations views">{related_views}</div>
   <div class="operations-tabs" role="tablist" aria-label="Operations views">
     <button type="button" class="k-chip k-chip-btn k-chip-tab is-on" style="min-block-size:var(--touch-target-size);" id="operations-tab-overview" role="tab" aria-selected="true" aria-controls="operations-pane-overview" tabindex="0">Overview</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab" style="min-block-size:var(--touch-target-size);" id="operations-tab-jobs" role="tab" aria-selected="false" aria-controls="operations-pane-jobs" tabindex="-1">Jobs</button>

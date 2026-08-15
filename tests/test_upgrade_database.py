@@ -1,18 +1,49 @@
 from __future__ import annotations
 
+import importlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 import upgrade_database as upgrade_database_module
 from upgrade_database import ACTIVE_HEAD, UpgradeDatabaseError, upgrade_database
 
+from execution import portfolio_readiness_receipt as readiness_module
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _authoritative_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_root: Path,
+) -> None:
+    monkeypatch.setattr(
+        upgrade_database_module,
+        "authoritative_managed_runtime_root",
+        lambda: runtime_root.resolve(),
+    )
+
+
+def test_authoritative_runtime_ignores_process_home_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted_home = upgrade_database_module.trusted_account_home()
+    monkeypatch.setenv("HOME", str(tmp_path / "spoof-home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "spoof-userprofile"))
+
+    assert upgrade_database_module.trusted_account_home() == trusted_home
+    assert (
+        upgrade_database_module.authoritative_managed_runtime_root()
+        == (trusted_home / ".gemini" / "antigravity" / "runtime" / "earnings-summary").resolve()
+    )
 
 
 def test_upgrade_requires_safe_sqlite_before_touching_database(
@@ -29,7 +60,7 @@ def test_upgrade_requires_safe_sqlite_before_touching_database(
         unsafe_runtime,
     )
     with pytest.raises(RuntimeError, match="unsafe SQLite test sentinel"):
-        upgrade_database(db_path, repo_root=ROOT)
+        upgrade_database(db_path, repo_root=ROOT, runtime_root=ROOT, allow_isolated_db=True)
     assert not db_path.exists()
 
 
@@ -61,9 +92,244 @@ def test_upgrade_classifies_database_only_after_lock_acquisition(
 
     monkeypatch.setattr(upgrade_database_module, "_integrity_check", accept_integrity)
 
-    receipt = upgrade_database(db_path, repo_root=ROOT)
+    receipt = upgrade_database(
+        db_path,
+        repo_root=ROOT,
+        runtime_root=ROOT,
+        allow_isolated_db=True,
+    )
 
     assert receipt.status == "already_current"
+
+
+def test_live_upgrade_requires_phase0_receipt_inside_shared_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    db_path.touch()
+    lock_held = False
+
+    @contextmanager
+    def fake_lock(*_args: object, **_kwargs: object) -> Generator[None]:
+        nonlocal lock_held
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
+
+    runtime_root = tmp_path / "runtime"
+    _authoritative_runtime(monkeypatch, runtime_root)
+
+    def canonical_db(root: Path) -> Path:
+        assert root == runtime_root.resolve()
+        return db_path
+
+    def prior_revision(_path: Path) -> tuple[str, ...]:
+        return (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,)
+
+    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", canonical_db)
+    monkeypatch.setattr(
+        upgrade_database_module,
+        "_read_revisions",
+        prior_revision,
+    )
+
+    with pytest.raises(UpgradeDatabaseError, match="Phase-0 backup/restore"):
+        upgrade_database(db_path, repo_root=ROOT, runtime_root=runtime_root)
+
+    assert lock_held is False
+
+
+def test_live_upgrade_revalidates_phase0_receipt_while_lock_is_held(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    db_path.touch()
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text("{}", encoding="utf-8")
+    lock_held = False
+    runtime_root = tmp_path / "runtime"
+    _authoritative_runtime(monkeypatch, runtime_root)
+    fetch_events: list[str] = []
+
+    @contextmanager
+    def fake_lock(*_args: object, **_kwargs: object) -> Generator[None]:
+        nonlocal lock_held
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    class _Blocked:
+        ready = False
+        blocking_reasons = ("test_block",)
+
+    origin = readiness_module.OriginMainObservation(
+        sha="a" * 40,
+        fetched_at=datetime.now(UTC),
+    )
+
+    def fetch_before_lock(root: Path) -> readiness_module.OriginMainObservation:
+        assert lock_held is False
+        assert root == ROOT.resolve()
+        fetch_events.append("fetch")
+        return origin
+
+    def collect_under_lock(**kwargs: object) -> _Blocked:
+        assert lock_held is True
+        assert fetch_events == ["fetch"]
+        assert kwargs["mode"] == "migration"
+        assert kwargs["runtime_root"] == runtime_root.resolve()
+        resolver = kwargs["origin_resolver"]
+        assert callable(resolver)
+        assert resolver(ROOT.resolve()) == origin
+        return _Blocked()
+
+    monkeypatch.setattr(upgrade_database_module, "hold_run_lock", fake_lock)
+
+    def canonical_db(root: Path) -> Path:
+        assert root == runtime_root.resolve()
+        return db_path
+
+    def prior_revision(_path: Path) -> tuple[str, ...]:
+        return (upgrade_database_module.OPERATION_EVENTS_CONTRACT_REVISION,)
+
+    monkeypatch.setattr(upgrade_database_module, "portfolio_db_path", canonical_db)
+    monkeypatch.setattr(
+        upgrade_database_module,
+        "_read_revisions",
+        prior_revision,
+    )
+    monkeypatch.setattr(readiness_module, "collect_readiness", collect_under_lock)
+    monkeypatch.setattr(readiness_module, "fetch_origin_main", fetch_before_lock)
+
+    with pytest.raises(UpgradeDatabaseError, match="test_block"):
+        upgrade_database(
+            db_path,
+            repo_root=ROOT,
+            runtime_root=runtime_root,
+            phase0_backup_restore_receipt=receipt_path,
+        )
+
+    assert lock_held is False
+
+
+def test_explicit_database_outside_runtime_requires_isolated_opt_in(tmp_path: Path) -> None:
+    db_path = tmp_path / "explicit.db"
+    runtime_root = tmp_path / "runtime"
+
+    with pytest.raises(UpgradeDatabaseError, match="does not match the runtime database"):
+        upgrade_database(db_path, repo_root=ROOT, runtime_root=runtime_root)
+
+    assert not db_path.exists()
+
+
+def test_candidate_runtime_cannot_relabel_authoritative_live_db_as_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative_runtime = tmp_path / "managed-runtime"
+    candidate_runtime = tmp_path / "candidate-worktree"
+    live_db = authoritative_runtime / "data" / "portfolio.db"
+    live_db.parent.mkdir(parents=True)
+    live_db.write_bytes(b"live-database-sentinel")
+    before = live_db.read_bytes()
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+    _authoritative_runtime(monkeypatch, authoritative_runtime)
+
+    with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
+        upgrade_database(
+            live_db,
+            repo_root=ROOT,
+            runtime_root=candidate_runtime,
+            allow_isolated_db=True,
+        )
+
+    assert live_db.read_bytes() == before
+
+
+def test_environment_redirect_cannot_unprotect_default_managed_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative_runtime = tmp_path / "managed-runtime"
+    candidate_runtime = tmp_path / "candidate-worktree"
+    live_db = authoritative_runtime / "data" / "portfolio.db"
+    live_db.parent.mkdir(parents=True)
+    live_db.write_bytes(b"default-live-database-sentinel")
+    before = live_db.read_bytes()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "decoy.db"))
+    _authoritative_runtime(monkeypatch, authoritative_runtime)
+
+    with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
+        upgrade_database(
+            live_db,
+            repo_root=ROOT,
+            runtime_root=candidate_runtime,
+            allow_isolated_db=True,
+        )
+
+    assert live_db.read_bytes() == before
+
+
+def test_candidate_runtime_cannot_relabel_symlink_to_live_db_as_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative_runtime = tmp_path / "managed-runtime"
+    candidate_runtime = tmp_path / "candidate-worktree"
+    live_db = authoritative_runtime / "data" / "portfolio.db"
+    live_db.parent.mkdir(parents=True)
+    live_db.write_bytes(b"symlinked-live-database-sentinel")
+    candidate_alias = tmp_path / "candidate-visible-symlink.db"
+    try:
+        candidate_alias.symlink_to(live_db)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+    before = live_db.read_bytes()
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+    _authoritative_runtime(monkeypatch, authoritative_runtime)
+
+    with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
+        upgrade_database(
+            candidate_alias,
+            repo_root=ROOT,
+            runtime_root=candidate_runtime,
+            allow_isolated_db=True,
+        )
+
+    assert live_db.read_bytes() == before
+
+
+def test_candidate_runtime_cannot_relabel_environment_configured_live_db_as_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative_runtime = tmp_path / "managed-runtime"
+    candidate_runtime = tmp_path / "candidate-worktree"
+    live_db = tmp_path / "configured-live.db"
+    live_db.write_bytes(b"configured-live-database-sentinel")
+    candidate_alias = tmp_path / "candidate-visible-alias.db"
+    os.link(live_db, candidate_alias)
+    before = live_db.read_bytes()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(live_db))
+    _authoritative_runtime(monkeypatch, authoritative_runtime)
+
+    with pytest.raises(UpgradeDatabaseError, match="authoritative managed runtime"):
+        upgrade_database(
+            candidate_alias,
+            repo_root=ROOT,
+            runtime_root=candidate_runtime,
+            allow_isolated_db=True,
+        )
+
+    assert live_db.read_bytes() == before
 
 
 def _revision(db_path: Path) -> str:
@@ -79,8 +345,18 @@ def _revision(db_path: Path) -> str:
 def test_upgrade_database_creates_fresh_db_and_is_idempotent(tmp_path: Path) -> None:
     db_path = tmp_path / "fresh.db"
 
-    created = upgrade_database(db_path, repo_root=ROOT)
-    repeated = upgrade_database(db_path, repo_root=ROOT)
+    created = upgrade_database(
+        db_path,
+        repo_root=ROOT,
+        runtime_root=ROOT,
+        allow_isolated_db=True,
+    )
+    repeated = upgrade_database(
+        db_path,
+        repo_root=ROOT,
+        runtime_root=ROOT,
+        allow_isolated_db=True,
+    )
 
     assert created.status == "created"
     assert repeated.status == "already_current"
@@ -91,7 +367,12 @@ def test_upgrade_database_bridges_archived_revision_with_verified_backup(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "legacy.db"
-    upgrade_database(db_path, repo_root=ROOT)
+    upgrade_database(
+        db_path,
+        repo_root=ROOT,
+        runtime_root=ROOT,
+        allow_isolated_db=True,
+    )
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("UPDATE alembic_version SET version_num='0273_post_earnings_readout_budget'")
@@ -109,6 +390,9 @@ def test_upgrade_database_bridges_archived_revision_with_verified_backup(
             str(db_path),
             "--repo-root",
             str(ROOT),
+            "--runtime-root",
+            str(ROOT),
+            "--allow-isolated-db",
             "--backup-path",
             str(backup_path),
         ],
@@ -126,7 +410,76 @@ def test_upgrade_database_bridges_archived_revision_with_verified_backup(
     assert _revision(backup_path) == "0273_post_earnings_readout_budget"
 
 
-def test_managed_wrapper_upgrades_exact_0010_with_backup_and_journal_schema(
+def test_archived_bridge_rejects_closed_detail_lookalike_before_revision_mutation(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lookalike-closed-journal.db"
+    upgrade_database(
+        db_path,
+        repo_root=ROOT,
+        runtime_root=ROOT,
+        allow_isolated_db=True,
+    )
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            DROP TRIGGER trg_operation_events_no_update;
+            DROP TRIGGER trg_operation_events_no_delete;
+            DROP INDEX ix_operation_events_operation_id;
+            DROP TABLE operation_events;
+            CREATE TABLE operation_events (
+                event_id TEXT NOT NULL PRIMARY KEY,
+                operation_id TEXT NOT NULL,
+                event_kind TEXT NOT NULL,
+                event_sha256 TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                status TEXT,
+                exit_code INTEGER,
+                severity TEXT,
+                detail_code TEXT,
+                detail_reason TEXT,
+                CONSTRAINT ck_lookalike_detail CHECK (
+                    detail_reason IS NULL OR detail_reason='terminal_detail_withheld'
+                )
+            );
+            UPDATE alembic_version
+            SET version_num='0273_post_earnings_readout_budget';
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    backup_path = tmp_path / "lookalike.before.db"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "execution" / "sqlite_bootstrap.py"),
+            str(ROOT / "execution" / "upgrade_database.py"),
+            "--db-path",
+            str(db_path),
+            "--repo-root",
+            str(ROOT),
+            "--runtime-root",
+            str(ROOT),
+            "--allow-isolated-db",
+            "--backup-path",
+            str(backup_path),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "operation_events" in result.stderr
+    assert _revision(db_path) == "0273_post_earnings_readout_budget"
+    assert _revision(backup_path) == "0273_post_earnings_readout_budget"
+
+
+def test_managed_wrapper_upgrades_exact_0010_to_0014_with_backup_and_closed_journal_schema(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db_path = migrated_db(tmp_path / "exact-0010.db", target="0010_add_rehearsal_io_indexes")
@@ -140,6 +493,9 @@ def test_managed_wrapper_upgrades_exact_0010_with_backup_and_journal_schema(
             str(db_path),
             "--repo-root",
             str(ROOT),
+            "--runtime-root",
+            str(ROOT),
+            "--allow-isolated-db",
             "--backup-path",
             str(backup_path),
         ],
@@ -163,6 +519,10 @@ def test_managed_wrapper_upgrades_exact_0010_with_backup_and_journal_schema(
             "operation_events",
             "ix_llm_calls_trace_id_called_at",
         }
+        event_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='operation_events'"
+        ).fetchone()[0]
+        assert "terminal_detail_withheld" in event_sql
     finally:
         conn.close()
 
@@ -203,6 +563,9 @@ def test_managed_upgrade_rejects_weaker_preexisting_same_column_journal_table(
             str(db_path),
             "--repo-root",
             str(ROOT),
+            "--runtime-root",
+            str(ROOT),
+            "--allow-isolated-db",
             "--backup-path",
             str(tmp_path / "weak-journal.before.db"),
         ],
@@ -238,6 +601,9 @@ def test_managed_upgrade_rejects_partial_preexisting_owned_llm_index(
             str(db_path),
             "--repo-root",
             str(ROOT),
+            "--runtime-root",
+            str(ROOT),
+            "--allow-isolated-db",
             "--backup-path",
             str(tmp_path / "partial-llm-index.before.db"),
         ],
@@ -261,12 +627,22 @@ def test_upgrade_database_rejects_nonempty_unversioned_db(tmp_path: Path) -> Non
         conn.close()
 
     with pytest.raises(UpgradeDatabaseError, match="refusing to guess"):
-        upgrade_database(db_path, repo_root=ROOT)
+        upgrade_database(
+            db_path,
+            repo_root=ROOT,
+            runtime_root=ROOT,
+            allow_isolated_db=True,
+        )
 
 
 def test_upgrade_database_rejects_foreign_key_corruption(tmp_path: Path) -> None:
     db_path = tmp_path / "foreign-key-corrupt.db"
-    upgrade_database(db_path, repo_root=ROOT)
+    upgrade_database(
+        db_path,
+        repo_root=ROOT,
+        runtime_root=ROOT,
+        allow_isolated_db=True,
+    )
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("PRAGMA foreign_keys = OFF")
@@ -283,7 +659,12 @@ def test_upgrade_database_rejects_foreign_key_corruption(tmp_path: Path) -> None
         conn.close()
 
     with pytest.raises(UpgradeDatabaseError, match="foreign_key_check failed"):
-        upgrade_database(db_path, repo_root=ROOT)
+        upgrade_database(
+            db_path,
+            repo_root=ROOT,
+            runtime_root=ROOT,
+            allow_isolated_db=True,
+        )
 
 
 def test_upgrade_database_cli_emits_valid_json_receipt(tmp_path: Path) -> None:
@@ -297,6 +678,9 @@ def test_upgrade_database_cli_emits_valid_json_receipt(tmp_path: Path) -> None:
             str(db_path),
             "--repo-root",
             str(ROOT),
+            "--runtime-root",
+            str(ROOT),
+            "--allow-isolated-db",
         ],
         cwd=ROOT,
         capture_output=True,
@@ -308,3 +692,11 @@ def test_upgrade_database_cli_emits_valid_json_receipt(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["status"] == "created"
     assert payload["to_revision"] == ACTIVE_HEAD
+
+
+def test_upgrade_database_path_entrypoint_uses_execution_import_root() -> None:
+    source = (ROOT / "execution" / "upgrade_database.py").read_text(encoding="utf-8")
+
+    assert "from execution import portfolio_readiness_receipt" not in source
+    assert source.count("import portfolio_readiness_receipt as readiness_module") == 2
+    assert importlib.import_module("portfolio_readiness_receipt") is readiness_module

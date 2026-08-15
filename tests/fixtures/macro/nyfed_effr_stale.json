@@ -1,0 +1,10 @@
+{
+  "refRates": [
+    {
+      "effectiveDate": "2026-06-01",
+      "type": "EFFR",
+      "percentRate": 3.83,
+      "revisionIndicator": ""
+    }
+  ]
+}

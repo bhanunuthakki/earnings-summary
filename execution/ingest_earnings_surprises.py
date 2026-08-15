@@ -28,6 +28,7 @@ from earnings_surprise_store import (  # noqa: E402
     append_observation,
     cache_generation_identity,
     observation_clock_error,
+    observation_clock_lexeme,
     observation_identity,
     quarantine_payload,
     validate_source_record,
@@ -140,6 +141,7 @@ def _values_match(column: str, existing: object, incoming: object) -> bool:
 
 def _projection_payload(record: EarningsSurpriseRecordV1, observation_id: str) -> dict[str, object]:
     payload = record.model_dump(mode="json")
+    payload["fetched_at"] = observation_clock_lexeme(record)
     payload["source_observation_id"] = observation_id
     return payload
 

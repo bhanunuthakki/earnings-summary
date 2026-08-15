@@ -4,12 +4,14 @@ import sqlite3
 import sys
 import textwrap
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
+from operations.journal import OperationRequestInput, accept_operation_request, finish_operation
 
 
 def _config(db_path: Path) -> Config:
@@ -33,6 +35,10 @@ def _seed_legacy_correlations(db_path: Path) -> None:
     conn.execute("INSERT INTO source_calls(source_name,kind,status) VALUES ('sec','facts','ok')")
     conn.commit()
     conn.close()
+
+
+def _noop_before_upgrade(_db_path: Path) -> None:
+    return None
 
 
 _REQUEST_INSERT = (
@@ -306,6 +312,7 @@ def test_0011_rejects_unsafe_direct_operation_request_inserts(
         ("cancelled", 1, "warning", "job_cancelled", None, "2026-08-13T12:01:00+00:00"),
         ("failed", 1.5, "error", "job_failed", None, "2026-08-13T12:01:00+00:00"),
         ("failed", 1, "error", "job_failed", "api_key=supersecret", "2026-08-13T12:01:00+00:00"),
+        ("failed", 1, "error", "job_failed", "worker failed", "2026-08-13T12:01:00+00:00"),
         (
             "failed",
             1,
@@ -342,6 +349,92 @@ def test_0011_rejects_noncanonical_terminal_events(
                 severity,
                 detail_code,
                 detail_reason,
+            ),
+        )
+    conn.close()
+
+
+def test_0011_api_terminal_falls_back_when_redaction_still_violates_privacy_check(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = migrated_db(
+        tmp_path / "journal-redaction.db",
+        upgrade_from="0010_add_rehearsal_io_indexes",
+        before_upgrade=_noop_before_upgrade,
+    )
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    now = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    request = accept_operation_request(
+        conn,
+        OperationRequestInput(
+            idempotency_key="migration-redaction-safe",
+            actor="task_scheduler",
+            job_name="unit-job",
+            trigger_kind="scheduled",
+            trace_id="c" * 32,
+            stage="unit-job",
+            scope={"job": "unit-job"},
+            command_sha256="d" * 64,
+            write_sets=("unit-lane",),
+            requested_at=now,
+        ),
+    )
+    sentinel = "JOURNAL-RAW-CREDENTIAL-7319"
+
+    terminal = finish_operation(
+        conn,
+        operation_id=request.operation_id,
+        status="failed",
+        exit_code=1,
+        severity="error",
+        occurred_at=now,
+        detail_reason=f"https://example.test/failure?api_key={sentinel}",
+    )
+
+    assert terminal.detail_reason
+    assert terminal.detail_reason == "terminal_detail_withheld"
+    assert len(terminal.detail_reason) <= 240
+    assert sentinel not in terminal.detail_reason
+    assert "api_key=" not in terminal.detail_reason.casefold()
+    assert "://" not in terminal.detail_reason
+    persisted = conn.execute(
+        "SELECT detail_reason FROM operation_events WHERE operation_id=? AND event_kind='terminal'",
+        (request.operation_id,),
+    ).fetchone()[0]
+    assert persisted == terminal.detail_reason
+
+    second = accept_operation_request(
+        conn,
+        OperationRequestInput(
+            idempotency_key="migration-redaction-direct-sql",
+            actor="task_scheduler",
+            job_name="unit-job",
+            trigger_kind="scheduled",
+            trace_id="e" * 32,
+            stage="unit-job",
+            scope={"job": "unit-job"},
+            command_sha256="f" * 64,
+            write_sets=("unit-lane",),
+            requested_at=now,
+        ),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO operation_events VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "operation-event:" + "a" * 64,
+                second.operation_id,
+                "terminal",
+                "b" * 64,
+                now.isoformat(timespec="microseconds"),
+                "failed",
+                1,
+                "error",
+                "job_failed",
+                f"api_key={sentinel}",
             ),
         )
     conn.close()

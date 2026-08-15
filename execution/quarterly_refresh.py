@@ -24,6 +24,7 @@ import argparse
 import json
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,12 @@ from pipeline.run_accounting import (  # noqa: E402
     start_run,
     suppression_payload,
 )
+from pipeline.transcript_acquisition import (  # noqa: E402
+    persist_authorized_transcript_artifact,
+    read_authorized_transcript,
+    stage_pending_issuer_transcripts,
+)
+from transcripts.acquisition_semantics import TranscriptAcquisitionEntrypoint  # noqa: E402
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 
@@ -241,12 +248,39 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"warning": "no tickers resolved"}, indent=2))
             return 0
 
+        transcript_artifacts = stage_pending_issuer_transcripts(
+            conn,
+            tickers=tickers,
+            project_root=PROJECT_ROOT,
+            private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+            entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
+            as_of=date.today(),
+        )
+        for artifact in transcript_artifacts.values():
+            persist_authorized_transcript_artifact(
+                conn,
+                artifact,
+                project_root=PROJECT_ROOT,
+                trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+            )
+        conn.commit()
+
+        def _revalidate_transcript_batch() -> None:
+            for artifact in transcript_artifacts.values():
+                read_authorized_transcript(
+                    conn,
+                    artifact,
+                    project_root=PROJECT_ROOT,
+                    trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                )
+
         try:
             run_id = start_run(
                 conn,
                 directive="quarterly_refresh",
                 ticker_scope=tickers,
                 invocation_inputs={"fetch_sec": bool(args.fetch_sec)},
+                pre_persist_validation=_revalidate_transcript_batch,
             )
         except PipelineRunSuppressedError as exc:
             print(json.dumps(suppression_payload(exc)))
@@ -259,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
             run_id=run_id,
             fetch_sec=args.fetch_sec,
             sec_owner_requested=args.ticker is not None,
+            transcript_artifacts=transcript_artifacts,
         )
         any_failed = _report_failed(report)
         failed_receipt = next(

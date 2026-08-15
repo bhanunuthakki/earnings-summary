@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -249,7 +249,7 @@ def test_dcf_provenance_refuses_a_pre_migration_schema() -> None:
             input_sha256="a" * 64,
             workbook_sha256=None,
             engine_version="test",
-            inputs_as_of=date(2026, 1, 1),
+            inputs_as_of=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
         ),
     )
     try:

@@ -69,6 +69,7 @@ class ReasonCode(StrEnum):
     MISSING_INPUT_MAPPING = "missing_input_mapping"  # IFRS/standard has no mapped field
     NOT_APPLICABLE_BUSINESS_MODEL = "not_applicable_business_model"
     DENOMINATOR_LE_ZERO = "denominator_le_zero"
+    UNSEALED_LINEAGE = "unsealed_lineage"
 
 
 PeriodGrid = Literal["quarterly", "ttm", "fy"]

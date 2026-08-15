@@ -124,6 +124,8 @@ class AlertRow:
     # Optional, defaulted (0142): existing keyword-arg call sites (several
     # test fixtures build AlertRow directly) stay byte-compatible.
     dismiss_reason: str | None = None
+    thesis_evaluation_episode_id: str | None = None
+    review_cycle_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -185,6 +187,8 @@ def fire_alert(
     evidence_json: str,
     signature_sha: str,
     memo_artifact_id: int | None = None,
+    thesis_evaluation_episode_id: str | None = None,
+    review_cycle_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> AlertRow:
     """Insert one alert row. ``status`` lands as 'pending' (the column default).
@@ -200,24 +204,53 @@ def fire_alert(
         )
     conn = _open(db_path)
     try:
-        cur = conn.execute(
-            """
-            INSERT INTO alerts(
-                user_id, ticker, trigger_kind, fired_at, status,
-                memo_artifact_id, evidence_json, signature_sha
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                user_id,
-                ticker,
-                trigger_kind,
-                fired_at.isoformat(),
-                ALERT_STATUS_PENDING,
-                memo_artifact_id,
-                evidence_json,
-                signature_sha,
-            ),
+        values = (
+            user_id,
+            ticker,
+            trigger_kind,
+            fired_at.isoformat(),
+            ALERT_STATUS_PENDING,
+            memo_artifact_id,
+            evidence_json,
+            signature_sha,
         )
+        try:
+            if thesis_evaluation_episode_id is None:
+                cur = conn.execute(
+                    """
+                    INSERT INTO alerts(
+                        user_id, ticker, trigger_kind, fired_at, status,
+                        memo_artifact_id, evidence_json, signature_sha
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO alerts(
+                        user_id, ticker, trigger_kind, fired_at, status,
+                        memo_artifact_id, evidence_json, signature_sha,
+                        thesis_evaluation_episode_id, review_cycle_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        *values,
+                        thesis_evaluation_episode_id,
+                        review_cycle_id or "initial",
+                    ),
+                )
+        except sqlite3.IntegrityError:
+            # The migration-owned partial unique index is the concurrency-safe
+            # dedup authority. A racing producer returns the active winner.
+            prior = conn.execute(
+                "SELECT * FROM alerts WHERE user_id=? AND signature_sha=? "
+                "AND status<>? ORDER BY id DESC LIMIT 1",
+                (user_id, signature_sha, ALERT_STATUS_EXPIRED),
+            ).fetchone()
+            if prior is None:
+                raise
+            return _row_to_alert(prior)
         row_id = int(cur.lastrowid or 0)
         conn.commit()
         return _fetch_alert(conn, row_id)
@@ -348,6 +381,33 @@ def dismiss_alert(
 
     See ``approve_alert`` for the exception semantics — symmetric.
     """
+    conn = _open(db_path)
+    try:
+        row = conn.execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone()
+        if row is None:
+            raise LookupError(f"alerts id={alert_id} not found")
+        keys = row.keys()
+        episode_id = (
+            row["thesis_evaluation_episode_id"] if "thesis_evaluation_episode_id" in keys else None
+        )
+        if episode_id is not None:
+            from compute.thesis_episode_attention import acknowledge_episode
+
+            acknowledge_episode(
+                conn,
+                str(episode_id),
+                acknowledged_at=datetime.now(UTC),
+                note=reason or "Dismissed from the alert feed.",
+            )
+            if reason is not None:
+                conn.execute(
+                    "UPDATE alerts SET dismiss_reason=? WHERE id=?",
+                    ((reason or "").strip() or None, alert_id),
+                )
+            conn.commit()
+            return _fetch_alert(conn, alert_id)
+    finally:
+        conn.close()
     return _transition_alert(
         alert_id=alert_id,
         target_status=ALERT_STATUS_DISMISSED,
@@ -756,6 +816,10 @@ def _row_to_alert(row: sqlite3.Row) -> AlertRow:
     # through this column) must not IndexError on a plain SELECT *.
     keys = row.keys()
     reason = row["dismiss_reason"] if "dismiss_reason" in keys else None
+    episode_id = (
+        row["thesis_evaluation_episode_id"] if "thesis_evaluation_episode_id" in keys else None
+    )
+    review_cycle_id = row["review_cycle_id"] if "review_cycle_id" in keys else None
     return AlertRow(
         id=int(row["id"]),
         user_id=str(row["user_id"]),
@@ -769,6 +833,8 @@ def _row_to_alert(row: sqlite3.Row) -> AlertRow:
         dismissed_at=_parse_dt_opt(row["dismissed_at"]),
         approved_at=_parse_dt_opt(row["approved_at"]),
         dismiss_reason=(str(reason) if reason is not None else None),
+        thesis_evaluation_episode_id=(str(episode_id) if episode_id is not None else None),
+        review_cycle_id=(str(review_cycle_id) if review_cycle_id is not None else None),
     )
 
 

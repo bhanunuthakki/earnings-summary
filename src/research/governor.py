@@ -85,7 +85,7 @@ import contextlib
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -224,7 +224,7 @@ def _tenet_challenge_moments(db_path: Path | str | None, *, now: datetime) -> li
             continue
         cost_raw = acc.get("est_cost_usd")
         cost = (
-            float(cast("float | int", cost_raw))
+            float(cost_raw)
             if isinstance(cost_raw, (int, float)) and not isinstance(cost_raw, bool)
             else None
         )
@@ -263,6 +263,8 @@ def _post_mortem_moments(db_path: Path | str | None, *, now: datetime) -> list[M
     drafted post-mortem is a one-shot receipt, not a recurring verdict) but
     kept for signature symmetry with the other collectors in this module."""
     del now
+    if db_path is None:
+        return []
     try:
         from synthesis.exit_postmortem import drafted_awaiting_glance
     except Exception:
@@ -561,6 +563,8 @@ def freshness_ok(
         if moment.class_ == "post_mortem":
             if kind != "position_entry":
                 return False
+            if db_path is None:
+                return False
             from synthesis.exit_postmortem import is_awaiting_glance
 
             return is_awaiting_glance(int(ref_id), db_path=db_path)
@@ -624,11 +628,64 @@ def run_governor(
     conn = open_conn(db_path)
     try:
         muted = {str(r[0]) for r in conn.execute("SELECT class_ FROM coach_mutes").fetchall()}
+        coach_ping_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(coach_pings)").fetchall()
+        }
+        has_episode_link = "thesis_evaluation_episode_id" in coach_ping_columns
+        attention_columns: set[str] = set()
+        if has_episode_link:
+            attention_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(thesis_evaluation_episodes)").fetchall()
+            }
+        required_attention_columns = {
+            "episode_id",
+            "ticker",
+            "attention_state",
+            "acknowledged_at",
+            "acknowledgement_note",
+            "next_review_at",
+            "acted_on_decision_id",
+            "superseded_by_episode_id",
+            "attention_updated_at",
+        }
+        has_attention_schema = required_attention_columns.issubset(attention_columns)
         for moment in moments:
-            prior = conn.execute(
-                "SELECT id, status FROM coach_pings WHERE class_ = ? AND key = ?",
-                (moment.class_, moment.key),
-            ).fetchone()
+            if has_episode_link:
+                prior = conn.execute(
+                    "SELECT id,status,thesis_evaluation_episode_id FROM coach_pings "
+                    "WHERE class_ = ? AND key = ?",
+                    (moment.class_, moment.key),
+                ).fetchone()
+            else:
+                prior = conn.execute(
+                    "SELECT id,status FROM coach_pings WHERE class_ = ? AND key = ?",
+                    (moment.class_, moment.key),
+                ).fetchone()
+            prior_id = None if prior is None else int(prior[0])
+            linked_episode_id = None if prior is None or not has_episode_link else prior[2]
+            if linked_episode_id is not None and prior_id is not None:
+                if not has_attention_schema:
+                    missing = sorted(required_attention_columns - attention_columns)
+                    raise RuntimeError(
+                        "incomplete thesis episode attention schema for linked coach ping; "
+                        f"missing columns: {', '.join(missing)}"
+                    )
+                from compute.thesis_episode_attention import get_attention
+
+                episode_attention = get_attention(
+                    conn,
+                    str(linked_episode_id),
+                    now=stamp.replace(tzinfo=UTC),
+                )
+                if not episode_attention.actionable:
+                    conn.execute(
+                        "UPDATE coach_pings SET status=?,updated_at=? "
+                        "WHERE id=? AND status='send_failed'",
+                        ("acted", stamp.isoformat(), prior_id),
+                    )
+                    conn.commit()
+                    continue
             if prior is not None and str(prior[1]) != "send_failed":
                 continue  # anti-nag: a moment is considered exactly once, forever
             tally["seen"] += 1
@@ -682,13 +739,37 @@ def run_governor(
                 else:
                     delivered, fallback = bool(send_fn(ping_id, moment)), "send_failed"
                 if not delivered:
-                    conn.execute(
-                        "UPDATE coach_pings SET status = ?, updated_at = ? WHERE id = ?",
+                    completed = conn.execute(
+                        "UPDATE coach_pings SET status = ?, updated_at = ? "
+                        "WHERE id = ? AND status = 'sent'",
                         (fallback, iso, ping_id),
                     )
                     conn.commit()
-                    status = fallback
-            tally[status] += 1
+                    if completed.rowcount == 1:
+                        status = fallback
+                    else:
+                        current = conn.execute(
+                            "SELECT status FROM coach_pings WHERE id=?", (ping_id,)
+                        ).fetchone()
+                        if current is None:
+                            raise RuntimeError(
+                                f"coach ping {ping_id} disappeared during delivery completion"
+                            )
+                        current_status = str(current[0])
+                        if current_status == "sent":
+                            raise RuntimeError(
+                                f"coach ping {ping_id} delivery completion lost its CAS"
+                            )
+                        if current_status not in tally and current_status not in {
+                            "acted",
+                            "dismissed",
+                        }:
+                            raise RuntimeError(
+                                f"coach ping {ping_id} has unexpected status {current_status!r}"
+                            )
+                        status = current_status
+            if status in tally:
+                tally[status] += 1
     finally:
         conn.close()
     return tally
@@ -710,6 +791,24 @@ def record_dismissal(ping_id: int, *, db_path: Path | str | None = None) -> tupl
     stamp = now_naive_utc().isoformat()
     conn = open_conn(db_path)
     try:
+        try:
+            linked = conn.execute(
+                "SELECT thesis_evaluation_episode_id FROM coach_pings WHERE id=?",
+                (ping_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            linked = None
+        if linked is not None and linked[0] is not None:
+            from compute.thesis_episode_attention import acknowledge_episode
+
+            acknowledge_episode(
+                conn,
+                str(linked[0]),
+                acknowledged_at=datetime.fromisoformat(stamp).replace(tzinfo=UTC),
+                note="Dismissed from the coach prompt.",
+            )
+            conn.commit()
+            return True, None
         row = conn.execute(
             "SELECT class_ FROM coach_pings WHERE id = ? "
             "AND status IN ('sent','digest','routed_to_brief','acted')",
@@ -789,6 +888,24 @@ def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
     stamp = now_naive_utc().isoformat()
     conn = open_conn(db_path)
     try:
+        try:
+            linked = conn.execute(
+                "SELECT thesis_evaluation_episode_id FROM coach_pings WHERE id=?",
+                (ping_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            linked = None
+        if linked is not None and linked[0] is not None:
+            from compute.thesis_episode_attention import acknowledge_episode
+
+            acknowledge_episode(
+                conn,
+                str(linked[0]),
+                acknowledged_at=datetime.fromisoformat(stamp).replace(tzinfo=UTC),
+                note="Acknowledged from the coach prompt.",
+            )
+            conn.commit()
+            return True
         cur = conn.execute(
             "UPDATE coach_pings SET status = 'acted', updated_at = ? "
             "WHERE id = ? AND status IN ('sent', 'digest')",

@@ -1,15 +1,17 @@
 """Macro-series registry — 12 macro slugs the scenario engine depends on.
 
-Each entry declares provider metadata in preference order. The macro job calls
-only timeout-bounded Yahoo candidates today. FMP entries remain declarative
-metadata for future admission through the shared FMP circuit/budget/recovery
-service; ``execution/fetch_macro_series.py`` never calls them directly. A
+Each entry declares default provider metadata in preference order. The macro job
+calls only timeout-bounded Yahoo candidates by default. The New York Fed EFFR
+adapter is dormant and must be injected explicitly by an isolated caller. FMP
+entries remain declarative metadata for future admission through the shared FMP
+circuit/budget/recovery service; ``execution/fetch_macro_series.py`` never calls
+them directly. A
 series without a fresh or explicitly cached-degraded observation is unavailable
 and prevents the scheduled sensitivity recompute.
 
 Provider config shape:
     {
-      "kind":         "fmp_historical" | "fmp_treasury" | "fmp_economic" | "fmp_fx",
+      "kind":         "yfinance" | "fmp_*",
       "path":         "<endpoint path, relative to FMP_BASE>",
       "params":       {dict of query string params},
       "row_field":    optional jq-style path inside the response to the list,
@@ -26,7 +28,12 @@ state, provider-call budgets, and durable backlog/receipts.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
+from typing import cast
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def _empty_params() -> dict[str, str]:
@@ -58,6 +65,37 @@ class ProviderSpec:
     scale: float = 1.0
 
 
+class MacroObservation(BaseModel):
+    """One provider-neutral, provenance-complete macro observation."""
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    series_id: str = Field(min_length=1)
+    effective_date: date
+    observed_at: datetime
+    value: float = Field(gt=0)
+    units: str = Field(min_length=1)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    source: str = Field(min_length=1)
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _exact_finite_value(cls, value: object) -> float:
+        if type(value) not in {int, float}:
+            raise ValueError("macro value must be a number")
+        parsed = float(cast("int | float", value))
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise ValueError("macro value must be finite and positive")
+        return parsed
+
+    @field_validator("observed_at")
+    @classmethod
+    def _aware_observed_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("macro observed_at must be timezone-aware")
+        return value.astimezone(UTC)
+
+
 def _yf(symbol: str, *, scale: float = 1.0) -> ProviderSpec:
     """Build the timeout-bounded Yahoo candidate used by the macro job."""
     return ProviderSpec(kind="yfinance", path=symbol, source="yfinance", scale=scale)
@@ -80,9 +118,8 @@ class SeriesSpec:
 
 # Notes on endpoint choices:
 #   - Rates: FMP exposes treasury yields at /stable/treasury-rates. Effective
-#     fed funds is best-effort from FMP's economic indicator endpoint; we list
-#     a 13W T-bill fallback as a proxy when the EFFR series is not in the
-#     plan.
+#     fed funds is declarative FMP economic-indicator metadata only. Treasury
+#     maturities are not economic substitutes for the effective fed-funds rate.
 #   - FX: USDxxx pairs flow through FMP's historical-price-eod feed which
 #     accepts a symbol like "USDBRL" and returns OHLC. The `close` field
 #     is the daily fix.
@@ -109,12 +146,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 path="economic-indicators",
                 params={"name": "federalFunds"},
                 value_key="value",
-            ),
-            ProviderSpec(
-                kind="fmp_treasury",
-                path="treasury-rates",
-                params={},
-                value_key="month1",
             ),
         ),
     ),

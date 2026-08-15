@@ -32,6 +32,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import cast
+from zoneinfo import ZoneInfo
 
 from dcf import valuation
 from dcf.provenance import DcfInputProvenance
@@ -88,6 +89,23 @@ def derive_over_under(live_price: float | None, npv_per_share: float) -> float |
 # row is stamped 'outlier' (migration 0182): surfaces badge it "unreviewed model",
 # lenses withhold the fair value. The row still persists — flagged, never dropped.
 SANITY_OVER_UNDER_LIMIT = 0.6
+_PACIFIC = ZoneInfo("America/Los_Angeles")
+
+
+def _validate_input_cutoff(row: DcfRunRow) -> None:
+    """Prevent source observations from looking ahead of the valuation date.
+
+    ``valuation_date`` is the Pacific information-date. ``inputs_as_of`` is an
+    absolute observation cutoff and therefore must be timezone-aware before it
+    can be compared at the Pacific midnight boundary.
+    """
+    if row.provenance is None:
+        return
+    inputs_as_of = row.provenance.inputs_as_of
+    if inputs_as_of.tzinfo is None or inputs_as_of.utcoffset() is None:
+        raise ValueError("DCF inputs_as_of must be a timezone-aware datetime")
+    if inputs_as_of.astimezone(_PACIFIC).date() > row.valuation_date:
+        raise ValueError("DCF inputs_as_of is later than the Pacific valuation date")
 
 
 def derive_sanity_flag(over_under_pct: float | None) -> str | None:
@@ -299,6 +317,7 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
     would defeat the whole point of recording it. Rows WITHOUT sync fields
     (the bespoke archetype builders) keep working on either schema.
     """
+    _validate_input_cutoff(row)
     has_sync = _has_sync_columns(conn)
     if (row.assumptions_sync_status or row.assumptions_synced_at) and not has_sync:
         raise sqlite3.OperationalError(

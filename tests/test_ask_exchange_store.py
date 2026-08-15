@@ -237,6 +237,38 @@ def test_complete_writes_assistant_and_artifacts_before_replay(
         assert connection.execute("SELECT COUNT(*) FROM ask_exchange_artifacts").fetchone() == (0,)
 
 
+def test_complete_rejects_disagreeing_trace_identities_before_commit(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = _database(tmp_path, migrated_db)
+    put_session_context("session-1", _context(), db_path=db_path)
+    begin_exchange(
+        session_id="session-1",
+        request_id="request-1",
+        payload_sha256=hash_request_payload({"message": "Show the thesis"}),
+        user_text="Show the thesis",
+        expected_revision=0,
+        db_path=db_path,
+    )
+    artifact_trace = "ask-grounding:" + ("a" * 64)
+    turn_trace = "ask-grounding:" + ("b" * 64)
+
+    with pytest.raises(ExchangeStateError, match="trace identities disagree"):
+        complete_exchange(
+            request_id="request-1",
+            assistant_text="The thesis remains intact.",
+            artifacts=ExchangeArtifactsV1(grounding_trace_id=artifact_trace),
+            grounding_trace_id=turn_trace,
+            expected_revision=1,
+            db_path=db_path,
+        )
+
+    pending = get_exchange("request-1", db_path=db_path)
+    assert pending is not None
+    assert pending.status == "pending"
+
+
 def test_revision_cas_and_fail_transition_release_the_pending_slot(
     tmp_path: Path,
     migrated_db: Callable[..., Path],

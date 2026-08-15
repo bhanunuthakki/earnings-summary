@@ -19,6 +19,15 @@ from scheduler_manifest import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CRON_DIR = PROJECT_ROOT / "cron"
 MANIFEST_PATH = CRON_DIR / "task_manifest.json"
+EXPECTED_DISABLED_TASKS = {
+    r"\earnings-summary\backfill_transcripts",
+    r"\earnings-summary\discover_ir_documents",
+    r"\earnings-summary\discover_ir_failing",
+    r"\earnings-summary\onboard_pending",
+    r"\earnings-summary\refresh_cache",
+    r"\earnings-summary\refresh_ir_kpis",
+    r"\earnings-summary\scan_ir_transcripts",
+}
 
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
@@ -32,6 +41,17 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert {task.wrapper for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("run_*.bat") if path.name != "run_python.bat"
     }
+
+
+def test_source_xml_preserves_exact_expected_disabled_lanes() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    disabled = {
+        task.task_name
+        for task in manifest.tasks
+        if not extract_xml_metadata(CRON_DIR / task.xml).enabled
+    }
+
+    assert disabled == EXPECTED_DISABLED_TASKS
 
 
 def test_generated_registration_and_inventory_are_deterministic_and_current() -> None:

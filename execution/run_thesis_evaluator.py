@@ -17,11 +17,16 @@ import argparse
 import json
 import sqlite3
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from compute.thesis_episode_attention import (  # noqa: E402
+    AttentionError,
+    deliver_due_episode_alerts,
+)
 from compute.thesis_evaluator import (  # noqa: E402
     ThesisVerdict,
     evaluate_ticker_thesis,
@@ -43,10 +48,6 @@ from thesis_reunderwrite_gate import ReUnderwriteBlockedError  # noqa: E402
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _MATERIAL_TABLE_QUERIES = {
-    "thesis_state": (
-        "PRAGMA table_info(thesis_state)",
-        "SELECT * FROM thesis_state WHERE UPPER(ticker) = ?",
-    ),
     "kpi_definitions": (
         "PRAGMA table_info(kpi_definitions)",
         "SELECT * FROM kpi_definitions WHERE UPPER(ticker) = ?",
@@ -54,10 +55,6 @@ _MATERIAL_TABLE_QUERIES = {
     "fact_overrides": (
         "PRAGMA table_info(fact_overrides)",
         "SELECT * FROM fact_overrides WHERE UPPER(ticker) = ?",
-    ),
-    "thesis_evaluations": (
-        "PRAGMA table_info(thesis_evaluations)",
-        "SELECT * FROM thesis_evaluations WHERE UPPER(ticker) = ?",
     ),
     "decisions": (
         "PRAGMA table_info(decisions)",
@@ -272,6 +269,15 @@ def main() -> int:
                 StageStatus.OK,
             )
 
+        due_review_alerts = 0
+        if not args.dry_run:
+            try:
+                due_review_alerts = deliver_due_episode_alerts(conn, now=datetime.now(UTC))
+                conn.commit()
+            except (AttentionError, sqlite3.Error) as exc:
+                conn.rollback()
+                failed += 1
+                sys.stderr.write(f"FAILED due thesis review delivery: {exc}\n")
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
         end_run(conn, run_id, terminal, error_summary=f"{failed} failed" if failed else None)
 
@@ -283,6 +289,7 @@ def main() -> int:
                     "skipped": skipped,
                     "failed": failed,
                     "dry_run": args.dry_run,
+                    "due_review_alerts": due_review_alerts,
                     "verdicts": [_verdict_to_dict(v) for v in verdicts],
                 },
                 indent=2,

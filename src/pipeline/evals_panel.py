@@ -115,6 +115,8 @@ _CORE_RUNNABLE_PURPOSES: tuple[str, ...] = (
     # Podcast takeaway summary has a checked-in mode-A golden set and a live
     # production caller; keep it reachable from the same eval run bar.
     "podcast_takeaway_summary",
+    # README updater output has a checked-in rubric audit and bounded corpus.
+    "readme_update",
 )
 RUNNABLE_PURPOSES: tuple[str, ...] = _CORE_RUNNABLE_PURPOSES + CAPTURE_QUALITY_PURPOSES
 

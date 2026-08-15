@@ -1399,7 +1399,8 @@ def _segment_sourced_rows(rows: Iterable[sqlite3.Row]) -> list[SourcedObservatio
         src_doc = r["source_doc_id"]
         prov: dict[str, object] = {
             "source": str(r["source"]) if r["source"] is not None else "unknown",
-            "fact_id": None,
+            "fact_id": int(r["fact_id"]) if r["fact_id"] is not None else None,
+            "fact_table": "segment_dimensions",
             "source_doc_id": int(src_doc) if src_doc is not None else None,
             "fetched_at": str(r["fetched_at"]) if r["fetched_at"] is not None else None,
             "source_url": str(r["source_url"]) if r["source_url"] is not None else None,
@@ -1535,7 +1536,8 @@ def load_segment_junction_series_with_provenance(
                       AND sp_inner.fiscal_period_type IN ({period_placeholders})
                       {as_of_clause}
                 )
-                SELECT sp.period_end, sd1.value, sp.unit, sp.source_doc_id, {prov_cols}
+                SELECT sp.period_end, sd1.value, sp.unit, sp.source_doc_id,
+                       sd1.id AS fact_id, {prov_cols}
                 FROM segment_periods sp
                 JOIN ranked_periods rp ON rp.id = sp.id AND rp.rn = 1
                 {doc_join}
@@ -1545,7 +1547,8 @@ def load_segment_junction_series_with_provenance(
             params: list[object] = [ticker.upper(), *period_list, *as_of_params, *dim_params]
         else:
             sql = f"""
-                SELECT sp.period_end, sd1.value, sp.unit, sp.source_doc_id, {prov_cols}
+                SELECT sp.period_end, sd1.value, sp.unit, sp.source_doc_id,
+                       sd1.id AS fact_id, {prov_cols}
                 FROM segment_periods sp
                 {doc_join}
                 {dim_value_clause}

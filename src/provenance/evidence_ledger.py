@@ -463,6 +463,13 @@ class EvidenceLedger:
         be written atomically.
         """
         if isinstance(record, DocumentVersion):
+            from provenance.issuer_registry import ensure_sec_cik_evidence_binding
+
+            ensure_sec_cik_evidence_binding(
+                self._conn,
+                recorded_issuer_id=record.issuer_id,
+                recorded_at=record.recorded_at,
+            )
             self._validate_legacy_document(record)
         table, columns, values, identity_column, identity_value = self._statement(record)
         placeholders = ", ".join("?" for _ in columns)

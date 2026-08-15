@@ -114,6 +114,10 @@ class ExchangeArtifactsV1(BaseModel):
     view_spec: dict[str, JsonValue] | None = None
     proposal_ref: AskProposalRefV1 | str | None = None
     proposal_error: ProposalErrorV1 | None = None
+    grounding_trace_id: str | None = Field(
+        default=None,
+        pattern=r"^ask-grounding:[0-9a-f]{64}$",
+    )
 
     @field_validator("proposal_ref")
     @classmethod
@@ -435,9 +439,13 @@ def complete_exchange(
     expected_revision: int,
     db_path: Path,
     citations: Sequence[object] | None = None,
+    grounding_trace_id: str | None = None,
     model: str | None = None,
 ) -> AskExchange:
     """Atomically persist the answer turn and artifacts, then mark completion."""
+
+    if artifacts.grounding_trace_id != grounding_trace_id:
+        raise ExchangeStateError("Ask exchange trace identities disagree")
 
     _validate_request_id(request_id)
     _validate_turn_text("assistant_text", assistant_text)
@@ -476,11 +484,26 @@ def complete_exchange(
         if len(artifacts_json.encode("utf-8")) > _MAX_ARTIFACT_JSON_BYTES:
             raise ValueError(f"artifacts exceed the {_MAX_ARTIFACT_JSON_BYTES}-byte limit")
         artifacts_sha256 = _sha256(artifacts_json)
-        assistant_cursor = connection.execute(
-            "INSERT INTO ask_turns(session_id,role,text,citations_json,model,created_at) "
-            "VALUES (?,'assistant',?,?,?,?)",
-            (exchange.session_id, assistant_text, citations_json, model, timestamp),
-        )
+        if grounding_trace_id is None:
+            assistant_cursor = connection.execute(
+                "INSERT INTO ask_turns(session_id,role,text,citations_json,model,created_at) "
+                "VALUES (?,'assistant',?,?,?,?)",
+                (exchange.session_id, assistant_text, citations_json, model, timestamp),
+            )
+        else:
+            assistant_cursor = connection.execute(
+                "INSERT INTO ask_turns"
+                "(session_id,role,text,citations_json,grounding_trace_id,model,created_at) "
+                "VALUES (?,'assistant',?,?,?,?,?)",
+                (
+                    exchange.session_id,
+                    assistant_text,
+                    citations_json,
+                    grounding_trace_id,
+                    model,
+                    timestamp,
+                ),
+            )
         if assistant_cursor.lastrowid is None:
             raise ExchangeStoreError("Ask assistant turn insert did not return a row identity")
         connection.execute(
@@ -685,6 +708,8 @@ def orchestrate_exchange_events(
     proposal_error: ProposalErrorV1 | None = None
     source_links: list[str] = []
     fact_links: list[str] = []
+    grounding_trace_id: str | None = None
+    held_grounded_events: list[dict[str, object]] = []
     try:
         for event in events:
             kind = event.get("type")
@@ -703,6 +728,15 @@ def orchestrate_exchange_events(
                 maybe_spec = event.get("spec")
                 if isinstance(maybe_spec, dict):
                     view_spec = cast("dict[str, JsonValue]", maybe_spec)
+            elif kind == "retrieval":
+                raw_trace_id = event.get("trace_id")
+                if not isinstance(raw_trace_id, str) or not raw_trace_id.startswith(
+                    "ask-grounding:"
+                ):
+                    raise ExchangeStateError("Ask retrieval event has an invalid trace identity")
+                if grounding_trace_id is not None and grounding_trace_id != raw_trace_id:
+                    raise ExchangeStateError("Ask engine emitted more than one retrieval trace")
+                grounding_trace_id = raw_trace_id
             elif kind == "citations":
                 maybe_items = event.get("items")
                 if isinstance(maybe_items, list):
@@ -721,6 +755,9 @@ def orchestrate_exchange_events(
                     code=str(raw_code or "registration_failed"),
                     message=str(raw_message or "proposal could not be registered"),
                 )
+            if grounding_trace_id is not None and kind in {"delta", "fragment", "citations"}:
+                held_grounded_events.append(dict(event))
+                continue
             yield event
 
         if held_final is None:
@@ -733,6 +770,7 @@ def orchestrate_exchange_events(
             view_spec=view_spec,
             proposal_ref=proposal_ref,
             proposal_error=proposal_error,
+            grounding_trace_id=grounding_trace_id,
             source_links=source_links,
             fact_links=fact_links,
         )
@@ -742,8 +780,10 @@ def orchestrate_exchange_events(
             artifacts=artifacts,
             expected_revision=exchange.session_revision,
             citations=citations,
+            grounding_trace_id=grounding_trace_id,
             db_path=db_path,
         )
+        yield from held_grounded_events
         if completed.artifacts is not None and isinstance(
             completed.artifacts.proposal_ref, AskProposalRefV1
         ):
@@ -771,11 +811,23 @@ def replay_exchange_events(
     if exchange.status != "completed" or exchange.assistant_turn_id is None:
         raise ExchangeStateError("only a completed Ask exchange can be replayed")
     connection = _open(db_path)
+    trace_row: sqlite3.Row | None = None
     try:
         row = connection.execute(
-            "SELECT role,text,citations_json FROM ask_turns WHERE id=? AND session_id=?",
+            "SELECT * FROM ask_turns WHERE id=? AND session_id=?",
             (exchange.assistant_turn_id, exchange.session_id),
         ).fetchone()
+        raw_trace_id = (
+            row["grounding_trace_id"]
+            if row is not None and "grounding_trace_id" in set(row.keys())
+            else None
+        )
+        if raw_trace_id:
+            trace_row = connection.execute(
+                "SELECT trace_id,route,strategy,outcome,item_count FROM ask_grounding_traces "
+                "WHERE trace_id=?",
+                (str(raw_trace_id),),
+            ).fetchone()
     finally:
         connection.close()
     if row is None or str(row["role"]) != "assistant":
@@ -784,6 +836,8 @@ def replay_exchange_events(
     artifacts = exchange.artifacts
     if artifacts is None:
         raise StoredExchangeDataError("completed Ask exchange artifacts are missing")
+    if artifacts.grounding_trace_id != (str(raw_trace_id) if raw_trace_id else None):
+        raise StoredExchangeDataError("Ask exchange and assistant trace bindings disagree")
     yield {
         "type": "artifacts",
         "route": artifacts.route,
@@ -798,6 +852,18 @@ def replay_exchange_events(
         "fact_links": list(artifacts.fact_links),
         "replay": True,
     }
+    if raw_trace_id:
+        if trace_row is None:
+            raise StoredExchangeDataError("completed Ask exchange grounding trace is missing")
+        yield {
+            "type": "retrieval",
+            "trace_id": str(trace_row["trace_id"]),
+            "route": str(trace_row["route"]),
+            "strategy": str(trace_row["strategy"]),
+            "outcome": str(trace_row["outcome"]),
+            "item_count": int(trace_row["item_count"]),
+            "replay": True,
+        }
     if citations:
         yield {"type": "citations", "items": citations, "replay": True}
     if artifacts.proposal_ref is not None:

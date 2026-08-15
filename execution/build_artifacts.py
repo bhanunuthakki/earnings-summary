@@ -54,9 +54,24 @@ from report.models import ReportFlavor  # noqa: E402
 from report.renderers.etf_markdown import render as render_etf_markdown  # noqa: E402
 from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
+from report.renderers.workspace_data import (  # noqa: E402
+    filter_important_print_vs_guide,
+    parse_print_vs_guide,
+)
 from report.renderers.workspace_html import (  # noqa: E402
     render_report_body,
     render_standalone_report,
+)
+from report.sections import (  # noqa: E402
+    appendix,
+    bear_case,
+    earnings,
+    exec_compensation,
+    qa_roster,
+    saydo,
+    segments,
+    thesis,
+    valuation,
 )
 from report.sections import financials as financials_section_mod  # noqa: E402
 from report.sections import snapshot as snapshot_section_mod  # noqa: E402
@@ -251,6 +266,16 @@ def main() -> int:
     flavor = ReportFlavor(args.flavor)
     summary: list[dict[str, object]] = []
     for ticker in tickers:
+        if args.regenerate_purpose is not None:
+            summary.append(
+                _regenerate_native_purpose(
+                    ticker,
+                    repo_root,
+                    purpose=args.regenerate_purpose,
+                    force_budget_bypass=args.force_budget_bypass,
+                )
+            )
+            continue
         result = _build_one(
             ticker,
             repo_root,
@@ -266,6 +291,111 @@ def main() -> int:
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
     return 0
+
+
+def _regenerate_native_purpose(
+    ticker: str,
+    repo_root: Path,
+    *,
+    purpose: str,
+    force_budget_bypass: bool,
+) -> dict[str, object]:
+    """Run exactly one purpose producer without rendering a report."""
+    _sync_db_to_repo(repo_root)
+    effective_bypass = force_budget_bypass or ticker_settings.get_bypass_budget(
+        ticker,
+        db_path=repo_root / "data" / "portfolio.db",
+    )
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = (
+        connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) if db_path.exists() else None
+    )
+    if conn is not None:
+        conn.row_factory = sqlite3.Row
+    try:
+        if purpose == "bear_case":
+            thesis_section = thesis.build(ticker, repo_root, conn=conn)
+            financials_section = financials_section_mod.build(ticker, repo_root, conn=conn)
+            segments_section = segments.build(ticker, repo_root, conn=conn)
+            earnings_section = earnings.build(
+                ticker,
+                repo_root,
+                enable_llm=False,
+                conn=conn,
+            )
+            section = bear_case.build(
+                ticker=ticker,
+                repo_root=repo_root,
+                enable_llm=True,
+                thesis=thesis_section,
+                financials=financials_section,
+                segments=segments_section,
+                earnings=earnings_section,
+                force_refresh=True,
+                force_budget_bypass=effective_bypass,
+                conn=conn,
+            )
+        elif purpose == "qa_topics":
+            earnings_section = earnings.build(
+                ticker,
+                repo_root,
+                enable_llm=False,
+                conn=conn,
+            )
+            section = qa_roster.build(
+                appendix=appendix.build(earnings_section),
+                ticker=ticker,
+                repo_root=repo_root,
+                enable_llm=True,
+                force_budget_bypass=effective_bypass,
+                force_refresh=True,
+            )
+        elif purpose == "valuation_basis":
+            section = valuation.build(
+                ticker=ticker,
+                repo_root=repo_root,
+                enable_llm=True,
+                force_budget_bypass=effective_bypass,
+                force_refresh=True,
+                conn=conn,
+            )
+        elif purpose == "saydo_filter":
+            section = saydo.build(ticker, repo_root, conn=conn)
+            generated = 0
+            for card in section.cards:
+                rows = parse_print_vs_guide(card)
+                if not rows:
+                    continue
+                filter_important_print_vs_guide(
+                    ticker=ticker,
+                    repo_root=repo_root,
+                    card=card,
+                    rows=rows,
+                    enable_llm=True,
+                    force_refresh=True,
+                    strict_refresh=True,
+                )
+                generated += 1
+            if generated == 0:
+                raise RuntimeError(f"saydo_filter has no parseable commitments for {ticker}")
+        elif purpose == "exec_comp_alignment":
+            section = exec_compensation.build(
+                ticker,
+                repo_root,
+                enable_llm=True,
+                force_budget_bypass=effective_bypass,
+                conn=conn,
+            )
+        else:
+            raise ValueError(f"unsupported native artifact purpose: {purpose}")
+    finally:
+        if conn is not None:
+            conn.close()
+    return {
+        "ticker": ticker,
+        "purpose": purpose,
+        "status": section.status.value,
+    }
 
 
 def _parse_args() -> argparse.Namespace:
@@ -317,6 +447,21 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Bypass the on-disk cache for the IR-anchor LLM sections (bear case §7 + "
         "recent developments §8) so they re-run with the latest fetched documents.",
+    )
+    parser.add_argument(
+        "--regenerate-purpose",
+        choices=(
+            "bear_case",
+            "exec_comp_alignment",
+            "qa_topics",
+            "saydo_filter",
+            "valuation_basis",
+        ),
+        default=None,
+        help=(
+            "Internal dirty-artifact drain seam: run only the named purpose "
+            "producer so unrelated LLM sections remain cache-contained."
+        ),
     )
     parser.add_argument(
         "--flavor",

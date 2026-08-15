@@ -26,11 +26,12 @@ import sqlite3
 from pathlib import Path
 
 from ir_uploads import ISSUER_REGISTRY, calendar_id_from_fye
+from pipeline.queries import ANALYZED_LIST_TYPE_VALUES
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Active list types whose tickers get an auto registry entry. Mirrors
 # db.ACTIVE_LIST_TYPES (kept local to avoid importing the heavier db module).
-ACTIVE_LIST_TYPES: tuple[str, ...] = ("portfolio", "watchlist", "evaluation")
+ACTIVE_LIST_TYPES: tuple[str, ...] = ANALYZED_LIST_TYPE_VALUES
 
 _STORE_REL = ("data", "issuer_registry.json")
 _DB_REL = ("data", "portfolio.db")

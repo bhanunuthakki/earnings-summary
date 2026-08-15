@@ -6,7 +6,7 @@ provenance/operational-risk judges after two HOLD-and-revision cycles.
 **Audience:** Repository owner and implementation agents.  
 **Umbrella PRD:** `docs/design/personal_investment_partner_prd.md`.  
 **Scope:** Trustworthy owner-decision capture, evidence-level thesis-evaluation deduplication,
-lightweight qualitative common-drawdown analysis, and the WIX learning-record repair.  
+lightweight qualitative common-drawdown analysis, and the WIX learning-record repair.
 **Document authority:** This is a design artifact, not a Layer-1 directive. It does not
 authorize a live migration, scheduled-task change, holdings mutation, or brokerage action.
 
