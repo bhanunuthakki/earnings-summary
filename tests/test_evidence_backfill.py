@@ -118,7 +118,11 @@ def _request(
 
 
 def _seed_legacy_file_observation(
-    conn: sqlite3.Connection, repo_root: Path, source_url: str
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    source_url: str,
+    *,
+    blob_sha256: str | None = None,
 ) -> None:
     row = conn.execute(
         "SELECT source_type, sha256, fetched_at, raw_bytes_size FROM documents WHERE id = 1"
@@ -126,10 +130,11 @@ def _seed_legacy_file_observation(
     assert row is not None
     observed_at = datetime.fromisoformat(str(row[2]))
     raw_path = repo_root / "data" / "ACME_10q.html"
+    stored_blob_sha256 = blob_sha256 or str(row[1])
     ledger = EvidenceLedger(conn)
     ledger.persist(
         ContentBlob(
-            sha256=str(row[1]),
+            sha256=stored_blob_sha256,
             byte_size=int(row[3]),
             media_type="text/html",
             storage_uri=raw_path.as_uri(),
@@ -142,7 +147,7 @@ def _seed_legacy_file_observation(
             idempotency_key="legacy-document:1:observation",
             source_kind=str(row[0]),
             source_url=source_url,
-            blob_sha256=str(row[1]),
+            blob_sha256=stored_blob_sha256,
             source_published_at=None,
             filing_at=None,
             accepted_at=None,
@@ -251,10 +256,26 @@ def test_apply_reuses_verified_legacy_file_observation_from_a_clone_root(
 
         assert result.records_created == 7
         assert result.records_replayed == 2
-        assert conn.execute(
-            "SELECT source_url FROM evidence_source_observations "
-            "WHERE idempotency_key = 'legacy-document:1:observation'"
-        ).fetchone()[0] == source_uri
+        assert (
+            conn.execute(
+                "SELECT source_url FROM evidence_source_observations "
+                "WHERE idempotency_key = 'legacy-document:1:observation'"
+            ).fetchone()[0]
+            == source_uri
+        )
+        assert tuple(
+            conn.execute(
+                "SELECT storage_uri, verified_sha256, availability_state "
+                "FROM v_evidence_blob_locations_current "
+                "WHERE blob_sha256 = (SELECT sha256 FROM documents WHERE id = 1) "
+                "AND storage_uri = ?",
+                (clone_path.as_uri(),),
+            ).fetchone()
+        ) == (
+            clone_path.as_uri(),
+            conn.execute("SELECT sha256 FROM documents WHERE id = 1").fetchone()[0],
+            "present",
+        )
     finally:
         conn.close()
 
@@ -265,19 +286,49 @@ def test_apply_uses_a_root_independent_uri_for_new_legacy_local_documents(
     conn, _, repo_root = _connection(tmp_path)
     try:
         conn.execute("UPDATE documents SET source_url = NULL WHERE id = 1")
+        conn.execute(
+            "UPDATE documents SET file_path = ? WHERE id = 1", ("data/tmp/../ACME_10q.html",)
+        )
         conn.commit()
 
         backfill_legacy_evidence(conn, _request(repo_root, apply=True))
 
-        assert conn.execute(
-            "SELECT source_url FROM evidence_source_observations "
-            "WHERE idempotency_key = 'legacy-document:1:observation'"
-        ).fetchone()[0] == "legacy-corpus:///data/ACME_10q.html"
+        assert (
+            conn.execute(
+                "SELECT source_url FROM evidence_source_observations "
+                "WHERE idempotency_key = 'legacy-document:1:observation'"
+            ).fetchone()[0]
+            == "legacy-corpus:///data/ACME_10q.html"
+        )
     finally:
         conn.close()
 
 
-def test_clone_replay_rejects_legacy_file_uri_for_a_different_logical_path(
+def test_apply_replaces_new_local_file_uri_with_a_logical_corpus_uri(
+    tmp_path: Path,
+) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        conn.execute(
+            "UPDATE documents SET source_url = ? WHERE id = 1",
+            ((repo_root / "data" / "ACME_10q.html").as_uri(),),
+        )
+        conn.commit()
+
+        backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+
+        assert (
+            conn.execute(
+                "SELECT source_url FROM evidence_source_observations "
+                "WHERE idempotency_key = 'legacy-document:1:observation'"
+            ).fetchone()[0]
+            == "legacy-corpus:///data/ACME_10q.html"
+        )
+    finally:
+        conn.close()
+
+
+def test_clone_replay_rejects_existing_legacy_observation_with_a_different_blob(
     tmp_path: Path,
 ) -> None:
     conn, _, source_root = _connection(tmp_path)
@@ -285,7 +336,10 @@ def test_clone_replay_rejects_legacy_file_uri_for_a_different_logical_path(
         conn.execute("UPDATE documents SET source_url = NULL WHERE id = 1")
         conn.commit()
         _seed_legacy_file_observation(
-            conn, source_root, "file:///C:/unrelated/ACME_10q.html"
+            conn,
+            source_root,
+            "file:///C:/unrelated/data/ACME_10q.html?alternate-origin",
+            blob_sha256="f" * 64,
         )
 
         clone_root = tmp_path / "clone"
@@ -293,7 +347,7 @@ def test_clone_replay_rejects_legacy_file_uri_for_a_different_logical_path(
         clone_path.parent.mkdir(parents=True)
         clone_path.write_bytes((source_root / "data" / "ACME_10q.html").read_bytes())
 
-        with pytest.raises(ValueError, match="legacy source observation"):
+        with pytest.raises(ValueError, match="different blob hash"):
             backfill_legacy_evidence(
                 conn, _request(clone_root, apply=True, task_id="clone-replay-reject")
             )

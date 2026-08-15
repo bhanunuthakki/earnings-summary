@@ -17,7 +17,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -322,6 +322,7 @@ def _persist_document_chain(
         conn,
         document_id=document_id,
         stored_source_url=_optional_text(document, "source_url"),
+        logical_path=_legacy_logical_path(path, root),
         stored_path=_required_text(document, "file_path"),
         blob_sha256=blob_sha256,
     )
@@ -711,20 +712,20 @@ def _legacy_source_url(
     *,
     document_id: int,
     stored_source_url: str | None,
+    logical_path: str,
     stored_path: str,
     blob_sha256: str,
 ) -> str:
     """Return immutable source provenance without coupling new records to a checkout path."""
-    if stored_source_url is not None:
-        return stored_source_url
-
-    canonical_url = _legacy_corpus_source_uri(stored_path)
+    canonical_url = _legacy_corpus_source_uri(logical_path, stored_path)
     existing = conn.execute(
         "SELECT observation_id, source_url, blob_sha256 FROM evidence_source_observations "
         "WHERE idempotency_key = ?",
         (f"legacy-document:{document_id}:observation",),
     ).fetchone()
     if existing is None:
+        if stored_source_url is not None and urlsplit(stored_source_url).scheme != "file":
+            return stored_source_url
         return canonical_url
 
     observation_id, existing_url, existing_blob_sha256 = existing
@@ -732,44 +733,35 @@ def _legacy_source_url(
         raise ValueError(f"legacy source observation {document_id} has an unexpected identity")
     if str(existing_blob_sha256).lower() != blob_sha256.lower():
         raise ValueError(f"legacy source observation {document_id} has a different blob hash")
-    if existing_url == canonical_url:
-        return canonical_url
-    if _legacy_file_uri_matches_stored_path(str(existing_url), stored_path):
+    if stored_source_url is None or urlsplit(stored_source_url).scheme == "file":
         emit_structured_event(
             "evidence_ledger_backfill_legacy_source_alias_reused",
             document_id=document_id,
-            reason="verified_file_uri_matches_stored_path_and_blob",
+            reason="existing_immutable_observation_matches_document_and_blob",
         )
         return str(existing_url)
-    raise ValueError(
-        f"legacy source observation {document_id} conflicts with the canonical corpus source"
-    )
+    return stored_source_url
 
 
-def _legacy_corpus_source_uri(stored_path: str) -> str:
+def _legacy_logical_path(path: Path, root: Path) -> str:
+    """Normalize an admitted file to a checkout-independent logical locator."""
+    data_root = (root / "data").resolve()
+    try:
+        return (Path("data") / path.relative_to(data_root)).as_posix()
+    except ValueError:
+        pass
+    try:
+        return path.relative_to(root.resolve()).as_posix()
+    except ValueError as exc:
+        raise RuntimeError("admitted legacy path is outside its declared roots") from exc
+
+
+def _legacy_corpus_source_uri(logical_path: str, stored_path: str) -> str:
     """Encode a logical corpus locator that is stable across checkout roots."""
-    path_value, separator, fragment = stored_path.partition("#")
-    normalized_path = path_value.replace("\\", "/").lstrip("/")
-    encoded_path = quote(normalized_path, safe="/")
+    _, separator, fragment = stored_path.partition("#")
+    encoded_path = quote(logical_path, safe="/")
     encoded_fragment = quote(fragment, safe="") if separator else ""
-    return f"legacy-corpus:///{encoded_path}" + (
-        f"#{encoded_fragment}" if separator else ""
-    )
-
-
-def _legacy_file_uri_matches_stored_path(source_url: str, stored_path: str) -> bool:
-    """Permit a historical local URI only for the verified legacy logical path."""
-    parsed = urlsplit(source_url)
-    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
-        return False
-    stored_value, separator, fragment = stored_path.partition("#")
-    if separator and parsed.fragment != fragment:
-        return False
-    if not separator and parsed.fragment:
-        return False
-    normalized_stored = stored_value.replace("\\", "/").lstrip("/").casefold()
-    normalized_uri_path = unquote(parsed.path).replace("\\", "/").rstrip("/").casefold()
-    return normalized_uri_path.endswith(f"/{normalized_stored}")
+    return f"legacy-corpus:///{encoded_path}" + (f"#{encoded_fragment}" if separator else "")
 
 
 def _read_checkpoint(path: Path) -> BackfillCheckpoint:
