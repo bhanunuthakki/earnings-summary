@@ -445,19 +445,28 @@ def fetch_sensitivities(
 # ---------------------------------------------------------------------------
 
 
-def _weekly_returns(points: list[tuple[date, float]]) -> list[tuple[date, float]]:
+SENSITIVITY_METRIC_VERSION = "v2_rate_diff"
+
+
+def _weekly_returns(
+    points: list[tuple[date, float]],
+    *,
+    is_rate_diff: bool = False,
+) -> list[tuple[date, float]]:
     """Down-sample a sorted-by-date list to weekly closes (Friday-anchored
-    via ISO week), then compute log returns. Returns [(week_end_date, ret), ...]
-    in chronological order. Skips weeks where the prior week is missing.
+    via ISO week), then compute log returns (for price/index/commodity series)
+    or declared first differences in percentage points (for yield/rate series).
+    Returns [(week_end_date, ret), ...] in chronological order. Skips weeks
+    where the prior week is missing.
 
     Input must be sorted ascending by date. Filters non-positive values
-    (an FX rate of 0 would blow up the log)."""
+    when log-returns are used (an FX rate of 0 would blow up the log)."""
     if len(points) < 3:
         return []
-    # Bucket by ISO (year, week) â€” keep the latest in-bucket observation.
+    # Bucket by ISO (year, week) — keep the latest in-bucket observation.
     last_per_week: dict[tuple[int, int], tuple[date, float]] = {}
     for d, v in points:
-        if v <= 0:
+        if not is_rate_diff and v <= 0:
             continue
         iso = d.isocalendar()
         key = (iso.year, iso.week)
@@ -473,9 +482,14 @@ def _weekly_returns(points: list[tuple[date, float]]) -> list[tuple[date, float]
     for i in range(1, len(weekly)):
         prev_v = weekly[i - 1][1]
         cur_v = weekly[i][1]
-        if prev_v <= 0 or cur_v <= 0:
-            continue
-        out.append((weekly[i][0], math.log(cur_v / prev_v)))
+        if is_rate_diff:
+            # First difference in rate percentage points (PRD §7.1, BHA-48)
+            # e.g. 4.25% - 4.00% = +0.25 percentage points
+            out.append((weekly[i][0], cur_v - prev_v))
+        else:
+            if prev_v <= 0 or cur_v <= 0:
+                continue
+            out.append((weekly[i][0], math.log(cur_v / prev_v)))
     return out
 
 
@@ -499,7 +513,7 @@ def _ols_beta(xs: list[float], ys: list[float]) -> tuple[float, float, int]:
         return beta, 0.0, n
     # r^2 = (cov_xy)^2 / (var_x * var_y)
     r_squared = (cov_xy * cov_xy) / (var_x * var_y)
-    # Clamp floating-noise overshoots â€” r^2 is mathematically in [0, 1].
+    # Clamp floating-noise overshoots — r^2 is mathematically in [0, 1].
     if r_squared < 0.0:
         r_squared = 0.0
     elif r_squared > 1.0:
@@ -516,25 +530,28 @@ def compute_sensitivities(
 ) -> dict[str, tuple[float, float, int]]:
     """Regress weekly log-returns of `ticker_prices` against each macro series.
 
-    Inputs are date-sorted ascending. Output: per series_id â†’ (beta, r^2, n_obs).
+    Inputs are date-sorted ascending. Output: per series_id -> (beta, r^2, n_obs).
     Series with too few overlapping weeks (< min_observations) are SKIPPED rather
     than returned with junk numbers.
 
+    For rate series (e.g. us_10y, fed_funds), transforms yields using declared
+    first differences in percentage points (PRD §7.1, BHA-48) so beta represents
+    expected % price return per +1.0 percentage point (+100 bps) yield change.
+
     The lookback_days cap is applied to the input window (latest N days),
-    not the regression â€” this lets the caller pass historical archives and
+    not the regression — this lets the caller pass historical archives and
     have the math automatically use a recent window."""
     if not ticker_prices:
         return {}
     # Apply lookback to the latest N days of the ticker price series.
     if lookback_days and lookback_days > 0:
-        cutoff_idx = len(ticker_prices) - 1
         latest = ticker_prices[-1][0]
         from datetime import timedelta
 
         cutoff = latest - timedelta(days=lookback_days)
         ticker_prices = [pt for pt in ticker_prices if pt[0] >= cutoff]
-        del cutoff_idx
-    tkr_weekly = _weekly_returns(ticker_prices)
+
+    tkr_weekly = _weekly_returns(ticker_prices, is_rate_diff=False)
     if len(tkr_weekly) < min_observations:
         return {}
     tkr_by_week: dict[tuple[int, int], float] = {}
@@ -554,7 +571,19 @@ def compute_sensitivities(
             series = [pt for pt in raw if pt[0] >= cutoff]
         else:
             series = list(raw)
-        ser_weekly = _weekly_returns(series)
+
+        # Check if series is a rate yield requiring first differences
+        is_rate = series_id in ("us_10y", "fed_funds")
+        try:
+            from macro_series import REGISTRY as MACRO_REGISTRY
+
+            spec = MACRO_REGISTRY.get(series_id)
+            if spec is not None and (spec.category == "rates" or spec.units == "pct"):
+                is_rate = True
+        except ImportError:
+            pass
+
+        ser_weekly = _weekly_returns(series, is_rate_diff=is_rate)
         if len(ser_weekly) < min_observations:
             continue
         ser_by_week = {(d.isocalendar().year, d.isocalendar().week): r for d, r in ser_weekly}
