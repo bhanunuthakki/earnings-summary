@@ -28,9 +28,16 @@ class _Conn:
     def close(self) -> None:
         self.closed = True
 
+    def commit(self) -> None:
+        return None
+
 
 def _fail_if_called(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("expensive work ran after pipeline suppression")
+
+
+def _empty_transcript_preflight(*_args: object, **_kwargs: object) -> dict[str, object]:
+    return {}
 
 
 @pytest.mark.parametrize(
@@ -73,6 +80,12 @@ def test_scheduled_cli_suppression_is_a_successful_terminal_noop(
             module,
             "_metric_input_fingerprint",
             lambda *_args, **_kwargs: ({"NU": None}, {}, "selection", "sources", 0),
+        )
+    if module_name == "execution.quarterly_refresh":
+        monkeypatch.setattr(
+            module,
+            "stage_pending_issuer_transcripts",
+            _empty_transcript_preflight,
         )
     monkeypatch.setattr(module, expensive_name, _fail_if_called)
 
