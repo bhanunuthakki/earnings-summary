@@ -5,18 +5,21 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, date, datetime
+from copy import deepcopy
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
 
 import execution.fetch_macro_series as macro
-from macro_series import REGISTRY, MacroObservation, SeriesSpec
+from macro_series import REGISTRY, MacroObservation, ProviderSpec, SeriesSpec
 from macro_store import SeriesValue, upsert_series_values
 
 FIXTURES = Path(__file__).parent / "fixtures" / "macro"
 NOW = datetime(2026, 8, 14, 16, 0, tzinfo=UTC)
+NYFED_PROVIDER = macro._NYFED_EFFR_PROVIDER
 
 
 def _schema(path: Path) -> None:
@@ -73,18 +76,20 @@ def _payload(name: str) -> object:
 def _loader(name: str):
     def load(
         series: SeriesSpec,
-        _provider: object,
+        _provider: ProviderSpec,
         *,
         observed_at: datetime,
         start_date: date,
         end_date: date,
         timeout_seconds: float,
     ) -> tuple[MacroObservation, ...]:
-        del start_date, end_date, timeout_seconds
+        del timeout_seconds
         return macro._parse_nyfed_effr_payload(
             _payload(name),
             series=series,
             observed_at=observed_at,
+            start_date=start_date,
+            end_date=end_date,
         )
 
     return load
@@ -94,20 +99,17 @@ def _refresh(db: Path, fixture: str) -> macro.MacroRefreshReceipt:
     return macro.refresh_series(
         series_ids=("fed_funds",),
         db_path=db,
+        provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
         provider_loaders={"nyfed_effr": _loader(fixture)},
         timeout_seconds=0.1,
         now=NOW,
     )
 
 
-def test_registry_routes_fed_funds_to_authoritative_non_fmp_source_first() -> None:
-    first = REGISTRY["fed_funds"].providers[0]
-    assert first.kind == "nyfed_effr"
-    assert first.source == "new_york_fed"
-    assert "newyorkfed.org" in first.path
-    assert all(
-        not provider.path.startswith("/api/v3") for provider in REGISTRY["fed_funds"].providers
-    )
+def test_default_registry_keeps_nyfed_unregistered_and_removes_treasury_proxy() -> None:
+    providers = REGISTRY["fed_funds"].providers
+    assert all(provider.kind != "nyfed_effr" for provider in providers)
+    assert all(provider.value_key != "month1" for provider in providers)
     assert macro.DEFAULT_TIMEOUT_SECONDS == 10.0
 
 
@@ -116,6 +118,8 @@ def test_fresh_fixture_preserves_typed_provenance_and_refreshes(db: Path) -> Non
         _payload("nyfed_effr_fresh.json"),
         series=REGISTRY["fed_funds"],
         observed_at=NOW,
+        start_date=date(2024, 8, 14),
+        end_date=date(2026, 8, 14),
     )
 
     assert parsed[-1] == MacroObservation(
@@ -140,7 +144,297 @@ def test_unknown_effr_row_field_remains_rejected() -> None:
             _payload("nyfed_effr_unknown_field.json"),
             series=REGISTRY["fed_funds"],
             observed_at=NOW,
+            start_date=date(2024, 8, 14),
+            end_date=date(2026, 8, 14),
         )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    [
+        ("percentRate", True),
+        ("percentRate", "3.63"),
+        ("percentRate", float("nan")),
+        ("percentRate", float("inf")),
+        ("percentPercentile1", True),
+    ],
+)
+def test_effr_json_number_is_exact_and_finite(field_name: str, bad_value: object) -> None:
+    payload_object = deepcopy(_payload("nyfed_effr_fresh.json"))
+    assert isinstance(payload_object, dict)
+    payload = cast("dict[str, object]", payload_object)
+    rows_object = payload["refRates"]
+    assert isinstance(rows_object, list) and isinstance(rows_object[0], dict)
+    first_row = cast("dict[str, object]", rows_object[0])
+    first_row[field_name] = bad_value
+    with pytest.raises((ValidationError, ValueError)):
+        macro._parse_nyfed_effr_payload(
+            payload,
+            series=REGISTRY["fed_funds"],
+            observed_at=NOW,
+            start_date=date(2024, 8, 14),
+            end_date=date(2026, 8, 14),
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_date",
+    ["08/13/2026", "2026-08-13T00:00:00Z", "2026-08-15", "2024-08-13"],
+)
+def test_effr_date_is_exact_business_date_inside_requested_range(bad_date: str) -> None:
+    payload_object = deepcopy(_payload("nyfed_effr_fresh.json"))
+    assert isinstance(payload_object, dict)
+    payload = cast("dict[str, object]", payload_object)
+    rows_object = payload["refRates"]
+    assert isinstance(rows_object, list) and isinstance(rows_object[0], dict)
+    first_row = cast("dict[str, object]", rows_object[0])
+    first_row["effectiveDate"] = bad_date
+    with pytest.raises((ValidationError, ValueError)):
+        macro._parse_nyfed_effr_payload(
+            payload,
+            series=REGISTRY["fed_funds"],
+            observed_at=NOW,
+            start_date=date(2024, 8, 14),
+            end_date=date(2026, 8, 14),
+        )
+
+
+def test_default_refresh_does_not_register_or_call_nyfed(db: Path) -> None:
+    calls = 0
+
+    def forbidden_loader(
+        _series: SeriesSpec,
+        _provider: ProviderSpec,
+        *,
+        observed_at: datetime,
+        start_date: date,
+        end_date: date,
+        timeout_seconds: float,
+    ) -> tuple[MacroObservation, ...]:
+        nonlocal calls
+        del observed_at, start_date, end_date, timeout_seconds
+        calls += 1
+        return ()
+
+    receipt = macro.refresh_series(
+        series_ids=("fed_funds",),
+        db_path=db,
+        provider_loaders={"nyfed_effr": forbidden_loader},
+        now=NOW,
+    )
+
+    assert calls == 0
+    assert receipt.status is macro.RefreshStatus.FAILED
+    assert macro._exit_code(receipt.status) != 0
+
+
+def test_duplicate_series_ids_are_rejected_before_provider_io(db: Path) -> None:
+    calls = 0
+
+    def counted_loader(
+        series: SeriesSpec,
+        provider: ProviderSpec,
+        *,
+        observed_at: datetime,
+        start_date: date,
+        end_date: date,
+        timeout_seconds: float,
+    ) -> tuple[MacroObservation, ...]:
+        nonlocal calls
+        calls += 1
+        return _loader("nyfed_effr_fresh.json")(
+            series,
+            provider,
+            observed_at=observed_at,
+            start_date=start_date,
+            end_date=end_date,
+            timeout_seconds=timeout_seconds,
+        )
+
+    with pytest.raises(ValueError, match="duplicate series"):
+        macro.refresh_series(
+            series_ids=("fed_funds", "fed_funds"),
+            db_path=db,
+            provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
+            provider_loaders={"nyfed_effr": counted_loader},
+            now=NOW,
+        )
+    assert calls == 0
+
+
+def test_duplicate_injected_providers_are_rejected_before_io(db: Path) -> None:
+    calls = 0
+
+    def counted_loader(*_args: object, **_kwargs: object) -> tuple[MacroObservation, ...]:
+        nonlocal calls
+        calls += 1
+        return ()
+
+    with pytest.raises(ValueError, match="provider request budget"):
+        macro.refresh_series(
+            series_ids=("fed_funds",),
+            db_path=db,
+            provider_overrides={"fed_funds": (NYFED_PROVIDER, NYFED_PROVIDER)},
+            provider_loaders={"nyfed_effr": counted_loader},
+            now=NOW,
+        )
+    assert calls == 0
+
+
+def test_structurally_equal_provider_spec_is_not_authorized(db: Path) -> None:
+    forged = ProviderSpec(
+        kind=NYFED_PROVIDER.kind,
+        path=NYFED_PROVIDER.path,
+        params=dict(NYFED_PROVIDER.params),
+        date_key=NYFED_PROVIDER.date_key,
+        value_key=NYFED_PROVIDER.value_key,
+        source=NYFED_PROVIDER.source,
+    )
+    with pytest.raises(ValueError, match="approved source"):
+        macro.refresh_series(
+            series_ids=("fed_funds",),
+            db_path=db,
+            provider_overrides={"fed_funds": (forged,)},
+            provider_loaders={"nyfed_effr": _loader("nyfed_effr_fresh.json")},
+            now=NOW,
+        )
+
+
+def test_forged_provider_identity_is_rejected_without_persistence(db: Path) -> None:
+    def forged_loader(
+        _series: SeriesSpec,
+        _provider: ProviderSpec,
+        *,
+        observed_at: datetime,
+        start_date: date,
+        end_date: date,
+        timeout_seconds: float,
+    ) -> tuple[MacroObservation, ...]:
+        del observed_at, start_date, end_date, timeout_seconds
+        return (
+            MacroObservation.model_construct(
+                series_id="vix",
+                effective_date=date(2026, 8, 13),
+                observed_at=NOW + timedelta(seconds=1),
+                value=3.63,
+                units="level",
+                currency="USD",
+                source="attacker",
+            ),
+        )
+
+    receipt = macro.refresh_series(
+        series_ids=("fed_funds",),
+        db_path=db,
+        provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
+        provider_loaders={"nyfed_effr": forged_loader},
+        now=NOW,
+    )
+
+    assert receipt.status is macro.RefreshStatus.FAILED
+    assert receipt.series[0].attempts[0].outcome is macro.AttemptOutcome.ERROR
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM macro_series").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("effective_date", "value"),
+    [
+        (date(2026, 8, 13), True),
+        (date(2026, 8, 13), "3.63"),
+        (date(2026, 8, 13), float("nan")),
+        (datetime(2026, 8, 13, tzinfo=UTC), 3.63),
+        (date(2026, 8, 15), 3.63),
+        (date(2024, 8, 13), 3.63),
+    ],
+)
+def test_provider_result_reparse_rejects_bad_value_or_date(
+    db: Path,
+    effective_date: object,
+    value: object,
+) -> None:
+    def forged_loader(
+        _series: SeriesSpec,
+        _provider: ProviderSpec,
+        *,
+        observed_at: datetime,
+        start_date: date,
+        end_date: date,
+        timeout_seconds: float,
+    ) -> tuple[MacroObservation, ...]:
+        del start_date, end_date, timeout_seconds
+        return (
+            MacroObservation.model_construct(
+                series_id="fed_funds",
+                effective_date=effective_date,
+                observed_at=observed_at,
+                value=value,
+                units="pct",
+                currency=None,
+                source="new_york_fed",
+            ),
+        )
+
+    receipt = macro.refresh_series(
+        series_ids=("fed_funds",),
+        db_path=db,
+        provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
+        provider_loaders={"nyfed_effr": forged_loader},
+        now=NOW,
+    )
+
+    assert receipt.status is macro.RefreshStatus.FAILED
+    assert receipt.series[0].attempts[0].outcome is macro.AttemptOutcome.ERROR
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM macro_series").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(("second_value", "outcome", "row_count"), [(3.63, "ok", 1), (3.64, "error", 0)])
+def test_provider_result_duplicate_dates_dedupe_or_reject(
+    db: Path,
+    second_value: float,
+    outcome: str,
+    row_count: int,
+) -> None:
+    def duplicate_loader(
+        _series: SeriesSpec,
+        _provider: ProviderSpec,
+        *,
+        observed_at: datetime,
+        start_date: date,
+        end_date: date,
+        timeout_seconds: float,
+    ) -> tuple[MacroObservation, ...]:
+        del start_date, end_date, timeout_seconds
+        return (
+            MacroObservation(
+                series_id="fed_funds",
+                effective_date=date(2026, 8, 13),
+                observed_at=observed_at,
+                value=3.63,
+                units="pct",
+                currency=None,
+                source="new_york_fed",
+            ),
+            MacroObservation(
+                series_id="fed_funds",
+                effective_date=date(2026, 8, 13),
+                observed_at=observed_at,
+                value=second_value,
+                units="pct",
+                currency=None,
+                source="new_york_fed",
+            ),
+        )
+
+    receipt = macro.refresh_series(
+        series_ids=("fed_funds",),
+        db_path=db,
+        provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
+        provider_loaders={"nyfed_effr": duplicate_loader},
+        now=NOW,
+    )
+
+    assert receipt.series[0].attempts[0].outcome.value == outcome
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM macro_series").fetchone()[0] == row_count
 
 
 def test_unchanged_fixture_is_a_true_noop(db: Path) -> None:
@@ -215,6 +509,7 @@ def test_bounded_all_series_canary_does_not_regress_other_eleven(db: Path) -> No
         series_ids=tuple(REGISTRY),
         db_path=db,
         yfinance_loader=yahoo,
+        provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
         provider_loaders={"nyfed_effr": _loader("nyfed_effr_fresh.json")},
         timeout_seconds=0.1,
         now=NOW,

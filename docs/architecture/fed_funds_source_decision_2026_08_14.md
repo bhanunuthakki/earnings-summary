@@ -2,7 +2,7 @@
 
 ## Decision
 
-Use the Federal Reserve Bank of New York Markets Data API's Effective Federal Funds Rate (EFFR) as the first provider behind the existing macro acquisition boundary. Keep FRED `DFF` unimplemented as a transport fallback unless its API-key and terms gate is separately approved. Do not build a production dependency on the Federal Reserve Board's retiring Data Download Program.
+Use the Federal Reserve Bank of New York Markets Data API's Effective Federal Funds Rate (EFFR) as the approved adapter candidate behind the existing macro acquisition boundary. It is not registered in the default macro registry: tests and isolated canaries must inject both the exact provider specification and a loader explicitly. Keep FRED `DFF` unimplemented as a transport fallback unless its API-key and terms gate is separately approved. Do not build a production dependency on the Federal Reserve Board's retiring Data Download Program.
 
 This decision authorizes repository implementation and a bounded isolated canary only. It does not authorize a provider purchase, managed-runtime deployment, production schedule change, retry expansion, or live activation.
 
@@ -18,6 +18,7 @@ This decision authorizes repository implementation and a bounded isolated canary
 
 - Source: `new_york_fed`.
 - Endpoint: `https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json`.
+- Activation: dormant by default; the daily CLI has no NY Fed registration or loader and therefore cannot issue a request after merge.
 - Query budget: one date-bounded request per run, two years of observations, no automatic retry.
 - Accepted semantic identity: only records whose `type` is exactly `EFFR`.
 - Effective date: `effectiveDate`, a New York Fed business-date transaction/activity date.
@@ -28,11 +29,15 @@ This decision authorizes repository implementation and a bounded isolated canary
 - Malformed, future-dated, non-positive, non-finite, oversized, timed-out, or unavailable responses do not write observations and preserve explicit degraded/non-zero status.
 - FMP candidates remain declarative and disabled behind the shared FMP recovery boundary. The one-month Treasury field is not an economic substitute for fed funds.
 
+## Durable-lineage residual
+
+The existing `macro_series` table durably stores the series ID, effective date, value, and source, while `source_calls` records the provider endpoint, outcome, latency, and record count. The typed adapter also validates units, currency, and acquisition timestamp before staging, but the current schema does not persist those three fields per observation. Closing that lineage gap requires a separately reviewed migration and is outside this dormant, no-activation change.
+
 ## External-practice record
 
 | Area | Code seam | Decision | Why drift-sensitive | Owner | Evidence status |
 | --- | --- | --- | --- | --- | --- |
-| Provider | `src/macro_series.py` and `execution/fetch_macro_series.py` | New York Fed EFFR first | API schema, publication, terms, and availability can change | Tool selector / BHA-52 | Current primary-source review completed 2026-08-14 |
+| Provider | `execution/fetch_macro_series.py` explicit injection seam | Dormant New York Fed EFFR candidate | API schema, publication, terms, and availability can change | Tool selector / BHA-52 | Current primary-source review completed 2026-08-14 |
 | Contract | Typed New York Fed response model | Validate the live `percentRate` field and fail closed if it changes | The current OpenAPI schema describes `percent`, while the live JSON returns `percentRate` | BHA-52 owner | Fixture-backed; vendor clarification remains open |
 | Operations | Macro refresh call budget | One request per run, no blind retry | No numeric provider quota is published | BHA-52 owner | Conservative local policy; production activation not authorized |
 | Rights | Any UI/export that presents reference-rate data | Carry the prescribed reference-rate notice and non-endorsement terms | New York Fed terms impose presentation/distribution conditions | Owner/legal | Required before production redistribution |

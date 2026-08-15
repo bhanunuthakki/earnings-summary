@@ -1,16 +1,17 @@
 """Macro-series registry — 12 macro slugs the scenario engine depends on.
 
-Each entry declares provider metadata in preference order. The macro job calls
-only timeout-bounded Yahoo candidates and the primary New York Fed EFFR API.
-FMP entries remain declarative metadata for future admission through the shared
-FMP circuit/budget/recovery service; ``execution/fetch_macro_series.py`` never
-calls them directly. A
+Each entry declares default provider metadata in preference order. The macro job
+calls only timeout-bounded Yahoo candidates by default. The New York Fed EFFR
+adapter is dormant and must be injected explicitly by an isolated caller. FMP
+entries remain declarative metadata for future admission through the shared FMP
+circuit/budget/recovery service; ``execution/fetch_macro_series.py`` never calls
+them directly. A
 series without a fresh or explicitly cached-degraded observation is unavailable
 and prevents the scheduled sensitivity recompute.
 
 Provider config shape:
     {
-      "kind":         "nyfed_effr" | "yfinance" | "fmp_*",
+      "kind":         "yfinance" | "fmp_*",
       "path":         "<endpoint path, relative to FMP_BASE>",
       "params":       {dict of query string params},
       "row_field":    optional jq-style path inside the response to the list,
@@ -105,9 +106,8 @@ class SeriesSpec:
 
 # Notes on endpoint choices:
 #   - Rates: FMP exposes treasury yields at /stable/treasury-rates. Effective
-#     fed funds is best-effort from FMP's economic indicator endpoint; we list
-#     a 13W T-bill fallback as a proxy when the EFFR series is not in the
-#     plan.
+#     fed funds is declarative FMP economic-indicator metadata only. Treasury
+#     maturities are not economic substitutes for the effective fed-funds rate.
 #   - FX: USDxxx pairs flow through FMP's historical-price-eod feed which
 #     accepts a symbol like "USDBRL" and returns OHLC. The `close` field
 #     is the daily fix.
@@ -130,24 +130,10 @@ REGISTRY: dict[str, SeriesSpec] = {
         category="rates",
         providers=(
             ProviderSpec(
-                kind="nyfed_effr",
-                path="https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json",
-                params={"type": "rate"},
-                date_key="effectiveDate",
-                value_key="percentRate",
-                source="new_york_fed",
-            ),
-            ProviderSpec(
                 kind="fmp_economic",
                 path="economic-indicators",
                 params={"name": "federalFunds"},
                 value_key="value",
-            ),
-            ProviderSpec(
-                kind="fmp_treasury",
-                path="treasury-rates",
-                params={},
-                value_key="month1",
             ),
         ),
     ),

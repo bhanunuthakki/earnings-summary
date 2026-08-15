@@ -77,7 +77,7 @@ def test_stable_flat_list_round_trip_parses(monkeypatch: pytest.MonkeyPatch) -> 
 def test_yfinance_provider_is_first_for_revived_series() -> None:
     """The five never-populated series (usd_brl foremost — the most thesis-
     relevant factor for a MELI+NU book) and the frozen ones lead with the free
-    yfinance provider; fed_funds leads with the New York Fed and has no Yahoo source."""
+    yfinance provider; fed_funds has no default Yahoo or NY Fed activation."""
     for sid in ("usd_brl", "usd_eur", "usd_twd", "copper", "sox", "vix", "us_10y"):
         first = REGISTRY[sid].providers[0]
         assert first.kind == "yfinance", (sid, first.kind)
