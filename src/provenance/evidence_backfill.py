@@ -17,6 +17,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -317,8 +318,12 @@ def _persist_document_chain(
     ticker = _required_text(document, "ticker")
     source_type = _required_text(document, "source_type")
     doc_type = _required_text(document, "doc_type")
-    source_url = _optional_text(document, "source_url") or _legacy_storage_source_uri(
-        path, _required_text(document, "file_path")
+    source_url = _legacy_source_url(
+        conn,
+        document_id=document_id,
+        stored_source_url=_optional_text(document, "source_url"),
+        stored_path=_required_text(document, "file_path"),
+        blob_sha256=blob_sha256,
     )
     existing_blob = _existing_blob(conn, blob_sha256)
     blob_byte_size, blob_media_type, blob_storage_uri, blob_recorded_at = existing_blob or (
@@ -701,11 +706,70 @@ def _resolve_legacy_path(root: Path, stored_path: str) -> Path | None:
     return None
 
 
-def _legacy_storage_source_uri(path: Path, stored_path: str) -> str:
-    """Retain a legacy file fragment (such as ``#accn=...``) without hashing it as a path."""
+def _legacy_source_url(
+    conn: sqlite3.Connection,
+    *,
+    document_id: int,
+    stored_source_url: str | None,
+    stored_path: str,
+    blob_sha256: str,
+) -> str:
+    """Return immutable source provenance without coupling new records to a checkout path."""
+    if stored_source_url is not None:
+        return stored_source_url
 
-    _, separator, fragment = stored_path.partition("#")
-    return path.as_uri() if not separator else f"{path.as_uri()}#{fragment}"
+    canonical_url = _legacy_corpus_source_uri(stored_path)
+    existing = conn.execute(
+        "SELECT observation_id, source_url, blob_sha256 FROM evidence_source_observations "
+        "WHERE idempotency_key = ?",
+        (f"legacy-document:{document_id}:observation",),
+    ).fetchone()
+    if existing is None:
+        return canonical_url
+
+    observation_id, existing_url, existing_blob_sha256 = existing
+    if observation_id != f"legacy-obs-{document_id}":
+        raise ValueError(f"legacy source observation {document_id} has an unexpected identity")
+    if str(existing_blob_sha256).lower() != blob_sha256.lower():
+        raise ValueError(f"legacy source observation {document_id} has a different blob hash")
+    if existing_url == canonical_url:
+        return canonical_url
+    if _legacy_file_uri_matches_stored_path(str(existing_url), stored_path):
+        emit_structured_event(
+            "evidence_ledger_backfill_legacy_source_alias_reused",
+            document_id=document_id,
+            reason="verified_file_uri_matches_stored_path_and_blob",
+        )
+        return str(existing_url)
+    raise ValueError(
+        f"legacy source observation {document_id} conflicts with the canonical corpus source"
+    )
+
+
+def _legacy_corpus_source_uri(stored_path: str) -> str:
+    """Encode a logical corpus locator that is stable across checkout roots."""
+    path_value, separator, fragment = stored_path.partition("#")
+    normalized_path = path_value.replace("\\", "/").lstrip("/")
+    encoded_path = quote(normalized_path, safe="/")
+    encoded_fragment = quote(fragment, safe="") if separator else ""
+    return f"legacy-corpus:///{encoded_path}" + (
+        f"#{encoded_fragment}" if separator else ""
+    )
+
+
+def _legacy_file_uri_matches_stored_path(source_url: str, stored_path: str) -> bool:
+    """Permit a historical local URI only for the verified legacy logical path."""
+    parsed = urlsplit(source_url)
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+        return False
+    stored_value, separator, fragment = stored_path.partition("#")
+    if separator and parsed.fragment != fragment:
+        return False
+    if not separator and parsed.fragment:
+        return False
+    normalized_stored = stored_value.replace("\\", "/").lstrip("/").casefold()
+    normalized_uri_path = unquote(parsed.path).replace("\\", "/").rstrip("/").casefold()
+    return normalized_uri_path.endswith(f"/{normalized_stored}")
 
 
 def _read_checkpoint(path: Path) -> BackfillCheckpoint:
