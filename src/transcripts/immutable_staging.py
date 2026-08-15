@@ -141,7 +141,9 @@ def _windows_open_no_follow(path: Path, *, directory: bool) -> int:
     )
     create_file.restype = ctypes.c_void_p
     flags = 0x00200000 | (0x02000000 if directory else 0)  # OPEN_REPARSE_POINT | BACKUP
-    sharing = 0x00000001 | (0x00000002 if directory else 0)  # READ | directory WRITE
+    sharing = (
+        0x00000003 if directory else 0x00000007
+    )  # Root denies DELETE; file readers share READ | WRITE | DELETE.
     raw_handle = create_file(str(path), 0x80000000, sharing, None, 3, flags, None)
     invalid_handle = ctypes.c_void_p(-1).value
     if raw_handle in (None, invalid_handle):
@@ -642,14 +644,7 @@ def _delete_owned_temporary(
     if os.name == "nt":
         _windows_mark_owned_for_deletion(descriptor)
     elif temporary.installed_name is not None:
-        current = _lstat_under_root(
-            root,
-            temporary.installed_name,
-            label="failed installed target",
-        )
-        if _object_identity(current) != temporary.identity:
-            raise OSError("installed target identity changed before cleanup")
-        os.unlink(temporary.installed_name, dir_fd=root.descriptor)
+        raise OSError("POSIX installed residue retained rather than unlinking a mutable name")
 
 
 def _close_owned_temporary(
@@ -675,8 +670,9 @@ def _close_owned_temporary(
     except OSError as exc:
         cleanup_error = cleanup_error or exc
     if cleanup_error is not None:
+        residue = temporary.installed_name or temporary.name or "<anonymous handle>"
         raise TranscriptStagingError(
-            "owned temporary cleanup could not be completed safely"
+            f"owned temporary cleanup could not be completed safely; residue retained: {residue}"
         ) from cleanup_error
 
 

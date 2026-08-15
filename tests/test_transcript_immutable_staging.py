@@ -6,6 +6,7 @@ import stat
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 from pydantic import ValidationError
@@ -800,6 +801,7 @@ def test_cleanup_never_chmods_a_replacement_path(
     assert not victim.stat().st_mode & stat.S_IWUSR
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows named-residue contract")
 def test_cleanup_denial_is_surfaced(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -819,10 +821,19 @@ def test_cleanup_denial_is_surfaced(
     monkeypatch.setattr(staging, "_atomic_install_no_replace", fail_install, raising=False)
     monkeypatch.setattr(staging, "_delete_owned_temporary", deny_owned_cleanup)
 
-    with pytest.raises(TranscriptStagingError, match="cleanup could not be completed"):
+    with pytest.raises(
+        TranscriptStagingError,
+        match="cleanup could not be completed",
+    ) as caught:
         _stage(source, private_root, payload=payload)
 
+    residues = tuple(private_root.iterdir())
+    assert len(residues) == 1
+    assert residues[0].name in str(caught.value)
+    assert "residue retained" in str(caught.value)
 
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows exact-handle deletion contract")
 def test_failed_installed_target_is_removed_through_owned_handle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -851,6 +862,108 @@ def test_failed_installed_target_is_removed_through_owned_handle(
         _stage(source, private_root, payload=payload)
 
     assert list(private_root.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX non-destructive cleanup contract")
+def test_posix_failed_install_never_unlinks_a_substituted_victim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"must survive")
+    validate_candidate: object = vars(staging)["_validate_owned_temporary"]
+    lstat_candidate: object = vars(staging)["_lstat_under_root"]
+    assert callable(validate_candidate)
+    assert callable(lstat_candidate)
+    substitution_attempted = False
+
+    def fail_after_installed_validation(*args: object, **kwargs: object) -> object:
+        result = validate_candidate(*args, **kwargs)
+        if kwargs.get("installed") is True:
+            raise TranscriptStagingError("injected installed-target failure")
+        return result
+
+    def substitute_after_identity_check(*args: object, **kwargs: object) -> object:
+        nonlocal substitution_attempted
+        result = lstat_candidate(*args, **kwargs)
+        if kwargs.get("label") == "failed installed target":
+            substitution_attempted = True
+            target_name = args[1]
+            assert isinstance(target_name, str)
+            target = private_root / target_name
+            target.unlink()
+            victim.rename(target)
+        return result
+
+    monkeypatch.setattr(
+        staging,
+        "_validate_owned_temporary",
+        fail_after_installed_validation,
+    )
+    monkeypatch.setattr(staging, "_lstat_under_root", substitute_after_identity_check)
+
+    with pytest.raises(TranscriptStagingError, match="residue retained") as caught:
+        _stage(source, private_root, payload=payload)
+
+    target = private_root / f"{_digest(payload)}.transcript"
+    assert not substitution_attempted
+    assert target.name in str(caught.value)
+    assert target.read_bytes() == payload
+    assert victim.read_bytes() == b"must survive"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows sharing contract")
+def test_windows_sixteen_way_replay_reads_while_installer_delete_handle_is_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+    install_candidate: object = vars(staging)["_atomic_install_no_replace"]
+    assert callable(install_candidate)
+    installed = Event()
+    release_installer = Event()
+    held_once = False
+
+    def hold_first_installed_handle(*args: object, **kwargs: object) -> object:
+        nonlocal held_once
+        result = install_candidate(*args, **kwargs)
+        if not held_once:
+            held_once = True
+            installed.set()
+            if not release_installer.wait(timeout=10):
+                raise AssertionError("replay probe did not release installer")
+        return result
+
+    monkeypatch.setattr(
+        staging,
+        "_atomic_install_no_replace",
+        hold_first_installed_handle,
+    )
+
+    with ThreadPoolExecutor(max_workers=17) as executor:
+        installer = executor.submit(_stage, source, private_root, payload=payload)
+        assert installed.wait(timeout=10)
+        replays = tuple(
+            executor.submit(_stage, source, private_root, payload=payload) for _ in range(16)
+        )
+        try:
+            artifacts = tuple(replay.result(timeout=10) for replay in replays)
+        finally:
+            release_installer.set()
+        first = installer.result(timeout=10)
+
+    assert all(artifact == first for artifact in artifacts)
+    assert _read(first) == payload
+    assert tuple(private_root.iterdir()) == (first.staged_path,)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows root-handle contract")
