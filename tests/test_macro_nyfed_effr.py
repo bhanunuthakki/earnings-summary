@@ -575,7 +575,9 @@ def test_provider_result_reparse_rejects_bad_value_or_date(
     assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM macro_series").fetchone()[0] == 0
 
 
-@pytest.mark.parametrize(("second_value", "outcome", "row_count"), [(3.63, "ok", 1), (3.64, "error", 0)])
+@pytest.mark.parametrize(
+    ("second_value", "outcome", "row_count"), [(3.63, "ok", 1), (3.64, "error", 0)]
+)
 def test_provider_result_duplicate_dates_dedupe_or_reject(
     db: Path,
     second_value: float,
@@ -622,7 +624,9 @@ def test_provider_result_duplicate_dates_dedupe_or_reject(
     )
 
     assert receipt.series[0].attempts[0].outcome.value == outcome
-    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM macro_series").fetchone()[0] == row_count
+    assert (
+        sqlite3.connect(db).execute("SELECT COUNT(*) FROM macro_series").fetchone()[0] == row_count
+    )
 
 
 def test_unchanged_fixture_is_a_true_noop(db: Path) -> None:

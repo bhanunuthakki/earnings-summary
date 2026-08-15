@@ -175,7 +175,7 @@ def test_yfinance_call_is_timeout_bounded_and_receipted(db: Path) -> None:
             db_path=db,
             yfinance_loader=loader,
             timeout_seconds=0.05,
-                now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
+            now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
         )
     finally:
         release.set()
