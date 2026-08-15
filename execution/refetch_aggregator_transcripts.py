@@ -46,7 +46,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -54,14 +54,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fetch_qa_transcript  # type: ignore[import-not-found]  # noqa: E402
-from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
-    FetchQaSpec,
-    fetch_qa,
-)
 
 import db  # noqa: E402
-from compute.transcript_ingest import ingest_evidence_file  # noqa: E402
 from models.companies import ListType  # noqa: E402
+from models.documents import DocType, SourceType  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.source_policy import (  # noqa: E402
     SOURCE_POLICY_CONFIG,
@@ -69,6 +65,21 @@ from pipeline.source_policy import (  # noqa: E402
     CollectionSource,
     CollectionTarget,
     select_collection_targets,
+)
+from pipeline.transcript_acquisition import (  # noqa: E402
+    COMBINED_SOURCE_REGIME_IDENTITY,
+    AuthorizedTranscriptArtifact,
+    TranscriptAcquisitionDeniedError,
+    authorize_transcript_request,
+)
+from transcripts.acquisition_semantics import (  # noqa: E402
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    ExistingArtifactBehavior,
+    TranscriptAcquisitionAuthorization,
+    TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
+    TranscriptAuthorizationStatus,
+    TranscriptProvider,
 )
 
 _TRANSCRIPT_INDEX = PROJECT_ROOT / ".tmp" / "transcript_index.json"
@@ -227,131 +238,15 @@ def _process_one(
     repo_root: Path,
     db_path: Path,
     owner_requested: bool,
+    authorized_artifact: AuthorizedTranscriptArtifact | None = None,
 ) -> QuarterResult:
-    processed_rel = f"transcripts/processed/{ticker}_Q{quarter}_{year}.txt"
-    raw_rel = f"transcripts/raw/{ticker}_Q{quarter}_{year}.txt"
-
-    old = _existing_txt_document(conn, ticker, processed_rel) or _existing_txt_document(
-        conn, ticker, raw_rel
-    )
-    old_doc_id, old_transcript_id = old if old else (None, None)
-    old_n, old_d = (
-        _segment_stats(conn, old_transcript_id)
-        if old_transcript_id not in (None, -1)
-        else (None, None)
-    )
-
-    if dry_run:
-        return QuarterResult(
-            ticker=ticker,
-            year=year,
-            quarter=quarter,
-            old_document_id=old_doc_id,
-            old_segment_count=old_n,
-            old_distinct_speakers=old_d,
-            new_document_id=None,
-            new_segment_count=None,
-            new_distinct_speakers=None,
-            superseded=False,
-            status="dry_run",
+    del conn, ticker, year, quarter, tracked, dry_run, repo_root, db_path, owner_requested
+    if authorized_artifact is None:
+        raise TranscriptAcquisitionDeniedError(
+            "aggregator refetch has no canonical authorized artifact"
         )
-
-    try:
-        fetched = fetch_qa(
-            FetchQaSpec(ticker=ticker, year=year, quarter=quarter),
-            force=True,
-            db_path=db_path,
-            owner_requested=owner_requested,
-        )
-    except Exception as e:
-        return QuarterResult(
-            ticker=ticker,
-            year=year,
-            quarter=quarter,
-            old_document_id=old_doc_id,
-            old_segment_count=old_n,
-            old_distinct_speakers=old_d,
-            new_document_id=None,
-            new_segment_count=None,
-            new_distinct_speakers=None,
-            superseded=False,
-            status=f"fetch_error: {type(e).__name__}: {e}"[:200],
-        )
-    if fetched is None:
-        return QuarterResult(
-            ticker=ticker,
-            year=year,
-            quarter=quarter,
-            old_document_id=old_doc_id,
-            old_segment_count=old_n,
-            old_distinct_speakers=old_d,
-            new_document_id=None,
-            new_segment_count=None,
-            new_distinct_speakers=None,
-            superseded=False,
-            status="fetch_miss",
-        )
-
-    try:
-        result = ingest_evidence_file(
-            conn,
-            file_path=fetched.output_path,
-            allowed_root=repo_root / "transcripts" / "raw",
-            project_root=repo_root,
-            tracked_tickers=tracked,
-        )
-    except Exception as e:
-        return QuarterResult(
-            ticker=ticker,
-            year=year,
-            quarter=quarter,
-            old_document_id=old_doc_id,
-            old_segment_count=old_n,
-            old_distinct_speakers=old_d,
-            new_document_id=None,
-            new_segment_count=None,
-            new_distinct_speakers=None,
-            superseded=False,
-            status=f"ingest_error: {type(e).__name__}: {e}"[:200],
-        )
-    if result is None or result.transcript_id is None:
-        return QuarterResult(
-            ticker=ticker,
-            year=year,
-            quarter=quarter,
-            old_document_id=old_doc_id,
-            old_segment_count=old_n,
-            old_distinct_speakers=old_d,
-            new_document_id=None,
-            new_segment_count=None,
-            new_distinct_speakers=None,
-            superseded=False,
-            status="ingest_no_result",
-        )
-
-    new_n, new_d = _segment_stats(conn, result.transcript_id)
-    # ingest_one already decided supersede-vs-skip via the reliability-ranked
-    # period guard (source tier, then segment-count richness); this just
-    # reports what it decided.
-    superseded = (
-        not result.skipped_existing and old_doc_id is not None and old_doc_id != result.document_id
-    )
-    if result.skipped_existing:
-        status = "no_improvement" if old_doc_id is not None else "skipped_lower_reliability"
-    else:
-        status = "ok"
-    return QuarterResult(
-        ticker=ticker,
-        year=year,
-        quarter=quarter,
-        old_document_id=old_doc_id,
-        old_segment_count=old_n,
-        old_distinct_speakers=old_d,
-        new_document_id=result.document_id,
-        new_segment_count=new_n,
-        new_distinct_speakers=new_d,
-        superseded=superseded,
-        status=status,
+    raise TranscriptAcquisitionDeniedError(
+        "aggregator refetch remains denied by the canonical provider policy"
     )
 
 
@@ -384,6 +279,46 @@ def main() -> int:
             json.dumps({"event": "plan", "tickers": len(scope_tickers), "quarters": len(quarters)})
             + "\n"
         )
+
+        denied: list[TranscriptAcquisitionAuthorization] = []
+        for ticker, year, quarter in quarters:
+            receipt = authorize_transcript_request(
+                conn,
+                TranscriptAcquisitionRequest(
+                    entrypoint=TranscriptAcquisitionEntrypoint.REFETCH_AGGREGATOR_TRANSCRIPTS,
+                    canonical_ticker=ticker,
+                    fiscal_year=year,
+                    fiscal_quarter=quarter,
+                    as_of=date.today(),
+                    source_type=SourceType.IR_DOC,
+                    document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+                    provider=TranscriptProvider.ROIC,
+                    owner_requested=explicit is not None,
+                    existing_artifact=False,
+                    existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+                    source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+                    source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+                ),
+            )
+            if receipt.status is TranscriptAuthorizationStatus.DENIED:
+                denied.append(receipt)
+        if denied:
+            for receipt in denied:
+                sys.stderr.write(
+                    json.dumps(
+                        {
+                            "event": "transcript_acquisition_denied",
+                            "entrypoint": receipt.request.entrypoint.value,
+                            "ticker": receipt.request.canonical_ticker,
+                            "provider": receipt.request.provider.value,
+                            "reason": receipt.reason.value,
+                            "idempotency_key": receipt.idempotency_key,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+            return 2
 
         results: list[QuarterResult] = []
         for i, (ticker, year, quarter) in enumerate(quarters):

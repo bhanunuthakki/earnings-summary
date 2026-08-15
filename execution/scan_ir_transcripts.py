@@ -71,7 +71,7 @@ from runtime.python_process import managed_python_prefix  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from backfill_transcripts import quarter_end_date, recent_fiscal_quarters  # noqa: E402
-from fetch_qa_transcript import FetchQaSpec, fetch_qa  # noqa: E402
+from fetch_qa_transcript import FetchQaSpec, FetchQaStatus, fetch_qa  # noqa: E402
 
 import db  # noqa: E402
 from sources.earnings_calendar import last_earnings_date  # noqa: E402
@@ -236,9 +236,12 @@ def scan_one(
         )
     except Exception as e:  # aggregator/issuer scraping is fragile — isolate one ticker
         return TickerScanResult(ticker, "error", qlabel, detail=f"{type(e).__name__}: {e}"[:200])
-    if hit is None:
+    if hit.status == FetchQaStatus.DENIED:
+        return TickerScanResult(ticker, "error", qlabel, detail="transcript acquisition denied")
+    if hit.status == FetchQaStatus.PROVIDER_MISS:
         return TickerScanResult(ticker, "not_published_yet", qlabel)
-    return TickerScanResult(ticker, "fetched", qlabel, detail=hit.source_name)
+    source_name = hit.result.source_name if hit.result is not None else "issuer_ir"
+    return TickerScanResult(ticker, "fetched", qlabel, detail=source_name)
 
 
 def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:

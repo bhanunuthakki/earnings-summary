@@ -27,6 +27,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import date
 from enum import Enum
 from pathlib import Path
 from typing import Any, cast
@@ -50,17 +51,26 @@ from compute.transcript_ingest import (  # noqa: E402
 )
 from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url  # noqa: E402
 from log_redact import redact  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
-    ArtifactKind,
-    AuthorizationReason,
-    CollectionSource,
-    decision_for,
+from models.documents import DocType, SourceType  # noqa: E402
+from pipeline.transcript_acquisition import (  # noqa: E402
+    COMBINED_SOURCE_REGIME_IDENTITY,
+    authorize_transcript_request,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from transcript_qa import (  # noqa: E402
     QaStatus,
     validate_audio_transcript,
     validate_transcript,
+)
+from transcripts.acquisition_semantics import (  # noqa: E402
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    ExistingArtifactBehavior,
+    TranscriptAcquisitionAuthorization,
+    TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
+    TranscriptAuthorizationFailure,
+    TranscriptAuthorizationStatus,
+    TranscriptProvider,
 )
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
@@ -192,18 +202,26 @@ def _select_audio_url(
     return smart_search_url(spec.ticker, spec.year, spec.quarter, ffmpeg_location)
 
 
-def _enforce_audio_policy() -> None:
+def _enforce_audio_policy(
+    authorization: TranscriptAcquisitionAuthorization | None = None,
+) -> None:
     """Fail closed before every downloader/search boundary; webcasts are excluded."""
 
-    decision = decision_for(
-        ListType.PORTFOLIO,
-        CollectionSource.TRANSCRIPT,
-        ArtifactKind.WEBCAST,
-        requested=True,
+    if (
+        authorization is not None
+        and authorization.status is TranscriptAuthorizationStatus.DENIED
+        and authorization.failure is TranscriptAuthorizationFailure.AUDIO_WEBCAST_EXCLUDED
+        and authorization.request.entrypoint
+        is TranscriptAcquisitionEntrypoint.FETCH_AUDIO_TRANSCRIPTS
+        and authorization.request.provider is TranscriptProvider.YOUTUBE_AUDIO
+    ):
+        raise AudioCollectionPolicyError(
+            "Audio/webcast collection is excluded by canonical transcript policy "
+            f"({authorization.idempotency_key})."
+        )
+    raise AudioCollectionPolicyError(
+        "Audio/webcast collection is excluded; the canonical denied receipt is required."
     )
-    if decision.allowed or decision.reason is not AuthorizationReason.WEBCAST_EXCLUDED:
-        raise RuntimeError("source policy failed to produce the required webcast denial")
-    raise AudioCollectionPolicyError("Audio/webcast collection is excluded by source policy.")
 
 
 def _safe_external_message(value: object) -> str:
@@ -526,9 +544,35 @@ def fetch_and_transcribe(
     ffmpeg_location: Path | None,
     whisper_model: str = DEFAULT_WHISPER_MODEL,
     beam_size: int = DEFAULT_BEAM_SIZE,
+    *,
+    db_path: Path | None = None,
+    owner_requested: bool = True,
+    as_of: date | None = None,
 ) -> TranscriptionResult | None:
-    _enforce_audio_policy()
     canonical_ticker = resolve_ticker(spec.ticker)
+    effective_db = PROJECT_ROOT / "data" / "portfolio.db" if db_path is None else db_path
+    request = TranscriptAcquisitionRequest(
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_AUDIO_TRANSCRIPTS,
+        canonical_ticker=canonical_ticker,
+        fiscal_year=spec.year,
+        fiscal_quarter=spec.quarter,
+        as_of=date.today() if as_of is None else as_of,
+        source_type=SourceType.TRANSCRIPT_AUDIO,
+        document_type=DocType.EARNINGS_CALL_AUDIO,
+        provider=TranscriptProvider.YOUTUBE_AUDIO,
+        owner_requested=owner_requested,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+    )
+    with connect_sqlite(
+        effective_db,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=False,
+    ) as conn:
+        authorization = authorize_transcript_request(conn, request)
+    _enforce_audio_policy(authorization)
     qlabel = _quarter_label(spec.quarter)
     output_path = RAW_DIR / f"{canonical_ticker}_{qlabel}_{spec.year}.txt"
 

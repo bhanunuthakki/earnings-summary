@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -203,6 +203,7 @@ def start_run(
     deduplicate_completed: bool = False,
     stale_after: timedelta = DEFAULT_STALE_AFTER,
     now: datetime | None = None,
+    pre_persist_validation: Callable[[], None] | None = None,
 ) -> str:
     """Atomically start an attempt, suppressing duplicate logical invocations.
 
@@ -224,6 +225,8 @@ def start_run(
         try:
             if not conn.in_transaction:
                 conn.execute("BEGIN IMMEDIATE")
+            if pre_persist_validation is not None:
+                pre_persist_validation()
             active_rows = conn.execute(
                 "SELECT attempt_id, started_at FROM pipeline_attempts "
                 "WHERE pipeline_key = ? AND status = ? ORDER BY started_at, attempt_id",
@@ -347,6 +350,8 @@ def start_run(
             conn.rollback()
             raise
     else:
+        if pre_persist_validation is not None:
+            pre_persist_validation()
         conn.execute(
             "INSERT INTO ingestion_runs "
             "(run_id, started_at, ended_at, directive, ticker_scope, status, error_summary) "

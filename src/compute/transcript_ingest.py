@@ -30,6 +30,11 @@ from pypdf import PdfReader
 from compute import evidence_snapshot
 from models.documents import DocType, FetchStatus, SourceType
 from models.facts import FiscalPeriodType
+from pipeline.transcript_acquisition import (
+    AuthorizedTranscriptArtifact,
+    read_authorized_transcript,
+    require_persisted_authorized_transcript_artifact,
+)
 from provenance.selection import selected_transcripts_relation
 from transcripts.source_reliability import choose_winner, classify_transcript_source
 
@@ -919,6 +924,7 @@ def ingest_evidence_file(
     project_root: Path,
     tracked_tickers: frozenset[str] | None = None,
     document_id: int | None = None,
+    authorized_artifact: AuthorizedTranscriptArtifact,
     commit: bool = True,
 ) -> IngestResult | None:
     """Capture, parse, and persist one evidence file as a single atomic operation.
@@ -929,7 +935,19 @@ def ingest_evidence_file(
     """
     if (tracked_tickers is None) == (document_id is None):
         raise ValueError("provide exactly one of tracked_tickers or document_id")
-    snapshot = evidence_snapshot.capture_snapshot(file_path, allowed_root)
+    if authorized_artifact.document_id != document_id:
+        raise ValueError("authorized transcript artifact does not match document identity")
+    require_persisted_authorized_transcript_artifact(
+        conn,
+        authorized_artifact,
+        project_root=project_root,
+    )
+    snapshot_payload = read_authorized_transcript(
+        conn,
+        authorized_artifact,
+        project_root=project_root,
+    )
+    snapshot_sha256 = authorized_artifact.sha256
     savepoint = "transcript_evidence_ingest"
     conn.execute(f"SAVEPOINT {savepoint}")  # nosec B608 -- constant internal identifier
     try:
@@ -942,7 +960,7 @@ def ingest_evidence_file(
                 raise evidence_snapshot.EvidenceSourceChangedError(
                     "document evidence receipt is missing or invalid"
                 )
-            if recorded_sha != snapshot.sha256:
+            if recorded_sha != snapshot_sha256:
                 raise evidence_snapshot.EvidenceSourceChangedError(
                     "document evidence does not match its immutable receipt"
                 )
@@ -950,7 +968,7 @@ def ingest_evidence_file(
                 conn,
                 document_id=document_id,
                 file_path=file_path,
-                snapshot_bytes=snapshot.payload,
+                snapshot_bytes=snapshot_payload,
                 commit=False,
             )
         else:
@@ -960,13 +978,17 @@ def ingest_evidence_file(
                 file_path=file_path,
                 project_root=project_root,
                 tracked_tickers=tracked_tickers,
-                snapshot_bytes=snapshot.payload,
+                snapshot_bytes=snapshot_payload,
                 commit=False,
             )
-        verified_after = evidence_snapshot.capture_snapshot(file_path, allowed_root)
-        if verified_after.sha256 != snapshot.sha256:
+        verified_payload = read_authorized_transcript(
+            conn,
+            authorized_artifact,
+            project_root=project_root,
+        )
+        if hashlib.sha256(verified_payload).hexdigest() != snapshot_sha256:
             raise evidence_snapshot.EvidenceSourceChangedError(
-                "evidence changed before transaction release"
+                "authorized staged evidence changed before transaction release"
             )
     except Exception:
         conn.execute(f"ROLLBACK TO {savepoint}")  # nosec B608

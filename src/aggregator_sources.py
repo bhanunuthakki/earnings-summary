@@ -43,6 +43,9 @@ from html.parser import HTMLParser
 
 import requests
 
+from models.documents import DocType, SourceType
+from transcripts.acquisition_semantics import TranscriptProvider
+
 log = logging.getLogger(__name__)
 
 UA = (
@@ -140,6 +143,9 @@ class AggregatorHit:
 @dataclass(frozen=True)
 class AggregatorSource:
     name: str
+    provider: TranscriptProvider
+    source_type: SourceType
+    document_type: DocType
     fetch_qa: Callable[[str, int, int], AggregatorHit | None]
 
 
@@ -156,7 +162,7 @@ class _VisibleTextStripper(HTMLParser):
         self.parts: list[str] = []
         self._skip_depth = 0
 
-    def handle_starttag(self, tag: str, attrs: list) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in ("script", "style", "noscript", "svg"):
             self._skip_depth += 1
 
@@ -723,10 +729,34 @@ def _issuer_ir_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit | No
 # ---------------------------------------------------------------------------
 
 SOURCES: list[AggregatorSource] = [
-    AggregatorSource("issuer_ir", _issuer_ir_fetch),
-    AggregatorSource("roic", _roic_fetch),
-    AggregatorSource("stockanalysis", _stockanalysis_fetch),
-    AggregatorSource("tickertrends", _tickertrends_fetch),
+    AggregatorSource(
+        "issuer_ir",
+        TranscriptProvider.ISSUER_IR,
+        SourceType.IR_DOC,
+        DocType.EARNINGS_CALL_TRANSCRIPT,
+        _issuer_ir_fetch,
+    ),
+    AggregatorSource(
+        "roic",
+        TranscriptProvider.ROIC,
+        SourceType.IR_DOC,
+        DocType.EARNINGS_CALL_TRANSCRIPT,
+        _roic_fetch,
+    ),
+    AggregatorSource(
+        "stockanalysis",
+        TranscriptProvider.STOCKANALYSIS,
+        SourceType.IR_DOC,
+        DocType.EARNINGS_CALL_TRANSCRIPT,
+        _stockanalysis_fetch,
+    ),
+    AggregatorSource(
+        "tickertrends",
+        TranscriptProvider.TICKERTRENDS,
+        SourceType.IR_DOC,
+        DocType.EARNINGS_CALL_TRANSCRIPT,
+        _tickertrends_fetch,
+    ),
 ]
 
 

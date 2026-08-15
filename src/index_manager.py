@@ -164,6 +164,22 @@ def has_transcript(ticker: str, year, quarter: str) -> dict | None:
     return index.get(_transcript_key(ticker, year, quarter))
 
 
+def peek_transcript(ticker: str, year: int, quarter: str) -> IndexEntry | None:
+    """Read transcript metadata without creating or updating an index file."""
+
+    if not os.path.exists(TRANSCRIPT_INDEX_PATH):
+        return None
+    try:
+        with open(TRANSCRIPT_INDEX_PATH, encoding="utf-8") as handle:
+            payload = cast(object, json.load(handle))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    entry = cast(DocumentIndex, payload).get(_transcript_key(ticker, year, quarter))
+    return entry if isinstance(entry, dict) else None
+
+
 def register_transcript(
     ticker: str,
     year,
@@ -173,6 +189,7 @@ def register_transcript(
     has_qa: bool | None = None,
     qa_status: str | None = None,
     qa_details: dict | None = None,
+    acquisition_receipt: IndexEntry | None = None,
 ) -> bool:
     index = _load(TRANSCRIPT_INDEX_PATH)
     key = _transcript_key(ticker, year, quarter)
@@ -195,6 +212,11 @@ def register_transcript(
     updated_qa_details = (
         qa_details if qa_details is not None else (existing.get("qa_details") if existing else None)
     )
+    updated_acquisition_receipt = (
+        acquisition_receipt
+        if acquisition_receipt is not None
+        else (existing.get("acquisition_receipt") if existing else None)
+    )
 
     canonical_filepath = _canonicalize_transcript_filepath(filepath)
 
@@ -208,6 +230,7 @@ def register_transcript(
         "has_qa": updated_has_qa,
         "qa_status": updated_qa_status,
         "qa_details": updated_qa_details,
+        "acquisition_receipt": updated_acquisition_receipt,
         "qa_checked_at": (
             datetime.datetime.now().isoformat()
             if qa_status is not None

@@ -46,7 +46,7 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -79,8 +79,14 @@ from pipeline.run_accounting import (  # noqa: E402
     start_run,
     suppression_payload,
 )
+from pipeline.transcript_acquisition import (  # noqa: E402
+    persist_authorized_transcript_artifact,
+    read_authorized_transcript,
+    stage_pending_issuer_transcripts,
+)
 from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from transcripts.acquisition_semantics import TranscriptAcquisitionEntrypoint  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -753,6 +759,26 @@ def main() -> int:
             return rc
 
         print(f"[onboard] {ticker} stage=quarterly_refresh", flush=True)
+        transcript_artifacts = stage_pending_issuer_transcripts(
+            conn,
+            tickers=[ticker],
+            project_root=PROJECT_ROOT,
+            private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+            entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
+            as_of=date.today(),
+        )
+        for artifact in transcript_artifacts.values():
+            persist_authorized_transcript_artifact(
+                conn,
+                artifact,
+                project_root=PROJECT_ROOT,
+            )
+        conn.commit()
+
+        def _revalidate_transcript_batch() -> None:
+            for artifact in transcript_artifacts.values():
+                read_authorized_transcript(conn, artifact, project_root=PROJECT_ROOT)
+
         try:
             run_id = start_run(
                 conn,
@@ -763,6 +789,7 @@ def main() -> int:
                     ticker,
                     instrument=str(instrument_value or "").lower() or None,
                 ),
+                pre_persist_validation=_revalidate_transcript_batch,
             )
         except PipelineRunSuppressedError as exc:
             print(json.dumps(suppression_payload(exc)))
@@ -774,6 +801,7 @@ def main() -> int:
             holdings_dir=_HOLDINGS_DIR,
             run_id=run_id,
             fetch_sec=False,
+            transcript_artifacts=transcript_artifacts,
         )
         any_failed = any(s.status is RefreshStageStatus.FAILED for s in report.stages)
         end_run(

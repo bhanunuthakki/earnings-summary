@@ -629,8 +629,9 @@ def test_refresh_portfolio_marks_failed_and_unattempted_after_exception(
         holdings_dir: Path,
         run_id: str,
         fetch_sec: bool,
+        transcript_artifacts: object | None = None,
     ) -> TickerRefreshReport:
-        del project_root, holdings_dir, run_id, fetch_sec
+        del project_root, holdings_dir, run_id, fetch_sec, transcript_artifacts
         attempted.append(ticker)
         if ticker == "MELI":
             raise RuntimeError("provider exploded")
@@ -721,6 +722,7 @@ def test_cli_emits_one_redacted_terminal_receipt_and_ends_run_once(
         return report
 
     monkeypatch.setattr(cli, "open_db", fake_open_db)
+    monkeypatch.setattr(cli, "stage_pending_issuer_transcripts", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(cli, "start_run", fake_start_run)
     monkeypatch.setattr(cli, "refresh_portfolio", fake_refresh_portfolio)
 
@@ -806,6 +808,7 @@ def test_cli_human_output_redacts_all_stage_notes(
         return None
 
     monkeypatch.setattr(cli, "open_db", fake_open_db)
+    monkeypatch.setattr(cli, "stage_pending_issuer_transcripts", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(cli, "start_run", fake_start_run)
     monkeypatch.setattr(cli, "refresh_portfolio", fake_refresh_portfolio)
     monkeypatch.setattr(cli, "end_run", fake_end_run)

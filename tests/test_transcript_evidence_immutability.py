@@ -43,7 +43,7 @@ def _body(marker: str) -> str:
     )
 
 
-def test_no_promote_is_raw_preserving_idempotent_and_force_fails_closed(
+def test_unreceipted_raw_ingest_fails_before_files_or_database_writes(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -72,7 +72,7 @@ def test_no_promote_is_raw_preserving_idempotent_and_force_fails_closed(
         "argv",
         ["ingest_transcripts.py", "--db", str(db_path), "--no-promote"],
     )
-    assert mod.main() == 0
+    assert mod.main() == 2
     assert raw_path.read_text(encoding="utf-8") == original
     assert not (processed_dir / raw_path.name).exists()
 
@@ -81,13 +81,7 @@ def test_no_promote_is_raw_preserving_idempotent_and_force_fails_closed(
             conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
             conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0],
         )
-        document_id = conn.execute("SELECT id FROM documents WHERE ticker = 'NU'").fetchone()[0]
-        with pytest.raises(sqlite3.IntegrityError, match="evidence is immutable"):
-            conn.execute(
-                "UPDATE documents SET file_path = 'transcripts/processed/NU_Q1_2026.txt' "
-                "WHERE id = ?",
-                (document_id,),
-            )
+        assert first_counts == (0, 0)
 
     monkeypatch.setattr(
         sys,
@@ -100,7 +94,7 @@ def test_no_promote_is_raw_preserving_idempotent_and_force_fails_closed(
             "--force",
         ],
     )
-    assert mod.main() == 0
+    assert mod.main() == 2
     with sqlite3.connect(db_path) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
@@ -108,13 +102,10 @@ def test_no_promote_is_raw_preserving_idempotent_and_force_fails_closed(
         ) == first_counts
 
     raw_path.write_text(_body("DIFFERENT"), encoding="utf-8")
-    assert mod.main() == 0
+    assert mod.main() == 2
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == first_counts[0] + 1
-        assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == first_counts[1] + 1
-        paths = [row[0] for row in conn.execute("SELECT file_path FROM documents ORDER BY id")]
-        assert len(set(paths)) == 2
-        assert all(path.startswith("transcripts/raw/.evidence/") for path in paths)
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 0
 
 
 def test_staging_rejects_source_mutation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,19 +231,14 @@ def test_per_file_savepoint_rolls_back_partial_writes_but_keeps_failure_receipt(
         "argv",
         ["ingest_transcripts.py", "--db", str(db_path), "--no-promote", "--force"],
     )
-    assert mod.main() == 1
+    assert mod.main() == 2
     with sqlite3.connect(db_path) as conn:
         after = tuple(
             conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             for table in ("documents", "transcripts", "transcript_segments")
         )
         assert after == before
-        assert (
-            conn.execute(
-                "SELECT COUNT(*) FROM stage_transitions WHERE status = 'failed'"
-            ).fetchone()[0]
-            == 1
-        )
+        assert conn.execute("SELECT COUNT(*) FROM stage_transitions").fetchone()[0] == 0
 
 
 def test_ingest_parses_the_same_snapshot_bytes_used_for_hash(tmp_path: Path) -> None:
@@ -355,7 +341,7 @@ def test_existing_ir_document_requires_exact_immutable_receipt(
         ],
     )
 
-    assert mod.main() == 1
+    assert mod.main() == 2
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 0
