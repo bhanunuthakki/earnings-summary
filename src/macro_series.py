@@ -68,7 +68,7 @@ class ProviderSpec:
 class MacroObservation(BaseModel):
     """One provider-neutral, provenance-complete macro observation."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     series_id: str = Field(min_length=1)
     effective_date: date

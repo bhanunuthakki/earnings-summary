@@ -7,8 +7,9 @@ import json
 import sqlite3
 from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -177,6 +178,75 @@ def test_macro_observation_rejects_naive_time_and_normalizes_aware_time_to_utc()
     )
     assert normalized.observed_at == datetime(2026, 8, 14, 16, 0, tzinfo=UTC)
     assert normalized.observed_at.utcoffset() == timedelta(0)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "coerced_value"),
+    [
+        ("effective_date", "2026-08-13"),
+        ("effective_date", datetime(2026, 8, 13, 0, 0, tzinfo=UTC)),
+        ("observed_at", "2026-08-14T16:00:00Z"),
+        ("observed_at", 1_776_182_400),
+        ("series_id", b"fed_funds"),
+        ("units", b"pct"),
+        ("source", b"new_york_fed"),
+        ("currency", b"USD"),
+        ("value", Decimal("3.63")),
+    ],
+)
+def test_macro_observation_ordinary_construction_rejects_type_coercion(
+    field_name: str,
+    coerced_value: object,
+) -> None:
+    values: dict[str, object] = {
+        "series_id": "fed_funds",
+        "effective_date": date(2026, 8, 13),
+        "observed_at": NOW,
+        "value": 3.63,
+        "units": "pct",
+        "currency": None,
+        "source": "new_york_fed",
+    }
+    values[field_name] = coerced_value
+    with pytest.raises(ValidationError):
+        MacroObservation(**cast("Any", values))
+
+
+def test_model_copy_bypass_is_rejected_again_at_provider_boundary(db: Path) -> None:
+    valid = MacroObservation(
+        series_id="fed_funds",
+        effective_date=date(2026, 8, 13),
+        observed_at=NOW,
+        value=3.63,
+        units="pct",
+        currency=None,
+        source="new_york_fed",
+    )
+    forged = valid.model_copy(update={"effective_date": "2026-08-13"})
+
+    def forged_loader(
+        _series: SeriesSpec,
+        _provider: ProviderSpec,
+        *,
+        observed_at: datetime,
+        start_date: date,
+        end_date: date,
+        timeout_seconds: float,
+    ) -> tuple[MacroObservation, ...]:
+        del observed_at, start_date, end_date, timeout_seconds
+        return (forged,)
+
+    receipt = macro.refresh_series(
+        series_ids=("fed_funds",),
+        db_path=db,
+        provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
+        provider_loaders={"nyfed_effr": forged_loader},
+        now=NOW,
+    )
+
+    assert receipt.status is macro.RefreshStatus.FAILED
+    assert receipt.series[0].attempts[0].outcome is macro.AttemptOutcome.ERROR
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM macro_series").fetchone()[0] == 0
 
 
 def test_unknown_effr_row_field_remains_rejected() -> None:
