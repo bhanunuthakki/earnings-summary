@@ -478,9 +478,7 @@ def main() -> int:
                         conn,
                         artifact,
                         project_root=PROJECT_ROOT,
-                        trusted_staging_root=PROJECT_ROOT
-                        / ".tmp"
-                        / "transcript-acquisition",
+                        trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
                     )
                     != path.read_bytes()
                 ):
