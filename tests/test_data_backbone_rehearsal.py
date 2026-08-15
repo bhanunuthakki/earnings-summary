@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -545,6 +546,32 @@ def _clean_code_identity() -> rehearsal.CodeIdentity:
             "porcelain_sha256": hashlib.sha256(b"").hexdigest(),
         }
     )
+
+
+def test_run_upgrade_explicitly_authorizes_the_isolated_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "rehearsal-repo" / "data" / "portfolio.db"
+    backup = tmp_path / "candidate-pre-upgrade.db"
+    captured: list[str] = []
+    expected = rehearsal.UpgradeTerminalReceipt(
+        status="upgraded",
+        db_path=str(candidate),
+        from_revision="0017_add_owner_decision_checkpoints",
+        to_revision=ACTIVE_HEAD,
+        backup_path=str(backup),
+        completed_at="2026-08-15T12:00:00+00:00",
+    )
+
+    def complete(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.extend(command)
+        return subprocess.CompletedProcess(command, 0, expected.model_dump_json(), "")
+
+    monkeypatch.setattr(cli.subprocess, "run", complete)
+
+    assert cli._run_upgrade(ROOT, candidate, backup) == expected
+    assert captured[captured.index("--runtime-root") + 1] == str(candidate.parents[1])
+    assert "--allow-isolated-db" in captured
 
 
 def test_cli_plan_writes_self_sealed_receipt(tmp_path: Path) -> None:
