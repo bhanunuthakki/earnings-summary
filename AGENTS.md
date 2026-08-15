@@ -61,6 +61,14 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 - A change that adds, removes, renames, or materially changes an operation, operational observation, or operator action must follow `directives/operations_governance_surface.md` before it is complete.
 - The change must leave a truthful surface update or an explicit tested no-surface-change disposition. Never infer health from configuration, silently leave a removed capability visible, or expose a mutating control merely because an execution path exists.
 
+### Locally Owned, Exit-Ready Reconstructability Invariant
+
+- The core assets of `earnings-summary` (data models, SQLite schemas and alembic migrations, financial compute formulas, synthesis lenses, DCF valuation models, evaluation suites, and deterministic CLI entrypoints) are locally owned, versioned, and runtime-neutral.
+- Prompts, schemas, domain semantics, and test suites must never depend on vendor-specific harness state, proprietary memory stores, or unversioned cloud environments.
+- Provider SDKs, hosted CI workflows, Claude/Gemini CLI subscription wrappers, model IDs, external financial APIs (FMP, SEC EDGAR), and cloud backup targets are replaceable boundary adapters.
+- All 11 platform subsystems must satisfy the deterministic inventory and verification contract in `reconstruction_manifest.json` and `execution/verify_reconstruction_inventory.py`.
+- Reconstructability is exit-ready by design: any replacement agent or local harness can verify, reconstruct, and operate the platform using version-controlled code, migrations, and SQLite snapshots.
+
 ## File Organization & State
 
 ### Categories
