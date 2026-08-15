@@ -1,0 +1,347 @@
+{
+  "manifest_version": "2026-08-15.2",
+  "workspace_name": "earnings-summary",
+  "description": "11-subsystem reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
+  "canonical_runtime": {
+    "python_version": ">=3.11",
+    "database": "sqlite3 (WAL mode)",
+    "primary_port": 7421,
+    "lockfiles": [
+      "requirements.lock",
+      "requirements.txt",
+      "pyproject.toml"
+    ]
+  },
+  "subsystems": [
+    {
+      "id": "core_data_layer",
+      "name": "Core SQLite Data Layer & Migrations",
+      "path": "alembic",
+      "language": "python",
+      "entrypoints": [
+        "alembic/versions/0001_initial_schema.py",
+        "src/sqlite_runtime.py",
+        "src/db.py"
+      ],
+      "dependencies": [
+        "requirements.lock",
+        "alembic.ini"
+      ],
+      "test_commands": [
+        "pytest tests/test_sqlite_runtime.py -q"
+      ],
+      "documentation": [
+        "AGENTS.md",
+        "directives/cross_asset_data_model.md"
+      ],
+      "version_ownership": "alembic_version table (head revision 0270+) and alembic/versions/ DDL migrations",
+      "backup_ownership": "repo-maintenance/backup_scratch.ps1 online SQLite snapshot (db_snapshots/portfolio.db) and data/portfolio.db WAL mode",
+      "state_classification": "durable_database",
+      "reconstruction_tier": "tier_0_data_backbone",
+      "invariants": [
+        "DDL migrations are idempotent and reversible",
+        "SQLite WAL mode with PRAGMA busy_timeout=5000",
+        "Alembic baseline 0001 wraps DDL in IF NOT EXISTS"
+      ],
+      "exit_ready_boundary": "Locally owned SQLite file and Alembic DDL scripts; zero external hosted DB or managed service dependencies"
+    },
+    {
+      "id": "pipeline_execution",
+      "name": "Deterministic Execution & Orchestration",
+      "path": "execution",
+      "language": "python",
+      "entrypoints": [
+        "execution/run_morning_pipeline.py",
+        "execution/refresh_expected_earnings.py",
+        "execution/refresh_cache.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_pipeline*.py -q"
+      ],
+      "documentation": [
+        "AGENTS.md",
+        "directives/data_pipeline_dag.md"
+      ],
+      "version_ownership": "Git commit SHA & execution script CLI parameter specifications",
+      "backup_ownership": "Git version control (code) and ephemeral checkpoint state in .tmp/ (excluded from static backup)",
+      "state_classification": "deterministic_orchestration",
+      "reconstruction_tier": "tier_1_pipeline_execution",
+      "invariants": [
+        "All scripts use typed CLI arguments and Pydantic models",
+        "Outputs >100KB or >2000 lines write to .tmp/",
+        "Scripts log JSON-lines to stderr and return data on stdout",
+        "Orchestration is resumable via .tmp/ checkpoint state"
+      ],
+      "exit_ready_boundary": "Pure Python CLI entrypoints with standard library argparse/typer; independent of proprietary orchestration engines"
+    },
+    {
+      "id": "source_adapters",
+      "name": "Multi-Source Ingestion & Preference Stack",
+      "path": "src/sources",
+      "language": "python",
+      "entrypoints": [
+        "src/sources/earnings_calendar.py",
+        "src/sources/registry.py",
+        "src/pipeline/source_policy.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_source_policy.py -q"
+      ],
+      "documentation": [
+        "directives/design_language.md"
+      ],
+      "version_ownership": "Issuer Acquisition Policy hash & source policy versioning",
+      "backup_ownership": "Git version control (code) and immutable source documents in ir_documents/ and transcripts/",
+      "state_classification": "source_ingestion_adapter",
+      "reconstruction_tier": "tier_1_pipeline_execution",
+      "invariants": [
+        "External APIs (FMP, SEC EDGAR, Yahoo) are isolated behind provider circuits",
+        "Immutable raw source bytes preserved with accession and SHA-256 locator",
+        "Auth credentials passed strictly via environment variables"
+      ],
+      "exit_ready_boundary": "Pluggable source adapter interfaces; fallback to local fixture replay or alternative data providers"
+    },
+    {
+      "id": "financial_compute_engine",
+      "name": "Financial Metrics & Valuation Compute Engine",
+      "path": "src/compute",
+      "language": "python",
+      "entrypoints": [
+        "src/compute/metrics_engine/engine.py",
+        "src/compute/kpi_extract_summaries.py",
+        "src/dcf/valuation.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_metrics_engine.py -q"
+      ],
+      "documentation": [
+        "directives/data_provenance.md"
+      ],
+      "version_ownership": "Deterministic metric ontology version & valuation model parameter schemas",
+      "backup_ownership": "Git version control (formulas, DCF models, compute code) and data/portfolio.db derived tables",
+      "state_classification": "deterministic_compute",
+      "reconstruction_tier": "tier_1_pipeline_execution",
+      "invariants": [
+        "Zero LLM dependency in deterministic valuation and financial math",
+        "Unit and currency checks on every numeric fact before persistence",
+        "Reproducible DCF and reverse-DCF valuations from persisted parameters"
+      ],
+      "exit_ready_boundary": "Pure deterministic Python compute library with NumPy/Pandas; portable to any runtime environment"
+    },
+    {
+      "id": "synthesis_research_lenses",
+      "name": "Synthesis Research Lenses & Analysis",
+      "path": "src/synthesis",
+      "language": "python",
+      "entrypoints": [
+        "src/synthesis/lenses/catalyst_calendar.py",
+        "src/advisor/senior_partner_brief.py",
+        "src/macro_store.py"
+      ],
+      "dependencies": [
+        "financial_compute_engine"
+      ],
+      "test_commands": [
+        "pytest tests/test_advisor.py -q"
+      ],
+      "documentation": [
+        "HOW_TO_USE_REPORTS.md"
+      ],
+      "version_ownership": "Playbook revision & research lens template versioning",
+      "backup_ownership": "Git version control (lens logic, report generators) and research artifacts in data/portfolio.db",
+      "state_classification": "synthesis_research_lens",
+      "reconstruction_tier": "tier_2_synthesis_lens",
+      "invariants": [
+        "Research lenses cite immutable evidence locators and timestamps",
+        "Macro playbook models drawdown regimes deterministically",
+        "Advisor briefs generate structured, auditable stance records"
+      ],
+      "exit_ready_boundary": "Separation of prompt templates from deterministic evidence assembly; transport-neutral LLM calling"
+    },
+    {
+      "id": "llm_router_eval_harness",
+      "name": "LLM Transport Router & Downgrade Eval Harness",
+      "path": "src/llm",
+      "language": "python",
+      "entrypoints": [
+        "src/llm/cli.py",
+        "src/llm/model_eval.py",
+        "src/llm/model_ladder.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_llm_budget.py -q"
+      ],
+      "documentation": [
+        "directives/cheapest_model_routing.md",
+        "directives/model_eval_loop.md",
+        "directives/llm_quota_scheduling.md"
+      ],
+      "version_ownership": "Model ladder configuration version & eval dataset SHA-256 hashes",
+      "backup_ownership": "Git version control (eval cases, grader rubrics, CLI routers) and evals/ test corpus",
+      "state_classification": "eval_router_harness",
+      "reconstruction_tier": "tier_2_synthesis_lens",
+      "invariants": [
+        "Cheapest-at-parity model routing ladder with automated downgrade evals",
+        "Per-purpose prompt templates versioned in local repository",
+        "Shared quota protection window (03:00-05:00 PT) enforced"
+      ],
+      "exit_ready_boundary": "Generic CLI/API transport interface allowing drop-in model provider swaps without business logic changes"
+    },
+    {
+      "id": "operations_governance_hub",
+      "name": "Operations Hub & Provider Circuit Telemetry",
+      "path": "src/pipeline",
+      "language": "python",
+      "entrypoints": [
+        "src/pipeline/operations_panel.py",
+        "src/pipeline/data_policy_settings_panel.py"
+      ],
+      "dependencies": [
+        "source_adapters"
+      ],
+      "test_commands": [
+        "pytest tests/test_data_policy_settings_panel.py -q"
+      ],
+      "documentation": [
+        "directives/design_language.md"
+      ],
+      "version_ownership": "Governance surface contract version & circuit state schema",
+      "backup_ownership": "Git version control (telemetry renderers) and provider circuit rows in data/portfolio.db",
+      "state_classification": "governance_telemetry",
+      "reconstruction_tier": "tier_3_presentation_cockpit",
+      "invariants": [
+        "Truthful controls: surface reflects actual verifiable subsystem health, never assumed state",
+        "Provider circuit states (CLOSED, OPEN, HALF_OPEN) deterministically managed",
+        "Operations surface changes follow directives/operations_governance_surface.md"
+      ],
+      "exit_ready_boundary": "Flask HTML fragment endpoints; renders independently of client-side frameworks"
+    },
+    {
+      "id": "ui_cockpit_server",
+      "name": "Flask Cockpit Server & Design System",
+      "path": "src/ui",
+      "language": "python",
+      "entrypoints": [
+        "execution/comments_server.py",
+        "src/ui/tokens.py",
+        "src/ui/controls.py"
+      ],
+      "dependencies": [
+        "operations_governance_hub"
+      ],
+      "test_commands": [
+        "pytest tests/test_ui_controls.py -q"
+      ],
+      "documentation": [
+        "directives/design_language.md"
+      ],
+      "version_ownership": "Design system token dictionary & CSS custom variable contract",
+      "backup_ownership": "Git version control (server routes, UI templates, design tokens)",
+      "state_classification": "interactive_cockpit",
+      "reconstruction_tier": "tier_3_presentation_cockpit",
+      "invariants": [
+        "Design token purity: zero raw hex or off-scale typography escapes",
+        "Component kit composition via src/ui/controls.py (.k-btn, .k-pill, .k-chip)",
+        "Request-scoped SQLite connection pooling via Flask g.request_read_db"
+      ],
+      "exit_ready_boundary": "Vanilla HTML/CSS with semantic tokens; no proprietary UI framework runtime locks"
+    },
+    {
+      "id": "user_state_journal_memory",
+      "name": "Analyst Memory & Decision Journal Store",
+      "path": "src/user_state",
+      "language": "python",
+      "entrypoints": [
+        "src/user_state/notes.py",
+        "src/journal_links.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_notes.py -q"
+      ],
+      "documentation": [
+        "DEFINITIONS.md"
+      ],
+      "version_ownership": "Journal note schema version & thesis state revision stamps",
+      "backup_ownership": "repo-maintenance/backup_scratch.ps1 online SQLite snapshot (analyst_notes, decisions tables)",
+      "state_classification": "durable_memory",
+      "reconstruction_tier": "tier_0_data_backbone",
+      "invariants": [
+        "Immutable thesis state history with timestamped analyst notes",
+        "Decision records bind to quantitative basis and market price stamps",
+        "Journal links preserve bi-directional evidence references"
+      ],
+      "exit_ready_boundary": "Relational SQLite tables and plain markdown exports; independent of proprietary agent memory clouds"
+    },
+    {
+      "id": "cron_automation_scheduler",
+      "name": "Windows Scheduler & Morning Automation",
+      "path": "cron",
+      "language": "batch/xml",
+      "entrypoints": [
+        "cron/run_fetch_fmp_earnings_calendar.bat",
+        "cron/run_python.bat"
+      ],
+      "dependencies": [
+        "pipeline_execution"
+      ],
+      "test_commands": [],
+      "documentation": [
+        "cron/SETUP_WINDOWS_SCHEDULER.md"
+      ],
+      "version_ownership": "Batch script Git versioning & Task Scheduler XML task definitions",
+      "backup_ownership": "Git version control (cron batch scripts, scheduler documentation)",
+      "state_classification": "scheduled_automation",
+      "reconstruction_tier": "tier_1_pipeline_execution",
+      "invariants": [
+        "Wrappers execute via run_python.bat with strict path resolution",
+        "Protected LLM quota window respected by scheduled morning pipelines",
+        "Task failures write structured error logs to logs/ directory"
+      ],
+      "exit_ready_boundary": "Standard Windows Batch / Task Scheduler XML; trivially convertible to cron, systemd, or launchd"
+    },
+    {
+      "id": "test_and_verification_suite",
+      "name": "Hermetic Testing & Code Quality Ratchets",
+      "path": "tests",
+      "language": "python",
+      "entrypoints": [
+        "Makefile",
+        "pyproject.toml"
+      ],
+      "dependencies": [
+        "requirements.lock"
+      ],
+      "test_commands": [
+        "pytest tests/test_calendar_end_to_end.py -q"
+      ],
+      "documentation": [
+        "AGENTS.md"
+      ],
+      "version_ownership": "pyproject.toml tool configurations & requirements.lock pinned dependencies",
+      "backup_ownership": "Git version control (tests, fixtures, lint/typecheck configuration)",
+      "state_classification": "hermetic_verification",
+      "reconstruction_tier": "tier_0_data_backbone",
+      "invariants": [
+        "Hermetic tests using session-scoped migrated_db fixture",
+        "Strict Pyright typechecking and Ruff linting with diff-aware ratchet",
+        "Deterministic verification entrypoints runnable offline via pytest"
+      ],
+      "exit_ready_boundary": "Standard pytest/Ruff/Pyright tooling; runs in any local or CI environment without proprietary runners"
+    }
+  ]
+}
