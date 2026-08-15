@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from models.companies import ListType
 from pipeline.ir_approval_panel import read_ir_approval_review, render_ir_approval_panel
@@ -26,6 +26,8 @@ from pipeline.source_policy import (
     mode_for_role,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+Tone = Literal["ok", "warn", "bad"]
 
 
 class PolicyDisplayState(StrEnum):
@@ -78,6 +80,18 @@ class ApprovedIssuerView(BaseModel):
     policy_sha256: str
 
 
+class FmpRecoveryEventView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    event_id: str
+    event_type: str
+    reason_code: str | None = None
+    state_from: str | None = None
+    state_to: str | None = None
+    circuit_revision: int | None = None
+    recorded_at: str
+
+
 FmpCircuitDisplayState = Literal["CLOSED", "OPEN", "HALF_OPEN", "UNINITIALIZED", "UNAVAILABLE"]
 FmpCorpusDisplayState = Literal["available", "empty", "unavailable"]
 FmpCircuitAdmission = Literal["permitted", "blocked", "probe_only", "unknown", "unavailable"]
@@ -117,6 +131,32 @@ class FmpOperationalReadModel(BaseModel):
     corpus_state: FmpCorpusDisplayState
     corpus_ticker_count: int | None = None
     last_corpus_at: str | None = None
+    recent_events: tuple[FmpRecoveryEventView, ...] = ()
+
+
+class SecCoverageCompanyView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ticker: str
+    name: str
+    role: str
+    sec_validated: bool
+    filing_regime: str
+    coverage_status: str
+    coverage_tone: Tone
+    notes: str
+
+
+class SecCoverageSummaryView(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    total_tracked: int = 0
+    portfolio_count: int = 0
+    evaluation_count: int = 0
+    watchlist_count: int = 0
+    validated_count: int = 0
+    gap_count: int = 0
+    companies: tuple[SecCoverageCompanyView, ...] = ()
 
 
 class DataPolicySettingsView(BaseModel):
@@ -127,6 +167,7 @@ class DataPolicySettingsView(BaseModel):
     rows: tuple[PolicyRowView, ...]
     approved_issuers: tuple[ApprovedIssuerView, ...]
     fmp_state: FmpOperationalReadModel
+    sec_coverage: SecCoverageSummaryView = Field(default_factory=SecCoverageSummaryView)
 
 
 _ROLE_CONTENT: dict[ListType, tuple[str, str, str]] = {
@@ -303,6 +344,29 @@ def read_fmp_operational_state(
                 "JOIN fmp_work_backlog AS work ON work.work_id=attempt.work_id "
                 "WHERE attempt.corpus_content_sha256 IS NOT NULL"
             ).fetchone()
+            has_events = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fmp_recovery_events'"
+            ).fetchone()
+            events_rows = (
+                conn.execute(
+                    "SELECT event_id,event_type,reason_code,state_from,state_to,circuit_revision,recorded_at "
+                    "FROM fmp_recovery_events ORDER BY recorded_at DESC LIMIT 5"
+                ).fetchall()
+                if has_events
+                else []
+            )
+            recent_events = tuple(
+                FmpRecoveryEventView(
+                    event_id=str(row["event_id"]),
+                    event_type=str(row["event_type"]),
+                    reason_code=str(row["reason_code"]) if row["reason_code"] is not None else None,
+                    state_from=str(row["state_from"]) if row["state_from"] is not None else None,
+                    state_to=str(row["state_to"]) if row["state_to"] is not None else None,
+                    circuit_revision=int(row["circuit_revision"]) if row["circuit_revision"] is not None else None,
+                    recorded_at=str(row["recorded_at"]),
+                )
+                for row in events_rows
+            )
         finally:
             conn.close()
     except (OSError, sqlite3.Error):
@@ -330,6 +394,7 @@ def read_fmp_operational_state(
             corpus_state=corpus_state,
             corpus_ticker_count=corpus_ticker_count,
             last_corpus_at=last_corpus_at,
+            recent_events=recent_events,
         )
     state = str(circuit["state"])
     if state not in {"CLOSED", "OPEN", "HALF_OPEN"}:
@@ -374,6 +439,99 @@ def read_fmp_operational_state(
         corpus_state=corpus_state,
         corpus_ticker_count=corpus_ticker_count,
         last_corpus_at=last_corpus_at,
+        recent_events=recent_events,
+    )
+
+
+def read_sec_coverage_state(db_path: Path | None) -> SecCoverageSummaryView:
+    """Read SEC collection priority and company coverage gaps without taking write locks."""
+
+    if db_path is None or not db_path.is_file():
+        return SecCoverageSummaryView()
+    try:
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        conn.row_factory = sqlite3.Row
+        try:
+            has_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracked_companies'"
+            ).fetchone()
+            if not has_table:
+                return SecCoverageSummaryView()
+            rows = conn.execute(
+                "SELECT ticker, name, list_type, sec_validated, filing_regime, archived_at "
+                "FROM tracked_companies WHERE archived_at IS NULL "
+                "ORDER BY CASE list_type WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 ELSE 3 END, ticker"
+            ).fetchall()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return SecCoverageSummaryView()
+
+    companies: list[SecCoverageCompanyView] = []
+    portfolio_count = 0
+    evaluation_count = 0
+    watchlist_count = 0
+    validated_count = 0
+    gap_count = 0
+
+    for row in rows:
+        ticker = str(row["ticker"])
+        name = str(row["name"])
+        role = str(row["list_type"])
+        sec_validated = bool(row["sec_validated"])
+        filing_regime = str(row["filing_regime"] or "10-K")
+
+        if role == "portfolio":
+            portfolio_count += 1
+            if sec_validated:
+                status = "Automatic full"
+                tone: Tone = "ok"
+                notes = f"Active SEC collection ({filing_regime})"
+                validated_count += 1
+            else:
+                status = "Coverage gap"
+                tone = "warn"
+                notes = "Portfolio issuer pending SEC profile validation"
+                gap_count += 1
+        elif role == "evaluation":
+            evaluation_count += 1
+            if sec_validated:
+                status = "On demand"
+                tone = "ok"
+                notes = f"Owner-requested SEC collection ready ({filing_regime})"
+                validated_count += 1
+            else:
+                status = "Pending validation"
+                tone = "warn"
+                notes = "Evaluation issuer pending SEC profile validation"
+                gap_count += 1
+        else:
+            watchlist_count += 1
+            status = "Metadata only"
+            tone = "ok"
+            notes = "SEC document crawl excluded by policy"
+
+        companies.append(
+            SecCoverageCompanyView(
+                ticker=ticker,
+                name=name,
+                role=role.capitalize(),
+                sec_validated=sec_validated,
+                filing_regime=filing_regime,
+                coverage_status=status,
+                coverage_tone=tone,
+                notes=notes,
+            )
+        )
+
+    return SecCoverageSummaryView(
+        total_tracked=len(rows),
+        portfolio_count=portfolio_count,
+        evaluation_count=evaluation_count,
+        watchlist_count=watchlist_count,
+        validated_count=validated_count,
+        gap_count=gap_count,
+        companies=tuple(companies),
     )
 
 
@@ -418,6 +576,7 @@ def build_data_policy_settings_view(*, db_path: Path | None = None) -> DataPolic
         rows=rows,
         approved_issuers=issuers,
         fmp_state=read_fmp_operational_state(db_path),
+        sec_coverage=read_sec_coverage_state(db_path),
     )
 
 
@@ -489,6 +648,46 @@ def _render_issuers(view: DataPolicySettingsView) -> str:
     return f'<div style="display:grid;gap:var(--sp-3);">{cards}</div>'
 
 
+def _render_sec_coverage(coverage: SecCoverageSummaryView) -> str:
+    if coverage.total_tracked == 0:
+        return (
+            '<div class="k-well">'
+            '<div class="k-card-row-title">SEC collection priority &amp; coverage gaps</div>'
+            "<p class=\"k-card-meta\">No tracked company records found in the database. SEC collection requires registered company targets.</p></div>"
+        )
+    cards = (
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax('
+        'var(--grid-card-sm),1fr));gap:var(--sp-3);margin-bottom:var(--sp-3);">'
+        f'<div class="k-well"><div class="k-label">Portfolio issuers</div><div class="k-card-row-title">{coverage.portfolio_count}</div><div class="k-card-meta">Automatic SEC collection</div></div>'
+        f'<div class="k-well"><div class="k-label">Evaluation issuers</div><div class="k-card-row-title">{coverage.evaluation_count}</div><div class="k-card-meta">On-demand collection</div></div>'
+        f'<div class="k-well"><div class="k-label">Watchlist / Index</div><div class="k-card-row-title">{coverage.watchlist_count}</div><div class="k-card-meta">Crawl excluded by policy</div></div>'
+        f'<div class="k-well"><div class="k-label">SEC Profile Gaps</div><div class="k-card-row-title">{coverage.gap_count}</div><div class="k-card-meta">Pending SEC validation</div></div>'
+        "</div>"
+    )
+    rows = "".join(
+        "<tr>"
+        f'<td><span class="k-ticker-symbol">{escape(c.ticker)}</span> <span class="k-card-meta">{escape(c.name)}</span></td>'
+        f'<td><span class="k-chip">{escape(c.role)}</span></td>'
+        f'<td><span class="k-chip k-chip-mono">{escape(c.filing_regime)}</span></td>'
+        f'<td><span class="k-pill k-pill-{c.coverage_tone}">{escape(c.coverage_status)}</span></td>'
+        f'<td><span class="k-card-meta">{escape(c.notes)}</span></td>'
+        "</tr>"
+        for c in coverage.companies
+    )
+    table = (
+        '<div style="overflow-x:auto;">'
+        '<table class="p-table" aria-label="SEC Collection Priority and Company Coverage">'
+        "<thead><tr><th>Company</th><th>Priority role</th><th>Regime</th><th>SEC status</th><th>Policy notes</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table></div>"
+    )
+    return (
+        '<div class="k-well">'
+        '<div class="k-card-row-title">SEC collection priority &amp; coverage gaps</div>'
+        '<p class="k-card-meta">Priority-governed SEC CompanyFacts and native filing collection status across tracked companies.</p>'
+        f"{cards}{table}</div>"
+    )
+
+
 def _render_fmp_state(state: FmpOperationalReadModel) -> str:
     if state.provider_availability == "unavailable":
         return (
@@ -526,6 +725,24 @@ def _render_fmp_state(state: FmpOperationalReadModel) -> str:
         f'<span class="k-chip k-chip-mono">{escape(ticker)}</span>'
         for ticker in state.pending_tickers
     )
+    events_html = ""
+    if state.recent_events:
+        event_rows = "".join(
+            "<tr>"
+            f'<td><span class="k-chip k-chip-mono">{escape(ev.recorded_at[:19])}</span></td>'
+            f'<td><span class="k-chip">{escape(ev.event_type)}</span></td>'
+            f'<td><span class="k-card-meta">{escape(ev.reason_code or "—")}</span></td>'
+            f'<td><span class="k-card-meta">{escape(str(ev.state_from or "—"))} → {escape(str(ev.state_to or "—"))}</span></td>'
+            "</tr>"
+            for ev in state.recent_events
+        )
+        events_html = (
+            '<div style="margin-top:var(--sp-3);">'
+            '<div class="k-label">Recent recovery receipts &amp; transitions</div>'
+            '<div style="overflow-x:auto;"><table class="p-table" aria-label="Recent FMP recovery events">'
+            "<thead><tr><th>Timestamp</th><th>Event type</th><th>Reason</th><th>State transition</th></tr></thead>"
+            f"<tbody>{event_rows}</tbody></table></div></div>"
+        )
     return (
         '<div class="k-well">'
         '<div style="display:flex;align-items:center;justify-content:space-between;'
@@ -554,6 +771,7 @@ def _render_fmp_state(state: FmpOperationalReadModel) -> str:
             if queue
             else ""
         )
+        + events_html
         + "</div>"
     )
 
@@ -579,6 +797,8 @@ def render_data_policy_settings_panel(
         + _render_roles(resolved)
         + '<h3 class="k-card-title">Source behavior by company priority</h3>'
         + _render_matrix(resolved)
+        + '<h3 class="k-card-title">SEC collection priority &amp; coverage gaps</h3>'
+        + _render_sec_coverage(resolved.sec_coverage)
         + '<h3 class="k-card-title">Owner-approved issuer adapters</h3>'
         + _render_issuers(resolved)
         + render_ir_approval_panel(read_ir_approval_review(db_path))
@@ -619,3 +839,4 @@ def render_operations_settings_shell(*, db_path: Path | None = None) -> str:
         + render_data_policy_settings_panel(db_path=db_path)
         + "</div></section>"
     )
+

@@ -1,0 +1,234 @@
+{
+  "manifest_version": "2026-08-15.1",
+  "workspace_name": "earnings-summary",
+  "description": "11-project reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
+  "canonical_runtime": {
+    "python_version": ">=3.11",
+    "database": "sqlite3 (WAL mode)",
+    "primary_port": 7421,
+    "lockfiles": [
+      "requirements.lock",
+      "requirements.txt",
+      "pyproject.toml"
+    ]
+  },
+  "subsystems": [
+    {
+      "id": "core_data_layer",
+      "name": "Core SQLite Data Layer & Migrations",
+      "path": "alembic",
+      "language": "python",
+      "entrypoints": [
+        "alembic/versions/0001_initial_schema.py",
+        "src/sqlite_runtime.py",
+        "src/db.py"
+      ],
+      "dependencies": [
+        "requirements.lock",
+        "alembic.ini"
+      ],
+      "test_commands": [
+        "pytest tests/test_sqlite_runtime.py -q"
+      ],
+      "documentation": [
+        "AGENTS.md",
+        "directives/cross_asset_data_model.md"
+      ]
+    },
+    {
+      "id": "pipeline_execution",
+      "name": "Deterministic Execution & Orchestration",
+      "path": "execution",
+      "language": "python",
+      "entrypoints": [
+        "execution/run_morning_pipeline.py",
+        "execution/refresh_expected_earnings.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_pipeline*.py -q"
+      ],
+      "documentation": [
+        "AGENTS.md",
+        "directives/data_pipeline_dag.md"
+      ]
+    },
+    {
+      "id": "source_adapters",
+      "name": "Multi-Source Ingestion & Preference Stack",
+      "path": "src/sources",
+      "language": "python",
+      "entrypoints": [
+        "src/sources/earnings_calendar.py",
+        "src/sources/registry.py",
+        "src/pipeline/source_policy.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_source_policy.py -q"
+      ],
+      "documentation": [
+        "directives/design_language.md"
+      ]
+    },
+    {
+      "id": "financial_compute_engine",
+      "name": "Financial Metrics & Valuation Compute Engine",
+      "path": "src/compute",
+      "language": "python",
+      "entrypoints": [
+        "src/compute/metrics_engine/engine.py",
+        "src/compute/kpi_extract_summaries.py",
+        "src/dcf/valuation.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_metrics_engine.py -q"
+      ],
+      "documentation": [
+        "directives/data_provenance.md"
+      ]
+    },
+    {
+      "id": "synthesis_research_lenses",
+      "name": "Synthesis Research Lenses & Analysis",
+      "path": "src/synthesis",
+      "language": "python",
+      "entrypoints": [
+        "src/synthesis/lenses/catalyst_calendar.py",
+        "src/advisor/senior_partner_brief.py"
+      ],
+      "dependencies": [
+        "financial_compute_engine"
+      ],
+      "test_commands": [
+        "pytest tests/test_advisor.py -q"
+      ],
+      "documentation": [
+        "HOW_TO_USE_REPORTS.md"
+      ]
+    },
+    {
+      "id": "llm_router_eval_harness",
+      "name": "LLM Transport Router & Downgrade Eval Harness",
+      "path": "src/llm",
+      "language": "python",
+      "entrypoints": [
+        "src/llm/cli.py",
+        "src/llm/model_eval.py",
+        "src/llm/model_ladder.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_llm_budget.py -q"
+      ],
+      "documentation": [
+        "directives/cheapest_model_routing.md",
+        "directives/model_eval_loop.md",
+        "directives/llm_quota_scheduling.md"
+      ]
+    },
+    {
+      "id": "operations_governance_hub",
+      "name": "Operations Hub & Provider Circuit Telemetry",
+      "path": "src/pipeline",
+      "language": "python",
+      "entrypoints": [
+        "src/pipeline/operations_panel.py",
+        "src/pipeline/data_policy_settings_panel.py"
+      ],
+      "dependencies": [
+        "source_adapters"
+      ],
+      "test_commands": [
+        "pytest tests/test_data_policy_settings_panel.py -q"
+      ],
+      "documentation": [
+        "directives/design_language.md"
+      ]
+    },
+    {
+      "id": "ui_cockpit_server",
+      "name": "Flask Cockpit Server & Design System",
+      "path": "src/ui",
+      "language": "python",
+      "entrypoints": [
+        "execution/comments_server.py",
+        "src/ui/tokens.py",
+        "src/ui/controls.py"
+      ],
+      "dependencies": [
+        "operations_governance_hub"
+      ],
+      "test_commands": [
+        "pytest tests/test_ui_controls.py -q"
+      ],
+      "documentation": [
+        "directives/design_language.md"
+      ]
+    },
+    {
+      "id": "user_state_journal_memory",
+      "name": "Analyst Memory & Decision Journal Store",
+      "path": "src/user_state",
+      "language": "python",
+      "entrypoints": [
+        "src/user_state/notes.py",
+        "src/journal_links.py"
+      ],
+      "dependencies": [
+        "core_data_layer"
+      ],
+      "test_commands": [
+        "pytest tests/test_notes.py -q"
+      ],
+      "documentation": [
+        "DEFINITIONS.md"
+      ]
+    },
+    {
+      "id": "cron_automation_scheduler",
+      "name": "Windows Scheduler & Morning Automation",
+      "path": "cron",
+      "language": "batch/xml",
+      "entrypoints": [
+        "cron/run_fetch_fmp_earnings_calendar.bat",
+        "cron/run_python.bat"
+      ],
+      "dependencies": [
+        "pipeline_execution"
+      ],
+      "test_commands": [],
+      "documentation": [
+        "cron/SETUP_WINDOWS_SCHEDULER.md"
+      ]
+    },
+    {
+      "id": "test_and_verification_suite",
+      "name": "Hermetic Testing & Code Quality Ratchets",
+      "path": "tests",
+      "language": "python",
+      "entrypoints": [
+        "Makefile",
+        "pyproject.toml"
+      ],
+      "dependencies": [
+        "requirements.lock"
+      ],
+      "test_commands": [
+        "pytest tests/test_calendar_end_to_end.py -q"
+      ],
+      "documentation": [
+        "AGENTS.md"
+      ]
+    }
+  ]
+}
