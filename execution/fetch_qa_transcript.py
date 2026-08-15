@@ -54,6 +54,7 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
     authorize_transcript_request,
+    issuer_transcript_source_url_is_authorized,
     load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
     project_root_for_database,
@@ -71,7 +72,9 @@ from transcripts.acquisition_semantics import (  # noqa: E402
     TranscriptAcquisitionEntrypoint,
     TranscriptAcquisitionRequest,
     TranscriptAuthorizationStatus,
+    TranscriptProvider,
 )
+from transcripts.immutable_staging import install_transcript_output  # noqa: E402
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 STAGING_DIR = PROJECT_ROOT / ".tmp" / "transcript-acquisition"
@@ -220,23 +223,20 @@ def _replay_artifact(
     request: TranscriptAcquisitionRequest,
     project_root: Path,
 ) -> tuple[AuthorizedTranscriptArtifact, bytes] | None:
-    try:
-        artifact = load_authorized_transcript_replay(
-            conn,
-            request=request,
-            project_root=project_root,
-            trusted_staging_root=STAGING_DIR,
-        )
-        if artifact is None:
-            return None
-        staged_bytes = read_authorized_transcript(
-            conn,
-            artifact,
-            project_root=project_root,
-            trusted_staging_root=STAGING_DIR,
-        )
-    except (OSError, ValueError, TranscriptAcquisitionDeniedError):
+    artifact = load_authorized_transcript_replay(
+        conn,
+        request=request,
+        project_root=project_root,
+        trusted_staging_root=STAGING_DIR,
+    )
+    if artifact is None:
         return None
+    staged_bytes = read_authorized_transcript(
+        conn,
+        artifact,
+        project_root=project_root,
+        trusted_staging_root=STAGING_DIR,
+    )
     return artifact, staged_bytes
 
 
@@ -247,9 +247,14 @@ def _restore_replay(
     artifact: AuthorizedTranscriptArtifact,
     staged_bytes: bytes,
 ) -> None:
-    if not output_path.is_file() or output_path.read_bytes() != staged_bytes:
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(staged_bytes)
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    install_transcript_output(
+        staged_bytes,
+        RAW_DIR,
+        output_path.name,
+        expected_sha256=artifact.sha256,
+        expected_size_bytes=artifact.size_bytes,
+    )
     qa_result = validate_synthesized_transcript(output_path)
     index_manager.register_transcript(
         resolve_ticker(spec.ticker),
@@ -324,6 +329,17 @@ def fetch_qa(
                 FetchQaAttempt(source.name, FetchQaAttemptStatus.PROVIDER_MISS, last_key)
             )
             continue
+        if authorization.request.provider is TranscriptProvider.ISSUER_IR and (
+            hit.source_name != "issuer_ir"
+            or not issuer_transcript_source_url_is_authorized(
+                canonical,
+                hit.page_url,
+                project_root=project_root,
+            )
+        ):
+            raise TranscriptAcquisitionDeniedError(
+                "returned issuer source URL is outside configured authority"
+            )
         payload = (_build_header(spec, hit) + hit.qa_text).encode("utf-8")
         acquired_artifact = stage_authorized_payload(
             authorization,

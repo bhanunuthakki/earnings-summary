@@ -1,12 +1,15 @@
+# pyright: reportPrivateUsage=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false
 from __future__ import annotations
 
 import ast
 import hashlib
+import json
+import os
 import sqlite3
 import sys
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -45,6 +48,22 @@ def _stored_company(path: Path, *, role: str = "portfolio") -> None:
         )
 
 
+def _issuer_config(repo_root: Path, ticker: str = "ACME") -> None:
+    path = repo_root / "micro_thesis" / "ir_config" / f"{ticker}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "ticker": ticker,
+                "platform": "mz",
+                "results_center_url": "https://issuer.example.invalid/results",
+                "spreadsheet_kpis": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -53,6 +72,7 @@ def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
 
     db_path = tmp_path / "portfolio.db"
     _stored_company(db_path)
+    _issuer_config(tmp_path)
     fetch.RAW_DIR = tmp_path / "transcripts" / "raw"
     fetch.STAGING_DIR = tmp_path / ".tmp" / "transcript-acquisition"
     fetch.STAGING_DIR.mkdir(parents=True)
@@ -452,6 +472,7 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
     from execution import ingest_transcripts as ingest
 
     repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -527,6 +548,7 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     from execution import fetch_qa_transcript as fetch
 
     repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -569,6 +591,7 @@ def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_dupli
     spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
     first = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
     assert first.result is not None
+    first.result.output_path.chmod(0o600)
     first.result.output_path.unlink()
     registrations.clear()
 
@@ -592,6 +615,7 @@ def test_authorized_fetch_replays_after_post_receipt_output_failure(
     from execution import fetch_qa_transcript as fetch
 
     repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
     db_path = migrated_db(repo_root / "data" / "portfolio.db")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -651,6 +675,260 @@ def test_authorized_fetch_replays_after_post_receipt_output_failure(
     with sqlite3.connect(db_path) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
+        )
+
+
+@pytest.mark.parametrize("damage", ["delete", "tamper"])
+def test_invalid_durable_replay_never_falls_through_to_network(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from transcripts.immutable_staging import TranscriptStagingError
+
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+    calls = 0
+
+    def issuer_hit(*_args: object) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            pytest.fail("invalid durable replay fell through to network")
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://issuer.example.invalid/transcript",
+            qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+            full_text_chars=50,
+        )
+
+    monkeypatch.setattr(fetch, "SOURCES", (replace(fetch.SOURCES[0], fetch_qa=issuer_hit),))
+    monkeypatch.setattr(
+        fetch,
+        "validate_synthesized_transcript",
+        lambda _path: SimpleNamespace(
+            status=QaStatus.OK,
+            issues=(),
+            model_dump=lambda **_kwargs: {"status": "ok"},
+        ),
+    )
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_args, **_kwargs: True)
+    spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
+    first = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
+    assert first.result is not None
+    staged_path = first.result.acquired_artifact.staged.staged_path
+    staged_path.chmod(0o600)
+    if damage == "delete":
+        staged_path.unlink()
+    else:
+        staged_path.write_bytes(b"tampered")
+
+    with pytest.raises(TranscriptStagingError):
+        fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
+    assert calls == 1
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
+        )
+
+
+def test_output_install_rejects_hardlink_without_mutating_victim(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from transcripts.immutable_staging import TranscriptStagingError
+
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+    fetch.RAW_DIR.mkdir(parents=True)
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"benign victim")
+    os.link(victim, fetch.RAW_DIR / "ACME_Q2_2026.txt")
+    monkeypatch.setattr(
+        fetch,
+        "SOURCES",
+        (
+            replace(
+                fetch.SOURCES[0],
+                fetch_qa=lambda *_args: fetch.AggregatorHit(
+                    source_name="issuer_ir",
+                    page_url="https://issuer.example.invalid/transcript",
+                    qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+                    full_text_chars=50,
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(TranscriptStagingError):
+        fetch.fetch_qa(
+            fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+            db_path=db_path,
+            owner_requested=False,
+            as_of=date(2026, 8, 12),
+        )
+
+    assert victim.read_bytes() == b"benign victim"
+
+
+def test_new_receipt_rejects_latent_or_changed_stored_target(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from pipeline.transcript_acquisition import (
+        require_authorized_transcript_request,
+        stage_authorized_payload,
+    )
+    from transcripts.acquisition_semantics import (
+        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        ExistingArtifactBehavior,
+        TranscriptAcquisitionRequest,
+    )
+
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True)
+    with sqlite3.connect(db_path) as raw:
+        raw.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    from pipeline.transcript_acquisition import COMBINED_SOURCE_REGIME_IDENTITY
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        request = TranscriptAcquisitionRequest(
+            entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+            canonical_ticker="ACME",
+            fiscal_year=2026,
+            fiscal_quarter=2,
+            as_of=date(2026, 8, 12),
+            source_type=SourceType.IR_DOC,
+            document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+            provider=TranscriptProvider.ISSUER_IR,
+            owner_requested=False,
+            existing_artifact=False,
+            existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+            source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+            source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+        )
+        authorization = require_authorized_transcript_request(conn, request)
+        artifact = stage_authorized_payload(
+            authorization,
+            payload=b"issuer bytes",
+            private_root=staging_root,
+            source_url="https://issuer.example.invalid/transcript",
+            canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
+        )
+        authorization_json = json.dumps(
+            authorization.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        artifact_payload = artifact.model_dump(mode="json")
+        artifact_payload["canonical_document_path"] = artifact.canonical_document_path.as_posix()
+        artifact_json = json.dumps(artifact_payload, sort_keys=True, separators=(",", ":"))
+        receipt_id = hashlib.sha256(artifact_json.encode("utf-8")).hexdigest()
+        conn.execute("DELETE FROM tracked_companies WHERE ticker='ACME'")
+        with pytest.raises(sqlite3.IntegrityError, match="stored target"):
+            conn.execute(
+                "INSERT INTO transcript_acquisition_receipts "
+                "(receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,"
+                "fiscal_quarter,canonical_document_path,artifact_sha256,artifact_size_bytes,"
+                "source_url,provider,source_type,document_type,source_regime,"
+                "source_regime_contract_sha256,authorization_json,artifact_json,recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    receipt_id,
+                    authorization.idempotency_key,
+                    None,
+                    "ACME",
+                    2026,
+                    2,
+                    "transcripts/raw/ACME_Q2_2026.txt",
+                    artifact.sha256,
+                    artifact.size_bytes,
+                    artifact.source_url,
+                    authorization.request.provider.value,
+                    authorization.request.source_type.value,
+                    authorization.request.document_type.value,
+                    authorization.request.source_regime_identity.regime.value,
+                    authorization.request.source_regime_identity.contract_sha256,
+                    authorization_json,
+                    artifact_json,
+                    datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                ),
+            )
+
+
+def test_returned_issuer_url_must_match_configured_authority(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+    from pipeline.transcript_acquisition import TranscriptAcquisitionDeniedError
+
+    repo_root = tmp_path / "repo"
+    _issuer_config(repo_root)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    monkeypatch.setattr(
+        fetch,
+        "SOURCES",
+        (
+            replace(
+                fetch.SOURCES[0],
+                fetch_qa=lambda *_args: fetch.AggregatorHit(
+                    source_name="issuer_ir",
+                    page_url="https://unrelated.example.invalid/transcript",
+                    qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+                    full_text_chars=50,
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(TranscriptAcquisitionDeniedError, match="issuer source URL"):
+        fetch.fetch_qa(
+            fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+            db_path=db_path,
+            owner_requested=False,
+            as_of=date(2026, 8, 12),
+        )
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 0
         )
 
 

@@ -1021,9 +1021,46 @@ def read_staged_transcript(
         )
 
 
+def install_transcript_output(
+    payload: bytes,
+    output_root: Path,
+    target_name: str,
+    *,
+    expected_sha256: str,
+    expected_size_bytes: int,
+) -> Path:
+    """Install exact bytes under a trusted output root without replacing any target."""
+
+    _validate_expected(
+        sha256=expected_sha256,
+        size_bytes=expected_size_bytes,
+        max_bytes=_read_validation_max(expected_size_bytes),
+    )
+    if (
+        len(payload) != expected_size_bytes
+        or hashlib.sha256(payload).hexdigest() != expected_sha256
+    ):
+        raise TranscriptStagingError("output payload does not match expected identity")
+    if not target_name or Path(target_name).name != target_name or target_name in {".", ".."}:
+        raise TranscriptStagingError("output target must be one direct filename")
+    root_path = _require_path(output_root, label="output root")
+    with _open_root(root_path) as root:
+        target = root.path / target_name
+        _commit_snapshot(root=root, target=target, payload=payload, digest=expected_sha256)
+        _read_verified_target(
+            root,
+            target_name,
+            digest=expected_sha256,
+            expected_size=expected_size_bytes,
+            label="installed output",
+        )
+    return target
+
+
 __all__ = [
     "StagedTranscriptArtifact",
     "TranscriptStagingError",
+    "install_transcript_output",
     "read_staged_transcript",
     "stage_transcript_artifact",
 ]

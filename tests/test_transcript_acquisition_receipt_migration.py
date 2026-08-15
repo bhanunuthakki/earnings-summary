@@ -46,6 +46,19 @@ def test_0018_receipts_are_append_only_and_projection_bound(
     migrated_db: Callable[..., Path],
 ) -> None:
     repo_root = tmp_path / "repo"
+    config_path = repo_root / "micro_thesis" / "ir_config" / "ACME.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "ticker": "ACME",
+                "platform": "mz",
+                "results_center_url": "https://issuer.example.invalid/results",
+                "spreadsheet_kpis": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     database = migrated_db(repo_root / "data" / "portfolio.db", target=HEAD)
     staging_root = repo_root / ".tmp" / "transcript-acquisition"
     staging_root.mkdir(parents=True)

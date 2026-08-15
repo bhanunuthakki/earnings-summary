@@ -104,6 +104,32 @@ def upgrade() -> None:
     )
     op.execute(
         """
+        CREATE TRIGGER trg_transcript_acquisition_receipts_stored_target_binding
+        BEFORE INSERT ON transcript_acquisition_receipts
+        WHEN (
+            SELECT COUNT(*) FROM tracked_companies AS tc
+            WHERE UPPER(tc.ticker) = NEW.canonical_ticker
+              AND tc.archived_at IS NULL
+              AND tc.list_type = json_extract(
+                  NEW.authorization_json,'$.stored_target.coverage_role'
+              )
+              AND (
+                  CASE
+                      WHEN tc.fiscal_year_end GLOB '[0-1][0-9]-[0-3][0-9]'
+                      THEN CAST(substr(tc.fiscal_year_end,1,2) AS INTEGER)
+                      ELSE NULL
+                  END
+              ) IS json_extract(
+                  NEW.authorization_json,'$.stored_target.fiscal_year_end_month'
+              )
+        ) != 1
+        BEGIN
+            SELECT RAISE(ABORT, 'transcript receipt does not match current stored target');
+        END
+        """
+    )
+    op.execute(
+        """
         CREATE TRIGGER trg_transcript_acquisition_receipts_document_binding
         BEFORE INSERT ON transcript_acquisition_receipts
         WHEN NEW.document_id IS NOT NULL AND NOT EXISTS (
@@ -126,6 +152,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("DROP TRIGGER IF EXISTS trg_transcript_acquisition_receipts_document_binding")
+    op.execute("DROP TRIGGER IF EXISTS trg_transcript_acquisition_receipts_stored_target_binding")
     op.execute("DROP TRIGGER IF EXISTS trg_transcript_acquisition_receipts_validate")
     op.execute("DROP TRIGGER IF EXISTS trg_transcript_acquisition_receipts_no_delete")
     op.execute("DROP TRIGGER IF EXISTS trg_transcript_acquisition_receipts_no_update")

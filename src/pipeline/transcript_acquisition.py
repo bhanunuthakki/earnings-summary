@@ -29,7 +29,10 @@ from pipeline.source_policy import (
     CollectionSource,
     StoredIdentityStatus,
     authorize_collection_target_in_connection,
+    canonical_https_url,
     decision_for,
+    ir_url_is_authorized,
+    issuer_policy,
     reported_quarter_is_in_window,
 )
 from provenance.source_regime import SourceRegime, contract_for, receipt_identity
@@ -374,6 +377,46 @@ def project_root_for_database(database_path: str | os.PathLike[str]) -> Path:
     return path.parent.parent if path.parent.name.lower() == "data" else path.parent
 
 
+def issuer_transcript_source_url_is_authorized(
+    ticker: str,
+    source_url: str,
+    *,
+    project_root: Path,
+) -> bool:
+    """Bind issuer transcript URLs to reviewed policy or configured issuer authority."""
+
+    candidate = canonical_https_url(source_url)
+    if candidate is None:
+        return False
+    try:
+        policy = issuer_policy(ticker)
+    except ValueError:
+        policy = None
+    if policy is not None:
+        return ir_url_is_authorized(policy.ir, source_url)
+
+    from ir_pipeline.config import get_config
+    from ir_pipeline.manifest import load_manifest
+
+    try:
+        config = get_config(ticker, project_root)
+    except (OSError, TypeError, ValueError):
+        return False
+    if config is None or config.platform != "mz":
+        return False
+    authority = canonical_https_url(config.results_center_url)
+    if authority is None:
+        return False
+    if candidate[0] == authority[0]:
+        return True
+    return any(
+        entry.ticker.upper() == ticker.upper()
+        and entry.doc_type == "transcript"
+        and entry.url == source_url
+        for entry in load_manifest(project_root, ticker)
+    )
+
+
 def _receipt_paths_are_safe(
     artifact: AuthorizedTranscriptArtifact,
     *,
@@ -487,6 +530,15 @@ def register_transcript_receipt_sqlite_functions(
             if parsed_recorded_at.tzinfo is not None:
                 return 0
             if not _receipt_paths_are_safe(artifact, project_root=project_root):
+                return 0
+            if request.provider is TranscriptProvider.ISSUER_IR and (
+                artifact.source_url is None
+                or not issuer_transcript_source_url_is_authorized(
+                    request.canonical_ticker,
+                    artifact.source_url,
+                    project_root=project_root,
+                )
+            ):
                 return 0
         except (OSError, TypeError, ValueError):
             return 0
@@ -758,6 +810,7 @@ __all__ = [
     "AuthorizedTranscriptArtifact",
     "TranscriptAcquisitionDeniedError",
     "authorize_transcript_request",
+    "issuer_transcript_source_url_is_authorized",
     "load_authorized_transcript_replay",
     "persist_authorized_transcript_artifact",
     "project_root_for_database",
