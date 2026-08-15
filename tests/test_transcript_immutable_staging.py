@@ -221,7 +221,8 @@ def test_stage_rejects_source_symlink(tmp_path: Path) -> None:
     private_root = tmp_path / "private"
     private_root.mkdir()
 
-    with pytest.raises(TranscriptStagingError, match="symlink or reparse"):
+    rejection = "symlink or reparse" if os.name == "nt" else "must be a direct canonical path"
+    with pytest.raises(TranscriptStagingError, match=rejection):
         stage_transcript_artifact(
             link,
             private_root,
@@ -612,9 +613,8 @@ def test_staged_target_swap_between_lstat_and_open_is_rejected(
     replacement.chmod(stat.S_IREAD)
     swapped = False
 
-    def swap_after_lstat(path: Path, *, label: str) -> os.stat_result:
+    def swap_target(metadata: os.stat_result, *, label: str) -> os.stat_result:
         nonlocal swapped
-        metadata = path.lstat()
         if label == "staged transcript" and not swapped:
             swapped = True
             artifact.staged_path.chmod(stat.S_IWRITE)
@@ -623,10 +623,31 @@ def test_staged_target_swap_between_lstat_and_open_is_rejected(
             artifact.staged_path.chmod(stat.S_IREAD)
         return metadata
 
-    monkeypatch.setattr(staging, "_lstat", swap_after_lstat)
+    if os.name == "nt":
+
+        def swap_after_lstat(path: Path, *, label: str) -> os.stat_result:
+            return swap_target(path.lstat(), label=label)
+
+        monkeypatch.setattr(staging, "_lstat", swap_after_lstat)
+    else:
+        lstat_candidate: object = vars(staging)["_lstat_under_root"]
+        assert callable(lstat_candidate)
+
+        def swap_after_root_lstat(
+            *args: object,
+            **kwargs: object,
+        ) -> os.stat_result:
+            metadata = lstat_candidate(*args, **kwargs)
+            assert isinstance(metadata, os.stat_result)
+            label = kwargs.get("label")
+            assert isinstance(label, str)
+            return swap_target(metadata, label=label)
+
+        monkeypatch.setattr(staging, "_lstat_under_root", swap_after_root_lstat)
 
     with pytest.raises(TranscriptStagingError, match="identity changed"):
         _read(artifact)
+    assert swapped
 
 
 def test_source_hardlink_is_rejected(tmp_path: Path) -> None:
@@ -665,7 +686,8 @@ def test_atomic_install_failure_cleans_temporary_files(
     assert list(private_root.iterdir()) == []
 
 
-def test_substituted_temporary_cannot_poison_canonical_target(
+@pytest.mark.skipif(os.name != "nt", reason="Windows named-temporary contract")
+def test_windows_substituted_temporary_cannot_poison_canonical_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -710,6 +732,43 @@ def test_substituted_temporary_cannot_poison_canonical_target(
     assert substitution_blocked
     assert not (private_root / f"{_digest(payload)}.transcript").exists()
     assert replacement.read_bytes() == poison
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX anonymous-temporary contract")
+def test_posix_temporary_has_no_mutable_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    payload = b"authorized"
+    source.write_bytes(payload)
+    candidate: object = vars(staging)["_atomic_install_no_replace"]
+    assert callable(candidate)
+    anonymous_install_observed = False
+
+    def assert_anonymous_then_install(*args: object, **kwargs: object) -> object:
+        nonlocal anonymous_install_observed
+        assert args
+        temporary = args[0]
+        assert vars(temporary)["name"] is None
+        assert tuple(private_root.glob("*.tmp")) == ()
+        anonymous_install_observed = True
+        return candidate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        staging,
+        "_atomic_install_no_replace",
+        assert_anonymous_then_install,
+        raising=False,
+    )
+
+    artifact = _stage(source, private_root, payload=payload)
+
+    assert anonymous_install_observed
+    assert _read(artifact) == payload
+    assert tuple(private_root.iterdir()) == (artifact.staged_path,)
 
 
 def test_cleanup_never_deletes_a_replacement_path(
