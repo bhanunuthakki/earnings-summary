@@ -124,6 +124,10 @@ exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scr
 # Unknowns behind it.
 extraPaths = ["src", "execution", "scratch", "cron"]
 pythonVersion = "3.11"
+# The sealed AppContainer boundary intentionally binds Windows-only ctypes APIs.
+# Keep CI's strict analysis on the target platform while Linux only collects its
+# import-safe contract tests.
+pythonPlatform = "Windows"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false

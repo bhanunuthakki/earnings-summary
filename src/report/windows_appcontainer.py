@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ctypes
 import json
-import msvcrt
 import os
 import subprocess
 import sys
@@ -23,6 +22,11 @@ from pathlib import Path
 
 from log_redact import redact
 from report.offline_artifact import OfflineBoundaryError
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    msvcrt = None
 
 _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 _CREATE_NO_WINDOW = 0x08000000
