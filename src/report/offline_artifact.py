@@ -19,6 +19,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date
@@ -28,6 +29,8 @@ from typing import Literal, cast
 from unittest.mock import patch
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+ArtifactTelemetry = Callable[[str, Literal["start", "complete"], int | None], None]
 
 
 class OfflineBoundaryError(RuntimeError):
@@ -196,6 +199,104 @@ def dependency_record(
     )
 
 
+def _dependency_bytes(
+    body: bytes, *, logical_path: str, dependency_class: DependencyClass
+) -> DependencyRecord:
+    return DependencyRecord(
+        logical_path=logical_path,
+        dependency_class=dependency_class,
+        sha256=hashlib.sha256(body).hexdigest(),
+        size_bytes=len(body),
+    )
+
+
+def runtime_dependency_records(
+    *, isolated_repo: Path, private_write_root: Path
+) -> tuple[DependencyRecord, ...]:
+    """Hash the effective imported runtime closure and normalized minimal env."""
+
+    isolated_repo = isolated_repo.resolve()
+    private_write_root = private_write_root.resolve()
+    runtime_root = Path(sys.base_prefix).resolve()
+    observed: dict[str, Path] = {"runtime/python.exe": Path(sys.executable).resolve()}
+    for module in tuple(sys.modules.values()):
+        raw = getattr(module, "__file__", None)
+        if not isinstance(raw, str):
+            continue
+        path = Path(raw).resolve()
+        if not path.is_file() or _is_within(path, isolated_repo):
+            continue
+        try:
+            relative = path.relative_to(runtime_root).as_posix()
+        except ValueError as exc:
+            raise OfflineBoundaryError(f"imported runtime escapes Python root: {path}") from exc
+        observed[f"runtime/python/{relative}"] = path
+    records = [
+        dependency_record(path, logical_path=logical, dependency_class=DependencyClass.RUNTIME)
+        for logical, path in sorted(observed.items())
+    ]
+    normalized_environment: dict[str, str] = {}
+    substitutions = (
+        (str(private_write_root), "$PRIVATE_WRITE"),
+        (str(isolated_repo), "$SEALED_REPO"),
+        (str(runtime_root), "$PYTHON_RUNTIME"),
+    )
+    private_homepath = str(private_write_root)[len(private_write_root.drive) :]
+    for key, value in sorted(os.environ.items()):
+        normalized = value
+        for source, replacement in substitutions:
+            normalized = normalized.replace(source, replacement)
+        if (
+            os.name == "nt"
+            and key.upper() == "HOMEPATH"
+            and value.casefold() == private_homepath.casefold()
+        ):
+            normalized = "$PRIVATE_WRITE"
+        normalized_environment[key] = normalized
+    environment_body = _canonical_json(normalized_environment)
+    records.append(
+        _dependency_bytes(
+            environment_body,
+            logical_path="runtime/environment.json",
+            dependency_class=DependencyClass.RUNTIME,
+        )
+    )
+    return tuple(sorted(records, key=lambda item: item.logical_path))
+
+
+def _require_no_reparse_points(path: Path, *, attested_root: Path | None = None) -> None:
+    current = Path(os.path.abspath(path))
+    boundary = Path(os.path.abspath(attested_root)) if attested_root is not None else None
+    if boundary is not None and current != boundary and boundary not in current.parents:
+        raise OfflineBoundaryError(f"offline dependency escapes its attested root: {path}")
+    while True:
+        try:
+            attributes = getattr(current.lstat(), "st_file_attributes", 0)
+        except OSError as exc:
+            raise OfflineBoundaryError(
+                f"offline dependency identity is unavailable: {path}"
+            ) from exc
+        if current.is_symlink() or attributes & 0x400:
+            raise OfflineBoundaryError(f"offline dependency contains a reparse point: {path}")
+        if boundary is not None and current == boundary:
+            return
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def _require_single_link_file(path: Path) -> None:
+    _require_no_reparse_points(path)
+    try:
+        observed = path.stat()
+    except OSError as exc:
+        raise OfflineBoundaryError(f"offline dependency is unavailable: {path}") from exc
+    if not path.is_file():
+        raise OfflineBoundaryError(f"offline dependency is not a regular file: {path}")
+    if observed.st_nlink != 1:
+        raise OfflineBoundaryError(f"offline dependency has a hardlink alias: {path}")
+
+
 def snapshot_database(
     source: Path,
     destination: Path,
@@ -212,7 +313,8 @@ def snapshot_database(
     immutable read-only connections.
     """
 
-    source = source.resolve()
+    source = Path(os.path.abspath(source))
+    _require_single_link_file(source)
     if not source.is_file():
         raise FileNotFoundError(source)
     sidecars = (
@@ -239,10 +341,20 @@ def snapshot_database(
     # bundle first, then let SQLite resolve WAL state only inside private space.
     with tempfile.TemporaryDirectory(prefix="offline-db-bundle-", dir=destination.parent) as name:
         private_db = Path(name) / source.name
-        shutil.copyfile(source, private_db)
-        source_wal = source.with_name(f"{source.name}-wal")
-        if source_wal.is_file():
-            shutil.copyfile(source_wal, private_db.with_name(f"{private_db.name}-wal"))
+        copied: dict[Path, DependencyRecord] = {}
+        for path, kind, logical in sidecars:
+            if path not in before:
+                continue
+            _require_single_link_file(path)
+            target = private_db.with_name(private_db.name + path.name.removeprefix(source.name))
+            shutil.copyfile(path, target)
+            copied[path] = dependency_record(
+                target,
+                logical_path=logical,
+                dependency_class=kind,
+            )
+        if copied != before:
+            raise OfflineBoundaryError("source database bundle changed during offline snapshot")
         source_conn = sqlite3.connect(f"{private_db.as_uri()}?mode=ro", uri=True)
         destination_conn = sqlite3.connect(destination)
         try:
@@ -250,14 +362,15 @@ def snapshot_database(
         finally:
             destination_conn.close()
             source_conn.close()
-    after = {
-        path: dependency_record(
-            path,
-            logical_path=record.logical_path,
-            dependency_class=record.dependency_class,
-        )
-        for path, record in before.items()
-    }
+    after = {}
+    for path, kind, logical in sidecars:
+        if path.is_file():
+            _require_single_link_file(path)
+            after[path] = dependency_record(
+                path,
+                logical_path=logical,
+                dependency_class=kind,
+            )
     if before != after:
         destination.unlink(missing_ok=True)
         raise OfflineBoundaryError("source database bundle changed during offline snapshot")
@@ -277,6 +390,7 @@ def _copy_dependency(
     ticker: str,
 ) -> DependencyRecord:
     source = source_repo / relative_path
+    _require_single_link_file(source)
     destination = isolated_repo / relative_path
     dependency_class = classify_dependency(relative_path, ticker=ticker)
     before = dependency_record(
@@ -300,9 +414,26 @@ def _copy_dependency(
 def _iter_files(root: Path) -> Generator[Path]:
     if not root.is_dir():
         return
-    for path in sorted(root.rglob("*")):
-        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
-            yield path
+    _require_no_reparse_points(root)
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        with os.scandir(current) as entries:
+            children = sorted(entries, key=lambda entry: entry.name.casefold())
+        directories: list[Path] = []
+        for entry in children:
+            path = Path(entry.path)
+            _require_no_reparse_points(path)
+            if entry.is_symlink():
+                raise OfflineBoundaryError(f"offline dependency contains a symbolic link: {path}")
+            if entry.is_dir(follow_symlinks=False):
+                directories.append(path)
+            elif not entry.is_file(follow_symlinks=False):
+                raise OfflineBoundaryError(f"offline dependency contains a special file: {path}")
+            elif "__pycache__" not in path.parts and path.suffix != ".pyc":
+                _require_single_link_file(path)
+                yield path
+        pending.extend(reversed(directories))
 
 
 def _ticker_file(path: Path, ticker: str) -> bool:
@@ -563,13 +694,57 @@ def _artifact_files(
     return deliverables, receipt
 
 
-def _verify_directory(output_dir: Path, expected: Mapping[str, bytes]) -> None:
-    actual_names = {path.name for path in output_dir.iterdir() if path.is_file()}
+@contextmanager
+def _timed_artifact_stage(
+    stage: str, telemetry: ArtifactTelemetry | None
+) -> Generator[None, None, None]:
+    started_ns = time.perf_counter_ns()
+    if telemetry is not None:
+        telemetry(stage, "start", None)
+    try:
+        yield
+    finally:
+        if telemetry is not None:
+            elapsed_ms = max(0, (time.perf_counter_ns() - started_ns) // 1_000_000)
+            telemetry(stage, "complete", elapsed_ms)
+
+
+def _verify_directory(
+    output_dir: Path,
+    expected: Mapping[str, bytes],
+    *,
+    attested_root: Path | None = None,
+) -> None:
+    _require_no_reparse_points(output_dir, attested_root=attested_root)
+    children = tuple(output_dir.iterdir())
+    if any(path.is_symlink() or not path.is_file() for path in children):
+        raise OfflineBoundaryError("immutable offline artifact differs: inventory mismatch")
+    actual_names = {path.name for path in children}
     expected_names = set(expected)
     if actual_names != expected_names:
         raise OfflineBoundaryError("immutable offline artifact differs: file inventory mismatch")
     for name, body in expected.items():
         if (output_dir / name).read_bytes() != body:
+            raise OfflineBoundaryError(f"immutable offline artifact differs: {name}")
+
+
+def verify_artifact_copy(source: Path, destination: Path) -> None:
+    """Require two flat immutable artifact directories to be byte-identical."""
+
+    _require_no_reparse_points(source)
+    _require_no_reparse_points(destination)
+    source_children = tuple(source.iterdir())
+    destination_children = tuple(destination.iterdir())
+    if any(
+        path.is_symlink() or not path.is_file()
+        for path in (*source_children, *destination_children)
+    ):
+        raise OfflineBoundaryError("immutable offline artifact differs: inventory mismatch")
+    source_names = {path.name for path in source_children}
+    if source_names != {path.name for path in destination_children}:
+        raise OfflineBoundaryError("immutable offline artifact differs: inventory mismatch")
+    for name in source_names:
+        if (source / name).read_bytes() != (destination / name).read_bytes():
             raise OfflineBoundaryError(f"immutable offline artifact differs: {name}")
 
 
@@ -580,32 +755,45 @@ def write_offline_artifact(
     as_of: date,
     payload: OfflineArtifactPayload,
     dependencies: Sequence[DependencyRecord],
+    telemetry: ArtifactTelemetry | None = None,
+    attested_root: Path | None = None,
 ) -> OfflineArtifactReceipt:
     """Write or verify one deterministic, immutable offline artifact bundle."""
 
-    files, receipt = _artifact_files(
-        ticker=ticker,
-        as_of=as_of,
-        payload=payload,
-        dependencies=dependencies,
-    )
+    with _timed_artifact_stage("serialization", telemetry):
+        files, receipt = _artifact_files(
+            ticker=ticker,
+            as_of=as_of,
+            payload=payload,
+            dependencies=dependencies,
+        )
     output_dir = output_dir.resolve()
     if output_dir.exists():
         if not output_dir.is_dir():
             raise OfflineBoundaryError("offline output path exists and is not a directory")
-        _verify_directory(output_dir, files)
+        with _timed_artifact_stage("verification", telemetry):
+            _verify_directory(output_dir, files, attested_root=attested_root)
         return receipt
 
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent))
+    with _timed_artifact_stage("staging_directory", telemetry):
+        output_dir.parent.mkdir(parents=True, exist_ok=True)
+        staging = output_dir.with_name(f".{output_dir.name}.{os.getpid():x}.staging")
+        try:
+            staging.mkdir()
+        except FileExistsError:
+            raise OfflineBoundaryError("offline artifact staging path already exists") from None
     try:
-        for name, body in files.items():
-            (staging / name).write_bytes(body)
-        _verify_directory(staging, files)
-        staging.replace(output_dir)
+        with _timed_artifact_stage("writes", telemetry):
+            for name, body in files.items():
+                (staging / name).write_bytes(body)
+        with _timed_artifact_stage("verification", telemetry):
+            _verify_directory(staging, files, attested_root=attested_root)
+        with _timed_artifact_stage("rename", telemetry):
+            staging.replace(output_dir)
     finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+        with _timed_artifact_stage("cleanup", telemetry):
+            if staging.exists():
+                shutil.rmtree(staging)
     return receipt
 
 
@@ -620,7 +808,9 @@ __all__ = [
     "classify_dependency",
     "dependency_record",
     "offline_runtime_guard",
+    "runtime_dependency_records",
     "snapshot_database",
     "stage_offline_repository",
+    "verify_artifact_copy",
     "write_offline_artifact",
 ]

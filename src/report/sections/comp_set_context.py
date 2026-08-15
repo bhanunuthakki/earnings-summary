@@ -29,6 +29,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from report.render_clock import render_today
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -305,7 +306,7 @@ def _scope_summary(
         return None
     rows = _metric_rows_at(conn, scope_type, scope_key, as_of, method_version)
     med = rows.get(("pe_ttm", "median"), {})
-    stale = (date.today() - as_of) > timedelta(days=STALE_AFTER_DAYS)
+    stale = (render_today() - as_of) > timedelta(days=STALE_AFTER_DAYS)
     return CompSetScopeSummary(
         scope_type=scope_type,
         scope_key=scope_key,
@@ -372,7 +373,7 @@ def load_comp_set_context(
                     }
                 )
 
-        stale = as_of is None or (date.today() - as_of) > timedelta(days=STALE_AFTER_DAYS)
+        stale = as_of is None or (render_today() - as_of) > timedelta(days=STALE_AFTER_DAYS)
 
         primary_keys = _OPERATING_PRIMARY if metric_class == "operating" else _FINANCIAL_PRIMARY
         primary_metrics = tuple(

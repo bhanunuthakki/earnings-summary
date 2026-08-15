@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from report.render_clock import render_now
+
 
 def fmt_compact_usd(v: float) -> str:
     """Compact magnitude: ``135.0B`` / ``45M`` / ``678K`` / ``1,234``.
@@ -74,7 +76,7 @@ def fmt_reltime(iso: str, *, now: datetime | None = None) -> str:
         return iso
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    ref = now or datetime.now(UTC)
+    ref = now or render_now()
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=UTC)
     seconds = int((ref - dt).total_seconds())

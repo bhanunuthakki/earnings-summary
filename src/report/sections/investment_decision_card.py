@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -29,6 +29,7 @@ from report.models import (
     InvestmentDecisionCardSection,
     SectionStatus,
 )
+from report.render_clock import render_now
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def build(
         generated_at = artifact.generated_at
         if generated_at.tzinfo is None:
             generated_at = generated_at.replace(tzinfo=UTC)
-        is_stale = generated_at < (datetime.now(UTC) - timedelta(days=_STALE_THRESHOLD_DAYS))
+        is_stale = generated_at < (render_now() - timedelta(days=_STALE_THRESHOLD_DAYS))
         section = InvestmentDecisionCardSection(
             status=SectionStatus.OK,
             ticker=ticker,

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from industry_classifier import suppressed_sections_for_ticker
 from report.models import BudgetSkip, ReportFlavor, ReportSpec
+from report.render_clock import render_today
 from report.sections import (
     appendix,
     bear_case,
@@ -172,7 +173,7 @@ def build_report(
     suppressed_sections = sorted(suppressed_sections_for_ticker(ticker, repo_root))
     return ReportSpec(
         ticker=ticker,
-        generation_date=generation_date or date.today(),
+        generation_date=generation_date or render_today(),
         repo_root=str(repo_root),
         flavor=flavor,
         llm_enabled=enable_llm,

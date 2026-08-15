@@ -9,27 +9,18 @@ explicit output directory.
 from __future__ import annotations
 
 import argparse
+import atexit
+import faulthandler
 import json
-import os
-import subprocess
 import sys
 import tempfile
+import time
 from datetime import date
 from pathlib import Path
 from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from report.models import ReportFlavor  # noqa: E402
-from report.offline_artifact import (  # noqa: E402
-    DependencyRecord,
-    OfflineArtifactPayload,
-    OfflineBoundaryError,
-    offline_runtime_guard,
-    stage_offline_repository,
-    write_offline_artifact,
-)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -42,11 +33,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--portfolio-database", type=Path)
     parser.add_argument(
         "--flavor",
-        choices=[flavor.value for flavor in ReportFlavor],
-        default=ReportFlavor.PORTFOLIO.value,
+        choices=("portfolio", "evaluation"),
+        default="portfolio",
     )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dependency-manifest", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--timeout-seconds", type=int, default=300, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -59,16 +51,36 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def _parent(args: argparse.Namespace) -> int:
+    from report.offline_artifact import (
+        OfflineBoundaryError,
+        stage_offline_repository,
+    )
+    from report.windows_appcontainer import (
+        minimal_worker_environment,
+        run_appcontainer_worker,
+    )
+
     source_repo = args.repo_root.resolve()
     output_dir = args.output_dir.resolve()
     if _is_within(output_dir, source_repo):
         raise OfflineBoundaryError("offline output directory must be outside the source repository")
     if not args.database.resolve().is_file():
         raise FileNotFoundError(args.database.resolve())
+    database = args.database.resolve()
+    if (
+        _is_within(output_dir, source_repo)
+        or _is_within(source_repo, output_dir)
+        or output_dir == database
+    ):
+        raise OfflineBoundaryError(
+            "offline output directory must be disjoint from canonical repository and database roots"
+        )
 
     with tempfile.TemporaryDirectory(prefix="earnings-offline-artifact-") as temporary:
         sandbox = Path(temporary)
         isolated_repo = sandbox / "earnings-summary"
+        private_write_root = sandbox / "private-write"
+        private_write_root.mkdir()
         dependencies = stage_offline_repository(
             source_repo=source_repo,
             isolated_repo=isolated_repo,
@@ -78,7 +90,7 @@ def _parent(args: argparse.Namespace) -> int:
                 args.portfolio_database.resolve() if args.portfolio_database is not None else None
             ),
         )
-        manifest_path = sandbox / "dependencies.json"
+        manifest_path = isolated_repo / "config" / "offline_dependencies.json"
         manifest_path.write_text(
             json.dumps(
                 [record.model_dump(mode="json") for record in dependencies],
@@ -89,6 +101,7 @@ def _parent(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
         worker = isolated_repo / "execution" / "build_offline_artifact.py"
+        staged_artifact = private_write_root / "artifact"
         command = [
             sys.executable,
             str(worker),
@@ -100,35 +113,41 @@ def _parent(args: argparse.Namespace) -> int:
             "--database",
             str(isolated_repo / "data" / "portfolio.db"),
             "--output-dir",
-            str(output_dir),
+            str(staged_artifact),
             "--as-of",
             args.as_of.isoformat(),
             "--flavor",
             args.flavor,
             "--dependency-manifest",
             str(manifest_path),
+            "--timeout-seconds",
+            str(args.timeout_seconds),
         ]
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "PYTHONPATH": str(isolated_repo / "src"),
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "EARNINGS_OFFLINE_RENDER": "1",
-                "LLM_FALLBACK_DISABLED": "1",
-            }
+        environment = minimal_worker_environment(
+            isolated_repo=isolated_repo,
+            write_root=private_write_root,
         )
-        completed = subprocess.run(
+        returncode, stdout, stderr = run_appcontainer_worker(
             command,
             cwd=isolated_repo,
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=False,
+            read_roots=(Path(sys.base_prefix), isolated_repo),
+            write_root=private_write_root,
+            environment=environment,
+            timeout_seconds=args.timeout_seconds,
         )
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "offline worker failed").strip()
+        if returncode != 0:
+            detail = (stderr or stdout or "offline worker failed").strip()
             raise OfflineBoundaryError(detail[-4_000:])
-        print(completed.stdout.strip())
+        if not staged_artifact.is_dir():
+            raise OfflineBoundaryError("AppContainer worker did not produce an artifact")
+        if output_dir.exists():
+            from report.offline_artifact import verify_artifact_copy
+
+            verify_artifact_copy(staged_artifact, output_dir)
+        else:
+            output_dir.parent.mkdir(parents=True, exist_ok=True)
+            staged_artifact.replace(output_dir)
+        print(stdout.strip())
     return 0
 
 
@@ -184,7 +203,52 @@ def _section_status(spec: object) -> dict[str, object]:
     return status
 
 
+def _worker_event(
+    stage: str,
+    phase: str = "mark",
+    elapsed_ms: int | None = None,
+) -> None:
+    event: dict[str, object] = {
+        "event": "offline_worker_stage",
+        "phase": phase,
+        "stage": stage,
+    }
+    if elapsed_ms is not None:
+        event["elapsed_ms"] = elapsed_ms
+    print(json.dumps(event, sort_keys=True), file=sys.stderr, flush=True)
+
+
+def _arm_worker_diagnostics(timeout_seconds: int) -> None:
+    started_ns = time.perf_counter_ns()
+
+    def emit_shutdown() -> None:
+        elapsed_ms = max(0, (time.perf_counter_ns() - started_ns) // 1_000_000)
+        _worker_event("interpreter_shutdown", "complete", elapsed_ms)
+
+    atexit.register(emit_shutdown)
+    faulthandler.enable(file=sys.stderr, all_threads=True)
+    dump_after_seconds = max(1, timeout_seconds - 5)
+    faulthandler.dump_traceback_later(dump_after_seconds, file=sys.stderr, repeat=False)
+    _worker_event("timeout_stack_dump_armed", elapsed_ms=dump_after_seconds * 1_000)
+
+
 def _worker(args: argparse.Namespace) -> int:
+    _arm_worker_diagnostics(args.timeout_seconds)
+    from report.windows_appcontainer import is_current_process_appcontainer
+
+    if not is_current_process_appcontainer():
+        raise RuntimeError("offline worker refused: process is not an AppContainer")
+    from report.models import ReportFlavor
+    from report.offline_artifact import (
+        DependencyRecord,
+        OfflineArtifactPayload,
+        OfflineBoundaryError,
+        offline_runtime_guard,
+        runtime_dependency_records,
+        write_offline_artifact,
+    )
+    from report.render_clock import fixed_render_clock, require_fixed_clock
+
     if args.dependency_manifest is None:
         raise OfflineBoundaryError("offline worker requires a dependency manifest")
     dependencies = tuple(
@@ -204,13 +268,16 @@ def _worker(args: argparse.Namespace) -> int:
     from report.sections import snapshot as snapshot_section
     from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-    with offline_runtime_guard(output_dir.parent) as metrics:
+    with fixed_render_clock(args.as_of), offline_runtime_guard(output_dir.parent) as metrics:
+        require_fixed_clock()
+        _worker_event("sandbox_verified")
         connection = connect_sqlite(
             database,
             role=SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
             schema_preflight=True,
         )
         try:
+            _worker_event("build_report_start")
             spec = build_report(
                 ticker=args.ticker,
                 repo_root=repo_root,
@@ -230,9 +297,11 @@ def _worker(args: argparse.Namespace) -> int:
             numeric_provenance.update(
                 financials_section.build_per_metric(args.ticker, repo_root, conn=connection)
             )
+            _worker_event("build_report_complete")
         finally:
             connection.close()
 
+        _worker_event("render_start")
         report_body = render_report_body(spec)
         html = render_standalone_report(spec, report_body)
         sections = json.loads(render_sections_json(spec))
@@ -251,13 +320,22 @@ def _worker(args: argparse.Namespace) -> int:
             },
             numeric_provenance=cast("dict[str, object]", normalized_provenance),
         )
+        _worker_event("render_complete")
+        runtime_dependencies = runtime_dependency_records(
+            isolated_repo=repo_root,
+            private_write_root=output_dir.parent,
+        )
+        _worker_event("runtime_attested")
         receipt = write_offline_artifact(
             output_dir=output_dir,
             ticker=args.ticker,
             as_of=args.as_of,
             payload=payload,
-            dependencies=dependencies,
+            dependencies=(*dependencies, *runtime_dependencies),
+            telemetry=_worker_event,
+            attested_root=output_dir.parent,
         )
+        _worker_event("artifact_written")
     if any(
         (
             metrics.network_attempts,

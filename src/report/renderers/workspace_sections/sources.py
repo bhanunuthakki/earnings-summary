@@ -8,12 +8,13 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from io import StringIO
 from pathlib import Path
 
 from llm.calibration import VersionSummary, daily_avg_scores, summarize_by_prompt_version
 from report.models import AppendixSection, ProvenanceSection
+from report.render_clock import render_now
 from report.renderers.workspace_charts import sparkline
 from report.renderers.workspace_sections._shared import _esc, _panel_head
 from ui import living_grid as lg
@@ -230,7 +231,7 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
     window_days = 30
     # Stored scored_at is naive UTC ISO; compare with a naive cutoff so the
     # SQL string comparison is well-defined.
-    since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=window_days)
+    since = render_now().replace(tzinfo=None) - timedelta(days=window_days)
     summaries: list[VersionSummary] = summarize_by_prompt_version(db_path=db_path, since=since)
 
     if not summaries:
