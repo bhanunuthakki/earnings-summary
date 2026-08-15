@@ -15,6 +15,7 @@ import transcripts.immutable_staging as staging
 from transcripts.immutable_staging import (
     StagedTranscriptArtifact,
     TranscriptStagingError,
+    install_transcript_output,
     read_staged_transcript,
     stage_transcript_artifact,
 )
@@ -148,6 +149,105 @@ def test_existing_content_address_collision_fails_closed(tmp_path: Path) -> None
         _stage(source, private_root)
 
     assert target.read_bytes() == b"forged collision"
+
+
+def test_output_install_is_exclusive_read_only_and_idempotent(tmp_path: Path) -> None:
+    output_root = tmp_path / "raw"
+    output_root.mkdir()
+    payload = b"authorized output"
+
+    first = install_transcript_output(
+        payload,
+        output_root,
+        "ACME_Q2_2026.txt",
+        expected_sha256=_digest(payload),
+        expected_size_bytes=len(payload),
+    )
+    second = install_transcript_output(
+        payload,
+        output_root,
+        "ACME_Q2_2026.txt",
+        expected_sha256=_digest(payload),
+        expected_size_bytes=len(payload),
+    )
+
+    assert first == second
+    assert first.read_bytes() == payload
+    assert first.stat().st_mode & stat.S_IWUSR == 0
+
+
+@pytest.mark.parametrize("existing_kind", ["mismatch", "writable", "directory"])
+def test_output_install_rejects_any_existing_unsealed_target(
+    tmp_path: Path,
+    existing_kind: str,
+) -> None:
+    output_root = tmp_path / "raw"
+    output_root.mkdir()
+    target = output_root / "ACME_Q2_2026.txt"
+    payload = b"authorized output"
+    if existing_kind == "directory":
+        target.mkdir()
+    else:
+        target.write_bytes(payload if existing_kind == "writable" else b"other bytes")
+        if existing_kind == "mismatch":
+            target.chmod(stat.S_IREAD)
+
+    with pytest.raises(TranscriptStagingError):
+        install_transcript_output(
+            payload,
+            output_root,
+            target.name,
+            expected_sha256=_digest(payload),
+            expected_size_bytes=len(payload),
+        )
+
+    if existing_kind != "directory":
+        assert target.read_bytes() == (payload if existing_kind == "writable" else b"other bytes")
+
+
+def test_output_install_rejects_symlink_without_mutating_victim(tmp_path: Path) -> None:
+    output_root = tmp_path / "raw"
+    output_root.mkdir()
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"victim")
+    target = output_root / "ACME_Q2_2026.txt"
+    try:
+        target.symlink_to(victim)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    payload = b"authorized output"
+
+    with pytest.raises(TranscriptStagingError, match="symlink or reparse"):
+        install_transcript_output(
+            payload,
+            output_root,
+            target.name,
+            expected_sha256=_digest(payload),
+            expected_size_bytes=len(payload),
+        )
+
+    assert victim.read_bytes() == b"victim"
+
+
+def test_output_install_rejects_hardlink_without_mutating_victim(tmp_path: Path) -> None:
+    output_root = tmp_path / "raw"
+    output_root.mkdir()
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"victim")
+    target = output_root / "ACME_Q2_2026.txt"
+    os.link(victim, target)
+    payload = b"authorized output"
+
+    with pytest.raises(TranscriptStagingError, match="hard link"):
+        install_transcript_output(
+            payload,
+            output_root,
+            target.name,
+            expected_sha256=_digest(payload),
+            expected_size_bytes=len(payload),
+        )
+
+    assert victim.read_bytes() == b"victim"
 
 
 def test_consumer_rejects_staged_byte_tampering(tmp_path: Path) -> None:

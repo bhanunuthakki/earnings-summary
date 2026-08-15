@@ -75,6 +75,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
     FetchQaSpec,
+    FetchQaStatus,
     fetch_qa,
 )
 
@@ -246,7 +247,10 @@ def _try_audio_fallback(ticker: str, year: int, quarter: int) -> bool:
         ffmpeg = None
     try:
         res = fat.fetch_and_transcribe(
-            fat.FetchSpec(ticker=ticker, year=year, quarter=quarter), ffmpeg
+            fat.FetchSpec(ticker=ticker, year=year, quarter=quarter),
+            ffmpeg,
+            db_path=Path(db.DB_PATH),
+            owner_requested=True,
         )
     except Exception as e:  # audio fetch/transcribe is best-effort
         sys.stderr.write(
@@ -291,8 +295,10 @@ def _backfill_one(
         except Exception as e:
             result.errors.append(f"{label}: {type(e).__name__}: {e}"[:200])
             continue
-        if hit is not None:
+        if hit.status in {FetchQaStatus.ACQUIRED, FetchQaStatus.IDEMPOTENT_REPLAY}:
             result.fetched.append(label)
+        elif hit.status == FetchQaStatus.DENIED:
+            result.errors.append(f"{label}: transcript acquisition denied")
         elif audio_fallback and _try_audio_fallback(ticker, y, q):
             result.fetched.append(f"{label} [audio]")
         else:

@@ -98,22 +98,12 @@ def _run_qa(refs: list[TranscriptRef], rerun_all: bool) -> dict[str, int]:
         if entry is None:
             # File on disk but unindexed — register a stub so update_transcript_qa
             # has a row to write to.
-            index_manager.register_transcript(
-                ref.ticker,
-                ref.year,
-                ref.qlabel,
-                source="unknown_legacy",
-                filepath=ref.path.name,
-                has_qa=None,
-            )
-            entry = index_manager.has_transcript(ref.ticker, ref.year, ref.qlabel)
-            counts["registered_new"] += 1
-
-        if entry is None:  # defensive — register failed
             print(
-                f"[qa-error] could not register {ref.ticker} {ref.qlabel} {ref.year}",
+                f"[qa-denied] {ref.ticker} {ref.qlabel} {ref.year}: "
+                "missing authorized acquisition receipt",
                 file=sys.stderr,
             )
+            counts["skipped"] += 1
             continue
 
         prior_status = entry.get("qa_status")

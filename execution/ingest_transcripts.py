@@ -20,6 +20,7 @@ import os
 import sqlite3
 import sys
 from contextlib import suppress
+from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
@@ -35,6 +36,7 @@ from compute.transcript_ingest import (  # noqa: E402
     ingest_evidence_file,
     parse_transcript_filename,
 )
+from models.documents import DocType, SourceType  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.invocation_fingerprint import files_fingerprint  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
@@ -45,6 +47,22 @@ from pipeline.run_accounting import (  # noqa: E402
     record_stage,
     start_run,
     suppression_payload,
+)
+from pipeline.transcript_acquisition import (  # noqa: E402
+    COMBINED_SOURCE_REGIME_IDENTITY,
+    AuthorizedTranscriptArtifact,
+    TranscriptAcquisitionDeniedError,
+    load_authorized_transcript_replay,
+    persist_authorized_transcript_artifact,
+    read_authorized_transcript,
+    stage_pending_issuer_transcripts,
+)
+from transcripts.acquisition_semantics import (  # noqa: E402
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    ExistingArtifactBehavior,
+    TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
+    TranscriptProvider,
 )
 
 _TRANSCRIPT_DIRS = (
@@ -238,7 +256,10 @@ def _candidate_files(restrict_ticker: str | None) -> list[tuple[Path, ParsedFile
 
 
 def _backfill_existing_ir_transcripts(
-    conn: sqlite3.Connection, run_id: str, restrict_ticker: str | None
+    conn: sqlite3.Connection,
+    run_id: str,
+    restrict_ticker: str | None,
+    authorized_artifacts: dict[int, AuthorizedTranscriptArtifact],
 ) -> tuple[list[dict[str, object]], int, int]:
     """Walk `documents WHERE doc_type='ir_transcript'` and emit transcripts/segments rows.
 
@@ -275,12 +296,18 @@ def _backfill_existing_ir_transcripts(
             continue
         abs_path, allowed_root = location
         try:
+            artifact = authorized_artifacts.get(doc_id)
+            if artifact is None:
+                raise TranscriptAcquisitionDeniedError(
+                    f"IR transcript doc#{doc_id} lacks an authorized artifact"
+                )
             result = ingest_evidence_file(
                 conn,
                 document_id=doc_id,
                 file_path=abs_path,
                 allowed_root=allowed_root,
                 project_root=PROJECT_ROOT,
+                authorized_artifact=artifact,
             )
             assert result is not None
         except (ValueError, OSError) as e:
@@ -421,9 +448,62 @@ def main() -> int:
             print(json.dumps(plan, indent=2))
             return 0
 
+        raw_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
+        for path, parsed in in_scope:
+            request = TranscriptAcquisitionRequest(
+                entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+                canonical_ticker=parsed.ticker,
+                fiscal_year=parsed.fiscal_year_label,
+                fiscal_quarter=parsed.quarter_idx,
+                as_of=date.today(),
+                source_type=SourceType.IR_DOC,
+                document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+                provider=TranscriptProvider.ISSUER_IR,
+                owner_requested=bool(args.ticker),
+                existing_artifact=False,
+                existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+                source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+                source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+            )
+            try:
+                artifact = load_authorized_transcript_replay(
+                    conn,
+                    request=request,
+                    project_root=PROJECT_ROOT,
+                    trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                )
+                if (
+                    artifact is None
+                    or read_authorized_transcript(
+                        conn,
+                        artifact,
+                        project_root=PROJECT_ROOT,
+                        trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                    )
+                    != path.read_bytes()
+                ):
+                    raise TranscriptAcquisitionDeniedError(
+                        f"{path.name} lacks its exact durable issuer acquisition receipt"
+                    )
+            except (OSError, ValueError, TranscriptAcquisitionDeniedError) as exc:
+                sys.stderr.write(
+                    json.dumps(
+                        {
+                            "event": "transcript_acquisition_denied",
+                            "ticker": parsed.ticker,
+                            "error_class": type(exc).__name__,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+                return 2
+            raw_authorizations[path] = artifact
+
         raw_root = PROJECT_ROOT / "transcripts" / "raw"
         processed_root = PROJECT_ROOT / "transcripts" / "processed"
         snapshots: dict[Path, evidence_snapshot.EvidenceSnapshot] = {}
+        staged_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
         try:
             staged_scope: list[tuple[Path, ParsedFilename]] = []
             for path, parsed in in_scope:
@@ -436,6 +516,7 @@ def main() -> int:
                     snapshot=stable,
                 )
                 staged_scope.append((staged, parsed))
+                staged_authorizations[staged] = raw_authorizations[path]
                 snapshots[staged] = evidence_snapshot.EvidenceSnapshot(
                     path=staged,
                     payload=stable.payload,
@@ -479,6 +560,39 @@ def main() -> int:
         ir_sources = (
             _ir_transcript_sources(conn, args.ticker) if args.include_ir_transcripts else []
         )
+        try:
+            ir_artifacts = (
+                stage_pending_issuer_transcripts(
+                    conn,
+                    tickers=sorted({ticker for _, ticker, _, _ in ir_sources}),
+                    project_root=PROJECT_ROOT,
+                    private_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                    entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
+                    as_of=date.today(),
+                )
+                if ir_sources
+                else {}
+            )
+        except (OSError, ValueError, TranscriptAcquisitionDeniedError) as exc:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "transcript_acquisition_denied",
+                        "error_class": type(exc).__name__,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            return 2
+        for artifact in ir_artifacts.values():
+            persist_authorized_transcript_artifact(
+                conn,
+                artifact,
+                project_root=PROJECT_ROOT,
+                trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+            )
+        conn.commit()
         if not in_scope and not ir_sources:
             print(json.dumps({**plan, "ingested": 0, "skipped_existing": 0}, indent=2))
             return 0
@@ -520,6 +634,7 @@ def main() -> int:
                     allowed_root=raw_root,
                     project_root=PROJECT_ROOT,
                     tracked_tickers=tracked,
+                    authorized_artifact=staged_authorizations[path],
                     commit=False,
                 )
                 if result is not None and not result.skipped_existing and not args.no_promote:
@@ -593,7 +708,7 @@ def main() -> int:
         ir_failed = 0
         if args.include_ir_transcripts:
             ir_ingested, ir_skipped, ir_failed = _backfill_existing_ir_transcripts(
-                conn, run_id, args.ticker
+                conn, run_id, args.ticker, ir_artifacts
             )
 
         total_failed = failed + ir_failed

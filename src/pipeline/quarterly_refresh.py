@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -57,6 +57,10 @@ from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     authorize_collection_target_in_connection,
+)
+from pipeline.transcript_acquisition import (
+    AuthorizedTranscriptArtifact,
+    TranscriptAcquisitionDeniedError,
 )
 from provenance.selection import selected_transcripts_relation
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -352,7 +356,11 @@ def _stage_extract_fmp_facts(
 
 
 def _stage_ingest_ir_transcripts(
-    conn: sqlite3.Connection, *, ticker: str, project_root: Path
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    project_root: Path,
+    transcript_artifacts: Mapping[int, AuthorizedTranscriptArtifact],
 ) -> StageResult:
     """Backfill ir_transcript PDFs into transcripts + transcript_segments."""
     cur = conn.execute(
@@ -373,6 +381,10 @@ def _stage_ingest_ir_transcripts(
     failed = 0
     for row in docs:
         doc_id = int(row["id"])
+        artifact = transcript_artifacts.get(doc_id)
+        if artifact is None:
+            failed += 1
+            continue
         location = recorded_evidence_location(project_root, str(row["file_path"]))
         if location is None:
             failed += 1
@@ -385,6 +397,7 @@ def _stage_ingest_ir_transcripts(
                 file_path=abs_path,
                 allowed_root=allowed_root,
                 project_root=project_root,
+                authorized_artifact=artifact,
             )
             processed += 1
         except (ValueError, OSError):
@@ -650,6 +663,7 @@ def refresh_ticker(
     run_id: str,
     fetch_sec: bool = False,
     sec_owner_requested: bool = False,
+    transcript_artifacts: Mapping[int, AuthorizedTranscriptArtifact] | None = None,
 ) -> TickerRefreshReport:
     """Run the full refresh DAG for one ticker.
 
@@ -657,6 +671,21 @@ def refresh_ticker(
     companyfacts API at the start of the DAG. Default off so the cron stays
     network-free unless explicitly invoked with --fetch-sec.
     """
+    pending_ids = {
+        int(row[0])
+        for row in conn.execute(
+            "SELECT id FROM documents WHERE ticker=? AND source_type='ir_doc' "
+            "AND doc_type='ir_transcript' "
+            "AND id NOT IN (SELECT document_id FROM transcripts)",
+            (ticker.upper(),),
+        ).fetchall()
+    }
+    available_ids = set(transcript_artifacts or {})
+    if not pending_ids.issubset(available_ids):
+        missing = sorted(pending_ids - available_ids)
+        raise TranscriptAcquisitionDeniedError(
+            f"quarterly refresh lacks authorized staged transcript documents: {missing}"
+        )
     stages: list[StageResult] = []
     if fetch_sec:
         stages.append(
@@ -669,7 +698,14 @@ def refresh_ticker(
         )
     stages.append(_stage_validate_segment_cache(ticker=ticker, project_root=project_root))
     stages.append(_stage_extract_fmp_facts(conn, ticker=ticker, project_root=project_root))
-    stages.append(_stage_ingest_ir_transcripts(conn, ticker=ticker, project_root=project_root))
+    stages.append(
+        _stage_ingest_ir_transcripts(
+            conn,
+            ticker=ticker,
+            project_root=project_root,
+            transcript_artifacts=({} if transcript_artifacts is None else transcript_artifacts),
+        )
+    )
     stages.append(_stage_derive_kpis(conn, ticker=ticker))
     stages.append(_stage_match_commitments(conn, ticker=ticker))
     eval_stage, eval_outcome = _stage_evaluate_thesis(
@@ -702,8 +738,24 @@ def refresh_portfolio(
     run_id: str,
     fetch_sec: bool = False,
     sec_owner_requested: bool = False,
+    transcript_artifacts: Mapping[int, AuthorizedTranscriptArtifact] | None = None,
 ) -> RefreshReport:
     """Run in order and return terminal accounting even on an exception."""
+    for ticker in tickers:
+        pending_ids = {
+            int(row[0])
+            for row in conn.execute(
+                "SELECT id FROM documents WHERE ticker=? AND source_type='ir_doc' "
+                "AND doc_type='ir_transcript' "
+                "AND id NOT IN (SELECT document_id FROM transcripts)",
+                (ticker.upper(),),
+            ).fetchall()
+        }
+        if not pending_ids.issubset(set(transcript_artifacts or {})):
+            raise TranscriptAcquisitionDeniedError(
+                f"portfolio refresh lacks authorized staged transcript documents: "
+                f"{sorted(pending_ids - set(transcript_artifacts or {}))}"
+            )
     started_at = datetime.now()
     reports: list[TickerRefreshReport] = []
     execution: list[TickerExecutionReceipt] = []
@@ -718,6 +770,7 @@ def refresh_portfolio(
                     run_id=run_id,
                     fetch_sec=fetch_sec,
                     sec_owner_requested=True,
+                    transcript_artifacts=transcript_artifacts,
                 )
             else:
                 ticker_report = refresh_ticker(
@@ -727,6 +780,7 @@ def refresh_portfolio(
                     holdings_dir=holdings_dir,
                     run_id=run_id,
                     fetch_sec=fetch_sec,
+                    transcript_artifacts=transcript_artifacts,
                 )
         except Exception as exc:
             execution.append(

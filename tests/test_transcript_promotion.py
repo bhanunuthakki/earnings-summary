@@ -10,6 +10,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -281,7 +282,7 @@ def test_index_entries_are_updated_after_promotion(
 
     # Seed both indexes with raw/ entries — the state a freshly-fetched file
     # would leave behind after fetch_qa_transcript ran.
-    index_manager.register_transcript(
+    cast("Callable[..., bool]", getattr(index_manager, "_register_transcript"))(
         "GOOG",
         2025,
         "Q1",
@@ -309,7 +310,7 @@ def test_index_entries_are_updated_after_promotion(
 # ---------------------------------------------------------------------------
 
 
-def test_main_stages_content_addressed_evidence_before_ingest(
+def test_main_rejects_unreceipted_file_before_staging_or_ingest(
     fake_project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """End-to-end: ingest binds stable bytes without moving the intake file."""
@@ -435,18 +436,13 @@ def test_main_stages_content_addressed_evidence_before_ingest(
     monkeypatch.setattr(sys, "argv", ["ingest_transcripts.py", "--db", str(db_path)])
 
     rc = mod.main()
-    assert rc == 0
+    assert rc == 2
 
     assert raw_path.exists()
     assert not (fake_project / "transcripts" / "processed" / "GOOG_Q1_2025.txt").exists()
     c = sqlite3.connect(str(db_path))
     c.row_factory = sqlite3.Row
-    row = c.execute(
-        "SELECT file_path FROM documents WHERE ticker = 'GOOG' "
-        "AND doc_type = 'earnings_call_transcript'"
-    ).fetchone()
+    row = c.execute("SELECT file_path FROM documents WHERE ticker = 'GOOG'").fetchone()
     c.close()
-    assert row["file_path"].startswith("transcripts/raw/.evidence/")
-    evidence = fake_project / row["file_path"]
-    assert evidence.exists()
-    assert evidence.read_bytes() == raw_path.read_bytes()
+    assert row is None
+    assert not (fake_project / "transcripts" / "raw" / ".evidence").exists()

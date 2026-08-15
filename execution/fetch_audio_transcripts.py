@@ -27,9 +27,10 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import date
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from urllib.parse import urlparse
 
 import yt_dlp
@@ -46,21 +47,29 @@ from alias_manager import resolve_ticker  # noqa: E402
 from compute.transcript_ingest import (  # noqa: E402
     QASectionStatus,
     detect_qa_section,
-    qa_status_to_db_value,
 )
 from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url  # noqa: E402
 from log_redact import redact  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
-    ArtifactKind,
-    AuthorizationReason,
-    CollectionSource,
-    decision_for,
+from models.documents import DocType, SourceType  # noqa: E402
+from pipeline.transcript_acquisition import (  # noqa: E402
+    COMBINED_SOURCE_REGIME_IDENTITY,
+    authorize_transcript_request,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from transcript_qa import (  # noqa: E402
     QaStatus,
     validate_audio_transcript,
     validate_transcript,
+)
+from transcripts.acquisition_semantics import (  # noqa: E402
+    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+    ExistingArtifactBehavior,
+    TranscriptAcquisitionAuthorization,
+    TranscriptAcquisitionEntrypoint,
+    TranscriptAcquisitionRequest,
+    TranscriptAuthorizationFailure,
+    TranscriptAuthorizationStatus,
+    TranscriptProvider,
 )
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
@@ -192,18 +201,26 @@ def _select_audio_url(
     return smart_search_url(spec.ticker, spec.year, spec.quarter, ffmpeg_location)
 
 
-def _enforce_audio_policy() -> None:
+def _enforce_audio_policy(
+    authorization: TranscriptAcquisitionAuthorization | None = None,
+) -> NoReturn:
     """Fail closed before every downloader/search boundary; webcasts are excluded."""
 
-    decision = decision_for(
-        ListType.PORTFOLIO,
-        CollectionSource.TRANSCRIPT,
-        ArtifactKind.WEBCAST,
-        requested=True,
+    if (
+        authorization is not None
+        and authorization.status is TranscriptAuthorizationStatus.DENIED
+        and authorization.failure is TranscriptAuthorizationFailure.AUDIO_WEBCAST_EXCLUDED
+        and authorization.request.entrypoint
+        is TranscriptAcquisitionEntrypoint.FETCH_AUDIO_TRANSCRIPTS
+        and authorization.request.provider is TranscriptProvider.YOUTUBE_AUDIO
+    ):
+        raise AudioCollectionPolicyError(
+            "Audio/webcast collection is excluded by canonical transcript policy "
+            f"({authorization.idempotency_key})."
+        )
+    raise AudioCollectionPolicyError(
+        "Audio/webcast collection is excluded; the canonical denied receipt is required."
     )
-    if decision.allowed or decision.reason is not AuthorizationReason.WEBCAST_EXCLUDED:
-        raise RuntimeError("source policy failed to produce the required webcast denial")
-    raise AudioCollectionPolicyError("Audio/webcast collection is excluded by source policy.")
 
 
 def _safe_external_message(value: object) -> str:
@@ -461,20 +478,9 @@ def _ensure_qa_recorded(
         # File on disk but not in index — register with a stub source so
         # validate_transcript can route. Caller will overwrite with real source
         # if it just produced the file; backfill leaves "unknown_legacy".
-        index_manager.register_transcript(
-            canonical_ticker,
-            year,
-            qlabel,
-            source="unknown_legacy",
-            filepath=output_path.name,
-            has_qa=None,
+        raise AudioCollectionPolicyError(
+            f"existing audio transcript lacks an authorized acquisition receipt: {output_path}"
         )
-        entry = cast(
-            "dict[str, object] | None",
-            index_manager.has_transcript(canonical_ticker, year, qlabel),
-        )
-        if entry is None:
-            raise RuntimeError(f"failed to register existing transcript {output_path}")
 
     # Backfill has_qa if missing — legacy entries from before Q&A detection landed.
     if entry.get("has_qa") is None:
@@ -482,22 +488,13 @@ def _ensure_qa_recorded(
             section = detect_qa_section(output_path.read_text(encoding="utf-8"))
         except OSError:
             section = None
-        if section is not None:
-            index_manager.register_transcript(
-                canonical_ticker,
-                year,
-                qlabel,
-                source=str(entry.get("source") or "unknown_legacy"),
-                filepath=output_path.name,
-                has_qa=qa_status_to_db_value(section.status),
+        if section is not None and section.status is QASectionStatus.ABSENT:
+            sys.stderr.write(
+                f"WARN missing_qa: {canonical_ticker} {qlabel} {year} — "
+                f"existing transcript has no analyst Q&A signals "
+                f"(signals={list(section.signals)}); replace with a full-call "
+                f"source before running downstream extraction.\n"
             )
-            if section.status is QASectionStatus.ABSENT:
-                sys.stderr.write(
-                    f"WARN missing_qa: {canonical_ticker} {qlabel} {year} — "
-                    f"existing transcript has no analyst Q&A signals "
-                    f"(signals={list(section.signals)}); replace with a full-call "
-                    f"source before running downstream extraction.\n"
-                )
 
     qa_status_raw = entry.get("qa_status")
     qa_status = qa_status_raw if isinstance(qa_status_raw, str) else None
@@ -526,9 +523,35 @@ def fetch_and_transcribe(
     ffmpeg_location: Path | None,
     whisper_model: str = DEFAULT_WHISPER_MODEL,
     beam_size: int = DEFAULT_BEAM_SIZE,
+    *,
+    db_path: Path | None = None,
+    owner_requested: bool = True,
+    as_of: date | None = None,
 ) -> TranscriptionResult | None:
-    _enforce_audio_policy()
     canonical_ticker = resolve_ticker(spec.ticker)
+    effective_db = PROJECT_ROOT / "data" / "portfolio.db" if db_path is None else db_path
+    request = TranscriptAcquisitionRequest(
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_AUDIO_TRANSCRIPTS,
+        canonical_ticker=canonical_ticker,
+        fiscal_year=spec.year,
+        fiscal_quarter=spec.quarter,
+        as_of=date.today() if as_of is None else as_of,
+        source_type=SourceType.TRANSCRIPT_AUDIO,
+        document_type=DocType.EARNINGS_CALL_AUDIO,
+        provider=TranscriptProvider.YOUTUBE_AUDIO,
+        owner_requested=owner_requested,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+    )
+    with connect_sqlite(
+        effective_db,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=False,
+    ) as conn:
+        authorization = authorize_transcript_request(conn, request)
+    _enforce_audio_policy(authorization)
     qlabel = _quarter_label(spec.quarter)
     output_path = RAW_DIR / f"{canonical_ticker}_{qlabel}_{spec.year}.txt"
 
@@ -587,7 +610,6 @@ def fetch_and_transcribe(
     #       can still be prepared-remarks only; downstream Say-Do / commitments
     #       extraction needs to know.
     qa_result = validate_audio_transcript(output_path)
-    qa_details_payload = qa_result.model_dump(mode="json")
     qa_section = detect_qa_section(output_path.read_text(encoding="utf-8"))
     if qa_section.status is QASectionStatus.ABSENT:
         sys.stderr.write(
@@ -598,15 +620,8 @@ def fetch_and_transcribe(
             f"recording before running Say-Do/commitments mining.\n"
         )
 
-    index_manager.register_transcript(
-        canonical_ticker,
-        spec.year,
-        qlabel,
-        source=source.value,
-        filepath=output_path.name,
-        has_qa=qa_status_to_db_value(qa_section.status),
-        qa_status=qa_result.status.value,
-        qa_details=qa_details_payload,
+    raise AudioCollectionPolicyError(
+        "audio transcript indexing requires an authorized acquisition receipt"
     )
 
     if qa_result.status == QaStatus.OK:

@@ -48,8 +48,17 @@ def test_direct_aggregator_fetch_denies_stored_watchlist_before_network(
 
     monkeypatch.setattr(
         mod,
-        "fetch_qa_with_fallback",
-        _unexpected_fetch,
+        "SOURCES",
+        tuple(
+            source.__class__(
+                source.name,
+                source.provider,
+                source.source_type,
+                source.document_type,
+                _unexpected_fetch,
+            )
+            for source in mod.SOURCES
+        ),
     )
 
     assert (
@@ -57,8 +66,8 @@ def test_direct_aggregator_fetch_denies_stored_watchlist_before_network(
             mod.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
             db_path=db_path,
             owner_requested=False,
-        )
-        is None
+        ).status
+        is mod.FetchQaStatus.DENIED
     )
 
 
@@ -76,8 +85,17 @@ def test_direct_aggregator_fetch_denies_quarter_outside_canonical_five_before_ne
 
     monkeypatch.setattr(
         mod,
-        "fetch_qa_with_fallback",
-        _unexpected_fetch,
+        "SOURCES",
+        tuple(
+            source.__class__(
+                source.name,
+                source.provider,
+                source.source_type,
+                source.document_type,
+                _unexpected_fetch,
+            )
+            for source in mod.SOURCES
+        ),
     )
 
     assert (
@@ -85,8 +103,8 @@ def test_direct_aggregator_fetch_denies_quarter_outside_canonical_five_before_ne
             mod.FetchQaSpec(ticker="ACME", year=2024, quarter=4),
             db_path=db_path,
             owner_requested=False,
-        )
-        is None
+        ).status
+        is mod.FetchQaStatus.DENIED
     )
 
 
@@ -104,7 +122,20 @@ def test_fetch_authorization_uses_the_caller_database_not_import_time_state(
     def _unexpected_fetch(*_args: object) -> None:
         pytest.fail("network boundary was crossed using the import-time database")
 
-    monkeypatch.setattr(mod, "fetch_qa_with_fallback", _unexpected_fetch)
+    monkeypatch.setattr(
+        mod,
+        "SOURCES",
+        tuple(
+            source.__class__(
+                source.name,
+                source.provider,
+                source.source_type,
+                source.document_type,
+                _unexpected_fetch,
+            )
+            for source in mod.SOURCES
+        ),
+    )
 
     assert (
         mod.fetch_qa(
@@ -112,6 +143,6 @@ def test_fetch_authorization_uses_the_caller_database_not_import_time_state(
             db_path=denied_db,
             owner_requested=False,
             as_of=date(2026, 8, 12),
-        )
-        is None
+        ).status
+        is mod.FetchQaStatus.DENIED
     )

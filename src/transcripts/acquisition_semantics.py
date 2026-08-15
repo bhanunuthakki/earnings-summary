@@ -53,6 +53,7 @@ class TranscriptAcquisitionEntrypoint(StrEnum):
     FETCH_QA_TRANSCRIPT = "fetch_qa_transcript"
     REFETCH_AGGREGATOR_TRANSCRIPTS = "refetch_aggregator_transcripts"
     FETCH_AUDIO_TRANSCRIPTS = "fetch_audio_transcripts"
+    INGEST_TRANSCRIPTS = "ingest_transcripts"
 
 
 class TranscriptProvider(StrEnum):
@@ -134,6 +135,7 @@ _PROVIDERS_BY_ENTRYPOINT = {
     TranscriptAcquisitionEntrypoint.FETCH_AUDIO_TRANSCRIPTS: frozenset(
         {TranscriptProvider.YOUTUBE_AUDIO}
     ),
+    TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS: frozenset({TranscriptProvider.ISSUER_IR}),
 }
 _SOURCE_TYPE_BY_PROVIDER: dict[TranscriptProvider, SourceType | None] = {
     TranscriptProvider.ISSUER_IR: SourceType.IR_DOC,
@@ -469,6 +471,37 @@ def _expected_outcome(
         TranscriptAuthorizationStatus.AUTHORIZED,
         TranscriptAuthorizationReason.AUTHORIZED,
         None,
+    )
+
+
+@validate_call(config=_STRICT_FROZEN)
+def authorize_transcript_acquisition_request(
+    request: TranscriptAcquisitionRequest,
+    stored_target: TranscriptStoredTarget,
+) -> TranscriptAcquisitionAuthorization:
+    """Build the one canonical receipt for an exact request and stored target."""
+
+    status, reason, failure = _expected_outcome(request, stored_target)
+    return TranscriptAcquisitionAuthorization(
+        request=request,
+        status=status,
+        reason=reason,
+        failure=failure,
+        idempotency_key=transcript_authorization_idempotency_key(request),
+        stored_target=stored_target,
+        provenance=TranscriptAuthorizationProvenance(
+            entrypoint=request.entrypoint,
+            canonical_ticker=request.canonical_ticker,
+            fiscal_year=request.fiscal_year,
+            fiscal_quarter=request.fiscal_quarter,
+            as_of=request.as_of,
+            source_type=request.source_type,
+            document_type=request.document_type,
+            provider=request.provider,
+            source_policy_version=request.source_policy_version,
+            source_regime_identity=request.source_regime_identity,
+            source_authority=classification_for_source_type(request.source_type).authority,
+        ),
     )
 
 

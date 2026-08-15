@@ -7,6 +7,7 @@ third-party downloader with dynamic test doubles.
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ import fetch_audio_transcripts as audio
 
 def test_audio_pipeline_is_denied_before_downloader_or_transcriber(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
         audio,
@@ -28,8 +30,19 @@ def test_audio_pipeline_is_denied_before_downloader_or_transcriber(
         lambda *_args, **_kwargs: pytest.fail("network boundary was crossed"),
     )
 
+    db_path = tmp_path / "portfolio.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE tracked_companies ("
+            "ticker TEXT,list_type TEXT,archived_at TEXT,fiscal_year_end TEXT)"
+        )
+        connection.execute("INSERT INTO tracked_companies VALUES ('ACME','portfolio',NULL,'12-31')")
     with pytest.raises(audio.AudioCollectionPolicyError, match="excluded"):
-        audio.fetch_and_transcribe(audio.FetchSpec(ticker="ACME", year=2026, quarter=2), None)
+        audio.fetch_and_transcribe(
+            audio.FetchSpec(ticker="ACME", year=2026, quarter=2),
+            None,
+            db_path=db_path,
+        )
 
 
 def test_validate_audio_url_rejects_private_target(monkeypatch: pytest.MonkeyPatch) -> None:
