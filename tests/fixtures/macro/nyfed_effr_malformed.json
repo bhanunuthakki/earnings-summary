@@ -1,0 +1,9 @@
+{
+  "refRates": [
+    {
+      "effectiveDate": "not-a-date",
+      "type": "EFFR",
+      "percentRate": "not-a-rate"
+    }
+  ]
+}
