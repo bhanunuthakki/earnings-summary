@@ -668,12 +668,65 @@ def test_book_factor_vector_never_raises_on_missing_db(tmp_path: Path) -> None:
     result = rf.book_factor_vector(missing, tmp_path)
     assert result.vector == {}
     assert result.top_contributors == {}
+    assert result.availability == "missing_table"
+    assert result.excluded_tickers == ("AAA",)
 
 
 def test_book_factor_vector_never_raises_on_missing_weights(tmp_path: Path) -> None:
     db_path = _db(tmp_path)
     result = rf.book_factor_vector(db_path, tmp_path)
     assert result.vector == {}
+    assert result.availability == "unavailable"
+
+
+def test_book_factor_vector_coverage_and_provenance_full(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    rf.persist_exposures(
+        "AAA",
+        [rf.FactorLoading(factor=_FACTOR_A, loading=0.8, rationale="r")],
+        provenance="thesis_derived",
+        input_sha="s1",
+        db_path=db_path,
+    )
+    rf.persist_exposures(
+        "BBB",
+        [rf.FactorLoading(factor=_FACTOR_B, loading=0.5, rationale="r")],
+        provenance="thesis_derived",
+        input_sha="s2",
+        db_path=db_path,
+    )
+    _write_weights(tmp_path, {"AAA": 0.5, "BBB": 0.5, "USD": 0.2})
+
+    result = rf.book_factor_vector(db_path, tmp_path)
+    assert result.availability == "full"
+    assert result.coverage_pct == 100.0
+    assert result.covered_weight_pct == 1.0
+    assert result.total_weight_pct == 1.0
+    assert result.evaluated_tickers == ("AAA", "BBB")
+    assert result.excluded_tickers == ()
+    assert result.source_as_of is not None
+    assert result.registry_version == rf.TAXONOMY_VERSION
+
+
+def test_book_factor_vector_partial_coverage_below_70_pct(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    rf.persist_exposures(
+        "AAA",
+        [rf.FactorLoading(factor=_FACTOR_A, loading=0.8, rationale="r")],
+        provenance="thesis_derived",
+        input_sha="s1",
+        db_path=db_path,
+    )
+    # BBB is in weights but has NO exposures in DB
+    _write_weights(tmp_path, {"AAA": 0.3, "BBB": 0.7})
+
+    result = rf.book_factor_vector(db_path, tmp_path)
+    assert result.availability == "partial"
+    assert result.coverage_pct == 30.0
+    assert result.covered_weight_pct == 0.3
+    assert result.total_weight_pct == 1.0
+    assert result.evaluated_tickers == ("AAA",)
+    assert result.excluded_tickers == ("BBB",)
 
 
 # ---------------------------------------------------------------------------
