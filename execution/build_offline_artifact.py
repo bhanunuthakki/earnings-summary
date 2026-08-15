@@ -38,6 +38,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dependency-manifest", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--environment-body-output", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--timeout-seconds", type=int, default=300, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
@@ -53,7 +54,8 @@ def _is_within(path: Path, root: Path) -> bool:
 def _parent(args: argparse.Namespace) -> int:
     from report.offline_artifact import (
         OfflineBoundaryError,
-        runtime_tree_dependency_records,
+        runtime_closure_dependency_records,
+        runtime_root_specs,
         stage_offline_repository,
     )
     from report.windows_appcontainer import (
@@ -76,6 +78,15 @@ def _parent(args: argparse.Namespace) -> int:
         raise OfflineBoundaryError(
             "offline output directory must be disjoint from canonical repository and database roots"
         )
+    environment_body_output = (
+        args.environment_body_output.resolve() if args.environment_body_output is not None else None
+    )
+    if environment_body_output is not None and (
+        environment_body_output.exists()
+        or _is_within(environment_body_output, source_repo)
+        or environment_body_output in (database, output_dir)
+    ):
+        raise OfflineBoundaryError("environment diagnostic output must be a new external file")
 
     with tempfile.TemporaryDirectory(prefix="earnings-offline-artifact-") as temporary:
         sandbox = Path(temporary)
@@ -91,8 +102,8 @@ def _parent(args: argparse.Namespace) -> int:
                 args.portfolio_database.resolve() if args.portfolio_database is not None else None
             ),
         )
-        runtime_root = Path(sys.base_prefix).resolve()
-        runtime_dependencies = runtime_tree_dependency_records(runtime_root)
+        runtime_specs = runtime_root_specs()
+        runtime_dependencies = runtime_closure_dependency_records()
         dependencies = (*dependencies, *runtime_dependencies)
         manifest_path = isolated_repo / "config" / "offline_dependencies.json"
         manifest_path.write_text(
@@ -106,8 +117,16 @@ def _parent(args: argparse.Namespace) -> int:
         )
         worker = isolated_repo / "execution" / "build_offline_artifact.py"
         staged_artifact = private_write_root / "artifact"
+        worker_executable = Path(sys.executable).resolve()
+        venv_launcher: str | None = None
+        if Path(sys.prefix).resolve() != Path(sys.base_prefix).resolve():
+            base_executable = getattr(sys, "_base_executable", None)
+            if not isinstance(base_executable, str) or not base_executable:
+                raise OfflineBoundaryError("virtual environment base executable is unavailable")
+            worker_executable = Path(base_executable).resolve()
+            venv_launcher = str(Path(sys.executable).resolve())
         command = [
-            sys.executable,
+            str(worker_executable),
             str(worker),
             "--worker",
             "--ticker",
@@ -127,25 +146,49 @@ def _parent(args: argparse.Namespace) -> int:
             "--timeout-seconds",
             str(args.timeout_seconds),
         ]
+        if environment_body_output is not None:
+            command.extend(
+                [
+                    "--environment-body-output",
+                    str(private_write_root / "environment.json"),
+                ]
+            )
         environment = minimal_worker_environment(
             isolated_repo=isolated_repo,
             write_root=private_write_root,
         )
+        if venv_launcher is not None:
+            # Avoid the Windows venv redirector spawning a second process inside
+            # the one-process job while retaining the exact venv prefix/identity.
+            environment["__PYVENV_LAUNCHER__"] = venv_launcher
         returncode, stdout, stderr = run_appcontainer_worker(
             command,
             cwd=isolated_repo,
-            read_roots=(runtime_root, isolated_repo),
+            read_roots=(*(root for _logical, root in runtime_specs), isolated_repo),
             write_root=private_write_root,
             environment=environment,
             timeout_seconds=args.timeout_seconds,
+            export_names=(
+                ("artifact", "environment.json")
+                if environment_body_output is not None
+                else ("artifact",)
+            ),
         )
         if returncode != 0:
             detail = (stderr or stdout or "offline worker failed").strip()
             raise OfflineBoundaryError(detail[-4_000:])
-        if runtime_tree_dependency_records(runtime_root) != runtime_dependencies:
+        if runtime_closure_dependency_records() != runtime_dependencies:
             raise OfflineBoundaryError("Python runtime changed during sealed offline execution")
         if not staged_artifact.is_dir():
             raise OfflineBoundaryError("AppContainer worker did not produce an artifact")
+        if environment_body_output is not None:
+            environment_body = private_write_root / "environment.json"
+            if not environment_body.is_file():
+                raise OfflineBoundaryError(
+                    "AppContainer worker did not produce environment evidence"
+                )
+            environment_body_output.parent.mkdir(parents=True, exist_ok=True)
+            environment_body.replace(environment_body_output)
         if output_dir.exists():
             from report.offline_artifact import verify_artifact_copy
 
@@ -249,6 +292,7 @@ def _worker(args: argparse.Namespace) -> int:
         DependencyRecord,
         OfflineArtifactPayload,
         OfflineBoundaryError,
+        normalized_runtime_environment_body,
         offline_runtime_guard,
         runtime_dependency_records,
         write_offline_artifact,
@@ -327,9 +371,21 @@ def _worker(args: argparse.Namespace) -> int:
             numeric_provenance=cast("dict[str, object]", normalized_provenance),
         )
         _worker_event("render_complete")
+        environment_body = normalized_runtime_environment_body(
+            isolated_repo=repo_root,
+            private_write_root=output_dir.parent,
+        )
+        if args.environment_body_output is not None:
+            environment_body_output = args.environment_body_output.resolve()
+            if environment_body_output.parent != output_dir.parent:
+                raise OfflineBoundaryError(
+                    "environment diagnostic must stay in the private output root"
+                )
+            environment_body_output.write_bytes(environment_body)
         runtime_dependencies = runtime_dependency_records(
             isolated_repo=repo_root,
             private_write_root=output_dir.parent,
+            environment_body=environment_body,
         )
         _worker_event("runtime_attested")
         receipt = write_offline_artifact(

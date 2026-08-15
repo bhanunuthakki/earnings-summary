@@ -35,6 +35,64 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 ArtifactTelemetry = Callable[[str, Literal["start", "complete"], int | None], None]
 
 
+class _GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class _WINTRUST_FILE_INFO(ctypes.Structure):  # noqa: N801 - Win32 ABI name
+    _fields_ = [
+        ("cbStruct", wintypes.DWORD),
+        ("pcwszFilePath", wintypes.LPCWSTR),
+        ("hFile", wintypes.HANDLE),
+        ("pgKnownSubject", ctypes.POINTER(_GUID)),
+    ]
+
+
+class _WINTRUST_CATALOG_INFO(ctypes.Structure):  # noqa: N801 - Win32 ABI name
+    _fields_ = [
+        ("cbStruct", wintypes.DWORD),
+        ("dwCatalogVersion", wintypes.DWORD),
+        ("pcwszCatalogFilePath", wintypes.LPCWSTR),
+        ("pcwszMemberTag", wintypes.LPCWSTR),
+        ("pcwszMemberFilePath", wintypes.LPCWSTR),
+        ("hMemberFile", wintypes.HANDLE),
+        ("pbCalculatedFileHash", ctypes.POINTER(ctypes.c_ubyte)),
+        ("cbCalculatedFileHash", wintypes.DWORD),
+        ("pcCatalogContext", ctypes.c_void_p),
+        ("hCatAdmin", wintypes.HANDLE),
+    ]
+
+
+class _CATALOG_INFO(ctypes.Structure):  # noqa: N801 - Win32 ABI name
+    _fields_ = [
+        ("cbStruct", wintypes.DWORD),
+        ("wszCatalogFile", wintypes.WCHAR * 260),
+    ]
+
+
+class _WINTRUST_DATA(ctypes.Structure):  # noqa: N801 - Win32 ABI name
+    _fields_ = [
+        ("cbStruct", wintypes.DWORD),
+        ("pPolicyCallbackData", ctypes.c_void_p),
+        ("pSIPClientData", ctypes.c_void_p),
+        ("dwUIChoice", wintypes.DWORD),
+        ("fdwRevocationChecks", wintypes.DWORD),
+        ("dwUnionChoice", wintypes.DWORD),
+        ("pChoice", ctypes.c_void_p),
+        ("dwStateAction", wintypes.DWORD),
+        ("hWVTStateData", wintypes.HANDLE),
+        ("pwszURLReference", wintypes.LPCWSTR),
+        ("dwProvFlags", wintypes.DWORD),
+        ("dwUIContext", wintypes.DWORD),
+        ("pSignatureSettings", ctypes.c_void_p),
+    ]
+
+
 class OfflineBoundaryError(RuntimeError):
     """A sealed offline-render invariant was violated."""
 
@@ -213,28 +271,82 @@ def _dependency_bytes(
 
 
 def runtime_dependency_records(
-    *, isolated_repo: Path, private_write_root: Path
+    *,
+    isolated_repo: Path,
+    private_write_root: Path,
+    environment_body: bytes | None = None,
 ) -> tuple[DependencyRecord, ...]:
     """Hash the effective imported runtime closure and normalized minimal env."""
 
     isolated_repo = isolated_repo.resolve()
     private_write_root = private_write_root.resolve()
-    runtime_root = Path(sys.base_prefix).resolve()
+    runtime_roots = runtime_root_specs()
     records = list(
         runtime_native_dependency_records(
             isolated_repo=isolated_repo,
-            runtime_root=runtime_root,
+            runtime_roots=runtime_roots,
         )
     )
-    normalized_environment: dict[str, str] = {}
-    substitutions = (
-        (str(private_write_root), "$PRIVATE_WRITE"),
-        (str(isolated_repo), "$SEALED_REPO"),
-        (str(runtime_root), "$PYTHON_RUNTIME"),
+    if environment_body is None:
+        environment_body = normalized_runtime_environment_body(
+            isolated_repo=isolated_repo,
+            private_write_root=private_write_root,
+        )
+    records.append(
+        _dependency_bytes(
+            environment_body,
+            logical_path="runtime/environment.json",
+            dependency_class=DependencyClass.RUNTIME,
+        )
     )
+    version = sys.getwindowsversion()
+    records.append(
+        _dependency_bytes(
+            _canonical_json(
+                {
+                    "build": version.build,
+                    "major": version.major,
+                    "minor": version.minor,
+                    "platform": version.platform,
+                    "service_pack": version.service_pack,
+                    "windows_directory": str(_windows_directory()),
+                }
+            ),
+            logical_path="runtime/os/identity.json",
+            dependency_class=DependencyClass.RUNTIME,
+        )
+    )
+    return tuple(sorted(records, key=lambda item: item.logical_path))
+
+
+def normalized_runtime_environment_body(
+    *,
+    isolated_repo: Path,
+    private_write_root: Path,
+    environment: Mapping[str, str] | None = None,
+) -> bytes:
+    """Serialize the worker environment without per-build sandbox or venv paths."""
+
+    normalized_environment: dict[str, str] = {}
+    runtime_base = Path(sys.base_prefix).resolve()
+    runtime_prefix = Path(sys.prefix).resolve()
+    substitutions = (
+        (str(isolated_repo), "$SEALED_REPO"),
+        (str(runtime_base), "$PYTHON_RUNTIME"),
+    )
+    if runtime_prefix != runtime_base:
+        substitutions = ((str(runtime_prefix), "$PYTHON_VENV"), *substitutions)
     private_homepath = str(private_write_root)[len(private_write_root.drive) :]
-    for key, value in sorted(os.environ.items()):
-        normalized = value
+    for key, value in sorted((environment or os.environ).items()):
+        normalized = _replace_windows_private_root(
+            value,
+            source=str(private_write_root),
+            replacement="$PRIVATE_WRITE",
+        )
+        normalized = _collapse_nested_appcontainer_private_root(
+            normalized,
+            private_write_root=private_write_root,
+        )
         for source, replacement in substitutions:
             normalized = normalized.replace(source, replacement)
         if (
@@ -244,18 +356,61 @@ def runtime_dependency_records(
         ):
             normalized = "$PRIVATE_WRITE"
         normalized_environment[key] = normalized
-    environment_body = _canonical_json(normalized_environment)
-    records.append(
-        _dependency_bytes(
-            environment_body,
-            logical_path="runtime/environment.json",
-            dependency_class=DependencyClass.RUNTIME,
-        )
-    )
-    return tuple(sorted(records, key=lambda item: item.logical_path))
+    return _canonical_json(normalized_environment)
 
 
-def runtime_tree_dependency_records(runtime_root: Path) -> tuple[DependencyRecord, ...]:
+def _replace_windows_private_root(value: str, *, source: str, replacement: str) -> str:
+    if os.name != "nt":
+        return value.replace(source, replacement)
+    source_folded = source.casefold()
+    normalized = value
+    start = 0
+    while (index := normalized.casefold().find(source_folded, start)) >= 0:
+        normalized = normalized[:index] + replacement + normalized[index + len(source) :]
+        start = index + len(replacement)
+    return normalized
+
+
+def _collapse_nested_appcontainer_private_root(value: str, *, private_write_root: Path) -> str:
+    """Collapse Windows' duplicate private-profile suffix after root substitution."""
+
+    if os.name != "nt":
+        return value
+    profile = private_write_root.parent
+    packages = profile.parent
+    if (
+        private_write_root.name.casefold() != "ac"
+        or packages.name.casefold() != "packages"
+        or not profile.name.casefold().startswith("earningssummaryoffline.")
+    ):
+        return value
+    marker = "$PRIVATE_WRITE"
+    suffix = "\\" + str(Path("Packages") / profile.name / private_write_root.name)
+    suffix_index = value.casefold().find(suffix.casefold())
+    if suffix_index < len(marker) or not value[:suffix_index].casefold().startswith(
+        marker.casefold()
+    ):
+        return value
+    return marker + value[suffix_index + len(suffix) :]
+
+
+def runtime_root_specs() -> tuple[tuple[str, Path], ...]:
+    """Return every Python/venv root the current interpreter may read."""
+
+    base = Path(sys.base_prefix).resolve()
+    prefix = Path(sys.prefix).resolve()
+    executable_root = Path(sys.executable).resolve().parent
+    specs: list[tuple[str, Path]] = [("runtime/python", base)]
+    if prefix != base:
+        specs.insert(0, ("runtime/venv", prefix))
+    if not any(_is_within(executable_root, root) for _logical, root in specs):
+        specs.insert(0, ("runtime/launcher", executable_root))
+    return tuple(specs)
+
+
+def runtime_tree_dependency_records(
+    runtime_root: Path, *, logical_root: str = "runtime/python"
+) -> tuple[DependencyRecord, ...]:
     """Hash every regular file admitted by the Python-runtime ACL."""
 
     runtime_root = Path(os.path.abspath(runtime_root))
@@ -283,7 +438,7 @@ def runtime_tree_dependency_records(runtime_root: Path) -> tuple[DependencyRecor
             records.append(
                 dependency_record(
                     path,
-                    logical_path=f"runtime/python/{relative}",
+                    logical_path=f"{logical_root}/{relative}",
                     dependency_class=DependencyClass.RUNTIME,
                 )
             )
@@ -291,8 +446,17 @@ def runtime_tree_dependency_records(runtime_root: Path) -> tuple[DependencyRecor
     return tuple(sorted(records, key=lambda item: item.logical_path))
 
 
+def runtime_closure_dependency_records() -> tuple[DependencyRecord, ...]:
+    """Hash the complete base-runtime, venv, and launcher roots."""
+
+    records: list[DependencyRecord] = []
+    for logical_root, runtime_root in runtime_root_specs():
+        records.extend(runtime_tree_dependency_records(runtime_root, logical_root=logical_root))
+    return tuple(sorted(records, key=lambda item: item.logical_path))
+
+
 def runtime_native_dependency_records(
-    *, isolated_repo: Path, runtime_root: Path
+    *, isolated_repo: Path, runtime_roots: Sequence[tuple[str, Path]]
 ) -> tuple[DependencyRecord, ...]:
     """Hash the current process' complete loaded native module closure."""
 
@@ -336,14 +500,8 @@ def runtime_native_dependency_records(
         capacity = count + 32
 
     isolated_repo = isolated_repo.resolve()
-    runtime_root = runtime_root.resolve()
-    system_root = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")).resolve()
-    defender_root = (
-        Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
-        / "Microsoft"
-        / "Windows Defender"
-        / "Platform"
-    ).resolve()
+    resolved_runtime_roots = tuple((logical, root.resolve()) for logical, root in runtime_roots)
+    system_root = _windows_directory()
     observed: dict[str, Path] = {}
     for module in modules[:count]:
         buffer = ctypes.create_unicode_buffer(32_768)
@@ -353,21 +511,237 @@ def runtime_native_dependency_records(
                 f"native runtime module identity failed ({ctypes.get_last_error()})"
             )
         path = Path(buffer.value).resolve()
-        if _is_within(path, runtime_root):
-            logical = f"runtime/python/{path.relative_to(runtime_root).as_posix()}"
+        runtime_match = next(
+            (
+                (logical_root, root)
+                for logical_root, root in resolved_runtime_roots
+                if _is_within(path, root)
+            ),
+            None,
+        )
+        if runtime_match is not None:
+            logical_root, root = runtime_match
+            logical = f"{logical_root}/{path.relative_to(root).as_posix()}"
         elif _is_within(path, isolated_repo):
             logical = f"runtime/sealed-repo/{path.relative_to(isolated_repo).as_posix()}"
         elif _is_within(path, system_root):
+            _require_trusted_windows_binary(path)
             logical = f"runtime/os/{path.relative_to(system_root).as_posix()}"
-        elif _is_within(path, defender_root):
-            logical = f"runtime/os/defender/{path.relative_to(defender_root).as_posix()}"
         else:
-            raise OfflineBoundaryError(f"loaded native module escapes trusted roots: {path}")
+            defender_root = (
+                _program_data_directory() / "Microsoft" / "Windows Defender" / "Platform"
+            ).resolve()
+            if not _is_within(path, defender_root):
+                raise OfflineBoundaryError(f"loaded native module escapes trusted roots: {path}")
+            _require_trusted_windows_binary(path)
+            logical = f"runtime/os/defender/{path.relative_to(defender_root).as_posix()}"
         observed[logical] = path
     return tuple(
         dependency_record(path, logical_path=logical, dependency_class=DependencyClass.RUNTIME)
         for logical, path in sorted(observed.items())
     )
+
+
+def _windows_api_directory(function_name: str) -> Path:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    function = getattr(kernel32, function_name)
+    function.argtypes = [wintypes.LPWSTR, wintypes.UINT]
+    function.restype = wintypes.UINT
+    buffer = ctypes.create_unicode_buffer(32_768)
+    length = function(buffer, len(buffer))
+    if length == 0 or length >= len(buffer):
+        raise OfflineBoundaryError(f"Windows directory identity failed ({ctypes.get_last_error()})")
+    return Path(buffer.value).resolve()
+
+
+def _windows_directory() -> Path:
+    return _windows_api_directory("GetWindowsDirectoryW")
+
+
+def _program_data_directory() -> Path:
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    ole32 = ctypes.WinDLL("ole32", use_last_error=True)
+    folder_id = _GUID()
+    if (
+        ole32.CLSIDFromString("{62AB5D82-FDC1-4DC3-A9DD-070D1D495D97}", ctypes.byref(folder_id))
+        != 0
+    ):
+        raise OfflineBoundaryError("ProgramData folder identity is unavailable")
+    path = wintypes.LPWSTR()
+    shell32.SHGetKnownFolderPath.argtypes = [
+        ctypes.POINTER(_GUID),
+        wintypes.DWORD,
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.LPWSTR),
+    ]
+    shell32.SHGetKnownFolderPath.restype = ctypes.c_long
+    result = int(shell32.SHGetKnownFolderPath(ctypes.byref(folder_id), 0, None, ctypes.byref(path)))
+    if result != 0 or not path.value:
+        raise OfflineBoundaryError(f"ProgramData folder identity failed ({result})")
+    try:
+        return Path(path.value).resolve()
+    finally:
+        ole32.CoTaskMemFree(path)
+
+
+def _require_trusted_windows_binary(path: Path) -> None:
+    action = _GUID(
+        0x00AAC56B,
+        0xCD44,
+        0x11D0,
+        (ctypes.c_ubyte * 8)(0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE),
+    )
+    file_info = _WINTRUST_FILE_INFO(ctypes.sizeof(_WINTRUST_FILE_INFO), str(path), None, None)
+    status = _verify_windows_trust(
+        action=action,
+        union_choice=1,
+        choice=ctypes.cast(ctypes.pointer(file_info), ctypes.c_void_p),
+    )
+    if status == 0:
+        return
+    if status == 0x800B0100 and _verify_windows_catalog_trust(path, action=action):
+        return
+    raise OfflineBoundaryError(f"loaded Windows module is not trusted: {path} ({status})")
+
+
+def _verify_windows_trust(*, action: _GUID, union_choice: int, choice: ctypes.c_void_p) -> int:
+    trust_data = _WINTRUST_DATA()
+    trust_data.cbStruct = ctypes.sizeof(_WINTRUST_DATA)
+    trust_data.dwUIChoice = 2
+    trust_data.fdwRevocationChecks = 0
+    trust_data.dwUnionChoice = union_choice
+    trust_data.pChoice = choice
+    trust_data.dwStateAction = 1
+    trust_data.dwProvFlags = 0x00001000
+    wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
+    verify = wintrust.WinVerifyTrust
+    verify.argtypes = [wintypes.HWND, ctypes.POINTER(_GUID), ctypes.POINTER(_WINTRUST_DATA)]
+    verify.restype = ctypes.c_long
+    status = int(verify(wintypes.HWND(-1), ctypes.byref(action), ctypes.byref(trust_data)))
+    trust_data.dwStateAction = 2
+    verify(wintypes.HWND(-1), ctypes.byref(action), ctypes.byref(trust_data))
+    return status & 0xFFFFFFFF
+
+
+def _verify_windows_catalog_trust(path: Path, *, action: _GUID) -> bool:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    file_handle = create_file(
+        str(path),
+        0x80000000,
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,
+        0x00000080,
+        None,
+    )
+    if file_handle == wintypes.HANDLE(-1).value:
+        raise OfflineBoundaryError(
+            f"loaded Windows module catalog handle failed: {path} ({ctypes.get_last_error()})"
+        )
+    cat_admin = wintypes.HANDLE()
+    acquire = wintrust.CryptCATAdminAcquireContext
+    acquire.argtypes = [ctypes.POINTER(wintypes.HANDLE), ctypes.POINTER(_GUID), wintypes.DWORD]
+    acquire.restype = wintypes.BOOL
+    if not acquire(ctypes.byref(cat_admin), None, 0):
+        close_handle(file_handle)
+        raise OfflineBoundaryError(
+            f"Windows catalog context is unavailable for {path} ({ctypes.get_last_error()})"
+        )
+    catalog_context = wintypes.HANDLE()
+    try:
+        calculate_hash = wintrust.CryptCATAdminCalcHashFromFileHandle
+        calculate_hash.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(ctypes.c_ubyte),
+            wintypes.DWORD,
+        ]
+        calculate_hash.restype = wintypes.BOOL
+        hash_size = wintypes.DWORD()
+        calculate_hash(file_handle, ctypes.byref(hash_size), None, 0)
+        if hash_size.value == 0:
+            raise OfflineBoundaryError(
+                f"Windows catalog hash size is unavailable for {path} ({ctypes.get_last_error()})"
+            )
+        hash_bytes = (ctypes.c_ubyte * hash_size.value)()
+        if not calculate_hash(file_handle, ctypes.byref(hash_size), hash_bytes, 0):
+            raise OfflineBoundaryError(
+                f"Windows catalog hash failed for {path} ({ctypes.get_last_error()})"
+            )
+        enumerate_catalog = wintrust.CryptCATAdminEnumCatalogFromHash
+        enumerate_catalog.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(ctypes.c_ubyte),
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        enumerate_catalog.restype = wintypes.HANDLE
+        catalog_context = wintypes.HANDLE(
+            enumerate_catalog(cat_admin, hash_bytes, hash_size.value, 0, None)
+        )
+        if not catalog_context.value:
+            return False
+        catalog_info = _CATALOG_INFO()
+        catalog_info.cbStruct = ctypes.sizeof(_CATALOG_INFO)
+        catalog_from_context = wintrust.CryptCATCatalogInfoFromContext
+        catalog_from_context.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_CATALOG_INFO),
+            wintypes.DWORD,
+        ]
+        catalog_from_context.restype = wintypes.BOOL
+        if not catalog_from_context(catalog_context, ctypes.byref(catalog_info), 0):
+            raise OfflineBoundaryError(
+                f"Windows catalog identity failed for {path} ({ctypes.get_last_error()})"
+            )
+        member_tag = bytes(hash_bytes[: hash_size.value]).hex().upper()
+        catalog_trust = _WINTRUST_CATALOG_INFO()
+        catalog_trust.cbStruct = ctypes.sizeof(_WINTRUST_CATALOG_INFO)
+        catalog_trust.pcwszCatalogFilePath = catalog_info.wszCatalogFile
+        catalog_trust.pcwszMemberTag = member_tag
+        catalog_trust.pcwszMemberFilePath = str(path)
+        catalog_trust.hMemberFile = file_handle
+        catalog_trust.pbCalculatedFileHash = hash_bytes
+        catalog_trust.cbCalculatedFileHash = hash_size.value
+        # HCATINFO is the catalog-enumeration handle, not a PCCTL_CONTEXT.
+        # The catalog path above is authoritative, so no CTL context is supplied.
+        catalog_trust.pcCatalogContext = None
+        catalog_trust.hCatAdmin = cat_admin
+        return (
+            _verify_windows_trust(
+                action=action,
+                union_choice=2,
+                choice=ctypes.cast(ctypes.pointer(catalog_trust), ctypes.c_void_p),
+            )
+            == 0
+        )
+    finally:
+        if catalog_context.value:
+            release_catalog = wintrust.CryptCATAdminReleaseCatalogContext
+            release_catalog.argtypes = [wintypes.HANDLE, wintypes.HANDLE, wintypes.DWORD]
+            release_catalog.restype = wintypes.BOOL
+            release_catalog(cat_admin, catalog_context, 0)
+        release_admin = wintrust.CryptCATAdminReleaseContext
+        release_admin.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        release_admin.restype = wintypes.BOOL
+        release_admin(cat_admin, 0)
+        close_handle(file_handle)
 
 
 def _require_no_reparse_points(path: Path, *, attested_root: Path | None = None) -> None:
@@ -924,9 +1298,12 @@ __all__ = [
     "UnclassifiedDependencyError",
     "classify_dependency",
     "dependency_record",
+    "normalized_runtime_environment_body",
     "offline_runtime_guard",
+    "runtime_closure_dependency_records",
     "runtime_dependency_records",
     "runtime_native_dependency_records",
+    "runtime_root_specs",
     "runtime_tree_dependency_records",
     "snapshot_database",
     "stage_offline_repository",

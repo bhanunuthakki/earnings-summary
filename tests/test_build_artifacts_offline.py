@@ -7,9 +7,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import threading
 from collections.abc import Callable
-from contextlib import AbstractContextManager
 from datetime import date
 from pathlib import Path
 from typing import cast
@@ -27,9 +25,11 @@ from report.offline_artifact import (
     OfflineBoundaryError,
     UnclassifiedDependencyError,
     classify_dependency,
+    normalized_runtime_environment_body,
     offline_runtime_guard,
     runtime_dependency_records,
     runtime_native_dependency_records,
+    runtime_root_specs,
     runtime_tree_dependency_records,
     snapshot_database,
     stage_offline_repository,
@@ -178,11 +178,40 @@ result_path.write_text(json.dumps(result), encoding='utf-8')
         read_roots=[Path(sys.base_prefix), read_root],
         write_root=write_root,
         environment=environment,
+        export_names=("probe.json",),
     )
 
     assert returncode == 0, stderr
-    assert '"event": "appcontainer_acl_lease"' in stderr
-    assert '"status": "released"' in stderr
+    cleanup = json.loads(stderr.splitlines()[-1])
+    assert cleanup["event"] == "appcontainer_profile_cleanup"
+    assert cleanup["status"] == "deleted"
+    assert cleanup["storage_removed"] is True
+    assert not Path(cleanup["storage"]).exists()
+    icacls = Path(os.environ["SYSTEMROOT"]) / "System32" / "icacls.exe"
+    for root in cleanup["acl_roots"]:
+        inspected = subprocess.run([str(icacls), root], capture_output=True, text=True, check=False)
+        assert inspected.returncode == 0
+        assert cleanup["sid"].casefold() not in inspected.stdout.casefold()
+    loopback = subprocess.run(
+        [
+            str(Path(os.environ["SYSTEMROOT"]) / "System32" / "CheckNetIsolation.exe"),
+            "LoopbackExempt",
+            "-s",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert loopback.returncode == 0
+    assert cleanup["sid"].casefold() not in loopback.stdout.casefold()
+    import winreg
+
+    mapping = (
+        r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion"
+        rf"\AppContainer\Mappings\{cleanup['sid']}"
+    )
+    with pytest.raises(FileNotFoundError):
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, mapping).Close()
     assert json.loads((write_root / "probe.json").read_text(encoding="utf-8")) == {
         "cached_connect": "denied",
         "os_open": "denied",
@@ -332,6 +361,105 @@ def test_runtime_attestation_normalizes_private_root_homepath(
     assert first == second
 
 
+@pytest.mark.skipif(os.name != "nt", reason="virtual environment paths are Windows-specific")
+def test_runtime_attestation_normalizes_run_specific_venv_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime_base = tmp_path / "python-base"
+    private_write_root = tmp_path / "private-write"
+    isolated_repo = tmp_path / "sealed-repo"
+    monkeypatch.setattr(sys, "base_prefix", str(runtime_base))
+
+    bodies: list[bytes] = []
+    for build_id in ("first", "second"):
+        venv_root = tmp_path / f"venv-{build_id}"
+        monkeypatch.setattr(sys, "prefix", str(venv_root))
+        bodies.append(
+            normalized_runtime_environment_body(
+                isolated_repo=isolated_repo,
+                private_write_root=private_write_root,
+                environment={
+                    "PATH": str(venv_root / "Scripts"),
+                    "PYTHONPATH": str(isolated_repo / "src"),
+                },
+            )
+        )
+
+    assert bodies[0] == bodies[1]
+    assert b'"PATH": "$PYTHON_VENV\\\\Scripts"' in bodies[0]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="HOMEPATH is a drive-less Windows path")
+def test_appcontainer_substitutes_drive_less_private_homepath(tmp_path: Path) -> None:
+    source = tmp_path / "sandbox" / "private-write"
+    target = Path(r"C:\Users\fixture\AppData\Local\Packages\profile\AC")
+    substitute = cast(
+        "Callable[[str, Path, Path], str]",
+        vars(windows_appcontainer)["_substitute_private_write"],
+    )
+
+    assert substitute(str(source), source, target) == str(target)
+    assert (
+        substitute(str(source)[len(source.drive) :], source, target)
+        == str(target)[len(target.drive) :]
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="AppContainer paths are case-insensitive on Windows")
+def test_runtime_attestation_normalizes_moniker_case_redirects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    records = []
+    for suffix in ("a" * 32, "b" * 32):
+        private_root = (tmp_path / "Packages" / f"earningssummaryoffline.{suffix}" / "AC").resolve()
+        os_redirect = str(private_root).replace(
+            f"earningssummaryoffline.{suffix}",
+            f"EarningsSummaryOffline.{suffix}",
+        )
+        monkeypatch.setenv("LOCALAPPDATA", os_redirect)
+        monkeypatch.setenv("TEMP", f"{os_redirect}\\Temp")
+        monkeypatch.setenv("TMP", f"{os_redirect}\\Temp")
+        records.append(
+            next(
+                record
+                for record in runtime_dependency_records(
+                    isolated_repo=PROJECT_ROOT,
+                    private_write_root=private_root,
+                )
+                if record.logical_path == "runtime/environment.json"
+            )
+        )
+
+    assert records[0] == records[1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="AppContainer private storage is Windows-specific")
+def test_runtime_attestation_collapses_nested_appcontainer_profile_suffixes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bodies: list[bytes] = []
+    for suffix in ("a" * 32, "b" * 32):
+        private_root = (tmp_path / "Packages" / f"EarningsSummaryOffline.{suffix}" / "AC").resolve()
+        monkeypatch.setenv(
+            "LOCALAPPDATA",
+            f"{private_root}\\Packages\\EarningsSummaryOffline.{suffix}\\AC",
+        )
+        monkeypatch.setenv(
+            "TEMP",
+            f"{private_root}\\Packages\\EarningsSummaryOffline.{suffix}\\AC\\Temp",
+        )
+        bodies.append(
+            normalized_runtime_environment_body(
+                isolated_repo=PROJECT_ROOT,
+                private_write_root=private_root,
+            )
+        )
+
+    assert bodies[0] == bodies[1]
+    assert b'"LOCALAPPDATA": "$PRIVATE_WRITE"' in bodies[0]
+    assert b'"TEMP": "$PRIVATE_WRITE\\\\Temp"' in bodies[0]
+
+
 def test_runtime_tree_attestation_hashes_every_admitted_file(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
     (runtime_root / "DLLs").mkdir(parents=True)
@@ -352,7 +480,7 @@ def test_runtime_tree_attestation_hashes_every_admitted_file(tmp_path: Path) -> 
 def test_native_runtime_attestation_includes_python_and_os_dlls() -> None:
     records = runtime_native_dependency_records(
         isolated_repo=PROJECT_ROOT,
-        runtime_root=Path(sys.base_prefix),
+        runtime_roots=runtime_root_specs(),
     )
     logical_paths = {record.logical_path.casefold() for record in records}
 
@@ -360,39 +488,58 @@ def test_native_runtime_attestation_includes_python_and_os_dlls() -> None:
     assert any(path.startswith("runtime/os/") and path.endswith(".dll") for path in logical_paths)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="named mutexes are Windows-specific")
-def test_runtime_acl_lease_serializes_concurrent_owners() -> None:
-    first_entered = threading.Event()
-    release_first = threading.Event()
-    second_entered = threading.Event()
-    lease = cast(
-        "Callable[..., AbstractContextManager[None]]",
-        vars(windows_appcontainer)["_serialized_acl_lease"],
+@pytest.mark.skipif(os.name != "nt", reason="repository venv acceptance is Windows-specific")
+def test_offline_cli_attests_repository_venv_end_to_end(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    venv_root = tmp_path / "repo-venv"
+    created = subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(venv_root)],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    native_fixture = venv_root / "Lib" / "site-packages" / "probe_native.pyd"
+    native_fixture.write_bytes(b"attested-native-extension-fixture")
+    venv_python = venv_root / "Scripts" / "python.exe"
+    database = migrated_db(tmp_path / "portfolio.db")
+    source_sha256 = hashlib.sha256(database.read_bytes()).hexdigest()
+    output = tmp_path / "venv-artifact"
+
+    completed = subprocess.run(
+        [
+            str(venv_python),
+            str(PROJECT_ROOT / "execution" / "build_offline_artifact.py"),
+            "--ticker",
+            "NU",
+            "--repo-root",
+            str(PROJECT_ROOT),
+            "--database",
+            str(database),
+            "--output-dir",
+            str(output),
+            "--as-of",
+            "2026-08-01",
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
-    def first_owner() -> None:
-        with lease(timeout_seconds=5):
-            first_entered.set()
-            assert release_first.wait(5)
-
-    def second_owner() -> None:
-        assert first_entered.wait(5)
-        with lease(timeout_seconds=5):
-            second_entered.set()
-
-    first = threading.Thread(target=first_owner)
-    second = threading.Thread(target=second_owner)
-    first.start()
-    second.start()
-    assert first_entered.wait(5)
-    assert not second_entered.wait(0.2)
-    release_first.set()
-    first.join(5)
-    second.join(5)
-
-    assert not first.is_alive()
-    assert not second.is_alive()
-    assert second_entered.is_set()
+    assert completed.returncode == 0, completed.stderr
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == source_sha256
+    receipt = json.loads((output / "receipt.json").read_text(encoding="utf-8"))
+    logical_paths = {record["logical_path"] for record in receipt["dependencies"]}
+    assert "runtime/venv/pyvenv.cfg" in logical_paths
+    assert "runtime/venv/Scripts/python.exe" in logical_paths
+    assert "runtime/venv/Lib/site-packages/probe_native.pyd" in logical_paths
+    assert "runtime/python/python313.dll" in logical_paths
+    assert receipt["network_attempts"] == 0
+    assert receipt["llm_attempts"] == 0
+    assert receipt["canonical_mutations"] == []
 
 
 def test_acl_revoke_failure_is_loud(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -498,9 +645,18 @@ def test_offline_cli_repeats_byte_identically_from_isolated_snapshot(
     assert hashlib.sha256(database.read_bytes()).hexdigest() == source_sha256
     first = {path.name: path.read_bytes() for path in outputs[0].iterdir()}
     second = {path.name: path.read_bytes() for path in outputs[1].iterdir()}
+    assert set(first) == {
+        "numeric_provenance.json",
+        "receipt.json",
+        "report.html",
+        "report.md",
+        "sections.json",
+        "status.json",
+    }
     assert first == second
     receipt = json.loads(first["receipt.json"])
     logical_paths = [record["logical_path"].casefold() for record in receipt["dependencies"]]
+    assert len(logical_paths) == 63_176
     assert len(logical_paths) == len(set(logical_paths))
     assert "runtime/python/python313.dll" in logical_paths
     assert "runtime/python/python3.dll" in logical_paths

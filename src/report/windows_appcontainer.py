@@ -14,16 +14,16 @@ import msvcrt
 import os
 import subprocess
 import sys
+import uuid
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from ctypes import wintypes
+from dataclasses import dataclass
 from pathlib import Path
 
 from log_redact import redact
 from report.offline_artifact import OfflineBoundaryError
 
-_PROFILE_NAME = "EarningsSummaryOfflineReportV1"
-_ERROR_ALREADY_EXISTS = 0x800700B7
 _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 _CREATE_NO_WINDOW = 0x08000000
 _CREATE_SUSPENDED = 0x00000004
@@ -40,7 +40,14 @@ _WAIT_OBJECT_0 = 0
 _WAIT_ABANDONED = 0x00000080
 _WAIT_TIMEOUT = 0x00000102
 _INFINITE = 0xFFFFFFFF
-_ACL_MUTEX_NAME = "Global\\EarningsSummaryOfflinePythonAclV1"
+
+
+@dataclass(frozen=True)
+class _EphemeralProfile:
+    name: str
+    sid_pointer: int
+    sid_text: str
+    storage_root: Path
 
 
 class _STARTUPINFO(ctypes.Structure):
@@ -140,7 +147,7 @@ def _system_binary(name: str) -> Path:
     return Path(buffer.value) / name
 
 
-def _profile_sid() -> tuple[int, str]:
+def _create_ephemeral_profile() -> _EphemeralProfile:
     userenv = ctypes.WinDLL("userenv", use_last_error=True)
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -155,10 +162,11 @@ def _profile_sid() -> tuple[int, str]:
         ctypes.POINTER(ctypes.c_void_p),
     ]
     create.restype = ctypes.c_long
+    profile_name = f"EarningsSummaryOffline.{uuid.uuid4().hex}"
     result = (
         int(
             create(
-                _PROFILE_NAME,
+                profile_name,
                 "Earnings Summary Offline Report",
                 "Network-denied deterministic report renderer",
                 None,
@@ -168,11 +176,6 @@ def _profile_sid() -> tuple[int, str]:
         )
         & 0xFFFFFFFF
     )
-    if result == _ERROR_ALREADY_EXISTS:
-        derive = userenv.DeriveAppContainerSidFromAppContainerName
-        derive.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
-        derive.restype = ctypes.c_long
-        result = int(derive(_PROFILE_NAME, ctypes.byref(sid))) & 0xFFFFFFFF
     if result != 0 or not sid.value:
         raise OfflineBoundaryError(f"AppContainer profile is unavailable ({result})")
     sid_text = wintypes.LPWSTR()
@@ -189,7 +192,45 @@ def _profile_sid() -> tuple[int, str]:
     if rendered is None:
         advapi32.FreeSid(sid)
         raise OfflineBoundaryError("AppContainer SID conversion returned no text")
-    return int(sid.value), rendered
+    storage = wintypes.LPWSTR()
+    get_storage = userenv.GetAppContainerFolderPath
+    get_storage.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPWSTR)]
+    get_storage.restype = ctypes.c_long
+    storage_result = int(get_storage(rendered, ctypes.byref(storage))) & 0xFFFFFFFF
+    if storage_result != 0 or not storage.value:
+        advapi32.FreeSid(sid)
+        raise OfflineBoundaryError(
+            f"AppContainer storage identity is unavailable ({storage_result})"
+        )
+    try:
+        storage_root = Path(storage.value).resolve()
+    finally:
+        ctypes.windll.ole32.CoTaskMemFree(storage)
+    return _EphemeralProfile(
+        name=profile_name,
+        sid_pointer=int(sid.value),
+        sid_text=rendered,
+        storage_root=storage_root,
+    )
+
+
+def _delete_ephemeral_profile(profile: _EphemeralProfile) -> None:
+    userenv = ctypes.WinDLL("userenv", use_last_error=True)
+    delete = userenv.DeleteAppContainerProfile
+    delete.argtypes = [wintypes.LPCWSTR]
+    delete.restype = ctypes.c_long
+    errors: list[int] = []
+    for _attempt in range(2):
+        result = int(delete(profile.name)) & 0xFFFFFFFF
+        if result == 0 and not profile.storage_root.exists():
+            return
+        errors.append(result)
+    storage_state = "present" if profile.storage_root.exists() else "absent"
+    raise OfflineBoundaryError(
+        "AppContainer profile cleanup failed; recovery required: "
+        f"profile={profile.name}; sid={profile.sid_text}; storage={profile.storage_root}; "
+        f"storage_state={storage_state}; delete_results={errors}"
+    )
 
 
 def _acl(sid: str, path: Path, rights: str | None) -> None:
@@ -206,41 +247,52 @@ def _acl(sid: str, path: Path, rights: str | None) -> None:
         raise OfflineBoundaryError(
             f"AppContainer ACL {action} failed for {path} and SID {sid}: {detail[-1_000:]}"
         )
+    inspected = subprocess.run(
+        [str(icacls), str(path)], capture_output=True, text=True, check=False
+    )
+    if inspected.returncode != 0:
+        raise OfflineBoundaryError(f"AppContainer ACL inspection failed for {path}")
+    sid_present = sid.casefold() in inspected.stdout.casefold()
+    if (rights is not None) != sid_present:
+        expected = "present" if rights is not None else "absent"
+        raise OfflineBoundaryError(
+            f"AppContainer ACL postcondition failed for {path}: SID {sid} must be {expected}"
+        )
 
 
 @contextmanager
-def _serialized_acl_lease(*, timeout_seconds: int) -> Generator[None, None, None]:
-    """Hold one cross-process lease around fixed-SID ACL grant and revoke."""
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
-    kernel32.CreateMutexW.restype = wintypes.HANDLE
-    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    kernel32.WaitForSingleObject.restype = wintypes.DWORD
-    kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
-    kernel32.ReleaseMutex.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    mutex = kernel32.CreateMutexW(None, False, _ACL_MUTEX_NAME)
-    if not mutex:
-        raise _win_error("ACL mutex creation")
-    acquired = False
+def _ephemeral_profile() -> Generator[_EphemeralProfile, None, None]:
+    profile = _create_ephemeral_profile()
     try:
-        wait = kernel32.WaitForSingleObject(mutex, timeout_seconds * 1000)
-        if wait == _WAIT_TIMEOUT:
-            raise OfflineBoundaryError("AppContainer ACL lease timed out")
-        if wait not in {_WAIT_OBJECT_0, _WAIT_ABANDONED}:
-            raise _win_error("ACL mutex wait")
-        acquired = True
-        yield
+        yield profile
     finally:
-        release_error: OfflineBoundaryError | None = None
-        if acquired and not kernel32.ReleaseMutex(mutex):
-            release_error = _win_error("ACL mutex release")
-        if not kernel32.CloseHandle(mutex) and release_error is None:
-            release_error = _win_error("ACL mutex close")
-        if release_error is not None:
-            raise release_error
+        try:
+            _delete_ephemeral_profile(profile)
+        finally:
+            ctypes.WinDLL("advapi32", use_last_error=True).FreeSid(
+                ctypes.c_void_p(profile.sid_pointer)
+            )
+
+
+def _remove_and_verify_loopback_exemption(sid: str) -> None:
+    binary = _system_binary("CheckNetIsolation.exe")
+    removed = subprocess.run(
+        [str(binary), "LoopbackExempt", "-d", f"-p={sid}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if removed.returncode != 0:
+        detail = redact((removed.stderr or removed.stdout or "unknown failure").strip())
+        raise OfflineBoundaryError(f"AppContainer loopback exemption removal failed: {detail}")
+    listed = subprocess.run(
+        [str(binary), "LoopbackExempt", "-s"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listed.returncode != 0 or sid.casefold() in listed.stdout.casefold():
+        raise OfflineBoundaryError(f"AppContainer loopback exemption persists for SID {sid}")
 
 
 def _environment_block(environment: Mapping[str, str]) -> ctypes.Array[ctypes.c_wchar]:
@@ -297,6 +349,7 @@ def is_current_process_appcontainer() -> bool:
 def _run_appcontainer_worker_with_acl(
     command: Sequence[str],
     *,
+    profile: _EphemeralProfile,
     cwd: Path,
     read_roots: Sequence[Path],
     write_root: Path,
@@ -373,7 +426,8 @@ def _run_appcontainer_worker_with_acl(
         ctypes.POINTER(wintypes.DWORD),
     ]
     advapi32.GetTokenInformation.restype = wintypes.BOOL
-    sid_pointer, sid_text = _profile_sid()
+    sid_pointer = profile.sid_pointer
+    sid_text = profile.sid_text
     roots = tuple(dict.fromkeys(Path(os.path.abspath(path)) for path in read_roots))
     write_root = Path(os.path.abspath(write_root))
     for root in (*roots, write_root):
@@ -387,16 +441,9 @@ def _run_appcontainer_worker_with_acl(
     stdout_path = write_root / "worker.stdout"
     stderr_path = write_root / "worker.stderr"
     try:
-        # The named mutex proves there is no live peer using the fixed SID.
-        # Clear any ACE left by an abandoned prior owner before granting this
-        # run's exact roots; failure is a hard stop with the SID/path evidence.
-        for root in (*roots, write_root):
-            _acl(sid_text, root, None)
         for root in roots:
             _acl(sid_text, root, "RX")
             granted.append(root)
-        _acl(sid_text, write_root, "M")
-        granted.append(write_root)
 
         stdin_fd = os.open(os.devnull, os.O_RDONLY)
         stdout_fd = os.open(stdout_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
@@ -527,7 +574,6 @@ def _run_appcontainer_worker_with_acl(
                 _acl(sid_text, root, None)
             except OfflineBoundaryError as exc:
                 cleanup_errors.append(str(exc))
-        advapi32.FreeSid(ctypes.c_void_p(sid_pointer))
         if cleanup_errors:
             raise OfflineBoundaryError(
                 "AppContainer ACL cleanup failed; recovery required: " + " | ".join(cleanup_errors)
@@ -541,6 +587,15 @@ def _run_appcontainer_worker_with_acl(
     return int(exit_code.value), stdout, stderr
 
 
+def _substitute_private_write(value: str, source: Path, target: Path) -> str:
+    substituted = value.replace(str(source), str(target))
+    if os.name != "nt":
+        return substituted
+    source_drive_less = str(source)[len(source.drive) :]
+    target_drive_less = str(target)[len(target.drive) :]
+    return substituted.replace(source_drive_less, target_drive_less)
+
+
 def run_appcontainer_worker(
     command: Sequence[str],
     *,
@@ -549,23 +604,57 @@ def run_appcontainer_worker(
     write_root: Path,
     environment: Mapping[str, str],
     timeout_seconds: int = 300,
+    export_names: Sequence[str] = (),
 ) -> tuple[int, str, str]:
-    """Run one child under one serialized, verified fixed-SID ACL lease."""
+    """Run one child with ephemeral identity and package-private writes."""
 
-    with _serialized_acl_lease(timeout_seconds=timeout_seconds):
+    export_root = Path(os.path.abspath(write_root))
+    export_root.mkdir(parents=True, exist_ok=True)
+    with _ephemeral_profile() as profile:
+        storage_root = profile.storage_root
+        if not storage_root.is_dir():
+            raise OfflineBoundaryError(
+                f"AppContainer private storage is unavailable: {storage_root}"
+            )
+        _remove_and_verify_loopback_exemption(profile.sid_text)
+        sealed_command = tuple(
+            _substitute_private_write(value, export_root, storage_root) for value in command
+        )
+        sealed_environment = {
+            key: _substitute_private_write(value, export_root, storage_root)
+            for key, value in environment.items()
+        }
         returncode, stdout, stderr = _run_appcontainer_worker_with_acl(
-            command,
+            sealed_command,
+            profile=profile,
             cwd=cwd,
             read_roots=read_roots,
-            write_root=write_root,
-            environment=environment,
+            write_root=storage_root,
+            environment=sealed_environment,
             timeout_seconds=timeout_seconds,
         )
+        if returncode == 0:
+            for name in export_names:
+                relative = Path(name)
+                if relative.is_absolute() or ".." in relative.parts or len(relative.parts) != 1:
+                    raise OfflineBoundaryError(f"invalid AppContainer export name: {name}")
+                source = storage_root / relative
+                destination = export_root / relative
+                if not source.exists() or destination.exists():
+                    raise OfflineBoundaryError(f"AppContainer export is unavailable: {name}")
+                source.replace(destination)
+        profile_name = profile.name
+        profile_sid = profile.sid_text
+        storage_path = str(profile.storage_root)
     cleanup_receipt = json.dumps(
         {
-            "event": "appcontainer_acl_lease",
-            "mutex": _ACL_MUTEX_NAME,
-            "status": "released",
+            "acl_roots": [str(Path(os.path.abspath(path))) for path in read_roots],
+            "event": "appcontainer_profile_cleanup",
+            "profile": profile_name,
+            "sid": profile_sid,
+            "status": "deleted",
+            "storage": storage_path,
+            "storage_removed": True,
         },
         sort_keys=True,
     )
