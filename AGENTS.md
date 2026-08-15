@@ -61,6 +61,14 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 - A change that adds, removes, renames, or materially changes an operation, operational observation, or operator action must follow `directives/operations_governance_surface.md` before it is complete.
 - The change must leave a truthful surface update or an explicit tested no-surface-change disposition. Never infer health from configuration, silently leave a removed capability visible, or expose a mutating control merely because an execution path exists.
 
+### Locally Owned, Exit-Ready Reconstructability Invariant
+
+- The core assets of `earnings-summary` (data models, SQLite schemas and alembic migrations, financial compute formulas, synthesis lenses, DCF valuation models, evaluation suites, and deterministic CLI entrypoints) are locally owned, versioned, and runtime-neutral.
+- Prompts, schemas, domain semantics, and test suites must never depend on vendor-specific harness state, proprietary memory stores, or unversioned cloud environments.
+- Provider SDKs, hosted CI workflows, Claude/Gemini CLI subscription wrappers, model IDs, external financial APIs (FMP, SEC EDGAR), and cloud backup targets are replaceable boundary adapters.
+- All 11 platform subsystems must satisfy the deterministic inventory and verification contract in `reconstruction_manifest.json` and `execution/verify_reconstruction_inventory.py`.
+- Reconstructability is exit-ready by design: any replacement agent or local harness can verify, reconstruct, and operate the platform using version-controlled code, migrations, and SQLite snapshots.
+
 ## File Organization & State
 
 ### Categories
@@ -123,22 +131,22 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 - Repo credential files: `.env`, `credentials.json`, `token.json` (global no-log/no-commit rules apply). Pass keys to scripts via environment variables, never CLI args; `src/log_redact.py` is the canonical redaction helper.
 
-## Session & Agent Model Selection — repo scope note
+## Agent delegation and review — repo scope note
 
-The per-session rule in the global `AGENTS.md` §Session & Agent Model Selection applies unchanged (delegation is the default for execution-shaped work; inline execution needs a named exemption).
+Use [[root:Delegation & Subagent Calibration]] for agent delegation and [[root:Evidence governance]] plus the `judging` procedure for J0-J3 review rigor. The repository does not redefine either policy.
 
 Repo-specific scope: that rule governs **coding/session** model choice. The application's **in-app per-purpose LLM routing** is a separate concern, governed by `LLM_MODELS` in `src/llm/cli.py`, the model-downgrade eval loop (`directives/model_eval_loop.md`), and the cheapest-at-parity routing design (`directives/cheapest_model_routing.md`).
 
-## Scheduling & Quota Discipline — repo scope note
+## LLM scheduling and quota — repo scope note
 
-The app's in-app LLM transport (`src/llm/cli.py` → subscription `claude` CLI) **shares one quota with every interactive Claude Code session on this machine**. The global `AGENTS.md` → "Scheduling & Quota Discipline" rules apply here with these repo specifics (full detail: `directives/llm_quota_scheduling.md`):
+The app's in-app LLM transport (`src/llm/cli.py` → subscription `claude` CLI) **shares one quota with every interactive Claude Code session on this machine**. Apply global `agent-operations.SCHEDULING.md` with these repo specifics (full detail: `directives/llm_quota_scheduling.md`):
 
 - Protected windows (America/Los_Angeles): **04:00 morning pipeline** (LLM legs: stage 0b `decision_conditions_extract`, stage 0/1 news + `material_news_classification`), **03:00 on the 1st** (`refresh_scenario_priors`), **Sun ~10:30** (weekly eval rungs). Multi-agent bursts must not still be burning 03:00–05:00; segment waves ≥6–7h apart.
 - Every NEW scheduled job with an LLM leg follows the per-item degrade pattern (transient CLI failure → defer + tally + retry next run; hard stops loud) — reference: `attach_conditions` post-#814 — and registers its window in `directives/llm_quota_scheduling.md`.
 
-## General Code Standards — see global AGENTS.md
+## Code-change specifics
 
-The full backend/code standards (typing, the NEVER/ALWAYS lists, classification, testing discipline, the pre-push checklist, PR conventions, Deep Modules) live in the global `AGENTS.md` and apply here unchanged — do not duplicate them in this file. The one repo nuance: a single `cast(...)` at a validated JSON / external-data boundary (right after an `isinstance`/schema check) is the accepted pattern here; never `# type: ignore` (this matches the global NEVER list's JSON-boundary exception). See `src/log_redact.py` for the canonical credential-redaction helper the global secret-handling rules reference.
+Use the global `code-change` procedure for typing, testing, architecture review, and validation. The one repo nuance: a single `cast(...)` at a validated JSON / external-data boundary (right after an `isinstance`/schema check) is accepted; never use `# type: ignore`. See `src/log_redact.py` for the canonical credential-redaction helper.
 
 ## Architectural & Execution Traps (Operational Learnings)
 
