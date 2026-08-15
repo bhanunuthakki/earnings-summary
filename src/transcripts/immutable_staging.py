@@ -18,12 +18,106 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Protocol, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-if os.name == "nt":
-    import msvcrt
+
+class _WindowsFunction(Protocol):
+    argtypes: object
+    restype: object
+
+    def __call__(self, *args: object) -> int | None: ...
+
+
+class _WindowsLibrary(Protocol):
+    CreateFileW: _WindowsFunction
+    CloseHandle: _WindowsFunction
+    GetFileInformationByHandleEx: _WindowsFunction
+    NtCreateFile: _WindowsFunction
+    NtSetInformationFile: _WindowsFunction
+    RtlNtStatusToDosError: _WindowsFunction
+    SetFileInformationByHandle: _WindowsFunction
+
+
+class _WindowsFFI(Protocol):
+    def load_library(
+        self,
+        name: str,
+        *,
+        use_last_error: bool = False,
+    ) -> _WindowsLibrary: ...
+
+    def get_last_error(self) -> int: ...
+
+    def open_osfhandle(self, handle: int, flags: int) -> int: ...
+
+    def get_osfhandle(self, descriptor: int) -> int: ...
+
+
+if sys.platform == "win32":
+    import msvcrt as _native_msvcrt
+
+    class _NativeWindowsFFI:
+        @staticmethod
+        def load_library(
+            name: str,
+            *,
+            use_last_error: bool = False,
+        ) -> _WindowsLibrary:
+            return cast(
+                _WindowsLibrary,
+                ctypes.WinDLL(name, use_last_error=use_last_error),
+            )
+
+        @staticmethod
+        def get_last_error() -> int:
+            return int(ctypes.get_last_error())
+
+        @staticmethod
+        def open_osfhandle(handle: int, flags: int) -> int:
+            return int(_native_msvcrt.open_osfhandle(handle, flags))
+
+        @staticmethod
+        def get_osfhandle(descriptor: int) -> int:
+            return int(_native_msvcrt.get_osfhandle(descriptor))
+
+    _WINDOWS_FFI: _WindowsFFI = _NativeWindowsFFI()
+else:
+
+    class _UnavailableWindowsFFI:
+        @staticmethod
+        def _unavailable() -> RuntimeError:
+            return RuntimeError("Windows filesystem APIs are unavailable")
+
+        def load_library(
+            self,
+            name: str,
+            *,
+            use_last_error: bool = False,
+        ) -> _WindowsLibrary:
+            del name, use_last_error
+            raise self._unavailable()
+
+        def get_last_error(self) -> int:
+            raise self._unavailable()
+
+        def open_osfhandle(self, handle: int, flags: int) -> int:
+            del handle, flags
+            raise self._unavailable()
+
+        def get_osfhandle(self, descriptor: int) -> int:
+            del descriptor
+            raise self._unavailable()
+
+    _WINDOWS_FFI = _UnavailableWindowsFFI()
+
+
+def _windows_integer_result(result: int | None, *, api: str) -> int:
+    if result is None:
+        raise OSError(f"{api} returned no status")
+    return result
+
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _WRITE_MODE_MASK = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
@@ -128,7 +222,7 @@ def _canonical_direct(path: Path, *, label: str) -> Path:
 
 
 def _windows_open_no_follow(path: Path, *, directory: bool) -> int:
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _WINDOWS_FFI.load_library("kernel32", use_last_error=True)
     create_file = kernel32.CreateFileW
     create_file.argtypes = (
         ctypes.c_wchar_p,
@@ -147,11 +241,14 @@ def _windows_open_no_follow(path: Path, *, directory: bool) -> int:
     raw_handle = create_file(str(path), 0x80000000, sharing, None, 3, flags, None)
     invalid_handle = ctypes.c_void_p(-1).value
     if raw_handle in (None, invalid_handle):
-        error = ctypes.get_last_error()
+        error = _WINDOWS_FFI.get_last_error()
         raise OSError(error, os.strerror(error), str(path))
     handle_value = int(raw_handle)
     try:
-        return msvcrt.open_osfhandle(handle_value, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        return _WINDOWS_FFI.open_osfhandle(
+            handle_value,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        )
     except Exception:
         kernel32.CloseHandle(ctypes.c_void_p(handle_value))
         raise
@@ -181,7 +278,7 @@ def _windows_create_owned_temporary(root: _OpenedRoot, *, digest: str) -> _Owned
             ("Information", ctypes.c_size_t),
         )
 
-    ntdll = ctypes.WinDLL("ntdll")
+    ntdll = _WINDOWS_FFI.load_library("ntdll")
     create_file = ntdll.NtCreateFile
     create_file.restype = ctypes.c_long
     for _attempt in range(32):
@@ -194,7 +291,7 @@ def _windows_create_owned_temporary(root: _OpenedRoot, *, digest: str) -> _Owned
         )
         attributes = _ObjectAttributes(
             Length=ctypes.sizeof(_ObjectAttributes),
-            RootDirectory=msvcrt.get_osfhandle(root.descriptor),
+            RootDirectory=_WINDOWS_FFI.get_osfhandle(root.descriptor),
             ObjectName=ctypes.pointer(unicode_name),
             Attributes=0x00000040,  # OBJ_CASE_INSENSITIVE
             SecurityDescriptor=None,
@@ -202,18 +299,21 @@ def _windows_create_owned_temporary(root: _OpenedRoot, *, digest: str) -> _Owned
         )
         raw_handle = ctypes.c_void_p()
         io_status = _IoStatusBlock()
-        status = create_file(
-            ctypes.byref(raw_handle),
-            0x0013019F,  # FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE
-            ctypes.byref(attributes),
-            ctypes.byref(io_status),
-            None,
-            0x00000080,  # FILE_ATTRIBUTE_NORMAL
-            0x00000001,  # FILE_SHARE_READ: deny replacement while owned
-            2,  # FILE_CREATE: no overwrite
-            0x00200060,  # OPEN_REPARSE_POINT | NON_DIRECTORY | SYNCHRONOUS_NONALERT
-            None,
-            0,
+        status = _windows_integer_result(
+            create_file(
+                ctypes.byref(raw_handle),
+                0x0013019F,  # FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE
+                ctypes.byref(attributes),
+                ctypes.byref(io_status),
+                None,
+                0x00000080,  # FILE_ATTRIBUTE_NORMAL
+                0x00000001,  # FILE_SHARE_READ: deny replacement while owned
+                2,  # FILE_CREATE: no overwrite
+                0x00200060,  # OPEN_REPARSE_POINT | NON_DIRECTORY | SYNCHRONOUS_NONALERT
+                None,
+                0,
+            ),
+            api="NtCreateFile",
         )
         if status < 0:
             error = _windows_error_from_ntstatus(status)
@@ -224,12 +324,12 @@ def _windows_create_owned_temporary(root: _OpenedRoot, *, digest: str) -> _Owned
             raise OSError("NtCreateFile returned an empty handle")
         handle_value = int(raw_handle.value)
         try:
-            descriptor = msvcrt.open_osfhandle(
+            descriptor = _WINDOWS_FFI.open_osfhandle(
                 handle_value,
                 os.O_RDWR | getattr(os, "O_BINARY", 0),
             )
         except Exception:
-            ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(handle_value))
+            _WINDOWS_FFI.load_library("kernel32").CloseHandle(ctypes.c_void_p(handle_value))
             raise
         metadata = os.fstat(descriptor)
         _require_regular(metadata, label="owned temporary", read_only=False)
@@ -242,11 +342,14 @@ def _windows_create_owned_temporary(root: _OpenedRoot, *, digest: str) -> _Owned
 
 
 def _windows_error_from_ntstatus(status: int) -> int:
-    ntdll = ctypes.WinDLL("ntdll")
+    ntdll = _WINDOWS_FFI.load_library("ntdll")
     convert = ntdll.RtlNtStatusToDosError
     convert.argtypes = (ctypes.c_long,)
     convert.restype = ctypes.c_uint32
-    return int(convert(status))
+    converted = convert(status)
+    if converted is None:
+        raise OSError("RtlNtStatusToDosError returned no status")
+    return int(converted)
 
 
 def _windows_set_read_only(descriptor: int) -> None:
@@ -259,17 +362,17 @@ def _windows_set_read_only(descriptor: int) -> None:
             ("FileAttributes", ctypes.c_uint32),
         )
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _WINDOWS_FFI.load_library("kernel32", use_last_error=True)
     get_info = kernel32.GetFileInformationByHandleEx
     set_info = kernel32.SetFileInformationByHandle
-    handle = ctypes.c_void_p(msvcrt.get_osfhandle(descriptor))
+    handle = ctypes.c_void_p(_WINDOWS_FFI.get_osfhandle(descriptor))
     basic = _FileBasicInfo()
     if not get_info(handle, 0, ctypes.byref(basic), ctypes.sizeof(basic)):
-        error = ctypes.get_last_error()
+        error = _WINDOWS_FFI.get_last_error()
         raise OSError(error, os.strerror(error))
     basic.FileAttributes = (basic.FileAttributes & ~0x00000080) | 0x00000001
     if not set_info(handle, 0, ctypes.byref(basic), ctypes.sizeof(basic)):
-        error = ctypes.get_last_error()
+        error = _WINDOWS_FFI.get_last_error()
         raise OSError(error, os.strerror(error))
 
 
@@ -293,7 +396,7 @@ def _windows_rename_owned(
             ("Information", ctypes.c_size_t),
         )
 
-    ntdll = ctypes.WinDLL("ntdll")
+    ntdll = _WINDOWS_FFI.load_library("ntdll")
     set_info = ntdll.NtSetInformationFile
     set_info.argtypes = (
         ctypes.c_void_p,
@@ -305,17 +408,20 @@ def _windows_rename_owned(
     set_info.restype = ctypes.c_long
     info = _FileRenameInfo()
     info.ReplaceIfExists = 0
-    info.RootDirectory = msvcrt.get_osfhandle(root.descriptor)
+    info.RootDirectory = _WINDOWS_FFI.get_osfhandle(root.descriptor)
     info.FileNameLength = len(target_name) * ctypes.sizeof(ctypes.c_wchar)
     info.FileName = target_name
-    handle = ctypes.c_void_p(msvcrt.get_osfhandle(temporary.descriptor))
+    handle = ctypes.c_void_p(_WINDOWS_FFI.get_osfhandle(temporary.descriptor))
     io_status = _IoStatusBlock()
-    status = set_info(
-        handle,
-        ctypes.byref(io_status),
-        ctypes.byref(info),
-        ctypes.sizeof(info),
-        10,  # FileRenameInformation
+    status = _windows_integer_result(
+        set_info(
+            handle,
+            ctypes.byref(io_status),
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+            10,  # FileRenameInformation
+        ),
+        api="NtSetInformationFile",
     )
     if status >= 0:
         return
@@ -326,17 +432,17 @@ def _windows_rename_owned(
 
 
 def _windows_mark_owned_for_deletion(descriptor: int) -> None:
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _WINDOWS_FFI.load_library("kernel32", use_last_error=True)
     set_info = kernel32.SetFileInformationByHandle
-    handle = ctypes.c_void_p(msvcrt.get_osfhandle(descriptor))
+    handle = ctypes.c_void_p(_WINDOWS_FFI.get_osfhandle(descriptor))
     flags = ctypes.c_uint32(0x00000013)  # DELETE | POSIX_SEMANTICS | IGNORE_READONLY
     if set_info(handle, 21, ctypes.byref(flags), ctypes.sizeof(flags)):
         return
-    first_error = ctypes.get_last_error()
+    first_error = _WINDOWS_FFI.get_last_error()
     disposition = ctypes.c_int(1)
     if set_info(handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)):
         return
-    error = ctypes.get_last_error() or first_error
+    error = _WINDOWS_FFI.get_last_error() or first_error
     raise OSError(error, os.strerror(error))
 
 
