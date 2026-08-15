@@ -24,6 +24,10 @@ from pipeline.quarterly_refresh import (
 )
 
 
+def _empty_artifact_batch(*_args: object, **_kwargs: object) -> dict[str, object]:
+    return {}
+
+
 def _create_schema(conn: sqlite3.Connection) -> None:
     """Mirror the production schema for the tables refresh_ticker touches."""
     conn.executescript(
@@ -722,7 +726,7 @@ def test_cli_emits_one_redacted_terminal_receipt_and_ends_run_once(
         return report
 
     monkeypatch.setattr(cli, "open_db", fake_open_db)
-    monkeypatch.setattr(cli, "stage_pending_issuer_transcripts", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "stage_pending_issuer_transcripts", _empty_artifact_batch)
     monkeypatch.setattr(cli, "start_run", fake_start_run)
     monkeypatch.setattr(cli, "refresh_portfolio", fake_refresh_portfolio)
 
@@ -808,7 +812,7 @@ def test_cli_human_output_redacts_all_stage_notes(
         return None
 
     monkeypatch.setattr(cli, "open_db", fake_open_db)
-    monkeypatch.setattr(cli, "stage_pending_issuer_transcripts", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "stage_pending_issuer_transcripts", _empty_artifact_batch)
     monkeypatch.setattr(cli, "start_run", fake_start_run)
     monkeypatch.setattr(cli, "refresh_portfolio", fake_refresh_portfolio)
     monkeypatch.setattr(cli, "end_run", fake_end_run)

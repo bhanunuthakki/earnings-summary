@@ -8,18 +8,23 @@ may retain multiple immutable versions, but exactly one is current for a
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
+from compute import transcript_ingest
 from compute.transcript_ingest import (
+    IngestResult,
     SpeakerTurn,
-    _ingest_one,
-    _insert_document,
-    _insert_segments,
-    _insert_transcript,
     find_transcript_for_period,
 )
 from models.facts import FiscalPeriodType
+
+_ingest_one = cast("Callable[..., IngestResult | None]", getattr(transcript_ingest, "_ingest_one"))
+_insert_document = cast("Callable[..., int]", getattr(transcript_ingest, "_insert_document"))
+_insert_segments = cast("Callable[..., int]", getattr(transcript_ingest, "_insert_segments"))
+_insert_transcript = cast("Callable[..., int]", getattr(transcript_ingest, "_insert_transcript"))
 
 
 def _conn() -> sqlite3.Connection:

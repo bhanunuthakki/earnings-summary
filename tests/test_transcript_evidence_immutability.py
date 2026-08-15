@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -17,6 +17,8 @@ from compute import transcript_ingest
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from compute.transcript_ingest import IngestResult
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -219,7 +221,7 @@ def test_per_file_savepoint_rolls_back_partial_writes_but_keeps_failure_receipt(
     (raw / "NU_Q1_2026.txt").write_text(_body("ORIGINAL"), encoding="utf-8")
     monkeypatch.setattr(mod, "PROJECT_ROOT", repo_root)
     monkeypatch.setattr(mod, "_TRANSCRIPT_DIRS", (processed, raw))
-    original_insert = transcript_ingest._insert_segments
+    original_insert = cast("Callable[..., int]", getattr(transcript_ingest, "_insert_segments"))
 
     def partial_then_fail(*args: Any, **kwargs: Any) -> int:
         original_insert(*args, **kwargs)
@@ -242,7 +244,9 @@ def test_per_file_savepoint_rolls_back_partial_writes_but_keeps_failure_receipt(
 
 
 def test_ingest_parses_the_same_snapshot_bytes_used_for_hash(tmp_path: Path) -> None:
-    from compute.transcript_ingest import _ingest_one
+    ingest_one = cast(
+        "Callable[..., IngestResult | None]", getattr(transcript_ingest, "_ingest_one")
+    )
 
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -271,7 +275,7 @@ def test_ingest_parses_the_same_snapshot_bytes_used_for_hash(tmp_path: Path) -> 
     path = tmp_path / "NU_Q1_2026.txt"
     snapshot = _body("SNAPSHOT").encode()
     path.write_bytes(_body("MUTATED").encode())
-    result = _ingest_one(
+    result = ingest_one(
         conn,
         file_path=path,
         project_root=tmp_path,

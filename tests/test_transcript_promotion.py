@@ -10,6 +10,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -281,7 +282,7 @@ def test_index_entries_are_updated_after_promotion(
 
     # Seed both indexes with raw/ entries — the state a freshly-fetched file
     # would leave behind after fetch_qa_transcript ran.
-    index_manager._register_transcript(
+    cast("Callable[..., bool]", getattr(index_manager, "_register_transcript"))(
         "GOOG",
         2025,
         "Q1",

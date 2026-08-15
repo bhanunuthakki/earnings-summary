@@ -14,9 +14,17 @@ from compute import evidence_snapshot, transcript_ingest
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import NoReturn
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _forbidden(message: str) -> Callable[..., NoReturn]:
+    def fail(*_args: object, **_kwargs: object) -> NoReturn:
+        pytest.fail(message)
+
+    return fail
 
 
 def _load_module() -> Any:
@@ -62,12 +70,12 @@ def test_refetch_direct_denial_precedes_network_and_snapshot(
     monkeypatch.setattr(
         mod.fetch_qa_transcript,
         "fetch_qa",
-        lambda *_args, **_kwargs: pytest.fail("denied refetch crossed the network boundary"),
+        _forbidden("denied refetch crossed the network boundary"),
     )
     monkeypatch.setattr(
         evidence_snapshot,
         "capture_snapshot",
-        lambda *_args, **_kwargs: pytest.fail("denied refetch captured mutable evidence"),
+        _forbidden("denied refetch captured mutable evidence"),
     )
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -105,12 +113,12 @@ def test_refetch_direct_denial_precedes_network_and_transcript_writes(
     monkeypatch.setattr(
         mod.fetch_qa_transcript,
         "fetch_qa",
-        lambda *_args, **_kwargs: pytest.fail("denied refetch crossed the network boundary"),
+        _forbidden("denied refetch crossed the network boundary"),
     )
     monkeypatch.setattr(
         transcript_ingest,
         "_insert_segments",
-        lambda *_args, **_kwargs: pytest.fail("denied refetch crossed persistence"),
+        _forbidden("denied refetch crossed persistence"),
     )
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row

@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from compute.transcript_ingest import _insert_transcript, supersede_transcripts
+from compute import transcript_ingest
+from compute.transcript_ingest import supersede_transcripts
 from models.facts import FiscalPeriodType
+
+_insert_transcript = cast("Callable[..., int]", getattr(transcript_ingest, "_insert_transcript"))
 
 
 def _legacy_database(path: Path) -> None:

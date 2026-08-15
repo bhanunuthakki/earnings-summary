@@ -19,6 +19,8 @@ import pytest
 
 import index_manager
 
+_register_transcript = cast("Callable[..., bool]", getattr(index_manager, "_register_transcript"))
+
 
 @pytest.fixture
 def isolated_indexes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -64,7 +66,7 @@ def test_register_transcript_canonicalizes_bare_filename_to_processed_dir(
     transcript_file = isolated_indexes / "transcripts" / "processed" / "AMZN_Q1_2026.txt"
     transcript_file.write_text("synthetic transcript body", encoding="utf-8")
 
-    index_manager._register_transcript(
+    _register_transcript(
         ticker="AMZN",
         year=2026,
         quarter="Q1",
@@ -132,7 +134,7 @@ def test_register_transcript_prefers_raw_over_processed_when_file_is_in_raw(
     raw_file = isolated_indexes / "transcripts" / "raw" / "GOOG_Q3_2025.txt"
     raw_file.write_text("freshly-fetched transcript", encoding="utf-8")
 
-    index_manager._register_transcript(
+    _register_transcript(
         ticker="GOOG",
         year=2025,
         quarter="Q3",
@@ -150,7 +152,7 @@ def test_register_transcript_defaults_to_processed_when_file_not_on_disk(
 ) -> None:
     """If neither raw/ nor processed/ has the file (rare; pre-write registration),
     default to processed/ so the stored path is still project-root-relative."""
-    index_manager._register_transcript(
+    _register_transcript(
         ticker="META",
         year=2026,
         quarter="Q2",
@@ -166,7 +168,7 @@ def test_register_transcript_passes_through_path_with_directory_separator(
     isolated_indexes: Path,
 ) -> None:
     """If the caller already supplies a directory-bearing path, trust it."""
-    index_manager._register_transcript(
+    _register_transcript(
         ticker="NVDA",
         year=2026,
         quarter="Q4",
@@ -180,7 +182,7 @@ def test_register_transcript_passes_through_path_with_directory_separator(
 
 def test_register_transcript_preserves_none_filepath(isolated_indexes: Path) -> None:
     """A None filepath stays None — used when registering a stub before the file lands."""
-    index_manager._register_transcript(
+    _register_transcript(
         ticker="AAPL",
         year=2026,
         quarter="Q1",
@@ -200,7 +202,7 @@ def test_legacy_transcript_index_filepath_also_canonicalized(
     transcript_file = isolated_indexes / "transcripts" / "processed" / "MELI_Q1_2026.txt"
     transcript_file.write_text("body", encoding="utf-8")
 
-    index_manager._register_transcript(
+    _register_transcript(
         ticker="MELI",
         year=2026,
         quarter="Q1",
@@ -226,7 +228,7 @@ def test_get_documents_for_ticker_includes_processed_docs(
     """
     f = isolated_indexes / "transcripts" / "processed" / "UBER_Q1_2026.txt"
     f.write_text("body", encoding="utf-8")
-    index_manager._register_transcript(
+    _register_transcript(
         ticker="UBER",
         year=2026,
         quarter="Q1",
