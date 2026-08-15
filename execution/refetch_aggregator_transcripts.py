@@ -58,7 +58,6 @@ import fetch_qa_transcript  # type: ignore[import-not-found]  # noqa: E402
 import db  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from models.documents import DocType, SourceType  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
 from pipeline.source_policy import (  # noqa: E402
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
@@ -72,6 +71,7 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     TranscriptAcquisitionDeniedError,
     authorize_transcript_request,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from transcripts.acquisition_semantics import (  # noqa: E402
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
@@ -270,7 +270,11 @@ def main() -> int:
         _retarget(repo_root)
 
     selected_db_path = repo_root / "data" / "portfolio.db"
-    conn = open_db(str(selected_db_path))
+    conn = connect_sqlite(
+        selected_db_path,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=False,
+    )
     try:
         explicit = [t.strip() for t in args.tickers.split(",")] if args.tickers else None
         scope_tickers = _scope_tickers(conn, args.scope, explicit)

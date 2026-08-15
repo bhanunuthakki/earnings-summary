@@ -572,7 +572,7 @@ def find_document_for_path(conn: sqlite3.Connection, doc_id: int) -> tuple[str, 
     return (row["ticker"], pe)
 
 
-def insert_document(
+def _insert_document(
     conn: sqlite3.Connection,
     *,
     ticker: str,
@@ -605,7 +605,7 @@ def insert_document(
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 
-def insert_transcript(
+def _insert_transcript(
     conn: sqlite3.Connection,
     *,
     document_id: int,
@@ -680,7 +680,7 @@ def qa_status_to_db_value(status: QASectionStatus) -> bool | None:
     return None
 
 
-def insert_segments(
+def _insert_segments(
     conn: sqlite3.Connection,
     *,
     transcript_id: int,
@@ -711,7 +711,7 @@ class IngestResult:
     source: str | None = None
 
 
-def ingest_one(
+def _ingest_one(
     conn: sqlite3.Connection,
     *,
     file_path: Path,
@@ -774,7 +774,7 @@ def ingest_one(
             new_source=source,
             new_segment_count=len(turns),
         )
-        transcript_id = insert_transcript(
+        transcript_id = _insert_transcript(
             conn,
             document_id=existing,
             ticker=parsed.ticker,
@@ -785,7 +785,7 @@ def ingest_one(
             is_current=decision.current_transcript_id is None,
             superseded_by_transcript_id=decision.current_transcript_id,
         )
-        segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
+        segment_count = _insert_segments(conn, transcript_id=transcript_id, turns=turns)
         winner_document_id, winner_transcript_id, skipped_existing = _apply_period_conflict(
             conn,
             decision=decision,
@@ -836,7 +836,7 @@ def ingest_one(
         winner_transcript_id = decision.current_transcript_id
         assert winner_document_id is not None
         assert winner_transcript_id is not None
-        losing_document_id = insert_document(
+        losing_document_id = _insert_document(
             conn,
             ticker=parsed.ticker,
             file_path=file_path,
@@ -844,7 +844,7 @@ def ingest_one(
             period_end=period.period_end,
             project_root=project_root,
         )
-        losing_transcript_id = insert_transcript(
+        losing_transcript_id = _insert_transcript(
             conn,
             document_id=losing_document_id,
             ticker=parsed.ticker,
@@ -855,7 +855,7 @@ def ingest_one(
             is_current=False,
             superseded_by_transcript_id=winner_transcript_id,
         )
-        insert_segments(conn, transcript_id=losing_transcript_id, turns=turns)
+        _insert_segments(conn, transcript_id=losing_transcript_id, turns=turns)
         supersede_transcripts(
             conn,
             winner_transcript_id=winner_transcript_id,
@@ -874,7 +874,7 @@ def ingest_one(
             source=source,
         )
 
-    document_id = insert_document(
+    document_id = _insert_document(
         conn,
         ticker=parsed.ticker,
         file_path=file_path,
@@ -882,7 +882,7 @@ def ingest_one(
         period_end=period.period_end,
         project_root=project_root,
     )
-    transcript_id = insert_transcript(
+    transcript_id = _insert_transcript(
         conn,
         document_id=document_id,
         ticker=parsed.ticker,
@@ -893,7 +893,7 @@ def ingest_one(
         is_current=decision.current_transcript_id is None,
         superseded_by_transcript_id=decision.current_transcript_id,
     )
-    segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
+    segment_count = _insert_segments(conn, transcript_id=transcript_id, turns=turns)
     winner_document_id, winner_transcript_id, skipped_existing = _apply_period_conflict(
         conn,
         decision=decision,
@@ -941,11 +941,13 @@ def ingest_evidence_file(
         conn,
         authorized_artifact,
         project_root=project_root,
+        trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
     )
     snapshot_payload = read_authorized_transcript(
         conn,
         authorized_artifact,
         project_root=project_root,
+        trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
     )
     snapshot_sha256 = authorized_artifact.sha256
     savepoint = "transcript_evidence_ingest"
@@ -964,7 +966,7 @@ def ingest_evidence_file(
                 raise evidence_snapshot.EvidenceSourceChangedError(
                     "document evidence does not match its immutable receipt"
                 )
-            result: IngestResult | None = ingest_existing_ir_transcript(
+            result: IngestResult | None = _ingest_existing_ir_transcript(
                 conn,
                 document_id=document_id,
                 file_path=file_path,
@@ -973,7 +975,7 @@ def ingest_evidence_file(
             )
         else:
             assert tracked_tickers is not None
-            result = ingest_one(
+            result = _ingest_one(
                 conn,
                 file_path=file_path,
                 project_root=project_root,
@@ -985,6 +987,7 @@ def ingest_evidence_file(
             conn,
             authorized_artifact,
             project_root=project_root,
+            trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
         )
         if hashlib.sha256(verified_payload).hexdigest() != snapshot_sha256:
             raise evidence_snapshot.EvidenceSourceChangedError(
@@ -1000,7 +1003,7 @@ def ingest_evidence_file(
     return result
 
 
-def ingest_existing_ir_transcript(
+def _ingest_existing_ir_transcript(
     conn: sqlite3.Connection,
     *,
     document_id: int,
@@ -1049,7 +1052,7 @@ def ingest_existing_ir_transcript(
         winner_transcript_id = decision.current_transcript_id
         assert winner_document_id is not None
         assert winner_transcript_id is not None
-        losing_transcript_id = insert_transcript(
+        losing_transcript_id = _insert_transcript(
             conn,
             document_id=document_id,
             ticker=ticker,
@@ -1060,7 +1063,7 @@ def ingest_existing_ir_transcript(
             is_current=False,
             superseded_by_transcript_id=winner_transcript_id,
         )
-        insert_segments(conn, transcript_id=losing_transcript_id, turns=turns)
+        _insert_segments(conn, transcript_id=losing_transcript_id, turns=turns)
         supersede_transcripts(
             conn,
             winner_transcript_id=winner_transcript_id,
@@ -1079,7 +1082,7 @@ def ingest_existing_ir_transcript(
             source=source,
         )
 
-    transcript_id = insert_transcript(
+    transcript_id = _insert_transcript(
         conn,
         document_id=document_id,
         ticker=ticker,
@@ -1090,7 +1093,7 @@ def ingest_existing_ir_transcript(
         is_current=decision.current_transcript_id is None,
         superseded_by_transcript_id=decision.current_transcript_id,
     )
-    segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
+    segment_count = _insert_segments(conn, transcript_id=transcript_id, turns=turns)
     winner_document_id, winner_transcript_id, skipped_existing = _apply_period_conflict(
         conn,
         decision=decision,

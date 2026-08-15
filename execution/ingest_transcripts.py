@@ -470,6 +470,7 @@ def main() -> int:
                     conn,
                     request=request,
                     project_root=PROJECT_ROOT,
+                    trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
                 )
                 if (
                     artifact is None
@@ -477,6 +478,9 @@ def main() -> int:
                         conn,
                         artifact,
                         project_root=PROJECT_ROOT,
+                        trusted_staging_root=PROJECT_ROOT
+                        / ".tmp"
+                        / "transcript-acquisition",
                     )
                     != path.read_bytes()
                 ):
@@ -588,6 +592,7 @@ def main() -> int:
                 conn,
                 artifact,
                 project_root=PROJECT_ROOT,
+                trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
             )
         conn.commit()
         if not in_scope and not ir_sources:

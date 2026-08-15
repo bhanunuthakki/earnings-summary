@@ -772,12 +772,18 @@ def main() -> int:
                 conn,
                 artifact,
                 project_root=PROJECT_ROOT,
+                trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
             )
         conn.commit()
 
         def _revalidate_transcript_batch() -> None:
             for artifact in transcript_artifacts.values():
-                read_authorized_transcript(conn, artifact, project_root=PROJECT_ROOT)
+                read_authorized_transcript(
+                    conn,
+                    artifact,
+                    project_root=PROJECT_ROOT,
+                    trusted_staging_root=PROJECT_ROOT / ".tmp" / "transcript-acquisition",
+                )
 
         try:
             run_id = start_run(

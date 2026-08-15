@@ -46,6 +46,7 @@ import index_manager  # noqa: E402
 from aggregator_sources import (  # noqa: E402
     SOURCES,
     AggregatorHit,
+    AggregatorSource,
 )
 from alias_manager import resolve_ticker  # noqa: E402
 from pipeline.transcript_acquisition import (  # noqa: E402
@@ -55,6 +56,7 @@ from pipeline.transcript_acquisition import (  # noqa: E402
     authorize_transcript_request,
     load_authorized_transcript_replay,
     persist_authorized_transcript_artifact,
+    project_root_for_database,
     read_authorized_transcript,
     stage_authorized_payload,
 )
@@ -216,22 +218,50 @@ def _replay_artifact(
     conn: sqlite3.Connection,
     *,
     request: TranscriptAcquisitionRequest,
-    output_path: Path,
-) -> AuthorizedTranscriptArtifact | None:
+    project_root: Path,
+) -> tuple[AuthorizedTranscriptArtifact, bytes] | None:
     try:
         artifact = load_authorized_transcript_replay(
             conn,
             request=request,
-            project_root=PROJECT_ROOT,
+            project_root=project_root,
+            trusted_staging_root=STAGING_DIR,
         )
         if artifact is None:
             return None
-        staged_bytes = read_authorized_transcript(conn, artifact, project_root=PROJECT_ROOT)
-        if not output_path.is_file() or output_path.read_bytes() != staged_bytes:
-            return None
+        staged_bytes = read_authorized_transcript(
+            conn,
+            artifact,
+            project_root=project_root,
+            trusted_staging_root=STAGING_DIR,
+        )
     except (OSError, ValueError, TranscriptAcquisitionDeniedError):
         return None
-    return artifact
+    return artifact, staged_bytes
+
+
+def _restore_replay(
+    spec: FetchQaSpec,
+    *,
+    output_path: Path,
+    artifact: AuthorizedTranscriptArtifact,
+    staged_bytes: bytes,
+) -> None:
+    if not output_path.is_file() or output_path.read_bytes() != staged_bytes:
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(staged_bytes)
+    qa_result = validate_synthesized_transcript(output_path)
+    index_manager.register_transcript(
+        resolve_ticker(spec.ticker),
+        spec.year,
+        f"Q{spec.quarter}",
+        source="issuer_ir",
+        filepath=output_path.name,
+        has_qa=True,
+        qa_status=qa_result.status.value,
+        qa_details=qa_result.model_dump(mode="json"),
+        acquisition_receipt=artifact,
+    )
 
 
 def fetch_qa(
@@ -248,9 +278,13 @@ def fetch_qa(
     effective_as_of = _policy_today() if as_of is None else as_of
     attempts: list[FetchQaAttempt] = []
     last_key = "transcript:" + "0" * 64
+    project_root = project_root_for_database(db_path)
+    authorized_sources: list[
+        tuple[AggregatorSource, TranscriptAcquisitionRequest, TranscriptAcquisitionAuthorization]
+    ] = []
     with connect_sqlite(
         db_path,
-        role=SQLiteConnectionRole.WRITER,
+        role=SQLiteConnectionRole.READ_ONLY,
         schema_preflight=False,
     ) as conn:
         for source in SOURCES:
@@ -266,73 +300,78 @@ def fetch_qa(
                 _log_denial(authorization)
                 attempts.append(FetchQaAttempt(source.name, FetchQaAttemptStatus.DENIED, last_key))
                 continue
-            if output_path.exists() and not force:
-                artifact = _replay_artifact(
-                    conn,
-                    request=request,
+            replay = _replay_artifact(conn, request=request, project_root=project_root)
+            if replay is not None and not force:
+                artifact, staged_bytes = replay
+                _restore_replay(
+                    spec,
                     output_path=output_path,
+                    artifact=artifact,
+                    staged_bytes=staged_bytes,
                 )
-                if artifact is None:
-                    _log_denial(authorization)
-                    return FetchQaOutcome(FetchQaStatus.DENIED, last_key, tuple(attempts))
                 return FetchQaOutcome(
                     FetchQaStatus.IDEMPOTENT_REPLAY,
                     last_key,
                     tuple(attempts),
                 )
-            hit = source.fetch_qa(canonical, spec.year, spec.quarter)
-            if hit is None:
-                attempts.append(
-                    FetchQaAttempt(source.name, FetchQaAttemptStatus.PROVIDER_MISS, last_key)
-                )
-                continue
-            payload = (_build_header(spec, hit) + hit.qa_text).encode("utf-8")
-            acquired_artifact = stage_authorized_payload(
-                authorization,
-                payload=payload,
-                private_root=STAGING_DIR,
-                source_url=hit.page_url,
+            authorized_sources.append((source, request, authorization))
+
+    for source, request, authorization in authorized_sources:
+        last_key = authorization.idempotency_key
+        hit = source.fetch_qa(canonical, spec.year, spec.quarter)
+        if hit is None:
+            attempts.append(
+                FetchQaAttempt(source.name, FetchQaAttemptStatus.PROVIDER_MISS, last_key)
             )
+            continue
+        payload = (_build_header(spec, hit) + hit.qa_text).encode("utf-8")
+        acquired_artifact = stage_authorized_payload(
+            authorization,
+            payload=payload,
+            private_root=STAGING_DIR,
+            source_url=hit.page_url,
+            canonical_document_path=Path("transcripts") / "raw" / output_path.name,
+        )
+        with connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=False,
+        ) as conn:
+            if authorize_transcript_request(conn, request) != authorization:
+                raise TranscriptAcquisitionDeniedError(
+                    "transcript authorization changed before durable persistence"
+                )
             staged_bytes = read_authorized_transcript(
                 conn,
                 acquired_artifact,
-                project_root=PROJECT_ROOT,
+                project_root=project_root,
+                trusted_staging_root=STAGING_DIR,
             )
             persist_authorized_transcript_artifact(
                 conn,
                 acquired_artifact,
-                project_root=PROJECT_ROOT,
+                project_root=project_root,
+                trusted_staging_root=STAGING_DIR,
             )
             conn.commit()
-            RAW_DIR.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(staged_bytes)
-            qa_result = validate_synthesized_transcript(output_path)
-            source_label = (
-                source.name if source.name == "issuer_ir" else f"aggregator_{source.name}"
-            )
-            index_manager.register_transcript(
-                canonical,
-                spec.year,
-                qlabel,
-                source=source_label,
-                filepath=output_path.name,
-                has_qa=True,
-                qa_status=qa_result.status.value,
-                qa_details=qa_result.model_dump(mode="json"),
-                acquisition_receipt=acquired_artifact.model_dump(mode="json"),
-            )
-            attempts.append(FetchQaAttempt(source.name, FetchQaAttemptStatus.ACQUIRED, last_key))
-            result = FetchQaResult(
-                ticker=canonical,
-                year=spec.year,
-                quarter=spec.quarter,
-                output_path=output_path,
-                source_name=hit.source_name,
-                page_url=hit.page_url,
-                authorization=authorization,
-                acquired_artifact=acquired_artifact,
-            )
-            return FetchQaOutcome(FetchQaStatus.ACQUIRED, last_key, tuple(attempts), result)
+        _restore_replay(
+            spec,
+            output_path=output_path,
+            artifact=acquired_artifact,
+            staged_bytes=staged_bytes,
+        )
+        attempts.append(FetchQaAttempt(source.name, FetchQaAttemptStatus.ACQUIRED, last_key))
+        result = FetchQaResult(
+            ticker=canonical,
+            year=spec.year,
+            quarter=spec.quarter,
+            output_path=output_path,
+            source_name=hit.source_name,
+            page_url=hit.page_url,
+            authorization=authorization,
+            acquired_artifact=acquired_artifact,
+        )
+        return FetchQaOutcome(FetchQaStatus.ACQUIRED, last_key, tuple(attempts), result)
 
     if attempts and all(item.status is FetchQaAttemptStatus.DENIED for item in attempts):
         return FetchQaOutcome(FetchQaStatus.DENIED, last_key, tuple(attempts))

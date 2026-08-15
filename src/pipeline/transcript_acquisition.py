@@ -11,12 +11,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import tempfile
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -43,6 +45,7 @@ from transcripts.acquisition_semantics import (
     TranscriptReportingStatus,
     TranscriptStoredTarget,
     authorize_transcript_acquisition_request,
+    transcript_authorization_idempotency_key,
     validate_transcript_acquisition_authorization,
 )
 from transcripts.immutable_staging import (
@@ -59,6 +62,7 @@ _STRICT_FROZEN = ConfigDict(
 )
 COMBINED_SOURCE_REGIME_IDENTITY = receipt_identity(contract_for(SourceRegime.COMBINED))
 MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024
+_UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
 
 class TranscriptAcquisitionDeniedError(PermissionError):
@@ -74,6 +78,7 @@ class AuthorizedTranscriptArtifact(BaseModel):
     authorization: TranscriptAcquisitionAuthorization
     document_id: int | None = Field(default=None, ge=1)
     source_url: str | None
+    canonical_document_path: Path
     source_path: Path
     staged: StagedTranscriptArtifact
 
@@ -84,6 +89,27 @@ class AuthorizedTranscriptArtifact(BaseModel):
             raise ValueError("artifact requires an authorized acquisition receipt")
         if self.source_path != self.staged.source_path:
             raise ValueError("artifact source path does not match staged provenance")
+        relative = self.canonical_document_path
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise ValueError("canonical document path must be repository-relative")
+        request = authorization.request
+        expected_name = (
+            f"{request.canonical_ticker}_Q{request.fiscal_quarter}_{request.fiscal_year}.txt"
+        )
+        if relative.name != expected_name:
+            raise ValueError("canonical document path does not match authorized target")
+        if self.document_id is None and relative.parts[:2] != ("transcripts", "raw"):
+            raise ValueError("new acquisition must target the canonical raw transcript directory")
+        if self.source_url is not None:
+            parsed = urlsplit(self.source_url)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.fragment
+            ):
+                raise ValueError("transcript source URL must be a public HTTPS URL")
         return self
 
     @property
@@ -187,6 +213,7 @@ def _stage_authorized_file(
     expected_sha256: str,
     expected_size_bytes: int,
     source_url: str | None,
+    canonical_document_path: Path,
     document_id: int | None,
 ) -> AuthorizedTranscriptArtifact:
     validated = validate_transcript_acquisition_authorization(authorization)
@@ -203,6 +230,7 @@ def _stage_authorized_file(
         authorization=validated,
         document_id=document_id,
         source_url=source_url,
+        canonical_document_path=canonical_document_path,
         source_path=staged.source_path,
         staged=staged,
     )
@@ -214,6 +242,7 @@ def stage_authorized_payload(
     payload: bytes,
     private_root: Path,
     source_url: str | None,
+    canonical_document_path: Path,
 ) -> AuthorizedTranscriptArtifact:
     """Stage acquired response bytes only after the exact provider is authorized."""
 
@@ -241,6 +270,7 @@ def stage_authorized_payload(
             expected_sha256=hashlib.sha256(payload).hexdigest(),
             expected_size_bytes=len(payload),
             source_url=source_url,
+            canonical_document_path=canonical_document_path,
             document_id=None,
         )
     finally:
@@ -252,27 +282,74 @@ def read_authorized_transcript(
     artifact: AuthorizedTranscriptArtifact,
     *,
     project_root: Path,
+    trusted_staging_root: Path,
 ) -> bytes:
     """Revalidate identity and consume only the immutable staged snapshot."""
 
-    del project_root  # reserved for persisted-path containment validation below
     validated = AuthorizedTranscriptArtifact.model_validate(artifact, strict=True)
     current = authorize_transcript_request(conn, validated.authorization.request)
     if current != validated.authorization:
         raise TranscriptAcquisitionDeniedError(
             "transcript authorization no longer matches stored policy"
         )
+    root = project_root.resolve(strict=True)
+    trusted_root = trusted_staging_root.resolve(strict=True)
+    trusted_root_stat = trusted_root.stat()
+    canonical_path = (root / validated.canonical_document_path).resolve()
+    try:
+        canonical_path.relative_to(root)
+    except ValueError as exc:
+        raise TranscriptAcquisitionDeniedError(
+            "canonical transcript path escapes the trusted project root"
+        ) from exc
     staged = validated.staged
+    expected_source_path = staged.source_path
+    expected_source_device = staged.source_device
+    expected_source_inode = staged.source_inode
+    expected_sha256 = staged.sha256
+    expected_size_bytes = staged.size_bytes
+    if validated.document_id is not None:
+        row = conn.execute(
+            "SELECT ticker,source_type,doc_type,file_path,sha256,raw_bytes_size,source_url "
+            "FROM documents WHERE id=?",
+            (validated.document_id,),
+        ).fetchone()
+        request = validated.authorization.request
+        if row is None or (
+            str(row["ticker"]).upper() != request.canonical_ticker
+            or str(row["source_type"]) != SourceType.IR_DOC.value
+            or str(row["doc_type"]) != DocType.IR_TRANSCRIPT.value
+            or Path(str(row["file_path"])) != validated.canonical_document_path
+            or str(row["sha256"]) != validated.sha256
+            or int(row["raw_bytes_size"]) != validated.size_bytes
+            or (str(row["source_url"]) if row["source_url"] is not None else None)
+            != validated.source_url
+        ):
+            raise TranscriptAcquisitionDeniedError(
+                "authorized transcript artifact does not match its canonical document row"
+            )
+        expected_source_path = canonical_path.resolve(strict=True)
+        source_stat = expected_source_path.stat()
+        expected_source_device = int(source_stat.st_dev)
+        expected_source_inode = int(source_stat.st_ino)
+        expected_sha256 = str(row["sha256"])
+        expected_size_bytes = int(row["raw_bytes_size"])
+    else:
+        source_parent = staged.source_path.resolve().parent
+        if source_parent != trusted_root.parent:
+            raise TranscriptAcquisitionDeniedError(
+                "acquired transcript source is outside the trusted staging namespace"
+            )
     return read_staged_transcript(
         staged,
-        trusted_staging_root=staged.staging_root,
-        trusted_staging_root_device=staged.staging_root_device,
-        trusted_staging_root_inode=staged.staging_root_inode,
-        expected_source_path=staged.source_path,
-        expected_source_device=staged.source_device,
-        expected_source_inode=staged.source_inode,
-        expected_sha256=staged.sha256,
-        expected_size_bytes=staged.size_bytes,
+        trusted_staging_root=trusted_root,
+        trusted_staging_root_device=int(trusted_root_stat.st_dev),
+        trusted_staging_root_inode=int(trusted_root_stat.st_ino),
+        expected_source_path=expected_source_path,
+        expected_source_device=expected_source_device,
+        expected_source_inode=expected_source_inode,
+        expected_sha256=expected_sha256,
+        expected_size_bytes=expected_size_bytes,
     )
 
 
@@ -281,11 +358,146 @@ def _canonical_json(payload: object) -> str:
 
 
 def _durable_artifact_json(artifact: AuthorizedTranscriptArtifact) -> str:
-    return _canonical_json(artifact.model_dump(mode="json"))
+    payload = artifact.model_dump(mode="json")
+    payload["canonical_document_path"] = artifact.canonical_document_path.as_posix()
+    return _canonical_json(payload)
 
 
 def _receipt_id(artifact_json: str) -> str:
     return hashlib.sha256(artifact_json.encode("utf-8")).hexdigest()
+
+
+def project_root_for_database(database_path: str | os.PathLike[str]) -> Path:
+    """Derive the trusted repository root from the canonical database location."""
+
+    path = Path(database_path).resolve()
+    return path.parent.parent if path.parent.name.lower() == "data" else path.parent
+
+
+def _receipt_paths_are_safe(
+    artifact: AuthorizedTranscriptArtifact,
+    *,
+    project_root: Path,
+) -> bool:
+    trusted_root = (project_root / ".tmp" / "transcript-acquisition").resolve()
+    staged = artifact.staged
+    try:
+        source = staged.source_path.resolve()
+        staging_root = staged.staging_root.resolve()
+        staged_path = staged.staged_path.resolve()
+        canonical = (project_root / artifact.canonical_document_path).resolve()
+        canonical.relative_to(project_root)
+        if staging_root != trusted_root:
+            return False
+        staged_path.relative_to(trusted_root)
+        if staged_path != trusted_root / f"{artifact.sha256}.transcript":
+            return False
+        if artifact.document_id is None:
+            source.relative_to(trusted_root.parent)
+        else:
+            source.relative_to(project_root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def register_transcript_receipt_sqlite_functions(
+    conn: sqlite3.Connection,
+    *,
+    database_path: str | os.PathLike[str],
+) -> None:
+    """Register deterministic validation used by the receipt INSERT trigger."""
+
+    project_root = project_root_for_database(database_path)
+
+    def validate(
+        receipt_id: object,
+        idempotency_key: object,
+        document_id: object,
+        canonical_ticker: object,
+        fiscal_year: object,
+        fiscal_quarter: object,
+        canonical_document_path: object,
+        artifact_sha256: object,
+        artifact_size_bytes: object,
+        source_url: object,
+        provider: object,
+        source_type: object,
+        document_type: object,
+        source_regime: object,
+        source_regime_contract_sha256: object,
+        authorization_json: object,
+        artifact_json: object,
+        recorded_at: object,
+    ) -> int:
+        try:
+            if not isinstance(authorization_json, str) or not isinstance(artifact_json, str):
+                return 0
+            authorization = TranscriptAcquisitionAuthorization.model_validate_json(
+                authorization_json
+            )
+            authorization = validate_transcript_acquisition_authorization(authorization)
+            artifact = AuthorizedTranscriptArtifact.model_validate_json(artifact_json)
+            if artifact.authorization != authorization:
+                return 0
+            request = authorization.request
+            scalar_values = (
+                receipt_id,
+                idempotency_key,
+                document_id,
+                canonical_ticker,
+                fiscal_year,
+                fiscal_quarter,
+                canonical_document_path,
+                artifact_sha256,
+                artifact_size_bytes,
+                source_url,
+                provider,
+                source_type,
+                document_type,
+                source_regime,
+                source_regime_contract_sha256,
+            )
+            expected_values = (
+                _receipt_id(_durable_artifact_json(artifact)),
+                transcript_authorization_idempotency_key(request),
+                artifact.document_id,
+                request.canonical_ticker,
+                request.fiscal_year,
+                request.fiscal_quarter,
+                artifact.canonical_document_path.as_posix(),
+                artifact.sha256,
+                artifact.size_bytes,
+                artifact.source_url,
+                request.provider.value,
+                request.source_type.value,
+                request.document_type.value,
+                request.source_regime_identity.regime.value,
+                request.source_regime_identity.contract_sha256,
+            )
+            if scalar_values != expected_values:
+                return 0
+            if authorization_json != _canonical_json(authorization.model_dump(mode="json")):
+                return 0
+            if artifact_json != _durable_artifact_json(artifact):
+                return 0
+            if not isinstance(recorded_at, str) or _UTC_TIMESTAMP.fullmatch(recorded_at) is None:
+                return 0
+            parsed_recorded_at = datetime.strptime(recorded_at, "%Y-%m-%dT%H:%M:%S.%fZ")
+            if parsed_recorded_at.tzinfo is not None:
+                return 0
+            if not _receipt_paths_are_safe(artifact, project_root=project_root):
+                return 0
+        except (OSError, TypeError, ValueError):
+            return 0
+        return 1
+
+    conn.create_function(
+        "transcript_receipt_valid",
+        18,
+        validate,
+        deterministic=True,
+    )
 
 
 def persist_authorized_transcript_artifact(
@@ -293,11 +505,17 @@ def persist_authorized_transcript_artifact(
     artifact: AuthorizedTranscriptArtifact,
     *,
     project_root: Path,
+    trusted_staging_root: Path,
 ) -> str:
     """Append or exactly replay one durable artifact receipt."""
 
     validated = AuthorizedTranscriptArtifact.model_validate(artifact, strict=True)
-    payload = read_authorized_transcript(conn, validated, project_root=project_root)
+    payload = read_authorized_transcript(
+        conn,
+        validated,
+        project_root=project_root,
+        trusted_staging_root=trusted_staging_root,
+    )
     if hashlib.sha256(payload).hexdigest() != validated.sha256:
         raise TranscriptAcquisitionDeniedError("staged transcript digest changed before receipt")
     authorization_json = _canonical_json(validated.authorization.model_dump(mode="json"))
@@ -307,6 +525,10 @@ def persist_authorized_transcript_artifact(
     values = (
         validated.authorization.idempotency_key,
         validated.document_id,
+        request.canonical_ticker,
+        request.fiscal_year,
+        request.fiscal_quarter,
+        validated.canonical_document_path.as_posix(),
         validated.sha256,
         validated.size_bytes,
         validated.source_url,
@@ -319,7 +541,8 @@ def persist_authorized_transcript_artifact(
         artifact_json,
     )
     existing = conn.execute(
-        "SELECT idempotency_key,document_id,artifact_sha256,artifact_size_bytes,"
+        "SELECT idempotency_key,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
+        "canonical_document_path,artifact_sha256,artifact_size_bytes,"
         "source_url,provider,source_type,document_type,source_regime,"
         "source_regime_contract_sha256,authorization_json,artifact_json "
         "FROM transcript_acquisition_receipts WHERE receipt_id=?",
@@ -331,10 +554,11 @@ def persist_authorized_transcript_artifact(
         return receipt_id
     conn.execute(
         "INSERT INTO transcript_acquisition_receipts "
-        "(receipt_id,idempotency_key,document_id,artifact_sha256,artifact_size_bytes,"
+        "(receipt_id,idempotency_key,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
+        "canonical_document_path,artifact_sha256,artifact_size_bytes,"
         "source_url,provider,source_type,document_type,source_regime,"
         "source_regime_contract_sha256,authorization_json,artifact_json,recorded_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             receipt_id,
             *values,
@@ -349,13 +573,15 @@ def load_authorized_transcript_replay(
     *,
     request: TranscriptAcquisitionRequest,
     project_root: Path,
+    trusted_staging_root: Path,
 ) -> AuthorizedTranscriptArtifact | None:
     """Load and revalidate the latest exact durable receipt for one target."""
 
     current = authorize_transcript_request(conn, request)
     try:
         row = conn.execute(
-            "SELECT receipt_id,document_id,artifact_sha256,artifact_size_bytes,source_url,"
+            "SELECT receipt_id,document_id,canonical_ticker,fiscal_year,fiscal_quarter,"
+            "canonical_document_path,artifact_sha256,artifact_size_bytes,source_url,"
             "provider,source_type,document_type,source_regime,source_regime_contract_sha256,"
             "authorization_json,artifact_json FROM transcript_acquisition_receipts "
             "WHERE idempotency_key=? ORDER BY recorded_at DESC,receipt_id DESC LIMIT 1",
@@ -374,6 +600,10 @@ def load_authorized_transcript_replay(
     artifact_json = _durable_artifact_json(artifact)
     durable_values = (
         artifact.document_id,
+        artifact.authorization.request.canonical_ticker,
+        artifact.authorization.request.fiscal_year,
+        artifact.authorization.request.fiscal_quarter,
+        artifact.canonical_document_path.as_posix(),
         artifact.sha256,
         artifact.size_bytes,
         artifact.source_url,
@@ -393,7 +623,12 @@ def load_authorized_transcript_replay(
         raise TranscriptAcquisitionDeniedError(
             "stored transcript receipt does not exactly match target"
         )
-    read_authorized_transcript(conn, artifact, project_root=project_root)
+    read_authorized_transcript(
+        conn,
+        artifact,
+        project_root=project_root,
+        trusted_staging_root=trusted_staging_root,
+    )
     return artifact
 
 
@@ -402,6 +637,7 @@ def require_persisted_authorized_transcript_artifact(
     artifact: AuthorizedTranscriptArtifact,
     *,
     project_root: Path,
+    trusted_staging_root: Path,
 ) -> AuthorizedTranscriptArtifact:
     """Require exact durable provenance before canonical transcript writes."""
 
@@ -410,6 +646,7 @@ def require_persisted_authorized_transcript_artifact(
         conn,
         request=validated.authorization.request,
         project_root=project_root,
+        trusted_staging_root=trusted_staging_root,
     )
     if persisted != validated:
         raise TranscriptAcquisitionDeniedError(
@@ -465,7 +702,7 @@ def stage_pending_issuer_transcripts(
         "AND id NOT IN (SELECT document_id FROM transcripts) ORDER BY id",
         (SourceType.IR_DOC.value, DocType.IR_TRANSCRIPT.value, *normalized),
     ).fetchall()
-    planned: list[tuple[sqlite3.Row, TranscriptAcquisitionAuthorization, Path, int, int]] = []
+    planned: list[tuple[sqlite3.Row, TranscriptAcquisitionAuthorization, Path, Path, int, int]] = []
     for row in rows:
         name = Path(str(row["file_path"])).name
         parts = name.rsplit("_", 2)
@@ -497,12 +734,12 @@ def stage_pending_issuer_transcripts(
                 "persisted transcript path escapes project root"
             ) from exc
         expected_size = int(row["raw_bytes_size"])
-        planned.append((row, authorization, source_path, expected_size, int(row["id"])))
+        planned.append((row, authorization, source_path, relative, expected_size, int(row["id"])))
 
     if planned:
         private_root.mkdir(parents=True, exist_ok=True)
     artifacts: dict[int, AuthorizedTranscriptArtifact] = {}
-    for row, authorization, source_path, expected_size, document_id in planned:
+    for row, authorization, source_path, relative, expected_size, document_id in planned:
         artifacts[document_id] = _stage_authorized_file(
             authorization,
             source_path=source_path,
@@ -510,6 +747,7 @@ def stage_pending_issuer_transcripts(
             expected_sha256=str(row["sha256"]),
             expected_size_bytes=expected_size,
             source_url=str(row["source_url"]) if row["source_url"] is not None else None,
+            canonical_document_path=relative,
             document_id=document_id,
         )
     return artifacts
@@ -522,7 +760,9 @@ __all__ = [
     "authorize_transcript_request",
     "load_authorized_transcript_replay",
     "persist_authorized_transcript_artifact",
+    "project_root_for_database",
     "read_authorized_transcript",
+    "register_transcript_receipt_sqlite_functions",
     "require_authorized_transcript_request",
     "require_persisted_authorized_transcript_artifact",
     "stage_authorized_payload",

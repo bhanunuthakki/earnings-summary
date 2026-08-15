@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from urllib.parse import urlparse
 
 import yt_dlp
@@ -47,7 +47,6 @@ from alias_manager import resolve_ticker  # noqa: E402
 from compute.transcript_ingest import (  # noqa: E402
     QASectionStatus,
     detect_qa_section,
-    qa_status_to_db_value,
 )
 from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url  # noqa: E402
 from log_redact import redact  # noqa: E402
@@ -204,7 +203,7 @@ def _select_audio_url(
 
 def _enforce_audio_policy(
     authorization: TranscriptAcquisitionAuthorization | None = None,
-) -> None:
+) -> NoReturn:
     """Fail closed before every downloader/search boundary; webcasts are excluded."""
 
     if (
@@ -479,20 +478,9 @@ def _ensure_qa_recorded(
         # File on disk but not in index — register with a stub source so
         # validate_transcript can route. Caller will overwrite with real source
         # if it just produced the file; backfill leaves "unknown_legacy".
-        index_manager.register_transcript(
-            canonical_ticker,
-            year,
-            qlabel,
-            source="unknown_legacy",
-            filepath=output_path.name,
-            has_qa=None,
+        raise AudioCollectionPolicyError(
+            f"existing audio transcript lacks an authorized acquisition receipt: {output_path}"
         )
-        entry = cast(
-            "dict[str, object] | None",
-            index_manager.has_transcript(canonical_ticker, year, qlabel),
-        )
-        if entry is None:
-            raise RuntimeError(f"failed to register existing transcript {output_path}")
 
     # Backfill has_qa if missing — legacy entries from before Q&A detection landed.
     if entry.get("has_qa") is None:
@@ -500,22 +488,13 @@ def _ensure_qa_recorded(
             section = detect_qa_section(output_path.read_text(encoding="utf-8"))
         except OSError:
             section = None
-        if section is not None:
-            index_manager.register_transcript(
-                canonical_ticker,
-                year,
-                qlabel,
-                source=str(entry.get("source") or "unknown_legacy"),
-                filepath=output_path.name,
-                has_qa=qa_status_to_db_value(section.status),
+        if section is not None and section.status is QASectionStatus.ABSENT:
+            sys.stderr.write(
+                f"WARN missing_qa: {canonical_ticker} {qlabel} {year} — "
+                f"existing transcript has no analyst Q&A signals "
+                f"(signals={list(section.signals)}); replace with a full-call "
+                f"source before running downstream extraction.\n"
             )
-            if section.status is QASectionStatus.ABSENT:
-                sys.stderr.write(
-                    f"WARN missing_qa: {canonical_ticker} {qlabel} {year} — "
-                    f"existing transcript has no analyst Q&A signals "
-                    f"(signals={list(section.signals)}); replace with a full-call "
-                    f"source before running downstream extraction.\n"
-                )
 
     qa_status_raw = entry.get("qa_status")
     qa_status = qa_status_raw if isinstance(qa_status_raw, str) else None
@@ -631,7 +610,6 @@ def fetch_and_transcribe(
     #       can still be prepared-remarks only; downstream Say-Do / commitments
     #       extraction needs to know.
     qa_result = validate_audio_transcript(output_path)
-    qa_details_payload = qa_result.model_dump(mode="json")
     qa_section = detect_qa_section(output_path.read_text(encoding="utf-8"))
     if qa_section.status is QASectionStatus.ABSENT:
         sys.stderr.write(
@@ -642,15 +620,8 @@ def fetch_and_transcribe(
             f"recording before running Say-Do/commitments mining.\n"
         )
 
-    index_manager.register_transcript(
-        canonical_ticker,
-        spec.year,
-        qlabel,
-        source=source.value,
-        filepath=output_path.name,
-        has_qa=qa_status_to_db_value(qa_section.status),
-        qa_status=qa_result.status.value,
-        qa_details=qa_details_payload,
+    raise AudioCollectionPolicyError(
+        "audio transcript indexing requires an authorized acquisition receipt"
     )
 
     if qa_result.status == QaStatus.OK:

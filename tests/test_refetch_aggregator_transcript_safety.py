@@ -109,7 +109,7 @@ def test_refetch_direct_denial_precedes_network_and_transcript_writes(
     )
     monkeypatch.setattr(
         transcript_ingest,
-        "insert_segments",
+        "_insert_segments",
         lambda *_args, **_kwargs: pytest.fail("denied refetch crossed persistence"),
     )
     with sqlite3.connect(db_path) as conn:

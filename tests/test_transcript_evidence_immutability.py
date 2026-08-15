@@ -219,13 +219,13 @@ def test_per_file_savepoint_rolls_back_partial_writes_but_keeps_failure_receipt(
     (raw / "NU_Q1_2026.txt").write_text(_body("ORIGINAL"), encoding="utf-8")
     monkeypatch.setattr(mod, "PROJECT_ROOT", repo_root)
     monkeypatch.setattr(mod, "_TRANSCRIPT_DIRS", (processed, raw))
-    original_insert = transcript_ingest.insert_segments
+    original_insert = transcript_ingest._insert_segments
 
     def partial_then_fail(*args: Any, **kwargs: Any) -> int:
         original_insert(*args, **kwargs)
         raise RuntimeError("injected after partial writes")
 
-    monkeypatch.setattr(transcript_ingest, "insert_segments", partial_then_fail)
+    monkeypatch.setattr(transcript_ingest, "_insert_segments", partial_then_fail)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -242,7 +242,7 @@ def test_per_file_savepoint_rolls_back_partial_writes_but_keeps_failure_receipt(
 
 
 def test_ingest_parses_the_same_snapshot_bytes_used_for_hash(tmp_path: Path) -> None:
-    from compute.transcript_ingest import ingest_one
+    from compute.transcript_ingest import _ingest_one
 
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -271,7 +271,7 @@ def test_ingest_parses_the_same_snapshot_bytes_used_for_hash(tmp_path: Path) -> 
     path = tmp_path / "NU_Q1_2026.txt"
     snapshot = _body("SNAPSHOT").encode()
     path.write_bytes(_body("MUTATED").encode())
-    result = ingest_one(
+    result = _ingest_one(
         conn,
         file_path=path,
         project_root=tmp_path,

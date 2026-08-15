@@ -281,7 +281,7 @@ def test_index_entries_are_updated_after_promotion(
 
     # Seed both indexes with raw/ entries — the state a freshly-fetched file
     # would leave behind after fetch_qa_transcript ran.
-    index_manager.register_transcript(
+    index_manager._register_transcript(
         "GOOG",
         2025,
         "Q1",

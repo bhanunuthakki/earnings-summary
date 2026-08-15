@@ -13,11 +13,11 @@ from pathlib import Path
 
 from compute.transcript_ingest import (
     SpeakerTurn,
+    _ingest_one,
+    _insert_document,
+    _insert_segments,
+    _insert_transcript,
     find_transcript_for_period,
-    ingest_one,
-    insert_document,
-    insert_segments,
-    insert_transcript,
 )
 from models.facts import FiscalPeriodType
 
@@ -92,7 +92,7 @@ def _seed_transcript(
     file_path = project_root / "transcripts" / "processed" / file_name
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(f"seed content for {file_name}", encoding="utf-8")
-    doc_id = insert_document(
+    doc_id = _insert_document(
         conn,
         ticker=ticker,
         file_path=file_path,
@@ -100,7 +100,7 @@ def _seed_transcript(
         period_end=period_end,
         project_root=project_root,
     )
-    transcript_id = insert_transcript(
+    transcript_id = _insert_transcript(
         conn,
         document_id=doc_id,
         ticker=ticker,
@@ -108,7 +108,7 @@ def _seed_transcript(
         period_end=period_end,
         source=source,
     )
-    insert_segments(
+    _insert_segments(
         conn,
         transcript_id=transcript_id,
         turns=[SpeakerTurn(speaker="Speaker", text="turn") for _ in range(segment_count)],
@@ -146,7 +146,7 @@ def test_no_conflict_inserts_normally(tmp_path: Path) -> None:
     conn = _conn()
     raw_path = _write_pdf_like_txt(tmp_path, "transcripts/raw/NVDA_Q1_2025.txt", _SYNTH_ROIC_BODY)
 
-    result = ingest_one(
+    result = _ingest_one(
         conn, file_path=raw_path, project_root=tmp_path, tracked_tickers=frozenset({"NVDA"})
     )
 
@@ -174,7 +174,7 @@ def test_higher_tier_existing_row_wins_and_new_version_is_preserved(tmp_path: Pa
     )
 
     raw_path = _write_pdf_like_txt(tmp_path, "transcripts/raw/NVDA_Q1_2025.txt", _SYNTH_ROIC_BODY)
-    result = ingest_one(
+    result = _ingest_one(
         conn, file_path=raw_path, project_root=tmp_path, tracked_tickers=frozenset({"NVDA"})
     )
 
@@ -215,7 +215,7 @@ def test_lower_tier_existing_row_is_preserved_as_superseded(tmp_path: Path) -> N
 
     raw_path = _write_pdf_like_txt(tmp_path, "transcripts/raw/NVDA_Q1_2025.txt", _SYNTH_ROIC_BODY)
 
-    result = ingest_one(
+    result = _ingest_one(
         conn, file_path=raw_path, project_root=tmp_path, tracked_tickers=frozenset({"NVDA"})
     )
 
@@ -262,7 +262,7 @@ def test_same_tier_richer_fetch_supersedes_thin_stub(tmp_path: Path) -> None:
 
     raw_path = _write_pdf_like_txt(tmp_path, "transcripts/raw/NVDA_Q1_2025.txt", _SYNTH_ROIC_BODY)
 
-    result = ingest_one(
+    result = _ingest_one(
         conn, file_path=raw_path, project_root=tmp_path, tracked_tickers=frozenset({"NVDA"})
     )
 
@@ -304,7 +304,7 @@ def test_same_tier_thinner_fetch_is_skipped(tmp_path: Path) -> None:
     )
     raw_path = _write_pdf_like_txt(tmp_path, "transcripts/raw/NVDA_Q1_2025.txt", thin_body)
 
-    result = ingest_one(
+    result = _ingest_one(
         conn, file_path=raw_path, project_root=tmp_path, tracked_tickers=frozenset({"NVDA"})
     )
 
@@ -336,12 +336,12 @@ def test_byte_identical_refetch_still_short_circuits_before_the_guard(tmp_path: 
     conn = _conn()
     raw_path = _write_pdf_like_txt(tmp_path, "transcripts/raw/NVDA_Q1_2025.txt", _SYNTH_ROIC_BODY)
 
-    first = ingest_one(
+    first = _ingest_one(
         conn, file_path=raw_path, project_root=tmp_path, tracked_tickers=frozenset({"NVDA"})
     )
     assert first is not None and not first.skipped_existing
 
-    second = ingest_one(
+    second = _ingest_one(
         conn, file_path=raw_path, project_root=tmp_path, tracked_tickers=frozenset({"NVDA"})
     )
     assert second is not None

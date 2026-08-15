@@ -35,7 +35,9 @@ def _stored_company(path: Path, *, role: str = "portfolio") -> None:
         conn.execute(
             "CREATE TABLE transcript_acquisition_receipts ("
             "receipt_id TEXT PRIMARY KEY,idempotency_key TEXT NOT NULL,"
-            "document_id INTEGER,artifact_sha256 TEXT NOT NULL,"
+            "document_id INTEGER,canonical_ticker TEXT NOT NULL,fiscal_year INTEGER NOT NULL,"
+            "fiscal_quarter INTEGER NOT NULL,canonical_document_path TEXT NOT NULL,"
+            "artifact_sha256 TEXT NOT NULL,"
             "artifact_size_bytes INTEGER NOT NULL,source_url TEXT,provider TEXT NOT NULL,"
             "source_type TEXT NOT NULL,document_type TEXT NOT NULL,source_regime TEXT NOT NULL,"
             "source_regime_contract_sha256 TEXT NOT NULL,authorization_json TEXT NOT NULL,"
@@ -51,9 +53,9 @@ def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
 
     db_path = tmp_path / "portfolio.db"
     _stored_company(db_path)
-    fetch.RAW_DIR = tmp_path / "raw"
-    fetch.STAGING_DIR = tmp_path / "staging"
-    fetch.STAGING_DIR.mkdir()
+    fetch.RAW_DIR = tmp_path / "transcripts" / "raw"
+    fetch.STAGING_DIR = tmp_path / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
     calls: list[str] = []
     registrations: list[dict[str, Any]] = []
 
@@ -110,7 +112,7 @@ def test_fetch_qa_calls_only_authorized_issuer_and_replays_without_side_effects(
     assert first.result is not None
     assert first.result.authorization.request.provider is TranscriptProvider.ISSUER_IR
     assert calls == ["issuer_ir"]
-    assert len(registrations) == 1
+    assert len(registrations) == 2
     assert second.status is fetch.FetchQaStatus.IDEMPOTENT_REPLAY
 
 
@@ -122,8 +124,8 @@ def test_fetch_qa_denial_has_zero_network_and_zero_persistence(
 
     db_path = tmp_path / "portfolio.db"
     _stored_company(db_path, role="watchlist")
-    fetch.RAW_DIR = tmp_path / "raw"
-    fetch.STAGING_DIR = tmp_path / "staging"
+    fetch.RAW_DIR = tmp_path / "transcripts" / "raw"
+    fetch.STAGING_DIR = tmp_path / ".tmp" / "transcript-acquisition"
 
     monkeypatch.setattr(
         fetch,
@@ -154,6 +156,50 @@ def test_fetch_qa_denial_has_zero_network_and_zero_persistence(
     assert not fetch.STAGING_DIR.exists()
 
 
+def test_fetch_qa_denial_leaves_database_and_sidecars_byte_identical(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+
+    db_path = migrated_db(tmp_path / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','watchlist','12-31')"
+        )
+    before = db_path.read_bytes()
+    before_sidecars = {
+        suffix: (db_path.parent / f"{db_path.name}{suffix}").read_bytes()
+        for suffix in ("-wal", "-shm")
+        if (db_path.parent / f"{db_path.name}{suffix}").exists()
+    }
+    monkeypatch.setattr(
+        fetch,
+        "SOURCES",
+        tuple(
+            replace(source, fetch_qa=lambda *_args: pytest.fail("network boundary crossed"))
+            for source in fetch.SOURCES
+        ),
+    )
+
+    outcome = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        db_path=db_path,
+        owner_requested=False,
+        as_of=date(2026, 8, 12),
+    )
+
+    assert outcome.status is fetch.FetchQaStatus.DENIED
+    assert db_path.read_bytes() == before
+    assert {
+        suffix: (db_path.parent / f"{db_path.name}{suffix}").read_bytes()
+        for suffix in ("-wal", "-shm")
+        if (db_path.parent / f"{db_path.name}{suffix}").exists()
+    } == before_sidecars
+
+
 def test_refetch_denial_precedes_work_manifest_and_accounting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -172,7 +218,11 @@ def test_refetch_denial_precedes_work_manifest_and_accounting(
         lambda *_args, **_kwargs: pytest.fail("denied refetch crossed provider/persistence work"),
     )
     monkeypatch.setattr(sys, "argv", ["refetch_aggregator_transcripts.py", "--sleep-s", "0"])
-    monkeypatch.setattr(refetch, "open_db", lambda _path: sqlite3.connect(db_path))
+    monkeypatch.setattr(
+        refetch,
+        "connect_sqlite",
+        lambda *_args, **_kwargs: sqlite3.connect(db_path),
+    )
 
     assert refetch.main() == 2
     assert not manifest_dir.exists()
@@ -300,7 +350,97 @@ def test_staged_existing_issuer_bytes_are_exact_and_replay_is_content_addressed(
         artifact = first[1]
         assert artifact.authorization.status is TranscriptAuthorizationStatus.AUTHORIZED
         assert first == second
-        assert read_authorized_transcript(conn, artifact, project_root=repo_root) == payload
+        assert (
+            read_authorized_transcript(
+                conn,
+                artifact,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+            == payload
+        )
+
+
+def test_same_hash_is_unique_and_artifact_cannot_cross_document_identity(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from pipeline.transcript_acquisition import (
+        TranscriptAcquisitionDeniedError,
+        persist_authorized_transcript_artifact,
+        stage_pending_issuer_transcripts,
+    )
+
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    payloads = {
+        "ACME": b"Operator\nAcme bytes\nAnalyst\nQuestion?",
+        "BETA": b"Operator\nBeta bytes\nAnalyst\nQuestion?",
+    }
+    paths = {
+        "ACME": repo_root / "ir_documents" / "ACME_Q2_2026.txt",
+        "BETA": repo_root / "ir_documents" / "BETA_Q2_2026.txt",
+    }
+    for ticker, path in paths.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payloads[ticker])
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES (?,?,'portfolio','12-31')",
+            (("ACME", "Acme"), ("BETA", "Beta")),
+        )
+        for ticker in ("ACME", "BETA"):
+            conn.execute(
+                "INSERT INTO documents "
+                "(ticker,source_type,doc_type,file_path,sha256,raw_bytes_size,source_url,"
+                "fetch_status,fetched_at) VALUES (?,?,?,?,?,?,?,'ok','2026-08-12T00:00:00Z')",
+                (
+                    ticker,
+                    SourceType.IR_DOC.value,
+                    DocType.IR_TRANSCRIPT.value,
+                    f"ir_documents/{ticker}_Q2_2026.txt",
+                    hashlib.sha256(payloads[ticker]).hexdigest(),
+                    len(payloads[ticker]),
+                    f"https://{ticker.lower()}.example.invalid/transcript",
+                ),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match=r"documents\.sha256"):
+            conn.execute(
+                "INSERT INTO documents "
+                "(ticker,source_type,doc_type,file_path,sha256,raw_bytes_size,source_url,"
+                "fetch_status,fetched_at) VALUES (?,?,?,?,?,?,?,'ok','2026-08-12T00:00:00Z')",
+                (
+                    "BETA",
+                    SourceType.IR_DOC.value,
+                    DocType.IR_TRANSCRIPT.value,
+                    "ir_documents/BETA_Q2_2026.txt",
+                    hashlib.sha256(payloads["ACME"]).hexdigest(),
+                    len(payloads["ACME"]),
+                    "https://beta.example.invalid/transcript",
+                ),
+            )
+        artifacts = stage_pending_issuer_transcripts(
+            conn,
+            tickers=["ACME"],
+            project_root=repo_root,
+            private_root=staging_root,
+            entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
+            as_of=date(2026, 8, 12),
+        )
+        forged = artifacts[1].model_copy(update={"document_id": 2})
+        with pytest.raises(
+            TranscriptAcquisitionDeniedError,
+            match="canonical document row",
+        ):
+            persist_authorized_transcript_artifact(
+                conn,
+                forged,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
 
 
 def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
@@ -379,6 +519,141 @@ def test_authorized_fetch_persists_once_and_direct_ingest_replays_after_restart(
         assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 1
 
 
+def test_authorized_fetch_repairs_missing_raw_and_index_without_network_or_duplicate_receipt(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+    calls = 0
+
+    def issuer_hit(*_args: object) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            pytest.fail("durable replay crossed the network boundary")
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://issuer.example.invalid/transcript",
+            qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+            full_text_chars=50,
+        )
+
+    monkeypatch.setattr(fetch, "SOURCES", (replace(fetch.SOURCES[0], fetch_qa=issuer_hit),))
+    monkeypatch.setattr(
+        fetch,
+        "validate_synthesized_transcript",
+        lambda _path: SimpleNamespace(
+            status=QaStatus.OK,
+            issues=(),
+            model_dump=lambda **_kwargs: {"status": "ok"},
+        ),
+    )
+    registrations: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        fetch.index_manager,
+        "register_transcript",
+        lambda *_args, **kwargs: registrations.append(kwargs),
+    )
+    spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
+    first = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
+    assert first.result is not None
+    first.result.output_path.unlink()
+    registrations.clear()
+
+    replay = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
+
+    assert replay.status is fetch.FetchQaStatus.IDEMPOTENT_REPLAY
+    assert first.result.output_path.read_bytes()
+    assert calls == 1
+    assert len(registrations) == 1
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
+        )
+
+
+def test_authorized_fetch_replays_after_post_receipt_output_failure(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from execution import fetch_qa_transcript as fetch
+
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end) "
+            "VALUES ('ACME','Acme','portfolio','12-31')"
+        )
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+    calls = 0
+
+    def issuer_hit(*_args: object) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            pytest.fail("restart replay crossed the network boundary")
+        return fetch.AggregatorHit(
+            source_name="issuer_ir",
+            page_url="https://issuer.example.invalid/transcript",
+            qa_text="Operator\nWelcome.\n\nAnalyst\nQuestion?\n",
+            full_text_chars=50,
+        )
+
+    monkeypatch.setattr(fetch, "SOURCES", (replace(fetch.SOURCES[0], fetch_qa=issuer_hit),))
+    monkeypatch.setattr(
+        fetch,
+        "validate_synthesized_transcript",
+        lambda _path: SimpleNamespace(
+            status=QaStatus.OK,
+            issues=(),
+            model_dump=lambda **_kwargs: {"status": "ok"},
+        ),
+    )
+    monkeypatch.setattr(fetch.index_manager, "register_transcript", lambda *_args, **_kwargs: True)
+    original_restore = fetch._restore_replay
+    monkeypatch.setattr(
+        fetch,
+        "_restore_replay",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("simulated output failure")),
+    )
+    spec = fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2)
+
+    with pytest.raises(OSError, match="simulated output failure"):
+        fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
+        )
+    assert not (fetch.RAW_DIR / "ACME_Q2_2026.txt").exists()
+
+    monkeypatch.setattr(fetch, "_restore_replay", original_restore)
+    replay = fetch.fetch_qa(spec, db_path=db_path, owner_requested=False, as_of=date(2026, 8, 12))
+
+    assert replay.status is fetch.FetchQaStatus.IDEMPOTENT_REPLAY
+    assert (fetch.RAW_DIR / "ACME_Q2_2026.txt").read_bytes()
+    assert calls == 1
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM transcript_acquisition_receipts").fetchone()[0] == 1
+        )
+
+
 def test_transitive_production_entrypoint_scan_closes_unreceipted_writers() -> None:
     root = Path(__file__).resolve().parents[1]
     named = (
@@ -392,6 +667,16 @@ def test_transitive_production_entrypoint_scan_closes_unreceipted_writers() -> N
 
     production = tuple((root / "execution").glob("*.py")) + tuple((root / "src").rglob("*.py"))
     ingest_calls: list[tuple[Path, int]] = []
+    index_calls: list[tuple[Path, int]] = []
+    private_writer_calls: list[tuple[Path, int, str]] = []
+    private_writer_names = {
+        "_ingest_one",
+        "_ingest_existing_ir_transcript",
+        "_insert_document",
+        "_insert_transcript",
+        "_insert_segments",
+        "_register_transcript",
+    }
     for path in production:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -410,7 +695,36 @@ def test_transitive_production_entrypoint_scan_closes_unreceipted_writers() -> N
                     path,
                     node.lineno,
                 )
+            if name == "register_transcript":
+                index_calls.append((path, node.lineno))
+                assert any(keyword.arg == "acquisition_receipt" for keyword in node.keywords), (
+                    path,
+                    node.lineno,
+                )
+            if name in private_writer_names:
+                private_writer_calls.append((path, node.lineno, name))
     assert {path.name for path, _line in ingest_calls} == {
         "ingest_transcripts.py",
         "quarterly_refresh.py",
+    }
+    assert {path.name for path, _line in index_calls} == {"fetch_qa_transcript.py"}
+    assert {path.name for path, _line, _name in private_writer_calls} <= {
+        "transcript_ingest.py",
+        "index_manager.py",
+    }
+    compute_tree = ast.parse(
+        (root / "src" / "compute" / "transcript_ingest.py").read_text(encoding="utf-8")
+    )
+    forbidden_public_writers = {
+        "ingest_one",
+        "ingest_existing_ir_transcript",
+        "insert_document",
+        "insert_transcript",
+        "insert_segments",
+    }
+    assert not {
+        node.name
+        for node in compute_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in forbidden_public_writers
     }
