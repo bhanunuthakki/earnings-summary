@@ -213,7 +213,9 @@ def _register_transcript(
     updated_qa_details = (
         qa_details if qa_details is not None else (existing.get("qa_details") if existing else None)
     )
-    existing_acquisition_receipt = existing.get("acquisition_receipt") if existing else None
+    existing_acquisition_receipt = (
+        cast(object, existing.get("acquisition_receipt")) if existing else None
+    )
     updated_acquisition_receipt: IndexEntry | None = (
         acquisition_receipt
         if acquisition_receipt is not None
