@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -105,6 +106,20 @@ def _refresh(db: Path, fixture: str) -> macro.MacroRefreshReceipt:
         timeout_seconds=0.1,
         now=NOW,
     )
+
+
+def test_default_loader_rejects_non_https_endpoint_before_network() -> None:
+    forged = replace(NYFED_PROVIDER, path="file:///tmp/effr.json")
+
+    with pytest.raises(macro.MacroProviderFetchError, match="approved HTTPS URL"):
+        macro._default_nyfed_effr_loader(
+            REGISTRY["fed_funds"],
+            forged,
+            observed_at=NOW,
+            start_date=date(2026, 8, 13),
+            end_date=date(2026, 8, 14),
+            timeout_seconds=10.0,
+        )
 
 
 def test_default_registry_keeps_nyfed_unregistered_and_removes_treasury_proxy() -> None:

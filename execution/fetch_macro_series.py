@@ -25,7 +25,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -375,6 +375,15 @@ def _default_nyfed_effr_loader(
         "startDate": start_date.isoformat(),
         "endDate": end_date.isoformat(),
     }
+    parsed_endpoint = urlsplit(provider.path)
+    if (
+        parsed_endpoint.scheme != "https"
+        or parsed_endpoint.netloc != "markets.newyorkfed.org"
+        or parsed_endpoint.path != "/api/rates/unsecured/effr/search.json"
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
+        raise MacroProviderFetchError("New York Fed EFFR endpoint is not the approved HTTPS URL")
     request = Request(
         f"{provider.path}?{urlencode(query)}",
         headers={
@@ -383,7 +392,8 @@ def _default_nyfed_effr_loader(
         },
     )
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        # The exact HTTPS origin and path are validated immediately above.
+        with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310
             raw = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
     except (HTTPError, URLError, OSError, TimeoutError) as exc:
         raise MacroProviderFetchError(f"New York Fed EFFR request failed: {redact(exc)}") from None
