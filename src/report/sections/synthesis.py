@@ -21,10 +21,11 @@ import logging
 import re
 import sqlite3
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 
 from report.models import SectionStatus, SynthesisLensRow, SynthesisSection
+from report.render_clock import render_now
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -118,7 +119,7 @@ def build(
 
     db_path = repo_root / "data" / "portfolio.db"
     rows: list[SynthesisLensRow] = []
-    now = datetime.now(UTC)
+    now = render_now()
     stale_cutoff = now - timedelta(days=STALE_THRESHOLD_DAYS)
     # One short-lived connection, opened lazily only if a lens actually cites,
     # for resolving source_doc_ids → cite-mark chips (L12 static-prose citations).

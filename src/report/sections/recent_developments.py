@@ -31,6 +31,7 @@ from report.models import (
     RecentDevelopmentsSection,
     SectionStatus,
 )
+from report.render_clock import render_now
 from report.sections._common import budget_gate, budget_skip_missing, missing
 
 log = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ def build(
         )
     section = RecentDevelopmentsSection(
         status=SectionStatus.OK,
-        cached_at=datetime.now(UTC),
+        cached_at=render_now(),
         news_days_window=news_days,
         content_md=content_md,
     )
@@ -150,7 +151,7 @@ def _read_cache(path: Path, ttl_days: int) -> RecentDevelopmentsSection | None:
         return None
     if cached_at.tzinfo is None:
         cached_at = cached_at.replace(tzinfo=UTC)
-    age = datetime.now(UTC) - cached_at
+    age = render_now() - cached_at
     if age > timedelta(days=ttl_days):
         return None
     return RecentDevelopmentsSection(

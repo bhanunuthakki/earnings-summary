@@ -235,9 +235,7 @@ def load_description(repo_root: Path, ticker: str) -> CompanyDescriptionResult |
 
 
 def _cache_path(repo_root: Path, ticker: str) -> Path:
-    out_dir = repo_root / "data" / "company_description"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir / f"{ticker.upper()}.json"
+    return repo_root / "data" / "company_description" / f"{ticker.upper()}.json"
 
 
 def _locate_form_10k(
@@ -653,4 +651,5 @@ def _coerce_named_rows(raw: object, allowed: set[str]) -> list[dict[str, str | N
 
 
 def _write_cache(path: Path, result: CompanyDescriptionResult) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")

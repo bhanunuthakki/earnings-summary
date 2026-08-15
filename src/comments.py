@@ -227,9 +227,13 @@ def _store_path(repo_root: Path, ticker: str, report_date: date) -> Path:
     # safe_ticker is the path-traversal gate (defense in depth): the comment
     # store is one file per ticker, so the ticker must be a single safe path
     # segment before it names a directory under data/report_comments/.
-    out = repo_root / "data" / "report_comments" / safe_ticker(ticker)
-    out.mkdir(parents=True, exist_ok=True)
-    return out / f"{report_date.isoformat()}.json"
+    return (
+        repo_root
+        / "data"
+        / "report_comments"
+        / safe_ticker(ticker)
+        / f"{report_date.isoformat()}.json"
+    )
 
 
 def load_store(repo_root: Path, ticker: str, report_date: date) -> CommentStore:
@@ -261,6 +265,7 @@ def save_store(repo_root: Path, store: CommentStore) -> None:
     POSIX behavior is unaffected because the first attempt always succeeds.
     """
     path = _store_path(repo_root, store.ticker, store.report_date)
+    path.parent.mkdir(parents=True, exist_ok=True)
     payload = store.model_dump_json(indent=2)
     # delete=False so we control the lifecycle — os.replace handles the swap.
     fd, tmp_name = tempfile.mkstemp(
@@ -329,7 +334,11 @@ def store_lock(repo_root: Path, ticker: str, report_date: date) -> Iterator[None
     A new lock per ``(ticker, report_date)`` lets unrelated stores update
     concurrently; same-store updates queue.
     """
-    lock = _path_lock(_store_path(repo_root, ticker, report_date))
+    path = _store_path(repo_root, ticker, report_date)
+    # Keep path canonicalization stable across the first concurrent writes.
+    # Readers remain side-effect free; only this mutating boundary creates it.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = _path_lock(path)
     with lock:
         yield
 

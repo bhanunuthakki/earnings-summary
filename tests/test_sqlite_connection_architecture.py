@@ -67,6 +67,10 @@ INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
     "execution/benchmark_sqlite_runtime.py": 2,
     "execution/fix_kpi_series.py": 1,
     "execution/gc_restore.py": 1,
+    # The sealed offline renderer copies a read-only source bundle into a
+    # private temporary database before running the child; central writer
+    # policy must not touch either copy.
+    "src/report/offline_artifact.py": 2,
     "src/schema_compat.py": 1,
     # Overview benchmark creates a WAL commit only on its private staged copy
     # to prove the read path observes uncheckpointed data.

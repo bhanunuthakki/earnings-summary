@@ -29,6 +29,7 @@ from report.models import (
     PortfolioPositionTransaction,
     SectionStatus,
 )
+from report.render_clock import render_today
 from report.sections._common import open_portfolio_tracker_db
 
 
@@ -206,7 +207,7 @@ def _open_decisions(
 ) -> list[PortfolioPositionDecision]:
     """Trade decisions on this ticker from the last `lookback_days` days
     where outcome_status is NULL (still open) or 'open'."""
-    cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
+    cutoff = (render_today() - timedelta(days=lookback_days)).isoformat()
     rows = conn.execute(
         """
         SELECT decision_date, action, confidence, thesis, linked_brief_path,
@@ -240,7 +241,7 @@ def _closed_decisions(
     ('validated', 'invalidated', 'partial'). Longer lookback than the
     open-decision query (~2y) so the user sees the full history of past
     calls when re-evaluating the name."""
-    cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
+    cutoff = (render_today() - timedelta(days=lookback_days)).isoformat()
     rows = conn.execute(
         """
         SELECT decision_date, action, confidence, thesis, linked_brief_path,
@@ -271,5 +272,5 @@ def _closed_decisions(
 
 def _parse_iso_date(s: str | None) -> date:
     if s is None:
-        return date.today()
+        return render_today()
     return date.fromisoformat(s[:10])
