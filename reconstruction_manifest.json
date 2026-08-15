@@ -103,7 +103,8 @@
       "language": "python",
       "entrypoints": [
         "src/synthesis/lenses/catalyst_calendar.py",
-        "src/advisor/senior_partner_brief.py"
+        "src/advisor/senior_partner_brief.py",
+        "src/macro_regime_playbook.py"
       ],
       "dependencies": [
         "financial_compute_engine"
