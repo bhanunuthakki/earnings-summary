@@ -42,7 +42,8 @@
       "language": "python",
       "entrypoints": [
         "execution/run_morning_pipeline.py",
-        "execution/refresh_expected_earnings.py"
+        "execution/refresh_expected_earnings.py",
+        "execution/ingest_ir_events.py"
       ],
       "dependencies": [
         "core_data_layer"

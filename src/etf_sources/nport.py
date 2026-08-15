@@ -368,6 +368,13 @@ def fetch_latest_report(
         log.warning({"event": "nport_no_accessions", "ticker": ref.ticker, "cik": ref.cik})
         return None
     for _filing_date, accession, primary_doc in accessions:
+        if not re.fullmatch(r"^\d{10}-?\d{2}-?\d{6}$", accession):
+            log.warning({"event": "nport_invalid_accession_shape", "ticker": ref.ticker, "accession": accession})
+            continue
+        clean_doc = Path(primary_doc).name
+        if not clean_doc or clean_doc != primary_doc or ".." in primary_doc or "\\" in primary_doc:
+            log.warning({"event": "nport_invalid_doc_name", "ticker": ref.ticker, "doc": primary_doc})
+            continue
         acc = accession.replace("-", "")
         url = EDGAR_FILE_URL.format(cik_int=ref.cik, acc=acc, name=primary_doc)
         xml_text = _sec_get(url, user_agent=user_agent, as_json=False)

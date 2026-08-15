@@ -397,6 +397,8 @@ def linkify(text: str, payload: CitationsPayload | None, *, href_base: str = "")
     return _CITE_RX.sub(_repl, text)
 
 
+safe_href = _safe_href
+
 __all__ = [
     "CITE_MARKS_CSS",
     "CITE_MARKS_JS",
@@ -405,4 +407,5 @@ __all__ = [
     "CitationsPayload",
     "citation_items",
     "linkify",
+    "safe_href",
 ]
