@@ -28,8 +28,10 @@ state, provider-call budgets, and durable backlog/receipts.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -76,12 +78,22 @@ class MacroObservation(BaseModel):
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     source: str = Field(min_length=1)
 
+    @field_validator("value", mode="before")
+    @classmethod
+    def _exact_finite_value(cls, value: object) -> float:
+        if type(value) not in {int, float}:
+            raise ValueError("macro value must be a number")
+        parsed = float(cast("int | float", value))
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise ValueError("macro value must be finite and positive")
+        return parsed
+
     @field_validator("observed_at")
     @classmethod
     def _aware_observed_at(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("macro observed_at must be timezone-aware")
-        return value
+        return value.astimezone(UTC)
 
 
 def _yf(symbol: str, *, scale: float = 1.0) -> ProviderSpec:

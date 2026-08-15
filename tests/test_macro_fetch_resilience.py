@@ -6,7 +6,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -154,7 +154,7 @@ def test_network_loader_runs_without_database_write_lock(db: Path) -> None:
         db_path=db,
         yfinance_loader=loader,
         timeout_seconds=0.5,
-        now=datetime(2026, 8, 12, 12, 0, 0),
+        now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
     )
 
     assert observed["write_lock_available"] is True
@@ -175,7 +175,7 @@ def test_yfinance_call_is_timeout_bounded_and_receipted(db: Path) -> None:
             db_path=db,
             yfinance_loader=loader,
             timeout_seconds=0.05,
-            now=datetime(2026, 8, 12, 12, 0, 0),
+                now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
         )
     finally:
         release.set()
@@ -215,7 +215,7 @@ def test_fmp_candidates_are_explicitly_disabled_without_provider_calls(
         yfinance_loader=lambda *_a, **_k: [],
         provider_loaders={"nyfed_effr": _empty_authoritative_loader},
         timeout_seconds=0.05,
-        now=datetime(2026, 8, 12, 12, 0, 0),
+        now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
     )
 
     attempt = next(item for item in receipt.series[0].attempts if item.source == "FMP")
@@ -247,7 +247,7 @@ def test_cached_degraded_is_explicit_and_partial_is_not_compute_eligible(db: Pat
         db_path=db,
         yfinance_loader=lambda *_a, **_k: [],
         timeout_seconds=0.05,
-        now=datetime(2026, 8, 12, 12, 0, 0),
+        now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
     )
     partial = macro.refresh_series(
         series_ids=("vix", "fed_funds"),
@@ -255,7 +255,7 @@ def test_cached_degraded_is_explicit_and_partial_is_not_compute_eligible(db: Pat
         yfinance_loader=lambda *_a, **_k: [],
         provider_loaders={"nyfed_effr": _empty_authoritative_loader},
         timeout_seconds=0.05,
-        now=datetime(2026, 8, 12, 12, 0, 0),
+        now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
     )
 
     assert cached.status is macro.RefreshStatus.CACHED_DEGRADED
@@ -270,7 +270,7 @@ def test_successful_yahoo_payload_older_than_freshness_guard_is_not_fresh(db: Pa
         db_path=db,
         yfinance_loader=lambda *_a, **_k: [(date(2026, 6, 1), 18.25)],
         timeout_seconds=0.05,
-        now=datetime(2026, 8, 12, 12, 0, 0),
+        now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
     )
 
     assert receipt.series[0].attempts[0].outcome is macro.AttemptOutcome.OK
@@ -299,7 +299,7 @@ def test_fed_funds_sixty_day_cache_is_stale_under_canonical_guard(db: Path) -> N
         yfinance_loader=lambda *_a, **_k: [],
         provider_loaders={"nyfed_effr": _empty_authoritative_loader},
         timeout_seconds=0.05,
-        now=datetime(2026, 8, 12, 12, 0, 0),
+        now=datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC),
     )
 
     assert receipt.series[0].cache_age_days == 60

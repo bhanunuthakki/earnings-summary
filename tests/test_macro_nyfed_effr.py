@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from copy import deepcopy
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -138,6 +138,47 @@ def test_fresh_fixture_preserves_typed_provenance_and_refreshes(db: Path) -> Non
     assert receipt.series[0].attempts[0].source == "new_york_fed"
 
 
+@pytest.mark.parametrize("bad_value", [True, "3.63", float("nan"), float("inf")])
+def test_macro_observation_ordinary_construction_requires_exact_finite_number(
+    bad_value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        MacroObservation(
+            series_id="fed_funds",
+            effective_date=date(2026, 8, 13),
+            observed_at=NOW,
+            value=cast("float", bad_value),
+            units="pct",
+            currency=None,
+            source="new_york_fed",
+        )
+
+
+def test_macro_observation_rejects_naive_time_and_normalizes_aware_time_to_utc() -> None:
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        MacroObservation(
+            series_id="fed_funds",
+            effective_date=date(2026, 8, 13),
+            observed_at=datetime(2026, 8, 14, 9, 0),
+            value=3.63,
+            units="pct",
+            currency=None,
+            source="new_york_fed",
+        )
+
+    normalized = MacroObservation(
+        series_id="fed_funds",
+        effective_date=date(2026, 8, 13),
+        observed_at=datetime(2026, 8, 14, 9, 0, tzinfo=timezone(timedelta(hours=-7))),
+        value=3.63,
+        units="pct",
+        currency=None,
+        source="new_york_fed",
+    )
+    assert normalized.observed_at == datetime(2026, 8, 14, 16, 0, tzinfo=UTC)
+    assert normalized.observed_at.utcoffset() == timedelta(0)
+
+
 def test_unknown_effr_row_field_remains_rejected() -> None:
     with pytest.raises(ValidationError, match="unexpectedMetadata"):
         macro._parse_nyfed_effr_payload(
@@ -197,6 +238,83 @@ def test_effr_date_is_exact_business_date_inside_requested_range(bad_date: str) 
             start_date=date(2024, 8, 14),
             end_date=date(2026, 8, 14),
         )
+
+
+@pytest.mark.parametrize("holiday", ["2026-06-19", "2027-07-05", "2026-11-26"])
+def test_effr_rejects_authoritative_new_york_fed_holidays(holiday: str) -> None:
+    payload = {
+        "refRates": [
+            {
+                "effectiveDate": holiday,
+                "type": "EFFR",
+                "percentRate": 3.63,
+                "revisionIndicator": "",
+            }
+        ]
+    }
+    with pytest.raises((ValidationError, ValueError), match="business date"):
+        macro._parse_nyfed_effr_payload(
+            payload,
+            series=REGISTRY["fed_funds"],
+            observed_at=NOW,
+            start_date=date(2026, 1, 1),
+            end_date=date(2027, 12, 31),
+        )
+
+
+def test_friday_before_saturday_holiday_remains_a_nyfed_business_date() -> None:
+    assert macro._is_nyfed_business_date(date(2026, 7, 3)) is True
+    assert macro._is_nyfed_business_date(date(2026, 7, 4)) is False
+
+
+def test_refresh_rejects_naive_as_of_before_provider_io(db: Path) -> None:
+    calls = 0
+
+    def counted_loader(*_args: object, **_kwargs: object) -> tuple[MacroObservation, ...]:
+        nonlocal calls
+        calls += 1
+        return ()
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        macro.refresh_series(
+            series_ids=("fed_funds",),
+            db_path=db,
+            provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
+            provider_loaders={"nyfed_effr": counted_loader},
+            now=datetime(2026, 8, 14, 16, 0),
+        )
+    assert calls == 0
+
+
+def test_refresh_normalizes_as_of_to_utc_before_request_dates(db: Path) -> None:
+    captured: list[tuple[datetime, date, date]] = []
+
+    def capture_loader(
+        _series: SeriesSpec,
+        _provider: ProviderSpec,
+        *,
+        observed_at: datetime,
+        start_date: date,
+        end_date: date,
+        timeout_seconds: float,
+    ) -> tuple[MacroObservation, ...]:
+        del timeout_seconds
+        captured.append((observed_at, start_date, end_date))
+        return ()
+
+    macro.refresh_series(
+        series_ids=("fed_funds",),
+        db_path=db,
+        provider_overrides={"fed_funds": (NYFED_PROVIDER,)},
+        provider_loaders={"nyfed_effr": capture_loader},
+        now=datetime(2026, 8, 14, 20, 30, tzinfo=timezone(timedelta(hours=-7))),
+    )
+
+    observed_at, start_date, end_date = captured[0]
+    assert observed_at == datetime(2026, 8, 15, 3, 30, tzinfo=UTC)
+    assert observed_at.utcoffset() == timedelta(0)
+    assert start_date == date(2024, 8, 15)
+    assert end_date == date(2026, 8, 15)
 
 
 def test_default_refresh_does_not_register_or_call_nyfed(db: Path) -> None:

@@ -21,8 +21,8 @@ This decision authorizes repository implementation and a bounded isolated canary
 - Activation: dormant by default; the daily CLI has no NY Fed registration or loader and therefore cannot issue a request after merge.
 - Query budget: one date-bounded request per run, two years of observations, no automatic retry.
 - Accepted semantic identity: only records whose `type` is exactly `EFFR`.
-- Effective date: `effectiveDate`, a New York Fed business-date transaction/activity date.
-- Observed time: timezone-aware UTC acquisition time supplied by the caller.
+- Effective date: `effectiveDate`, a New York Fed business-date transaction/activity date. The deterministic calendar follows the New York Fed's listed closures: weekends, named holidays, and Monday closure for Sunday holidays; a Saturday holiday does not close the preceding Friday.
+- Observed time: a timezone-aware acquisition time normalized to zero-offset UTC before request bounds or freshness calculations; naive timestamps fail closed.
 - Value and units: `percentRate`, percentage points, scale `1.0`; currency is not applicable.
 - Freshness: the existing 45-day guard remains authoritative. Endpoint reachability or registry configuration never proves freshness.
 - Duplicate dates: identical values coalesce; conflicting values fail closed.
@@ -39,6 +39,7 @@ The existing `macro_series` table durably stores the series ID, effective date, 
 | --- | --- | --- | --- | --- | --- |
 | Provider | `execution/fetch_macro_series.py` explicit injection seam | Dormant New York Fed EFFR candidate | API schema, publication, terms, and availability can change | Tool selector / BHA-52 | Current primary-source review completed 2026-08-14 |
 | Contract | Typed New York Fed response model | Validate the live `percentRate` field and fail closed if it changes | The current OpenAPI schema describes `percent`, while the live JSON returns `percentRate` | BHA-52 owner | Fixture-backed; vendor clarification remains open |
+| Calendar | NY Fed effective-date admission | Apply the official New York Fed closure schedule, including Sunday but not Saturday observance | Published future schedules and exceptional closures can change | BHA-52 owner | Current official schedule reviewed 2026-08-14; recheck before extending beyond listed future years |
 | Operations | Macro refresh call budget | One request per run, no blind retry | No numeric provider quota is published | BHA-52 owner | Conservative local policy; production activation not authorized |
 | Rights | Any UI/export that presents reference-rate data | Carry the prescribed reference-rate notice and non-endorsement terms | New York Fed terms impose presentation/distribution conditions | Owner/legal | Required before production redistribution |
 
@@ -46,6 +47,7 @@ The existing `macro_series` table durably stores the series ID, effective date, 
 
 - Federal Reserve Bank of New York, [Markets Data APIs](https://markets.newyorkfed.org/static/docs/markets-api.html), API documentation accessed 2026-08-14.
 - Federal Reserve Bank of New York, [Effective Federal Funds Rate](https://www.newyorkfed.org/markets/reference-rates/effr), accessed 2026-08-14.
+- Federal Reserve Bank of New York, [Holiday Schedule](https://www.newyorkfed.org/aboutthefed/holiday_schedule), and Board of Governors, [Holidays Observed — K.8](https://www.federalreserve.gov/aboutthefed/k8.htm), last updated 2026-07-08 and accessed 2026-08-14.
 - Federal Reserve Bank of New York, [Reference-rate methodology, publication, revisions, and contingencies](https://www.newyorkfed.org/markets/reference-rates/additional-information-about-reference-rates), updated 2026-04-06 and accessed 2026-08-14.
 - Federal Reserve Bank of New York, [Terms of Use](https://www.newyorkfed.org/privacy/termsofuse), updated 2023-06-09 and accessed 2026-08-14.
 - Federal Reserve Bank of St. Louis, [FRED `DFF`](https://fred.stlouisfed.org/series/DFF), [observations API](https://fred.stlouisfed.org/docs/api/fred/series_observations.html), and [API terms](https://fred.stlouisfed.org/docs/api/terms_of_use.html), accessed 2026-08-14.

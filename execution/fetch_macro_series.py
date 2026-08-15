@@ -17,9 +17,11 @@ import sqlite3
 import sys
 import threading
 import time
+from calendar import monthrange
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.error import HTTPError, URLError
@@ -128,7 +130,7 @@ class _NyFedEffrRow(_ReceiptModel):
             raise ValueError("effectiveDate must be an exact YYYY-MM-DD string") from None
         if parsed.isoformat() != value:
             raise ValueError("effectiveDate must be an exact YYYY-MM-DD string")
-        if parsed.weekday() >= 5:
+        if not _is_nyfed_business_date(parsed):
             raise ValueError("effectiveDate must be a business date")
         return parsed
 
@@ -176,6 +178,45 @@ _NYFED_EFFR_PROVIDER = ProviderSpec(
     value_key="percentRate",
     source="new_york_fed",
 )
+
+
+def _nth_weekday(year: int, month: int, weekday: int, occurrence: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (occurrence - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    last = date(year, month, monthrange(year, month)[1])
+    return last - timedelta(days=(last.weekday() - weekday) % 7)
+
+
+@lru_cache(maxsize=32)
+def _nyfed_holidays(year: int) -> frozenset[date]:
+    """Standard New York Fed closures, including Sunday-Monday observance."""
+    fixed = {
+        date(year, 1, 1),
+        date(year, 7, 4),
+        date(year, 11, 11),
+        date(year, 12, 25),
+    }
+    if year >= 2021:
+        fixed.add(date(year, 6, 19))
+    holidays = {
+        _nth_weekday(year, 1, 0, 3),
+        _nth_weekday(year, 2, 0, 3),
+        _last_weekday(year, 5, 0),
+        _nth_weekday(year, 9, 0, 1),
+        _nth_weekday(year, 10, 0, 2),
+        _nth_weekday(year, 11, 3, 4),
+        *fixed,
+    }
+    holidays.update(day + timedelta(days=1) for day in fixed if day.weekday() == 6)
+    return frozenset(holidays)
+
+
+def _is_nyfed_business_date(value: date) -> bool:
+    """Apply NY Fed closures without observing Saturday holidays on Friday."""
+    return value.weekday() < 5 and value not in _nyfed_holidays(value.year)
 
 
 def _resolve_url(provider: ProviderSpec) -> str:
@@ -294,6 +335,7 @@ def _parse_nyfed_effr_payload(
 
     if observed_at.tzinfo is None or observed_at.utcoffset() is None:
         raise ValueError("observed_at must be timezone-aware")
+    observed_at = observed_at.astimezone(UTC)
     if start_date > end_date:
         raise ValueError("requested date range is inverted")
     parsed = _NyFedEffrPayload.model_validate(payload)
@@ -485,7 +527,7 @@ def _validate_provider_observations(
             raise ValueError("provider observation identity does not match trusted metadata")
         if type(raw.effective_date) is not date:
             raise ValueError("provider effective date must be a date")
-        if raw.effective_date.weekday() >= 5:
+        if not _is_nyfed_business_date(raw.effective_date):
             raise ValueError("provider effective date must be a business date")
         if not start_date <= raw.effective_date <= end_date:
             raise ValueError("provider effective date is outside the requested range")
@@ -605,7 +647,8 @@ def refresh_series(
     overrides = _validated_provider_overrides(series_ids, provider_overrides)
     stamp = now or datetime.now(UTC)
     if stamp.tzinfo is None or stamp.utcoffset() is None:
-        stamp = stamp.replace(tzinfo=UTC)
+        raise ValueError("now must be timezone-aware")
+    stamp = stamp.astimezone(UTC)
     today = stamp.date()
     loaders = dict(provider_loaders or {})
     staged: list[SeriesValue] = []
