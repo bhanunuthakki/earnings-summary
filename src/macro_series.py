@@ -1,15 +1,16 @@
 """Macro-series registry — 12 macro slugs the scenario engine depends on.
 
 Each entry declares provider metadata in preference order. The macro job calls
-only timeout-bounded Yahoo candidates today. FMP entries remain declarative
-metadata for future admission through the shared FMP circuit/budget/recovery
-service; ``execution/fetch_macro_series.py`` never calls them directly. A
+only timeout-bounded Yahoo candidates and the primary New York Fed EFFR API.
+FMP entries remain declarative metadata for future admission through the shared
+FMP circuit/budget/recovery service; ``execution/fetch_macro_series.py`` never
+calls them directly. A
 series without a fresh or explicitly cached-degraded observation is unavailable
 and prevents the scheduled sensitivity recompute.
 
 Provider config shape:
     {
-      "kind":         "fmp_historical" | "fmp_treasury" | "fmp_economic" | "fmp_fx",
+      "kind":         "nyfed_effr" | "yfinance" | "fmp_*",
       "path":         "<endpoint path, relative to FMP_BASE>",
       "params":       {dict of query string params},
       "row_field":    optional jq-style path inside the response to the list,
@@ -27,6 +28,9 @@ state, provider-call budgets, and durable backlog/receipts.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def _empty_params() -> dict[str, str]:
@@ -56,6 +60,27 @@ class ProviderSpec:
     value_key: str = "close"
     source: str = "FMP"
     scale: float = 1.0
+
+
+class MacroObservation(BaseModel):
+    """One provider-neutral, provenance-complete macro observation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    series_id: str = Field(min_length=1)
+    effective_date: date
+    observed_at: datetime
+    value: float = Field(gt=0)
+    units: str = Field(min_length=1)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    source: str = Field(min_length=1)
+
+    @field_validator("observed_at")
+    @classmethod
+    def _aware_observed_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("macro observed_at must be timezone-aware")
+        return value
 
 
 def _yf(symbol: str, *, scale: float = 1.0) -> ProviderSpec:
@@ -104,6 +129,14 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="pct",
         category="rates",
         providers=(
+            ProviderSpec(
+                kind="nyfed_effr",
+                path="https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json",
+                params={"type": "rate"},
+                date_key="effectiveDate",
+                value_key="percentRate",
+                source="new_york_fed",
+            ),
             ProviderSpec(
                 kind="fmp_economic",
                 path="economic-indicators",

@@ -12,8 +12,21 @@ from pathlib import Path
 import pytest
 
 import execution.fetch_macro_series as macro
-from macro_series import REGISTRY
+from macro_series import REGISTRY, MacroObservation, ProviderSpec, SeriesSpec
 from macro_store import SeriesValue, upsert_series_values
+
+
+def _empty_authoritative_loader(
+    _series: SeriesSpec,
+    _provider: ProviderSpec,
+    *,
+    observed_at: datetime,
+    start_date: date,
+    end_date: date,
+    timeout_seconds: float,
+) -> tuple[MacroObservation, ...]:
+    del observed_at, start_date, end_date, timeout_seconds
+    return ()
 
 
 def _schema(path: Path) -> None:
@@ -200,11 +213,12 @@ def test_fmp_candidates_are_explicitly_disabled_without_provider_calls(
         series_ids=("fed_funds",),
         db_path=db,
         yfinance_loader=lambda *_a, **_k: [],
+        provider_loaders={"nyfed_effr": _empty_authoritative_loader},
         timeout_seconds=0.05,
         now=datetime(2026, 8, 12, 12, 0, 0),
     )
 
-    attempt = receipt.series[0].attempts[0]
+    attempt = next(item for item in receipt.series[0].attempts if item.source == "FMP")
     assert attempt.source == "FMP"
     assert attempt.outcome is macro.AttemptOutcome.DISABLED
     assert attempt.reason in {
@@ -239,6 +253,7 @@ def test_cached_degraded_is_explicit_and_partial_is_not_compute_eligible(db: Pat
         series_ids=("vix", "fed_funds"),
         db_path=db,
         yfinance_loader=lambda *_a, **_k: [],
+        provider_loaders={"nyfed_effr": _empty_authoritative_loader},
         timeout_seconds=0.05,
         now=datetime(2026, 8, 12, 12, 0, 0),
     )
@@ -282,6 +297,7 @@ def test_fed_funds_sixty_day_cache_is_stale_under_canonical_guard(db: Path) -> N
         series_ids=("fed_funds",),
         db_path=db,
         yfinance_loader=lambda *_a, **_k: [],
+        provider_loaders={"nyfed_effr": _empty_authoritative_loader},
         timeout_seconds=0.05,
         now=datetime(2026, 8, 12, 12, 0, 0),
     )
