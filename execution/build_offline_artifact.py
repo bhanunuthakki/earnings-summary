@@ -53,6 +53,7 @@ def _is_within(path: Path, root: Path) -> bool:
 def _parent(args: argparse.Namespace) -> int:
     from report.offline_artifact import (
         OfflineBoundaryError,
+        runtime_tree_dependency_records,
         stage_offline_repository,
     )
     from report.windows_appcontainer import (
@@ -90,6 +91,9 @@ def _parent(args: argparse.Namespace) -> int:
                 args.portfolio_database.resolve() if args.portfolio_database is not None else None
             ),
         )
+        runtime_root = Path(sys.base_prefix).resolve()
+        runtime_dependencies = runtime_tree_dependency_records(runtime_root)
+        dependencies = (*dependencies, *runtime_dependencies)
         manifest_path = isolated_repo / "config" / "offline_dependencies.json"
         manifest_path.write_text(
             json.dumps(
@@ -130,7 +134,7 @@ def _parent(args: argparse.Namespace) -> int:
         returncode, stdout, stderr = run_appcontainer_worker(
             command,
             cwd=isolated_repo,
-            read_roots=(Path(sys.base_prefix), isolated_repo),
+            read_roots=(runtime_root, isolated_repo),
             write_root=private_write_root,
             environment=environment,
             timeout_seconds=args.timeout_seconds,
@@ -138,6 +142,8 @@ def _parent(args: argparse.Namespace) -> int:
         if returncode != 0:
             detail = (stderr or stdout or "offline worker failed").strip()
             raise OfflineBoundaryError(detail[-4_000:])
+        if runtime_tree_dependency_records(runtime_root) != runtime_dependencies:
+            raise OfflineBoundaryError("Python runtime changed during sealed offline execution")
         if not staged_artifact.is_dir():
             raise OfflineBoundaryError("AppContainer worker did not produce an artifact")
         if output_dir.exists():

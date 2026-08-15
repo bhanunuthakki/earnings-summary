@@ -9,6 +9,7 @@ not call the ordinary artifact builder or mutate canonical repository state.
 from __future__ import annotations
 
 import builtins
+import ctypes
 import hashlib
 import io
 import json
@@ -22,6 +23,7 @@ import tempfile
 import time
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
+from ctypes import wintypes
 from datetime import date
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -218,23 +220,12 @@ def runtime_dependency_records(
     isolated_repo = isolated_repo.resolve()
     private_write_root = private_write_root.resolve()
     runtime_root = Path(sys.base_prefix).resolve()
-    observed: dict[str, Path] = {"runtime/python.exe": Path(sys.executable).resolve()}
-    for module in tuple(sys.modules.values()):
-        raw = getattr(module, "__file__", None)
-        if not isinstance(raw, str):
-            continue
-        path = Path(raw).resolve()
-        if not path.is_file() or _is_within(path, isolated_repo):
-            continue
-        try:
-            relative = path.relative_to(runtime_root).as_posix()
-        except ValueError as exc:
-            raise OfflineBoundaryError(f"imported runtime escapes Python root: {path}") from exc
-        observed[f"runtime/python/{relative}"] = path
-    records = [
-        dependency_record(path, logical_path=logical, dependency_class=DependencyClass.RUNTIME)
-        for logical, path in sorted(observed.items())
-    ]
+    records = list(
+        runtime_native_dependency_records(
+            isolated_repo=isolated_repo,
+            runtime_root=runtime_root,
+        )
+    )
     normalized_environment: dict[str, str] = {}
     substitutions = (
         (str(private_write_root), "$PRIVATE_WRITE"),
@@ -262,6 +253,121 @@ def runtime_dependency_records(
         )
     )
     return tuple(sorted(records, key=lambda item: item.logical_path))
+
+
+def runtime_tree_dependency_records(runtime_root: Path) -> tuple[DependencyRecord, ...]:
+    """Hash every regular file admitted by the Python-runtime ACL."""
+
+    runtime_root = Path(os.path.abspath(runtime_root))
+    if not runtime_root.is_dir():
+        raise OfflineBoundaryError(f"Python runtime root is unavailable: {runtime_root}")
+    _require_no_reparse_points(runtime_root)
+    records: list[DependencyRecord] = []
+    pending = [runtime_root]
+    while pending:
+        current = pending.pop()
+        with os.scandir(current) as entries:
+            children = sorted(entries, key=lambda entry: entry.name.casefold())
+        directories: list[Path] = []
+        for entry in children:
+            path = Path(entry.path)
+            attributes = getattr(path.lstat(), "st_file_attributes", 0)
+            if entry.is_symlink() or attributes & 0x400:
+                raise OfflineBoundaryError(f"Python runtime contains a reparse point: {path}")
+            if entry.is_dir(follow_symlinks=False):
+                directories.append(path)
+                continue
+            if not entry.is_file(follow_symlinks=False):
+                raise OfflineBoundaryError(f"Python runtime contains a special file: {path}")
+            relative = path.relative_to(runtime_root).as_posix()
+            records.append(
+                dependency_record(
+                    path,
+                    logical_path=f"runtime/python/{relative}",
+                    dependency_class=DependencyClass.RUNTIME,
+                )
+            )
+        pending.extend(reversed(directories))
+    return tuple(sorted(records, key=lambda item: item.logical_path))
+
+
+def runtime_native_dependency_records(
+    *, isolated_repo: Path, runtime_root: Path
+) -> tuple[DependencyRecord, ...]:
+    """Hash the current process' complete loaded native module closure."""
+
+    if os.name != "nt":
+        raise OfflineBoundaryError("native runtime attestation requires Windows")
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.EnumProcessModules.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.HMODULE),
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    psapi.EnumProcessModules.restype = wintypes.BOOL
+    psapi.GetModuleFileNameExW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.HMODULE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+    ]
+    psapi.GetModuleFileNameExW.restype = wintypes.DWORD
+    process = kernel32.GetCurrentProcess()
+    needed = wintypes.DWORD()
+    capacity = 256
+    while True:
+        modules = (wintypes.HMODULE * capacity)()
+        if not psapi.EnumProcessModules(
+            process,
+            modules,
+            ctypes.sizeof(modules),
+            ctypes.byref(needed),
+        ):
+            raise OfflineBoundaryError(
+                f"native runtime enumeration failed ({ctypes.get_last_error()})"
+            )
+        count = needed.value // ctypes.sizeof(wintypes.HMODULE)
+        if count <= capacity:
+            break
+        capacity = count + 32
+
+    isolated_repo = isolated_repo.resolve()
+    runtime_root = runtime_root.resolve()
+    system_root = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")).resolve()
+    defender_root = (
+        Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+        / "Microsoft"
+        / "Windows Defender"
+        / "Platform"
+    ).resolve()
+    observed: dict[str, Path] = {}
+    for module in modules[:count]:
+        buffer = ctypes.create_unicode_buffer(32_768)
+        length = psapi.GetModuleFileNameExW(process, module, buffer, len(buffer))
+        if length == 0 or length >= len(buffer):
+            raise OfflineBoundaryError(
+                f"native runtime module identity failed ({ctypes.get_last_error()})"
+            )
+        path = Path(buffer.value).resolve()
+        if _is_within(path, runtime_root):
+            logical = f"runtime/python/{path.relative_to(runtime_root).as_posix()}"
+        elif _is_within(path, isolated_repo):
+            logical = f"runtime/sealed-repo/{path.relative_to(isolated_repo).as_posix()}"
+        elif _is_within(path, system_root):
+            logical = f"runtime/os/{path.relative_to(system_root).as_posix()}"
+        elif _is_within(path, defender_root):
+            logical = f"runtime/os/defender/{path.relative_to(defender_root).as_posix()}"
+        else:
+            raise OfflineBoundaryError(f"loaded native module escapes trusted roots: {path}")
+        observed[logical] = path
+    return tuple(
+        dependency_record(path, logical_path=logical, dependency_class=DependencyClass.RUNTIME)
+        for logical, path in sorted(observed.items())
+    )
 
 
 def _require_no_reparse_points(path: Path, *, attested_root: Path | None = None) -> None:
@@ -679,8 +785,19 @@ def _artifact_files(
     output_sha256 = {
         name: hashlib.sha256(body).hexdigest() for name, body in sorted(deliverables.items())
     }
+    unique_dependencies: dict[str, DependencyRecord] = {}
+    for record in dependencies:
+        prior = unique_dependencies.get(record.logical_path)
+        if prior is not None and prior != record:
+            raise OfflineBoundaryError(
+                f"conflicting offline dependency identity: {record.logical_path}"
+            )
+        unique_dependencies[record.logical_path] = record
     ordered_dependencies = tuple(
-        sorted(dependencies, key=lambda item: (item.dependency_class.value, item.logical_path))
+        sorted(
+            unique_dependencies.values(),
+            key=lambda item: (item.dependency_class.value, item.logical_path),
+        )
     )
     receipt = OfflineArtifactReceipt(
         ticker=ticker,
@@ -809,6 +926,8 @@ __all__ = [
     "dependency_record",
     "offline_runtime_guard",
     "runtime_dependency_records",
+    "runtime_native_dependency_records",
+    "runtime_tree_dependency_records",
     "snapshot_database",
     "stage_offline_repository",
     "verify_artifact_copy",

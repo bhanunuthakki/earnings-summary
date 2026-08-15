@@ -7,14 +7,18 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from comments import load_store
 from compute import company_description, platform_diagram, segment_definitions, valuation_basis
+from report import windows_appcontainer
 from report.builder import build_report
 from report.offline_artifact import (
     DependencyClass,
@@ -25,6 +29,8 @@ from report.offline_artifact import (
     classify_dependency,
     offline_runtime_guard,
     runtime_dependency_records,
+    runtime_native_dependency_records,
+    runtime_tree_dependency_records,
     snapshot_database,
     stage_offline_repository,
     write_offline_artifact,
@@ -175,6 +181,8 @@ result_path.write_text(json.dumps(result), encoding='utf-8')
     )
 
     assert returncode == 0, stderr
+    assert '"event": "appcontainer_acl_lease"' in stderr
+    assert '"status": "released"' in stderr
     assert json.loads((write_root / "probe.json").read_text(encoding="utf-8")) == {
         "cached_connect": "denied",
         "os_open": "denied",
@@ -324,6 +332,87 @@ def test_runtime_attestation_normalizes_private_root_homepath(
     assert first == second
 
 
+def test_runtime_tree_attestation_hashes_every_admitted_file(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    (runtime_root / "DLLs").mkdir(parents=True)
+    (runtime_root / "python.exe").write_bytes(b"launcher")
+    (runtime_root / "python313.dll").write_bytes(b"runtime")
+    (runtime_root / "DLLs" / "_sqlite3.pyd").write_bytes(b"extension")
+
+    records = runtime_tree_dependency_records(runtime_root)
+
+    assert {record.logical_path for record in records} == {
+        "runtime/python/DLLs/_sqlite3.pyd",
+        "runtime/python/python.exe",
+        "runtime/python/python313.dll",
+    }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native module enumeration is Windows-specific")
+def test_native_runtime_attestation_includes_python_and_os_dlls() -> None:
+    records = runtime_native_dependency_records(
+        isolated_repo=PROJECT_ROOT,
+        runtime_root=Path(sys.base_prefix),
+    )
+    logical_paths = {record.logical_path.casefold() for record in records}
+
+    assert "runtime/python/python313.dll" in logical_paths
+    assert any(path.startswith("runtime/os/") and path.endswith(".dll") for path in logical_paths)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="named mutexes are Windows-specific")
+def test_runtime_acl_lease_serializes_concurrent_owners() -> None:
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    lease = cast(
+        "Callable[..., AbstractContextManager[None]]",
+        vars(windows_appcontainer)["_serialized_acl_lease"],
+    )
+
+    def first_owner() -> None:
+        with lease(timeout_seconds=5):
+            first_entered.set()
+            assert release_first.wait(5)
+
+    def second_owner() -> None:
+        assert first_entered.wait(5)
+        with lease(timeout_seconds=5):
+            second_entered.set()
+
+    first = threading.Thread(target=first_owner)
+    second = threading.Thread(target=second_owner)
+    first.start()
+    second.start()
+    assert first_entered.wait(5)
+    assert not second_entered.wait(0.2)
+    release_first.set()
+    first.join(5)
+    second.join(5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert second_entered.is_set()
+
+
+def test_acl_revoke_failure_is_loud(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def fake_system_binary(_name: str) -> Path:
+        return Path("icacls")
+
+    def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 5, "", "revoke denied")
+
+    monkeypatch.setattr("report.windows_appcontainer._system_binary", fake_system_binary)
+    monkeypatch.setattr("report.windows_appcontainer.subprocess.run", fake_run)
+    apply_acl = cast(
+        "Callable[[str, Path, str | None], None]",
+        vars(windows_appcontainer)["_acl"],
+    )
+
+    with pytest.raises(OfflineBoundaryError, match="ACL revoke failed"):
+        apply_acl("S-1-15-2-test", tmp_path, None)
+
+
 def test_staging_rejects_hardlink_alias_to_sensitive_input(tmp_path: Path) -> None:
     source = tmp_path / "source"
     (source / "src").mkdir(parents=True)
@@ -410,3 +499,12 @@ def test_offline_cli_repeats_byte_identically_from_isolated_snapshot(
     first = {path.name: path.read_bytes() for path in outputs[0].iterdir()}
     second = {path.name: path.read_bytes() for path in outputs[1].iterdir()}
     assert first == second
+    receipt = json.loads(first["receipt.json"])
+    logical_paths = [record["logical_path"].casefold() for record in receipt["dependencies"]]
+    assert len(logical_paths) == len(set(logical_paths))
+    assert "runtime/python/python313.dll" in logical_paths
+    assert "runtime/python/python3.dll" in logical_paths
+    assert any(path.startswith("runtime/os/") and path.endswith(".dll") for path in logical_paths)
+    assert receipt["network_attempts"] == 0
+    assert receipt["llm_attempts"] == 0
+    assert receipt["canonical_mutations"] == []

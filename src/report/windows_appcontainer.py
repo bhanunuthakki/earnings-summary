@@ -9,11 +9,13 @@ private result tree receives modify access.
 from __future__ import annotations
 
 import ctypes
+import json
 import msvcrt
 import os
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
 
@@ -35,7 +37,10 @@ _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 _WAIT_OBJECT_0 = 0
+_WAIT_ABANDONED = 0x00000080
+_WAIT_TIMEOUT = 0x00000102
 _INFINITE = 0xFFFFFFFF
+_ACL_MUTEX_NAME = "Global\\EarningsSummaryOfflinePythonAclV1"
 
 
 class _STARTUPINFO(ctypes.Structure):
@@ -195,8 +200,47 @@ def _acl(sid: str, path: Path, rights: str | None) -> None:
     else:
         command.extend(["/grant", f"*{sid}:(OI)(CI)({rights})", "/Q"])
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    if completed.returncode != 0 and rights is not None:
-        raise OfflineBoundaryError(f"AppContainer ACL grant failed for {path}")
+    if completed.returncode != 0:
+        action = "grant" if rights is not None else "revoke"
+        detail = redact((completed.stderr or completed.stdout or "unknown failure").strip())
+        raise OfflineBoundaryError(
+            f"AppContainer ACL {action} failed for {path} and SID {sid}: {detail[-1_000:]}"
+        )
+
+
+@contextmanager
+def _serialized_acl_lease(*, timeout_seconds: int) -> Generator[None, None, None]:
+    """Hold one cross-process lease around fixed-SID ACL grant and revoke."""
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+    kernel32.ReleaseMutex.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    mutex = kernel32.CreateMutexW(None, False, _ACL_MUTEX_NAME)
+    if not mutex:
+        raise _win_error("ACL mutex creation")
+    acquired = False
+    try:
+        wait = kernel32.WaitForSingleObject(mutex, timeout_seconds * 1000)
+        if wait == _WAIT_TIMEOUT:
+            raise OfflineBoundaryError("AppContainer ACL lease timed out")
+        if wait not in {_WAIT_OBJECT_0, _WAIT_ABANDONED}:
+            raise _win_error("ACL mutex wait")
+        acquired = True
+        yield
+    finally:
+        release_error: OfflineBoundaryError | None = None
+        if acquired and not kernel32.ReleaseMutex(mutex):
+            release_error = _win_error("ACL mutex release")
+        if not kernel32.CloseHandle(mutex) and release_error is None:
+            release_error = _win_error("ACL mutex close")
+        if release_error is not None:
+            raise release_error
 
 
 def _environment_block(environment: Mapping[str, str]) -> ctypes.Array[ctypes.c_wchar]:
@@ -250,7 +294,7 @@ def is_current_process_appcontainer() -> bool:
         kernel32.CloseHandle(token)
 
 
-def run_appcontainer_worker(
+def _run_appcontainer_worker_with_acl(
     command: Sequence[str],
     *,
     cwd: Path,
@@ -259,8 +303,6 @@ def run_appcontainer_worker(
     environment: Mapping[str, str],
     timeout_seconds: int = 300,
 ) -> tuple[int, str, str]:
-    """Run one child in a capability-free AppContainer and return its logs."""
-
     if os.name != "nt":
         raise OfflineBoundaryError("sealed offline rendering requires Windows AppContainer")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -345,6 +387,11 @@ def run_appcontainer_worker(
     stdout_path = write_root / "worker.stdout"
     stderr_path = write_root / "worker.stderr"
     try:
+        # The named mutex proves there is no live peer using the fixed SID.
+        # Clear any ACE left by an abandoned prior owner before granting this
+        # run's exact roots; failure is a hard stop with the SID/path evidence.
+        for root in (*roots, write_root):
+            _acl(sid_text, root, None)
         for root in roots:
             _acl(sid_text, root, "RX")
             granted.append(root)
@@ -474,9 +521,17 @@ def run_appcontainer_worker(
             kernel32.DeleteProcThreadAttributeList(attribute_list)
         if job:
             kernel32.CloseHandle(job)
+        cleanup_errors: list[str] = []
         for root in reversed(granted):
-            _acl(sid_text, root, None)
+            try:
+                _acl(sid_text, root, None)
+            except OfflineBoundaryError as exc:
+                cleanup_errors.append(str(exc))
         advapi32.FreeSid(ctypes.c_void_p(sid_pointer))
+        if cleanup_errors:
+            raise OfflineBoundaryError(
+                "AppContainer ACL cleanup failed; recovery required: " + " | ".join(cleanup_errors)
+            )
     stdout = (
         stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
     )
@@ -484,6 +539,37 @@ def run_appcontainer_worker(
         stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
     )
     return int(exit_code.value), stdout, stderr
+
+
+def run_appcontainer_worker(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    read_roots: Sequence[Path],
+    write_root: Path,
+    environment: Mapping[str, str],
+    timeout_seconds: int = 300,
+) -> tuple[int, str, str]:
+    """Run one child under one serialized, verified fixed-SID ACL lease."""
+
+    with _serialized_acl_lease(timeout_seconds=timeout_seconds):
+        returncode, stdout, stderr = _run_appcontainer_worker_with_acl(
+            command,
+            cwd=cwd,
+            read_roots=read_roots,
+            write_root=write_root,
+            environment=environment,
+            timeout_seconds=timeout_seconds,
+        )
+    cleanup_receipt = json.dumps(
+        {
+            "event": "appcontainer_acl_lease",
+            "mutex": _ACL_MUTEX_NAME,
+            "status": "released",
+        },
+        sort_keys=True,
+    )
+    return returncode, stdout, stderr + cleanup_receipt + "\n"
 
 
 def minimal_worker_environment(*, isolated_repo: Path, write_root: Path) -> dict[str, str]:
