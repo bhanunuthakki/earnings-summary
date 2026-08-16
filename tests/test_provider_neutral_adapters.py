@@ -6,18 +6,24 @@ import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
 
 from sources.adapters import (
     CorporateActionAdjustment,
+    CurrencyBinding,
+    CurrencyBindingBasis,
+    CurrencyBindingSourceFamily,
     FilingAuthority,
     FilingSectionPayload,
     FmpProviderAdapter,
     SegmentDimension,
     SyntheticSecondaryProviderAdapter,
     format_error_envelope,
+    issuer_reported_currency_binding,
+    quote_currency_binding,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +79,7 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
         ("WIX", "20-F", "business")
     ]
 
+    issuer_packet = '[{"symbol":"WIX","reportedCurrency":"USD"}]'
     estimates = adapter.parse_estimates(
         json.dumps(
             [
@@ -80,7 +87,6 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
                     "symbol": "WIX",
                     "date": "2026-03-31",
                     "quarter": 1,
-                    "reportedCurrency": "USD",
                     "revenueAvg": "125000000",
                     "revenueLow": "120000000",
                     "revenueHigh": "130000000",
@@ -90,6 +96,7 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
         ),
         "WIX",
         observed_at=OBSERVED_AT,
+        currency_packet=issuer_packet,
     )
     assert [(item.metric, item.fiscal_period, item.estimated_avg) for item in estimates] == [
         ("revenue", "Q1", Decimal("125000000"))
@@ -114,6 +121,7 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
         ("North America", Decimal("80000000"))
     ]
 
+    quote_packet = '[{"symbol":"WIX","currency":"USD"}]'
     prices = adapter.parse_prices(
         json.dumps(
             {
@@ -127,14 +135,22 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
                         "volume": 500000,
                     }
                 ],
-                "currency": "USD",
             }
         ),
         "WIX",
+        currency_packet=quote_packet,
     )
     assert [(item.as_of_date.date().isoformat(), item.close) for item in prices.points] == [
         ("2026-03-31", Decimal("105"))
     ]
+    assert (
+        estimates[0].currency_binding.source_payload_hash
+        == __import__("hashlib").sha256(issuer_packet.encode("utf-8")).hexdigest()
+    )
+    assert (
+        prices.currency_binding.source_payload_hash
+        == __import__("hashlib").sha256(quote_packet.encode("utf-8")).hexdigest()
+    )
 
 
 def test_fmp_filing_sections_parsing() -> None:
@@ -164,7 +180,12 @@ def test_fmp_estimates_parsing() -> None:
 
     adapter = FmpProviderAdapter()
     raw = wix_est_file.read_text(encoding="utf-8")
-    estimates = adapter.parse_estimates(raw, "WIX", observed_at=OBSERVED_AT)
+    estimates = adapter.parse_estimates(
+        raw,
+        "WIX",
+        observed_at=OBSERVED_AT,
+        currency_packet=(FMP_DIR / "WIX_income_statement_annual.json").read_bytes(),
+    )
 
     assert len(estimates) > 0
     rev_estimates = [e for e in estimates if e.metric == "revenue"]
@@ -207,6 +228,7 @@ def test_fmp_prices_parsing() -> None:
         raw,
         "ABNB",
         adjustment_method=CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
+        currency_packet=(FMP_DIR / "ABNB_profile.json").read_bytes(),
     )
 
     assert series.ticker == "ABNB"
@@ -267,6 +289,10 @@ def test_synthetic_secondary_provider_and_parity() -> None:
     assert len(estimates) == 1
     assert estimates[0].estimated_avg == Decimal("125000000.0")
     assert estimates[0].analyst_count == 14
+    assert (
+        estimates[0].currency_binding.source_family
+        is CurrencyBindingSourceFamily.SECONDARY_CONSENSUS
+    )
 
     # Synthetic price
     price_payload = json.dumps(
@@ -288,6 +314,15 @@ def test_synthetic_secondary_provider_and_parity() -> None:
     prices = secondary_adapter.parse_prices(price_payload, "TEST")
     assert len(prices.points) == 1
     assert prices.points[0].close == Decimal("104.2")
+    assert (
+        prices.currency_binding.source_family is CurrencyBindingSourceFamily.SECONDARY_PRICE_PAYLOAD
+    )
+    with pytest.raises(ValueError, match="currency packet"):
+        secondary_adapter.parse_prices(
+            price_payload,
+            "TEST",
+            currency_packet='{"currency":"EUR","bars":[]}',
+        )
 
 
 def test_error_envelope_redaction() -> None:
@@ -322,6 +357,25 @@ def test_contracts_reject_unsealed_or_unknown_provenance() -> None:
         FilingSectionPayload.model_validate({**common, "fetched_at": datetime(2026, 3, 31)})
 
 
+def test_currency_bindings_are_hash_sealed_and_purpose_limited() -> None:
+    issuer = issuer_reported_currency_binding(
+        '[{"symbol":"MELI","reportedCurrency":"USD"}]', "MELI"
+    )
+    quote = quote_currency_binding('[{"symbol":"MELI","currency":"USD"}]', "MELI")
+    assert issuer.basis is CurrencyBindingBasis.ISSUER_REPORTED
+    assert quote.basis is CurrencyBindingBasis.QUOTE
+    assert len(issuer.source_payload_hash) == 64
+    with pytest.raises(ValidationError):
+        CurrencyBinding.model_validate(
+            {
+                "ticker": "MELI",
+                "currency": "USD",
+                "basis": CurrencyBindingBasis.ISSUER_REPORTED,
+                "source_payload_hash": "not-a-hash",
+            }
+        )
+
+
 def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> None:
     adapter = FmpProviderAdapter()
     raw = b'{"symbol":"WIX","period":"FY","business":"text"}'
@@ -340,7 +394,10 @@ def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> Non
             }
         ]
     )
-    parsed_estimate = adapter.parse_estimates(estimate, "WIX", observed_at=OBSERVED_AT)[0]
+    issuer_packet = '[{"symbol":"WIX","reportedCurrency":"EUR"}]'
+    parsed_estimate = adapter.parse_estimates(
+        estimate, "WIX", observed_at=OBSERVED_AT, currency_packet=issuer_packet
+    )[0]
     assert parsed_estimate.observation_date == OBSERVED_AT
     assert parsed_estimate.target_period_end == datetime(2026, 3, 30, 23, tzinfo=UTC)
 
@@ -349,20 +406,39 @@ def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> Non
             '[{"symbol":"NOPE","date":"2026-03-31","reportedCurrency":"USD","revenueAvg":1}]',
             "WIX",
             observed_at=OBSERVED_AT,
+            currency_packet=issuer_packet,
         )
     with pytest.raises(ValueError, match="reportedCurrency"):
         adapter.parse_estimates(
             '[{"symbol":"WIX","date":"2026-03-31","revenueAvg":1}]',
             "WIX",
             observed_at=OBSERVED_AT,
+            currency_packet='[{"symbol":"WIX","currency":"EUR"}]',
         )
     with pytest.raises(ValueError, match="error response"):
         adapter.parse_filing_sections('{"symbol":"WIX","error":"denied"}', "WIX")
     with pytest.raises(ValueError, match="ticker"):
         adapter.parse_prices(
-            '{"symbol":"NOPE","currency":"USD","historical":[{"date":"2026-03-31","open":1,"high":2,"low":1,"close":2,"volume":3}]}',
+            '{"symbol":"NOPE","historical":[{"date":"2026-03-31","open":1,"high":2,"low":1,"close":2,"volume":3}]}',
             "WIX",
+            currency_packet='[{"symbol":"WIX","currency":"USD"}]',
         )
+
+    forged = CurrencyBinding.model_construct(
+        ticker="WIX",
+        currency="USD",
+        basis=CurrencyBindingBasis.ISSUER_REPORTED,
+        source_payload_hash="a" * 64,
+        source_family=CurrencyBindingSourceFamily.FMP_FINANCIAL_STATEMENT,
+    )
+    for bypass in (forged, forged.model_copy(update={"currency": "EUR"})):
+        with pytest.raises(ValueError, match="raw packet"):
+            adapter.parse_estimates(
+                estimate,
+                "WIX",
+                observed_at=OBSERVED_AT,
+                currency_packet=cast("bytes | str", bypass),
+            )
 
 
 def test_fixture_provider_never_forges_sec_authority_or_values() -> None:
