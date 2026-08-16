@@ -12,25 +12,29 @@ import sys
 from pathlib import Path
 
 # Vendor SDKs that must NEVER be imported outside designated adapters
-BANNED_DIRECT_IMPORTS = frozenset({
-    "anthropic",
-    "google.genai",
-    "google.generativeai",
-    "openai",
-    "mistralai",
-    "groq",
-    "together",
-})
+BANNED_DIRECT_IMPORTS = frozenset(
+    {
+        "anthropic",
+        "google.genai",
+        "google.generativeai",
+        "openai",
+        "mistralai",
+        "groq",
+        "together",
+    }
+)
 
 # Allowlisted adapter files permitted to interface with provider SDKs/CLIs
-ALLOWLISTED_FILES = frozenset({
-    "src/llm/gemini_backend.py",
-    "src/llm/openrouter_backend.py",
-    "src/llm/codex_backend.py",
-    "src/llm/cli.py",
-    "src/llm/transport.py",
-    "src/llm/frontier.py",
-})
+ALLOWLISTED_FILES = frozenset(
+    {
+        "src/llm/gemini_backend.py",
+        "src/llm/openrouter_backend.py",
+        "src/llm/codex_backend.py",
+        "src/llm/cli.py",
+        "src/llm/transport.py",
+        "src/llm/frontier.py",
+    }
+)
 
 
 def check_file(path: Path, repo_root: Path) -> list[str]:
@@ -79,7 +83,9 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
-    print("[PASS] Zero direct provider SDK imports outside allowlisted adapters. Adapter boundary is hermetic.")
+    print(
+        "[PASS] Zero direct provider SDK imports outside allowlisted adapters. Adapter boundary is hermetic."
+    )
     return 0
 
 

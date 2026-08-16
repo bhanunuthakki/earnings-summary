@@ -132,7 +132,9 @@ class IREventRunResult(BaseModel):
 
 def generate_event_id(issuer_id: str, event_kind: EventKind, stable_source_identity: str) -> str:
     """Deterministic event identifier formatted as ir-event:v1:<sha256>."""
-    key = json.dumps([issuer_id, event_kind, stable_source_identity], sort_keys=True, separators=(",", ":"))
+    key = json.dumps(
+        [issuer_id, event_kind, stable_source_identity], sort_keys=True, separators=(",", ":")
+    )
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return f"ir-event:v1:{digest}"
 
@@ -250,7 +252,11 @@ def record_ir_events_batch(
             matched_exact = False
             for row in existing_rows:
                 sig_id, ex_title, ex_date, ex_url, _ = row
-                if ex_date == obs.event_date.isoformat() and ex_title == obs.title and ex_url == obs.source_url:
+                if (
+                    ex_date == obs.event_date.isoformat()
+                    and ex_title == obs.title
+                    and ex_url == obs.source_url
+                ):
                     matched_exact = True
                     dispositions.append(
                         IREventDisposition(
@@ -339,9 +345,13 @@ def record_ir_events_batch(
     if not observations:
         run_status = "empty"
     elif rejected_count > 0 or conflict_count > 0:
-        run_status = "partial" if inserted_count + replayed_count + superseded_count > 0 else "error"
+        run_status = (
+            "partial" if inserted_count + replayed_count + superseded_count > 0 else "error"
+        )
 
-    roster_hash = hashlib.sha256(",".join(sorted({o.ticker for o in observations})).encode("utf-8")).hexdigest()
+    roster_hash = hashlib.sha256(
+        ",".join(sorted({o.ticker for o in observations})).encode("utf-8")
+    ).hexdigest()
     policy_hash = hashlib.sha256(b"ir_events_policy_v1").hexdigest()
 
     return IREventRunResult(

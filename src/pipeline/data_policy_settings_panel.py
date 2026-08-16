@@ -362,7 +362,9 @@ def read_fmp_operational_state(
                     reason_code=str(row["reason_code"]) if row["reason_code"] is not None else None,
                     state_from=str(row["state_from"]) if row["state_from"] is not None else None,
                     state_to=str(row["state_to"]) if row["state_to"] is not None else None,
-                    circuit_revision=int(row["circuit_revision"]) if row["circuit_revision"] is not None else None,
+                    circuit_revision=int(row["circuit_revision"])
+                    if row["circuit_revision"] is not None
+                    else None,
                     recorded_at=str(row["recorded_at"]),
                 )
                 for row in events_rows
@@ -653,7 +655,7 @@ def _render_sec_coverage(coverage: SecCoverageSummaryView) -> str:
         return (
             '<div class="k-well">'
             '<div class="k-card-row-title">SEC collection priority &amp; coverage gaps</div>'
-            "<p class=\"k-card-meta\">No tracked company records found in the database. SEC collection requires registered company targets.</p></div>"
+            '<p class="k-card-meta">No tracked company records found in the database. SEC collection requires registered company targets.</p></div>'
         )
     cards = (
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax('
@@ -839,4 +841,3 @@ def render_operations_settings_shell(*, db_path: Path | None = None) -> str:
         + render_data_policy_settings_panel(db_path=db_path)
         + "</div></section>"
     )
-

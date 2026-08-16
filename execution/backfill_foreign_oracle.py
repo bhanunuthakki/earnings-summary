@@ -31,7 +31,9 @@ from sources.foreign_oracle_backfill import (  # noqa: E402
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Backfill and validate foreign filers against sealed oracle.")
+    parser = argparse.ArgumentParser(
+        description="Backfill and validate foreign filers against sealed oracle."
+    )
     parser.add_argument(
         "--output-receipt",
         type=Path,
@@ -70,13 +72,69 @@ def main() -> None:
     }
 
     # Foreign Filer Documents to Validate
-    test_cases: list[tuple[str, ForeignFilingForm, bytes, bool, str, RequestedFiscalPeriod, int, date]] = [
-        ("NVO", ForeignFilingForm.FORM_20F, b'{"facts": {"Revenues": 250000000000, "OperatingProfit": 100000000000}}', True, "0001193125-26-100001", "FY", 2025, date(2025, 12, 31)),
-        ("BN", ForeignFilingForm.FORM_40F, b'{"facts": {"TotalRevenue": 95000000000, "NetIncome": 5000000000}}', True, "0001193125-26-200002", "FY", 2025, date(2025, 12, 31)),
-        ("ASML", ForeignFilingForm.FORM_20FA, b'{"facts": {"Sales": 27500000000, "GrossProfit": 14000000000}}', True, "0001193125-26-250005", "FY", 2025, date(2025, 12, 31)),
-        ("NU", ForeignFilingForm.ISSUER_IR_SPREADSHEET, b'{"facts": {"TotalRevenue": 3000000000, "NetIncome": 600000000}}', False, "NU-IR-2026-Q1", "Q1", 2026, date(2026, 3, 31)),
-        ("WIX", ForeignFilingForm.FORM_6K, b"<html>Press Release: Q1 2026 Non-inline HTML</html>", False, "0001193125-26-300003", "Q1", 2026, date(2026, 3, 31)),
-        ("BHP", ForeignFilingForm.FORM_6K, b"<html>BHP Semiannual Release</html>", False, "0001193125-26-400004", "Q1", 2025, date(2025, 9, 30)),
+    test_cases: list[
+        tuple[str, ForeignFilingForm, bytes, bool, str, RequestedFiscalPeriod, int, date]
+    ] = [
+        (
+            "NVO",
+            ForeignFilingForm.FORM_20F,
+            b'{"facts": {"Revenues": 250000000000, "OperatingProfit": 100000000000}}',
+            True,
+            "0001193125-26-100001",
+            "FY",
+            2025,
+            date(2025, 12, 31),
+        ),
+        (
+            "BN",
+            ForeignFilingForm.FORM_40F,
+            b'{"facts": {"TotalRevenue": 95000000000, "NetIncome": 5000000000}}',
+            True,
+            "0001193125-26-200002",
+            "FY",
+            2025,
+            date(2025, 12, 31),
+        ),
+        (
+            "ASML",
+            ForeignFilingForm.FORM_20FA,
+            b'{"facts": {"Sales": 27500000000, "GrossProfit": 14000000000}}',
+            True,
+            "0001193125-26-250005",
+            "FY",
+            2025,
+            date(2025, 12, 31),
+        ),
+        (
+            "NU",
+            ForeignFilingForm.ISSUER_IR_SPREADSHEET,
+            b'{"facts": {"TotalRevenue": 3000000000, "NetIncome": 600000000}}',
+            False,
+            "NU-IR-2026-Q1",
+            "Q1",
+            2026,
+            date(2026, 3, 31),
+        ),
+        (
+            "WIX",
+            ForeignFilingForm.FORM_6K,
+            b"<html>Press Release: Q1 2026 Non-inline HTML</html>",
+            False,
+            "0001193125-26-300003",
+            "Q1",
+            2026,
+            date(2026, 3, 31),
+        ),
+        (
+            "BHP",
+            ForeignFilingForm.FORM_6K,
+            b"<html>BHP Semiannual Release</html>",
+            False,
+            "0001193125-26-400004",
+            "Q1",
+            2025,
+            date(2025, 9, 30),
+        ),
     ]
 
     total_exact_matches = 0

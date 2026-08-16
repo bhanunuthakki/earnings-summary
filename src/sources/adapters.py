@@ -184,7 +184,6 @@ class ProviderAdapter(ABC):
         """Parse corporate-action adjusted historical prices from raw provider response."""
         ...
 
-
     @property
     def filing_metadata_keys(self) -> set[str]:
         """Set of top-level JSON metadata keys that should not be treated as filing sections."""
@@ -211,10 +210,16 @@ class FmpProviderAdapter(ProviderAdapter):
         fiscal_year: int | None = None,
         fetched_at: datetime | None = None,
     ) -> list[FilingSectionPayload]:
-        text = raw_content if isinstance(raw_content, str) else raw_content.decode("utf-8", errors="replace")
+        text = (
+            raw_content
+            if isinstance(raw_content, str)
+            else raw_content.decode("utf-8", errors="replace")
+        )
         raw_obj: object = json.loads(text)
         if not isinstance(raw_obj, dict):
-            raise ValueError(f"FMP filing section payload must be a JSON object, got {type(raw_obj)}")
+            raise ValueError(
+                f"FMP filing section payload must be a JSON object, got {type(raw_obj)}"
+            )
 
         payload = cast("dict[str, object]", raw_obj)
         fetch_ts = fetched_at or datetime.now(UTC)
@@ -264,7 +269,11 @@ class FmpProviderAdapter(ProviderAdapter):
         raw_content: bytes | str,
         ticker: str,
     ) -> list[DatedEstimateObservation]:
-        text = raw_content if isinstance(raw_content, str) else raw_content.decode("utf-8", errors="replace")
+        text = (
+            raw_content
+            if isinstance(raw_content, str)
+            else raw_content.decode("utf-8", errors="replace")
+        )
         payload_hash = _compute_sha256(text)
         raw_obj: object = json.loads(text)
         if not isinstance(raw_obj, list):
@@ -296,7 +305,12 @@ class FmpProviderAdapter(ProviderAdapter):
                 ("net_income", "netIncomeAvg", "netIncomeLow", "netIncomeHigh", None),
             ]
 
-            target_date_str = str(rec.get("estimatedDate") or rec.get("period_end") or rec.get("periodEndDate") or date_str).strip()
+            target_date_str = str(
+                rec.get("estimatedDate")
+                or rec.get("period_end")
+                or rec.get("periodEndDate")
+                or date_str
+            ).strip()
             target_dt = _parse_iso_utc(target_date_str) if target_date_str else obs_dt
 
             for metric_name, avg_k, low_k, high_k, count_k in metric_mappings:
@@ -338,7 +352,11 @@ class FmpProviderAdapter(ProviderAdapter):
         *,
         dim_type: str = "geography",
     ) -> list[SegmentStructureObservation]:
-        text = raw_content if isinstance(raw_content, str) else raw_content.decode("utf-8", errors="replace")
+        text = (
+            raw_content
+            if isinstance(raw_content, str)
+            else raw_content.decode("utf-8", errors="replace")
+        )
         payload_hash = _compute_sha256(text)
         raw_obj: object = json.loads(text)
         if not isinstance(raw_obj, list):
@@ -355,7 +373,11 @@ class FmpProviderAdapter(ProviderAdapter):
             if not date_str:
                 continue
             period_dt = _parse_iso_utc(date_str)
-            fy = int(str(rec["fiscalYear"])) if "fiscalYear" in rec and rec["fiscalYear"] is not None else period_dt.year
+            fy = (
+                int(str(rec["fiscalYear"]))
+                if "fiscalYear" in rec and rec["fiscalYear"] is not None
+                else period_dt.year
+            )
             fp = str(rec.get("period", "FY"))
             currency = str(rec.get("reportedCurrency", "USD")).upper()
             seg_data_obj = rec.get("data")
@@ -397,7 +419,11 @@ class FmpProviderAdapter(ProviderAdapter):
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
         currency: str = "USD",
     ) -> AdjustedPriceSeries:
-        text = raw_content if isinstance(raw_content, str) else raw_content.decode("utf-8", errors="replace")
+        text = (
+            raw_content
+            if isinstance(raw_content, str)
+            else raw_content.decode("utf-8", errors="replace")
+        )
         payload_hash = _compute_sha256(text)
         raw_obj: object = json.loads(text)
 
@@ -407,7 +433,9 @@ class FmpProviderAdapter(ProviderAdapter):
         elif isinstance(raw_obj, dict):
             raw_dict = cast("dict[str, object]", raw_obj)
             if "historical" not in raw_dict:
-                raise ValueError(f"FMP price payload dict missing required 'historical' key: {list(raw_dict.keys())}")
+                raise ValueError(
+                    f"FMP price payload dict missing required 'historical' key: {list(raw_dict.keys())}"
+                )
             historical = raw_dict.get("historical")
             if isinstance(historical, list):
                 records = cast("list[object]", historical)
@@ -493,7 +521,11 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         fiscal_year: int | None = None,
         fetched_at: datetime | None = None,
     ) -> list[FilingSectionPayload]:
-        text = raw_content if isinstance(raw_content, str) else raw_content.decode("utf-8", errors="replace")
+        text = (
+            raw_content
+            if isinstance(raw_content, str)
+            else raw_content.decode("utf-8", errors="replace")
+        )
         raw_obj: object = json.loads(text)
         payload = cast("dict[str, object]", raw_obj) if isinstance(raw_obj, dict) else {}
         fetch_ts = fetched_at or datetime.now(UTC)
@@ -531,7 +563,11 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         raw_content: bytes | str,
         ticker: str,
     ) -> list[DatedEstimateObservation]:
-        text = raw_content if isinstance(raw_content, str) else raw_content.decode("utf-8", errors="replace")
+        text = (
+            raw_content
+            if isinstance(raw_content, str)
+            else raw_content.decode("utf-8", errors="replace")
+        )
         payload_hash = _compute_sha256(text)
         raw_obj: object = json.loads(text)
         payload = cast("dict[str, object]", raw_obj) if isinstance(raw_obj, dict) else {}
@@ -557,8 +593,12 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                         fiscal_period=str(est.get("period", "Q1")),
                         metric=str(est.get("metric", "revenue")),
                         estimated_avg=Decimal(str(est.get("mean", "0"))),
-                        estimated_low=Decimal(str(est["min"])) if "min" in est and est["min"] is not None else None,
-                        estimated_high=Decimal(str(est["max"])) if "max" in est and est["max"] is not None else None,
+                        estimated_low=Decimal(str(est["min"]))
+                        if "min" in est and est["min"] is not None
+                        else None,
+                        estimated_high=Decimal(str(est["max"]))
+                        if "max" in est and est["max"] is not None
+                        else None,
                         analyst_count=int(str(count_val)) if count_val is not None else None,
                         currency=str(est.get("currency", "USD")),
                         source_payload_hash=payload_hash,
@@ -573,7 +613,11 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         *,
         dim_type: str = "geography",
     ) -> list[SegmentStructureObservation]:
-        text = raw_content if isinstance(raw_content, str) else raw_content.decode("utf-8", errors="replace")
+        text = (
+            raw_content
+            if isinstance(raw_content, str)
+            else raw_content.decode("utf-8", errors="replace")
+        )
         payload_hash = _compute_sha256(text)
         raw_obj: object = json.loads(text)
         payload = cast("dict[str, object]", raw_obj) if isinstance(raw_obj, dict) else {}
@@ -614,7 +658,11 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
         currency: str = "USD",
     ) -> AdjustedPriceSeries:
-        text = raw_content if isinstance(raw_content, str) else raw_content.decode("utf-8", errors="replace")
+        text = (
+            raw_content
+            if isinstance(raw_content, str)
+            else raw_content.decode("utf-8", errors="replace")
+        )
         payload_hash = _compute_sha256(text)
         raw_obj: object = json.loads(text)
         payload = cast("dict[str, object]", raw_obj) if isinstance(raw_obj, dict) else {}

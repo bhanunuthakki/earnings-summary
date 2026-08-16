@@ -80,8 +80,12 @@ def test_oracle_comparison_exact_matches() -> None:
     assert backfill_receipt.exact_matches_count == 2
     assert backfill_receipt.discrepancies_count == 0
     assert len(backfill_receipt.comparisons) == 2
-    assert backfill_receipt.comparisons[0].classification == OracleComparisonClassification.EXACT_MATCH
-    assert backfill_receipt.comparisons[1].classification == OracleComparisonClassification.EXACT_MATCH
+    assert (
+        backfill_receipt.comparisons[0].classification == OracleComparisonClassification.EXACT_MATCH
+    )
+    assert (
+        backfill_receipt.comparisons[1].classification == OracleComparisonClassification.EXACT_MATCH
+    )
 
 
 def test_oracle_missing_and_divergence_classifications() -> None:
@@ -107,7 +111,10 @@ def test_oracle_missing_and_divergence_classifications() -> None:
     assert receipt_partial.status == "HOLD"
     assert receipt_partial.exact_matches_count == 1
     assert receipt_partial.discrepancies_count == 1
-    assert receipt_partial.comparisons[1].classification == OracleComparisonClassification.MISSING_EXTRACTION
+    assert (
+        receipt_partial.comparisons[1].classification
+        == OracleComparisonClassification.MISSING_EXTRACTION
+    )
 
     # 2. Material disagreement (>5% difference)
     oracle_material_diff = {
@@ -115,7 +122,10 @@ def test_oracle_missing_and_divergence_classifications() -> None:
         "net_income": Decimal("40000000"),  # 20% divergence from 50M
     }
     receipt_diff = validator.compare_facts("BN", sec_receipt, oracle_material_diff)
-    assert receipt_diff.comparisons[1].classification == OracleComparisonClassification.MATERIAL_DISAGREEMENT
+    assert (
+        receipt_diff.comparisons[1].classification
+        == OracleComparisonClassification.MATERIAL_DISAGREEMENT
+    )
     assert receipt_diff.comparisons[1].divergence_ratio == Decimal("0.25")
 
     # 3. Provider normalization (<=5% difference)
@@ -124,7 +134,10 @@ def test_oracle_missing_and_divergence_classifications() -> None:
         "net_income": Decimal("49000000"),  # ~2% divergence
     }
     receipt_minor = validator.compare_facts("BN", sec_receipt, oracle_minor_diff)
-    assert receipt_minor.comparisons[1].classification == OracleComparisonClassification.PROVIDER_NORMALIZATION
+    assert (
+        receipt_minor.comparisons[1].classification
+        == OracleComparisonClassification.PROVIDER_NORMALIZATION
+    )
 
 
 def test_oracle_degraded_and_semiannual_dispositions() -> None:
@@ -144,7 +157,10 @@ def test_oracle_degraded_and_semiannual_dispositions() -> None:
     wix_backfill = validator.compare_facts("WIX", wix_sec, {})
     assert wix_backfill.status == "PASS"
     assert wix_backfill.degraded_or_na_count == 1
-    assert wix_backfill.comparisons[0].classification == OracleComparisonClassification.DEGRADED_NON_INLINE
+    assert (
+        wix_backfill.comparisons[0].classification
+        == OracleComparisonClassification.DEGRADED_NON_INLINE
+    )
 
     # 2. Semiannual quarterly slice N/A
     bhp_sec = normalizer.normalize_document(
@@ -159,4 +175,7 @@ def test_oracle_degraded_and_semiannual_dispositions() -> None:
     bhp_backfill = validator.compare_facts("BHP", bhp_sec, {})
     assert bhp_backfill.status == "PASS"
     assert bhp_backfill.degraded_or_na_count == 1
-    assert bhp_backfill.comparisons[0].classification == OracleComparisonClassification.NOT_APPLICABLE_SEMIANNUAL
+    assert (
+        bhp_backfill.comparisons[0].classification
+        == OracleComparisonClassification.NOT_APPLICABLE_SEMIANNUAL
+    )

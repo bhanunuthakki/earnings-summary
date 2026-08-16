@@ -31,7 +31,9 @@ from evals.evidence_governance import (  # noqa: E402
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify evidence-governed judging and active enforcement.")
+    parser = argparse.ArgumentParser(
+        description="Verify evidence-governed judging and active enforcement."
+    )
     parser.add_argument(
         "--output-receipt",
         type=Path,
@@ -139,7 +141,10 @@ def main() -> None:
     )
     assert rollback_eval.status == EvidenceJudgeStatus.PASS
 
-    all_passed = all(e["status"] == EvidenceJudgeStatus.PASS.value for e in evaluations) and pop_audit.is_population_complete
+    all_passed = (
+        all(e["status"] == EvidenceJudgeStatus.PASS.value for e in evaluations)
+        and pop_audit.is_population_complete
+    )
     overall_status = "PASS" if all_passed else "HOLD"
 
     summary = {

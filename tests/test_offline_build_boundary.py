@@ -133,7 +133,9 @@ def test_offline_build_determinism_and_receipt_emission(tmp_path: Path) -> None:
     boundary = OfflineBuildBoundary(repo_root=repo_root)
 
     # Monkeypatch render_artifacts to return deterministic strings
-    def mock_render(ticker: str, repo: Path, conn: sqlite3.Connection | None = None) -> tuple[str, str, str]:
+    def mock_render(
+        ticker: str, repo: Path, conn: sqlite3.Connection | None = None
+    ) -> tuple[str, str, str]:
         html = f"<html><body>Report for {ticker}</body></html>"
         md = f"# Report for {ticker}"
         sections = json.dumps({"ticker": ticker, "sections": []})
@@ -158,7 +160,9 @@ def test_offline_build_determinism_and_receipt_emission(tmp_path: Path) -> None:
     for fp_str in receipt.emitted_files:
         assert Path(fp_str).exists()
 
-    receipt_json = json.loads(Path(output_dir / "2026-03-31_offline_receipt.json").read_text(encoding="utf-8"))
+    receipt_json = json.loads(
+        Path(output_dir / "2026-03-31_offline_receipt.json").read_text(encoding="utf-8")
+    )
     assert receipt_json["build_id"] == receipt.build_id
     assert receipt_json["html_sha256"] == receipt.html_sha256
 

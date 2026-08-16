@@ -104,7 +104,9 @@ def test_reader_and_dual_read_parity_on_mock_corpus(tmp_path: Path) -> None:
             },
         ],
     }
-    (fmp_dir / "TEST_price_chart_10y_div_adj.json").write_text(json.dumps(price_payload), encoding="utf-8")
+    (fmp_dir / "TEST_price_chart_10y_div_adj.json").write_text(
+        json.dumps(price_payload), encoding="utf-8"
+    )
 
     # 2. Mock estimates (1 entry with 2 metrics = 2 observation points)
     estimates_payload = [
@@ -117,7 +119,9 @@ def test_reader_and_dual_read_parity_on_mock_corpus(tmp_path: Path) -> None:
             "epsAvg": 1.25,
         }
     ]
-    (fmp_dir / "TEST_analyst_estimates.json").write_text(json.dumps(estimates_payload), encoding="utf-8")
+    (fmp_dir / "TEST_analyst_estimates.json").write_text(
+        json.dumps(estimates_payload), encoding="utf-8"
+    )
 
     # 3. Mock geographic segments
     segments_payload = [
@@ -130,7 +134,9 @@ def test_reader_and_dual_read_parity_on_mock_corpus(tmp_path: Path) -> None:
             },
         }
     ]
-    (fmp_dir / "TEST_revenue_geographic_segmentation.json").write_text(json.dumps(segments_payload), encoding="utf-8")
+    (fmp_dir / "TEST_revenue_geographic_segmentation.json").write_text(
+        json.dumps(segments_payload), encoding="utf-8"
+    )
 
     # 4. Mock 10-K sections
     filing_payload = {
@@ -206,11 +212,27 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
     price_payload = {
         "symbol": "DIVERGE",
         "historical": [
-            {"date": "2026-03-31", "open": 100.0, "high": 105.0, "low": 99.0, "close": 104.0, "volume": 500},
-            {"date": "2026-04-01", "open": 104.0, "high": 108.0, "low": 103.0, "close": 107.0, "volume": 600},
+            {
+                "date": "2026-03-31",
+                "open": 100.0,
+                "high": 105.0,
+                "low": 99.0,
+                "close": 104.0,
+                "volume": 500,
+            },
+            {
+                "date": "2026-04-01",
+                "open": 104.0,
+                "high": 108.0,
+                "low": 103.0,
+                "close": 107.0,
+                "volume": 600,
+            },
         ],
     }
-    (fmp_dir / "DIVERGE_price_chart_10y_div_adj.json").write_text(json.dumps(price_payload), encoding="utf-8")
+    (fmp_dir / "DIVERGE_price_chart_10y_div_adj.json").write_text(
+        json.dumps(price_payload), encoding="utf-8"
+    )
 
     verifier = DualReadShadowingVerifier(repo_root=repo)
     # Patch reader to simulate adapter discrepancy
@@ -244,7 +266,9 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
 
     # 3. Estimates divergence
     est_payload = [{"symbol": "DIVERGE", "date": "2026-03-31", "revenueAvg": 1000000}]
-    (fmp_dir / "DIVERGE_analyst_estimates.json").write_text(json.dumps(est_payload), encoding="utf-8")
+    (fmp_dir / "DIVERGE_analyst_estimates.json").write_text(
+        json.dumps(est_payload), encoding="utf-8"
+    )
     verifier.reader.get_analyst_estimates = lambda t, metric=None: []  # type: ignore[method-assign]
     est_receipt = verifier.verify_estimates_parity("DIVERGE")
     assert est_receipt.parity_passed is False
@@ -253,7 +277,9 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
 
     # 4. Segments divergence
     seg_payload = [{"date": "2026-03-31", "data": {"US": 100}}]
-    (fmp_dir / "DIVERGE_revenue_geographic_segmentation.json").write_text(json.dumps(seg_payload), encoding="utf-8")
+    (fmp_dir / "DIVERGE_revenue_geographic_segmentation.json").write_text(
+        json.dumps(seg_payload), encoding="utf-8"
+    )
     verifier.reader.get_segment_structure = lambda t, dim_type="geography": []  # type: ignore[method-assign]
     seg_receipt = verifier.verify_segments_parity("DIVERGE", dim_type="geography")
     assert seg_receipt.parity_passed is False
@@ -262,7 +288,9 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
 
     # 5. Filing sections divergence
     filing_payload = {"symbol": "DIVERGE", "year": 2025, "Item 1": "Text"}
-    (fmp_dir / "DIVERGE_form_10k_2025.json").write_text(json.dumps(filing_payload), encoding="utf-8")
+    (fmp_dir / "DIVERGE_form_10k_2025.json").write_text(
+        json.dumps(filing_payload), encoding="utf-8"
+    )
     verifier.reader.get_filing_sections = lambda t, form="10-K", year=None: []  # type: ignore[method-assign]
     filing_receipt = verifier.verify_filing_sections_parity("DIVERGE", form="10-K")
     assert filing_receipt.parity_passed is False

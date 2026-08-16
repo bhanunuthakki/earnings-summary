@@ -23,8 +23,14 @@ from sources.foreign_filers import (
 
 def test_compute_sha256_bytes_known_vector() -> None:
     """Assert compute_sha256_bytes matches the standard empty-string and test string SHA-256 vectors."""
-    assert compute_sha256_bytes(b"") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    assert compute_sha256_bytes(b"hello") == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    assert (
+        compute_sha256_bytes(b"")
+        == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
+    assert (
+        compute_sha256_bytes(b"hello")
+        == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    )
 
 
 def test_foreign_filer_models_frozen_immutability() -> None:

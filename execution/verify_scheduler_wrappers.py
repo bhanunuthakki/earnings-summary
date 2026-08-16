@@ -43,8 +43,12 @@ def verify_scheduler_fleet(cron_dir: Path, manifest_path: Path) -> tuple[bool, l
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cron-dir", type=Path, default=CRON_DIR, help="Directory containing cron files")
-    parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH, help="Path to task manifest")
+    parser.add_argument(
+        "--cron-dir", type=Path, default=CRON_DIR, help="Directory containing cron files"
+    )
+    parser.add_argument(
+        "--manifest", type=Path, default=MANIFEST_PATH, help="Path to task manifest"
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     args = parser.parse_args(argv)
 
@@ -57,7 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     TMP_DIR.mkdir(parents=True, exist_ok=True)
-    (TMP_DIR / "scheduler_wrappers_receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+    (TMP_DIR / "scheduler_wrappers_receipt.json").write_text(
+        json.dumps(receipt, indent=2), encoding="utf-8"
+    )
 
     if not passed:
         sys.stderr.write(f"=== Scheduler Fleet Verification FAILED ({len(errors)} errors) ===\n")
@@ -70,7 +76,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("=== Scheduler Fleet Verification: [PASS] ===")
         print(f"  Validated Tasks: {task_count}")
-        print("  All XML definitions, wrapper scripts, and exit tails match task_manifest.json exactly.")
+        print(
+            "  All XML definitions, wrapper scripts, and exit tails match task_manifest.json exactly."
+        )
         print(f"  Receipt Emitted: {TMP_DIR / 'scheduler_wrappers_receipt.json'}")
 
     return 0

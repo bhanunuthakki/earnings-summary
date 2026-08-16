@@ -93,7 +93,10 @@ class ProviderNeutralDataReader:
 
         if self.fmp_dir.exists():
             if year is not None:
-                target = self.fmp_dir / f"{ticker_clean}_form_{form.lower().replace('-', '')}_{year}.json"
+                target = (
+                    self.fmp_dir
+                    / f"{ticker_clean}_form_{form.lower().replace('-', '')}_{year}.json"
+                )
                 if target.exists():
                     matching_files.append(target)
             else:
@@ -316,7 +319,11 @@ class DualReadShadowingVerifier:
                             discrepancies.append(f"Duplicate date {d_str} in legacy price JSON")
                         seen_dates.add(d_str)
 
-                        c_val = item_dict.get("adjClose") if item_dict.get("adjClose") is not None else item_dict.get("close")
+                        c_val = (
+                            item_dict.get("adjClose")
+                            if item_dict.get("adjClose") is not None
+                            else item_dict.get("close")
+                        )
                         if d_str and c_val is not None:
                             legacy_points[d_str] = Decimal(str(c_val))
             except Exception as e:
@@ -353,13 +360,17 @@ class DualReadShadowingVerifier:
 
         if not discrepancies:
             if raw_legacy_count != raw_adapter_count:
-                discrepancies.append(f"Price count mismatch: legacy={raw_legacy_count} vs adapter={raw_adapter_count}")
+                discrepancies.append(
+                    f"Price count mismatch: legacy={raw_legacy_count} vs adapter={raw_adapter_count}"
+                )
             else:
                 legacy_set = set(legacy_points.items())
                 adapter_set = set(adapter_points.items())
                 diff = legacy_set.symmetric_difference(adapter_set)
                 if diff:
-                    discrepancies.append(f"Price observations divergence on {len(diff)} items: {list(diff)[:5]}")
+                    discrepancies.append(
+                        f"Price observations divergence on {len(diff)} items: {list(diff)[:5]}"
+                    )
 
         passed = len(discrepancies) == 0
 
@@ -449,11 +460,15 @@ class DualReadShadowingVerifier:
 
         if not discrepancies:
             if len(legacy_metrics) != len(adapter_metrics):
-                discrepancies.append(f"Estimate metric count mismatch: legacy={len(legacy_metrics)} vs adapter={len(adapter_metrics)}")
+                discrepancies.append(
+                    f"Estimate metric count mismatch: legacy={len(legacy_metrics)} vs adapter={len(adapter_metrics)}"
+                )
             else:
                 diff = legacy_metrics.symmetric_difference(adapter_metrics)
                 if diff:
-                    discrepancies.append(f"Estimate observations divergence on {len(diff)} items: {list(diff)[:5]}")
+                    discrepancies.append(
+                        f"Estimate observations divergence on {len(diff)} items: {list(diff)[:5]}"
+                    )
 
         passed = len(discrepancies) == 0
 
@@ -471,7 +486,9 @@ class DualReadShadowingVerifier:
             verified_at=datetime.now(UTC),
         )
 
-    def verify_segments_parity(self, ticker: str, dim_type: str = "geography") -> DualReadParityReceipt:
+    def verify_segments_parity(
+        self, ticker: str, dim_type: str = "geography"
+    ) -> DualReadParityReceipt:
         """Verify segment observation equality across legacy direct JSON and adapter reader."""
         ticker_clean = ticker.upper().strip()
         fmp_dir = self.repo_root / "data" / "historical" / "fmp"
@@ -502,7 +519,9 @@ class DualReadShadowingVerifier:
                                 for s_name, val in data_dict.items():
                                     if val is not None:
                                         try:
-                                            legacy_segments.add((d_str, str(s_name), Decimal(str(val))))
+                                            legacy_segments.add(
+                                                (d_str, str(s_name), Decimal(str(val)))
+                                            )
                                         except Exception:
                                             continue
             except Exception as e:
@@ -539,11 +558,15 @@ class DualReadShadowingVerifier:
 
         if not discrepancies:
             if len(legacy_segments) != len(adapter_segments):
-                discrepancies.append(f"Segment count mismatch: legacy={len(legacy_segments)} vs adapter={len(adapter_segments)}")
+                discrepancies.append(
+                    f"Segment count mismatch: legacy={len(legacy_segments)} vs adapter={len(adapter_segments)}"
+                )
             else:
                 diff = legacy_segments.symmetric_difference(adapter_segments)
                 if diff:
-                    discrepancies.append(f"Segment divergence on {len(diff)} items: {list(diff)[:5]}")
+                    discrepancies.append(
+                        f"Segment divergence on {len(diff)} items: {list(diff)[:5]}"
+                    )
 
         passed = len(discrepancies) == 0
 
@@ -561,7 +584,9 @@ class DualReadShadowingVerifier:
             verified_at=datetime.now(UTC),
         )
 
-    def verify_filing_sections_parity(self, ticker: str, form: str = "10-K") -> DualReadParityReceipt:
+    def verify_filing_sections_parity(
+        self, ticker: str, form: str = "10-K"
+    ) -> DualReadParityReceipt:
         """Verify filing section extraction equality across legacy direct JSON and adapter reader."""
         ticker_clean = ticker.upper().strip()
         fmp_dir = self.repo_root / "data" / "historical" / "fmp"
@@ -618,7 +643,9 @@ class DualReadShadowingVerifier:
 
         if not discrepancies:
             if len(legacy_sections) != len(adapter_sections):
-                discrepancies.append(f"Filing section count mismatch: legacy={len(legacy_sections)} vs adapter={len(adapter_sections)}")
+                discrepancies.append(
+                    f"Filing section count mismatch: legacy={len(legacy_sections)} vs adapter={len(adapter_sections)}"
+                )
             else:
                 for sec_name, leg_text in legacy_sections.items():
                     if sec_name not in adapter_sections:

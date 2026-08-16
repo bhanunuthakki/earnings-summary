@@ -24,7 +24,9 @@ from pipeline.three_regime_renderer import (  # noqa: E402
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Render deterministic three-regime research artifacts.")
+    parser = argparse.ArgumentParser(
+        description="Render deterministic three-regime research artifacts."
+    )
     parser.add_argument(
         "--as-of-date",
         type=str,
@@ -49,7 +51,9 @@ def main() -> None:
     receipt = renderer.render_all_regimes_for_cohort(tickers=cohort, as_of_date=as_of_dt)
 
     output_receipt.parent.mkdir(parents=True, exist_ok=True)
-    output_receipt.write_text(json.dumps(receipt.model_dump(mode="json"), indent=2), encoding="utf-8")
+    output_receipt.write_text(
+        json.dumps(receipt.model_dump(mode="json"), indent=2), encoding="utf-8"
+    )
 
     if args.json:
         print(json.dumps(receipt.model_dump(mode="json"), indent=2))

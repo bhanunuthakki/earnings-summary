@@ -134,7 +134,7 @@ def test_validation_rejects_wrapper_without_standard_exit_tail(tmp_path: Path) -
     source = manifest.tasks[0]
     shutil.copy2(CRON_DIR / source.xml, tmp_path / source.xml)
     (tmp_path / source.wrapper).write_text(
-        "@echo off\nset \"PROJECT_ROOT=%~dp0..\"\necho done\n",
+        '@echo off\nset "PROJECT_ROOT=%~dp0.."\necho done\n',
         encoding="utf-8",
     )
     one_task = TaskManifest(
@@ -143,4 +143,6 @@ def test_validation_rejects_wrapper_without_standard_exit_tail(tmp_path: Path) -
         tasks=(source,),
     )
     errors = validate_source_tree(one_task, cron_dir=tmp_path)
-    assert any("wrapper does not end with standard 'endlocal & exit /b' exit tail" in err for err in errors)
+    assert any(
+        "wrapper does not end with standard 'endlocal & exit /b' exit tail" in err for err in errors
+    )

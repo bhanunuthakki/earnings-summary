@@ -239,7 +239,9 @@ class ForeignOracleBackfillValidator:
                 )
                 discrepancies += 1
 
-        status: Literal["PASS", "HOLD"] = "PASS" if discrepancies == 0 or (exact_matches > 0 and discrepancies == 0) else "HOLD"
+        status: Literal["PASS", "HOLD"] = (
+            "PASS" if discrepancies == 0 or (exact_matches > 0 and discrepancies == 0) else "HOLD"
+        )
 
         return ForeignBackfillReceipt(
             run_id=run_id,

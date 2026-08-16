@@ -352,4 +352,3 @@ def test_fmp_recovery_event_receipts_in_panel(tmp_path: Path) -> None:
     assert "Recent recovery receipts &amp; transitions" in html
     assert "circuit_half_open" in html
     assert "probe_window_reached" in html
-

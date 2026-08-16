@@ -196,7 +196,12 @@ FOREIGN_FILER_ROSTER: MappingProxyType[str, ForeignFilerProfile] = MappingProxyT
 class ForeignFilerNormalizer:
     """Deterministic normalizer for foreign filer SEC forms and IR packages."""
 
-    def __init__(self, roster: MappingProxyType[str, ForeignFilerProfile] | dict[str, ForeignFilerProfile] | None = None) -> None:
+    def __init__(
+        self,
+        roster: MappingProxyType[str, ForeignFilerProfile]
+        | dict[str, ForeignFilerProfile]
+        | None = None,
+    ) -> None:
         self.roster = roster if roster is not None else FOREIGN_FILER_ROSTER
 
     def normalize_document(
@@ -234,7 +239,12 @@ class ForeignFilerNormalizer:
         currency = profile.reporting_currency
 
         # 2. Semiannual filter guard (e.g. BHP)
-        if profile.cadence == ReportingCadence.SEMIANNUAL and requested_period in ("Q1", "Q2", "Q3", "Q4"):
+        if profile.cadence == ReportingCadence.SEMIANNUAL and requested_period in (
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4",
+        ):
             return ForeignNormalizationReceipt(
                 ticker=ticker_clean,
                 form=form,
@@ -268,9 +278,8 @@ class ForeignFilerNormalizer:
             )
 
         # 4. Parse admitted spreadsheet or statement cache
-        if (
-            form == ForeignFilingForm.ISSUER_IR_SPREADSHEET
-            and (not profile.admitted_document_hashes or doc_hash not in profile.admitted_document_hashes)
+        if form == ForeignFilingForm.ISSUER_IR_SPREADSHEET and (
+            not profile.admitted_document_hashes or doc_hash not in profile.admitted_document_hashes
         ):
             return ForeignNormalizationReceipt(
                 ticker=ticker_clean,

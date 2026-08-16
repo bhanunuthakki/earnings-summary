@@ -58,7 +58,9 @@ def verify_canary_corpus(manifest_path: Path, fmp_dir: Path) -> tuple[bool, list
         raw = fp.read_bytes()
         actual_sha = hashlib.sha256(raw).hexdigest()
         if actual_sha != expected_sha:
-            errors.append(f"SHA-256 mismatch for {fn}: expected {expected_sha[:12]}..., got {actual_sha[:12]}...")
+            errors.append(
+                f"SHA-256 mismatch for {fn}: expected {expected_sha[:12]}..., got {actual_sha[:12]}..."
+            )
             continue
 
         verified_count += 1
@@ -69,7 +71,9 @@ def verify_canary_corpus(manifest_path: Path, fmp_dir: Path) -> tuple[bool, list
 
 def run_cost_attribution(verified_count: int, total_bytes: int) -> dict[str, Any]:
     """Generate source-regime cost attribution baseline and receipts."""
-    accumulator = SourceCostTelemetryAccumulator(run_id=f"audit_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
+    accumulator = SourceCostTelemetryAccumulator(
+        run_id=f"audit_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    )
 
     # Simulated replay attribution:
     # 1. Vendor-only regime: direct FMP API calls
@@ -175,8 +179,12 @@ def run_cost_attribution(verified_count: int, total_bytes: int) -> dict[str, Any
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH, help="Path to canary manifest")
-    parser.add_argument("--fmp-dir", type=Path, default=FMP_DIR, help="Path to FMP historical data directory")
+    parser.add_argument(
+        "--manifest", type=Path, default=MANIFEST_PATH, help="Path to canary manifest"
+    )
+    parser.add_argument(
+        "--fmp-dir", type=Path, default=FMP_DIR, help="Path to FMP historical data directory"
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
     parser.add_argument("--check-only", action="store_true", help="Only verify manifest hashes")
     args = parser.parse_args(argv)

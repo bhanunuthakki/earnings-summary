@@ -134,8 +134,16 @@ class ThreeRegimeDeterministicRenderer:
         )
 
         fin_metrics = {
-            "revenue": Decimal("250000000000") if ticker_clean == "NVO" else Decimal("95000000000") if ticker_clean == "BN" else Decimal("1000000000"),
-            "operating_income": Decimal("100000000000") if ticker_clean == "NVO" else Decimal("20000000000") if ticker_clean == "BN" else Decimal("250000000"),
+            "revenue": Decimal("250000000000")
+            if ticker_clean == "NVO"
+            else Decimal("95000000000")
+            if ticker_clean == "BN"
+            else Decimal("1000000000"),
+            "operating_income": Decimal("100000000000")
+            if ticker_clean == "NVO"
+            else Decimal("20000000000")
+            if ticker_clean == "BN"
+            else Decimal("250000000"),
         }
 
         sec1_html = (
@@ -212,8 +220,14 @@ class ThreeRegimeDeterministicRenderer:
         )
 
         # Assemble full documents
-        full_html = f"<!DOCTYPE html><html><head><title>{ticker_clean} - {regime.value}</title></head><body>" + "".join(s.content_html for s in sections) + "</body></html>"
-        full_md = f"# Research Report: {ticker_clean} ({regime.value})\n\n" + "\n\n".join(s.content_markdown for s in sections)
+        full_html = (
+            f"<!DOCTYPE html><html><head><title>{ticker_clean} - {regime.value}</title></head><body>"
+            + "".join(s.content_html for s in sections)
+            + "</body></html>"
+        )
+        full_md = f"# Research Report: {ticker_clean} ({regime.value})\n\n" + "\n\n".join(
+            s.content_markdown for s in sections
+        )
         sections_dict: list[dict[str, Any]] = [s.model_dump(mode="json") for s in sections]
         full_json = json.dumps(sections_dict, indent=2, sort_keys=True)
 
@@ -229,7 +243,9 @@ class ThreeRegimeDeterministicRenderer:
 
         two_pass_match = (html_h1 == html_h2) and (md_h1 == md_h2) and (json_h1 == json_h2)
         if not two_pass_match:
-            raise ValueError(f"Two-pass determinism check failed for {ticker_clean} under {regime.value}")
+            raise ValueError(
+                f"Two-pass determinism check failed for {ticker_clean} under {regime.value}"
+            )
 
         return SingleRegimeRenderOutput(
             ticker=ticker_clean,
@@ -261,7 +277,11 @@ class ThreeRegimeDeterministicRenderer:
                 outputs.append(out)
 
         all_two_pass = all(o.two_pass_byte_identical for o in outputs)
-        status: Literal["PASS", "HOLD", "BLOCK"] = "PASS" if all_two_pass and len(outputs) == (len(tickers) * len(SourceRegime)) else "HOLD"
+        status: Literal["PASS", "HOLD", "BLOCK"] = (
+            "PASS"
+            if all_two_pass and len(outputs) == (len(tickers) * len(SourceRegime))
+            else "HOLD"
+        )
 
         return ThreeRegimeRenderReceipt(
             run_id=run_id,

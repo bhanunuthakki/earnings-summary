@@ -148,11 +148,19 @@ class ThreeRegimeBacktestRunner:
                 if stratum == StratumCohort.STRATUM_SPARSE_SEMIANNUAL:
                     # Semiannual has slightly lower completeness due to lack of quarterly slices
                     comp = comp * Decimal("0.90")
-                elif stratum == StratumCohort.STRATUM_20F_FOREIGN and regime == SourceRegime.REGIME_0_VENDOR_ONLY:
+                elif (
+                    stratum == StratumCohort.STRATUM_20F_FOREIGN
+                    and regime == SourceRegime.REGIME_0_VENDOR_ONLY
+                ):
                     # Vendor only has lower citation fidelity on foreign 20-F
                     cit = cit * Decimal("0.85")
 
-                composite = (dcf_fit * Decimal("0.3")) + (plaus * Decimal("0.3")) + (cit * Decimal("0.2")) + (comp * Decimal("0.2"))
+                composite = (
+                    (dcf_fit * Decimal("0.3"))
+                    + (plaus * Decimal("0.3"))
+                    + (cit * Decimal("0.2"))
+                    + (comp * Decimal("0.2"))
+                )
                 composite = round(min(Decimal("1.0"), composite), 4)
 
                 obs = RegimeEvaluationObservation(
@@ -180,13 +188,20 @@ class ThreeRegimeBacktestRunner:
         for regime in SourceRegime:
             reg_obs = [o for o in observations if o.regime == regime]
             if reg_obs:
-                avg_quality = sum((o.composite_quality_score for o in reg_obs), Decimal("0")) / Decimal(str(len(reg_obs)))
+                avg_quality = sum(
+                    (o.composite_quality_score for o in reg_obs), Decimal("0")
+                ) / Decimal(str(len(reg_obs)))
                 total_cost = sum((o.cost_attribution_usd for o in reg_obs), Decimal("0"))
                 regime_quality_summary[regime.value] = round(avg_quality, 4)
                 regime_cost_summary[regime.value] = total_cost
 
         # Regime 2 (Combined) should achieve highest quality with balanced cost
-        status: Literal["PASS", "HOLD", "BLOCK"] = "PASS" if regime_quality_summary.get(SourceRegime.REGIME_2_COMBINED.value, Decimal("0")) >= Decimal("0.90") else "HOLD"
+        status: Literal["PASS", "HOLD", "BLOCK"] = (
+            "PASS"
+            if regime_quality_summary.get(SourceRegime.REGIME_2_COMBINED.value, Decimal("0"))
+            >= Decimal("0.90")
+            else "HOLD"
+        )
 
         recommendation = (
             "Regime 2 (Combined Canonical Primary + Independent Prices) achieves superior composite quality (0.978) "

@@ -122,9 +122,7 @@ def test_upcoming_strip_renders_correctly_with_calendar_and_estimates(tmp_path: 
             "INSERT INTO expected_earnings VALUES ('NVDA', '2026-08-20', 'fmp', '2026-08-01', '2026-08-01')"
         )
         # MDB has no expected_earnings row, but past surprise release 90d ago -> estimated date
-        conn.execute(
-            "INSERT INTO earnings_surprises VALUES ('MDB', '2026-04-30', '2026-05-20')"
-        )
+        conn.execute("INSERT INTO earnings_surprises VALUES ('MDB', '2026-04-30', '2026-05-20')")
         # Add an open watch note for NVDA
         conn.execute(
             """
@@ -167,7 +165,9 @@ def test_verify_calendars_audit_cli_integration(tmp_path: Path) -> None:
             "CREATE TABLE analyst_notes (user_id TEXT, ticker TEXT, kind TEXT, body TEXT, status TEXT, created_at TEXT, updated_at TEXT)"
         )
         conn.execute("INSERT INTO tracked_companies VALUES ('AAPL', 'Apple', 'portfolio', NULL)")
-        conn.execute("INSERT INTO expected_earnings VALUES ('AAPL', '2026-08-18', 'fmp', '2026-08-01', '2026-08-01')")
+        conn.execute(
+            "INSERT INTO expected_earnings VALUES ('AAPL', '2026-08-18', 'fmp', '2026-08-01', '2026-08-01')"
+        )
         conn.commit()
 
     today = date(2026, 8, 14)

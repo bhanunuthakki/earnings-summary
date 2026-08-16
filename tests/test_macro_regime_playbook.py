@@ -214,5 +214,10 @@ def test_select_top_regimes_for_action_ranking() -> None:
     top_ids = [r.regime_id for r in top_regimes]
     assert any(
         reg in top_ids
-        for reg in ("latam_credit_stress", "currency_crisis", "saas_multiple_compression", "sovereign_debt_funding_crisis")
+        for reg in (
+            "latam_credit_stress",
+            "currency_crisis",
+            "saas_multiple_compression",
+            "sovereign_debt_funding_crisis",
+        )
     )

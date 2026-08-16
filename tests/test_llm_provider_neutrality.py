@@ -13,7 +13,9 @@ from llm.purpose import PurposeId, validate_purpose
 def test_purpose_validation_success() -> None:
     assert validate_purpose("peer_selection") == PurposeId.PEER_SELECTION
     assert validate_purpose(PurposeId.BEAR_CASE) == PurposeId.BEAR_CASE
-    assert validate_purpose("material_news_classification") == PurposeId.MATERIAL_NEWS_CLASSIFICATION
+    assert (
+        validate_purpose("material_news_classification") == PurposeId.MATERIAL_NEWS_CLASSIFICATION
+    )
 
 
 def test_purpose_validation_fails_closed_on_unknown() -> None:

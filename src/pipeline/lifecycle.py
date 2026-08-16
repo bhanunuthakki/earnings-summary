@@ -134,11 +134,18 @@ class SafeRowPruner:
         elif where_clause is not None:
             # Enforce strict syntax guard against comment, semicolon, and isolated DDL/DML keywords
             if any(sym in where_clause for sym in (";", "--", "/*", "*/")):
-                raise ValueError(f"Forbidden comment or delimiter symbol in where_clause: {where_clause}")
+                raise ValueError(
+                    f"Forbidden comment or delimiter symbol in where_clause: {where_clause}"
+                )
             import re
-            match = re.search(r"\b(union|drop|delete|insert|update|exec)\b", where_clause, re.IGNORECASE)
+
+            match = re.search(
+                r"\b(union|drop|delete|insert|update|exec)\b", where_clause, re.IGNORECASE
+            )
             if match:
-                raise ValueError(f"Forbidden SQL keyword '{match.group(0)}' in pruning where_clause: {where_clause}")
+                raise ValueError(
+                    f"Forbidden SQL keyword '{match.group(0)}' in pruning where_clause: {where_clause}"
+                )
             final_where = where_clause
             final_params.extend(params)
         else:
@@ -213,7 +220,7 @@ class SafeRowPruner:
 
         placeholders = ", ".join("?" for _ in cols)
         col_names = ", ".join(f'"{c}"' for c in cols)
-        sql = f'INSERT OR REPLACE INTO {table_name} ({col_names}) VALUES ({placeholders})'
+        sql = f"INSERT OR REPLACE INTO {table_name} ({col_names}) VALUES ({placeholders})"
 
         cursor = self.conn.cursor()
         with self.conn:

@@ -87,7 +87,9 @@ def parse_raw_provider_output(
     if provider == "openrouter_chat":
         # Simulates OpenAI/OpenRouter chat completion
         choices = raw_provider_payload.get("choices", [])
-        msg: dict[str, Any] = choices[0].get("message", {}) if (choices and isinstance(choices[0], dict)) else {}
+        msg: dict[str, Any] = (
+            choices[0].get("message", {}) if (choices and isinstance(choices[0], dict)) else {}
+        )
         usage = raw_provider_payload.get("usage", {})
         return LLMResponseEnvelope(
             purpose=purpose,
@@ -129,7 +131,9 @@ def test_provider_blind_news_classification_across_vendors() -> None:
     # 2. Gemini API payload
     gemini_raw = {
         "modelVersion": "gemini-2.5-flash-001",
-        "candidates": [{"text": "The news indicates a major product delay affecting FY26 guidance."}],
+        "candidates": [
+            {"text": "The news indicates a major product delay affecting FY26 guidance."}
+        ],
         "parsed_json": {
             "is_material": True,
             "confidence": 0.95,
@@ -141,8 +145,12 @@ def test_provider_blind_news_classification_across_vendors() -> None:
         "latency_ms": 230.0,
     }
 
-    resp_claude = parse_raw_provider_output(claude_raw, "claude_cli", "material_news_classification")
-    resp_gemini = parse_raw_provider_output(gemini_raw, "gemini_api", "material_news_classification")
+    resp_claude = parse_raw_provider_output(
+        claude_raw, "claude_cli", "material_news_classification"
+    )
+    resp_gemini = parse_raw_provider_output(
+        gemini_raw, "gemini_api", "material_news_classification"
+    )
 
     assert resp_claude.is_success
     assert resp_gemini.is_success
@@ -173,7 +181,9 @@ def test_provider_blind_decision_conditions_extraction() -> None:
         "latency_ms": 310.0,
     }
 
-    resp = parse_raw_provider_output(openrouter_raw, "openrouter_chat", "decision_conditions_extract")
+    resp = parse_raw_provider_output(
+        openrouter_raw, "openrouter_chat", "decision_conditions_extract"
+    )
     assert resp.is_success
     assert resp.parsed_payload is not None
 
@@ -185,7 +195,9 @@ def test_provider_blind_decision_conditions_extraction() -> None:
 
 def test_provider_adapter_failure_closed_handling() -> None:
     unknown_raw = {"some": "data"}
-    resp = parse_raw_provider_output(unknown_raw, "unsupported_provider", "material_news_classification")
+    resp = parse_raw_provider_output(
+        unknown_raw, "unsupported_provider", "material_news_classification"
+    )
 
     assert not resp.is_success
     assert resp.failure_code == LLMFailureCode.UNAVAILABLE

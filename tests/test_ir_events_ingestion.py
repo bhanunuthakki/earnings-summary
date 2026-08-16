@@ -22,13 +22,19 @@ def test_event_id_and_revision_id_are_deterministic() -> None:
     assert eid1 == eid2
     assert eid1.startswith("ir-event:v1:")
 
-    rev1 = generate_revision_id(eid1, {"date": "2026-11-15", "title": "Nvidia Financial Analyst Day"}, "obs-1")
-    rev2 = generate_revision_id(eid1, {"date": "2026-11-15", "title": "Nvidia Financial Analyst Day"}, "obs-1")
+    rev1 = generate_revision_id(
+        eid1, {"date": "2026-11-15", "title": "Nvidia Financial Analyst Day"}, "obs-1"
+    )
+    rev2 = generate_revision_id(
+        eid1, {"date": "2026-11-15", "title": "Nvidia Financial Analyst Day"}, "obs-1"
+    )
     assert rev1 == rev2
     assert rev1.startswith("ir-rev:v1:")
 
 
-def test_record_ir_events_batch_lifecycle_and_reconciliation(tmp_path: Path, migrated_db: Any) -> None:
+def test_record_ir_events_batch_lifecycle_and_reconciliation(
+    tmp_path: Path, migrated_db: Any
+) -> None:
     db_path = migrated_db(tmp_path / "portfolio.db")
     conn = sqlite3.connect(db_path)
 
@@ -36,7 +42,9 @@ def test_record_ir_events_batch_lifecycle_and_reconciliation(tmp_path: Path, mig
     cal_date = date(2026, 8, 15)
 
     eid = generate_event_id("NOW", "analyst_day", "https://ir.servicenow.com/events/2026")
-    rev1 = generate_revision_id(eid, {"date": "2026-10-20", "title": "Financial Analyst Day 2026"}, "obs-100")
+    rev1 = generate_revision_id(
+        eid, {"date": "2026-10-20", "title": "Financial Analyst Day 2026"}, "obs-100"
+    )
 
     obs1 = IREventObservation(
         event_id=eid,
@@ -73,7 +81,9 @@ def test_record_ir_events_batch_lifecycle_and_reconciliation(tmp_path: Path, mig
     assert res2.dispositions[0].disposition == "replayed"
 
     # 3. Rescheduled event
-    rev2 = generate_revision_id(eid, {"date": "2026-11-05", "title": "ServiceNow Analyst Day (Rescheduled)"}, "obs-101")
+    rev2 = generate_revision_id(
+        eid, {"date": "2026-11-05", "title": "ServiceNow Analyst Day (Rescheduled)"}, "obs-101"
+    )
     obs2 = IREventObservation(
         event_id=eid,
         revision_id=rev2,
@@ -116,7 +126,9 @@ def test_record_ir_events_batch_lifecycle_and_reconciliation(tmp_path: Path, mig
         observed_at=now,
     )
 
-    res4 = record_ir_events_batch(conn, [obs_cancelled], mode="apply", now=now, calendar_date=cal_date)
+    res4 = record_ir_events_batch(
+        conn, [obs_cancelled], mode="apply", now=now, calendar_date=cal_date
+    )
     assert res4.cancelled == 1
 
     cur = conn.execute("SELECT id FROM signals WHERE ticker = 'NOW'")
@@ -166,7 +178,9 @@ def test_admission_rules_reject_past_and_excessive_dates(tmp_path: Path, migrate
         observed_at=now,
     )
 
-    res = record_ir_events_batch(conn, [obs_past, obs_far], mode="apply", now=now, calendar_date=cal_date)
+    res = record_ir_events_batch(
+        conn, [obs_past, obs_far], mode="apply", now=now, calendar_date=cal_date
+    )
     assert res.rejected == 2
     assert res.inserted == 0
 

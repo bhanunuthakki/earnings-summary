@@ -33,6 +33,8 @@ def test_news_structuring_cohort_size_and_schema() -> None:
 
     assert data.get("purpose") == "news_structuring"
     cases = data.get("cases", [])
-    assert len(cases) >= 6, f"Expected at least 6 cases for news_structuring cohort, got {len(cases)}"
+    assert len(cases) >= 6, (
+        f"Expected at least 6 cases for news_structuring cohort, got {len(cases)}"
+    )
     case_ids = {c["id"] for c in cases}
     assert len(case_ids) == len(cases), "Duplicate case IDs found in news_structuring.json"

@@ -95,7 +95,9 @@ def audit_calendars(db_path: Path, today: date | None = None) -> CalendarAuditRe
                     "GROUP BY ticker, expected_date HAVING c > 1"
                 ).fetchall()
                 if dupes:
-                    issues.append(f"Found {len(dupes)} duplicate (ticker, expected_date) entries in expected_earnings")
+                    issues.append(
+                        f"Found {len(dupes)} duplicate (ticker, expected_date) entries in expected_earnings"
+                    )
 
                 # Verify future rescheduling invariant: at most one future row per ticker
                 multi_future = conn.execute(
@@ -104,19 +106,23 @@ def audit_calendars(db_path: Path, today: date | None = None) -> CalendarAuditRe
                     (cur_today.isoformat(),),
                 ).fetchall()
                 if multi_future:
-                    issues.append(f"Found {len(multi_future)} tickers with multiple upcoming future dates in expected_earnings")
+                    issues.append(
+                        f"Found {len(multi_future)} tickers with multiple upcoming future dates in expected_earnings"
+                    )
             else:
                 issues.append("expected_earnings table not found")
 
             # 3. Check upcoming strip generation
             strip_items = upcoming_earnings(db_path, cur_today, conn=conn)
             for ticker, when, is_estimate in strip_items[:10]:
-                sample_upcoming.append({
-                    "ticker": ticker,
-                    "expected_date": when.isoformat(),
-                    "is_estimate": is_estimate,
-                    "days_away": (when - cur_today).days,
-                })
+                sample_upcoming.append(
+                    {
+                        "ticker": ticker,
+                        "expected_date": when.isoformat(),
+                        "is_estimate": is_estimate,
+                        "days_away": (when - cur_today).days,
+                    }
+                )
 
         finally:
             conn.close()
@@ -171,7 +177,9 @@ def main() -> int:
             print("\nSample Upcoming Strip:")
             for s in result.sample_upcoming:
                 est_label = "est." if s["is_estimate"] else "confirmed"
-                print(f"  - {s['ticker']:<6} | {s['expected_date']} ({s['days_away']}d away) | {est_label}")
+                print(
+                    f"  - {s['ticker']:<6} | {s['expected_date']} ({s['days_away']}d away) | {est_label}"
+                )
 
     return 0 if result.integrity_pass else 1
 

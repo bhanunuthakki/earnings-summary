@@ -334,7 +334,9 @@ def validate_source_tree(
             errors.append(f"{task.wrapper}: wrapper does not resolve from its own checkout")
         if r"\.gemini\antigravity\scratch" in wrapper_text:
             errors.append(f"{task.wrapper}: wrapper hardcodes a mutable checkout")
-        wrapper_lines = [line.strip().casefold() for line in wrapper_raw.splitlines() if line.strip()]
+        wrapper_lines = [
+            line.strip().casefold() for line in wrapper_raw.splitlines() if line.strip()
+        ]
         if wrapper_lines:
             last_line = wrapper_lines[-1]
             if not ("endlocal" in last_line and "exit /b" in last_line):

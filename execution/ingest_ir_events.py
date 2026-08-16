@@ -30,11 +30,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Ingest and persist forward-dated IR events (investor/analyst days)."
     )
-    parser.add_argument("--ticker", type=str, help="Specific ticker to ingest (optional, defaults to universe)")
+    parser.add_argument(
+        "--ticker", type=str, help="Specific ticker to ingest (optional, defaults to universe)"
+    )
     parser.add_argument("--db", type=Path, help="Path to portfolio.db")
-    parser.add_argument("--dry-run", action="store_true", help="Evaluate observations without persisting")
-    parser.add_argument("--apply", action="store_true", help="Persist valid events to signals table (default)")
-    parser.add_argument("--json", action="store_true", help="Emit structured IREventRunResult JSON to stdout")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Evaluate observations without persisting"
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="Persist valid events to signals table (default)"
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Emit structured IREventRunResult JSON to stdout"
+    )
     return parser.parse_args()
 
 

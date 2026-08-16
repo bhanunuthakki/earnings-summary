@@ -93,11 +93,27 @@ def test_strata_specific_quality_adjustments() -> None:
     receipt = runner.evaluate_cohort(tickers=["WIX", "BHP"])
 
     # BHP (Semiannual) completeness adjusted
-    bhp_obs_regime2 = next(o for o in receipt.observations if o.ticker == "BHP" and o.regime == SourceRegime.REGIME_2_COMBINED)
-    wix_obs_regime2 = next(o for o in receipt.observations if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_2_COMBINED)
+    bhp_obs_regime2 = next(
+        o
+        for o in receipt.observations
+        if o.ticker == "BHP" and o.regime == SourceRegime.REGIME_2_COMBINED
+    )
+    wix_obs_regime2 = next(
+        o
+        for o in receipt.observations
+        if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_2_COMBINED
+    )
     assert bhp_obs_regime2.completeness_score < wix_obs_regime2.completeness_score
 
     # WIX (20-F) under vendor-only has reduced citation fidelity
-    wix_vendor = next(o for o in receipt.observations if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_0_VENDOR_ONLY)
-    wix_sec = next(o for o in receipt.observations if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_1_SEC_IR_PRIMARY)
+    wix_vendor = next(
+        o
+        for o in receipt.observations
+        if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_0_VENDOR_ONLY
+    )
+    wix_sec = next(
+        o
+        for o in receipt.observations
+        if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_1_SEC_IR_PRIMARY
+    )
     assert wix_vendor.citation_fidelity_score < wix_sec.citation_fidelity_score

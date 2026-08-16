@@ -3273,11 +3273,17 @@ def _business_factor_section(factors: BookFactorVector | None) -> str:
     cov_pill = ""
     if factors is not None:
         if factors.availability == "full":
-            cov_pill = f'<span class="k-pill k-pill-ok">Coverage: {factors.coverage_pct:.0f}%</span>'
+            cov_pill = (
+                f'<span class="k-pill k-pill-ok">Coverage: {factors.coverage_pct:.0f}%</span>'
+            )
         elif factors.availability == "partial":
-            cov_pill = f'<span class="k-pill k-pill-warn">Partial: {factors.coverage_pct:.0f}%</span>'
+            cov_pill = (
+                f'<span class="k-pill k-pill-warn">Partial: {factors.coverage_pct:.0f}%</span>'
+            )
         elif factors.availability == "stale":
-            cov_pill = f'<span class="k-pill k-pill-warn">Stale ({factors.coverage_pct:.0f}%)</span>'
+            cov_pill = (
+                f'<span class="k-pill k-pill-warn">Stale ({factors.coverage_pct:.0f}%)</span>'
+            )
         elif factors.availability == "missing_table":
             cov_pill = '<span class="k-pill k-pill-bad">Table Missing</span>'
         elif factors.availability == "empty_table":
@@ -3323,7 +3329,9 @@ def _business_factor_section(factors: BookFactorVector | None) -> str:
 
     excluded_note = ""
     if factors.excluded_tickers:
-        ex_chips = " ".join(f'<span class="k-chip k-chip-mono">{escape(t)}</span>' for t in factors.excluded_tickers)
+        ex_chips = " ".join(
+            f'<span class="k-chip k-chip-mono">{escape(t)}</span>' for t in factors.excluded_tickers
+        )
         excluded_note = f'<p class="muted" style="margin-top:var(--sp-2);">Unmapped / excluded holdings ({len(factors.excluded_tickers)}): {ex_chips}</p>'
 
     return f'{head}<div class="pf-exp">{"".join(rows)}</div>{excluded_note}</section>'

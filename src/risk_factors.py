@@ -953,7 +953,9 @@ def book_factor_vector(db_path: Path | str | None, repo_root: Path) -> BookFacto
     evaluated_tickers = tuple(sorted(evaluated_tickers_set))
     excluded_tickers = tuple(sorted(set(non_cash_weights.keys()) - evaluated_tickers_set))
     covered_weight = sum(non_cash_weights[t] for t in evaluated_tickers)
-    coverage_pct = (covered_weight / total_non_cash_weight * 100.0) if total_non_cash_weight > 0.0 else 0.0
+    coverage_pct = (
+        (covered_weight / total_non_cash_weight * 100.0) if total_non_cash_weight > 0.0 else 0.0
+    )
 
     # Determine availability status (PRD §6.2)
     if not evaluated_tickers or covered_weight <= 0.0:

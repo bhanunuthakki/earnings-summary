@@ -378,6 +378,7 @@ REGIME_REGISTRY: dict[str, RegimeDefinition] = {r.regime_id: r for r in INITIAL_
 # Core Pure Computation Functions (PRD §6.1)
 # ---------------------------------------------------------------------------
 
+
 def score_to_rating(score: float) -> QualitativeRating:
     """Convert a continuous regime score in [-1.0, 1.0] to a qualitative rating."""
     if score >= 0.50:

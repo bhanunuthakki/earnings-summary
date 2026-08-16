@@ -146,7 +146,9 @@ class OfflineBuildBoundary:
 
         commit_sha = get_git_commit_sha(self.repo_root)
         if (self.repo_root / ".git").exists() and commit_sha == "0" * 40:
-            violations.append("Unable to resolve valid git commit SHA from existing .git repository")
+            violations.append(
+                "Unable to resolve valid git commit SHA from existing .git repository"
+            )
 
         # 1. Check database integrity
         db_status = "OK"
@@ -164,7 +166,9 @@ class OfflineBuildBoundary:
         elif self.default_db_path.exists():
             checked_files.append(str(self.default_db_path.relative_to(self.repo_root)))
             try:
-                test_conn = connect_sqlite(str(self.default_db_path), role=SQLiteConnectionRole.READ_ONLY)
+                test_conn = connect_sqlite(
+                    str(self.default_db_path), role=SQLiteConnectionRole.READ_ONLY
+                )
                 cur = test_conn.cursor()
                 cur.execute("PRAGMA integrity_check")
                 row = cur.fetchone()
@@ -184,10 +188,15 @@ class OfflineBuildBoundary:
         if self.canary_manifest_path.exists():
             checked_files.append(str(self.canary_manifest_path.relative_to(self.repo_root)))
             try:
-                manifest_data = cast("dict[str, Any]", json.loads(self.canary_manifest_path.read_text(encoding="utf-8")))
+                manifest_data = cast(
+                    "dict[str, Any]",
+                    json.loads(self.canary_manifest_path.read_text(encoding="utf-8")),
+                )
                 files = cast("list[dict[str, Any]]", manifest_data.get("files", []))
                 # If ticker is in canary corpus (e.g. WIX or RBRK), verify its files exist
-                ticker_files = [f for f in files if str(f.get("ticker", "")).upper() == ticker_upper]
+                ticker_files = [
+                    f for f in files if str(f.get("ticker", "")).upper() == ticker_upper
+                ]
                 missing_canary: list[str] = []
                 corrupted_canary: list[str] = []
                 for cf in ticker_files:
@@ -199,9 +208,13 @@ class OfflineBuildBoundary:
                     elif expected_sha and _compute_sha256(fp.read_bytes()) != expected_sha:
                         corrupted_canary.append(fn)
                 if missing_canary:
-                    violations.append(f"Missing {len(missing_canary)} sealed canary files for {ticker_upper}: {missing_canary[:3]}")
+                    violations.append(
+                        f"Missing {len(missing_canary)} sealed canary files for {ticker_upper}: {missing_canary[:3]}"
+                    )
                 if corrupted_canary:
-                    violations.append(f"Corrupted {len(corrupted_canary)} sealed canary files (hash mismatch) for {ticker_upper}: {corrupted_canary[:3]}")
+                    violations.append(
+                        f"Corrupted {len(corrupted_canary)} sealed canary files (hash mismatch) for {ticker_upper}: {corrupted_canary[:3]}"
+                    )
                 if not missing_canary and not corrupted_canary:
                     canary_verified = True
             except Exception as e:
@@ -259,7 +272,9 @@ class OfflineBuildBoundary:
         close_conn_after = False
         active_conn = conn
         if active_conn is None and self.default_db_path.exists():
-            active_conn = connect_sqlite(str(self.default_db_path), role=SQLiteConnectionRole.READ_ONLY)
+            active_conn = connect_sqlite(
+                str(self.default_db_path), role=SQLiteConnectionRole.READ_ONLY
+            )
             close_conn_after = True
 
         try:
@@ -300,20 +315,26 @@ class OfflineBuildBoundary:
         close_conn_after = False
         active_conn = conn
         if active_conn is None and self.default_db_path.exists():
-            active_conn = connect_sqlite(str(self.default_db_path), role=SQLiteConnectionRole.READ_ONLY)
+            active_conn = connect_sqlite(
+                str(self.default_db_path), role=SQLiteConnectionRole.READ_ONLY
+            )
             close_conn_after = True
 
         try:
             # 1. Preflight check
             preflight = self.run_preflight(ticker_upper, as_of_date, conn=active_conn)
             if not preflight.passed:
-                raise RuntimeError(f"Offline build preflight failed for {ticker_upper}: {preflight.violations}")
+                raise RuntimeError(
+                    f"Offline build preflight failed for {ticker_upper}: {preflight.violations}"
+                )
 
             # 2. Input Manifest
             manifest = self.compute_input_manifest(ticker_upper, as_of_date, output_dir)
 
             # 3. First Render Pass
-            html_1, md_1, json_1 = self.render_artifacts(ticker_upper, self.repo_root, conn=active_conn)
+            html_1, md_1, json_1 = self.render_artifacts(
+                ticker_upper, self.repo_root, conn=active_conn
+            )
             html_sha = _compute_sha256(html_1)
             md_sha = _compute_sha256(md_1)
             sections_sha = _compute_sha256(json_1)
@@ -321,7 +342,9 @@ class OfflineBuildBoundary:
             # 4. Optional Determinism Check (Second Render Pass)
             two_pass_ok = True
             if verify_determinism:
-                html_2, md_2, json_2 = self.render_artifacts(ticker_upper, self.repo_root, conn=active_conn)
+                html_2, md_2, json_2 = self.render_artifacts(
+                    ticker_upper, self.repo_root, conn=active_conn
+                )
                 if html_1 != html_2:
                     raise ValueError("Determinism failure: workspace.html diff across passes")
                 if md_1 != md_2:

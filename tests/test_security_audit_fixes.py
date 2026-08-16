@@ -44,11 +44,13 @@ def test_linkify_escapes_and_filters_xss_hrefs() -> None:
     rendered = linkify("Revenue was $100M [1]", payload)
     # The unsafe link must not be rendered as an active href
     assert 'href="javascript:' not in rendered
-    assert 'href=' not in rendered
+    assert "href=" not in rendered
     assert '<span class="cite-mark cite-badge">1</span>' in rendered
 
 
-def test_approve_endpoint_default_deny_when_untrusted_headers(tmp_path: Path, migrated_db: Any) -> None:
+def test_approve_endpoint_default_deny_when_untrusted_headers(
+    tmp_path: Path, migrated_db: Any
+) -> None:
     db_path = migrated_db(tmp_path / "portfolio.db")
     app = Flask("test_alert_routes")
     ctx = AppContext(

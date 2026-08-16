@@ -63,7 +63,9 @@ def main() -> None:
 
     verified_matches = sum(1 for r in receipts if r["status"] == ParityStatus.VERIFIED_MATCH.value)
     divergences = sum(1 for r in receipts if r["status"] == ParityStatus.VERIFIED_DIVERGENCE.value)
-    indeterminates = sum(1 for r in receipts if r["status"] == ParityStatus.INDETERMINATE_UNAVAILABLE.value)
+    indeterminates = sum(
+        1 for r in receipts if r["status"] == ParityStatus.INDETERMINATE_UNAVAILABLE.value
+    )
 
     if divergences > 0 or verified_matches == 0:
         overall_status = "FAIL"

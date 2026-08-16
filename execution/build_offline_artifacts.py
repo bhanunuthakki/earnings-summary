@@ -21,7 +21,9 @@ from pipeline.offline_build_boundary import OfflineBuildBoundary  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Execute sealed offline research artifact build.")
-    parser.add_argument("--ticker", required=True, help="Target equity ticker (e.g. WIX, RBRK, GOOG)")
+    parser.add_argument(
+        "--ticker", required=True, help="Target equity ticker (e.g. WIX, RBRK, GOOG)"
+    )
     parser.add_argument(
         "--as-of-date",
         type=date.fromisoformat,
@@ -47,7 +49,9 @@ def main() -> None:
     as_of_date: date = args.as_of_date
     date_str = as_of_date.isoformat()
 
-    output_dir: Path = args.output_dir or (PROJECT_ROOT / ".tmp" / "offline_builds" / ticker / date_str)
+    output_dir: Path = args.output_dir or (
+        PROJECT_ROOT / ".tmp" / "offline_builds" / ticker / date_str
+    )
 
     boundary = OfflineBuildBoundary(repo_root=PROJECT_ROOT)
 
@@ -73,7 +77,9 @@ def main() -> None:
         print(f"  HTML SHA:      {receipt.html_sha256[:16]}...")
         print(f"  Markdown SHA:  {receipt.md_sha256[:16]}...")
         print(f"  JSON SHA:      {receipt.sections_sha256[:16]}...")
-        print(f"  Determinism:   {'VERIFIED' if receipt.deterministic_two_pass_verified else 'SKIPPED'}")
+        print(
+            f"  Determinism:   {'VERIFIED' if receipt.deterministic_two_pass_verified else 'SKIPPED'}"
+        )
         print(f"  Duration:      {receipt.duration_ms:.1f}ms")
         print(f"  Artifacts in:  {output_dir}")
 

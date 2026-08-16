@@ -66,7 +66,11 @@ def validate_purpose(purpose: str | PurposeId) -> PurposeId:
         return PurposeId(cleaned)
     except ValueError as err:
         # Check if purpose has dynamic lens/research prefix
-        if cleaned.startswith("lens:") or cleaned.startswith("research_") or cleaned.startswith("advisor_"):
+        if (
+            cleaned.startswith("lens:")
+            or cleaned.startswith("research_")
+            or cleaned.startswith("advisor_")
+        ):
             return PurposeId.BACKEND_COMPARE_JUDGE  # fallback/specialization if applicable or raise
         raise ValueError(
             f"Unknown LLM purpose '{cleaned}' is not in the closed purpose registry. "
