@@ -160,8 +160,8 @@ _ROSTER_DICT: dict[str, ForeignFilerProfile] = {
         cadence=ReportingCadence.QUARTERLY,
         reporting_currency="USD",
         admitted_document_hashes=(
-            "6719875a6438ee2cf931d86d634db560a927d6efc1fbe239a5ee0495f5735b54",
-            "bed91b33182d30c6e400a111a9cd469c18e1c2d3e47258a3f5793d6f9db6b0a8",
+            "6719875a6438ee2cf931d86d634db560a927d6efc1fbe239a5ee0495f5735b54",  # pragma: allowlist secret
+            "bed91b33182d30c6e400a111a9cd469c18e1c2d3e47258a3f5793d6f9db6b0a8",  # pragma: allowlist secret
         ),
     ),
     "WIX": ForeignFilerProfile(
