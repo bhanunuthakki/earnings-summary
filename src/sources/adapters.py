@@ -46,6 +46,12 @@ class SegmentDimension(StrEnum):
     BUSINESS_UNIT = "business_unit"
 
 
+def _normalized_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        raise ValueError("timestamps must be timezone-aware")
+    return value.astimezone(UTC)
+
+
 class FilingSectionPayload(BaseModel):
     """One section, bound to both its text and the exact source packet bytes."""
 
@@ -64,6 +70,11 @@ class FilingSectionPayload(BaseModel):
     source_url: str | None = None
     fetched_at: datetime
     provider: str = Field(..., min_length=1)
+
+    @field_validator("fetched_at")
+    @classmethod
+    def fetched_at_is_utc(cls, value: datetime) -> datetime:
+        return _normalized_utc(value)
 
 
 class DatedEstimateObservation(BaseModel):
@@ -84,6 +95,11 @@ class DatedEstimateObservation(BaseModel):
     analyst_count: int | None = Field(default=None, ge=0)
     currency: Currency
     source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
+
+    @field_validator("observation_date", "target_period_end")
+    @classmethod
+    def estimate_timestamps_are_utc(cls, value: datetime) -> datetime:
+        return _normalized_utc(value)
 
     @field_validator("estimated_avg", "estimated_low", "estimated_high")
     @classmethod
@@ -111,6 +127,11 @@ class SegmentStructureObservation(BaseModel):
     unit: str = Field(default="actual", pattern=r"^(?:actual|thousands|millions|billions)$")
     source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
 
+    @field_validator("period_end")
+    @classmethod
+    def period_end_is_utc(cls, value: datetime) -> datetime:
+        return _normalized_utc(value)
+
     @field_validator("value")
     @classmethod
     def value_is_finite(cls, value: Decimal) -> Decimal:
@@ -132,6 +153,11 @@ class AdjustedPricePoint(BaseModel):
     volume: int = Field(ge=0)
     split_ratio: Decimal | None = None
     dividend_amount: Decimal | None = None
+
+    @field_validator("as_of_date")
+    @classmethod
+    def as_of_date_is_utc(cls, value: datetime) -> datetime:
+        return _normalized_utc(value)
 
     @field_validator("open", "high", "low", "close", "split_ratio", "dividend_amount")
     @classmethod
@@ -283,7 +309,7 @@ class ProviderAdapter(ABC):
 
     @abstractmethod
     def parse_estimates(
-        self, raw_content: bytes | str, ticker: str
+        self, raw_content: bytes | str, ticker: str, *, observed_at: datetime
     ) -> list[DatedEstimateObservation]: ...
 
     @abstractmethod
@@ -364,7 +390,7 @@ class FmpProviderAdapter(ProviderAdapter):
         return results
 
     def parse_estimates(
-        self, raw_content: bytes | str, ticker: str
+        self, raw_content: bytes | str, ticker: str, *, observed_at: datetime
     ) -> list[DatedEstimateObservation]:
         raw, payload_hash = _decode_json(raw_content, label="FMP estimate payload")
         results: list[DatedEstimateObservation] = []
@@ -406,7 +432,7 @@ class FmpProviderAdapter(ProviderAdapter):
                     DatedEstimateObservation(
                         ticker=symbol,
                         provider=self.provider_name,
-                        observation_date=observed,
+                        observation_date=observed_at,
                         target_period_end=observed,
                         fiscal_year=observed.year,
                         fiscal_period=period,
@@ -485,6 +511,7 @@ class FmpProviderAdapter(ProviderAdapter):
     ) -> AdjustedPriceSeries:
         raw, payload_hash = _decode_json(raw_content, label="FMP price payload")
         root = _as_dict(raw, label="FMP price payload")
+        symbol = _requested_ticker(root, ticker)
         records = _as_list(root.get("historical"), label="FMP historical prices")
         currency = _currency(root, label="FMP price payload")
         points: list[AdjustedPricePoint] = []
@@ -514,7 +541,7 @@ class FmpProviderAdapter(ProviderAdapter):
             raise ValueError("FMP historical prices must not be empty")
         points.sort(key=lambda point: point.as_of_date)
         return AdjustedPriceSeries(
-            ticker=ticker.upper(),
+            ticker=symbol,
             provider=self.provider_name,
             adjustment_method=adjustment_method,
             currency=currency,
@@ -572,7 +599,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         return results
 
     def parse_estimates(
-        self, raw_content: bytes | str, ticker: str
+        self, raw_content: bytes | str, ticker: str, *, observed_at: datetime
     ) -> list[DatedEstimateObservation]:
         raw, payload_hash = _decode_json(raw_content, label="secondary estimate payload")
         payload = _as_dict(raw, label="secondary estimate payload")
@@ -581,7 +608,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
             _as_list(payload.get("consensus"), label="secondary consensus")
         ):
             record = _as_dict(item, label=f"secondary consensus record {index}")
-            timestamp = _parse_datetime(
+            target_period_end = _parse_datetime(
                 _require_text(record, "as_of", label="secondary consensus record"),
                 label="secondary estimate date",
             )
@@ -595,8 +622,8 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                 DatedEstimateObservation(
                     ticker=ticker.upper(),
                     provider=self.provider_name,
-                    observation_date=timestamp,
-                    target_period_end=timestamp,
+                    observation_date=observed_at,
+                    target_period_end=target_period_end,
                     fiscal_year=_parse_int(
                         record.get("year"), label="secondary estimate year", minimum=1
                     ),

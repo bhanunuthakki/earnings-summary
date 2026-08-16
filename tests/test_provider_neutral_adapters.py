@@ -22,6 +22,7 @@ from sources.adapters import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FMP_DIR = REPO_ROOT / "data" / "historical" / "fmp"
+OBSERVED_AT = datetime(2026, 4, 1, tzinfo=UTC)
 
 
 def test_frozen_schema_immutability_and_extra_forbid() -> None:
@@ -88,6 +89,7 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
             ]
         ),
         "WIX",
+        observed_at=OBSERVED_AT,
     )
     assert [(item.metric, item.fiscal_period, item.estimated_avg) for item in estimates] == [
         ("revenue", "Q1", Decimal("125000000"))
@@ -162,7 +164,7 @@ def test_fmp_estimates_parsing() -> None:
 
     adapter = FmpProviderAdapter()
     raw = wix_est_file.read_text(encoding="utf-8")
-    estimates = adapter.parse_estimates(raw, "WIX")
+    estimates = adapter.parse_estimates(raw, "WIX", observed_at=OBSERVED_AT)
 
     assert len(estimates) > 0
     rev_estimates = [e for e in estimates if e.metric == "revenue"]
@@ -261,7 +263,7 @@ def test_synthetic_secondary_provider_and_parity() -> None:
             ]
         }
     )
-    estimates = secondary_adapter.parse_estimates(est_payload, "TEST")
+    estimates = secondary_adapter.parse_estimates(est_payload, "TEST", observed_at=OBSERVED_AT)
     assert len(estimates) == 1
     assert estimates[0].estimated_avg == Decimal("125000000.0")
     assert estimates[0].analyst_count == 14
@@ -316,6 +318,8 @@ def test_contracts_reject_unsealed_or_unknown_provenance() -> None:
         FilingSectionPayload.model_validate({**common, "form": "not-a-filing"})
     with pytest.raises(ValidationError):
         FilingSectionPayload.model_validate({**common, "section_hash": "g" * 64})
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        FilingSectionPayload.model_validate({**common, "fetched_at": datetime(2026, 3, 31)})
 
 
 def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> None:
@@ -336,19 +340,29 @@ def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> Non
             }
         ]
     )
-    assert adapter.parse_estimates(estimate, "WIX")[0].observation_date == datetime(
-        2026, 3, 30, 23, tzinfo=UTC
-    )
+    parsed_estimate = adapter.parse_estimates(estimate, "WIX", observed_at=OBSERVED_AT)[0]
+    assert parsed_estimate.observation_date == OBSERVED_AT
+    assert parsed_estimate.target_period_end == datetime(2026, 3, 30, 23, tzinfo=UTC)
 
     with pytest.raises(ValueError, match="ticker"):
         adapter.parse_estimates(
             '[{"symbol":"NOPE","date":"2026-03-31","reportedCurrency":"USD","revenueAvg":1}]',
             "WIX",
+            observed_at=OBSERVED_AT,
         )
     with pytest.raises(ValueError, match="reportedCurrency"):
-        adapter.parse_estimates('[{"symbol":"WIX","date":"2026-03-31","revenueAvg":1}]', "WIX")
+        adapter.parse_estimates(
+            '[{"symbol":"WIX","date":"2026-03-31","revenueAvg":1}]',
+            "WIX",
+            observed_at=OBSERVED_AT,
+        )
     with pytest.raises(ValueError, match="error response"):
         adapter.parse_filing_sections('{"symbol":"WIX","error":"denied"}', "WIX")
+    with pytest.raises(ValueError, match="ticker"):
+        adapter.parse_prices(
+            '{"symbol":"NOPE","currency":"USD","historical":[{"date":"2026-03-31","open":1,"high":2,"low":1,"close":2,"volume":3}]}',
+            "WIX",
+        )
 
 
 def test_fixture_provider_never_forges_sec_authority_or_values() -> None:
@@ -364,6 +378,7 @@ def test_fixture_provider_never_forges_sec_authority_or_values() -> None:
         adapter.parse_estimates(
             '{"consensus":[{"as_of":"2026-03-31","year":2026,"period":"Q1","metric":"revenue","currency":"USD"}]}',
             "WIX",
+            observed_at=OBSERVED_AT,
         )
     with pytest.raises(ValueError, match="currency"):
         adapter.parse_prices(
