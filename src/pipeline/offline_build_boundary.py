@@ -97,14 +97,30 @@ def get_git_commit_sha(repo_root: Path) -> str:
 
 
 def compute_db_wal_hash(db_path: Path) -> str:
-    """Hash main sqlite DB file header plus file size for integrity pinning."""
+    """Compute full content SHA-256 hash across main sqlite DB file plus active WAL and SHM sidecars."""
     if not db_path.exists():
         return _compute_sha256(b"missing_db")
     try:
+        hasher = hashlib.sha256()
         with open(db_path, "rb") as f:
-            header = f.read(4096)
-        size = db_path.stat().st_size
-        return _compute_sha256(f"{size}:{hashlib.sha256(header).hexdigest()}".encode())
+            for chunk in iter(lambda: f.read(65536), b""):
+                hasher.update(chunk)
+
+        # Hash WAL sidecar if present
+        wal_path = db_path.parent / f"{db_path.name}-wal"
+        if wal_path.exists():
+            with open(wal_path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    hasher.update(chunk)
+
+        # Hash SHM sidecar if present
+        shm_path = db_path.parent / f"{db_path.name}-shm"
+        if shm_path.exists():
+            with open(shm_path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    hasher.update(chunk)
+
+        return hasher.hexdigest()
     except Exception as e:
         return _compute_sha256(f"err:{e}".encode())
 
@@ -129,6 +145,8 @@ class OfflineBuildBoundary:
         ticker_upper = ticker.upper()
 
         commit_sha = get_git_commit_sha(self.repo_root)
+        if (self.repo_root / ".git").exists() and commit_sha == "0" * 40:
+            violations.append("Unable to resolve valid git commit SHA from existing .git repository")
 
         # 1. Check database integrity
         db_status = "OK"
@@ -171,14 +189,20 @@ class OfflineBuildBoundary:
                 # If ticker is in canary corpus (e.g. WIX or RBRK), verify its files exist
                 ticker_files = [f for f in files if str(f.get("ticker", "")).upper() == ticker_upper]
                 missing_canary: list[str] = []
+                corrupted_canary: list[str] = []
                 for cf in ticker_files:
                     fn = str(cf.get("filename", ""))
+                    expected_sha = str(cf.get("sha256", ""))
                     fp = self.repo_root / "data" / "historical" / "fmp" / fn
                     if not fp.exists():
                         missing_canary.append(fn)
+                    elif expected_sha and _compute_sha256(fp.read_bytes()) != expected_sha:
+                        corrupted_canary.append(fn)
                 if missing_canary:
                     violations.append(f"Missing {len(missing_canary)} sealed canary files for {ticker_upper}: {missing_canary[:3]}")
-                else:
+                if corrupted_canary:
+                    violations.append(f"Corrupted {len(corrupted_canary)} sealed canary files (hash mismatch) for {ticker_upper}: {corrupted_canary[:3]}")
+                if not missing_canary and not corrupted_canary:
                     canary_verified = True
             except Exception as e:
                 violations.append(f"Failed parsing canary manifest: {e}")

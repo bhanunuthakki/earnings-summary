@@ -124,6 +124,12 @@ def _compute_sha256(data: bytes | str) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _parse_iso_utc(date_str: str) -> datetime:
+    """Parse ISO date string safely preserving timezone shifts into UTC."""
+    dt = datetime.fromisoformat(date_str.strip())
+    return dt.astimezone(UTC) if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 class ProviderAdapter(ABC):
     """Abstract boundary adapter interface for third-party financial data."""
 
@@ -264,9 +270,10 @@ class FmpProviderAdapter(ProviderAdapter):
             date_str = str(rec.get("date", "")).strip()
             if not date_str:
                 continue
-            obs_dt = datetime.fromisoformat(date_str).replace(tzinfo=UTC)
+            obs_dt = _parse_iso_utc(date_str)
 
-            fy = obs_dt.year
+            raw_fy = rec.get("fiscalYear") or rec.get("year")
+            fy = int(str(raw_fy)) if raw_fy is not None and str(raw_fy).isdigit() else obs_dt.year
             fp = "FY"
             if "quarter" in rec and rec["quarter"] is not None:
                 fp = f"Q{rec['quarter']}"
@@ -278,6 +285,9 @@ class FmpProviderAdapter(ProviderAdapter):
                 ("ebit", "ebitAvg", "ebitLow", "ebitHigh", None),
                 ("net_income", "netIncomeAvg", "netIncomeLow", "netIncomeHigh", None),
             ]
+
+            target_date_str = str(rec.get("estimatedDate") or rec.get("period_end") or rec.get("periodEndDate") or date_str).strip()
+            target_dt = _parse_iso_utc(target_date_str) if target_date_str else obs_dt
 
             for metric_name, avg_k, low_k, high_k, count_k in metric_mappings:
                 avg_val = rec.get(avg_k)
@@ -297,7 +307,7 @@ class FmpProviderAdapter(ProviderAdapter):
                         ticker=symbol,
                         provider=self.provider_name,
                         observation_date=obs_dt,
-                        target_period_end=obs_dt,
+                        target_period_end=target_dt,
                         fiscal_year=fy,
                         fiscal_period=fp,
                         metric=metric_name,
@@ -334,7 +344,7 @@ class FmpProviderAdapter(ProviderAdapter):
             date_str = str(rec.get("date", "")).strip()
             if not date_str:
                 continue
-            period_dt = datetime.fromisoformat(date_str).replace(tzinfo=UTC)
+            period_dt = _parse_iso_utc(date_str)
             fy = int(str(rec["fiscalYear"])) if "fiscalYear" in rec and rec["fiscalYear"] is not None else period_dt.year
             fp = str(rec.get("period", "FY"))
             currency = str(rec.get("reportedCurrency", "USD")).upper()
@@ -386,11 +396,12 @@ class FmpProviderAdapter(ProviderAdapter):
             records = cast("list[object]", raw_obj)
         elif isinstance(raw_obj, dict):
             raw_dict = cast("dict[str, object]", raw_obj)
+            if "historical" not in raw_dict:
+                raise ValueError(f"FMP price payload dict missing required 'historical' key: {list(raw_dict.keys())}")
             historical = raw_dict.get("historical")
             if isinstance(historical, list):
                 records = cast("list[object]", historical)
-
-        if not records and not isinstance(raw_obj, (list, dict)):
+        else:
             raise ValueError(f"FMP price payload shape unexpected: {type(raw_obj)}")
 
         points: list[AdjustedPricePoint] = []
@@ -401,7 +412,7 @@ class FmpProviderAdapter(ProviderAdapter):
             date_str = str(rec.get("date", "")).strip()
             if not date_str:
                 continue
-            dt = datetime.fromisoformat(date_str).replace(tzinfo=UTC)
+            dt = _parse_iso_utc(date_str)
 
             if adjustment_method == CorporateActionAdjustment.SPLIT_AND_DIVIDEND:
                 o = rec.get("adjOpen") if rec.get("adjOpen") is not None else rec.get("open")
@@ -419,6 +430,18 @@ class FmpProviderAdapter(ProviderAdapter):
 
             vol_val = rec.get("volume", 0)
             vol = int(str(vol_val)) if vol_val is not None else 0
+
+            # Extract corporate action details if present in payload
+            raw_split = rec.get("splitRatio")
+            if raw_split is None:
+                raw_split = rec.get("split_ratio")
+            split_ratio = Decimal(str(raw_split)) if raw_split is not None else Decimal("1.0")
+
+            raw_div = rec.get("dividend")
+            if raw_div is None:
+                raw_div = rec.get("adjDividend")
+            dividend_amount = Decimal(str(raw_div)) if raw_div is not None else None
+
             points.append(
                 AdjustedPricePoint(
                     as_of_date=dt,
@@ -427,8 +450,8 @@ class FmpProviderAdapter(ProviderAdapter):
                     low=Decimal(str(low_p)),
                     close=Decimal(str(c)),
                     volume=vol,
-                    split_ratio=Decimal("1.0"),
-                    dividend_amount=None,
+                    split_ratio=split_ratio,
+                    dividend_amount=dividend_amount,
                 )
             )
 
@@ -512,7 +535,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                 as_of_str = str(est.get("as_of", ""))
                 if not as_of_str:
                     continue
-                dt = datetime.fromisoformat(as_of_str).replace(tzinfo=UTC)
+                dt = _parse_iso_utc(as_of_str)
                 count_val = est.get("count")
                 results.append(
                     DatedEstimateObservation(
@@ -554,7 +577,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                 period_str = str(s.get("period_end", ""))
                 if not period_str:
                     continue
-                dt = datetime.fromisoformat(period_str).replace(tzinfo=UTC)
+                dt = _parse_iso_utc(period_str)
                 results.append(
                     SegmentStructureObservation(
                         ticker=ticker.upper(),
@@ -595,7 +618,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                 ts_str = str(p.get("timestamp", ""))
                 if not ts_str:
                     continue
-                dt = datetime.fromisoformat(ts_str).replace(tzinfo=UTC)
+                dt = _parse_iso_utc(ts_str)
                 div_val = p.get("dividend")
                 points.append(
                     AdjustedPricePoint(
@@ -625,9 +648,13 @@ def format_error_envelope(exc: Exception, raw_payload: str | None = None) -> dic
     msg = f"{type(exc).__name__}: {exc}"
     redacted_msg = redact(msg)
     redacted_body = redact(raw_payload) if raw_payload else None
+    if redacted_body:
+        snippet = (redacted_body[:256] + "...") if len(redacted_body) > 256 else redacted_body
+    else:
+        snippet = "none"
     return {
         "status": "error",
         "error_type": type(exc).__name__,
         "message": redacted_msg,
-        "sanitized_payload_snippet": (redacted_body[:256] + "...") if redacted_body else "none",
+        "sanitized_payload_snippet": snippet,
     }

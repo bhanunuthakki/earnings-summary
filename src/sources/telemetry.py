@@ -7,6 +7,7 @@ All events and summaries are strictly typed and credential-redacted.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -79,6 +80,7 @@ class SourceCostTelemetryAccumulator:
 
     def __init__(self, run_id: str | None = None) -> None:
         self.run_id = run_id or f"run_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+        self._lock = threading.Lock()
         self._events: list[SourceRegimeCostEvent] = []
 
     def record(
@@ -99,7 +101,7 @@ class SourceCostTelemetryAccumulator:
         notes: str | None = None,
         timestamp: datetime | None = None,
     ) -> SourceRegimeCostEvent:
-        """Record an event with sanitization on notes/endpoint."""
+        """Record an event with sanitization on notes/endpoint in a thread-safe manner."""
         sanitized_endpoint = redact(endpoint)
         sanitized_notes = redact(notes) if notes else None
 
@@ -120,12 +122,14 @@ class SourceCostTelemetryAccumulator:
             timestamp=timestamp or datetime.now(UTC),
             notes=sanitized_notes,
         )
-        self._events.append(event)
+        with self._lock:
+            self._events.append(event)
         return event
 
     @property
     def events(self) -> Sequence[SourceRegimeCostEvent]:
-        return tuple(self._events)
+        with self._lock:
+            return tuple(self._events)
 
     def summarize(self) -> SourceRegimeCostSummary:
         """Compute regime-by-regime aggregation."""
@@ -138,12 +142,17 @@ class SourceCostTelemetryAccumulator:
                 "total_provider_cost_usd": Decimal("0.0"),
                 "total_llm_cost_usd": Decimal("0.0"),
                 "total_operator_time_seconds": Decimal("0.0"),
+                "error_count": 0,
+                "retry_count": 0,
                 "tickers": set(),
             }
             for r in SourceRegime
         }
 
-        for ev in self._events:
+        with self._lock:
+            snapshot_events = list(self._events)
+
+        for ev in snapshot_events:
             b = breakdowns[ev.regime]
             b["total_calls"] += 1
             b["total_bytes"] += ev.bytes_transferred
@@ -174,7 +183,7 @@ class SourceCostTelemetryAccumulator:
         return SourceRegimeCostSummary(
             run_id=self.run_id,
             generated_at=datetime.now(UTC),
-            events_count=len(self._events),
+            events_count=len(snapshot_events),
             regimes=final_regimes,
             total_cost_usd=grand_total,
         )

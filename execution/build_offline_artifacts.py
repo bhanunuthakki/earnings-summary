@@ -36,9 +36,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--verify-determinism",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Assert byte-identical outputs across two consecutive render passes",
+        help="Assert byte-identical outputs across two consecutive render passes (pass --no-verify-determinism to disable)",
     )
     parser.add_argument("--json", action="store_true", help="Print build receipt JSON to stdout")
 

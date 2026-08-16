@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -109,22 +109,47 @@ class SafeRowPruner:
         self,
         *,
         table_name: str,
-        where_clause: str,
+        where_clause: str | None = None,
+        filters: dict[str, Any] | None = None,
         params: Sequence[Any] = (),
         dry_run: bool = True,
         save_snapshot: bool = True,
     ) -> PruneReceipt:
         """Evaluate matching rows, enforce safety gates, and delete conditionally."""
-        # Sanitize table_name to prevent SQL injection
+        # Sanitize table_name to protect against SQL injection
         if not table_name.isidentifier():
             raise ValueError(f"Invalid table name: {table_name}")
+
+        final_where = ""
+        final_params: list[Any] = []
+
+        if filters is not None:
+            clauses: list[str] = []
+            for col, val in filters.items():
+                if not str(col).isidentifier():
+                    raise ValueError(f"Invalid column identifier in filter: {col}")
+                clauses.append(f'"{col}" = ?')
+                final_params.append(val)
+            final_where = " AND ".join(clauses)
+        elif where_clause is not None:
+            # Enforce strict syntax guard against comment, semicolon, and isolated DDL/DML keywords
+            if any(sym in where_clause for sym in (";", "--", "/*", "*/")):
+                raise ValueError(f"Forbidden comment or delimiter symbol in where_clause: {where_clause}")
+            import re
+            match = re.search(r"\b(union|drop|delete|insert|update|exec)\b", where_clause, re.IGNORECASE)
+            if match:
+                raise ValueError(f"Forbidden SQL keyword '{match.group(0)}' in pruning where_clause: {where_clause}")
+            final_where = where_clause
+            final_params.extend(params)
+        else:
+            raise ValueError("Must provide either 'filters' dict or sanitized 'where_clause'")
 
         self.conn.row_factory = sqlite3.Row
         cursor = self.conn.cursor()
 
         # 1. Select matching rows
-        select_sql = f"SELECT * FROM {table_name} WHERE {where_clause}"
-        cursor.execute(select_sql, params)
+        select_sql = f"SELECT * FROM {table_name} WHERE {final_where}"
+        cursor.execute(select_sql, final_params)
         matched_rows = cursor.fetchall()
         matched_count = len(matched_rows)
 
@@ -141,13 +166,13 @@ class SafeRowPruner:
             dict_rows = [dict(r) for r in matched_rows]
             snapshot_json = json.dumps(dict_rows, default=str)
 
-        # 4. Perform deletion if not dry_run
+        # 4. Perform deletion if not dry_run inside transaction
         deleted_count = 0
         if not dry_run and matched_count > 0:
-            delete_sql = f"DELETE FROM {table_name} WHERE {where_clause}"
-            cursor.execute(delete_sql, params)
-            deleted_count = cursor.rowcount
-            self.conn.commit()
+            with self.conn:
+                delete_sql = f"DELETE FROM {table_name} WHERE {final_where}"
+                cursor.execute(delete_sql, final_params)
+                deleted_count = cursor.rowcount
 
         return PruneReceipt(
             run_id=self.run_id,
@@ -157,32 +182,41 @@ class SafeRowPruner:
             rows_deleted=deleted_count,
             threshold_limit=self.max_rows_threshold,
             executed_at=datetime.now(UTC),
-            predicate_sql=where_clause,
+            predicate_sql=final_where,
             restorable_snapshot_json=snapshot_json,
         )
 
     def restore_from_receipt(self, receipt: PruneReceipt) -> int:
-        """Restore rows from a PruneReceipt snapshot."""
+        """Restore rows from a PruneReceipt snapshot atomically."""
         if not receipt.restorable_snapshot_json:
             return 0
 
-        rows = json.loads(receipt.restorable_snapshot_json)
-        if not rows:
+        raw_rows: object = json.loads(receipt.restorable_snapshot_json)
+        if not isinstance(raw_rows, list) or not raw_rows:
             return 0
+
+        raw_list = cast("list[object]", raw_rows)
+        sample_raw: object = raw_list[0]
+        if not isinstance(sample_raw, dict):
+            return 0
+        sample: dict[str, object] = cast("dict[str, object]", sample_raw)
+        rows = cast("list[dict[str, object]]", raw_rows)
+
+        cols: list[str] = [str(k) for k in sample]
+        for col in cols:
+            if not col.isidentifier():
+                raise ValueError(f"Invalid column identifier in snapshot: {col}")
 
         table_name = receipt.target_table
         if not table_name.isidentifier():
-            raise ValueError(f"Invalid table name: {table_name}")
+            raise ValueError(f"Invalid target table: {table_name}")
+
+        placeholders = ", ".join("?" for _ in cols)
+        col_names = ", ".join(f'"{c}"' for c in cols)
+        sql = f'INSERT OR REPLACE INTO {table_name} ({col_names}) VALUES ({placeholders})'
 
         cursor = self.conn.cursor()
-        restored = 0
-        for r in rows:
-            cols = list(r.keys())
-            placeholders = ", ".join("?" for _ in cols)
-            col_names = ", ".join(cols)
-            sql = f"INSERT OR REPLACE INTO {table_name} ({col_names}) VALUES ({placeholders})"
-            cursor.execute(sql, list(r.values()))
-            restored += 1
-
-        self.conn.commit()
-        return restored
+        with self.conn:
+            for r in rows:
+                cursor.execute(sql, [r.get(c) for c in cols])
+        return len(rows)
