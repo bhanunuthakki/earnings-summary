@@ -192,7 +192,6 @@ _FILESYSTEM_PREFIXES = (
     "data/ticker_specific/",
     "data/valuation_basis/",
     ".tmp/",
-    "tmp/",
     "micro_thesis/",
     "transcripts/",
 )
@@ -914,8 +913,6 @@ def _iter_files(root: Path) -> Generator[Path]:
             children = sorted(entries, key=lambda entry: entry.name.casefold())
         directories: list[Path] = []
         for entry in children:
-            if entry.name in {"node_modules", ".git", ".claude", "worktrees", "__pycache__"}:
-                continue
             path = Path(entry.path)
             _require_no_reparse_points(path)
             if entry.is_symlink():
