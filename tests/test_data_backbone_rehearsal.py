@@ -569,7 +569,8 @@ def test_run_upgrade_explicitly_authorizes_the_isolated_candidate(
 
     monkeypatch.setattr(cli.subprocess, "run", complete)
 
-    assert cli._run_upgrade(ROOT, candidate, backup) == expected
+    run_upgrade = getattr(cli, "_run_upgrade")
+    assert run_upgrade(ROOT, candidate, backup) == expected
     assert captured[captured.index("--runtime-root") + 1] == str(candidate.parents[1])
     assert "--allow-isolated-db" in captured
 
