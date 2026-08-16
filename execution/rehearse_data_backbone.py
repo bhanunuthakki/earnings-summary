@@ -40,11 +40,11 @@ from provenance.data_backbone_rehearsal import (  # noqa: E402
     RuntimeIdentity,
     SwapRehearsalRolledBackError,
     UpgradeTerminalReceipt,
+    attest_closed_database_storage,
     build_corpus_manifest,
     build_table_commitments,
     copy_corpus_verified,
     database_revision,
-    database_storage_identity,
     exercise_swap_and_rollback,
     online_backup_read_only,
     require_disk_space,
@@ -351,7 +351,7 @@ def _receipt_common(
     **terminal: object,
 ) -> RehearsalReceipt:
     return seal_rehearsal_receipt(
-        schema_version="data-backbone-rehearsal/v1",
+        schema_version="data-backbone-rehearsal/v2",
         mode=mode,
         status=status,
         main_commit=commit,
@@ -403,7 +403,7 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
         expected_head=source_revision,
         read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
     )
-    source_storage = database_storage_identity(source_db)
+    source_storage = attest_closed_database_storage(source_db)
     source_manifest = build_corpus_manifest(source_corpus)
     preservation_before = build_table_commitments(
         source_db,
@@ -448,6 +448,12 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
     work_dir.mkdir(parents=True)
     _event("data_backbone_rehearsal_started", work_directory=work_dir)
     online_backup_read_only(source_db, candidate)
+    candidate_verification_before_upgrade = verify_database(
+        candidate,
+        expected_head=source_revision,
+        read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    )
+    candidate_storage_before_upgrade = attest_closed_database_storage(candidate)
     source_snapshot = work_dir / "source-snapshot.db"
     _copy_database_exact(candidate, source_snapshot)
     snapshot_commitments = build_table_commitments(candidate)
@@ -471,13 +477,21 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
         raise RehearsalError("source corpus changed during rehearsal")
     if copied_manifest_after != copied_manifest:
         raise RehearsalError("copied corpus changed outside governed offline replay")
-    source_storage_after = database_storage_identity(source_db)
-    source_sha_after = sha256_file(source_db)
+    source_storage_after = attest_closed_database_storage(source_db)
+    source_sha_after = source_storage_after.storage.entries[0].content_sha256
     if source_storage_after != source_storage:
         raise RehearsalError("source database storage bytes changed during rehearsal")
-    preservation_after = build_table_commitments(candidate)
+    candidate_storage_after = attest_closed_database_storage(candidate)
+    preservation_after = build_table_commitments(
+        candidate,
+        read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    )
     require_equal_commitments(preservation_before, preservation_after)
-    candidate_verification = verify_database(candidate, expected_head=ACTIVE_HEAD)
+    candidate_verification = verify_database(
+        candidate,
+        expected_head=ACTIVE_HEAD,
+        read_mode=DatabaseReadMode.CLOSED_IMMUTABLE_SOURCE,
+    )
 
     swap_dir = work_dir / "swap"
     swap_live = swap_dir / "rehearsal-live.db"
@@ -526,7 +540,10 @@ def run(args: argparse.Namespace) -> RehearsalReceipt:
         started_at=started_at,
         source_database_after_sha256=source_sha_after,
         source_storage_after=source_storage_after,
+        candidate_database_before_upgrade=candidate_verification_before_upgrade,
+        candidate_storage_before_upgrade=candidate_storage_before_upgrade,
         candidate_database_after=candidate_verification,
+        candidate_storage_after=candidate_storage_after,
         source_corpus_after=source_manifest_after,
         copied_corpus_after=copied_manifest_after,
         preservation_after=preservation_after,

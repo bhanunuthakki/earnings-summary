@@ -9,14 +9,18 @@ Directive: directives/data_provenance.md §2 — "LLM-extracted documents must
 carry parent_document_id pointing at the primary document the LLM read from."
 
 Derivation: src/provenance/llm_extracted_parent.py::resolve_parent — matches on
-(ticker, period_end date, the doc_type's allowed parent (source_type, doc_type)
-pairs), picking the earliest-``fetched_at`` candidate when more than one exists.
-See that module's docstring for why "earliest" is the mechanically correct
-tie-break, not a guess.
+an exact derived processed-transcript basename for call summaries, or the
+canonical IR source path plus stored period for investor-update summaries. Zero
+or ambiguous candidates remain unresolved; no fiscal-calendar fallback is
+permitted.
 
-Rows with zero candidate parents are left NULL and printed in the report — no
-guessing. Only NULL columns are ever written (idempotent; re-running after new
-primary documents land resolves the rows that were previously unresolvable).
+This is a document-lineage repair only. It does not mutate legacy facts: a
+period correction for historical KPI records requires a separately governed
+fact-plane publication rather than a new legacy-fact write path.
+
+Rows with zero or ambiguous candidate parents are left NULL and printed in the
+report — no guessing. Apply mode updates only orphan rows and is idempotent;
+re-running after new primary documents land can resolve previously blocked rows.
 
 Usage:
     python execution/backfill_llm_extracted_parents.py                 # dry run, all tickers
@@ -68,7 +72,8 @@ def backfill(
     log: bool = True,
 ) -> BackfillResult:
     """Walk orphan llm_extracted documents rows and fill parent_document_id."""
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    role = SQLiteConnectionRole.READ_ONLY if dry_run else SQLiteConnectionRole.WRITER
+    conn = connect_sqlite(db_path, role=role, schema_preflight=not dry_run)
     conn.row_factory = sqlite3.Row
     try:
         sql = (
@@ -100,7 +105,7 @@ def backfill(
                 if log:
                     print(
                         f"  UNRESOLVED id={row['id']} {row['ticker']} {row['doc_type']} "
-                        f"{period_label} - no candidate parent document on file"
+                        f"{period_label} - no unique exact-basename transcript parent"
                     )
                 continue
             result.resolved += 1

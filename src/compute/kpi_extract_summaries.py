@@ -303,7 +303,9 @@ def extract_for_ticker(
     canonical_units = _canonical_units_from_holdings(holdings, tier_1_names, fact_units=fact_units)
 
     for quarter, year, source_path, spec in sources:
-        period_end = _period_end(ticker, quarter, year)
+        period_end = _canonical_summary_period_end(
+            conn, ticker, _period_end(ticker, quarter, year), source_path, spec.doc_type
+        )
         period_label = f"Q{quarter} {year} [{spec.name}]"
         log.quarters_attempted.append(period_label)
 
@@ -565,11 +567,12 @@ def _ensure_summary_document_row(
         conn, ticker=ticker, doc_type=doc_type, file_path=file_path_str, period_end=period_end
     )
     parent_document_id = match.parent_document_id if match is not None else None
+    canonical_period_end = match.parent_period_end if match is not None else period_end
     common_args = (
         ticker,
         SourceType.LLM_EXTRACTED.value,
         doc_type,
-        period_end,
+        canonical_period_end,
         file_path_str,
         sha,
         datetime.now(UTC),
@@ -608,6 +611,28 @@ def _ensure_summary_document_row(
     )
     conn.commit()
     return doc_id
+
+
+def _canonical_summary_period_end(
+    conn: sqlite3.Connection,
+    ticker: str,
+    fallback_period_end: datetime,
+    path: Path,
+    doc_type: str,
+) -> datetime:
+    """Use the resolved source's period when summary lineage is deterministic.
+
+    The filename fiscal map remains a write-time fallback for newly-created
+    unlinked summaries. It is never used to force a legacy parent match.
+    """
+    match = resolve_parent(
+        conn,
+        ticker=ticker,
+        doc_type=doc_type,
+        file_path=str(path).replace("\\", "/"),
+        period_end=fallback_period_end,
+    )
+    return match.parent_period_end if match is not None else fallback_period_end
 
 
 def _llm_extract(
@@ -1032,7 +1057,9 @@ def capture_for_ticker(
     # persist guards, or unparseable — surfaced in the capture coverage log.
     cov_seen = cov_captured = cov_dropped = cov_unparseable = 0
     for quarter, year, source_path, spec in sources:
-        period_end = _period_end(ticker, quarter, year)
+        period_end = _canonical_summary_period_end(
+            conn, ticker, _period_end(ticker, quarter, year), source_path, spec.doc_type
+        )
         period_label = f"Q{quarter} {year} [{spec.name}]"
         log.quarters_attempted.append(period_label)
         try:

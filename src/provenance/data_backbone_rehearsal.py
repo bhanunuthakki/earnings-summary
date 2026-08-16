@@ -149,6 +149,24 @@ class DatabaseStorageIdentity(BaseModel):
         return self
 
 
+class ClosedDatabaseStorageAttestation(BaseModel):
+    """A sealed storage identity plus explicit proof every SQLite sidecar is absent."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    path: str = Field(min_length=1)
+    storage: DatabaseStorageIdentity
+    wal_absent: Literal[True]
+    shm_absent: Literal[True]
+    journal_absent: Literal[True]
+
+    @model_validator(mode="after")
+    def _contains_only_the_closed_main_file(self) -> Self:
+        if tuple(entry.suffix for entry in self.storage.entries) != ("",):
+            raise ValueError("closed storage attestation cannot contain SQLite sidecars")
+        return self
+
+
 class OfflineTerminalReceipt(BaseModel):
     """The subset of refresh_cache's closed receipt needed by the gate."""
 
@@ -202,12 +220,50 @@ class SwapRollbackEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     mechanism: Literal["windows_replace_file", "portable_rename_pair"]
+    live_path: str = Field(min_length=1)
+    candidate_path: str = Field(min_length=1)
+    rollback_path: str = Field(min_length=1)
+    failed_candidate_path: str = Field(min_length=1)
     live_sha256_before: str = Field(pattern=_SHA256_PATTERN)
     candidate_sha256: str = Field(pattern=_SHA256_PATTERN)
     installed_sha256: str = Field(pattern=_SHA256_PATTERN)
     restored_live_sha256: str = Field(pattern=_SHA256_PATTERN)
     failed_candidate_sha256: str = Field(pattern=_SHA256_PATTERN)
+    live_storage_before: ClosedDatabaseStorageAttestation
+    candidate_storage_before: ClosedDatabaseStorageAttestation
+    installed_live_storage: ClosedDatabaseStorageAttestation
+    restored_live_storage: ClosedDatabaseStorageAttestation
+    failed_candidate_storage: ClosedDatabaseStorageAttestation
     rollback_restored: Literal[True]
+
+    @model_validator(mode="after")
+    def _storage_commitments_match_file_commitments(self) -> Self:
+        checks = (
+            (self.live_storage_before, self.live_sha256_before),
+            (self.candidate_storage_before, self.candidate_sha256),
+            (self.installed_live_storage, self.installed_sha256),
+            (self.restored_live_storage, self.restored_live_sha256),
+            (self.failed_candidate_storage, self.failed_candidate_sha256),
+        )
+        if any(attestation.storage.entries[0].content_sha256 != sha for attestation, sha in checks):
+            raise ValueError("rollback storage closure does not match file commitments")
+        if self.installed_sha256 != self.candidate_sha256:
+            raise ValueError("installed live identity does not match the candidate")
+        if self.failed_candidate_sha256 != self.candidate_sha256:
+            raise ValueError("failed candidate identity does not match the candidate")
+        if self.restored_live_sha256 != self.live_sha256_before:
+            raise ValueError("restored live identity does not match original live")
+        if self.live_storage_before.path != self.live_path:
+            raise ValueError("live storage path does not match rollback path")
+        if self.candidate_storage_before.path != self.candidate_path:
+            raise ValueError("candidate storage path does not match rollback path")
+        if self.installed_live_storage.path != self.live_path:
+            raise ValueError("installed live storage path does not match rollback path")
+        if self.restored_live_storage.path != self.live_path:
+            raise ValueError("restored live storage path does not match rollback path")
+        if self.failed_candidate_storage.path != self.failed_candidate_path:
+            raise ValueError("failed candidate storage path does not match rollback path")
+        return self
 
 
 class RuntimeIdentity(BaseModel):
@@ -266,7 +322,7 @@ class RehearsalReceipt(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal["data-backbone-rehearsal/v1"]
+    schema_version: Literal["data-backbone-rehearsal/v2"]
     mode: Literal["plan", "apply_rehearsal"]
     status: Literal["planned", "passed"]
     main_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -280,10 +336,13 @@ class RehearsalReceipt(BaseModel):
     source_schema_before: str = Field(min_length=1)
     expected_schema_after: str = Field(min_length=1)
     source_database_before: DatabaseVerification
-    source_storage_before: DatabaseStorageIdentity
+    source_storage_before: ClosedDatabaseStorageAttestation
     source_database_after_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
-    source_storage_after: DatabaseStorageIdentity | None = None
+    source_storage_after: ClosedDatabaseStorageAttestation | None = None
+    candidate_database_before_upgrade: DatabaseVerification | None = None
+    candidate_storage_before_upgrade: ClosedDatabaseStorageAttestation | None = None
     candidate_database_after: DatabaseVerification | None = None
+    candidate_storage_after: ClosedDatabaseStorageAttestation | None = None
     source_corpus_before: CorpusManifest
     source_corpus_after: CorpusManifest | None = None
     copied_corpus_after: CorpusManifest | None = None
@@ -307,7 +366,10 @@ class RehearsalReceipt(BaseModel):
         terminal = (
             self.source_database_after_sha256,
             self.source_storage_after,
+            self.candidate_database_before_upgrade,
+            self.candidate_storage_before_upgrade,
             self.candidate_database_after,
+            self.candidate_storage_after,
             self.source_corpus_after,
             self.copied_corpus_after,
             self.preservation_after,
@@ -320,6 +382,47 @@ class RehearsalReceipt(BaseModel):
             raise ValueError("planned receipt cannot claim apply evidence")
         if self.status == "passed" and any(item is None for item in terminal):
             raise ValueError("passed receipt requires complete apply evidence")
+        if self.source_storage_before.path != self.source_database:
+            raise ValueError("source storage-before path does not match source database")
+        if self.source_database_before.content_sha256 != (
+            self.source_storage_before.storage.entries[0].content_sha256
+        ):
+            raise ValueError("source verification-before does not match closed storage")
+        if self.status == "passed":
+            source_storage_after = self.source_storage_after
+            source_database_after_sha256 = self.source_database_after_sha256
+            candidate_database_before_upgrade = self.candidate_database_before_upgrade
+            candidate_storage_before_upgrade = self.candidate_storage_before_upgrade
+            candidate_database_after = self.candidate_database_after
+            candidate_storage_after = self.candidate_storage_after
+            if (
+                source_storage_after is None
+                or source_database_after_sha256 is None
+                or candidate_database_before_upgrade is None
+                or candidate_storage_before_upgrade is None
+                or candidate_database_after is None
+                or candidate_storage_after is None
+            ):
+                raise ValueError("passed receipt requires complete closed-storage evidence")
+            if source_storage_after.path != self.source_database:
+                raise ValueError("source storage-after path does not match source database")
+            if (
+                source_database_after_sha256
+                != source_storage_after.storage.entries[0].content_sha256
+            ):
+                raise ValueError("source verification-after does not match closed storage")
+            if (
+                candidate_database_before_upgrade.path != candidate_storage_before_upgrade.path
+                or candidate_database_before_upgrade.content_sha256
+                != candidate_storage_before_upgrade.storage.entries[0].content_sha256
+            ):
+                raise ValueError("candidate verification-before does not match closed storage")
+            if (
+                candidate_database_after.path != candidate_storage_after.path
+                or candidate_database_after.content_sha256
+                != candidate_storage_after.storage.entries[0].content_sha256
+            ):
+                raise ValueError("candidate verification-after does not match closed storage")
         provisional = bool(info.context and info.context.get("allow_internal_provisional"))
         if not (provisional and self.receipt_sha256 == "0" * 64) and (
             self.receipt_sha256 != rehearsal_receipt_payload_sha256(self)
@@ -448,6 +551,21 @@ def require_sidecar_free_database(path: Path) -> None:
             "source database must be a closed restored snapshot with no SQLite sidecars: "
             + ", ".join(found)
         )
+
+
+def attest_closed_database_storage(path: Path) -> ClosedDatabaseStorageAttestation:
+    """Seal a database identity while making every closed-storage predicate explicit."""
+    resolved = path.resolve(strict=True)
+    require_sidecar_free_database(resolved)
+    storage = database_storage_identity(resolved)
+    require_sidecar_free_database(resolved)
+    return ClosedDatabaseStorageAttestation(
+        path=str(resolved),
+        storage=storage,
+        wal_absent=True,
+        shm_absent=True,
+        journal_absent=True,
+    )
 
 
 @contextmanager
@@ -800,13 +918,16 @@ def exercise_swap_and_rollback(
             raise RehearsalError("throwaway swap path escapes explicit rehearsal root") from exc
     if rollback.exists() or failed.exists():
         raise RehearsalError("throwaway rollback destinations must not already exist")
-    live_sha = sha256_file(live)
-    candidate_sha = sha256_file(candidate)
+    live_storage_before = attest_closed_database_storage(live)
+    candidate_storage_before = attest_closed_database_storage(candidate)
+    live_sha = live_storage_before.storage.entries[0].content_sha256
+    candidate_sha = candidate_storage_before.storage.entries[0].content_sha256
     mechanism: Literal["windows_replace_file", "portable_rename_pair"] = (
         "windows_replace_file" if os.name == "nt" else "portable_rename_pair"
     )
     _replace_throwaway_live(live=live, candidate=candidate, rollback=rollback)
-    installed_sha = sha256_file(live)
+    installed_live_storage = attest_closed_database_storage(live)
+    installed_sha = installed_live_storage.storage.entries[0].content_sha256
     if installed_sha != candidate_sha:
         raise RehearsalError("throwaway swap installed bytes differ from candidate")
     try:
@@ -815,34 +936,56 @@ def exercise_swap_and_rollback(
     except Exception as exc:
         live.rename(failed)
         rollback.rename(live)
-        restored_sha = sha256_file(live)
-        failed_sha = sha256_file(failed)
+        restored_live_storage = attest_closed_database_storage(live)
+        failed_candidate_storage = attest_closed_database_storage(failed)
+        restored_sha = restored_live_storage.storage.entries[0].content_sha256
+        failed_sha = failed_candidate_storage.storage.entries[0].content_sha256
         if restored_sha != live_sha:
             raise RehearsalError("throwaway rollback did not restore original live bytes") from exc
         evidence = SwapRollbackEvidence(
             mechanism=mechanism,
+            live_path=str(live),
+            candidate_path=str(candidate),
+            rollback_path=str(rollback),
+            failed_candidate_path=str(failed),
             live_sha256_before=live_sha,
             candidate_sha256=candidate_sha,
             installed_sha256=installed_sha,
             restored_live_sha256=restored_sha,
             failed_candidate_sha256=failed_sha,
+            live_storage_before=live_storage_before,
+            candidate_storage_before=candidate_storage_before,
+            installed_live_storage=installed_live_storage,
+            restored_live_storage=restored_live_storage,
+            failed_candidate_storage=failed_candidate_storage,
             rollback_restored=True,
         )
         raise SwapRehearsalRolledBackError(f"{exc}; throwaway rollback restored", evidence) from exc
 
     live.rename(failed)
     rollback.rename(live)
-    restored_sha = sha256_file(live)
-    failed_sha = sha256_file(failed)
+    restored_live_storage = attest_closed_database_storage(live)
+    failed_candidate_storage = attest_closed_database_storage(failed)
+    restored_sha = restored_live_storage.storage.entries[0].content_sha256
+    failed_sha = failed_candidate_storage.storage.entries[0].content_sha256
     if restored_sha != live_sha or failed_sha != candidate_sha:
         raise RehearsalError("throwaway rollback evidence differs from commitments")
     return SwapRollbackEvidence(
         mechanism=mechanism,
+        live_path=str(live),
+        candidate_path=str(candidate),
+        rollback_path=str(rollback),
+        failed_candidate_path=str(failed),
         live_sha256_before=live_sha,
         candidate_sha256=candidate_sha,
         installed_sha256=installed_sha,
         restored_live_sha256=restored_sha,
         failed_candidate_sha256=failed_sha,
+        live_storage_before=live_storage_before,
+        candidate_storage_before=candidate_storage_before,
+        installed_live_storage=installed_live_storage,
+        restored_live_storage=restored_live_storage,
+        failed_candidate_storage=failed_candidate_storage,
         rollback_restored=True,
     )
 
