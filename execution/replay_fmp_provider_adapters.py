@@ -17,7 +17,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from sources.fmp_replay import replay_fmp_adapter_corpus  # noqa: E402
+from sources.fmp_replay import replay_fmp_adapter_corpus, validate_report_output_path  # noqa: E402
 
 
 def _observed_at(value: str) -> datetime:
@@ -36,9 +36,15 @@ def main() -> int:
     parser.add_argument("--observed-at", type=_observed_at, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-manifest-sha256")
+    parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
     try:
+        output_path = validate_report_output_path(
+            args.corpus_root,
+            args.output,
+            overwrite=args.overwrite,
+        )
         report = replay_fmp_adapter_corpus(
             args.corpus_root,
             observed_at=args.observed_at,
@@ -49,13 +55,13 @@ def main() -> int:
         return 2
 
     payload = json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(payload, encoding="utf-8")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(payload, encoding="utf-8")
     print(
         json.dumps(
             {
                 "status": "ok" if report.failed_files == 0 else "failed",
-                "report": str(args.output),
+                "report": str(output_path),
                 "report_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
                 "manifest_sha256": report.corpus_manifest_sha256,
                 "selected_files": report.selected_files,

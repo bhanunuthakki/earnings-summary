@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from sources.fmp_replay import replay_fmp_adapter_corpus
+from sources.fmp_replay import replay_fmp_adapter_corpus, validate_report_output_path
 
 OBSERVED_AT = datetime(2026, 8, 15, tzinfo=UTC)
 
@@ -114,3 +114,31 @@ def test_replay_rejects_manifest_drift(tmp_path: Path) -> None:
             observed_at=OBSERVED_AT,
             expected_manifest_sha256="a" * 64,
         )
+
+
+def test_replay_report_cannot_overwrite_corpus_or_existing_file(tmp_path: Path) -> None:
+    _complete_corpus(tmp_path)
+    external_report = tmp_path.parent / "replay.json"
+    external_report.write_text("old", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside the corpus"):
+        validate_report_output_path(tmp_path, tmp_path / "WIX_profile.json")
+    with pytest.raises(ValueError, match="already exists"):
+        validate_report_output_path(tmp_path, external_report)
+    assert validate_report_output_path(tmp_path, external_report, overwrite=True) == external_report
+
+
+def test_replay_reports_close_only_price_packet_as_a_non_admission(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "QQQ_price_chart_10y_div_adj.json",
+        [{"date": "2026-08-14", "adjClose": 1, "close": 1, "volume": 3}],
+    )
+    _write(tmp_path, "QQQ_profile.json", [{"symbol": "QQQ", "currency": "USD"}])
+
+    report = replay_fmp_adapter_corpus(tmp_path, observed_at=OBSERVED_AT)
+
+    assert report.succeeded_files == 0
+    assert report.failed_files == 1
+    assert report.failures[0].family == "price"
+    assert report.failures[0].message == "FMP price open is required"
