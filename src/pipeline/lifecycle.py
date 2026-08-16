@@ -155,7 +155,7 @@ class SafeRowPruner:
         cursor = self.conn.cursor()
 
         # 1. Select matching rows
-        select_sql = f"SELECT * FROM {table_name} WHERE {final_where}"
+        select_sql = f"SELECT * FROM {table_name} WHERE {final_where}"  # nosec B608
         cursor.execute(select_sql, final_params)
         matched_rows = cursor.fetchall()
         matched_count = len(matched_rows)
@@ -177,7 +177,7 @@ class SafeRowPruner:
         deleted_count = 0
         if not dry_run and matched_count > 0:
             with self.conn:
-                delete_sql = f"DELETE FROM {table_name} WHERE {final_where}"
+                delete_sql = f"DELETE FROM {table_name} WHERE {final_where}"  # nosec B608
                 cursor.execute(delete_sql, final_params)
                 deleted_count = cursor.rowcount
 

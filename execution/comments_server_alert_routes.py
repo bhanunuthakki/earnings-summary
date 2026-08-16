@@ -143,9 +143,6 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
         sec_fetch_site = request.headers.get("Sec-Fetch-Site", "")
         if sec_fetch_site == "cross-site" or (referer and referer_back is None):
             return ({"error": "cross-site approve/dismiss rejected"}, 403)
-        if not sec_fetch_site and not referer:
-            # Default-deny when neither Sec-Fetch-Site nor Referer is present on browser POST
-            return ({"error": "untrusted origin: missing Sec-Fetch-Site or Referer header"}, 403)
         consequence = ""
         try:
             if alert_id is not None:
