@@ -43,6 +43,12 @@ def _seed_db(db_path: Path) -> None:
             file_path TEXT, sha256 TEXT, fetched_at TIMESTAMP, fetch_status TEXT,
             raw_bytes_size INTEGER, parent_document_id INTEGER
         );
+        CREATE TABLE kpi_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT, period_end TIMESTAMP, fiscal_period_type TEXT,
+            kpi_definition_id INTEGER, value NUMERIC, unit TEXT,
+            source_doc_id INTEGER
+        );
         """
     )
     rows = [
@@ -52,7 +58,7 @@ def _seed_db(db_path: Path) -> None:
             "transcript_audio",
             "earnings_call_transcript",
             "2023-03-31 00:00:00",
-            "x",
+            "transcripts/processed/NU_Q1_2023.txt",
             "sha-transcript",
             "2026-05-19 01:45:16",
             "ok",
@@ -120,6 +126,7 @@ def _seed_db(db_path: Path) -> None:
 def test_dry_run_reports_without_writing(tmp_path: Path, backfill_mod: Any) -> None:
     db_path = tmp_path / "portfolio.db"
     _seed_db(db_path)
+    before = db_path.read_bytes()
 
     result = backfill_mod.backfill(db_path, dry_run=True, log=False)
 
@@ -134,6 +141,7 @@ def test_dry_run_reports_without_writing(tmp_path: Path, backfill_mod: Any) -> N
             "2025-12-31",
         )
     ]
+    assert db_path.read_bytes() == before
 
     # Dry run must not write.
     conn = sqlite3.connect(db_path)
@@ -193,6 +201,81 @@ def test_ticker_filter_scopes_the_scan(tmp_path: Path, backfill_mod: Any) -> Non
     result = backfill_mod.backfill(db_path, only_ticker="amat", dry_run=True, log=False)
     assert result.scanned == 1
     assert result.unresolved == 1
+
+
+def test_veev_orphan_without_exact_transcript_remains_unresolved(
+    tmp_path: Path, backfill_mod: Any
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size, parent_document_id) "
+        "VALUES ('VEEV', 'llm_extracted', 'llm_summary', '2026-04-30', "
+        "'.tmp/VEEV_Q1_2026_summary.txt', 'veev-orphan', '2026-05-01', 'ok', 1, NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    result = backfill_mod.backfill(db_path, only_ticker="VEEV", dry_run=False, log=False)
+    assert result.resolved == 0
+    assert result.unresolved == 1
+    assert _doc_id(db_path, "veev-orphan") in {row[0] for row in result.unresolved_rows}
+
+
+def test_apply_links_rbrk_to_its_exact_transcript_parent_without_mutating_facts(
+    tmp_path: Path, backfill_mod: Any
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    parent_id = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size, parent_document_id) "
+        "VALUES ('RBRK', 'transcript_audio', 'earnings_call_transcript', '2025-04-30', "
+        "'transcripts/processed/RBRK_Q1_2026.txt', 'rbrk-parent', '2025-05-01', 'ok', 1, NULL)"
+    ).lastrowid
+    child_id = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size, parent_document_id) "
+        "VALUES ('RBRK', 'llm_extracted', 'llm_summary', '2026-04-30', "
+        "'.tmp/RBRK_Q1_2026_summary.txt', 'rbrk-summary', '2025-05-02', 'ok', 1, NULL)"
+    ).lastrowid
+    assert parent_id is not None and child_id is not None
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, value, "
+        "unit, source_doc_id) VALUES ('RBRK', '2026-04-30', 'Q1', 1, 10, 'actual', ?)",
+        (child_id,),
+    )
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, value, "
+        "unit, source_doc_id) VALUES ('RBRK', '2026-04-30', 'Q1', 2, 10, 'actual', ?)",
+        (parent_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    dry_result = backfill_mod.backfill(db_path, only_ticker="RBRK", dry_run=True, log=False)
+    assert dry_result.resolved == 1
+
+    result = backfill_mod.backfill(db_path, only_ticker="RBRK", dry_run=False, log=False)
+    assert result.resolved == 1
+
+    conn = sqlite3.connect(db_path)
+    child = conn.execute(
+        "SELECT parent_document_id, period_end FROM documents WHERE id = ?", (child_id,)
+    ).fetchone()
+    assert child == (parent_id, "2026-04-30")
+    dependent = conn.execute(
+        "SELECT period_end FROM kpi_facts WHERE source_doc_id = ?", (child_id,)
+    ).fetchone()
+    assert dependent == ("2026-04-30",)
+    unrelated = conn.execute(
+        "SELECT period_end FROM kpi_facts WHERE source_doc_id = ?", (parent_id,)
+    ).fetchone()
+    assert unrelated == ("2026-04-30",)
+    conn.close()
 
 
 def _doc_id(db_path: Path, sha256: str) -> int:

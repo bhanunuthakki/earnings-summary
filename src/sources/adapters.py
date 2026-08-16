@@ -1,9 +1,4 @@
-"""Provider-neutral data adapters and frozen domain schemas.
-
-Defines canonical Pydantic V2 frozen contracts for filing sections, dated analyst
-estimates, product/geographic segments, and corporate-action-adjusted price series.
-Decouples core business logic and synthesis readers from provider-specific JSON schemas.
-"""
+"""Provider-neutral adapters with sealed, fail-closed source contracts."""
 
 from __future__ import annotations
 
@@ -11,13 +6,17 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from log_redact import redact
+from models.facts import Currency, FiscalPeriodType
+
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_FILING_FORM_PATTERN = r"^(?:10-(?:K|Q)|20-F|40-F|6-K|8-K|S-1)(?:/A)?$"
 
 
 class FilingAuthority(StrEnum):
@@ -32,43 +31,111 @@ class CorporateActionAdjustment(StrEnum):
     UNADJUSTED = "unadjusted"
 
 
-class FilingSectionPayload(BaseModel):
-    """Provider-neutral representation of a single filing section."""
+class EstimateMetric(StrEnum):
+    REVENUE = "revenue"
+    EPS = "eps"
+    EBITDA = "ebitda"
+    EBIT = "ebit"
+    NET_INCOME = "net_income"
+
+
+class SegmentDimension(StrEnum):
+    PRODUCT = "product"
+    GEOGRAPHY = "geography"
+    CHANNEL = "channel"
+    BUSINESS_UNIT = "business_unit"
+
+
+class CurrencyBindingBasis(StrEnum):
+    """What an immutable companion packet proves about a numeric payload."""
+
+    ISSUER_REPORTED = "issuer_reported"
+    QUOTE = "quote"
+
+
+class CurrencyBindingSourceFamily(StrEnum):
+    """The packet family that directly declared a returned numeric currency."""
+
+    FMP_FINANCIAL_STATEMENT = "fmp_financial_statement"
+    FMP_PROFILE = "fmp_profile"
+    SECONDARY_CONSENSUS = "secondary_consensus"
+    SECONDARY_PRICE_PAYLOAD = "secondary_price_payload"
+
+
+class CurrencyBinding(BaseModel):
+    """A ticker-scoped currency assertion, sealed to its companion raw packet."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    ticker: str = Field(..., min_length=1)
+    ticker: str = Field(..., pattern=r"^[A-Z0-9.\-]+$")
+    currency: Currency
+    basis: CurrencyBindingBasis
+    source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
+    source_family: CurrencyBindingSourceFamily
+
+
+def _normalized_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        raise ValueError("timestamps must be timezone-aware")
+    return value.astimezone(UTC)
+
+
+class FilingSectionPayload(BaseModel):
+    """One section, bound to both its text and the exact source packet bytes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ticker: str = Field(..., pattern=r"^[A-Z0-9.\-]+$")
     authority: FilingAuthority
-    accession_number: str | None = None
-    form: str = Field(..., min_length=2)  # "10-K", "10-Q", "20-F", "40-F", "6-K", "8-K"
+    accession_number: str | None = Field(default=None, min_length=1)
+    form: str = Field(..., pattern=_FILING_FORM_PATTERN)
     fiscal_year: int | None = None
-    fiscal_period: str | None = None  # "Q1", "Q2", "Q3", "Q4", "FY", "9M", "H1", "H2"
+    fiscal_period: FiscalPeriodType | None = None
     section_name: str = Field(..., min_length=1)
-    raw_text: str
-    section_hash: str = Field(..., min_length=64, max_length=64)
+    raw_text: str = Field(..., min_length=1)
+    section_hash: str = Field(..., pattern=_SHA256_PATTERN)
+    source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
     source_url: str | None = None
     fetched_at: datetime
     provider: str = Field(..., min_length=1)
 
+    @field_validator("fetched_at")
+    @classmethod
+    def fetched_at_is_utc(cls, value: datetime) -> datetime:
+        return _normalized_utc(value)
+
 
 class DatedEstimateObservation(BaseModel):
-    """Provider-neutral dated analyst consensus estimate observation."""
+    """Provider-neutral dated analyst consensus observation."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    ticker: str = Field(..., min_length=1)
+    ticker: str = Field(..., pattern=r"^[A-Z0-9.\-]+$")
     provider: str = Field(..., min_length=1)
     observation_date: datetime
     target_period_end: datetime
     fiscal_year: int
-    fiscal_period: str  # "Q1", "Q2", "Q3", "Q4", "FY"
-    metric: str  # "revenue", "eps", "ebitda", "ebit", "net_income", "sga"
+    fiscal_period: FiscalPeriodType
+    metric: EstimateMetric
     estimated_avg: Decimal
     estimated_low: Decimal | None = None
     estimated_high: Decimal | None = None
-    analyst_count: int | None = None
-    currency: str = "USD"
-    source_payload_hash: str = Field(..., min_length=64, max_length=64)
+    analyst_count: int | None = Field(default=None, ge=0)
+    currency: Currency
+    currency_binding: CurrencyBinding
+    source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
+
+    @field_validator("observation_date", "target_period_end")
+    @classmethod
+    def estimate_timestamps_are_utc(cls, value: datetime) -> datetime:
+        return _normalized_utc(value)
+
+    @field_validator("estimated_avg", "estimated_low", "estimated_high")
+    @classmethod
+    def decimal_is_finite(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and not value.is_finite():
+            raise ValueError("numeric values must be finite")
+        return value
 
 
 class SegmentStructureObservation(BaseModel):
@@ -76,22 +143,34 @@ class SegmentStructureObservation(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    ticker: str = Field(..., min_length=1)
+    ticker: str = Field(..., pattern=r"^[A-Z0-9.\-]+$")
     provider: str = Field(..., min_length=1)
     period_end: datetime
     fiscal_year: int
-    fiscal_period: str  # "Q1", "Q2", "Q3", "Q4", "FY"
-    dim_type: str  # "product", "geography", "channel", "business_unit"
+    fiscal_period: FiscalPeriodType
+    dim_type: SegmentDimension
     segment_name: str = Field(..., min_length=1)
-    metric: str = "revenue"
+    metric: EstimateMetric = EstimateMetric.REVENUE
     value: Decimal
-    currency: str = "USD"
-    unit: str = "actual"
-    source_payload_hash: str = Field(..., min_length=64, max_length=64)
+    currency: Currency
+    unit: str = Field(default="actual", pattern=r"^(?:actual|thousands|millions|billions)$")
+    source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
+
+    @field_validator("period_end")
+    @classmethod
+    def period_end_is_utc(cls, value: datetime) -> datetime:
+        return _normalized_utc(value)
+
+    @field_validator("value")
+    @classmethod
+    def value_is_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("numeric values must be finite")
+        return value
 
 
 class AdjustedPricePoint(BaseModel):
-    """Single bar in an adjusted price series."""
+    """One bar; absent action fields remain absent rather than being fabricated."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -100,44 +179,217 @@ class AdjustedPricePoint(BaseModel):
     high: Decimal
     low: Decimal
     close: Decimal
-    volume: int
-    split_ratio: Decimal = Decimal("1.0")
+    volume: int = Field(ge=0)
+    split_ratio: Decimal | None = None
     dividend_amount: Decimal | None = None
+
+    @field_validator("as_of_date")
+    @classmethod
+    def as_of_date_is_utc(cls, value: datetime) -> datetime:
+        return _normalized_utc(value)
+
+    @field_validator("open", "high", "low", "close", "split_ratio", "dividend_amount")
+    @classmethod
+    def prices_are_finite(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and not value.is_finite():
+            raise ValueError("numeric values must be finite")
+        return value
 
 
 class AdjustedPriceSeries(BaseModel):
-    """Provider-neutral price time series with explicit corporate action basis."""
+    """Provider-neutral price series with an explicit adjustment basis."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    ticker: str = Field(..., min_length=1)
+    ticker: str = Field(..., pattern=r"^[A-Z0-9.\-]+$")
     provider: str = Field(..., min_length=1)
     adjustment_method: CorporateActionAdjustment
-    currency: str = "USD"
+    currency: Currency
+    currency_binding: CurrencyBinding
     points: tuple[AdjustedPricePoint, ...]
-    source_payload_hash: str = Field(..., min_length=64, max_length=64)
+    source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
 
 
-def _compute_sha256(data: bytes | str) -> str:
-    if isinstance(data, str):
-        data = data.encode("utf-8")
-    return hashlib.sha256(data).hexdigest()
+def _payload_bytes(raw_content: object) -> bytes:
+    if isinstance(raw_content, bytes):
+        return raw_content
+    if isinstance(raw_content, str):
+        return raw_content.encode("utf-8")
+    raise ValueError("raw packet must be bytes or text")
 
 
-def _parse_iso_utc(date_str: str) -> datetime:
-    """Parse ISO date string safely preserving timezone shifts into UTC."""
-    dt = datetime.fromisoformat(date_str.strip())
-    return dt.astimezone(UTC) if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+def _decode_json(raw_content: bytes | str, *, label: str) -> tuple[object, str]:
+    raw_bytes = _payload_bytes(raw_content)
+    try:
+        return json.loads(raw_bytes.decode("utf-8")), hashlib.sha256(raw_bytes).hexdigest()
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} must be valid UTF-8 JSON") from exc
+
+
+def _as_dict(value: object, *, label: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    typed_value = cast("dict[object, object]", value)
+    if not all(isinstance(key, str) for key in typed_value):
+        raise ValueError(f"{label} must be a JSON object with string keys")
+    return cast("dict[str, object]", value)
+
+
+def _as_list(value: object, *, label: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a JSON list")
+    return cast("list[object]", value)
+
+
+def _require_text(record: dict[str, object], key: str, *, label: str) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} requires non-empty {key}")
+    return value.strip()
+
+
+def _requested_ticker(record: dict[str, object], ticker: str) -> str:
+    requested = ticker.strip().upper()
+    if not requested:
+        raise ValueError("ticker must be non-empty")
+    declared = record.get("symbol")
+    if declared is not None and str(declared).strip().upper() != requested:
+        raise ValueError("payload ticker does not match requested ticker")
+    return requested
+
+
+def _parse_datetime(value: str, *, label: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label} must be ISO-8601") from exc
+    # Date-only FMP fields have no offset; their documented calendar-date policy is UTC.
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _parse_decimal(value: object, *, label: str) -> Decimal:
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{label} is required")
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{label} must be decimal") from exc
+    if not parsed.is_finite():
+        raise ValueError(f"{label} must be finite")
+    return parsed
+
+
+def _parse_int(value: object, *, label: str, minimum: int = 0) -> int:
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{label} is required")
+    try:
+        parsed = int(str(value))
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an integer") from exc
+    if parsed < minimum:
+        raise ValueError(f"{label} must be at least {minimum}")
+    return parsed
+
+
+def _currency(record: dict[str, object], *, label: str, key: str = "currency") -> Currency:
+    raw = _require_text(record, key, label=label)
+    try:
+        return Currency(raw.upper())
+    except ValueError as exc:
+        raise ValueError(f"{label} has unsupported currency {raw!r}") from exc
+
+
+def _currency_binding(
+    raw_content: bytes | str,
+    ticker: str,
+    *,
+    key: str,
+    basis: CurrencyBindingBasis,
+    source_family: CurrencyBindingSourceFamily,
+) -> CurrencyBinding:
+    raw, payload_hash = _decode_json(raw_content, label="currency binding packet")
+    records = _as_list(raw, label="currency binding packet")
+    if not records:
+        raise ValueError("currency binding packet must not be empty")
+    record = _as_dict(records[0], label="currency binding record")
+    symbol = _requested_ticker(record, ticker)
+    return CurrencyBinding(
+        ticker=symbol,
+        currency=_currency(record, label="currency binding record", key=key),
+        basis=basis,
+        source_payload_hash=payload_hash,
+        source_family=source_family,
+    )
+
+
+def issuer_reported_currency_binding(raw_content: bytes | str, ticker: str) -> CurrencyBinding:
+    """Seal a reporting-currency assertion from an FMP financial-statement packet."""
+    return _currency_binding(
+        raw_content,
+        ticker,
+        key="reportedCurrency",
+        basis=CurrencyBindingBasis.ISSUER_REPORTED,
+        source_family=CurrencyBindingSourceFamily.FMP_FINANCIAL_STATEMENT,
+    )
+
+
+def quote_currency_binding(raw_content: bytes | str, ticker: str) -> CurrencyBinding:
+    """Seal a quote-currency assertion from an FMP profile packet."""
+    return _currency_binding(
+        raw_content,
+        ticker,
+        key="currency",
+        basis=CurrencyBindingBasis.QUOTE,
+        source_family=CurrencyBindingSourceFamily.FMP_PROFILE,
+    )
+
+
+def _require_binding(
+    binding: CurrencyBinding,
+    ticker: str,
+    *,
+    basis: CurrencyBindingBasis,
+    source_family: CurrencyBindingSourceFamily,
+) -> Currency:
+    if binding.ticker != ticker.upper():
+        raise ValueError("currency binding ticker does not match requested ticker")
+    if binding.basis is not basis:
+        raise ValueError(f"currency binding must use {basis.value} basis")
+    if binding.source_family != source_family:
+        raise ValueError(f"currency binding must use {source_family} source family")
+    return binding.currency
+
+
+def _fiscal_period(value: object, *, label: str) -> FiscalPeriodType:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} requires fiscal period")
+    try:
+        return FiscalPeriodType(value.upper())
+    except ValueError as exc:
+        raise ValueError(f"{label} has unsupported fiscal period {value!r}") from exc
+
+
+def _price_value(
+    record: dict[str, object],
+    key: str,
+    adjustment_method: CorporateActionAdjustment,
+) -> Decimal:
+    adjusted = f"adj{key[0].upper()}{key[1:]}"
+    selected = (
+        record.get(adjusted)
+        if adjustment_method is CorporateActionAdjustment.SPLIT_AND_DIVIDEND
+        and record.get(adjusted) is not None
+        else record.get(key)
+    )
+    return _parse_decimal(selected, label=f"FMP price {key}")
 
 
 class ProviderAdapter(ABC):
-    """Abstract boundary adapter interface for third-party financial data."""
+    """The only boundary through which untrusted provider payloads enter readers."""
 
     @property
     @abstractmethod
-    def provider_name(self) -> str:
-        """Name of the data provider (e.g., 'fmp', 'sec_edgar', 'synthetic')."""
-        ...
+    def provider_name(self) -> str: ...
 
     @abstractmethod
     def parse_filing_sections(
@@ -148,18 +400,17 @@ class ProviderAdapter(ABC):
         form: str = "10-K",
         fiscal_year: int | None = None,
         fetched_at: datetime | None = None,
-    ) -> list[FilingSectionPayload]:
-        """Parse structured filing sections from raw provider response."""
-        ...
+    ) -> list[FilingSectionPayload]: ...
 
     @abstractmethod
     def parse_estimates(
         self,
         raw_content: bytes | str,
         ticker: str,
-    ) -> list[DatedEstimateObservation]:
-        """Parse consensus analyst estimates from raw provider response."""
-        ...
+        *,
+        observed_at: datetime,
+        currency_packet: bytes | str | None = None,
+    ) -> list[DatedEstimateObservation]: ...
 
     @abstractmethod
     def parse_segments(
@@ -167,10 +418,8 @@ class ProviderAdapter(ABC):
         raw_content: bytes | str,
         ticker: str,
         *,
-        dim_type: str = "geography",
-    ) -> list[SegmentStructureObservation]:
-        """Parse product or geographic segment structure from raw provider response."""
-        ...
+        dim_type: SegmentDimension = SegmentDimension.GEOGRAPHY,
+    ) -> list[SegmentStructureObservation]: ...
 
     @abstractmethod
     def parse_prices(
@@ -179,28 +428,17 @@ class ProviderAdapter(ABC):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
-        currency: str = "USD",
-    ) -> AdjustedPriceSeries:
-        """Parse corporate-action adjusted historical prices from raw provider response."""
-        ...
-
-    @property
-    def filing_metadata_keys(self) -> set[str]:
-        """Set of top-level JSON metadata keys that should not be treated as filing sections."""
-        return set()
+        currency_packet: bytes | str | None = None,
+    ) -> AdjustedPriceSeries: ...
 
 
 class FmpProviderAdapter(ProviderAdapter):
-    """Adapter for Financial Modeling Prep (FMP) JSON cached payloads."""
+    """Strict adapter for immutable FMP cache packets."""
 
     @property
     def provider_name(self) -> str:
         return "fmp"
 
-    @property
-    def filing_metadata_keys(self) -> set[str]:
-        return {"symbol", "period", "year", "link", "finalLink"}
-
     def parse_filing_sections(
         self,
         raw_content: bytes | str,
@@ -210,139 +448,139 @@ class FmpProviderAdapter(ProviderAdapter):
         fiscal_year: int | None = None,
         fetched_at: datetime | None = None,
     ) -> list[FilingSectionPayload]:
-        text = (
-            raw_content
-            if isinstance(raw_content, str)
-            else raw_content.decode("utf-8", errors="replace")
+        raw, payload_hash = _decode_json(raw_content, label="FMP filing section payload")
+        payload = _as_dict(raw, label="FMP filing section payload")
+        symbol = _requested_ticker(payload, ticker)
+        period = _fiscal_period(payload.get("period", "FY"), label="FMP filing section payload")
+        raw_year = payload.get("year", fiscal_year)
+        year = (
+            _parse_int(raw_year, label="FMP filing section year", minimum=1)
+            if raw_year is not None
+            else None
         )
-        raw_obj: object = json.loads(text)
-        if not isinstance(raw_obj, dict):
-            raise ValueError(
-                f"FMP filing section payload must be a JSON object, got {type(raw_obj)}"
-            )
-
-        payload = cast("dict[str, object]", raw_obj)
-        fetch_ts = fetched_at or datetime.now(UTC)
-        symbol = str(payload.get("symbol", ticker)).upper()
-        raw_year = payload.get("year")
-        fy = int(str(raw_year)) if raw_year is not None and str(raw_year).isdigit() else fiscal_year
-        period = str(payload.get("period", "FY"))
-
-        sections: list[FilingSectionPayload] = []
-        metadata_keys = {"symbol", "period", "year", "link", "finalLink"}
-
-        for sec_name, sec_content in payload.items():
-            if sec_name in metadata_keys or sec_content is None:
+        source_url = payload.get("link") or payload.get("finalLink")
+        if source_url is not None and (not isinstance(source_url, str) or not source_url.strip()):
+            raise ValueError("FMP filing section source URL must be text")
+        metadata = {"symbol", "period", "year", "link", "finalLink", "reportedCurrency"}
+        if any(key.lower() in {"error", "error message", "message"} for key in payload):
+            raise ValueError("FMP filing section payload contains an error response")
+        results: list[FilingSectionPayload] = []
+        for name, content in payload.items():
+            if name in metadata:
                 continue
-            if isinstance(sec_content, str):
-                cleaned_text = sec_content.strip()
-            elif isinstance(sec_content, (list, dict)):
-                cleaned_text = json.dumps(sec_content, sort_keys=True)
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, (list, dict)):
+                text = json.dumps(
+                    content, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+                )
             else:
-                cleaned_text = str(sec_content).strip()
-
-            if not cleaned_text:
-                continue
-
-            sec_hash = _compute_sha256(cleaned_text)
-            source_url = payload.get("link") or payload.get("finalLink")
-            sections.append(
+                raise ValueError("FMP filing section text must be non-empty text")
+            if not text.strip():
+                raise ValueError("FMP filing section text must be non-empty text")
+            results.append(
                 FilingSectionPayload(
                     ticker=symbol,
                     authority=FilingAuthority.VENDOR,
-                    accession_number=None,
                     form=form,
-                    fiscal_year=fy,
+                    fiscal_year=year,
                     fiscal_period=period,
-                    section_name=sec_name,
-                    raw_text=cleaned_text,
-                    section_hash=sec_hash,
-                    source_url=str(source_url) if source_url is not None else None,
-                    fetched_at=fetch_ts,
+                    section_name=name,
+                    raw_text=text,
+                    section_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    source_payload_hash=payload_hash,
+                    source_url=source_url,
+                    fetched_at=fetched_at or datetime.now(UTC),
                     provider=self.provider_name,
                 )
             )
-        return sections
+        if not results:
+            raise ValueError("FMP filing section payload has no section text")
+        return results
 
     def parse_estimates(
         self,
         raw_content: bytes | str,
         ticker: str,
+        *,
+        observed_at: datetime,
+        currency_packet: bytes | str | None = None,
     ) -> list[DatedEstimateObservation]:
-        text = (
-            raw_content
-            if isinstance(raw_content, str)
-            else raw_content.decode("utf-8", errors="replace")
-        )
-        payload_hash = _compute_sha256(text)
-        raw_obj: object = json.loads(text)
-        if not isinstance(raw_obj, list):
-            raise ValueError(f"FMP estimate payload must be a JSON list, got {type(raw_obj)}")
-
-        raw_list = cast("list[object]", raw_obj)
+        raw, payload_hash = _decode_json(raw_content, label="FMP estimate payload")
+        if currency_packet is None:
+            raise ValueError("FMP estimate payload requires an issuer currency packet")
+        currency_binding = issuer_reported_currency_binding(currency_packet, ticker)
         results: list[DatedEstimateObservation] = []
-        for item in raw_list:
-            if not isinstance(item, dict):
-                continue
-            rec = cast("dict[str, object]", item)
-            symbol = str(rec.get("symbol", ticker)).upper()
-            date_str = str(rec.get("date", "")).strip()
-            if not date_str:
-                continue
-            obs_dt = _parse_iso_utc(date_str)
-
-            raw_fy = rec.get("fiscalYear") or rec.get("year")
-            fy = int(str(raw_fy)) if raw_fy is not None and str(raw_fy).isdigit() else obs_dt.year
-            fp = "FY"
-            if "quarter" in rec and rec["quarter"] is not None:
-                fp = f"Q{rec['quarter']}"
-
-            metric_mappings = [
-                ("revenue", "revenueAvg", "revenueLow", "revenueHigh", "numAnalystsRevenue"),
-                ("eps", "epsAvg", "epsLow", "epsHigh", "numAnalystsEps"),
-                ("ebitda", "ebitdaAvg", "ebitdaLow", "ebitdaHigh", None),
-                ("ebit", "ebitAvg", "ebitLow", "ebitHigh", None),
-                ("net_income", "netIncomeAvg", "netIncomeLow", "netIncomeHigh", None),
-            ]
-
-            target_date_str = str(
-                rec.get("estimatedDate")
-                or rec.get("period_end")
-                or rec.get("periodEndDate")
-                or date_str
-            ).strip()
-            target_dt = _parse_iso_utc(target_date_str) if target_date_str else obs_dt
-
-            for metric_name, avg_k, low_k, high_k, count_k in metric_mappings:
-                avg_val = rec.get(avg_k)
-                if avg_val is None:
+        mappings = (
+            (
+                EstimateMetric.REVENUE,
+                "revenueAvg",
+                "revenueLow",
+                "revenueHigh",
+                "numAnalystsRevenue",
+            ),
+            (EstimateMetric.EPS, "epsAvg", "epsLow", "epsHigh", "numAnalystsEps"),
+            (EstimateMetric.EBITDA, "ebitdaAvg", "ebitdaLow", "ebitdaHigh", None),
+            (EstimateMetric.EBIT, "ebitAvg", "ebitLow", "ebitHigh", None),
+            (EstimateMetric.NET_INCOME, "netIncomeAvg", "netIncomeLow", "netIncomeHigh", None),
+        )
+        for index, item in enumerate(_as_list(raw, label="FMP estimate payload")):
+            record = _as_dict(item, label=f"FMP estimate record {index}")
+            symbol = _requested_ticker(record, ticker)
+            observed = _parse_datetime(
+                _require_text(record, "date", label="FMP estimate record"),
+                label="FMP estimate date",
+            )
+            quarter = record.get("quarter")
+            period = (
+                FiscalPeriodType.FY
+                if quarter is None
+                else _fiscal_period(
+                    f"Q{_parse_int(quarter, label='FMP estimate quarter', minimum=1)}",
+                    label="FMP estimate record",
+                )
+            )
+            currency = _require_binding(
+                currency_binding,
+                symbol,
+                basis=CurrencyBindingBasis.ISSUER_REPORTED,
+                source_family=CurrencyBindingSourceFamily.FMP_FINANCIAL_STATEMENT,
+            )
+            emitted = False
+            for metric, average_key, low_key, high_key, count_key in mappings:
+                if average_key not in record or record[average_key] is None:
                     continue
-                try:
-                    d_avg = Decimal(str(avg_val))
-                except Exception:
-                    continue
-
-                d_low = Decimal(str(rec[low_k])) if rec.get(low_k) is not None else None
-                d_high = Decimal(str(rec[high_k])) if rec.get(high_k) is not None else None
-                count = int(str(rec[count_k])) if count_k and rec.get(count_k) is not None else None
-
                 results.append(
                     DatedEstimateObservation(
                         ticker=symbol,
                         provider=self.provider_name,
-                        observation_date=obs_dt,
-                        target_period_end=target_dt,
-                        fiscal_year=fy,
-                        fiscal_period=fp,
-                        metric=metric_name,
-                        estimated_avg=d_avg,
-                        estimated_low=d_low,
-                        estimated_high=d_high,
-                        analyst_count=count,
-                        currency="USD",
+                        observation_date=observed_at,
+                        target_period_end=observed,
+                        fiscal_year=observed.year,
+                        fiscal_period=period,
+                        metric=metric,
+                        estimated_avg=_parse_decimal(
+                            record[average_key], label=f"FMP {metric} average"
+                        ),
+                        estimated_low=_parse_decimal(record[low_key], label=f"FMP {metric} low")
+                        if record.get(low_key) is not None
+                        else None,
+                        estimated_high=_parse_decimal(record[high_key], label=f"FMP {metric} high")
+                        if record.get(high_key) is not None
+                        else None,
+                        analyst_count=_parse_int(
+                            record[count_key], label=f"FMP {metric} analyst count"
+                        )
+                        if count_key and record.get(count_key) is not None
+                        else None,
+                        currency=currency,
+                        currency_binding=currency_binding,
                         source_payload_hash=payload_hash,
                     )
                 )
+                emitted = True
+            if not emitted:
+                raise ValueError(f"FMP estimate record {index} has no supported estimate metric")
         return results
 
     def parse_segments(
@@ -350,62 +588,38 @@ class FmpProviderAdapter(ProviderAdapter):
         raw_content: bytes | str,
         ticker: str,
         *,
-        dim_type: str = "geography",
+        dim_type: SegmentDimension = SegmentDimension.GEOGRAPHY,
     ) -> list[SegmentStructureObservation]:
-        text = (
-            raw_content
-            if isinstance(raw_content, str)
-            else raw_content.decode("utf-8", errors="replace")
-        )
-        payload_hash = _compute_sha256(text)
-        raw_obj: object = json.loads(text)
-        if not isinstance(raw_obj, list):
-            raise ValueError(f"FMP segment payload must be a JSON list, got {type(raw_obj)}")
-
-        raw_list = cast("list[object]", raw_obj)
+        raw, payload_hash = _decode_json(raw_content, label="FMP segment payload")
         results: list[SegmentStructureObservation] = []
-        for item in raw_list:
-            if not isinstance(item, dict):
-                continue
-            rec = cast("dict[str, object]", item)
-            symbol = str(rec.get("symbol", ticker)).upper()
-            date_str = str(rec.get("date", "")).strip()
-            if not date_str:
-                continue
-            period_dt = _parse_iso_utc(date_str)
-            fy = (
-                int(str(rec["fiscalYear"]))
-                if "fiscalYear" in rec and rec["fiscalYear"] is not None
-                else period_dt.year
+        for index, item in enumerate(_as_list(raw, label="FMP segment payload")):
+            record = _as_dict(item, label=f"FMP segment record {index}")
+            symbol = _requested_ticker(record, ticker)
+            period_end = _parse_datetime(
+                _require_text(record, "date", label="FMP segment record"), label="FMP segment date"
             )
-            fp = str(rec.get("period", "FY"))
-            currency = str(rec.get("reportedCurrency", "USD")).upper()
-            seg_data_obj = rec.get("data")
-            if not isinstance(seg_data_obj, dict):
-                continue
-            seg_data = cast("dict[str, object]", seg_data_obj)
-
-            for seg_name, val in seg_data.items():
-                if val is None:
-                    continue
-                try:
-                    dec_val = Decimal(str(val))
-                except Exception:
-                    continue
-
+            data = _as_dict(record.get("data"), label="FMP segment data")
+            if not data:
+                raise ValueError("FMP segment data must not be empty")
+            year = _parse_int(
+                record.get("fiscalYear", period_end.year), label="FMP fiscal year", minimum=1
+            )
+            period = _fiscal_period(record.get("period", "FY"), label="FMP segment record")
+            currency = _currency(record, label="FMP segment record", key="reportedCurrency")
+            for name, value in data.items():
+                if not name.strip():
+                    raise ValueError("FMP segment name must be non-empty")
                 results.append(
                     SegmentStructureObservation(
                         ticker=symbol,
                         provider=self.provider_name,
-                        period_end=period_dt,
-                        fiscal_year=fy,
-                        fiscal_period=fp,
+                        period_end=period_end,
+                        fiscal_year=year,
+                        fiscal_period=period,
                         dim_type=dim_type,
-                        segment_name=str(seg_name),
-                        metric="revenue",
-                        value=dec_val,
+                        segment_name=name,
+                        value=_parse_decimal(value, label=f"FMP segment {name}"),
                         currency=currency,
-                        unit="actual",
                         source_payload_hash=payload_hash,
                     )
                 )
@@ -417,96 +631,68 @@ class FmpProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
-        currency: str = "USD",
+        currency_packet: bytes | str | None = None,
     ) -> AdjustedPriceSeries:
-        text = (
-            raw_content
-            if isinstance(raw_content, str)
-            else raw_content.decode("utf-8", errors="replace")
+        raw, payload_hash = _decode_json(raw_content, label="FMP price payload")
+        if currency_packet is None:
+            raise ValueError("FMP price payload requires a quote currency packet")
+        currency_binding = quote_currency_binding(currency_packet, ticker)
+        root = (
+            _as_dict(cast("object", raw), label="FMP price payload")
+            if isinstance(raw, dict)
+            else None
         )
-        payload_hash = _compute_sha256(text)
-        raw_obj: object = json.loads(text)
-
-        records: list[object] = []
-        if isinstance(raw_obj, list):
-            records = cast("list[object]", raw_obj)
-        elif isinstance(raw_obj, dict):
-            raw_dict = cast("dict[str, object]", raw_obj)
-            if "historical" not in raw_dict:
-                raise ValueError(
-                    f"FMP price payload dict missing required 'historical' key: {list(raw_dict.keys())}"
-                )
-            historical = raw_dict.get("historical")
-            if isinstance(historical, list):
-                records = cast("list[object]", historical)
-        else:
-            raise ValueError(f"FMP price payload shape unexpected: {type(raw_obj)}")
-
+        symbol = _requested_ticker(root, ticker) if root is not None else ticker.upper()
+        records = (
+            _as_list(root.get("historical"), label="FMP historical prices")
+            if root is not None
+            else _as_list(cast("object", raw), label="FMP historical prices")
+        )
+        currency = _require_binding(
+            currency_binding,
+            symbol,
+            basis=CurrencyBindingBasis.QUOTE,
+            source_family=CurrencyBindingSourceFamily.FMP_PROFILE,
+        )
         points: list[AdjustedPricePoint] = []
-        for item in records:
-            if not isinstance(item, dict):
-                continue
-            rec = cast("dict[str, object]", item)
-            date_str = str(rec.get("date", "")).strip()
-            if not date_str:
-                continue
-            dt = _parse_iso_utc(date_str)
-
-            if adjustment_method == CorporateActionAdjustment.SPLIT_AND_DIVIDEND:
-                o = rec.get("adjOpen") if rec.get("adjOpen") is not None else rec.get("open")
-                h = rec.get("adjHigh") if rec.get("adjHigh") is not None else rec.get("high")
-                low_p = rec.get("adjLow") if rec.get("adjLow") is not None else rec.get("low")
-                c = rec.get("adjClose") if rec.get("adjClose") is not None else rec.get("close")
-            else:
-                o = rec.get("open")
-                h = rec.get("high")
-                low_p = rec.get("low")
-                c = rec.get("close")
-
-            if any(v is None for v in (o, h, low_p, c)):
-                continue
-
-            vol_val = rec.get("volume", 0)
-            vol = int(str(vol_val)) if vol_val is not None else 0
-
-            # Extract corporate action details if present in payload
-            raw_split = rec.get("splitRatio")
-            if raw_split is None:
-                raw_split = rec.get("split_ratio")
-            split_ratio = Decimal(str(raw_split)) if raw_split is not None else Decimal("1.0")
-
-            raw_div = rec.get("dividend")
-            if raw_div is None:
-                raw_div = rec.get("adjDividend")
-            dividend_amount = Decimal(str(raw_div)) if raw_div is not None else None
+        for index, item in enumerate(records):
+            record = _as_dict(item, label=f"FMP price record {index}")
+            date = _parse_datetime(
+                _require_text(record, "date", label="FMP price record"), label="FMP price date"
+            )
 
             points.append(
                 AdjustedPricePoint(
-                    as_of_date=dt,
-                    open=Decimal(str(o)),
-                    high=Decimal(str(h)),
-                    low=Decimal(str(low_p)),
-                    close=Decimal(str(c)),
-                    volume=vol,
-                    split_ratio=split_ratio,
-                    dividend_amount=dividend_amount,
+                    as_of_date=date,
+                    open=_price_value(record, "open", adjustment_method),
+                    high=_price_value(record, "high", adjustment_method),
+                    low=_price_value(record, "low", adjustment_method),
+                    close=_price_value(record, "close", adjustment_method),
+                    volume=_parse_int(record.get("volume"), label="FMP price volume"),
+                    split_ratio=_parse_decimal(record["splitRatio"], label="FMP split ratio")
+                    if record.get("splitRatio") is not None
+                    else None,
+                    dividend_amount=_parse_decimal(record["dividend"], label="FMP dividend")
+                    if record.get("dividend") is not None
+                    else None,
                 )
             )
-
-        points.sort(key=lambda p: p.as_of_date)
-
+        if not points:
+            raise ValueError("FMP historical prices must not be empty")
+        points.sort(key=lambda point: point.as_of_date)
         return AdjustedPriceSeries(
-            ticker=ticker.upper(),
+            ticker=symbol,
             provider=self.provider_name,
             adjustment_method=adjustment_method,
-            currency=currency.upper(),
+            currency=currency,
+            currency_binding=currency_binding,
             points=tuple(points),
             source_payload_hash=payload_hash,
         )
 
 
 class SyntheticSecondaryProviderAdapter(ProviderAdapter):
-    """Mock secondary provider adapter demonstrating multi-provider neutrality."""
+    """Fixture-backed second provider, deliberately vendor-authoritative only."""
 
     @property
     def provider_name(self) -> str:
@@ -521,89 +707,103 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         fiscal_year: int | None = None,
         fetched_at: datetime | None = None,
     ) -> list[FilingSectionPayload]:
-        text = (
-            raw_content
-            if isinstance(raw_content, str)
-            else raw_content.decode("utf-8", errors="replace")
-        )
-        raw_obj: object = json.loads(text)
-        payload = cast("dict[str, object]", raw_obj) if isinstance(raw_obj, dict) else {}
-        fetch_ts = fetched_at or datetime.now(UTC)
-        sections: list[FilingSectionPayload] = []
-        raw_sections = payload.get("sections", [])
-        if isinstance(raw_sections, list):
-            for sec_obj in cast("list[object]", raw_sections):
-                if not isinstance(sec_obj, dict):
-                    continue
-                sec = cast("dict[str, object]", sec_obj)
-                raw = str(sec.get("text", ""))
-                accession = sec.get("accession")
-                period = sec.get("period", "FY")
-                source_url = sec.get("url")
-                sections.append(
-                    FilingSectionPayload(
-                        ticker=ticker.upper(),
-                        authority=FilingAuthority.SEC,
-                        accession_number=str(accession) if accession is not None else None,
-                        form=form,
-                        fiscal_year=fiscal_year,
-                        fiscal_period=str(period) if period is not None else "FY",
-                        section_name=str(sec.get("name", "")),
-                        raw_text=raw,
-                        section_hash=_compute_sha256(raw),
-                        source_url=str(source_url) if source_url is not None else None,
-                        fetched_at=fetch_ts,
-                        provider=self.provider_name,
-                    )
+        raw, payload_hash = _decode_json(raw_content, label="secondary filing payload")
+        payload = _as_dict(raw, label="secondary filing payload")
+        sections = _as_list(payload.get("sections"), label="secondary filing sections")
+        results: list[FilingSectionPayload] = []
+        for index, item in enumerate(sections):
+            record = _as_dict(item, label=f"secondary filing section {index}")
+            text = _require_text(record, "text", label="secondary filing section")
+            results.append(
+                FilingSectionPayload(
+                    ticker=ticker.upper(),
+                    authority=FilingAuthority.VENDOR,
+                    accession_number=str(record["accession"])
+                    if record.get("accession") is not None
+                    else None,
+                    form=form,
+                    fiscal_year=fiscal_year,
+                    fiscal_period=_fiscal_period(
+                        record.get("period", "FY"), label="secondary filing section"
+                    ),
+                    section_name=_require_text(record, "name", label="secondary filing section"),
+                    raw_text=text,
+                    section_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    source_payload_hash=payload_hash,
+                    source_url=str(record["url"]) if record.get("url") is not None else None,
+                    fetched_at=fetched_at or datetime.now(UTC),
+                    provider=self.provider_name,
                 )
-        return sections
+            )
+        if not results:
+            raise ValueError("secondary filing sections must not be empty")
+        return results
 
     def parse_estimates(
         self,
         raw_content: bytes | str,
         ticker: str,
+        *,
+        observed_at: datetime,
+        currency_packet: bytes | str | None = None,
     ) -> list[DatedEstimateObservation]:
-        text = (
+        raw, payload_hash = _decode_json(raw_content, label="secondary estimate payload")
+        if currency_packet is not None and _payload_bytes(currency_packet) != _payload_bytes(
             raw_content
-            if isinstance(raw_content, str)
-            else raw_content.decode("utf-8", errors="replace")
-        )
-        payload_hash = _compute_sha256(text)
-        raw_obj: object = json.loads(text)
-        payload = cast("dict[str, object]", raw_obj) if isinstance(raw_obj, dict) else {}
+        ):
+            raise ValueError("secondary estimate currency packet must be the estimate packet")
+        payload = _as_dict(raw, label="secondary estimate payload")
         results: list[DatedEstimateObservation] = []
-        raw_consensus = payload.get("consensus", [])
-        if isinstance(raw_consensus, list):
-            for est_obj in cast("list[object]", raw_consensus):
-                if not isinstance(est_obj, dict):
-                    continue
-                est = cast("dict[str, object]", est_obj)
-                as_of_str = str(est.get("as_of", ""))
-                if not as_of_str:
-                    continue
-                dt = _parse_iso_utc(as_of_str)
-                count_val = est.get("count")
-                results.append(
-                    DatedEstimateObservation(
-                        ticker=ticker.upper(),
-                        provider=self.provider_name,
-                        observation_date=dt,
-                        target_period_end=dt,
-                        fiscal_year=int(str(est.get("year", dt.year))),
-                        fiscal_period=str(est.get("period", "Q1")),
-                        metric=str(est.get("metric", "revenue")),
-                        estimated_avg=Decimal(str(est.get("mean", "0"))),
-                        estimated_low=Decimal(str(est["min"]))
-                        if "min" in est and est["min"] is not None
-                        else None,
-                        estimated_high=Decimal(str(est["max"]))
-                        if "max" in est and est["max"] is not None
-                        else None,
-                        analyst_count=int(str(count_val)) if count_val is not None else None,
-                        currency=str(est.get("currency", "USD")),
-                        source_payload_hash=payload_hash,
-                    )
+        for index, item in enumerate(
+            _as_list(payload.get("consensus"), label="secondary consensus")
+        ):
+            record = _as_dict(item, label=f"secondary consensus record {index}")
+            target_period_end = _parse_datetime(
+                _require_text(record, "as_of", label="secondary consensus record"),
+                label="secondary estimate date",
+            )
+            try:
+                metric = EstimateMetric(
+                    _require_text(record, "metric", label="secondary consensus record")
                 )
+            except ValueError as exc:
+                raise ValueError("secondary estimate metric is unsupported") from exc
+            results.append(
+                DatedEstimateObservation(
+                    ticker=ticker.upper(),
+                    provider=self.provider_name,
+                    observation_date=observed_at,
+                    target_period_end=target_period_end,
+                    fiscal_year=_parse_int(
+                        record.get("year"), label="secondary estimate year", minimum=1
+                    ),
+                    fiscal_period=_fiscal_period(
+                        record.get("period"), label="secondary consensus record"
+                    ),
+                    metric=metric,
+                    estimated_avg=_parse_decimal(
+                        record.get("mean"), label="secondary estimate mean"
+                    ),
+                    estimated_low=_parse_decimal(record["min"], label="secondary estimate min")
+                    if record.get("min") is not None
+                    else None,
+                    estimated_high=_parse_decimal(record["max"], label="secondary estimate max")
+                    if record.get("max") is not None
+                    else None,
+                    analyst_count=_parse_int(record["count"], label="secondary estimate count")
+                    if record.get("count") is not None
+                    else None,
+                    currency=_currency(record, label="secondary consensus record"),
+                    currency_binding=CurrencyBinding(
+                        ticker=ticker.upper(),
+                        currency=_currency(record, label="secondary consensus record"),
+                        basis=CurrencyBindingBasis.ISSUER_REPORTED,
+                        source_payload_hash=payload_hash,
+                        source_family=CurrencyBindingSourceFamily.SECONDARY_CONSENSUS,
+                    ),
+                    source_payload_hash=payload_hash,
+                )
+            )
         return results
 
     def parse_segments(
@@ -611,43 +811,42 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         raw_content: bytes | str,
         ticker: str,
         *,
-        dim_type: str = "geography",
+        dim_type: SegmentDimension = SegmentDimension.GEOGRAPHY,
     ) -> list[SegmentStructureObservation]:
-        text = (
-            raw_content
-            if isinstance(raw_content, str)
-            else raw_content.decode("utf-8", errors="replace")
-        )
-        payload_hash = _compute_sha256(text)
-        raw_obj: object = json.loads(text)
-        payload = cast("dict[str, object]", raw_obj) if isinstance(raw_obj, dict) else {}
+        raw, payload_hash = _decode_json(raw_content, label="secondary segment payload")
+        payload = _as_dict(raw, label="secondary segment payload")
         results: list[SegmentStructureObservation] = []
-        raw_breakdowns = payload.get("breakdowns", [])
-        if isinstance(raw_breakdowns, list):
-            for s_obj in cast("list[object]", raw_breakdowns):
-                if not isinstance(s_obj, dict):
-                    continue
-                s = cast("dict[str, object]", s_obj)
-                period_str = str(s.get("period_end", ""))
-                if not period_str:
-                    continue
-                dt = _parse_iso_utc(period_str)
-                results.append(
-                    SegmentStructureObservation(
-                        ticker=ticker.upper(),
-                        provider=self.provider_name,
-                        period_end=dt,
-                        fiscal_year=int(str(s.get("year", dt.year))),
-                        fiscal_period=str(s.get("period", "FY")),
-                        dim_type=dim_type,
-                        segment_name=str(s.get("segment", "")),
-                        metric=str(s.get("metric", "revenue")),
-                        value=Decimal(str(s.get("amount", "0"))),
-                        currency=str(s.get("currency", "USD")),
-                        unit="actual",
-                        source_payload_hash=payload_hash,
-                    )
+        for index, item in enumerate(
+            _as_list(payload.get("breakdowns"), label="secondary breakdowns")
+        ):
+            record = _as_dict(item, label=f"secondary breakdown {index}")
+            date = _parse_datetime(
+                _require_text(record, "period_end", label="secondary breakdown"),
+                label="secondary segment date",
+            )
+            try:
+                metric = EstimateMetric(
+                    _require_text(record, "metric", label="secondary breakdown")
                 )
+            except ValueError as exc:
+                raise ValueError("secondary segment metric is unsupported") from exc
+            results.append(
+                SegmentStructureObservation(
+                    ticker=ticker.upper(),
+                    provider=self.provider_name,
+                    period_end=date,
+                    fiscal_year=_parse_int(
+                        record.get("year"), label="secondary segment year", minimum=1
+                    ),
+                    fiscal_period=_fiscal_period(record.get("period"), label="secondary breakdown"),
+                    dim_type=dim_type,
+                    segment_name=_require_text(record, "segment", label="secondary breakdown"),
+                    metric=metric,
+                    value=_parse_decimal(record.get("amount"), label="secondary segment amount"),
+                    currency=_currency(record, label="secondary breakdown"),
+                    source_payload_hash=payload_hash,
+                )
+            )
         return results
 
     def parse_prices(
@@ -656,63 +855,65 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
-        currency: str = "USD",
+        currency_packet: bytes | str | None = None,
     ) -> AdjustedPriceSeries:
-        text = (
+        raw, payload_hash = _decode_json(raw_content, label="secondary price payload")
+        if currency_packet is not None and _payload_bytes(currency_packet) != _payload_bytes(
             raw_content
-            if isinstance(raw_content, str)
-            else raw_content.decode("utf-8", errors="replace")
-        )
-        payload_hash = _compute_sha256(text)
-        raw_obj: object = json.loads(text)
-        payload = cast("dict[str, object]", raw_obj) if isinstance(raw_obj, dict) else {}
+        ):
+            raise ValueError("secondary price currency packet must be the price packet")
+        payload = _as_dict(raw, label="secondary price payload")
+        currency = _currency(payload, label="secondary price payload")
         points: list[AdjustedPricePoint] = []
-        raw_bars = payload.get("bars", [])
-        if isinstance(raw_bars, list):
-            for p_obj in cast("list[object]", raw_bars):
-                if not isinstance(p_obj, dict):
-                    continue
-                p = cast("dict[str, object]", p_obj)
-                ts_str = str(p.get("timestamp", ""))
-                if not ts_str:
-                    continue
-                dt = _parse_iso_utc(ts_str)
-                div_val = p.get("dividend")
-                points.append(
-                    AdjustedPricePoint(
-                        as_of_date=dt,
-                        open=Decimal(str(p.get("open", "0"))),
-                        high=Decimal(str(p.get("high", "0"))),
-                        low=Decimal(str(p.get("low", "0"))),
-                        close=Decimal(str(p.get("close", "0"))),
-                        volume=int(str(p.get("volume", "0"))),
-                        split_ratio=Decimal(str(p.get("split_factor", "1.0"))),
-                        dividend_amount=Decimal(str(div_val)) if div_val is not None else None,
+        for index, item in enumerate(_as_list(payload.get("bars"), label="secondary price bars")):
+            record = _as_dict(item, label=f"secondary price bar {index}")
+            points.append(
+                AdjustedPricePoint(
+                    as_of_date=_parse_datetime(
+                        _require_text(record, "timestamp", label="secondary price bar"),
+                        label="secondary price timestamp",
+                    ),
+                    open=_parse_decimal(record.get("open"), label="secondary price open"),
+                    high=_parse_decimal(record.get("high"), label="secondary price high"),
+                    low=_parse_decimal(record.get("low"), label="secondary price low"),
+                    close=_parse_decimal(record.get("close"), label="secondary price close"),
+                    volume=_parse_int(record.get("volume"), label="secondary price volume"),
+                    split_ratio=_parse_decimal(
+                        record["split_factor"], label="secondary split ratio"
                     )
+                    if record.get("split_factor") is not None
+                    else None,
+                    dividend_amount=_parse_decimal(record["dividend"], label="secondary dividend")
+                    if record.get("dividend") is not None
+                    else None,
                 )
-        points.sort(key=lambda x: x.as_of_date)
+            )
+        if not points:
+            raise ValueError("secondary price bars must not be empty")
+        points.sort(key=lambda point: point.as_of_date)
         return AdjustedPriceSeries(
             ticker=ticker.upper(),
             provider=self.provider_name,
             adjustment_method=adjustment_method,
-            currency=currency.upper(),
+            currency=currency,
+            currency_binding=CurrencyBinding(
+                ticker=ticker.upper(),
+                currency=currency,
+                basis=CurrencyBindingBasis.QUOTE,
+                source_payload_hash=payload_hash,
+                source_family=CurrencyBindingSourceFamily.SECONDARY_PRICE_PAYLOAD,
+            ),
             points=tuple(points),
             source_payload_hash=payload_hash,
         )
 
 
 def format_error_envelope(exc: Exception, raw_payload: str | None = None) -> dict[str, str]:
-    """Format an exception into a safe, credential-redacted error envelope."""
-    msg = f"{type(exc).__name__}: {exc}"
-    redacted_msg = redact(msg)
-    redacted_body = redact(raw_payload) if raw_payload else None
-    if redacted_body:
-        snippet = (redacted_body[:256] + "...") if len(redacted_body) > 256 else redacted_body
-    else:
-        snippet = "none"
+    """Return a credential-redacted operational error envelope."""
+    body = redact(raw_payload) if raw_payload else None
     return {
         "status": "error",
         "error_type": type(exc).__name__,
-        "message": redacted_msg,
-        "sanitized_payload_snippet": snippet,
+        "message": redact(f"{type(exc).__name__}: {exc}"),
+        "sanitized_payload_snippet": (body[:256] + "...") if body else "none",
     }
