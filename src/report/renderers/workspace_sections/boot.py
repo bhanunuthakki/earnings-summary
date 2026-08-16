@@ -8,6 +8,7 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
+import os
 from io import StringIO
 from pathlib import Path
 
@@ -35,11 +36,17 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
 
     from comments import load_store, to_json_payload
 
+    capability_store = ReportCapabilityStore(Path(spec.repo_root))
+    report_capability = (
+        capability_store.load()
+        if os.environ.get("EARNINGS_OFFLINE_RENDER") == "1"
+        else capability_store.load_or_create()
+    )
     boot = {
         "ticker": spec.ticker,
         "report_date": spec.generation_date.isoformat(),
         "server_url": "http://localhost:7421",
-        "report_capability": ReportCapabilityStore(Path(spec.repo_root)).load_or_create(),
+        "report_capability": report_capability or "",
     }
     body.write(f'<script id="workspace-boot" type="application/json">{_json.dumps(boot)}</script>')
     payload: dict[str, object]

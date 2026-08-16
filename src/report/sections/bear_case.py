@@ -41,6 +41,7 @@ from report.models import (
     SegmentsSection,
     ThesisSection,
 )
+from report.render_clock import render_now
 from report.sections._common import budget_gate, budget_skip_missing, missing
 from report.sections._ts_signals import (
     format_signals_as_prompt_block,
@@ -196,7 +197,7 @@ def _read_cache(ticker: str, repo_root: Path, cache_ttl_days: int) -> BearCaseSe
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except OSError:
         return None
-    if datetime.now(UTC) - mtime > timedelta(days=cache_ttl_days):
+    if render_now() - mtime > timedelta(days=cache_ttl_days):
         return None
     try:
         raw = path.read_text(encoding="utf-8")
@@ -343,7 +344,7 @@ def _strategic_targets_md(ticker: str, repo_root: Path) -> str:
 
 def _format_target_value(value: object, unit: object, currency: object) -> str:
     """Compose '50000 USD_M', '30%', etc. Returns '' for qualitative rows."""
-    if value is None:
+    if not isinstance(value, (int, float, str)):
         return ""
     try:
         v = float(value)
@@ -400,6 +401,7 @@ def _parse_response(text: str) -> BearCaseSection:
 def _coerce_failure_mode(raw: object) -> dict[str, str]:
     if not isinstance(raw, dict):
         raise ValueError(f"failure_mode must be an object; got {type(raw).__name__}")
+    values = cast("dict[object, object]", raw)
     keys = (
         "hypothesis",
         "evidence_in_data",
@@ -407,7 +409,7 @@ def _coerce_failure_mode(raw: object) -> dict[str, str]:
         "quantitative_impact",
         "refutation_criteria",
     )
-    return {k: str(raw.get(k, "")) for k in keys}
+    return {k: str(values.get(k, "")) for k in keys}
 
 
 def _str_or_none(v: object) -> str | None:

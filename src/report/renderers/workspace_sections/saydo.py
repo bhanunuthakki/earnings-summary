@@ -13,6 +13,7 @@ from io import StringIO
 from pathlib import Path
 
 from report.models import ReportSpec, SayDoCard, SayDoHistoricalMetric, SayDoSection
+from report.render_clock import render_today
 from report.renderers.workspace_charts import verdict_bar
 from report.renderers.workspace_data import (
     PrintVsGuideRow,
@@ -156,7 +157,7 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
     """
     if not rows:
         return
-    today = datetime.now().date()
+    today = render_today()
     graded = sum(1 for r in rows if r.outcome is not None)
     n = len(rows)
     body.write(

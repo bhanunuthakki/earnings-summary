@@ -23,11 +23,13 @@ Sources:
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import re
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -43,6 +45,7 @@ from report.models import (
     SurpriseScorecardCard,
     ThemeRollup,
 )
+from report.render_clock import render_now
 from report.sections._common import budget_gate, missing, open_repo_db
 from report.sections._ts_signals import (
     format_signals_as_prompt_block,
@@ -519,9 +522,11 @@ def _read_transcript_text(path: Path) -> str | None:
     suffix = path.suffix.lower()
     try:
         if suffix == ".pdf":
-            from parser import extract_text_from_pdf
-
-            return extract_text_from_pdf(str(path))
+            extract = cast(
+                "Callable[[str], str]",
+                importlib.import_module("parser").extract_text_from_pdf,
+            )
+            return extract(str(path))
         with open(path, encoding="utf-8") as f:
             return f.read()
     except Exception as exc:
@@ -699,7 +704,7 @@ def _read_themes_cache(
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except OSError:
         return None
-    if datetime.now(UTC) - mtime > timedelta(days=THEMES_CACHE_TTL_DAYS):
+    if render_now() - mtime > timedelta(days=THEMES_CACHE_TTL_DAYS):
         return None
     try:
         raw_body = json.loads(path.read_text(encoding="utf-8"))

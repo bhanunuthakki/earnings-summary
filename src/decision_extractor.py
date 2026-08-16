@@ -303,14 +303,14 @@ Paragraph:
 # ===========================================================================
 
 
-def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
+def _open(db_path: Path | str | None, *, read_only: bool = False) -> sqlite3.Connection | None:
     try:
         path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
         conn = connect_sqlite(
             path,
-            role=SQLiteConnectionRole.WRITER,
+            role=(SQLiteConnectionRole.READ_ONLY if read_only else SQLiteConnectionRole.WRITER),
             schema_preflight=True,
         )
         conn.row_factory = sqlite3.Row
@@ -523,7 +523,7 @@ def history(
     since_days: int | None = None,
     db_path: Path | str | None = None,
 ) -> list[Decision]:
-    conn = _open(db_path)
+    conn = _open(db_path, read_only=True)
     if conn is None:
         return []
     try:

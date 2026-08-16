@@ -17,6 +17,7 @@ from report.legacy_body import (
     ReaderExtractionReceipt,
     extract_legacy_reader_body,
 )
+from report.render_clock import render_now
 
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
 ReaderMode = Literal["shared_body", "legacy_standalone"]
@@ -216,7 +217,7 @@ def _repo_relative(repo_root: Path, path: Path) -> str:
 def _read_index(repo_root: Path) -> ReportArtifactIndex:
     path = report_artifact_index_path(repo_root)
     if not path.exists():
-        return ReportArtifactIndex(generated_at=datetime.now(UTC))
+        return ReportArtifactIndex(generated_at=render_now())
     return ReportArtifactIndex.model_validate_json(path.read_text(encoding="utf-8"))
 
 
@@ -232,7 +233,7 @@ def _write_index(repo_root: Path, items: tuple[ReportArtifactRef, ...]) -> None:
     ordered = tuple(
         sorted(items, key=lambda item: (item.generated_at, item.artifact_id), reverse=True)
     )
-    index = ReportArtifactIndex(generated_at=datetime.now(UTC), items=ordered)
+    index = ReportArtifactIndex(generated_at=render_now(), items=ordered)
     _atomic_write_text(
         report_artifact_index_path(repo_root),
         index.model_dump_json(indent=2) + "\n",

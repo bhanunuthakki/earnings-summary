@@ -266,12 +266,11 @@ def load(repo_root: Path, ticker: str) -> ValuationBasisResult | None:
 
 
 def _cache_path(repo_root: Path, ticker: str) -> Path:
-    out = repo_root / "data" / "valuation_basis"
-    out.mkdir(parents=True, exist_ok=True)
-    return out / f"{ticker.upper()}.json"
+    return repo_root / "data" / "valuation_basis" / f"{ticker.upper()}.json"
 
 
 def _write_cache(path: Path, result: ValuationBasisResult) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(result), indent=2, default=str), encoding="utf-8")
 
 

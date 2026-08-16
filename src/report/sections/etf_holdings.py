@@ -13,7 +13,6 @@ own modules following the equity-section convention.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
 from pathlib import Path
 
 from instrument_store import get_etf_holdings, get_etf_profile
@@ -25,6 +24,7 @@ from report.etf_models import (
     EtfSectorBreakdownRow,
 )
 from report.models import MissingReason, SectionStatus
+from report.render_clock import render_today
 from report.sections._common import open_repo_db
 
 
@@ -140,7 +140,7 @@ def build_etf_brief(ticker: str, repo_root: Path, top_n: int = 10) -> EtfBriefSp
     """Glue both subsections into the EtfBriefSpec the renderer consumes."""
     return EtfBriefSpec(
         ticker=ticker.upper(),
-        generation_date=date.today(),
+        generation_date=render_today(),
         repo_root=str(repo_root),
         profile=build_profile(ticker, repo_root),
         holdings=build_holdings(ticker, repo_root, top_n=top_n),

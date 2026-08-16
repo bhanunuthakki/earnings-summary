@@ -174,9 +174,7 @@ def load_diagram(repo_root: Path, ticker: str) -> PlatformDiagramResult | None:
 
 
 def _cache_path(repo_root: Path, ticker: str) -> Path:
-    out_dir = repo_root / "data" / "platform_diagram"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir / f"{ticker.upper()}.json"
+    return repo_root / "data" / "platform_diagram" / f"{ticker.upper()}.json"
 
 
 def _latest_transcripts(repo_root: Path, ticker: str, n: int) -> list[tuple[Path, str]]:
@@ -281,4 +279,5 @@ def _str_or_none(v: object) -> str | None:
 
 
 def _write_cache(path: Path, result: PlatformDiagramResult) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
