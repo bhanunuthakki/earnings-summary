@@ -273,3 +273,82 @@ def test_panel_route_is_read_only(client: FlaskClient) -> None:
     assert response.mimetype == "text/html"
     assert 'data-settings-panel="data-collection"' in response.get_data(as_text=True)
     assert client.post("/api/panel/data_policy_settings").status_code == 405
+
+
+def test_sec_coverage_state_and_rendering(tmp_path: Path) -> None:
+    db = tmp_path / "portfolio.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE tracked_companies (ticker TEXT, name TEXT, list_type TEXT, "
+            "sec_validated BOOLEAN, filing_regime TEXT, archived_at TIMESTAMP)"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("RBRK", "Rubrik", "portfolio", 1, "10-K", None),
+                ("WIX", "Wix.com", "portfolio", 0, "20-F", None),
+                ("ABNB", "Airbnb", "evaluation", 1, "10-K", None),
+                ("SNOW", "Snowflake", "evaluation", 0, "10-K", None),
+                ("AMAT", "Applied Materials", "watchlist", 0, "10-K", None),
+                ("OLD", "Archived Co", "portfolio", 1, "10-K", "2026-08-01 00:00:00"),
+            ],
+        )
+
+    view = build_data_policy_settings_view(db_path=db)
+    cov = view.sec_coverage
+
+    assert cov.total_tracked == 5
+    assert cov.portfolio_count == 2
+    assert cov.evaluation_count == 2
+    assert cov.watchlist_count == 1
+    assert cov.validated_count == 2
+    assert cov.gap_count == 2
+
+    html = render_data_policy_settings_panel(db_path=db)
+    assert "SEC collection priority &amp; coverage gaps" in html
+    assert "Portfolio issuers" in html
+    assert "SEC Profile Gaps" in html
+    assert "Rubrik" in html
+    assert "Wix.com" in html
+    assert "Coverage gap" in html
+    assert "Automatic full" in html
+    assert "Archived Co" not in html
+
+
+def test_fmp_recovery_event_receipts_in_panel(tmp_path: Path) -> None:
+    db = tmp_path / "portfolio.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE provider_circuit_state (provider TEXT, state TEXT, next_probe_at TEXT, "
+            "last_reason_code TEXT, last_success_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_backlog (work_id TEXT, ticker TEXT, state TEXT, "
+            "priority INTEGER, created_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_work_attempts (work_id TEXT, corpus_content_sha256 TEXT, "
+            "corpus_captured_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE fmp_recovery_events (event_id TEXT, provider TEXT, work_id TEXT, "
+            "attempt_id TEXT, event_type TEXT, reason_code TEXT, state_from TEXT, state_to TEXT, "
+            "circuit_revision INTEGER, recorded_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO provider_circuit_state VALUES ('fmp', 'HALF_OPEN', '2026-08-14T20:00:00', "
+            "'rate_limit_probe', '2026-08-14T10:00:00')"
+        )
+        conn.execute(
+            "INSERT INTO fmp_recovery_events VALUES "
+            "('ev-1', 'fmp', 'w-1', 'att-1', 'circuit_half_open', 'probe_window_reached', 'OPEN', 'HALF_OPEN', 5, '2026-08-14T19:55:00')"
+        )
+
+    view = build_data_policy_settings_view(db_path=db)
+    assert len(view.fmp_state.recent_events) == 1
+    assert view.fmp_state.recent_events[0].event_type == "circuit_half_open"
+
+    html = render_data_policy_settings_panel(db_path=db)
+    assert "Recent recovery receipts &amp; transitions" in html
+    assert "circuit_half_open" in html
+    assert "probe_window_reached" in html

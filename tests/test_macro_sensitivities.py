@@ -158,3 +158,53 @@ def test_compute_sensitivities_multiple_series() -> None:
     beta_b, _r_b, _n_b = out["macro_b"]
     assert beta_a > 0  # ticker loads positively on macro_a
     assert beta_b < 0  # negatively on macro_b
+
+
+def test_sensitivity_metric_version_constant() -> None:
+    from macro_store import SENSITIVITY_METRIC_VERSION
+
+    assert SENSITIVITY_METRIC_VERSION == "v2_rate_diff"
+
+
+def test_weekly_returns_rate_first_difference() -> None:
+    dates = _daily_dates(21)
+    # Yield series: 4.00, 4.10, 4.25 (percentage points)
+    yields = [4.00 + 0.05 * i for i in range(21)]
+    diffs = _weekly_returns(list(zip(dates, yields)), is_rate_diff=True)
+    assert len(diffs) >= 2
+    # All differences should be positive and expressed in percentage points (~0.25 to 0.35 pp)
+    assert all(d > 0 for (_dt, d) in diffs)
+    # Values should be around (7 * 0.05) = 0.35 percentage points, not log ratios
+    assert any(0.20 <= d <= 0.50 for (_dt, d) in diffs)
+
+
+def test_compute_sensitivities_for_us_10y_uses_first_difference() -> None:
+    """For us_10y, sensitivity should represent expected % stock return per +1.0% yield move."""
+    rng = random.Random(99)
+    n = 365
+    dates = _daily_dates(n)
+
+    # 10Y yield in percent (e.g. starts at 4.0%, moves in bps daily ~ N(0, 0.04%))
+    yield_diffs = [rng.gauss(0.0, 0.04) for _ in range(n - 1)]
+    yield_levels = [4.0]
+    for d in yield_diffs:
+        yield_levels.append(max(0.5, yield_levels[-1] + d))
+
+    # Ticker: -5.0 beta (i.e. -5% return for +1.0% yield increase)
+    # Weekly stock return = -5.0 * weekly_yield_diff + noise
+    # We construct daily stock prices reflecting this
+    tkr_returns = [-5.0 * d + rng.gauss(0.0, 0.005) for d in yield_diffs]
+    tkr_levels = _gen_series_from_returns(tkr_returns, start=100.0)
+
+    out = compute_sensitivities(
+        ticker_prices=list(zip(dates, tkr_levels)),
+        series_lookups={"us_10y": list(zip(dates, yield_levels))},
+        lookback_days=365,
+    )
+
+    assert "us_10y" in out
+    beta, r_sq, n_obs = out["us_10y"]
+    # Should recover approximately -5.0
+    assert beta == pytest.approx(-5.0, abs=1.0)
+    assert r_sq > 0.4
+    assert n_obs >= 40

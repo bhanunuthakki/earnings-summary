@@ -92,7 +92,9 @@ def file_is_clean(git_diff_text: str, ruff_diff_text: str) -> tuple[bool, set[in
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
+    )
 
 
 def check_file(path: str, base: str) -> tuple[bool, set[int]]:

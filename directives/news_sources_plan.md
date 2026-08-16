@@ -192,3 +192,20 @@ Effort: one focused PR.
 * **Contact email in the default UA** lives in `execution/fetch_edgar_news.py`
   (`EDGAR_USER_AGENT` env var overrides). SEC policy requires a real contact; the repo is
   private, so the default carries one.
+
+---
+
+## 6. Formal Disposition on Deferred Legs (BHA-61 / 2026-08-15)
+
+In accordance with Linear issue **BHA-61** and the combined-source data backbone roadmap, the candidate fallback sources have been formally audited and dispositioned:
+
+1. **Finnhub `/stock/upgrade-downgrade`**: **FORMALLY RETIRED (KILLED)**.
+   - *Rationale*: Requires proprietary API key management, 60 req/min quota tracking, and ongoing maintenance for redundant data already captured by `yf_grades` and SEC EDGAR 8-K disclosures.
+2. **Generic RSS & Web Scrapers**: **FORMALLY RETIRED (KILLED)**.
+   - *Rationale*: High noise-to-signal ratio, lack of authoritative publisher provenance, and scraping fragility violate repository data standards.
+3. **Canonical Active Ladder**:
+   - **Tier 1 (Additive Core)**: SEC EDGAR 8-K/13D/13G filings (public domain, canonical).
+   - **Tier 2 (Market Core)**: FMP stock-news (curated financial wire).
+   - **Tier 3 (Analyst Actions)**: `yf_grades` (keyless, structured).
+   - **Tier 4 (Contingency Fallback)**: Curated WebSearch + LLM structuring (fail-closed, deterministic refusal on network failure).
+

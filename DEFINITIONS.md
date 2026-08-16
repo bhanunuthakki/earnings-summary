@@ -1,5 +1,9 @@
 # Definitions
 
+**Scope:** project
+**Owner:** earnings-summary
+**Inherits:** C:\Users\Bhanu\.gemini\DEFINITIONS.md
+
 Canonical terminology for this project. Use these terms verbatim in code (variables, functions, types, columns), comments, commit messages, and PR descriptions. New domain terms must be added here before being used.
 
 ## Research Level

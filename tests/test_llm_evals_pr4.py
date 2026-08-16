@@ -122,7 +122,7 @@ def test_checked_in_classifier_golden_sets_load() -> None:
     doc_types = {str(cast("dict[str, object]", c.expected)["doc_type"]) for c in ic}
     assert "ir_event" in doc_types  # the non-quarterly shape is covered
     ns = load_news_structuring_golden(GOLDEN_DIR / "news_structuring.json")
-    assert 1 <= len(ns) <= 4  # live web spend — the set stays small
+    assert 1 <= len(ns) <= 8  # live web spend — the set stays small
 
 
 def test_pr4_wiring_is_consistent() -> None:

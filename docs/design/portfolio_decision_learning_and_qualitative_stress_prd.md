@@ -1,10 +1,10 @@
 # Portfolio Decision Learning and Qualitative Stress — Product Requirements Document
 
-**Status:** Proposed for owner approval on 2026-08-14; implementation not started.
+**Status:** Proposed for owner approval on 2026-08-14; implementation not started.  
 **Independent review:** PASS on 2026-08-14 from product-effectiveness and
-provenance/operational-risk judges after two HOLD-and-revision cycles.
-**Audience:** Repository owner and implementation agents.
-**Umbrella PRD:** `docs/design/personal_investment_partner_prd.md`.
+provenance/operational-risk judges after two HOLD-and-revision cycles.  
+**Audience:** Repository owner and implementation agents.  
+**Umbrella PRD:** `docs/design/personal_investment_partner_prd.md`.  
 **Scope:** Trustworthy owner-decision capture, evidence-level thesis-evaluation deduplication,
 lightweight qualitative common-drawdown analysis, and the WIX learning-record repair.
 **Document authority:** This is a design artifact, not a Layer-1 directive. It does not

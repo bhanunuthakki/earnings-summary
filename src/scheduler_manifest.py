@@ -328,11 +328,21 @@ def validate_source_tree(
         wrapper_path = cron_dir / task.wrapper
         if not wrapper_path.is_file():
             continue
-        wrapper_text = wrapper_path.read_text(encoding="utf-8").casefold()
+        wrapper_raw = wrapper_path.read_text(encoding="utf-8")
+        wrapper_text = wrapper_raw.casefold()
         if "%~dp0" not in wrapper_text:
             errors.append(f"{task.wrapper}: wrapper does not resolve from its own checkout")
         if r"\.gemini\antigravity\scratch" in wrapper_text:
             errors.append(f"{task.wrapper}: wrapper hardcodes a mutable checkout")
+        wrapper_lines = [
+            line.strip().casefold() for line in wrapper_raw.splitlines() if line.strip()
+        ]
+        if wrapper_lines:
+            last_line = wrapper_lines[-1]
+            if not ("endlocal" in last_line and "exit /b" in last_line):
+                errors.append(
+                    f"{task.wrapper}: wrapper does not end with standard 'endlocal & exit /b' exit tail"
+                )
     return errors
 
 

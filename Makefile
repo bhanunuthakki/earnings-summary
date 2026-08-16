@@ -62,6 +62,15 @@ check: format-changed lint-changed typecheck-changed test  ## Pre-push gate: you
 
 check-fast: format-changed lint-changed typecheck-changed test-changed  ## Fast inner-loop gate: format + lint + typecheck + changed-tests
 
+manifest-check:  ## Validate 11-project reconstruction inventory
+	$(PY) execution/verify_reconstruction_inventory.py
+
+calendar-check:  ## Validate earnings and research calendars end-to-end
+	$(PY) execution/verify_calendars.py
+
+drill: manifest-check calendar-check check-fast  ## Reconstruction drill: inventory + calendars + fast checks
+
 ci-local:  ## Mirror CI locally (format-check on changed + full tests)
 	$(MAKE) lint-changed && $(MAKE) test
+
 

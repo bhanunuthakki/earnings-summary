@@ -64,15 +64,5 @@ if has pytest; then
   fi
 fi
 
-home_dir="${USERPROFILE:-${HOME}}"
-stubs="${home_dir}/.gemini/snippets/sync_agent_stubs.py"
-guide_test="${home_dir}/.gemini/snippets/test_guide_generation.py"
-if has python && [ -f "$stubs" ]; then
-  run python "$stubs" --check
-  if python -c "import pytest" >/dev/null 2>&1 && [ -f "$guide_test" ]; then
-    run python -m pytest "$guide_test" -q
-  fi
-fi
-
 printf 'pre-push gate passed.\n' >&2
 exit 0

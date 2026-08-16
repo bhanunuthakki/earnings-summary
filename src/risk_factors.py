@@ -214,10 +214,19 @@ class BookFactorVector:
     """The book-level read: weight x loading summed per factor, plus each
     factor's top-3 contributing tickers (by their weight x loading
     contribution). Pure read over ``is_latest`` rows — zero LLM, safe on the
-    render path."""
+    render path. Carries full availability, coverage, and provenance metadata (PRD §6.2)."""
 
     vector: dict[str, float]
     top_contributors: dict[str, tuple[tuple[str, float], ...]]
+    availability: str = "unavailable"  # "full" | "partial" | "missing_table" | "empty_table" | "stale" | "unavailable"
+    coverage_pct: float = 0.0
+    covered_weight_pct: float = 0.0
+    total_weight_pct: float = 0.0
+    excluded_tickers: tuple[str, ...] = ()
+    evaluated_tickers: tuple[str, ...] = ()
+    source_as_of: str | None = None
+    effective_as_of: str | None = None
+    registry_version: str = TAXONOMY_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -853,11 +862,10 @@ def book_factor_vector(db_path: Path | str | None, repo_root: Path) -> BookFacto
     """Weights x is_latest loadings, aggregated per factor, with each
     factor's top-3 contributing tickers. Pure DB read + the materialized
     weights cache — zero LLM, zero live tracker call, safe on the render
-    path. ``BookFactorVector({}, {})`` when the table/DB is unavailable or no
-    weighted holding has any persisted loading yet."""
+    path. Carries full availability, coverage, and provenance metadata (PRD §6.2, BHA-46)."""
     from portfolio_weights import read_materialized_weights
 
-    empty = BookFactorVector(vector={}, top_contributors={})
+    empty = BookFactorVector(vector={}, top_contributors={}, availability="unavailable")
     try:
         weights = read_materialized_weights(repo_root)
     except Exception:
@@ -865,26 +873,74 @@ def book_factor_vector(db_path: Path | str | None, repo_root: Path) -> BookFacto
         return empty
     if not weights:
         return empty
+
+    # Filter out cash/currency from non-cash portfolio weight
+    non_cash_weights: dict[str, float] = {
+        ticker.upper(): float(w)
+        for ticker, w in weights.items()
+        if ticker.upper() not in ("USD", "CASH", "CURRENCY") and float(w) > 0.0
+    }
+    total_non_cash_weight = sum(non_cash_weights.values())
+
     conn = _open(db_path)
     if conn is None:
-        return empty
+        return BookFactorVector(
+            vector={},
+            top_contributors={},
+            availability="missing_table",
+            total_weight_pct=round(total_non_cash_weight, 4),
+            excluded_tickers=tuple(sorted(non_cash_weights.keys())),
+        )
     try:
         rows = conn.execute(
-            "SELECT ticker, factor, loading FROM business_factor_exposures WHERE is_latest = 1"
+            "SELECT ticker, factor, loading, created_at, input_sha FROM business_factor_exposures WHERE is_latest = 1"
         ).fetchall()
     except sqlite3.Error as exc:
         log.warning({"event": "business_factor_vector_read_failed", "error": str(exc)})
-        return empty
+        return BookFactorVector(
+            vector={},
+            top_contributors={},
+            availability="missing_table",
+            total_weight_pct=round(total_non_cash_weight, 4),
+            excluded_tickers=tuple(sorted(non_cash_weights.keys())),
+        )
     finally:
         conn.close()
 
+    if not rows:
+        return BookFactorVector(
+            vector={},
+            top_contributors={},
+            availability="empty_table",
+            total_weight_pct=round(total_non_cash_weight, 4),
+            excluded_tickers=tuple(sorted(non_cash_weights.keys())),
+        )
+
     vector: dict[str, float] = {}
     contributions: dict[str, list[tuple[str, float]]] = {}
-    for raw_ticker, raw_factor, raw_loading in rows:
+    evaluated_tickers_set: set[str] = set()
+    oldest_created_at: str | None = None
+    newest_created_at: str | None = None
+
+    for r in rows:
+        raw_ticker = r[0]
+        raw_factor = r[1]
+        raw_loading = r[2]
+        created_at_val = r[3] if len(r) > 3 else None
+
         ticker = str(raw_ticker).upper()
-        weight = weights.get(ticker)
-        if not weight:
+        if created_at_val is not None:
+            created_str = str(created_at_val)
+            if oldest_created_at is None or created_str < oldest_created_at:
+                oldest_created_at = created_str
+            if newest_created_at is None or created_str > newest_created_at:
+                newest_created_at = created_str
+
+        weight = non_cash_weights.get(ticker)
+        if weight is None:
             continue
+
+        evaluated_tickers_set.add(ticker)
         try:
             loading = float(raw_loading)
         except (TypeError, ValueError):
@@ -894,11 +950,40 @@ def book_factor_vector(db_path: Path | str | None, repo_root: Path) -> BookFacto
         vector[factor] = vector.get(factor, 0.0) + contribution
         contributions.setdefault(factor, []).append((ticker, contribution))
 
+    evaluated_tickers = tuple(sorted(evaluated_tickers_set))
+    excluded_tickers = tuple(sorted(set(non_cash_weights.keys()) - evaluated_tickers_set))
+    covered_weight = sum(non_cash_weights[t] for t in evaluated_tickers)
+    coverage_pct = (
+        (covered_weight / total_non_cash_weight * 100.0) if total_non_cash_weight > 0.0 else 0.0
+    )
+
+    # Determine availability status (PRD §6.2)
+    if not evaluated_tickers or covered_weight <= 0.0:
+        availability = "empty_table"
+    elif coverage_pct >= 70.0:
+        availability = "full"
+    elif coverage_pct > 0.0:
+        availability = "partial"
+    else:
+        availability = "unavailable"
+
     top_contributors = {
         factor: tuple(sorted(items, key=lambda kv: kv[1], reverse=True)[:3])
         for factor, items in contributions.items()
     }
-    return BookFactorVector(vector=vector, top_contributors=top_contributors)
+    return BookFactorVector(
+        vector=vector,
+        top_contributors=top_contributors,
+        availability=availability,
+        coverage_pct=round(coverage_pct, 2),
+        covered_weight_pct=round(covered_weight, 4),
+        total_weight_pct=round(total_non_cash_weight, 4),
+        excluded_tickers=excluded_tickers,
+        evaluated_tickers=evaluated_tickers,
+        source_as_of=newest_created_at,
+        effective_as_of=oldest_created_at,
+        registry_version=TAXONOMY_VERSION,
+    )
 
 
 __all__ = [

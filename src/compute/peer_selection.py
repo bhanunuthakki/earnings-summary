@@ -48,6 +48,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError, field_validator
 
 from llm.cli import DEFAULT_MODEL, LLM_MODELS
 from llm.structured import StructuredParseError, call_llm_structured
+from log_redact import redact
 from net.client import FMP_CLIENT, HttpCallError, HttpErrorKind, JsonShape, RetryPolicy
 
 log = logging.getLogger(__name__)
@@ -572,7 +573,7 @@ def _stable_get(
                 "event": "peer_fetch_http_error",
                 "symbol": symbol,
                 "endpoint": endpoint,
-                "error": str(exc)[:120],
+                "error": redact(str(exc))[:120],
             }
         )
         return None
