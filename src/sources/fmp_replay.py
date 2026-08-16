@@ -167,19 +167,31 @@ def corpus_manifest_sha256(corpus_root: Path, inputs: tuple[_ReplayInput, ...]) 
 
 def validate_report_output_path(
     corpus_root: Path,
+    report_root: Path,
     output_path: Path,
     *,
     overwrite: bool = False,
 ) -> Path:
-    """Reject report destinations that could mutate the immutable cache."""
+    """Restrict reports to their designated safe root outside the corpus."""
     resolved_root = corpus_root.resolve()
+    resolved_report_root = report_root.resolve()
     resolved_output = output_path.resolve()
+    try:
+        resolved_report_root.relative_to(resolved_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("replay report root must be outside the corpus root")
     try:
         resolved_output.relative_to(resolved_root)
     except ValueError:
         pass
     else:
         raise ValueError("replay report output must be outside the corpus root")
+    try:
+        resolved_output.relative_to(resolved_report_root)
+    except ValueError as exc:
+        raise ValueError("replay report output must stay under the report root") from exc
     if resolved_output.exists() and not overwrite:
         raise ValueError("replay report output already exists; pass --overwrite to replace it")
     if resolved_output.is_dir():

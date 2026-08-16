@@ -118,14 +118,22 @@ def test_replay_rejects_manifest_drift(tmp_path: Path) -> None:
 
 def test_replay_report_cannot_overwrite_corpus_or_existing_file(tmp_path: Path) -> None:
     _complete_corpus(tmp_path)
-    external_report = tmp_path.parent / "replay.json"
-    external_report.write_text("old", encoding="utf-8")
+    report_root = tmp_path.parent / "reports"
+    safe_report = report_root / "replay.json"
+    safe_report.parent.mkdir()
+    safe_report.write_text("old", encoding="utf-8")
+    external_report = tmp_path.parent / "portfolio.db"
 
     with pytest.raises(ValueError, match="outside the corpus"):
-        validate_report_output_path(tmp_path, tmp_path / "WIX_profile.json")
+        validate_report_output_path(tmp_path, report_root, tmp_path / "WIX_profile.json")
+    with pytest.raises(ValueError, match="stay under the report root"):
+        validate_report_output_path(tmp_path, report_root, external_report)
     with pytest.raises(ValueError, match="already exists"):
-        validate_report_output_path(tmp_path, external_report)
-    assert validate_report_output_path(tmp_path, external_report, overwrite=True) == external_report
+        validate_report_output_path(tmp_path, report_root, safe_report)
+    assert (
+        validate_report_output_path(tmp_path, report_root, safe_report, overwrite=True)
+        == safe_report
+    )
 
 
 def test_replay_reports_close_only_price_packet_as_a_non_admission(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPORT_ROOT = PROJECT_ROOT / ".tmp" / "fmp_provider_adapter_replay"
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from sources.fmp_replay import replay_fmp_adapter_corpus, validate_report_output_path  # noqa: E402
@@ -34,15 +35,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus-root", type=Path, required=True)
     parser.add_argument("--observed-at", type=_observed_at, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--output", type=Path, required=True, help="Relative report path under .tmp"
+    )
     parser.add_argument("--expected-manifest-sha256")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
     try:
+        if args.output.is_absolute():
+            raise ValueError("--output must be relative to the replay report root")
         output_path = validate_report_output_path(
             args.corpus_root,
-            args.output,
+            REPORT_ROOT,
+            REPORT_ROOT / args.output,
             overwrite=args.overwrite,
         )
         report = replay_fmp_adapter_corpus(
