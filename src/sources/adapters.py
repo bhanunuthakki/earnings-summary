@@ -8,9 +8,9 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import cast
+from typing import Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from log_redact import redact
 from models.facts import Currency, FiscalPeriodType
@@ -179,14 +179,14 @@ class SegmentStructureObservation(BaseModel):
 
 
 class AdjustedPricePoint(BaseModel):
-    """One bar; absent action fields remain absent rather than being fabricated."""
+    """One close or OHLC bar; absent fields remain absent rather than fabricated."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     as_of_date: datetime
-    open: Decimal
-    high: Decimal
-    low: Decimal
+    open: Decimal | None = None
+    high: Decimal | None = None
+    low: Decimal | None = None
     close: Decimal
     volume: int = Field(ge=0)
     split_ratio: Decimal | None = None
@@ -203,6 +203,13 @@ class AdjustedPricePoint(BaseModel):
         if value is not None and not value.is_finite():
             raise ValueError("numeric values must be finite")
         return value
+
+    @model_validator(mode="after")
+    def ohlc_fields_are_consistent(self) -> Self:
+        present = (self.open is not None, self.high is not None, self.low is not None)
+        if any(present) and not all(present):
+            raise ValueError("open, high, and low must all be present or all be absent")
+        return self
 
 
 class AdjustedPriceSeries(BaseModel):
@@ -410,18 +417,38 @@ def _fiscal_period(value: object, *, label: str) -> FiscalPeriodType:
         raise ValueError(f"{label} has unsupported fiscal period {value!r}") from exc
 
 
-def _price_value(
+def _selected_price_value(
     record: dict[str, object],
     key: str,
     adjustment_method: CorporateActionAdjustment,
-) -> Decimal:
+) -> object:
     adjusted = f"adj{key[0].upper()}{key[1:]}"
-    selected = (
+    return (
         record.get(adjusted)
         if adjustment_method is CorporateActionAdjustment.SPLIT_AND_DIVIDEND
         and record.get(adjusted) is not None
         else record.get(key)
     )
+
+
+def _price_value(
+    record: dict[str, object],
+    key: str,
+    adjustment_method: CorporateActionAdjustment,
+) -> Decimal:
+    return _parse_decimal(
+        _selected_price_value(record, key, adjustment_method), label=f"FMP price {key}"
+    )
+
+
+def _optional_price_value(
+    record: dict[str, object],
+    key: str,
+    adjustment_method: CorporateActionAdjustment,
+) -> Decimal | None:
+    selected = _selected_price_value(record, key, adjustment_method)
+    if selected is None:
+        return None
     return _parse_decimal(selected, label=f"FMP price {key}")
 
 
@@ -733,9 +760,9 @@ class FmpProviderAdapter(ProviderAdapter):
             points.append(
                 AdjustedPricePoint(
                     as_of_date=date,
-                    open=_price_value(record, "open", adjustment_method),
-                    high=_price_value(record, "high", adjustment_method),
-                    low=_price_value(record, "low", adjustment_method),
+                    open=_optional_price_value(record, "open", adjustment_method),
+                    high=_optional_price_value(record, "high", adjustment_method),
+                    low=_optional_price_value(record, "low", adjustment_method),
                     close=_price_value(record, "close", adjustment_method),
                     volume=_parse_int(record.get("volume"), label="FMP price volume"),
                     split_ratio=_parse_decimal(record["splitRatio"], label="FMP split ratio")

@@ -136,7 +136,7 @@ def test_replay_report_cannot_overwrite_corpus_or_existing_file(tmp_path: Path) 
     )
 
 
-def test_replay_reports_close_only_price_packet_as_a_non_admission(tmp_path: Path) -> None:
+def test_replay_admits_close_only_price_packet_without_fabricating_ohlc(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "QQQ_price_chart_10y_div_adj.json",
@@ -146,7 +146,7 @@ def test_replay_reports_close_only_price_packet_as_a_non_admission(tmp_path: Pat
 
     report = replay_fmp_adapter_corpus(tmp_path, observed_at=OBSERVED_AT)
 
-    assert report.succeeded_files == 0
-    assert report.failed_files == 1
-    assert report.failures[0].family == "price"
-    assert report.failures[0].message == "FMP price open is required"
+    assert report.succeeded_files == 1
+    assert report.failed_files == 0
+    assert report.emitted_records["price"] == 1
+    assert report.failures == ()
