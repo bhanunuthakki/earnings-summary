@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from sources.adapters import (
+    AdjustedPricePoint,
     CorporateActionAdjustment,
     CurrencyBinding,
     CurrencyBindingBasis,
@@ -281,6 +282,33 @@ def test_fmp_prices_parsing() -> None:
     first_pt = series.points[0]
     assert isinstance(first_pt.close, Decimal)
     assert first_pt.volume >= 0
+
+
+def test_fmp_close_only_adjusted_prices_preserve_absent_ohlc() -> None:
+    series = FmpProviderAdapter().parse_prices(
+        '[{"date":"2026-08-14","adjClose":105,"close":100,"volume":500000}]',
+        "QQQ",
+        currency_packet='[{"symbol":"QQQ","currency":"USD"}]',
+    )
+
+    assert len(series.points) == 1
+    point = series.points[0]
+    assert point.open is None
+    assert point.high is None
+    assert point.low is None
+    assert point.close == Decimal("105")
+
+
+def test_price_point_rejects_partial_ohlc_bar() -> None:
+    with pytest.raises(ValidationError, match="all be present or all be absent"):
+        AdjustedPricePoint(
+            as_of_date=OBSERVED_AT,
+            open=Decimal("100"),
+            high=None,
+            low=Decimal("95"),
+            close=Decimal("105"),
+            volume=500000,
+        )
 
 
 def test_synthetic_secondary_provider_and_parity() -> None:
