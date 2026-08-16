@@ -53,6 +53,15 @@ class CurrencyBindingBasis(StrEnum):
     QUOTE = "quote"
 
 
+class CurrencyBindingSourceFamily(StrEnum):
+    """The packet family that directly declared a returned numeric currency."""
+
+    FMP_FINANCIAL_STATEMENT = "fmp_financial_statement"
+    FMP_PROFILE = "fmp_profile"
+    SECONDARY_CONSENSUS = "secondary_consensus"
+    SECONDARY_PRICE_PAYLOAD = "secondary_price_payload"
+
+
 class CurrencyBinding(BaseModel):
     """A ticker-scoped currency assertion, sealed to its companion raw packet."""
 
@@ -62,7 +71,7 @@ class CurrencyBinding(BaseModel):
     currency: Currency
     basis: CurrencyBindingBasis
     source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
-    source_family: str = Field(..., pattern=r"^(?:financial_statement|profile)$")
+    source_family: CurrencyBindingSourceFamily
 
 
 def _normalized_utc(value: datetime) -> datetime:
@@ -296,7 +305,7 @@ def _currency_binding(
     *,
     key: str,
     basis: CurrencyBindingBasis,
-    source_family: str,
+    source_family: CurrencyBindingSourceFamily,
 ) -> CurrencyBinding:
     raw, payload_hash = _decode_json(raw_content, label="currency binding packet")
     records = _as_list(raw, label="currency binding packet")
@@ -320,7 +329,7 @@ def issuer_reported_currency_binding(raw_content: bytes | str, ticker: str) -> C
         ticker,
         key="reportedCurrency",
         basis=CurrencyBindingBasis.ISSUER_REPORTED,
-        source_family="financial_statement",
+        source_family=CurrencyBindingSourceFamily.FMP_FINANCIAL_STATEMENT,
     )
 
 
@@ -331,7 +340,7 @@ def quote_currency_binding(raw_content: bytes | str, ticker: str) -> CurrencyBin
         ticker,
         key="currency",
         basis=CurrencyBindingBasis.QUOTE,
-        source_family="profile",
+        source_family=CurrencyBindingSourceFamily.FMP_PROFILE,
     )
 
 
@@ -340,7 +349,7 @@ def _require_binding(
     ticker: str,
     *,
     basis: CurrencyBindingBasis,
-    source_family: str,
+    source_family: CurrencyBindingSourceFamily,
 ) -> Currency:
     if binding.ticker != ticker.upper():
         raise ValueError("currency binding ticker does not match requested ticker")
@@ -535,7 +544,7 @@ class FmpProviderAdapter(ProviderAdapter):
                 currency_binding,
                 symbol,
                 basis=CurrencyBindingBasis.ISSUER_REPORTED,
-                source_family="financial_statement",
+                source_family=CurrencyBindingSourceFamily.FMP_FINANCIAL_STATEMENT,
             )
             emitted = False
             for metric, average_key, low_key, high_key, count_key in mappings:
@@ -643,7 +652,7 @@ class FmpProviderAdapter(ProviderAdapter):
             currency_binding,
             symbol,
             basis=CurrencyBindingBasis.QUOTE,
-            source_family="profile",
+            source_family=CurrencyBindingSourceFamily.FMP_PROFILE,
         )
         points: list[AdjustedPricePoint] = []
         for index, item in enumerate(records):
@@ -739,6 +748,10 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         currency_packet: bytes | str | None = None,
     ) -> list[DatedEstimateObservation]:
         raw, payload_hash = _decode_json(raw_content, label="secondary estimate payload")
+        if currency_packet is not None and _payload_bytes(currency_packet) != _payload_bytes(
+            raw_content
+        ):
+            raise ValueError("secondary estimate currency packet must be the estimate packet")
         payload = _as_dict(raw, label="secondary estimate payload")
         results: list[DatedEstimateObservation] = []
         for index, item in enumerate(
@@ -786,7 +799,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                         currency=_currency(record, label="secondary consensus record"),
                         basis=CurrencyBindingBasis.ISSUER_REPORTED,
                         source_payload_hash=payload_hash,
-                        source_family="financial_statement",
+                        source_family=CurrencyBindingSourceFamily.SECONDARY_CONSENSUS,
                     ),
                     source_payload_hash=payload_hash,
                 )
@@ -845,6 +858,10 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         currency_packet: bytes | str | None = None,
     ) -> AdjustedPriceSeries:
         raw, payload_hash = _decode_json(raw_content, label="secondary price payload")
+        if currency_packet is not None and _payload_bytes(currency_packet) != _payload_bytes(
+            raw_content
+        ):
+            raise ValueError("secondary price currency packet must be the price packet")
         payload = _as_dict(raw, label="secondary price payload")
         currency = _currency(payload, label="secondary price payload")
         points: list[AdjustedPricePoint] = []
@@ -884,7 +901,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                 currency=currency,
                 basis=CurrencyBindingBasis.QUOTE,
                 source_payload_hash=payload_hash,
-                source_family="profile",
+                source_family=CurrencyBindingSourceFamily.SECONDARY_PRICE_PAYLOAD,
             ),
             points=tuple(points),
             source_payload_hash=payload_hash,

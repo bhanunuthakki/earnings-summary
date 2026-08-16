@@ -15,6 +15,7 @@ from sources.adapters import (
     CorporateActionAdjustment,
     CurrencyBinding,
     CurrencyBindingBasis,
+    CurrencyBindingSourceFamily,
     FilingAuthority,
     FilingSectionPayload,
     FmpProviderAdapter,
@@ -288,6 +289,10 @@ def test_synthetic_secondary_provider_and_parity() -> None:
     assert len(estimates) == 1
     assert estimates[0].estimated_avg == Decimal("125000000.0")
     assert estimates[0].analyst_count == 14
+    assert (
+        estimates[0].currency_binding.source_family
+        is CurrencyBindingSourceFamily.SECONDARY_CONSENSUS
+    )
 
     # Synthetic price
     price_payload = json.dumps(
@@ -309,6 +314,15 @@ def test_synthetic_secondary_provider_and_parity() -> None:
     prices = secondary_adapter.parse_prices(price_payload, "TEST")
     assert len(prices.points) == 1
     assert prices.points[0].close == Decimal("104.2")
+    assert (
+        prices.currency_binding.source_family is CurrencyBindingSourceFamily.SECONDARY_PRICE_PAYLOAD
+    )
+    with pytest.raises(ValueError, match="currency packet"):
+        secondary_adapter.parse_prices(
+            price_payload,
+            "TEST",
+            currency_packet='{"currency":"EUR","bars":[]}',
+        )
 
 
 def test_error_envelope_redaction() -> None:
@@ -415,7 +429,7 @@ def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> Non
         currency="USD",
         basis=CurrencyBindingBasis.ISSUER_REPORTED,
         source_payload_hash="a" * 64,
-        source_family="financial_statement",
+        source_family=CurrencyBindingSourceFamily.FMP_FINANCIAL_STATEMENT,
     )
     for bypass in (forged, forged.model_copy(update={"currency": "EUR"})):
         with pytest.raises(ValueError, match="raw packet"):
