@@ -224,7 +224,7 @@ def test_veev_orphan_without_exact_transcript_remains_unresolved(
     assert _doc_id(db_path, "veev-orphan") in {row[0] for row in result.unresolved_rows}
 
 
-def test_apply_uses_parent_period_and_retimes_only_dependent_facts(
+def test_apply_links_rbrk_to_its_exact_transcript_parent_without_mutating_facts(
     tmp_path: Path, backfill_mod: Any
 ) -> None:
     db_path = tmp_path / "portfolio.db"
@@ -258,23 +258,19 @@ def test_apply_uses_parent_period_and_retimes_only_dependent_facts(
 
     dry_result = backfill_mod.backfill(db_path, only_ticker="RBRK", dry_run=True, log=False)
     assert dry_result.resolved == 1
-    assert dry_result.retimestamped == 1
-    assert dry_result.kpi_facts_retimestamped == 1
 
     result = backfill_mod.backfill(db_path, only_ticker="RBRK", dry_run=False, log=False)
     assert result.resolved == 1
-    assert result.retimestamped == 1
-    assert result.kpi_facts_retimestamped == 1
 
     conn = sqlite3.connect(db_path)
     child = conn.execute(
         "SELECT parent_document_id, period_end FROM documents WHERE id = ?", (child_id,)
     ).fetchone()
-    assert child == (parent_id, "2025-04-30 00:00:00")
+    assert child == (parent_id, "2026-04-30")
     dependent = conn.execute(
         "SELECT period_end FROM kpi_facts WHERE source_doc_id = ?", (child_id,)
     ).fetchone()
-    assert dependent == ("2025-04-30 00:00:00",)
+    assert dependent == ("2026-04-30",)
     unrelated = conn.execute(
         "SELECT period_end FROM kpi_facts WHERE source_doc_id = ?", (parent_id,)
     ).fetchone()

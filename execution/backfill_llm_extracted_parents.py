@@ -10,10 +10,13 @@ carry parent_document_id pointing at the primary document the LLM read from."
 
 Derivation: src/provenance/llm_extracted_parent.py::resolve_parent — matches on
 an exact derived processed-transcript basename for call summaries, or the
-canonical IR source path plus stored period for investor-update summaries. The
-matched parent period is canonical: the repair retimestamps only that summary
-document and KPI facts that directly reference it. Zero or ambiguous candidates
-remain unresolved; no fiscal-calendar fallback is permitted.
+canonical IR source path plus stored period for investor-update summaries. Zero
+or ambiguous candidates remain unresolved; no fiscal-calendar fallback is
+permitted.
+
+This is a document-lineage repair only. It does not mutate legacy facts: a
+period correction for historical KPI records requires a separately governed
+fact-plane publication rather than a new legacy-fact write path.
 
 Rows with zero or ambiguous candidate parents are left NULL and printed in the
 report — no guessing. Apply mode updates only orphan rows and is idempotent;
@@ -55,8 +58,6 @@ class BackfillResult:
     scanned: int = 0
     resolved: int = 0
     unresolved: int = 0
-    retimestamped: int = 0
-    kpi_facts_retimestamped: int = 0
     confidence_counts: Counter[str] = field(default_factory=_new_counter)
     unresolved_rows: list[tuple[int, str, str, str]] = field(
         default_factory=list[tuple[int, str, str, str]]
@@ -86,12 +87,6 @@ def backfill(
         sql += " ORDER BY id"
 
         result = BackfillResult()
-        has_kpi_facts = (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kpi_facts'"
-            ).fetchone()
-            is not None
-        )
         for row in conn.execute(sql, params).fetchall():
             result.scanned += 1
             match = resolve_parent(
@@ -115,35 +110,17 @@ def backfill(
                 continue
             result.resolved += 1
             result.confidence_counts[match.confidence] += 1
-            parent_period_label = match.parent_period_end.date().isoformat()
-            needs_retimestamp = period_label != parent_period_label
-            affected_facts = 0
-            if needs_retimestamp and has_kpi_facts:
-                affected_facts = int(
-                    conn.execute(
-                        "SELECT COUNT(*) FROM kpi_facts WHERE source_doc_id = ?", (row["id"],)
-                    ).fetchone()[0]
-                )
-                result.kpi_facts_retimestamped += affected_facts
-            if needs_retimestamp:
-                result.retimestamped += 1
             if log:
                 print(
                     f"  id={row['id']} {row['ticker']} {row['doc_type']} {period_label} "
-                    f"-> parent={match.parent_document_id} period={parent_period_label} "
-                    f"({match.confidence}; {affected_facts} dependent kpi_facts)"
+                    f"-> parent={match.parent_document_id} ({match.confidence})"
                 )
             if not dry_run:
                 conn.execute(
-                    "UPDATE documents SET parent_document_id = ?, period_end = ? "
+                    "UPDATE documents SET parent_document_id = ? "
                     "WHERE id = ? AND parent_document_id IS NULL",
-                    (match.parent_document_id, match.parent_period_end, row["id"]),
+                    (match.parent_document_id, row["id"]),
                 )
-                if needs_retimestamp and has_kpi_facts:
-                    conn.execute(
-                        "UPDATE kpi_facts SET period_end = ? WHERE source_doc_id = ?",
-                        (match.parent_period_end, row["id"]),
-                    )
         if not dry_run:
             conn.commit()
     finally:
@@ -153,11 +130,6 @@ def backfill(
         verb = "would resolve" if dry_run else "resolved"
         print(f"\nscanned {result.scanned} orphan llm_extracted documents row(s)")
         print(f"  {verb}: {result.resolved}")
-        print(f"  {'would retimestamp' if dry_run else 'retimestamped'}: {result.retimestamped}")
-        print(
-            f"  dependent kpi_facts {'would be ' if dry_run else ''}retimestamped: "
-            f"{result.kpi_facts_retimestamped}"
-        )
         if result.confidence_counts:
             by_conf = ", ".join(f"{k}={v}" for k, v in sorted(result.confidence_counts.items()))
             print(f"    by confidence: {by_conf}")
