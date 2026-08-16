@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from sources.adapters import (
+    AdjustedPricePoint,
     CorporateActionAdjustment,
     CurrencyBinding,
     CurrencyBindingBasis,
@@ -217,6 +218,46 @@ def test_fmp_segments_parsing() -> None:
     assert len(first.source_payload_hash) == 64
 
 
+def test_fmp_empty_segment_packet_is_an_explicit_zero_row_result() -> None:
+    adapter = FmpProviderAdapter()
+
+    segments = adapter.parse_segments(
+        '[{"symbol":"WIX","date":"2026-03-31","fiscalYear":2026,"period":"Q1",'
+        '"reportedCurrency":"USD","data":{}}]',
+        "WIX",
+    )
+
+    assert segments == []
+
+
+def test_fmp_segment_currency_falls_back_only_to_a_same_period_packet() -> None:
+    adapter = FmpProviderAdapter()
+    segment = (
+        '[{"symbol":"WIX","date":"2026-03-31","fiscalYear":2026,"period":"Q1",'
+        '"data":{"North America":5}}]'
+    )
+    matching_statement = '[{"symbol":"WIX","date":"2026-03-31","reportedCurrency":"USD"}]'
+
+    observations = adapter.parse_segments(
+        segment,
+        "WIX",
+        currency_packet=matching_statement,
+    )
+
+    assert observations[0].currency == "USD"
+    assert observations[0].currency_binding.source_period_end == datetime(2026, 3, 31, tzinfo=UTC)
+    with pytest.raises(ValueError, match="matching ticker period"):
+        adapter.parse_segments(
+            segment,
+            "WIX",
+            currency_packet='[{"symbol":"WIX","date":"2025-12-31","reportedCurrency":"USD"}]',
+        )
+
+
+def test_fmp_empty_top_level_segment_endpoint_is_an_explicit_zero_row_result() -> None:
+    assert FmpProviderAdapter().parse_segments("[]", "WIX") == []
+
+
 def test_fmp_prices_parsing() -> None:
     abnb_price_file = FMP_DIR / "ABNB_price_chart_10y_div_adj.json"
     if not abnb_price_file.exists():
@@ -241,6 +282,33 @@ def test_fmp_prices_parsing() -> None:
     first_pt = series.points[0]
     assert isinstance(first_pt.close, Decimal)
     assert first_pt.volume >= 0
+
+
+def test_fmp_close_only_adjusted_prices_preserve_absent_ohlc() -> None:
+    series = FmpProviderAdapter().parse_prices(
+        '[{"date":"2026-08-14","adjClose":105,"close":100,"volume":500000}]',
+        "QQQ",
+        currency_packet='[{"symbol":"QQQ","currency":"USD"}]',
+    )
+
+    assert len(series.points) == 1
+    point = series.points[0]
+    assert point.open is None
+    assert point.high is None
+    assert point.low is None
+    assert point.close == Decimal("105")
+
+
+def test_price_point_rejects_partial_ohlc_bar() -> None:
+    with pytest.raises(ValidationError, match="all be present or all be absent"):
+        AdjustedPricePoint(
+            as_of_date=OBSERVED_AT,
+            open=Decimal("100"),
+            high=None,
+            low=Decimal("95"),
+            close=Decimal("105"),
+            volume=500000,
+        )
 
 
 def test_synthetic_secondary_provider_and_parity() -> None:
