@@ -58,8 +58,10 @@ class CurrencyBindingSourceFamily(StrEnum):
 
     FMP_FINANCIAL_STATEMENT = "fmp_financial_statement"
     FMP_PROFILE = "fmp_profile"
+    FMP_SEGMENT_PAYLOAD = "fmp_segment_payload"
     SECONDARY_CONSENSUS = "secondary_consensus"
     SECONDARY_PRICE_PAYLOAD = "secondary_price_payload"
+    SECONDARY_SEGMENT_PAYLOAD = "secondary_segment_payload"
 
 
 class CurrencyBinding(BaseModel):
@@ -72,6 +74,12 @@ class CurrencyBinding(BaseModel):
     basis: CurrencyBindingBasis
     source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
     source_family: CurrencyBindingSourceFamily
+    source_period_end: datetime | None = None
+
+    @field_validator("source_period_end")
+    @classmethod
+    def source_period_end_is_utc(cls, value: datetime | None) -> datetime | None:
+        return _normalized_utc(value) if value is not None else None
 
 
 def _normalized_utc(value: datetime) -> datetime:
@@ -153,6 +161,7 @@ class SegmentStructureObservation(BaseModel):
     metric: EstimateMetric = EstimateMetric.REVENUE
     value: Decimal
     currency: Currency
+    currency_binding: CurrencyBinding
     unit: str = Field(default="actual", pattern=r"^(?:actual|thousands|millions|billions)$")
     source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
 
@@ -306,23 +315,54 @@ def _currency_binding(
     key: str,
     basis: CurrencyBindingBasis,
     source_family: CurrencyBindingSourceFamily,
+    target_period_end: datetime | None = None,
 ) -> CurrencyBinding:
     raw, payload_hash = _decode_json(raw_content, label="currency binding packet")
     records = _as_list(raw, label="currency binding packet")
     if not records:
         raise ValueError("currency binding packet must not be empty")
-    record = _as_dict(records[0], label="currency binding record")
+    parsed_records = [_as_dict(item, label="currency binding record") for item in records]
+    matching = [
+        record
+        for record in parsed_records
+        if _requested_ticker(record, ticker) == ticker.upper()
+        and (
+            target_period_end is None
+            or _parse_datetime(
+                _require_text(record, "date", label="currency binding record"),
+                label="currency binding record date",
+            )
+            == target_period_end
+        )
+    ]
+    if not matching:
+        raise ValueError("currency binding packet has no matching ticker period")
+    record = matching[0]
     symbol = _requested_ticker(record, ticker)
+    source_period_end = (
+        _parse_datetime(
+            _require_text(record, "date", label="currency binding record"),
+            label="currency binding record date",
+        )
+        if record.get("date") is not None
+        else None
+    )
     return CurrencyBinding(
         ticker=symbol,
         currency=_currency(record, label="currency binding record", key=key),
         basis=basis,
         source_payload_hash=payload_hash,
         source_family=source_family,
+        source_period_end=source_period_end,
     )
 
 
-def issuer_reported_currency_binding(raw_content: bytes | str, ticker: str) -> CurrencyBinding:
+def issuer_reported_currency_binding(
+    raw_content: bytes | str,
+    ticker: str,
+    *,
+    target_period_end: datetime | None = None,
+) -> CurrencyBinding:
     """Seal a reporting-currency assertion from an FMP financial-statement packet."""
     return _currency_binding(
         raw_content,
@@ -330,6 +370,7 @@ def issuer_reported_currency_binding(raw_content: bytes | str, ticker: str) -> C
         key="reportedCurrency",
         basis=CurrencyBindingBasis.ISSUER_REPORTED,
         source_family=CurrencyBindingSourceFamily.FMP_FINANCIAL_STATEMENT,
+        target_period_end=target_period_end,
     )
 
 
@@ -419,6 +460,7 @@ class ProviderAdapter(ABC):
         ticker: str,
         *,
         dim_type: SegmentDimension = SegmentDimension.GEOGRAPHY,
+        currency_packet: bytes | str | None = None,
     ) -> list[SegmentStructureObservation]: ...
 
     @abstractmethod
@@ -589,6 +631,7 @@ class FmpProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         dim_type: SegmentDimension = SegmentDimension.GEOGRAPHY,
+        currency_packet: bytes | str | None = None,
     ) -> list[SegmentStructureObservation]:
         raw, payload_hash = _decode_json(raw_content, label="FMP segment payload")
         results: list[SegmentStructureObservation] = []
@@ -600,12 +643,37 @@ class FmpProviderAdapter(ProviderAdapter):
             )
             data = _as_dict(record.get("data"), label="FMP segment data")
             if not data:
-                raise ValueError("FMP segment data must not be empty")
+                # An explicit empty endpoint response means the source reported
+                # no segment rows for that period; preserve it as zero output.
+                continue
             year = _parse_int(
                 record.get("fiscalYear", period_end.year), label="FMP fiscal year", minimum=1
             )
             period = _fiscal_period(record.get("period", "FY"), label="FMP segment record")
-            currency = _currency(record, label="FMP segment record", key="reportedCurrency")
+            if record.get("reportedCurrency") is not None:
+                currency = _currency(record, label="FMP segment record", key="reportedCurrency")
+                currency_binding = CurrencyBinding(
+                    ticker=symbol,
+                    currency=currency,
+                    basis=CurrencyBindingBasis.ISSUER_REPORTED,
+                    source_payload_hash=payload_hash,
+                    source_family=CurrencyBindingSourceFamily.FMP_SEGMENT_PAYLOAD,
+                    source_period_end=period_end,
+                )
+            else:
+                if currency_packet is None:
+                    raise ValueError("FMP segment record requires an issuer currency packet")
+                currency_binding = issuer_reported_currency_binding(
+                    currency_packet,
+                    symbol,
+                    target_period_end=period_end,
+                )
+                currency = _require_binding(
+                    currency_binding,
+                    symbol,
+                    basis=CurrencyBindingBasis.ISSUER_REPORTED,
+                    source_family=CurrencyBindingSourceFamily.FMP_FINANCIAL_STATEMENT,
+                )
             for name, value in data.items():
                 if not name.strip():
                     raise ValueError("FMP segment name must be non-empty")
@@ -620,6 +688,7 @@ class FmpProviderAdapter(ProviderAdapter):
                         segment_name=name,
                         value=_parse_decimal(value, label=f"FMP segment {name}"),
                         currency=currency,
+                        currency_binding=currency_binding,
                         source_payload_hash=payload_hash,
                     )
                 )
@@ -812,8 +881,13 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         dim_type: SegmentDimension = SegmentDimension.GEOGRAPHY,
+        currency_packet: bytes | str | None = None,
     ) -> list[SegmentStructureObservation]:
         raw, payload_hash = _decode_json(raw_content, label="secondary segment payload")
+        if currency_packet is not None and _payload_bytes(currency_packet) != _payload_bytes(
+            raw_content
+        ):
+            raise ValueError("secondary segment currency packet must be the segment packet")
         payload = _as_dict(raw, label="secondary segment payload")
         results: list[SegmentStructureObservation] = []
         for index, item in enumerate(
@@ -844,6 +918,14 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                     metric=metric,
                     value=_parse_decimal(record.get("amount"), label="secondary segment amount"),
                     currency=_currency(record, label="secondary breakdown"),
+                    currency_binding=CurrencyBinding(
+                        ticker=ticker.upper(),
+                        currency=_currency(record, label="secondary breakdown"),
+                        basis=CurrencyBindingBasis.ISSUER_REPORTED,
+                        source_payload_hash=payload_hash,
+                        source_family=CurrencyBindingSourceFamily.SECONDARY_SEGMENT_PAYLOAD,
+                        source_period_end=date,
+                    ),
                     source_payload_hash=payload_hash,
                 )
             )

@@ -217,6 +217,18 @@ def test_fmp_segments_parsing() -> None:
     assert len(first.source_payload_hash) == 64
 
 
+def test_fmp_empty_segment_packet_is_an_explicit_zero_row_result() -> None:
+    adapter = FmpProviderAdapter()
+
+    segments = adapter.parse_segments(
+        '[{"symbol":"WIX","date":"2026-03-31","fiscalYear":2026,"period":"Q1",'
+        '"reportedCurrency":"USD","data":{}}]',
+        "WIX",
+    )
+
+    assert segments == []
+
+
 def test_fmp_prices_parsing() -> None:
     abnb_price_file = FMP_DIR / "ABNB_price_chart_10y_div_adj.json"
     if not abnb_price_file.exists():
