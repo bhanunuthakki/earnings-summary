@@ -203,8 +203,11 @@ def _run_upgrade(repo_root: Path, candidate: Path, backup: Path) -> UpgradeTermi
         str(candidate),
         "--repo-root",
         str(repo_root),
+        "--runtime-root",
+        str(candidate.parents[1]),
         "--backup-path",
         str(backup),
+        "--allow-isolated-db",
     ]
     result = subprocess.run(
         command,
