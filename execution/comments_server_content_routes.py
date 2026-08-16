@@ -258,10 +258,20 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
     def peek_earnings_readout():
         from pipeline.peeks import render_earnings_readout_peek
 
+        raw_artifact_id = request.args.get("artifact_id")
+        artifact_id: int | None = None
+        if raw_artifact_id is not None:
+            try:
+                artifact_id = int(raw_artifact_id)
+            except ValueError:
+                abort(400)
+            if artifact_id <= 0:
+                abort(400)
         html = render_earnings_readout_peek(
             db_path,
             repo_root,
             request.args.get("ticker") or "",
+            artifact_id=artifact_id,
         )
         if html is None:
             abort(404)

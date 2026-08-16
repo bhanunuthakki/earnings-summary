@@ -29,6 +29,7 @@ from pipeline.work_os_decisions import (
     DecisionProjection,
     build_decision_projection,
 )
+from pipeline.work_os_earnings import EarningsReadoutSummary, load_latest_earnings_readouts
 from provenance.selection import selected_transcripts_relation
 from report.artifacts import load_report_artifact_index
 
@@ -82,6 +83,7 @@ class CompanyDeskResponse(BaseModel):
     open_questions: list[DeskQuestion]
     question_store_status: Literal["ok", "unavailable"]
     latest_brief: BriefLibraryItem | None
+    latest_earnings_readout: EarningsReadoutSummary | None
     earnings_doorway: EarningsDoorway
     warnings: list[str]
 
@@ -378,13 +380,15 @@ def build_company_desk(
     )
     questions, question_store_status, question_warnings = _questions(conn, normalized)
     latest_brief = _latest_brief(repo_root, normalized)
+    readout_projection = load_latest_earnings_readouts(conn, [normalized])
+    latest_earnings_readout = readout_projection.readouts.get(normalized)
     earnings_doorway = build_earnings_doorway(
         conn,
         normalized,
         today=today or calendar_today(generated_at),
     )
     position = _position_snapshot(conn, normalized)
-    warnings = [*decision_warnings, *question_warnings]
+    warnings = [*decision_warnings, *question_warnings, *readout_projection.warnings]
     if position.price is None and position.fair_value is None:
         warnings.insert(0, "position_snapshot_unavailable")
     if latest_brief is None:
@@ -400,6 +404,7 @@ def build_company_desk(
         open_questions=questions,
         question_store_status=question_store_status,
         latest_brief=latest_brief,
+        latest_earnings_readout=latest_earnings_readout,
         earnings_doorway=earnings_doorway,
         warnings=warnings,
     )

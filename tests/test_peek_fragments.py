@@ -1483,6 +1483,45 @@ def test_earnings_readout_peek_route_serves_and_404s(client: FlaskClient, db_pat
     assert client.get("/api/peek/earnings-readout").status_code == 404
 
 
+def test_earnings_readout_peek_can_resolve_one_exact_persisted_artifact(
+    client: FlaskClient, db_path: Path
+) -> None:
+    _seed_readout_ticker(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO llm_artifacts "
+            "(id, ticker, scope, purpose, fiscal_period, content_md, input_sha256, "
+            "prompt_version, generated_at) VALUES "
+            "(700, 'NU', 'ticker', 'post_earnings_readout', '2026-06-30', "
+            "'## Exact Q2 readout\\nQuarter-stable content.', ?, 'v1', ?)",
+            ("b" * 64, "2026-08-01T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO transcripts (id, document_id, ticker, call_date, "
+            "fiscal_period_type, period_end, source_url) VALUES "
+            "(9001, 9001, 'NU', '2026-10-20', 'Q3', '2026-09-30', "
+            "'https://example.test/q3-transcript')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    exact = client.get("/api/peek/earnings-readout?ticker=NU&artifact_id=700")
+    assert exact.status_code == 200
+    body = exact.get_data(as_text=True)
+    assert "Exact Q2 readout" in body
+    assert "quarter ended 2026-06-30" in body
+    assert "artifact #700" in body
+    assert "data-generate-readout" not in body
+
+    latest = client.get("/api/peek/earnings-readout?ticker=NU").get_data(as_text=True)
+    assert "Exact Q2 readout" not in latest
+    assert 'data-generate-readout="NU"' in latest
+    assert client.get("/api/peek/earnings-readout?ticker=NU&artifact_id=701").status_code == 404
+    assert client.get("/api/peek/earnings-readout?ticker=NU&artifact_id=nope").status_code == 400
+
+
 def test_evaluation_readout_is_explicit_on_request_and_persists(
     client: FlaskClient, db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -280,6 +280,22 @@ def test_dashboard_page_returns_shell(client):
 def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
     app_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    conn = sqlite3.connect(app_repo / "data" / "portfolio.db")
+    conn.executescript(
+        """
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT,
+            scope TEXT NOT NULL DEFAULT 'ticker',
+            purpose TEXT NOT NULL,
+            fiscal_period TEXT,
+            content_md TEXT,
+            generated_at TEXT,
+            superseded_by_id INTEGER
+        );
+        """
+    )
+    conn.close()
     monkeypatch.setattr(
         comments_server,
         "fetch_live_portfolio",
@@ -313,6 +329,45 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
     assert [row["ticker"] for row in payload["companies"]] == ["NU"]
     assert payload["companies"][0]["current_weight_pct"] == 50.0
     assert "MELI" not in response.get_data(as_text=True)
+
+
+def test_work_os_portfolio_api_includes_latest_persisted_earnings_readout(
+    app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "UPDATE transcripts SET fiscal_period_type='Q2', period_end='2026-06-30' WHERE ticker='NU'"
+    )
+    conn.executescript(
+        """
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT,
+            scope TEXT NOT NULL DEFAULT 'ticker',
+            purpose TEXT NOT NULL,
+            fiscal_period TEXT,
+            content_md TEXT,
+            generated_at TEXT,
+            superseded_by_id INTEGER
+        );
+        INSERT INTO llm_artifacts VALUES (
+            44, 'NU', 'ticker', 'post_earnings_readout', '2026-06-30',
+            'persisted readout', '2026-08-14T11:44:51Z', NULL
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    payload = (
+        comments_server.create_app(app_repo).test_client().get("/api/work-os/portfolio").get_json()
+    )
+
+    readout = payload["companies"][0]["latest_earnings_readout"]
+    assert readout["artifact_id"] == 44
+    assert readout["period_label"] == "Q2 · Jun 2026"
+    assert readout["route"] == "/api/peek/earnings-readout?ticker=NU&artifact_id=44"
+    assert payload["earnings_readouts"] == [readout]
 
 
 def test_dashboard_overview_excludes_action_blocks(client):

@@ -8,7 +8,7 @@ leaks transport errors into the page.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.research_cockpit import CockpitRow
+from pipeline.work_os_earnings import EarningsReadoutSummary
 
 
 class WorkOsPortfolioCompany(BaseModel):
@@ -42,6 +43,7 @@ class WorkOsPortfolioCompany(BaseModel):
     report_url: str | None = None
     earnings_route: str | None = None
     earnings_label: str | None = None
+    latest_earnings_readout: EarningsReadoutSummary | None = None
 
 
 class WorkOsPortfolioAction(BaseModel):
@@ -65,6 +67,7 @@ class WorkOsPortfolioHydration(BaseModel):
     as_of: str | None = None
     total_market_value: float | None = None
     companies: list[WorkOsPortfolioCompany]
+    earnings_readouts: list[EarningsReadoutSummary]
     actions: list[WorkOsPortfolioAction]
     warnings: list[str]
 
@@ -79,17 +82,24 @@ def _live_by_ticker(live: LivePortfolio) -> dict[str, LivePosition]:
     }
 
 
-def _company(row: CockpitRow, live_position: LivePosition | None) -> WorkOsPortfolioCompany:
+def _company(
+    row: CockpitRow,
+    live_position: LivePosition | None,
+    latest_earnings_readout: EarningsReadoutSummary | None,
+) -> WorkOsPortfolioCompany:
     ticker = row.base.ticker.strip().upper()
-    earnings_route = None
-    earnings_label = None
-    if row.base.last_transcript and row.base.last_transcript.period_end:
+    if latest_earnings_readout is not None:
+        earnings_route = latest_earnings_readout.route
+        earnings_label = f"{latest_earnings_readout.period_label} readout →"
+    elif row.base.last_transcript and row.base.last_transcript.period_end:
         earnings_route = f"/api/peek/earnings-readout?ticker={ticker}"
-        earnings_label = "Q2 Readout →"
+        earnings_label = "Generate readout →"
     elif row.next_earnings:
         earnings_route = f"/api/peek/earnings-prep?ticker={ticker}"
         earnings_label = f"ER {row.next_earnings}"
-
+    else:
+        earnings_route = None
+        earnings_label = None
     return WorkOsPortfolioCompany(
         ticker=ticker,
         name=row.name or ticker,
@@ -112,6 +122,7 @@ def _company(row: CockpitRow, live_position: LivePosition | None) -> WorkOsPortf
         report_url=f"/reports/{ticker}" if row.base.last_build_at else None,
         earnings_route=earnings_route,
         earnings_label=earnings_label,
+        latest_earnings_readout=latest_earnings_readout,
     )
 
 
@@ -154,15 +165,25 @@ def build_work_os_portfolio(
     rows: Sequence[CockpitRow],
     live: LivePortfolio,
     *,
+    latest_readouts: Mapping[str, EarningsReadoutSummary] | None = None,
+    readout_warnings: Sequence[str] = (),
     generated_at: datetime | None = None,
 ) -> WorkOsPortfolioHydration:
     """Join research portfolio rows to optional current tracker positions."""
 
     built_at = (generated_at or datetime.now(UTC)).astimezone(UTC)
     positions = _live_by_ticker(live)
-    companies = [_company(row, positions.get(row.base.ticker.strip().upper())) for row in rows]
+    readouts = latest_readouts or {}
+    companies = [
+        _company(
+            row,
+            positions.get(row.base.ticker.strip().upper()),
+            readouts.get(row.base.ticker.strip().upper()),
+        )
+        for row in rows
+    ]
     actions = [action for row in rows if (action := _action(row)) is not None][:3]
-    warnings: list[str] = []
+    warnings = list(readout_warnings)
     if not live.available:
         warnings.append("portfolio_tracker_unavailable")
     elif live.is_stale:
@@ -170,11 +191,20 @@ def build_work_os_portfolio(
     if live.is_partial:
         warnings.append("portfolio_tracker_partial")
     return WorkOsPortfolioHydration(
-        status="ok" if live.available and not live.is_stale and not live.is_partial else "degraded",
+        status=(
+            "ok"
+            if live.available and not live.is_stale and not live.is_partial and not warnings
+            else "degraded"
+        ),
         generated_at=built_at.isoformat().replace("+00:00", "Z"),
         as_of=live.as_of,
         total_market_value=live.total_market_value if live.available else None,
         companies=companies,
+        earnings_readouts=sorted(
+            readouts.values(),
+            key=lambda readout: (readout.fiscal_period, readout.ticker),
+            reverse=True,
+        ),
         actions=actions,
         warnings=warnings,
     )

@@ -183,6 +183,7 @@ from pipeline.ticker_command_center import (  # noqa: E402
     render_notes_drawer_fragment,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
+from pipeline.work_os_earnings import load_latest_earnings_readouts  # noqa: E402
 from pipeline.work_os_overview import render_overview_panel  # noqa: E402
 from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
@@ -1771,8 +1772,26 @@ def create_app(
     @app.route("/api/work-os/portfolio", methods=["GET"])
     def work_os_portfolio_api():
         """Portfolio-only research state for Cockpit and Company Desk."""
-        rows = build_cockpit_rows(get_read_db(), repo_root).get("portfolio", [])
-        payload = build_work_os_portfolio(rows, fetch_live_portfolio())
+        conn = get_read_db()
+        rows_by_role = build_cockpit_rows(conn, repo_root)
+        rows = rows_by_role.get("portfolio", [])
+        evaluation_rows = rows_by_role.get("evaluation", [])
+        coverage_roles = {
+            row.base.ticker.strip().upper(): role
+            for role, role_rows in (("portfolio", rows), ("evaluation", evaluation_rows))
+            for row in role_rows
+        }
+        readout_projection = load_latest_earnings_readouts(
+            conn,
+            list(coverage_roles),
+            coverage_roles=coverage_roles,
+        )
+        payload = build_work_os_portfolio(
+            rows,
+            fetch_live_portfolio(),
+            latest_readouts=readout_projection.readouts,
+            readout_warnings=readout_projection.warnings,
+        )
         response = app.json.response(payload.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response

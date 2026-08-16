@@ -109,8 +109,10 @@ def render_brief_library_shell() -> str:
 <section id="screen-brief-library" class="screen-view" data-layout="report-library">
   <div class="research-screen" aria-live="polite">
     <div class="k-card research-toolbar">
-      <div><div class="k-card-meta">Research Engine</div><h2 class="k-card-title">Brief Library</h2><div class="k-card-meta">Persisted research artifacts with stable identity, provenance, and freshness</div></div>
+      <div><div class="k-card-meta">Research Engine</div><h2 class="k-card-title">Brief Library</h2><div class="k-card-meta">Quarter-indexed earnings readouts and full research briefs with stable identity and freshness</div></div>
       <div class="research-actions">
+        <label class="k-card-meta" for="briefKindFilter">Artifact</label>
+        <select class="k-select" id="briefKindFilter"><option value="">All</option><option value="earnings_readout">Earnings readouts</option><option value="full_brief">Full briefs</option></select>
         <label class="k-card-meta" for="briefTickerFilter">Ticker</label>
         <select class="k-select" id="briefTickerFilter"><option value="">All companies</option></select>
         <label class="k-card-meta" for="briefRoleFilter">Coverage</label>
