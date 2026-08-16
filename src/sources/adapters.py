@@ -185,12 +185,22 @@ class ProviderAdapter(ABC):
         ...
 
 
+    @property
+    def filing_metadata_keys(self) -> set[str]:
+        """Set of top-level JSON metadata keys that should not be treated as filing sections."""
+        return set()
+
+
 class FmpProviderAdapter(ProviderAdapter):
     """Adapter for Financial Modeling Prep (FMP) JSON cached payloads."""
 
     @property
     def provider_name(self) -> str:
         return "fmp"
+
+    @property
+    def filing_metadata_keys(self) -> set[str]:
+        return {"symbol", "period", "year", "link", "finalLink"}
 
     def parse_filing_sections(
         self,
