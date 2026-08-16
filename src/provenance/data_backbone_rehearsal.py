@@ -406,7 +406,10 @@ class RehearsalReceipt(BaseModel):
                 raise ValueError("passed receipt requires complete closed-storage evidence")
             if source_storage_after.path != self.source_database:
                 raise ValueError("source storage-after path does not match source database")
-            if source_database_after_sha256 != source_storage_after.storage.entries[0].content_sha256:
+            if (
+                source_database_after_sha256
+                != source_storage_after.storage.entries[0].content_sha256
+            ):
                 raise ValueError("source verification-after does not match closed storage")
             if (
                 candidate_database_before_upgrade.path != candidate_storage_before_upgrade.path

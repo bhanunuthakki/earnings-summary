@@ -290,7 +290,9 @@ def test_forced_post_swap_failure_restores_throwaway_live(tmp_path: Path) -> Non
     live_sha = _sha(live)
     candidate_sha = _sha(candidate)
 
-    with pytest.raises(rehearsal.SwapRehearsalRolledBackError, match="forced post-swap failure") as exc:
+    with pytest.raises(
+        rehearsal.SwapRehearsalRolledBackError, match="forced post-swap failure"
+    ) as exc:
         rehearsal.exercise_swap_and_rollback(
             tmp_path, live, candidate, force_post_swap_failure=True
         )
