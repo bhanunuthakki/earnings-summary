@@ -15,6 +15,7 @@ from sources.adapters import (
     FilingAuthority,
     FilingSectionPayload,
     FmpProviderAdapter,
+    SegmentDimension,
     SyntheticSecondaryProviderAdapter,
     format_error_envelope,
 )
@@ -33,13 +34,14 @@ def test_frozen_schema_immutability_and_extra_forbid() -> None:
         section_name="Item 1",
         raw_text="Business description",
         section_hash=sha,
+        source_payload_hash=sha,
         fetched_at=now,
         provider="sec",
     )
 
     # Immutability check
     with pytest.raises(ValidationError):
-        payload.ticker = "NEW"  # type: ignore[misc]
+        payload.__setattr__("ticker", "NEW")
 
     # Extra field forbidden check
     data = payload.model_dump()
@@ -58,6 +60,7 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
                 "symbol": "WIX",
                 "year": "2024",
                 "period": "FY",
+                "reportedCurrency": "USD",
                 "link": "https://example.test/wix-2024",
                 "business": "Website creation platform",
             }
@@ -76,6 +79,7 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
                     "symbol": "WIX",
                     "date": "2026-03-31",
                     "quarter": 1,
+                    "reportedCurrency": "USD",
                     "revenueAvg": "125000000",
                     "revenueLow": "120000000",
                     "revenueHigh": "130000000",
@@ -120,7 +124,8 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
                         "adjClose": "105",
                         "volume": 500000,
                     }
-                ]
+                ],
+                "currency": "USD",
             }
         ),
         "WIX",
@@ -177,7 +182,7 @@ def test_fmp_segments_parsing() -> None:
 
     adapter = FmpProviderAdapter()
     raw = abnb_seg_file.read_text(encoding="utf-8")
-    segments = adapter.parse_segments(raw, "ABNB", dim_type="geography")
+    segments = adapter.parse_segments(raw, "ABNB", dim_type=SegmentDimension.GEOGRAPHY)
 
     assert len(segments) > 0
     first = segments[0]
@@ -200,7 +205,6 @@ def test_fmp_prices_parsing() -> None:
         raw,
         "ABNB",
         adjustment_method=CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
-        currency="USD",
     )
 
     assert series.ticker == "ABNB"
@@ -236,7 +240,7 @@ def test_synthetic_secondary_provider_and_parity() -> None:
     )
     assert len(sections) == 1
     assert sections[0].ticker == "TEST"
-    assert sections[0].authority == FilingAuthority.SEC
+    assert sections[0].authority == FilingAuthority.VENDOR
     assert sections[0].section_name == "Item 1. Business"
 
     # Synthetic estimates
@@ -265,6 +269,7 @@ def test_synthetic_secondary_provider_and_parity() -> None:
     # Synthetic price
     price_payload = json.dumps(
         {
+            "currency": "USD",
             "bars": [
                 {
                     "timestamp": "2026-06-01T00:00:00",
@@ -275,7 +280,7 @@ def test_synthetic_secondary_provider_and_parity() -> None:
                     "volume": 500000,
                     "split_factor": 1.0,
                 }
-            ]
+            ],
         }
     )
     prices = secondary_adapter.parse_prices(price_payload, "TEST")
@@ -292,3 +297,76 @@ def test_error_envelope_redaction() -> None:
     assert env["status"] == "error"
     assert "SECRET_API_KEY_12345" not in env["message"]
     assert "BEARER_TOKEN_ABCXYZ" not in env["sanitized_payload_snippet"]
+
+
+def test_contracts_reject_unsealed_or_unknown_provenance() -> None:
+    now = datetime.now(UTC)
+    common: dict[str, object] = {
+        "ticker": "WIX",
+        "authority": FilingAuthority.VENDOR,
+        "form": "20-F",
+        "section_name": "Business",
+        "raw_text": "text",
+        "section_hash": "a" * 64,
+        "source_payload_hash": "b" * 64,
+        "fetched_at": now,
+        "provider": "fmp",
+    }
+    with pytest.raises(ValidationError):
+        FilingSectionPayload.model_validate({**common, "form": "not-a-filing"})
+    with pytest.raises(ValidationError):
+        FilingSectionPayload.model_validate({**common, "section_hash": "g" * 64})
+
+
+def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> None:
+    adapter = FmpProviderAdapter()
+    raw = b'{"symbol":"WIX","period":"FY","business":"text"}'
+    section = adapter.parse_filing_sections(raw, "WIX", form="20-F")[0]
+    assert section.source_payload_hash != section.section_hash
+    assert section.source_payload_hash == __import__("hashlib").sha256(raw).hexdigest()
+
+    estimate = json.dumps(
+        [
+            {
+                "symbol": "WIX",
+                "date": "2026-03-31T01:00:00+02:00",
+                "quarter": 1,
+                "reportedCurrency": "EUR",
+                "revenueAvg": "5",
+            }
+        ]
+    )
+    assert adapter.parse_estimates(estimate, "WIX")[0].observation_date == datetime(
+        2026, 3, 30, 23, tzinfo=UTC
+    )
+
+    with pytest.raises(ValueError, match="ticker"):
+        adapter.parse_estimates(
+            '[{"symbol":"NOPE","date":"2026-03-31","reportedCurrency":"USD","revenueAvg":1}]',
+            "WIX",
+        )
+    with pytest.raises(ValueError, match="reportedCurrency"):
+        adapter.parse_estimates('[{"symbol":"WIX","date":"2026-03-31","revenueAvg":1}]', "WIX")
+    with pytest.raises(ValueError, match="error response"):
+        adapter.parse_filing_sections('{"symbol":"WIX","error":"denied"}', "WIX")
+
+
+def test_fixture_provider_never_forges_sec_authority_or_values() -> None:
+    adapter = SyntheticSecondaryProviderAdapter()
+    sections = adapter.parse_filing_sections(
+        '{"sections":[{"name":"Business","text":"text","period":"FY"}]}',
+        "WIX",
+        form="20-F",
+    )
+    assert sections[0].authority is FilingAuthority.VENDOR
+
+    with pytest.raises(ValueError, match="mean"):
+        adapter.parse_estimates(
+            '{"consensus":[{"as_of":"2026-03-31","year":2026,"period":"Q1","metric":"revenue","currency":"USD"}]}',
+            "WIX",
+        )
+    with pytest.raises(ValueError, match="currency"):
+        adapter.parse_prices(
+            '{"bars":[{"timestamp":"2026-03-31","open":1,"high":2,"low":1,"close":2,"volume":3}]}',
+            "WIX",
+        )
