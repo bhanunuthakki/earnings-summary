@@ -21,8 +21,8 @@ POST_ROUTE = "/api/peek/earnings-readout?ticker=NU"
     [
         (-8, "unavailable", None, None, "Earnings artifact unavailable"),
         (-7, "available", "pre", PRE_ROUTE, "Pre-earnings brief →"),
-        (14, "available", "post", POST_ROUTE, "Post-earnings readout →"),
-        (15, "unavailable", None, None, "Earnings artifact unavailable"),
+        (90, "available", "post", POST_ROUTE, "Post-earnings readout →"),
+        (91, "unavailable", None, None, "Earnings artifact unavailable"),
     ],
 )
 def test_resolver_enforces_inclusive_window_boundaries(
@@ -40,7 +40,7 @@ def test_resolver_enforces_inclusive_window_boundaries(
     )
 
     assert PRE_EARNINGS_WINDOW_DAYS == 7
-    assert POST_EARNINGS_WINDOW_DAYS == 14
+    assert POST_EARNINGS_WINDOW_DAYS == 90
     assert resolved.status == status
     assert resolved.phase == phase
     assert resolved.route == route

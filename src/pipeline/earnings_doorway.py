@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 PRE_EARNINGS_WINDOW_DAYS = 7
-POST_EARNINGS_WINDOW_DAYS = 14
+POST_EARNINGS_WINDOW_DAYS = 90
 
 EarningsPhase = Literal["pre", "post"]
 EarningsDoorwayStatus = Literal["available", "pending", "unavailable"]
