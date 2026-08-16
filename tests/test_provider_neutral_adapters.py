@@ -12,12 +12,16 @@ from pydantic import ValidationError
 
 from sources.adapters import (
     CorporateActionAdjustment,
+    CurrencyBinding,
+    CurrencyBindingBasis,
     FilingAuthority,
     FilingSectionPayload,
     FmpProviderAdapter,
     SegmentDimension,
     SyntheticSecondaryProviderAdapter,
     format_error_envelope,
+    issuer_reported_currency_binding,
+    quote_currency_binding,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +77,9 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
         ("WIX", "20-F", "business")
     ]
 
+    issuer_currency = issuer_reported_currency_binding(
+        '[{"symbol":"WIX","reportedCurrency":"USD"}]', "WIX"
+    )
     estimates = adapter.parse_estimates(
         json.dumps(
             [
@@ -80,7 +87,6 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
                     "symbol": "WIX",
                     "date": "2026-03-31",
                     "quarter": 1,
-                    "reportedCurrency": "USD",
                     "revenueAvg": "125000000",
                     "revenueLow": "120000000",
                     "revenueHigh": "130000000",
@@ -90,6 +96,7 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
         ),
         "WIX",
         observed_at=OBSERVED_AT,
+        currency_binding=issuer_currency,
     )
     assert [(item.metric, item.fiscal_period, item.estimated_avg) for item in estimates] == [
         ("revenue", "Q1", Decimal("125000000"))
@@ -114,6 +121,7 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
         ("North America", Decimal("80000000"))
     ]
 
+    quote_currency = quote_currency_binding('[{"symbol":"WIX","currency":"USD"}]', "WIX")
     prices = adapter.parse_prices(
         json.dumps(
             {
@@ -127,10 +135,10 @@ def test_fmp_adapter_parses_all_contract_shapes_without_local_corpus() -> None:
                         "volume": 500000,
                     }
                 ],
-                "currency": "USD",
             }
         ),
         "WIX",
+        currency_binding=quote_currency,
     )
     assert [(item.as_of_date.date().isoformat(), item.close) for item in prices.points] == [
         ("2026-03-31", Decimal("105"))
@@ -164,7 +172,12 @@ def test_fmp_estimates_parsing() -> None:
 
     adapter = FmpProviderAdapter()
     raw = wix_est_file.read_text(encoding="utf-8")
-    estimates = adapter.parse_estimates(raw, "WIX", observed_at=OBSERVED_AT)
+    issuer_currency = issuer_reported_currency_binding(
+        (FMP_DIR / "WIX_income_statement_annual.json").read_bytes(), "WIX"
+    )
+    estimates = adapter.parse_estimates(
+        raw, "WIX", observed_at=OBSERVED_AT, currency_binding=issuer_currency
+    )
 
     assert len(estimates) > 0
     rev_estimates = [e for e in estimates if e.metric == "revenue"]
@@ -203,10 +216,12 @@ def test_fmp_prices_parsing() -> None:
 
     adapter = FmpProviderAdapter()
     raw = abnb_price_file.read_text(encoding="utf-8")
+    quote_currency = quote_currency_binding((FMP_DIR / "ABNB_profile.json").read_bytes(), "ABNB")
     series = adapter.parse_prices(
         raw,
         "ABNB",
         adjustment_method=CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
+        currency_binding=quote_currency,
     )
 
     assert series.ticker == "ABNB"
@@ -322,6 +337,25 @@ def test_contracts_reject_unsealed_or_unknown_provenance() -> None:
         FilingSectionPayload.model_validate({**common, "fetched_at": datetime(2026, 3, 31)})
 
 
+def test_currency_bindings_are_hash_sealed_and_purpose_limited() -> None:
+    issuer = issuer_reported_currency_binding(
+        '[{"symbol":"MELI","reportedCurrency":"USD"}]', "MELI"
+    )
+    quote = quote_currency_binding('[{"symbol":"MELI","currency":"USD"}]', "MELI")
+    assert issuer.basis is CurrencyBindingBasis.ISSUER_REPORTED
+    assert quote.basis is CurrencyBindingBasis.QUOTE
+    assert len(issuer.source_payload_hash) == 64
+    with pytest.raises(ValidationError):
+        CurrencyBinding.model_validate(
+            {
+                "ticker": "MELI",
+                "currency": "USD",
+                "basis": CurrencyBindingBasis.ISSUER_REPORTED,
+                "source_payload_hash": "not-a-hash",
+            }
+        )
+
+
 def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> None:
     adapter = FmpProviderAdapter()
     raw = b'{"symbol":"WIX","period":"FY","business":"text"}'
@@ -340,7 +374,12 @@ def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> Non
             }
         ]
     )
-    parsed_estimate = adapter.parse_estimates(estimate, "WIX", observed_at=OBSERVED_AT)[0]
+    issuer_currency = issuer_reported_currency_binding(
+        '[{"symbol":"WIX","reportedCurrency":"EUR"}]', "WIX"
+    )
+    parsed_estimate = adapter.parse_estimates(
+        estimate, "WIX", observed_at=OBSERVED_AT, currency_binding=issuer_currency
+    )[0]
     assert parsed_estimate.observation_date == OBSERVED_AT
     assert parsed_estimate.target_period_end == datetime(2026, 3, 30, 23, tzinfo=UTC)
 
@@ -349,19 +388,22 @@ def test_adapters_fail_closed_and_preserve_byte_and_timezone_provenance() -> Non
             '[{"symbol":"NOPE","date":"2026-03-31","reportedCurrency":"USD","revenueAvg":1}]',
             "WIX",
             observed_at=OBSERVED_AT,
+            currency_binding=issuer_currency,
         )
-    with pytest.raises(ValueError, match="reportedCurrency"):
+    with pytest.raises(ValueError, match="issuer_reported"):
         adapter.parse_estimates(
             '[{"symbol":"WIX","date":"2026-03-31","revenueAvg":1}]',
             "WIX",
             observed_at=OBSERVED_AT,
+            currency_binding=quote_currency_binding('[{"symbol":"WIX","currency":"EUR"}]', "WIX"),
         )
     with pytest.raises(ValueError, match="error response"):
         adapter.parse_filing_sections('{"symbol":"WIX","error":"denied"}', "WIX")
     with pytest.raises(ValueError, match="ticker"):
         adapter.parse_prices(
-            '{"symbol":"NOPE","currency":"USD","historical":[{"date":"2026-03-31","open":1,"high":2,"low":1,"close":2,"volume":3}]}',
+            '{"symbol":"NOPE","historical":[{"date":"2026-03-31","open":1,"high":2,"low":1,"close":2,"volume":3}]}',
             "WIX",
+            currency_binding=quote_currency_binding('[{"symbol":"WIX","currency":"USD"}]', "WIX"),
         )
 
 

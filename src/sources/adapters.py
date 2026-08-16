@@ -46,6 +46,24 @@ class SegmentDimension(StrEnum):
     BUSINESS_UNIT = "business_unit"
 
 
+class CurrencyBindingBasis(StrEnum):
+    """What an immutable companion packet proves about a numeric payload."""
+
+    ISSUER_REPORTED = "issuer_reported"
+    QUOTE = "quote"
+
+
+class CurrencyBinding(BaseModel):
+    """A ticker-scoped currency assertion, sealed to its companion raw packet."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ticker: str = Field(..., pattern=r"^[A-Z0-9.\-]+$")
+    currency: Currency
+    basis: CurrencyBindingBasis
+    source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
+
+
 def _normalized_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         raise ValueError("timestamps must be timezone-aware")
@@ -265,6 +283,55 @@ def _currency(record: dict[str, object], *, label: str, key: str = "currency") -
         raise ValueError(f"{label} has unsupported currency {raw!r}") from exc
 
 
+def _currency_binding(
+    raw_content: bytes | str,
+    ticker: str,
+    *,
+    key: str,
+    basis: CurrencyBindingBasis,
+) -> CurrencyBinding:
+    raw, payload_hash = _decode_json(raw_content, label="currency binding packet")
+    records = _as_list(raw, label="currency binding packet")
+    if not records:
+        raise ValueError("currency binding packet must not be empty")
+    record = _as_dict(records[0], label="currency binding record")
+    symbol = _requested_ticker(record, ticker)
+    return CurrencyBinding(
+        ticker=symbol,
+        currency=_currency(record, label="currency binding record", key=key),
+        basis=basis,
+        source_payload_hash=payload_hash,
+    )
+
+
+def issuer_reported_currency_binding(raw_content: bytes | str, ticker: str) -> CurrencyBinding:
+    """Seal a reporting-currency assertion from an FMP financial-statement packet."""
+    return _currency_binding(
+        raw_content,
+        ticker,
+        key="reportedCurrency",
+        basis=CurrencyBindingBasis.ISSUER_REPORTED,
+    )
+
+
+def quote_currency_binding(raw_content: bytes | str, ticker: str) -> CurrencyBinding:
+    """Seal a quote-currency assertion from an FMP profile packet."""
+    return _currency_binding(raw_content, ticker, key="currency", basis=CurrencyBindingBasis.QUOTE)
+
+
+def _require_binding(
+    binding: CurrencyBinding,
+    ticker: str,
+    *,
+    basis: CurrencyBindingBasis,
+) -> Currency:
+    if binding.ticker != ticker.upper():
+        raise ValueError("currency binding ticker does not match requested ticker")
+    if binding.basis is not basis:
+        raise ValueError(f"currency binding must use {basis.value} basis")
+    return binding.currency
+
+
 def _fiscal_period(value: object, *, label: str) -> FiscalPeriodType:
     if not isinstance(value, str):
         raise ValueError(f"{label} requires fiscal period")
@@ -309,7 +376,12 @@ class ProviderAdapter(ABC):
 
     @abstractmethod
     def parse_estimates(
-        self, raw_content: bytes | str, ticker: str, *, observed_at: datetime
+        self,
+        raw_content: bytes | str,
+        ticker: str,
+        *,
+        observed_at: datetime,
+        currency_binding: CurrencyBinding | None = None,
     ) -> list[DatedEstimateObservation]: ...
 
     @abstractmethod
@@ -328,6 +400,7 @@ class ProviderAdapter(ABC):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
+        currency_binding: CurrencyBinding | None = None,
     ) -> AdjustedPriceSeries: ...
 
 
@@ -367,7 +440,15 @@ class FmpProviderAdapter(ProviderAdapter):
         for name, content in payload.items():
             if name in metadata:
                 continue
-            if not isinstance(content, str) or not content.strip():
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, (list, dict)):
+                text = json.dumps(
+                    content, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+                )
+            else:
+                raise ValueError("FMP filing section text must be non-empty text")
+            if not text.strip():
                 raise ValueError("FMP filing section text must be non-empty text")
             results.append(
                 FilingSectionPayload(
@@ -377,8 +458,8 @@ class FmpProviderAdapter(ProviderAdapter):
                     fiscal_year=year,
                     fiscal_period=period,
                     section_name=name,
-                    raw_text=content,
-                    section_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    raw_text=text,
+                    section_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
                     source_payload_hash=payload_hash,
                     source_url=source_url,
                     fetched_at=fetched_at or datetime.now(UTC),
@@ -390,7 +471,12 @@ class FmpProviderAdapter(ProviderAdapter):
         return results
 
     def parse_estimates(
-        self, raw_content: bytes | str, ticker: str, *, observed_at: datetime
+        self,
+        raw_content: bytes | str,
+        ticker: str,
+        *,
+        observed_at: datetime,
+        currency_binding: CurrencyBinding | None = None,
     ) -> list[DatedEstimateObservation]:
         raw, payload_hash = _decode_json(raw_content, label="FMP estimate payload")
         results: list[DatedEstimateObservation] = []
@@ -423,7 +509,13 @@ class FmpProviderAdapter(ProviderAdapter):
                     label="FMP estimate record",
                 )
             )
-            currency = _currency(record, label="FMP estimate record", key="reportedCurrency")
+            if currency_binding is None:
+                raise ValueError("FMP estimate payload requires an issuer currency binding")
+            currency = _require_binding(
+                currency_binding,
+                symbol,
+                basis=CurrencyBindingBasis.ISSUER_REPORTED,
+            )
             emitted = False
             for metric, average_key, low_key, high_key, count_key in mappings:
                 if average_key not in record or record[average_key] is None:
@@ -508,12 +600,23 @@ class FmpProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
+        currency_binding: CurrencyBinding | None = None,
     ) -> AdjustedPriceSeries:
         raw, payload_hash = _decode_json(raw_content, label="FMP price payload")
-        root = _as_dict(raw, label="FMP price payload")
-        symbol = _requested_ticker(root, ticker)
-        records = _as_list(root.get("historical"), label="FMP historical prices")
-        currency = _currency(root, label="FMP price payload")
+        root = (
+            _as_dict(cast("object", raw), label="FMP price payload")
+            if isinstance(raw, dict)
+            else None
+        )
+        symbol = _requested_ticker(root, ticker) if root is not None else ticker.upper()
+        records = (
+            _as_list(root.get("historical"), label="FMP historical prices")
+            if root is not None
+            else _as_list(cast("object", raw), label="FMP historical prices")
+        )
+        if currency_binding is None:
+            raise ValueError("FMP price payload requires a quote currency binding")
+        currency = _require_binding(currency_binding, symbol, basis=CurrencyBindingBasis.QUOTE)
         points: list[AdjustedPricePoint] = []
         for index, item in enumerate(records):
             record = _as_dict(item, label=f"FMP price record {index}")
@@ -599,7 +702,12 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         return results
 
     def parse_estimates(
-        self, raw_content: bytes | str, ticker: str, *, observed_at: datetime
+        self,
+        raw_content: bytes | str,
+        ticker: str,
+        *,
+        observed_at: datetime,
+        currency_binding: CurrencyBinding | None = None,
     ) -> list[DatedEstimateObservation]:
         raw, payload_hash = _decode_json(raw_content, label="secondary estimate payload")
         payload = _as_dict(raw, label="secondary estimate payload")
@@ -698,6 +806,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
+        currency_binding: CurrencyBinding | None = None,
     ) -> AdjustedPriceSeries:
         raw, payload_hash = _decode_json(raw_content, label="secondary price payload")
         payload = _as_dict(raw, label="secondary price payload")
