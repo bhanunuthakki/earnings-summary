@@ -425,7 +425,8 @@ def test_ensure_summary_document_row_resolves_parent_from_transcript(tmp_path: P
         "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, "
         "sha256, fetched_at, fetch_status, raw_bytes_size) "
         "VALUES ('NU', 'transcript_audio', 'earnings_call_transcript', "
-        "'2023-03-31 00:00:00', 'x', 'x', '2026-05-19 01:45:16', 'ok', 1)"
+        "'2023-03-31 00:00:00', 'transcripts/processed/NU_Q1_2023.txt', 'x', "
+        "'2026-05-19 01:45:16', 'ok', 1)"
     ).lastrowid
     conn.commit()
 
@@ -470,6 +471,27 @@ def test_ensure_summary_document_row_flags_unresolvable_parent(tmp_path: Path) -
     assert issue["ticker"] == "AMAT"
     assert issue["severity"] == Severity.WARN.value
     assert issue["rule"] == ValidationRule.MISSING_FIELD.value
+
+
+def test_ensure_summary_document_row_uses_parent_canonical_period(tmp_path: Path) -> None:
+    conn = _documents_db()
+    conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, "
+        "sha256, fetched_at, fetch_status, raw_bytes_size) "
+        "VALUES ('RBRK', 'transcript_audio', 'earnings_call_transcript', '2025-04-30', "
+        "'transcripts/processed/RBRK_Q1_2026.txt', 'parent', '2025-05-01', 'ok', 1)"
+    )
+    conn.commit()
+    summary_path = tmp_path / "RBRK_Q1_2026_summary.txt"
+    summary_path.write_text("summary text", encoding="utf-8")
+
+    doc_id = _ensure_summary_document_row(
+        conn, "RBRK", datetime(2026, 4, 30), summary_path, "llm_summary"
+    )
+
+    row = conn.execute("SELECT period_end FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    assert row is not None
+    assert str(row["period_end"])[:10] == "2025-04-30"
 
 
 def test_period_end_calendar_fye_unaffected() -> None:

@@ -38,12 +38,13 @@ def _insert_doc(
     doc_type: str,
     period_end: str,
     fetched_at: str,
+    file_path: str = "x",
 ) -> int:
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, period_end, "
         "file_path, sha256, fetched_at, fetch_status, raw_bytes_size) "
-        "VALUES (?, ?, ?, ?, 'x', 'x', ?, 'ok', 1)",
-        (ticker, source_type, doc_type, period_end, fetched_at),
+        "VALUES (?, ?, ?, ?, ?, 'x', ?, 'ok', 1)",
+        (ticker, source_type, doc_type, period_end, file_path, fetched_at),
     )
     assert cur.lastrowid is not None
     return cur.lastrowid
@@ -68,6 +69,7 @@ def test_unique_transcript_audio_candidate(conn: sqlite3.Connection) -> None:
         doc_type="earnings_call_transcript",
         period_end="2023-03-31 00:00:00",
         fetched_at="2026-05-19 01:45:16.308875",
+        file_path="transcripts/processed/NU_Q1_2023.txt",
     )
     result = resolve_parent(
         conn,
@@ -81,8 +83,8 @@ def test_unique_transcript_audio_candidate(conn: sqlite3.Connection) -> None:
     assert result.confidence == "unique"
 
 
-def test_unique_ir_transcript_candidate(conn: sqlite3.Connection) -> None:
-    doc_id = _insert_doc(
+def test_llm_summary_does_not_match_ir_transcript(conn: sqlite3.Connection) -> None:
+    _insert_doc(
         conn,
         ticker="NU",
         source_type="ir_doc",
@@ -97,30 +99,28 @@ def test_unique_ir_transcript_candidate(conn: sqlite3.Connection) -> None:
         file_path=".tmp/NU_Q1_2023_summary.txt",
         period_end="2023-03-31 00:00:00",  # backfill path passes the raw DB string
     )
-    assert result is not None
-    assert result.parent_document_id == doc_id
-    assert result.confidence == "unique"
+    assert result is None
 
 
-def test_multi_candidate_picks_earliest_fetched(conn: sqlite3.Connection) -> None:
-    """Two eligible parents for the same period — the summary was written once
-    (kpi_extract_summaries + process_ir_documents both cache-hit on an existing
-    .tmp file), so the one ingested FIRST is the one actually read."""
-    earlier_id = _insert_doc(
+def test_llm_summary_ambiguous_exact_basename_returns_none(conn: sqlite3.Connection) -> None:
+    """The repair must not guess between duplicate processed-transcript rows."""
+    _insert_doc(
         conn,
         ticker="UBER",
         source_type="transcript_audio",
         doc_type="earnings_call_transcript",
         period_end="2024-12-31 00:00:00",
         fetched_at="2026-05-19 01:47:11.053932",
+        file_path="transcripts/processed/UBER_Q4_2024.txt",
     )
     _insert_doc(
         conn,
         ticker="UBER",
-        source_type="ir_doc",
-        doc_type="ir_transcript",
+        source_type="transcript_audio",
+        doc_type="earnings_call_transcript",
         period_end="2024-12-31T00:00:00",
         fetched_at="2026-06-04T23:56:09.601781",
+        file_path="archive/UBER_Q4_2024.txt",
     )
     result = resolve_parent(
         conn,
@@ -129,60 +129,43 @@ def test_multi_candidate_picks_earliest_fetched(conn: sqlite3.Connection) -> Non
         file_path=".tmp/UBER_Q4_2024_summary.txt",
         period_end=datetime(2024, 12, 31),
     )
-    assert result is not None
-    assert result.parent_document_id == earlier_id
-    assert result.confidence == "earliest_of_2"
-    assert result.candidate_count == 2
+    assert result is None
 
 
-def test_earliest_tiebreak_is_time_aware_not_lexicographic(conn: sqlite3.Connection) -> None:
-    """Regression: a naive string sort of fetched_at picks the WRONG winner
-    whenever two rows share a calendar date but differ in separator style
-    (' ' < 'T' in ASCII, independent of actual time of day). Candidate A is a
-    space-separated stamp at 09:00 (lexicographically SMALLER string); candidate
-    B is a "T"-separated stamp at 01:00 (the true earliest). B must win.
-    """
-    space_later_id = _insert_doc(
+def test_llm_summary_uses_exact_basename_not_period_end(conn: sqlite3.Connection) -> None:
+    """The processed transcript's stored period is canonical for the child."""
+    parent_id = _insert_doc(
         conn,
-        ticker="CRM",
+        ticker="RBRK",
         source_type="transcript_audio",
         doc_type="earnings_call_transcript",
-        period_end="2025-12-31 00:00:00",
-        fetched_at="2025-12-31 09:00:00.000000",
+        period_end="2025-04-30 00:00:00",
+        fetched_at="2025-05-01 09:00:00.000000",
+        file_path="transcripts/processed/RBRK_Q1_2026.txt",
     )
-    t_earlier_id = _insert_doc(
-        conn,
-        ticker="CRM",
-        source_type="ir_doc",
-        doc_type="ir_transcript",
-        period_end="2025-12-31T00:00:00",
-        fetched_at="2025-12-31T01:00:00.000000",
-    )
-    # Sanity: prove the trap is real — plain string comparison picks the wrong row.
-    assert "2025-12-31 09:00:00.000000" < "2025-12-31T01:00:00.000000"
 
     result = resolve_parent(
         conn,
-        ticker="CRM",
+        ticker="RBRK",
         doc_type="llm_summary",
-        file_path=".tmp/CRM_Q4_2025_summary.txt",
-        period_end=datetime(2025, 12, 31),
+        file_path=".tmp/RBRK_Q1_2026_summary.txt",
+        period_end=datetime(2026, 4, 30),
     )
     assert result is not None
-    assert result.parent_document_id == t_earlier_id
-    assert result.parent_document_id != space_later_id
+    assert result.parent_document_id == parent_id
+    assert result.parent_period_end == datetime(2025, 4, 30)
 
 
-def test_aware_and_naive_fetched_at_do_not_crash_the_sort(conn: sqlite3.Connection) -> None:
-    """Some rows carry a '+00:00' offset, others don't (naive-UTC convention) —
-    mixing them in the same candidate set must not raise."""
-    naive_id = _insert_doc(
+def test_llm_summary_ignores_nonmatching_transcript_basename(conn: sqlite3.Connection) -> None:
+    """Matching the ticker and period alone is insufficient for lineage repair."""
+    _insert_doc(
         conn,
         ticker="ABNB",
         source_type="transcript_audio",
         doc_type="earnings_call_transcript",
         period_end="2025-03-31 00:00:00",
         fetched_at="2026-05-19 02:01:49.601393",
+        file_path="transcripts/processed/ABNB_Q2_2025.txt",
     )
     _insert_doc(
         conn,
@@ -199,11 +182,10 @@ def test_aware_and_naive_fetched_at_do_not_crash_the_sort(conn: sqlite3.Connecti
         file_path=".tmp/ABNB_Q1_2025_summary.txt",
         period_end=datetime(2025, 3, 31),
     )
-    assert result is not None
-    assert result.parent_document_id == naive_id
+    assert result is None
 
 
-def test_investor_update_filename_routes_to_investor_update_doc_type(
+def test_investor_update_summary_resolves_canonical_ir_parent(
     conn: sqlite3.Connection,
 ) -> None:
     # A plain earnings-call transcript exists for the same period, but the
@@ -223,6 +205,7 @@ def test_investor_update_filename_routes_to_investor_update_doc_type(
         doc_type="ir_investor_update",
         period_end="2024-06-30T00:00:00",
         fetched_at="2026-05-03T20:52:55",
+        file_path="ir_documents/MELI/2024-06-30/ir_investor_update__deadbeef.pdf",
     )
     result = resolve_parent(
         conn,
@@ -233,6 +216,77 @@ def test_investor_update_filename_routes_to_investor_update_doc_type(
     )
     assert result is not None
     assert result.parent_document_id == investor_update_id
+
+
+def test_investor_update_summary_ambiguous_canonical_parent_returns_none(
+    conn: sqlite3.Connection,
+) -> None:
+    for file_path in (
+        "ir_documents/MELI/2024-06-30/ir_investor_update__deadbeef.pdf",
+        "ir_documents/MELI/2024-06-30/ir_investor_update__cafebabe.pdf",
+    ):
+        _insert_doc(
+            conn,
+            ticker="MELI",
+            source_type="ir_doc",
+            doc_type="ir_investor_update",
+            period_end="2024-06-30",
+            fetched_at="2026-05-03T20:52:55",
+            file_path=file_path,
+        )
+
+    result = resolve_parent(
+        conn,
+        ticker="MELI",
+        doc_type="llm_summary",
+        file_path=".tmp/MELI_Q2_2024_investor_update_summary.txt",
+        period_end=datetime(2024, 6, 30),
+    )
+    assert result is None
+
+
+def test_investor_update_summary_requires_matching_canonical_period(
+    conn: sqlite3.Connection,
+) -> None:
+    _insert_doc(
+        conn,
+        ticker="MELI",
+        source_type="ir_doc",
+        doc_type="ir_investor_update",
+        period_end="2024-06-30",
+        fetched_at="2026-05-03T20:52:55",
+        file_path="ir_documents/MELI/2024-06-30/ir_investor_update__deadbeef.pdf",
+    )
+
+    result = resolve_parent(
+        conn,
+        ticker="MELI",
+        doc_type="llm_summary",
+        file_path=".tmp/MELI_Q2_2024_investor_update_summary.txt",
+        period_end=datetime(2024, 3, 31),
+    )
+    assert result is None
+
+
+def test_malformed_parent_period_returns_none(conn: sqlite3.Connection) -> None:
+    _insert_doc(
+        conn,
+        ticker="RBRK",
+        source_type="transcript_audio",
+        doc_type="earnings_call_transcript",
+        period_end="not-a-date",
+        fetched_at="2025-05-01",
+        file_path="transcripts/processed/RBRK_Q1_2026.txt",
+    )
+
+    result = resolve_parent(
+        conn,
+        ticker="RBRK",
+        doc_type="llm_summary",
+        file_path=".tmp/RBRK_Q1_2026_summary.txt",
+        period_end=datetime(2026, 4, 30),
+    )
+    assert result is None
 
 
 @pytest.mark.parametrize(
