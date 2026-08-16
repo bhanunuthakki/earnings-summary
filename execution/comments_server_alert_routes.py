@@ -140,8 +140,9 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
             response.headers["Cache-Control"] = "no-store"
             return response
 
-        sec_fetch_site = request.headers.get("Sec-Fetch-Site", "")
-        if sec_fetch_site == "cross-site" or (referer and referer_back is None):
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site" or (
+            referer and referer_back is None
+        ):
             return ({"error": "cross-site approve/dismiss rejected"}, 403)
         consequence = ""
         try:

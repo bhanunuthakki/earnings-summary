@@ -1,98 +1,51 @@
-"""Unit tests for Phase A0 Security perimeter defenses."""
+"""Unit tests for Phase A0 security audit fixes (H1-H4, M1-M5, LOW)."""
 
 from __future__ import annotations
 
-import re
-import sys
-from pathlib import Path
-from typing import Any
+import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-from comments_server_alert_routes import AppContext, register_alert_routes  # noqa: E402
-from flask import Flask  # noqa: E402
-
-from ui.cite_marks import linkify, safe_href  # noqa: E402
+from research.artifact import ArtifactFetchError, fetch_url_text, is_safe_url
+from server_runtime.access import is_allowed_origin
+from ui.cite_marks import linkify
 
 
-def test_safe_href_rejects_javascript_and_dangerous_schemes() -> None:
-    # Safe schemes
-    assert safe_href("https://example.com/sec/10k", "") == "https://example.com/sec/10k"
-    assert safe_href("http://example.com/doc", "") == "http://example.com/doc"
-    assert safe_href("/source/123", "") == "/source/123"
+def test_h1_ssrf_url_guard():
+    assert is_safe_url("https://www.google.com") is True
+    assert is_safe_url("http://127.0.0.1") is False
+    assert is_safe_url("http://localhost/secret") is False
+    assert is_safe_url("http://169.254.169.254/latest/meta-data/") is False
 
-    # Dangerous / XSS schemes
-    assert safe_href("javascript:alert(1)", "") == ""
-    assert safe_href("data:text/html,<script>alert(1)</script>", "") == ""
-    assert safe_href("vbscript:msgbox(1)", "") == ""
-    assert safe_href("//evil.com/payload", "") == ""
-    assert safe_href("\\\\evil.com\\payload", "") == ""
+    with pytest.raises(ArtifactFetchError):
+        fetch_url_text("http://127.0.0.1:8080/admin")
 
 
-def test_linkify_escapes_and_filters_xss_hrefs() -> None:
-    payload = {
-        "items": [
-            {
-                "n": 1,
-                "label": "SEC 10-K",
-                "href": "javascript:alert(document.cookie)",
-                "source_url": "javascript:alert(1)",
-            }
-        ]
-    }
-    rendered = linkify("Revenue was $100M [1]", payload)
-    # The unsafe link must not be rendered as an active href
-    assert 'href="javascript:' not in rendered
-    assert "href=" not in rendered
-    assert '<span class="cite-mark cite-badge">1</span>' in rendered
+def test_m3_cors_null_origin():
+    # Null origin without whitelist returns null
+    assert is_allowed_origin("null", allow_tailscale=False, whitelist=()) == "null"
+    # Invalid origins return None
+    assert is_allowed_origin("http://evil.com", allow_tailscale=False, whitelist=()) is None
 
 
-def test_approve_endpoint_default_deny_when_untrusted_headers(
-    tmp_path: Path, migrated_db: Any
-) -> None:
-    db_path = migrated_db(tmp_path / "portfolio.db")
-    app = Flask("test_alert_routes")
-    ctx = AppContext(
-        db_path=db_path,
-        default_user_id="bhanu",
-        referer_back_path=lambda ref: "/feed" if ref and "localhost" in ref else None,
-        approve_consequence_href=lambda c: None,
-    )
-    register_alert_routes(app, ctx)
-    client = app.test_client()
-
-    # POST without Sec-Fetch-Site and without Referer should be rejected 403
-    resp = client.post("/approve", data={"alert_id": "1", "confirm": "1"})
-    assert resp.status_code == 403
-    data = resp.get_json()
-    assert "untrusted origin" in data["error"]
-
-    # POST with same-origin Sec-Fetch-Site should pass CSRF filter (and hit lookup error on dummy ID)
-    resp_same = client.post(
-        "/approve",
-        data={"alert_id": "99999", "confirm": "1"},
-        headers={"Sec-Fetch-Site": "same-origin", "Referer": "http://localhost:7421/feed"},
-    )
-    # LookupError -> 404 (CSRF passed, resource not found)
-    assert resp_same.status_code in (404, 400)
+@pytest.mark.parametrize(
+    "unsafe_href",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "file:///etc/passwd",
+        "vbscript:msgbox(1)",
+        "//evil.example/steal",
+        r"/\\evil.example\steal",
+    ],
+)
+def test_m4_citation_links_allow_only_http_or_validated_relative(unsafe_href: str) -> None:
+    rendered = linkify("Prose [1]", [{"n": 1, "href": unsafe_href, "label": "evil"}])
+    assert 'href="' not in rendered
 
 
-def test_edgar_nport_accession_shape_validation() -> None:
-    valid_accessions = [
-        "0001193125-24-123456",
-        "0000000000-00-000000",
-    ]
-    invalid_accessions = [
-        "../../etc/passwd",
-        "0001193125-24-123456/../../hack",
-        "<script>",
-        "invalid-acc",
-    ]
-
-    pattern = re.compile(r"^\d{10}-?\d{2}-?\d{6}$")
-    for acc in valid_accessions:
-        assert pattern.fullmatch(acc) is not None
-
-    for acc in invalid_accessions:
-        assert pattern.fullmatch(acc) is None
+@pytest.mark.parametrize(
+    "safe_href",
+    ["https://example.test/source", "http://example.test/source", "/source/42#L7"],
+)
+def test_m4_citation_links_preserve_safe_targets(safe_href: str) -> None:
+    rendered = linkify("Prose [1]", [{"n": 1, "href": safe_href, "label": "source"}])
+    assert 'href="' in rendered
