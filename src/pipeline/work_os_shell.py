@@ -528,7 +528,11 @@ def _production_runtime(generated_at: datetime) -> str:
       return;
     }}
     if (doorway && doorway.status === 'pending') {{
-      target.innerHTML = '<span class="k-chip">' + escapeWorkOsHtml(doorway.label) + '</span>';
+      const fallbackRoute = doorway.route || (doorway.phase === 'post'
+        ? '/api/peek/earnings-readout?ticker=' + encodeURIComponent(ticker)
+        : '/api/peek/earnings-prep?ticker=' + encodeURIComponent(ticker));
+      const title = (doorway.phase === 'post' ? 'Post-earnings readout — ' : 'Earnings prep — ') + ticker;
+      target.innerHTML = '<button class="k-chip" type="button" data-peek-url="' + escapeWorkOsHtml(fallbackRoute) + '" data-peek-title="' + escapeWorkOsHtml(title) + '">' + escapeWorkOsHtml(doorway.label) + '</button>';
       return;
     }}
     target.innerHTML = '<span class="k-card-meta">Earnings artifact unavailable</span>';
@@ -591,6 +595,42 @@ def _production_runtime(generated_at: datetime) -> str:
     event.preventDefault();
     event.stopPropagation();
     workOsOpenPeekRoute(route, trigger.getAttribute('data-peek-title') || 'Research detail');
+  }});
+
+  document.addEventListener('click', async function (event) {{
+    const trigger = event.target instanceof Element
+      ? event.target.closest('[data-generate-readout]') : null;
+    if (!trigger) return;
+    const ticker = trigger.getAttribute('data-generate-readout') || '';
+    if (!ticker) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const originalText = trigger.textContent;
+    trigger.disabled = true;
+    trigger.textContent = 'Generating persisted readout…';
+    try {{
+      const response = await fetch('/api/earnings-readout/generate', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json', Accept: 'application/json' }},
+        body: JSON.stringify({{ ticker: ticker }})
+      }});
+      const data = await response.json();
+      if (!response.ok) {{
+        throw new Error(data && data.error ? data.error : 'HTTP ' + response.status);
+      }}
+      await workOsOpenPeekRoute('/api/peek/earnings-readout?ticker=' + encodeURIComponent(ticker), 'Post-earnings readout — ' + ticker);
+      if (window.workOsActiveTicker === ticker) {{
+        await workOsRenderCompanyDesk(ticker);
+      }}
+    }} catch (err) {{
+      trigger.disabled = false;
+      trigger.textContent = originalText;
+      const statusEl = document.createElement('span');
+      statusEl.className = 'stat-subtext';
+      statusEl.style.color = 'var(--bad)';
+      statusEl.textContent = ' (' + (err.message || 'Generation failed') + ')';
+      trigger.insertAdjacentElement('afterend', statusEl);
+    }}
   }});
 
   function workOsCompanyByTicker(ticker) {{
@@ -882,14 +922,18 @@ def _production_runtime(generated_at: datetime) -> str:
       rows.innerHTML = companies.map(function (company) {{
         const weight = Number.isFinite(company.current_weight_pct) ? workOsPercent(company.current_weight_pct) : 'Weight unavailable';
         const status = company.thesis_status || 'status pending';
-        const briefAction = company.report_url ? '<button class="k-chip is-active" type="button" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Full Brief Canvas &rarr;</button>' : '<span class="k-chip">Brief pending</span>';
+        const briefBtn = company.report_url ? '<button class="k-chip is-active" type="button" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Full Brief Canvas &rarr;</button>' : '<span class="k-chip">Brief pending</span>';
+        const readoutBtn = company.earnings_route
+          ? '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(company.earnings_route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(company.ticker) + '">' + escapeWorkOsHtml(company.earnings_label || 'Q2 Readout →') + '</button>'
+          : (company.earnings_label ? '<span class="k-chip">' + escapeWorkOsHtml(company.earnings_label) + '</span>' : '');
+        const combinedActions = '<div style="display: flex; gap: var(--sp-1); flex-wrap: wrap;">' + (readoutBtn ? readoutBtn + ' ' : '') + briefBtn + '</div>';
         return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
           '<td><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono">' + workOsMoney(company.price) + ' / <strong>' + workOsMoney(company.fair_value) + '</strong></td>' +
-          '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span></td><td>' + briefAction + '</td>' +
+          '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span></td><td>' + combinedActions + '</td>' +
           '<td class="num"><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '">Review Thresholds</button></td></tr>';
       }}).join('');
     }}
-    document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function () {{ switchCompanyWorkspace(node.dataset.workOsTicker); }}); }});
+    document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ if (event.target.closest('[data-peek-url]') || event.target.closest('[data-work-os-full-brief]') || event.target.closest('[data-work-os-thresholds]')) return; switchCompanyWorkspace(node.dataset.workOsTicker); }}); }});
     document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
     document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
       event.stopPropagation();

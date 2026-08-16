@@ -40,6 +40,8 @@ class WorkOsPortfolioCompany(BaseModel):
     next_earnings: str | None = None
     research_refreshed_at: str | None = None
     report_url: str | None = None
+    earnings_route: str | None = None
+    earnings_label: str | None = None
 
 
 class WorkOsPortfolioAction(BaseModel):
@@ -79,6 +81,15 @@ def _live_by_ticker(live: LivePortfolio) -> dict[str, LivePosition]:
 
 def _company(row: CockpitRow, live_position: LivePosition | None) -> WorkOsPortfolioCompany:
     ticker = row.base.ticker.strip().upper()
+    earnings_route = None
+    earnings_label = None
+    if row.base.last_transcript and row.base.last_transcript.period_end:
+        earnings_route = f"/api/peek/earnings-readout?ticker={ticker}"
+        earnings_label = "Q2 Readout →"
+    elif row.next_earnings:
+        earnings_route = f"/api/peek/earnings-prep?ticker={ticker}"
+        earnings_label = f"ER {row.next_earnings}"
+
     return WorkOsPortfolioCompany(
         ticker=ticker,
         name=row.name or ticker,
@@ -99,6 +110,8 @@ def _company(row: CockpitRow, live_position: LivePosition | None) -> WorkOsPortf
         next_earnings=row.next_earnings,
         research_refreshed_at=row.base.last_build_at or row.base.fmp_last_pulled,
         report_url=f"/reports/{ticker}" if row.base.last_build_at else None,
+        earnings_route=earnings_route,
+        earnings_label=earnings_label,
     )
 
 
