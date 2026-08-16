@@ -107,6 +107,9 @@ def test_reader_and_dual_read_parity_on_mock_corpus(tmp_path: Path) -> None:
     (fmp_dir / "TEST_price_chart_10y_div_adj.json").write_text(
         json.dumps(price_payload), encoding="utf-8"
     )
+    (fmp_dir / "TEST_profile.json").write_text(
+        json.dumps([{"symbol": "TEST", "currency": "USD"}]), encoding="utf-8"
+    )
 
     # 2. Mock estimates (1 entry with 2 metrics = 2 observation points)
     estimates_payload = [
@@ -128,6 +131,7 @@ def test_reader_and_dual_read_parity_on_mock_corpus(tmp_path: Path) -> None:
         {
             "date": "2026-03-31",
             "symbol": "TEST",
+            "reportedCurrency": "USD",
             "data": {
                 "North America": 300000000,
                 "Europe": 200000000,
@@ -233,15 +237,20 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
     (fmp_dir / "DIVERGE_price_chart_10y_div_adj.json").write_text(
         json.dumps(price_payload), encoding="utf-8"
     )
+    (fmp_dir / "DIVERGE_profile.json").write_text(
+        json.dumps([{"symbol": "DIVERGE", "currency": "USD"}]), encoding="utf-8"
+    )
 
     verifier = DualReadShadowingVerifier(repo_root=repo)
     # Patch reader to simulate adapter discrepancy
-    orig_method = verifier.reader.get_adjusted_price_series
+    orig_series = verifier.reader.get_adjusted_price_series("DIVERGE")
+    assert isinstance(orig_series, AdjustedPriceSeries)
     verifier.reader.get_adjusted_price_series = lambda t: AdjustedPriceSeries(  # type: ignore[method-assign]
         ticker=t,
         provider="fmp",
-        adjustment_method=orig_method(t).adjustment_method,  # type: ignore[union-attr]
-        currency="USD",
+        adjustment_method=orig_series.adjustment_method,
+        currency=orig_series.currency,
+        currency_binding=orig_series.currency_binding,
         points=(),  # empty points = divergence
         source_payload_hash="0" * 64,
     )
@@ -276,7 +285,9 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
     assert len(est_receipt.discrepancy_details) > 0
 
     # 4. Segments divergence
-    seg_payload = [{"date": "2026-03-31", "data": {"US": 100}}]
+    seg_payload = [
+        {"date": "2026-03-31", "symbol": "DIVERGE", "reportedCurrency": "USD", "data": {"US": 100}}
+    ]
     (fmp_dir / "DIVERGE_revenue_geographic_segmentation.json").write_text(
         json.dumps(seg_payload), encoding="utf-8"
     )

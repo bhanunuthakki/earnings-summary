@@ -24,6 +24,7 @@ from sources.adapters import (
     FilingSectionPayload,
     FmpProviderAdapter,
     ProviderAdapter,
+    SegmentDimension,
     SegmentStructureObservation,
 )
 
@@ -156,9 +157,32 @@ class ProviderNeutralDataReader:
 
         try:
             content = found_file.read_bytes()
-            all_estimates = self.adapter.parse_estimates(content, ticker=ticker_clean)
+            stmt_file = next(
+                (
+                    f
+                    for f in (
+                        self.fmp_dir / f"{ticker_clean}_income_statement.json",
+                        self.fmp_dir / f"{ticker_clean}_income_statement_quarterly.json",
+                        self.fmp_dir / f"{ticker_clean}_financials.json",
+                    )
+                    if f.exists()
+                ),
+                None,
+            )
+            if stmt_file:
+                currency_packet = stmt_file.read_bytes()
+            else:
+                currency_packet = json.dumps(
+                    [{"symbol": ticker_clean, "reportedCurrency": "USD"}]
+                ).encode("utf-8")
+            all_estimates = self.adapter.parse_estimates(
+                content,
+                ticker=ticker_clean,
+                observed_at=datetime.now(UTC),
+                currency_packet=currency_packet,
+            )
             if metric:
-                return [e for e in all_estimates if e.metric.lower() == metric.lower()]
+                return [e for e in all_estimates if e.metric.value.lower() == metric.lower()]
             return all_estimates
         except Exception as e:
             return ReaderUnavailableStatus(
@@ -197,7 +221,12 @@ class ProviderNeutralDataReader:
 
         try:
             content = found_file.read_bytes()
-            return self.adapter.parse_segments(content, ticker=ticker_clean, dim_type=dim_type)
+            dim_enum = (
+                SegmentDimension.PRODUCT
+                if "prod" in dim_type.lower()
+                else SegmentDimension.GEOGRAPHY
+            )
+            return self.adapter.parse_segments(content, ticker=ticker_clean, dim_type=dim_enum)
         except Exception as e:
             return ReaderUnavailableStatus(
                 ticker=ticker_clean,
@@ -235,11 +264,18 @@ class ProviderNeutralDataReader:
 
         try:
             content = found_file.read_bytes()
+            profile_file = self.fmp_dir / f"{ticker_clean}_profile.json"
+            if profile_file.exists():
+                currency_packet = profile_file.read_bytes()
+            else:
+                currency_packet = json.dumps(
+                    [{"symbol": ticker_clean, "currency": currency}]
+                ).encode("utf-8")
             return self.adapter.parse_prices(
                 content,
                 ticker=ticker_clean,
                 adjustment_method=adjustment,
-                currency=currency,
+                currency_packet=currency_packet,
             )
         except Exception as e:
             return ReaderUnavailableStatus(
@@ -438,8 +474,8 @@ class DualReadShadowingVerifier:
         if isinstance(adapter_res, list):
             raw_adapter_count = len(adapter_res)
             for est in adapter_res:
-                d_str = est.observation_date.strftime("%Y-%m-%d")
-                adapter_metrics.add((d_str, est.metric, est.estimated_avg))
+                d_str = est.target_period_end.strftime("%Y-%m-%d")
+                adapter_metrics.add((d_str, est.metric.value, est.estimated_avg))
         else:
             discrepancies.append(f"Adapter read unavailable: {adapter_res.reason}")
 
@@ -601,8 +637,15 @@ class DualReadShadowingVerifier:
                 raw_obj: object = json.loads(matching_files[0].read_text(encoding="utf-8"))
                 if isinstance(raw_obj, dict):
                     raw_dict = cast("dict[str, object]", raw_obj)
-                    # Retrieve metadata keys declared by the provider adapter
-                    metadata_keys = self.reader.adapter.filing_metadata_keys
+                    metadata_keys = {
+                        "symbol",
+                        "period",
+                        "year",
+                        "link",
+                        "finalLink",
+                        "reportedCurrency",
+                        "currency",
+                    }
                     for k, v in raw_dict.items():
                         if k not in metadata_keys and v is not None:
                             if isinstance(v, (list, dict)):
