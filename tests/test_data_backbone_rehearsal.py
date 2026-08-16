@@ -290,7 +290,7 @@ def test_forced_post_swap_failure_restores_throwaway_live(tmp_path: Path) -> Non
     live_sha = _sha(live)
     candidate_sha = _sha(candidate)
 
-    with pytest.raises(rehearsal.SwapRehearsalRolledBackError, match="forced post-swap failure"):
+    with pytest.raises(rehearsal.SwapRehearsalRolledBackError, match="forced post-swap failure") as exc:
         rehearsal.exercise_swap_and_rollback(
             tmp_path, live, candidate, force_post_swap_failure=True
         )
@@ -299,6 +299,34 @@ def test_forced_post_swap_failure_restores_throwaway_live(tmp_path: Path) -> Non
     failed_candidates = tuple(tmp_path.glob("rehearsal-failed-candidate*.db"))
     assert len(failed_candidates) == 1
     assert _sha(failed_candidates[0]) == candidate_sha
+    evidence = exc.value.evidence
+    assert evidence.live_path == str(live.resolve())
+    assert evidence.failed_candidate_path == str(failed_candidates[0].resolve())
+    assert evidence.live_storage_before.wal_absent
+    assert evidence.candidate_storage_before.shm_absent
+    assert evidence.restored_live_storage.journal_absent
+    assert (
+        evidence.failed_candidate_storage.storage.entries[0].content_sha256
+        == evidence.candidate_storage_before.storage.entries[0].content_sha256
+    )
+
+
+def test_closed_storage_attestation_requires_and_records_every_sidecar_absence(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "closed.db"
+    _write_db(database)
+
+    attestation = rehearsal.attest_closed_database_storage(database)
+
+    assert attestation.storage == rehearsal.database_storage_identity(database)
+    assert attestation.wal_absent is True
+    assert attestation.shm_absent is True
+    assert attestation.journal_absent is True
+
+    Path(f"{database}-wal").write_bytes(b"active")
+    with pytest.raises(rehearsal.RehearsalError, match="no SQLite sidecars"):
+        rehearsal.attest_closed_database_storage(database)
 
 
 def test_swap_rejects_paths_outside_explicit_rehearsal_root(tmp_path: Path) -> None:
@@ -739,9 +767,27 @@ def test_cli_apply_keeps_exact_sources_and_records_throwaway_rollback(
     assert exit_code == 0
     receipt = rehearsal.RehearsalReceipt.model_validate_json(receipt_path.read_text())
     assert receipt.status == "passed"
+    assert receipt.source_storage_before.wal_absent
+    assert receipt.source_storage_after is not None
+    assert receipt.source_storage_after.shm_absent
+    assert receipt.candidate_database_before_upgrade is not None
+    assert receipt.candidate_storage_before_upgrade is not None
+    assert receipt.candidate_storage_before_upgrade.journal_absent
+    assert receipt.candidate_storage_after is not None
+    assert receipt.candidate_storage_after.storage.entries[0].suffix == ""
     assert receipt.swap_rollback is not None and receipt.swap_rollback.rollback_restored
     assert receipt.forced_failure_rollback is not None
     assert receipt.forced_failure_rollback.rollback_restored
+    for rollback in (receipt.swap_rollback, receipt.forced_failure_rollback):
+        assert rollback.live_path.endswith("rehearsal-live.db")
+        assert rollback.failed_candidate_path.endswith("rehearsal-failed-candidate.db")
+        assert rollback.installed_live_storage.wal_absent
+        assert rollback.restored_live_storage.shm_absent
+        assert rollback.failed_candidate_storage.journal_absent
+        assert (
+            rollback.failed_candidate_storage.storage.entries[0].content_sha256
+            == rollback.candidate_sha256
+        )
     assert source_roles == [rehearsal.SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY] * 4
     assert rehearsal.database_storage_identity(source_db) == source_storage
     assert rehearsal.build_corpus_manifest(source_corpus) == source_manifest
