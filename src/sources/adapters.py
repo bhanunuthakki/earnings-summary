@@ -62,6 +62,7 @@ class CurrencyBinding(BaseModel):
     currency: Currency
     basis: CurrencyBindingBasis
     source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
+    source_family: str = Field(..., pattern=r"^(?:financial_statement|profile)$")
 
 
 def _normalized_utc(value: datetime) -> datetime:
@@ -112,6 +113,7 @@ class DatedEstimateObservation(BaseModel):
     estimated_high: Decimal | None = None
     analyst_count: int | None = Field(default=None, ge=0)
     currency: Currency
+    currency_binding: CurrencyBinding
     source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
 
     @field_validator("observation_date", "target_period_end")
@@ -194,12 +196,17 @@ class AdjustedPriceSeries(BaseModel):
     provider: str = Field(..., min_length=1)
     adjustment_method: CorporateActionAdjustment
     currency: Currency
+    currency_binding: CurrencyBinding
     points: tuple[AdjustedPricePoint, ...]
     source_payload_hash: str = Field(..., pattern=_SHA256_PATTERN)
 
 
-def _payload_bytes(raw_content: bytes | str) -> bytes:
-    return raw_content if isinstance(raw_content, bytes) else raw_content.encode("utf-8")
+def _payload_bytes(raw_content: object) -> bytes:
+    if isinstance(raw_content, bytes):
+        return raw_content
+    if isinstance(raw_content, str):
+        return raw_content.encode("utf-8")
+    raise ValueError("raw packet must be bytes or text")
 
 
 def _decode_json(raw_content: bytes | str, *, label: str) -> tuple[object, str]:
@@ -289,6 +296,7 @@ def _currency_binding(
     *,
     key: str,
     basis: CurrencyBindingBasis,
+    source_family: str,
 ) -> CurrencyBinding:
     raw, payload_hash = _decode_json(raw_content, label="currency binding packet")
     records = _as_list(raw, label="currency binding packet")
@@ -301,6 +309,7 @@ def _currency_binding(
         currency=_currency(record, label="currency binding record", key=key),
         basis=basis,
         source_payload_hash=payload_hash,
+        source_family=source_family,
     )
 
 
@@ -311,12 +320,19 @@ def issuer_reported_currency_binding(raw_content: bytes | str, ticker: str) -> C
         ticker,
         key="reportedCurrency",
         basis=CurrencyBindingBasis.ISSUER_REPORTED,
+        source_family="financial_statement",
     )
 
 
 def quote_currency_binding(raw_content: bytes | str, ticker: str) -> CurrencyBinding:
     """Seal a quote-currency assertion from an FMP profile packet."""
-    return _currency_binding(raw_content, ticker, key="currency", basis=CurrencyBindingBasis.QUOTE)
+    return _currency_binding(
+        raw_content,
+        ticker,
+        key="currency",
+        basis=CurrencyBindingBasis.QUOTE,
+        source_family="profile",
+    )
 
 
 def _require_binding(
@@ -324,11 +340,14 @@ def _require_binding(
     ticker: str,
     *,
     basis: CurrencyBindingBasis,
+    source_family: str,
 ) -> Currency:
     if binding.ticker != ticker.upper():
         raise ValueError("currency binding ticker does not match requested ticker")
     if binding.basis is not basis:
         raise ValueError(f"currency binding must use {basis.value} basis")
+    if binding.source_family != source_family:
+        raise ValueError(f"currency binding must use {source_family} source family")
     return binding.currency
 
 
@@ -381,7 +400,7 @@ class ProviderAdapter(ABC):
         ticker: str,
         *,
         observed_at: datetime,
-        currency_binding: CurrencyBinding | None = None,
+        currency_packet: bytes | str | None = None,
     ) -> list[DatedEstimateObservation]: ...
 
     @abstractmethod
@@ -400,7 +419,7 @@ class ProviderAdapter(ABC):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
-        currency_binding: CurrencyBinding | None = None,
+        currency_packet: bytes | str | None = None,
     ) -> AdjustedPriceSeries: ...
 
 
@@ -476,9 +495,12 @@ class FmpProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         observed_at: datetime,
-        currency_binding: CurrencyBinding | None = None,
+        currency_packet: bytes | str | None = None,
     ) -> list[DatedEstimateObservation]:
         raw, payload_hash = _decode_json(raw_content, label="FMP estimate payload")
+        if currency_packet is None:
+            raise ValueError("FMP estimate payload requires an issuer currency packet")
+        currency_binding = issuer_reported_currency_binding(currency_packet, ticker)
         results: list[DatedEstimateObservation] = []
         mappings = (
             (
@@ -509,12 +531,11 @@ class FmpProviderAdapter(ProviderAdapter):
                     label="FMP estimate record",
                 )
             )
-            if currency_binding is None:
-                raise ValueError("FMP estimate payload requires an issuer currency binding")
             currency = _require_binding(
                 currency_binding,
                 symbol,
                 basis=CurrencyBindingBasis.ISSUER_REPORTED,
+                source_family="financial_statement",
             )
             emitted = False
             for metric, average_key, low_key, high_key, count_key in mappings:
@@ -544,6 +565,7 @@ class FmpProviderAdapter(ProviderAdapter):
                         if count_key and record.get(count_key) is not None
                         else None,
                         currency=currency,
+                        currency_binding=currency_binding,
                         source_payload_hash=payload_hash,
                     )
                 )
@@ -600,9 +622,12 @@ class FmpProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
-        currency_binding: CurrencyBinding | None = None,
+        currency_packet: bytes | str | None = None,
     ) -> AdjustedPriceSeries:
         raw, payload_hash = _decode_json(raw_content, label="FMP price payload")
+        if currency_packet is None:
+            raise ValueError("FMP price payload requires a quote currency packet")
+        currency_binding = quote_currency_binding(currency_packet, ticker)
         root = (
             _as_dict(cast("object", raw), label="FMP price payload")
             if isinstance(raw, dict)
@@ -614,9 +639,12 @@ class FmpProviderAdapter(ProviderAdapter):
             if root is not None
             else _as_list(cast("object", raw), label="FMP historical prices")
         )
-        if currency_binding is None:
-            raise ValueError("FMP price payload requires a quote currency binding")
-        currency = _require_binding(currency_binding, symbol, basis=CurrencyBindingBasis.QUOTE)
+        currency = _require_binding(
+            currency_binding,
+            symbol,
+            basis=CurrencyBindingBasis.QUOTE,
+            source_family="profile",
+        )
         points: list[AdjustedPricePoint] = []
         for index, item in enumerate(records):
             record = _as_dict(item, label=f"FMP price record {index}")
@@ -648,6 +676,7 @@ class FmpProviderAdapter(ProviderAdapter):
             provider=self.provider_name,
             adjustment_method=adjustment_method,
             currency=currency,
+            currency_binding=currency_binding,
             points=tuple(points),
             source_payload_hash=payload_hash,
         )
@@ -707,7 +736,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         observed_at: datetime,
-        currency_binding: CurrencyBinding | None = None,
+        currency_packet: bytes | str | None = None,
     ) -> list[DatedEstimateObservation]:
         raw, payload_hash = _decode_json(raw_content, label="secondary estimate payload")
         payload = _as_dict(raw, label="secondary estimate payload")
@@ -752,6 +781,13 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
                     if record.get("count") is not None
                     else None,
                     currency=_currency(record, label="secondary consensus record"),
+                    currency_binding=CurrencyBinding(
+                        ticker=ticker.upper(),
+                        currency=_currency(record, label="secondary consensus record"),
+                        basis=CurrencyBindingBasis.ISSUER_REPORTED,
+                        source_payload_hash=payload_hash,
+                        source_family="financial_statement",
+                    ),
                     source_payload_hash=payload_hash,
                 )
             )
@@ -806,7 +842,7 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
         ticker: str,
         *,
         adjustment_method: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
-        currency_binding: CurrencyBinding | None = None,
+        currency_packet: bytes | str | None = None,
     ) -> AdjustedPriceSeries:
         raw, payload_hash = _decode_json(raw_content, label="secondary price payload")
         payload = _as_dict(raw, label="secondary price payload")
@@ -843,6 +879,13 @@ class SyntheticSecondaryProviderAdapter(ProviderAdapter):
             provider=self.provider_name,
             adjustment_method=adjustment_method,
             currency=currency,
+            currency_binding=CurrencyBinding(
+                ticker=ticker.upper(),
+                currency=currency,
+                basis=CurrencyBindingBasis.QUOTE,
+                source_payload_hash=payload_hash,
+                source_family="profile",
+            ),
             points=tuple(points),
             source_payload_hash=payload_hash,
         )
