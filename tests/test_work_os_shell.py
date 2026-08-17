@@ -618,7 +618,9 @@ def test_company_desk_earnings_doorway_matches_full_brief_canvas_interaction() -
     assert "escapeWorkOsHtml(doorway.label)" in html
     assert "Post-earnings readout — ' + ticker" in html
     assert "Earnings prep — ' + ticker" in html
+    assert "workOsRenderEarningsDoorway(" in html
     assert "desk.earnings_doorway || null" in html
+    assert "desk.latest_earnings_readout || null" in html
     assert "Pre-earnings brief pending" not in html
     assert "Post-earnings readout pending" not in html
     doorway_runtime = html.split("function workOsRenderEarningsDoorway", 1)[1].split(
@@ -628,6 +630,13 @@ def test_company_desk_earnings_doorway_matches_full_brief_canvas_interaction() -
     assert "data-peek-url" in doorway_runtime
     assert "if (doorway && doorway.status === 'available' && doorway.route)" in doorway_runtime
     assert "if (doorway && doorway.status === 'pending')" in doorway_runtime
+    pending_runtime = doorway_runtime.split("if (doorway && doorway.status === 'pending')", 1)[
+        1
+    ].split("if (latestButton)", 1)[0]
+    assert "fallbackRoute" in pending_runtime
+    assert "data-peek-url" in pending_runtime
+    assert "</button>' + latestButton" in pending_runtime
+    assert "<span" not in pending_runtime
     unavailable = doorway_runtime.split("Earnings artifact unavailable", 1)[0]
     assert "data-peek-url" in unavailable
 
@@ -645,6 +654,31 @@ def test_earnings_doorway_route_uses_the_document_level_peek_delegate() -> None:
     assert "body.innerHTML = html" in html
     assert "peekOverlay.open()" in html
     assert "The persisted earnings artifact is unavailable." in html
+
+
+def test_home_and_library_surface_latest_earnings_readouts_before_full_briefs() -> None:
+    html = render_work_os_shell()
+
+    assert "company.latest_earnings_readout || null" in html
+    assert "data-work-os-readout" in html
+    assert "Readout unavailable" in html
+    assert "node.tagName === 'TR'" in html
+    assert "event.target.closest('button')" in html
+    assert 'id="briefKindFilter"' in html
+    assert '<option value="earnings_readout">Earnings readouts</option>' in html
+    assert "const hydratedReadouts = workOsPortfolioHydration" in html
+    assert "const readoutItems = hydratedReadouts" in html
+    assert "await workOsEnsurePortfolioHydration()" in html
+    assert "let workOsPortfolioLoading = null" in html
+    assert "Read earnings readout &rarr;" in html
+    assert "readoutCards + briefCards" in html
+    assert "#screen-brief-library .research-actions" in html
+    assert "grid-template-columns: auto minmax(0, 1fr)" in html
+    assert ".research-library-card .k-btn" in html
+    assert "min-block-size: var(--touch-target-size)" in html
+    assert "workOsPortfolioHydration = null" in html
+    assert "await workOsEnsurePortfolioHydration()" in html
+    assert "data.artifact_id" in html
 
 
 def test_nvo_action_queue_open_company_uses_the_canonical_desk_handoff() -> None:

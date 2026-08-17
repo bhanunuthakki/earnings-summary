@@ -120,6 +120,7 @@ def _seed_earnings_store(repo_root: Path) -> None:
             purpose TEXT NOT NULL,
             fiscal_period TEXT,
             content_md TEXT,
+            generated_at TEXT,
             superseded_by_id INTEGER
         );
         CREATE TABLE earnings_surprises (
@@ -136,7 +137,8 @@ def _insert_artifact(repo_root: Path, *, purpose: str, fiscal_period: str) -> No
     conn = sqlite3.connect(repo_root / "data" / "portfolio.db")
     conn.execute(
         "INSERT INTO llm_artifacts "
-        "(ticker, purpose, fiscal_period, content_md) VALUES ('NU', ?, ?, 'persisted')",
+        "(ticker, purpose, fiscal_period, content_md, generated_at) "
+        "VALUES ('NU', ?, ?, 'persisted', '2026-08-14T11:44:51Z')",
         (purpose, fiscal_period),
     )
     conn.commit()
@@ -458,3 +460,35 @@ def test_company_desk_missing_or_unparseable_calendar_has_no_dead_link(
         conn.close()
     assert desk.earnings_doorway.status == "unavailable"
     assert desk.earnings_doorway.route is None
+
+
+def test_company_desk_keeps_latest_readout_reachable_outside_event_window(
+    work_os_app_repo: Path,
+) -> None:
+    _seed_earnings_store(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "INSERT INTO transcripts "
+        "(document_id, ticker, call_date, fiscal_period_type, period_end) "
+        "VALUES (77, 'NU', '2026-08-12', 'Q2', '2026-06-30')"
+    )
+    conn.commit()
+    conn.close()
+    _insert_artifact(
+        work_os_app_repo,
+        purpose="post_earnings_readout",
+        fiscal_period="2026-06-30",
+    )
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(work_os_app_repo, conn, "NU", today=date(2026, 11, 15))
+    finally:
+        conn.close()
+
+    assert desk.earnings_doorway.status == "unavailable"
+    assert desk.latest_earnings_readout is not None
+    assert desk.latest_earnings_readout.period_label == "Q2 · Jun 2026"
+    assert desk.latest_earnings_readout.route.endswith(
+        f"&artifact_id={desk.latest_earnings_readout.artifact_id}"
+    )
