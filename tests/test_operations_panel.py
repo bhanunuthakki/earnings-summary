@@ -224,6 +224,13 @@ def test_operations_renderer_has_governance_tab_and_related_views(
     assert "new EventSource" in html
 
 
+def test_operations_renderer_uses_card_title_for_the_card_heading(tmp_path: Path) -> None:
+    html = render_operations_panel(_view(tmp_path))
+
+    assert '<h1 class="k-card-title" id="operations-title">Operations</h1>' in html
+    assert '<h1 class="k-toolbar-title" id="operations-title">Operations</h1>' not in html
+
+
 def test_operations_health_views_remain_read_only_truthful_and_sanitize_evidence(
     tmp_path: Path,
 ) -> None:

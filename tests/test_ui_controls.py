@@ -567,9 +567,8 @@ def test_k_empty_escapes_the_line_but_not_the_chip() -> None:
 #     owning session. The quarantine can only SHRINK: a quarantined dimension
 #     that becomes clean FAILS (test_quarantine_only_shrinks) — "graduate it" —
 #     so S7's burn-down is ratcheted, not optional.
-#   * test_full_conformance_is_red is xfail(strict): it asserts the quarantine
-#     is empty, so it "lands red" today and FLIPS to a hard failure the moment
-#     the last surface graduates, forcing this scaffolding to be removed.
+#   * Full conformance is a normal green gate: the quarantine is empty, and any
+#     new drift fails immediately without an ignore path.
 # ===========================================================================
 
 # Every scanner input comes from the typed, immutable design registry. Detection
@@ -832,11 +831,8 @@ def test_scope_is_color_font_radius_never_layout() -> None:
     assert scan_surface("x", '<a href="#dcf">x</a>') == {}
 
 
-@pytest.mark.xfail(strict=True, reason="quarantine non-empty until S7 sweep + report unfork land")
-def test_full_conformance_is_red() -> None:
-    """The guard 'lands red': full token conformance is not yet reached. This
-    xfail FLIPS to a hard failure (strict) the moment QUARANTINE empties,
-    forcing the scaffolding to be torn out. There is no --ignore bypass."""
+def test_full_conformance_has_no_quarantine() -> None:
+    """Full conformance stays green only while the quarantine remains empty."""
     assert not QUARANTINE, f"still quarantined: {sorted(QUARANTINE)}"
 
 

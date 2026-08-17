@@ -37,7 +37,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.2.0"
+REGISTRY_VERSION = "1.3.0"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -251,65 +251,7 @@ PERMANENT_EXEMPTIONS = (
     ),
 )
 
-_QUARANTINE_EXPIRY = date(2026, 10, 1)
-QUARANTINE_ENTRIES = (
-    QuarantineEntry(
-        "pipeline/data_policy_settings_panel.py",
-        "floating-card-title",
-        "BHA-92",
-        "Operations data-policy card title still composes the toolbar title class.",
-        _QUARANTINE_EXPIRY,
-    ),
-    QuarantineEntry(
-        "pipeline/operations_panel.py",
-        "floating-card-title",
-        "BHA-92",
-        "Operations card title still composes the toolbar title class.",
-        _QUARANTINE_EXPIRY,
-    ),
-    QuarantineEntry(
-        "pipeline/ticker_command_center.py",
-        "floating-card-title",
-        "BHA-92",
-        "Research drawer/card headings still use local title classes.",
-        _QUARANTINE_EXPIRY,
-    ),
-    QuarantineEntry(
-        "report/renderers/workspace_charts.py",
-        "radius",
-        "BHA-92",
-        "Editorial chart marks need a sanctioned micro radius.",
-        _QUARANTINE_EXPIRY,
-    ),
-    QuarantineEntry(
-        "report/renderers/workspace_comments.py",
-        "radius",
-        "BHA-92",
-        "Report-comment geometry remains in the serialized report migration.",
-        _QUARANTINE_EXPIRY,
-    ),
-    QuarantineEntry(
-        "report/renderers/workspace_styles.py",
-        "radius",
-        "BHA-92",
-        "Editorial micro marks need a deliberate replacement token.",
-        _QUARANTINE_EXPIRY,
-    ),
-    QuarantineEntry(
-        "ui/cite_marks.py",
-        "color",
-        "BHA-92",
-        "Minimal-host fallback color remains until report host wiring lands.",
-        _QUARANTINE_EXPIRY,
-    ),
-    QuarantineEntry(
-        "ui/cite_marks.py",
-        "radius",
-        "BHA-92",
-        "Minimal-host fallback radius remains until report host wiring lands.",
-        _QUARANTINE_EXPIRY,
-    ),
-)
+QUARANTINE_ENTRIES: tuple[QuarantineEntry, ...] = ()
 
 BESPOKE_BUTTON_APPROVALS = (
     BespokeButtonApproval("cc-drawer-close", "work-os", "Named drawer close glyph."),
@@ -483,7 +425,7 @@ REGISTERED = frozenset(
 )
 
 EXEMPT = frozenset(entry.surface for entry in PERMANENT_EXEMPTIONS)
-QUARANTINE = MappingProxyType(
+QUARANTINE: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         surface: frozenset(
             entry.dimension for entry in QUARANTINE_ENTRIES if entry.surface == surface

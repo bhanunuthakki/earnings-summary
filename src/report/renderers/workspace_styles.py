@@ -347,7 +347,7 @@ body { font-family: var(--sans); font-size: var(--fs-body); line-height: 1.5; di
 }
 .news-item::before {
   content: ''; position: absolute; left: 0; top: 0; bottom: 0;
-  width: 3px; border-radius: var(--radius) 0 0 6px;
+  width: 3px; border-radius: var(--radius) 0 0 var(--radius-sm);
 }
 .news-item.tone-pos::before { background: var(--accent); }
 .news-item.tone-opt::before { background: var(--warn); }
@@ -857,7 +857,7 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .scenario-bar-price {
   position: absolute; top: -3px; bottom: -3px; width: 2px;
-  border-radius: 1px; background: var(--fg);
+  border-radius: var(--radius-sm); background: var(--fg);
 }
 .scenario-bar-base { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--muted); }
 .scenario-bar-legend {

@@ -82,7 +82,7 @@ def verdict_bar(ratings: list[str]) -> str:
         opacity = "1" if r == "EXCEEDED" else "0.55"
         cells.append(
             f'<div title="{_esc(r)}" style="width:12px;height:18px;'
-            f'background:{color};opacity:{opacity};border-radius:1px"></div>'
+            f'background:{color};opacity:{opacity};border-radius:var(--radius-sm)"></div>'
         )
     return f'<div style="display:flex;gap:2px;align-items:center">{"".join(cells)}</div>'
 

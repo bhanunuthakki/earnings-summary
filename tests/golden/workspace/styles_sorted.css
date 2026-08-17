@@ -34,17 +34,17 @@
 .chat-toggle-icon { font-family: var(--mono); }
 .chat-toggle.open { background: var(--muted); }
 .cite-pop-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 4px; }
-.cite-pop-kind { font-size: var(--fs-caption); color: var(--accent); background: var(--accent-soft); border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.03em; }
+.cite-pop-kind { font-size: var(--fs-caption); color: var(--accent); background: var(--accent-soft); border-radius: var(--radius); padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.03em; }
 .cite-pop-label { display: block; font-weight: 600; color: var(--fg); }
 .cite-pop-meta { display: block; color: var(--muted); margin-top: 2px; }
-.cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
+.cite-pop-per { font-size: var(--fs-caption); color: var(--muted); }
 .cite-pop-tick { font-weight: 600; color: var(--fg); }
-.cite-pop-value { display: block; font-size: var(--fs-body, 13px); font-weight: 600; color: var(--fg); margin-top: 3px; }
+.cite-pop-value { display: block; font-size: var(--fs-body); font-weight: 600; color: var(--fg); margin-top: 3px; }
 .cite-pop-value-cap { display: block; font-size: var(--fs-caption); color: var(--muted); margin-top: 1px; }
-.cite-unverified { display: inline-block; font-size: var(--fs-caption); color: var(--warn); border: 1px dashed var(--warn); border-radius: var(--radius-full, 999px); padding: 1px 7px; cursor: default; }
-.cite-wrap .cite-badge { font-size: var(--fs-caption); line-height: 1; vertical-align: middle; color: var(--accent-contrast); background: var(--accent); border-radius: var(--radius-full, 999px); padding: 1px 5px; margin-left: 3px; white-space: nowrap; }
+.cite-unverified { display: inline-block; font-size: var(--fs-caption); color: var(--warn); border: 1px dashed var(--warn); border-radius: var(--radius-full); padding: 1px 7px; cursor: default; }
+.cite-wrap .cite-badge { font-size: var(--fs-caption); line-height: 1; vertical-align: middle; color: var(--accent-contrast); background: var(--accent); border-radius: var(--radius-full); padding: 1px 5px; margin-left: 3px; white-space: nowrap; }
 .cite-wrap .cite-mark { color: var(--accent); text-decoration: none; font-size: 0.8em; vertical-align: super; cursor: pointer; white-space: nowrap; }
-.cite-wrap .cite-pop { display: none; position: absolute; z-index: 60; bottom: calc(100% + 4px); left: 0; min-width: 170px; max-width: 260px; padding: 7px 9px; background: var(--surface); border: 1px solid var(--border, var(--hairline)); border-radius: var(--radius, 6px); box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, 0.45)); font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45; white-space: normal; text-align: left; }
+.cite-wrap .cite-pop { display: none; position: absolute; z-index: 60; bottom: calc(100% + 4px); left: 0; min-width: 170px; max-width: 260px; padding: 7px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); font-size: var(--fs-caption); font-weight: 400; line-height: 1.45; white-space: normal; text-align: left; }
 .cite-wrap { position: relative; display: inline; }
 .cite-wrap:hover .cite-pop, .cite-wrap:focus-within .cite-pop { display: block; }
 .cmt-body { color: var(--fg); line-height: 1.5; white-space: pre-wrap; }
@@ -373,7 +373,7 @@
 .news-item.tone-opt .news-tag { color: var(--warn); }
 .news-item.tone-opt::before { background: var(--warn); }
 .news-item.tone-pos::before { background: var(--accent); }
-.news-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: var(--radius) 0 0 6px; }
+.news-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: var(--radius) 0 0 var(--radius-sm); }
 .news-meta { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; font-family: var(--mono); font-size: var(--fs-caption); margin-bottom: var(--sp-2); }
 .news-src { color: var(--muted); font-family: var(--sans); font-size: var(--fs-caption); }
 .news-strip { padding: var(--sp-5) var(--pad-x) var(--sp-5); border-bottom: 1px solid var(--border); background: var(--bg); }
@@ -486,7 +486,7 @@
 .scenario-bar { padding: var(--sp-2) var(--panel-pad-x) var(--sp-3); border-bottom: 1px solid var(--hairline); }
 .scenario-bar-base { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--muted); }
 .scenario-bar-legend { display: flex; justify-content: space-between; margin-top: var(--sp-1); font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }
-.scenario-bar-price { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--fg); }
+.scenario-bar-price { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: var(--radius-sm); background: var(--fg); }
 .scenario-bar-track { position: relative; height: 6px; border-radius: var(--radius-full); background: linear-gradient(90deg, color-mix(in srgb, var(--bad) 16%, transparent), color-mix(in srgb, var(--ok) 16%, transparent)); }
 .scenario-cell + .scenario-cell { border-left: 1px solid var(--hairline); }
 .scenario-cell strong { font-family: var(--mono); font-size: var(--fs-title); font-weight: 500; }
@@ -725,7 +725,7 @@
 /* Financials */ .chart-panel { padding-bottom: var(--panel-pad-y); }
 /* Floating "+ Comment" button on text selection (Google-Docs style). The button itself is the kit's small primary (.k-btn.k-btn-primary.k-btn-sm, added in the JS markup); only the floater's drop shadow + pill radius are surface-specific. */ .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
 /* Footnote marker. Sized in em, not px: a reference mark must scale with the prose it sits in rather than pin to a UI step. */ .k-fn { font-size: 0.72em; font-weight: 600; color: var(--mark); vertical-align: super; margin-left: 1px; }
-/* Free-text highlight (the underlined excerpt the user commented on). Open = warn-tinted, addressed = ok-tinted, both routed through the status tokens via color-mix (no raw rgba). */ mark.cmt-highlight { background: color-mix(in srgb, var(--warn) 18%, transparent); border-bottom: 2px solid var(--warn); color: inherit; cursor: pointer; padding: 0 1px; border-radius: 1px; transition: background 0.12s; }
+/* Free-text highlight (the underlined excerpt the user commented on). Open = warn-tinted, addressed = ok-tinted, both routed through the status tokens via color-mix (no raw rgba). */ mark.cmt-highlight { background: color-mix(in srgb, var(--warn) 18%, transparent); border-bottom: 2px solid var(--warn); color: inherit; cursor: pointer; padding: 0 1px; border-radius: var(--radius-sm); transition: background 0.12s; }
 /* Health pill — server reachability indicator in the sidebar header. Rides the kit's .k-pill (+ k-pill-ok online / k-pill-bad offline / neutral bare while the first poll is in flight, tone set in renderHealthPill); layout + mono-micro refine only here. */ .cmt-health-pill { margin: 2px 6px 0 6px; font-size: var(--fs-caption); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
 /* Hero quote (Earnings tab) */ .hero-quote { border: 1px solid var(--border-2); background: linear-gradient(180deg, var(--paper), var(--surface)); padding: var(--sp-5) var(--sp-6) var(--sp-5); border-radius: var(--radius); display: flex; gap: var(--sp-5); position: relative; }
 /* Keyboard-shortcut help overlay (JS-injected by workspace_script; ? toggles, Esc / click closes). Token-only so it tracks the active theme. */ .ws-kbd-help { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 72%, transparent); }
@@ -761,7 +761,7 @@
 /* Thesis */ .val-stack { display: flex; flex-direction: column; }
 /* UX9 grouped tabs: the top bar swaps .tab-group-pane wrappers; inside a multi-section group a slim pill row swaps the section panes. Section panes stay .tab-pane (display + print + comment-anchor scoping reuse the rules above). */ .tab-group-pane { display: none; }
 /* Wave 5: a captured report value injected into a driver flashes; the report's "-> DCF" affordance is a quiet accent micro-button. */ .dcf-edit-field input.dcf-injected { outline: 2px solid var(--accent); outline-offset: 1px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
-/* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--radius, 6px); padding: 0 3px; }
+/* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--radius); padding: 0 3px; }
 /* autofill: repaint the browser's yellow inset over the kit surface */ input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus, textarea:-webkit-autofill, select:-webkit-autofill { -webkit-text-fill-color: var(--fg); -webkit-box-shadow: 0 0 0 1000px var(--paper) inset; caret-color: var(--fg); }
 /* hide the native search-cancel, number spinners, and drag-resize handle */ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 /* hover deepens the accent toward the ink (color-mix), not a filter — so the transition stays a plain background tween and never touches the whole box. */ .k-btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--fg)); }

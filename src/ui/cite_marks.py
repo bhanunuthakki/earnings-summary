@@ -30,9 +30,12 @@ snippet so neither depends on the other having loaded):
     unverifiedChipHtml(claims)       — '' or the warn chip for claims with
                                        supported === false
 
-``CITE_MARKS_CSS`` keys off whichever theme the host sets and consumes only
-the canonical tokens (--surface/--fg/--border/--accent/--hairline/…,
-src/ui/tokens.py) — no legacy report-vocabulary aliases (2026-07-18 sweep).
+``CITE_MARKS_CSS`` requires a production host to emit the shared palette first;
+it consumes the canonical tokens (--surface/--fg/--border/--accent/--hairline/…,
+src/ui/tokens.py) with no tokenless fallback. The supported production host is
+the workspace report, which emits ``workspace_styles.CSS`` before the chat
+fragment that carries these marks. There are no legacy report-vocabulary
+aliases (2026-07-18 sweep).
 """
 
 from __future__ import annotations
@@ -54,12 +57,12 @@ CITE_MARKS_CSS = """
    badge. Accent (interactive), NOT green — green = a positive number here. */
 .cite-wrap .cite-val {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-radius: var(--radius, 6px); padding: 0 3px;
+  border-radius: var(--radius); padding: 0 3px;
 }
 .cite-wrap .cite-badge {
   font-size: var(--fs-caption); line-height: 1; vertical-align: middle;
   color: var(--accent-contrast);
-  background: var(--accent); border-radius: var(--radius-full, 999px);
+  background: var(--accent); border-radius: var(--radius-full);
   padding: 1px 5px; margin-left: 3px; white-space: nowrap;
 }
 .cite-wrap .cite-pop {
@@ -67,10 +70,10 @@ CITE_MARKS_CSS = """
   bottom: calc(100% + 4px); left: 0;
   min-width: 170px; max-width: 260px; padding: 7px 9px;
   background: var(--surface);
-  border: 1px solid var(--border, var(--hairline));
-  border-radius: var(--radius, 6px);
-  box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, 0.45));
-  font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-caption); font-weight: 400; line-height: 1.45;
   white-space: normal; text-align: left;
 }
 .cite-wrap:hover .cite-pop, .cite-wrap:focus-within .cite-pop { display: block; }
@@ -83,12 +86,12 @@ CITE_MARKS_CSS = """
 .cite-pop-kind {
   font-size: var(--fs-caption); color: var(--accent);
   background: var(--accent-soft);
-  border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase;
+  border-radius: var(--radius); padding: 1px 6px; text-transform: uppercase;
   letter-spacing: 0.03em;
 }
-.cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
+.cite-pop-per { font-size: var(--fs-caption); color: var(--muted); }
 .cite-pop-value {
-  display: block; font-size: var(--fs-body, 13px); font-weight: 600;
+  display: block; font-size: var(--fs-body); font-weight: 600;
   color: var(--fg); margin-top: 3px;
 }
 .cite-pop-value-cap {
@@ -97,7 +100,7 @@ CITE_MARKS_CSS = """
 .cite-unverified {
   display: inline-block; font-size: var(--fs-caption);
   color: var(--warn); border: 1px dashed var(--warn);
-  border-radius: var(--radius-full, 999px); padding: 1px 7px; cursor: default;
+  border-radius: var(--radius-full); padding: 1px 7px; cursor: default;
 }
 """
 

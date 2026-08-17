@@ -67,6 +67,16 @@ def test_policy_view_is_derived_from_the_canonical_authorization_contract() -> N
     assert all(cell.state is PolicyDisplayState.NEVER for cell in rows["webcasts"].cells)
 
 
+def test_data_policy_renderer_uses_card_title_for_the_card_heading() -> None:
+    html = render_data_policy_settings_panel()
+
+    assert (
+        '<h2 class="k-card-title" id="data-policy-settings-title">Data collection policy</h2>'
+        in html
+    )
+    assert '<h2 class="k-toolbar-title" id="data-policy-settings-title">' not in html
+
+
 def test_fmp_operational_state_reads_current_recovery_state_without_mutation(
     tmp_path: Path,
 ) -> None:
@@ -249,7 +259,7 @@ def test_work_os_exposes_operations_and_related_settings_without_legacy_embedded
 
     assert 'id="screen-execution-queue"' in html
     assert '"screen-execution-queue": "/api/panel/operations"' in html
-    assert "workOsLoadScreen(target, operations)" in html
+    assert "workOsLoadScreen(target, operationsMount)" in html
     assert "window.workOsOpenRelatedView = function" in html
     assert 'id="opsTabQueue"' not in html
     assert 'id="opsTabSettings"' not in html

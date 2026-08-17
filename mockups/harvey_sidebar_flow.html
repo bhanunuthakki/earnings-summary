@@ -861,7 +861,7 @@
   <!-- ==========================================================================
        LEFT SIDEBAR NAVIGATION (COLLAPSIBLE HARVEY / LEGORA 3-LAYER WORK OS)
        ========================================================================== -->
-  <aside class="app-sidebar" id="appSidebar">
+  <aside class="app-sidebar" id="appSidebar" role="navigation" aria-label="Work OS navigation">
     <div>
       <div class="sidebar-brand">
         <button type="button" class="sidebar-home k-btn k-btn-quiet" onclick="goCounterreadHome()" aria-label="Counterread home" title="Counterread home">
@@ -887,7 +887,7 @@
       </div>
 
       <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->
-      <div class="nav-layer-title">L1 · Portfolio Intelligence</div>
+      <h2 class="nav-layer-title">L1 · Portfolio Intelligence</h2>
       <a onclick="navigateTo('screen-cockpit')" class="nav-item is-active" id="nav-cockpit" data-tooltip="Portfolio Cockpit & Review" title="Portfolio Cockpit & Review">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
         <span class="nav-text">Portfolio Cockpit</span>
@@ -902,7 +902,7 @@
       </a>
 
       <!-- LAYER 2: RESEARCH ENGINE -->
-      <div class="nav-layer-title">L2 · Research Engine</div>
+      <h2 class="nav-layer-title">L2 · Research Engine</h2>
       <a onclick="navigateTo('screen-workspace')" class="nav-item" id="nav-workspace" data-tooltip="Company Desk (Nu Holdings)" title="Company Desk (Nu Holdings)">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <span class="nav-text">Company Desk</span>
@@ -917,7 +917,7 @@
       </a>
 
       <!-- LAYER 3: OPERATIONS & GOVERNANCE -->
-      <div class="nav-layer-title">L3 · Operations & Governance</div>
+      <h2 class="nav-layer-title">L3 · Operations & Governance</h2>
       <a onclick="navigateTo('screen-audit-log')" class="nav-item" id="nav-audit-log" data-tooltip="Decision Audit Log & Governance" title="Decision Audit Log & Governance">
         <svg class="nav-svg-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <span class="nav-text">Decision Audit Log</span>

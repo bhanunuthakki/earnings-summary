@@ -483,14 +483,11 @@ where the shell itself shipped a legacy-alias `:root` and passed green.
   reading/display ramp (incl. 60/100px), the `.src-chip` 8.5px+3px mark, `0.93em`
   inline mono, the `%23`-encoded chevron data-URIs, and `charts_v2.py` SVG
   internals. `tokens.py` is the one place raw hex (the palette) lives.
-- **Red-state policy — allowlist-with-expiry, not block-on-merge.** Pre-existing
-  drift is **quarantined per (surface, dimension)** with an owner; the quarantine
-  can only **shrink** (a dimension that becomes clean must be graduated, or the
-  ratchet fails). New drift in any clean surface/dimension fails immediately.
-  `test_full_conformance_is_red` is an `xfail` asserting the quarantine is empty:
-  it "lands red" today and flips to a hard failure once the last surface
-  graduates. There is **no `--ignore` bypass** — the only way to green is to fix
-  the CSS. Run `python -m pytest tests/test_ui_controls.py -q` to see the state.
+- **Zero-quarantine policy.** The bounded migration quarantine is empty. New
+  drift in any registered surface/dimension fails immediately, and the normal
+  green full-conformance test asserts that no entry can be reintroduced. There
+  is **no `--ignore` bypass** — the only way to green is to fix the CSS. Run
+  `python -m pytest tests/test_ui_controls.py -q` to verify the state.
 
 ## 8. Growing the language
 
@@ -581,14 +578,6 @@ precedents.
 <!-- design-registry:quarantine:start -->
 | Key | Owner | Expiry / rationale |
 |---|---|---|
-| `pipeline/data_policy_settings_panel.py:floating-card-title` | BHA-92 | 2026-10-01 · toolbar title inside an Operations card |
-| `pipeline/operations_panel.py:floating-card-title` | BHA-92 | 2026-10-01 · toolbar title inside the Operations card |
-| `pipeline/ticker_command_center.py:floating-card-title` | BHA-92 | 2026-10-01 · local research drawer/card title composition |
-| `report/renderers/workspace_charts.py:radius` | BHA-92 | 2026-10-01 · editorial chart micro radius |
-| `report/renderers/workspace_comments.py:radius` | BHA-92 | 2026-10-01 · serialized report migration |
-| `report/renderers/workspace_styles.py:radius` | BHA-92 | 2026-10-01 · editorial micro marks |
-| `ui/cite_marks.py:color` | BHA-92 | 2026-10-01 · minimal-host fallback color |
-| `ui/cite_marks.py:radius` | BHA-92 | 2026-10-01 · minimal-host fallback radius |
 <!-- design-registry:quarantine:end -->
 
 <!-- design-registry:bespoke-buttons:start -->
@@ -972,18 +961,16 @@ TRACKED ticker is a `news` row; a move on an UNTRACKED ticker is a
 > work landed, so the catalogue has been **removed rather than hand-maintained**
 > (its warning predicted exactly this).
 >
-> The live, authoritative inventory of remaining drift is the **executable
-> guard** (§7.1 above — `tests/test_ui_controls.py`): its `QUARANTINE` map is
-> the current burn-down list, ratcheted shrink-only, and
-> `test_full_conformance_is_red` flips from `xfail` to a hard failure the moment
-> it empties. Run `python -m pytest tests/test_ui_controls.py -q` for the exact
-> state — never re-derive it here.
+> The live, authoritative inventory is the **executable guard** (§7.1 above —
+> `tests/test_ui_controls.py`). Its `QUARANTINE` map is empty and the ordinary
+> full-conformance test keeps it empty. Run that file for the exact state —
+> never re-derive it here.
 >
 > Burn-down lineage: **S1** unforked the shell namespace and added the
 > `.k-well/.k-pill` status kit; **S7** swept the dashboard / cockpit / pipeline
 > long-tail onto tokens and `color-mix` (deleting the reinvented pill systems);
-> the provenance / evals / sources console (**S10**) and the report iframe /
-> editorial surfaces are the last quarantined surfaces. The **`kit-badge`
+> the provenance / evals / sources console (**S10**) and BHA-92 then graduated
+> the final Operations, research, report, and citation surfaces. The **`kit-badge`
 > component dimension** (added 2026-06-15) seeded four reinvented filled-pill
 > surfaces — command-center `allocation .ad-pill` / `position_lifecycle .plc-pill`
 > and report `workspace_comments .cmt-*` / `workspace_styles .decision-badge` —

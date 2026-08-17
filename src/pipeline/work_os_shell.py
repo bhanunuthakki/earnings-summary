@@ -224,6 +224,9 @@ def _production_runtime(generated_at: datetime) -> str:
   .is-cited-location {{ background: color-mix(in srgb, var(--warn) 14%, transparent); }}
   .research-row {{ display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3); }}
   .research-library-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }}
+  #screen-workspace .research-grid.k-grid-split-rail-lg {{
+    grid-template-columns: minmax(0, 1fr) var(--rail-lg);
+  }}
   @media (max-width: 47.5rem) {{
     body {{ display: flex; min-width: 0; }}
     .app-sidebar,
@@ -259,6 +262,8 @@ def _production_runtime(generated_at: datetime) -> str:
     .k-action-row {{ flex-wrap: wrap; gap: var(--sp-2); }}
     .screen-view [style*="grid-template-columns"] {{ grid-template-columns: 1fr !important; }}
     .research-decision-band, .research-grid, .research-library-grid, .work-os-reader-decision {{ grid-template-columns: 1fr; }}
+    #screen-workspace .k-grid-split-rail-lg,
+    #screen-execution-queue .k-grid-split-rail {{ display: block; }}
     #screen-brief-library .research-toolbar {{ align-items: stretch; }}
     #screen-brief-library .research-actions {{ display: grid; grid-template-columns: auto minmax(0, 1fr); inline-size: 100%; }}
     #screen-brief-library .research-actions .k-select {{ min-width: 0; inline-size: 100%; }}
@@ -1169,9 +1174,9 @@ def _production_runtime(generated_at: datetime) -> str:
     if (target === 'screen-analytics-playground') workOsRenderFactPlayground();
     originalNavigateTo(target);
     if (target === 'screen-execution-queue') {{
-      const operations = document.getElementById(target);
-      if (operations && operations.dataset.loadedEndpoint !== workOsEndpoint(target)) {{
-        workOsLoadScreen(target, operations);
+      const operationsMount = document.getElementById('workOsOperationsMount');
+      if (operationsMount && operationsMount.dataset.loadedEndpoint !== workOsEndpoint(target)) {{
+        workOsLoadScreen(target, operationsMount);
       }}
     }}
     const currentUrl = window.location.pathname + window.location.search + window.location.hash;
@@ -1512,6 +1517,44 @@ def _add_production_contract(
     html = html.replace(
         '<section id="screen-cockpit" class="screen-view is-active">',
         '<section id="screen-cockpit" class="screen-view is-active" data-mobile-surface="cockpit">',
+        1,
+    )
+    html = html.replace(
+        '<section id="screen-workspace" class="screen-view" data-layout="decision-workbench">',
+        '<section id="screen-workspace" class="screen-view" data-layout="decision-workbench" '
+        'role="region" aria-labelledby="workOsCompanyDeskHeading">',
+        1,
+    )
+    html = html.replace(
+        '<div class="k-card-meta" id="companyPickerLabel">Company Desk</div>',
+        '<h1 class="k-card-title" id="workOsCompanyDeskHeading"><span id="companyPickerLabel">Company Desk</span></h1>',
+        1,
+    )
+    html = html.replace(
+        '<div class="research-grid">',
+        '<div class="research-grid k-grid-split-rail-lg">',
+        1,
+    )
+    html = html.replace(
+        '<section id="screen-brief-library" class="screen-view" data-layout="report-library">',
+        '<section id="screen-brief-library" class="screen-view" data-layout="report-library" '
+        'role="region" aria-labelledby="workOsBriefLibraryHeading">',
+        1,
+    )
+    html = html.replace(
+        '<h2 class="k-card-title">Brief Library</h2>',
+        '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>',
+        1,
+    )
+    html = html.replace(
+        '<section id="screen-analytics-playground" class="screen-view" data-layout="governed-fact-playground">',
+        '<section id="screen-analytics-playground" class="screen-view" data-layout="governed-fact-playground" '
+        'role="region" aria-labelledby="workOsFactPlaygroundHeading">',
+        1,
+    )
+    html = html.replace(
+        '<h2 class="k-card-title">Fact &amp; Metric Playground</h2>',
+        '<h2 class="k-card-title" id="workOsFactPlaygroundHeading">Fact &amp; Metric Playground</h2>',
         1,
     )
     html = html.replace(
