@@ -12,13 +12,13 @@ from unittest.mock import MagicMock
 from models.facts import Unit
 from pipeline.sec_fpi_ingest import (
     LocatedFpiExhibit,
-    _parse_numeric,
-    _strip_html,
     extract_fpi_financial_facts_html,
     extract_fpi_kpis_narrative,
     fetch_fpi_exhibit,
+    parse_numeric,
     persist_fpi_facts,
     resolve_cik,
+    strip_html,
 )
 
 
@@ -31,17 +31,17 @@ def test_resolve_cik() -> None:
 
 
 def test_parse_numeric() -> None:
-    assert _parse_numeric("$123.45") == Decimal("123.45")
-    assert _parse_numeric("(50.2)") == Decimal("-50.2")
-    assert _parse_numeric("-1,234.56") == Decimal("-1234.56")
-    assert _parse_numeric("14.5%") == Decimal("14.5")
-    assert _parse_numeric("") is None
-    assert _parse_numeric("abc") is None
+    assert parse_numeric("$123.45") == Decimal("123.45")
+    assert parse_numeric("(50.2)") == Decimal("-50.2")
+    assert parse_numeric("-1,234.56") == Decimal("-1234.56")
+    assert parse_numeric("14.5%") == Decimal("14.5")
+    assert parse_numeric("") is None
+    assert parse_numeric("abc") is None
 
 
 def test_strip_html() -> None:
     html = "<p>Total Revenue was <b>$563.1 million</b> &nbsp; YoY.</p>"
-    plain = _strip_html(html)
+    plain = strip_html(html)
     assert plain == "Total Revenue was $563.1 million YoY."
 
 
@@ -92,7 +92,7 @@ def test_extract_fpi_kpis_narrative() -> None:
       Free cash flow margin was 10.8% for the quarter.
     </p>
     """
-    plain = _strip_html(html)
+    plain = strip_html(html)
     kpis = extract_fpi_kpis_narrative(html, plain, "WIX")
 
     kpi_dict = {name: (val, unit) for name, val, unit, _ in kpis}
@@ -152,6 +152,7 @@ def test_persist_fpi_facts_idempotency(migrated_db: Callable[..., Path], tmp_pat
         """,
         (doc_sha, len(doc_content)),
     )
+    assert cur.lastrowid is not None
     doc_id = int(cur.lastrowid)
 
     from provenance.evidence_backfill import ensure_legacy_document_evidence

@@ -8,7 +8,6 @@ anchoring, table/narrative extraction, and fact persistence for FPI filers
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 import sqlite3
@@ -257,7 +256,7 @@ _ENTITY_WS_RE = re.compile(r"&nbsp;|&#\d+;")
 _WS_RE = re.compile(r"\s+")
 
 
-def _strip_html(raw_html: str) -> str:
+def strip_html(raw_html: str) -> str:
     plain = _TAG_RE.sub(" ", raw_html)
     plain = _ENTITY_WS_RE.sub(" ", plain)
     return _WS_RE.sub(" ", plain).strip()
@@ -277,7 +276,7 @@ def fetch_fpi_exhibit(
         return None
 
     raw_html = r.text
-    plain_text = _strip_html(raw_html)
+    plain_text = strip_html(raw_html)
     density = len(plain_text) / max(len(raw_html), 1)
     is_image_only = len(plain_text) < _MIN_TEXT_CHARS or density < _MIN_TEXT_DENSITY
     sha256 = hashlib.sha256(raw_html.encode("utf-8")).hexdigest()
@@ -344,7 +343,7 @@ def register_and_anchor_fpi_document(
     return doc_id
 
 
-def _parse_numeric(val_str: str) -> Decimal | None:
+def parse_numeric(val_str: str) -> Decimal | None:
     """Parse string formatted currency/number into Decimal."""
     cleaned = val_str.replace("$", "").replace(",", "").replace("%", "").strip()
     if not cleaned:
@@ -403,14 +402,16 @@ def extract_fpi_financial_facts_html(
             if len(cells) < 2:
                 continue
             label = cells[0].lower()
-            nums = []
+            nums: list[tuple[Decimal, str]] = []
             for c in cells[1:]:
-                num = _parse_numeric(c)
+                num = parse_numeric(c)
                 if num is not None:
                     nums.append((num, c))
 
             if not nums:
                 continue
+            first_val: Decimal
+            raw_str: str
             first_val, raw_str = nums[0]
 
             # Revenues
@@ -470,9 +471,9 @@ def extract_fpi_financial_facts_html(
 
     # If both OCF and Capex exist, compute FCF
     if "operating_cash_flow" in results and "capital_expenditure" in results:
-        ocf = results["operating_cash_flow"][0]
-        capex = results["capital_expenditure"][0]
-        fcf = ocf + capex  # capex is negative
+        ocf: Decimal = results["operating_cash_flow"][0]
+        capex: Decimal = results["capital_expenditure"][0]
+        fcf: Decimal = ocf + capex  # capex is negative
         results["free_cash_flow"] = (
             fcf,
             "USD",
@@ -562,12 +563,11 @@ def persist_fpi_facts(
 
     # 1. Insert financial facts
     for line_item, (val, currency_str, _excerpt) in financial_facts.items():
-        loc = FactLocator(line_item=line_item, section_name="consolidated_financial_statements")
-        loc_str = (
-            loc.model_dump_json()
-            if hasattr(loc, "model_dump_json")
-            else json.dumps({"line_item": line_item})
+        loc = FactLocator(
+            section="consolidated_financial_statements",
+            verbatim_snippet=line_item,
         )
+        loc_str = loc.model_dump_json()
         conn.execute(
             """
             INSERT INTO financial_facts
@@ -592,7 +592,7 @@ def persist_fpi_facts(
 
     # 2. Insert KPI facts using manifest
     if kpis:
-        kpi_values = []
+        kpi_values: list[KpiValue] = []
         for name, val, unit_enum, excerpt in kpis:
             kpi_values.append(
                 KpiValue(
@@ -601,7 +601,7 @@ def persist_fpi_facts(
                     unit=unit_enum,
                     confidence=0.95,
                     source_excerpt=excerpt,
-                    locator=FactLocator(section_name="press_release", line_item=name),
+                    locator=FactLocator(section="press_release", verbatim_snippet=name),
                 )
             )
 
