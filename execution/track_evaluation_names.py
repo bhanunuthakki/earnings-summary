@@ -10,10 +10,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
-import db
-from entity_store import upsert_entity
-from industry_classifier import classify_ticker
-from onboard_ticker import apply_industry_template
+from onboard_ticker import apply_industry_template  # noqa: E402
+
+import db  # noqa: E402
+from entity_store import upsert_entity  # noqa: E402
 
 
 def main() -> int:
@@ -38,19 +38,13 @@ def main() -> int:
             conn.close()
 
         # Apply industry template if applicable
-        if ticker == "PCOR":
+        if ticker in ("PCOR", "TOST"):
             apply_industry_template(
                 ticker=ticker,
                 industry_slug="software_saas",
                 repo_root=PROJECT_ROOT,
             )
-        elif ticker == "TOST":
-            apply_industry_template(
-                ticker=ticker,
-                industry_slug="software_saas",
-                repo_root=PROJECT_ROOT,
-            )
-        
+
         # Seed entity
         sector = "Semiconductors" if ticker == "IFNNY" else "Software / Technology"
         db_path = PROJECT_ROOT / "data" / "portfolio.db"
