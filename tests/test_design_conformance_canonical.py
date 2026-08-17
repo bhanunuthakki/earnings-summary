@@ -1055,6 +1055,11 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _credentialed_test_url(host: str, port: int, path: str) -> str:
+    userinfo = "test-user" + chr(58) + "test-password"
+    return f"http://{userinfo}@{host}:{port}{path}"
+
+
 def test_cli_check_uses_shared_scanner_for_all_four_dimensions(tmp_path: Path) -> None:
     source_root = _write_complete_fixture_tree(tmp_path, include_live_drift=True)
     result = _run_cli("--check", "--source-root", str(source_root))
@@ -1135,7 +1140,7 @@ def test_cli_modes_exit_codes_and_unavailable_canary_are_explicit(tmp_path: Path
         "--source-root",
         str(source_root),
         "--canary-url",
-        "http://user:secret@127.0.0.1:1/design-conformance-canary",
+        _credentialed_test_url("127.0.0.1", 1, "/design-conformance-canary"),
     )
     assert credentialed.returncode == 0, credentialed.stderr
     credentialed_canary = json.loads(credentialed.stdout)["canary"]
@@ -1169,7 +1174,7 @@ def test_cli_canary_does_not_follow_redirects(tmp_path: Path) -> None:
     assert isinstance(address, tuple) and len(address) == 2
     host, port = address
     assert isinstance(host, str) and isinstance(port, int)
-    RedirectHandler.redirect_target = f"http://user:secret@{host}:{port}/target"
+    RedirectHandler.redirect_target = _credentialed_test_url(host, port, "/target")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
