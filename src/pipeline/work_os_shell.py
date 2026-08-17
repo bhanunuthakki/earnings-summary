@@ -324,7 +324,10 @@ def _production_runtime(generated_at: datetime) -> str:
     const meta = document.getElementById('workOsBriefReaderMeta');
     const sections = document.getElementById('workOsBriefReaderSections');
     workOsReaderContext = artifact;
-    if (title) title.textContent = artifact.ticker + ' · ' + artifact.title;
+    const displayTitle = artifact.title && String(artifact.title).toUpperCase().startsWith(String(artifact.ticker).toUpperCase())
+      ? artifact.title
+      : artifact.ticker + ' · ' + (artifact.title || 'Full Research Brief');
+    if (title) title.textContent = displayTitle;
     if (meta) meta.textContent = artifact.report_date + ' · ' + String(artifact.coverage_role || 'unknown') + ' coverage';
     if (sections) sections.replaceChildren();
     workOsRenderReaderDecision(null);
@@ -1025,28 +1028,39 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }});
 
+  function workOsFormatDecisionDate(rawDate) {{
+    if (!rawDate) return '';
+    const parsed = new Date(rawDate);
+    return Number.isNaN(parsed.getTime()) ? String(rawDate) : parsed.toISOString().slice(0, 10);
+  }}
+
   function workOsDecisionMeta(state, emptyLabel) {{
     if (!state) return emptyLabel;
     const source = state.source_lens ? String(state.source_lens).replaceAll('_', ' ') : state.decided_by;
-    return source + ' · revision ' + state.revision;
+    const revision = workOsFormatDecisionDate(state.revision);
+    const asOf = workOsFormatDecisionDate(state.as_of);
+    return source + (revision ? ' · revision ' + revision : '') + (asOf ? ' · as of ' + asOf : '');
   }}
 
   function workOsRenderReaderDecision(decision) {{
     const projection = decision || {{ relationship: 'unavailable' }};
     const owner = projection.owner || null;
     const model = projection.model || null;
-    document.getElementById('workOsBriefOwnerState').textContent = owner ? String(owner.value).toUpperCase() : '—';
-    document.getElementById('workOsBriefOwnerMeta').textContent = workOsDecisionMeta(owner, 'No owner decision recorded');
-    document.getElementById('workOsBriefModelState').textContent = model ? String(model.value).toUpperCase() : '—';
-    document.getElementById('workOsBriefModelMeta').textContent = workOsDecisionMeta(model, 'No model recommendation recorded');
+    const ownerStateEl = document.getElementById('workOsBriefOwnerState');
+    const ownerMetaEl = document.getElementById('workOsBriefOwnerMeta');
+    const modelStateEl = document.getElementById('workOsBriefModelState');
+    const modelMetaEl = document.getElementById('workOsBriefModelMeta');
+    if (ownerStateEl) ownerStateEl.textContent = owner ? String(owner.value).toUpperCase() : '—';
+    if (ownerMetaEl) ownerMetaEl.textContent = workOsDecisionMeta(owner, 'No owner decision recorded');
+    if (modelStateEl) modelStateEl.textContent = model ? String(model.value).toUpperCase() : '—';
+    if (modelMetaEl) modelMetaEl.textContent = workOsDecisionMeta(model, 'No model recommendation recorded');
     const relationship = String(projection.relationship || 'unavailable');
-    const freshness = String(projection.freshness || 'unavailable');
+    const freshness = projection.freshness ? String(projection.freshness).replaceAll('_', ' ') : '';
     const relationshipNode = document.getElementById('workOsBriefDecisionRelationship');
-    relationshipNode.textContent = relationship.replaceAll('_', ' ') + ' · ' + freshness;
-    relationshipNode.className = 'k-pill';
-    relationshipNode.classList.toggle('k-pill-ok', relationship === 'agree');
-    relationshipNode.classList.toggle('k-pill-bad', relationship === 'conflict');
-    relationshipNode.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
+    if (relationshipNode) {{
+      relationshipNode.textContent = relationship.replaceAll('_', ' ').toUpperCase() + (freshness ? ' · ' + freshness : '');
+      relationshipNode.className = relationship === 'agree' ? 'k-pill k-pill-ok' : relationship === 'conflict' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn';
+    }}
   }}
 
   function workOsReaderUnavailable(body, artifact, status) {{

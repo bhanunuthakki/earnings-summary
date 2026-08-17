@@ -30,7 +30,8 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 .work-os-reader-header { position: sticky; inset-block-start: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3); background: var(--bg); }
 .work-os-reader-masthead { min-width: 0; text-align: center; }
 .work-os-reader-actions { display: flex; align-items: center; gap: var(--sp-2); }
-.work-os-reader-decision { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; }
+.work-os-reader-decision { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; min-height: auto; height: auto; overflow: visible; flex-shrink: 0; }
+.work-os-reader-decision > div { display: flex; flex-direction: column; gap: var(--sp-1); min-height: 0; }
 .work-os-reader-layout { display: grid; grid-template-columns: var(--grid-card-sm) minmax(0, 1fr); gap: var(--sp-4); flex: 1 1 auto; min-height: 0; max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; overflow: hidden; }
 .work-os-reader-sections { display: flex; flex-direction: column; align-self: start; gap: var(--sp-1); max-block-size: 100%; overflow-y: auto; }
 .work-os-reader-sections:empty { display: none; }
