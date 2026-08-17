@@ -314,19 +314,30 @@ def _production_runtime(generated_at: datetime) -> str:
     modal: true, priority: window.CCOverlay.PRIORITY.DRAWER, scrim: true,
     trapFocus: true, restoreFocus: true, motion: 'slide-right',
     group: 'work-os-drawer', closeId: 'drillDrawerClose', wireClose: false,
-    onOpen: function () {{ drillDrawer.setAttribute('aria-hidden', 'false'); }},
+    onOpen: function () {{
+      drillDrawer.classList.add('is-open');
+      drillDrawer.setAttribute('aria-hidden', 'false');
+    }},
     onBeforeClose: function () {{
       workOsAbortTarget(document.getElementById('drawerBody'), 'hidden');
     }},
-    onClose: function () {{ drillDrawer.setAttribute('aria-hidden', 'true'); originalCloseDrillDrawer(); }}
+    onClose: function () {{
+      drillDrawer.classList.remove('is-open');
+      drillDrawer.setAttribute('aria-hidden', 'true');
+      originalCloseDrillDrawer();
+    }}
   }});
   const peekOverlay = peekDrawer && window.CCOverlay.register(peekDrawer, {{
     modal: true, priority: window.CCOverlay.PRIORITY.PEEK, scrim: true,
     trapFocus: true, restoreFocus: true, motion: 'slide-right',
     group: 'work-os-drawer', closeId: 'peekDrawerClose', wireClose: false,
-    onOpen: function () {{ peekDrawer.setAttribute('aria-hidden', 'false'); }},
+    onOpen: function () {{
+      peekDrawer.classList.add('is-open');
+      peekDrawer.setAttribute('aria-hidden', 'false');
+    }},
     onBeforeClose: function () {{ workOsAbortPeekRequest(); }},
     onClose: function () {{
+      peekDrawer.classList.remove('is-open');
       peekDrawer.setAttribute('aria-hidden', 'true');
       originalClosePeekDrawer();
     }}

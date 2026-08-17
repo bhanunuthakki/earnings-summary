@@ -515,6 +515,10 @@ def test_earnings_peek_ignores_stale_requests_and_aborts_on_close() -> None:
     assert "error.name === 'AbortError'" in html
     assert "workOsAbortPeekRequest();" in html
     assert "onBeforeClose: function () { workOsAbortPeekRequest(); }" in html
+    assert "peekDrawer.classList.add('is-open')" in html
+    assert "peekDrawer.classList.remove('is-open')" in html
+    assert "drillDrawer.classList.add('is-open')" in html
+    assert "drillDrawer.classList.remove('is-open')" in html
 
 
 def test_company_desk_identity_ticker_uses_the_display_role_without_changing_shared_tickers() -> (
