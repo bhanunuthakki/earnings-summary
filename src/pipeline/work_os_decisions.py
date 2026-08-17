@@ -57,6 +57,8 @@ class DecisionCondition(BaseModel):
     for_periods: int
     note: str | None
     evidence_ref: str | None
+    origin: Literal["owner", "model"] = "model"
+
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -168,16 +170,15 @@ def build_decision_projection(
         relationship=relationship,
         freshness=freshness,
     )
-    condition_row = owner_row or model_row
-    conditions: list[DecisionCondition] = []
-    if condition_row is not None:
-        values = dict(condition_row)
+    owner_conditions: list[DecisionCondition] = []
+    if owner_row is not None:
+        values = dict(owner_row)
         decision_id = int(values["id"])
         revision = str(values["made_at"])
         for index, condition in enumerate(
             conditions_from_json(values.get("decision_conditions")), start=0
         ):
-            conditions.append(
+            owner_conditions.append(
                 DecisionCondition(
                     stable_id=f"decision:{decision_id}:condition:{index}",
                     decision_id=decision_id,
@@ -189,9 +190,39 @@ def build_decision_projection(
                     for_periods=condition.for_periods,
                     note=condition.note,
                     evidence_ref=condition.metric_source,
+                    origin="owner",
                 )
             )
+
+    model_conditions: list[DecisionCondition] = []
+    if model_row is not None:
+        values = dict(model_row)
+        decision_id = int(values["id"])
+        revision = str(values["made_at"])
+        for index, condition in enumerate(
+            conditions_from_json(values.get("decision_conditions")), start=0
+        ):
+            model_conditions.append(
+                DecisionCondition(
+                    stable_id=f"decision:{decision_id}:condition:{index}",
+                    decision_id=decision_id,
+                    revision=revision,
+                    metric=condition.metric,
+                    operator=condition.op,
+                    threshold=condition.threshold,
+                    unit=condition.unit,
+                    for_periods=condition.for_periods,
+                    note=condition.note,
+                    evidence_ref=condition.metric_source,
+                    origin="model",
+                )
+            )
+
+
+    # Use owner conditions when explicitly populated; otherwise fall back to model conditions
+    conditions = owner_conditions if owner_conditions else model_conditions
     return projection, conditions, []
+
 
 
 __all__ = [

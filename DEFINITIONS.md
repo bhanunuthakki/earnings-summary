@@ -23,6 +23,27 @@ Every tracked-company row is described by four independent axes. Together they a
 
 The database row is the sole membership authority. Workbooks, research directories, thesis files, cached LLM artifacts, and WACC seeds are outputs or inputs; they never create, restore, or upgrade membership.
 
+## Filing Regime
+
+**Definition.** The regulatory framework governing an issuer's SEC periodic reporting obligations and filing document formats. The canonical regimes are:
+- `10-K`: Domestic US operating companies and issuers filing annual Form 10-K, quarterly Form 10-Q, and current Form 8-K.
+- `20-F`: Foreign Private Issuers (FPIs) filing annual Form 20-F and furnishing interim/quarterly releases and updates on Form 6-K.
+- `40-F`: Canadian Multijurisdictional Disclosure System (MJDS) filers filing annual Form 40-F and furnishing interim reports on Form 6-K.
+- `none`: Non-SEC registrants or unsponsored ADRs with no direct EDGAR reporting obligation (e.g. `NTDOY`, `FLKR`).
+
+**Contract.** Pipelines branch deterministically on `tracked_companies.filing_regime`. Interim quarters for `20-F`/`40-F` issuers MUST route through the 6-K exhibit ingestion pipeline rather than assuming US 10-Q XBRL availability.
+
+## Foreign Private Issuer (FPI)
+
+**Definition.** An SEC-registered non-US entity that qualifies under Exchange Act Rule 3b-4 to file annual reports on Form 20-F and furnish quarterly/interim financial statements, press releases, and material updates on Form 6-K instead of domestic 10-Q/10-K/8-K forms.
+
+**Contract.** FPIs do not publish structured XBRL in the SEC `/api/xbrl/companyfacts/` endpoint for quarterly 6-Ks. All quarterly/interim financials for FPIs MUST be extracted from primary 6-K exhibit HTML/text and registered with evidence ledger provenance.
+
+## Interim Filing Obligation
+
+**Definition.** The expected quarterly or half-yearly SEC filing type derived from an issuer's Filing Regime: Form 10-Q for `10-K` filers, and Form 6-K (earnings release / financial statements exhibit) for `20-F` and `40-F` filers.
+
+
 ## Coverage Role Resource Contract
 
 | Coverage Role | Research Level | Schedule | Deterministic work | LLM / deliverables |
