@@ -46,6 +46,12 @@ Composition contract — ``controls_css(default)`` rides immediately after
 * ``.k-well`` (+ ``-ok/-warn/-bad/-accent``) — the soft-filled BLOCK sibling of
   ``.k-pill`` for KPI cards / callouts / tone rows: same ``color-mix`` family,
   box radius.
+* ``.k-drawer`` — the slide-drawer geometry modifier for ``.k-overlay``;
+  compose both classes so the overlay substrate keeps owning dismissal and the
+  drawer adds the sanctioned drawer radius/elevation.
+* ``.k-grid-shell`` / ``.k-grid-single`` / ``.k-grid-split-rail`` /
+  ``.k-grid-matrix`` plus the existing ``.card-grid-*`` family — the five
+  registered horizontal grid archetypes. Surfaces add placement and gaps only.
 * ``.k-dot`` (+ ``-ok/-warn/-bad/-muted``) — the one filled circular STATUS dot
   (freshness ticks, cron run-marks, system-status marks). Fill is
   ``currentColor``, so a tone modifier only sets ``color``; a surface sizes it
@@ -297,7 +303,7 @@ input, textarea, select, [contenteditable] { caret-color: var(--accent); }
   display: inline-flex; align-items: center; gap: 6px;
   font: inherit; font-size: var(--fs-body); font-weight: 600; line-height: 1.3;
   border-radius: var(--radius); padding: 6px 14px; cursor: pointer;
-  border: 1px solid transparent; background: transparent; color: var(--fg);
+  border: var(--bw-thin) solid transparent; background: transparent; color: var(--fg);
   white-space: nowrap;
   transition: color var(--transition), border-color var(--transition),
     background var(--transition);
@@ -325,7 +331,7 @@ input, textarea, select, [contenteditable] { caret-color: var(--accent); }
   font-size: var(--fs-caption); font-weight: 600; line-height: 1.5;
   text-transform: uppercase; letter-spacing: 0.05em;
   border-radius: var(--radius-full); padding: 1px 8px;
-  border: 1px solid var(--border); color: var(--muted); background: transparent;
+  border: var(--bw-thin) solid var(--border); color: var(--muted); background: transparent;
   white-space: nowrap;
 }
 .k-chip-ok   { color: var(--ok);   border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
@@ -420,6 +426,12 @@ a.k-tick-sym:hover { color: var(--accent); }
    callouts, tone rows) — same color-mix family, box radius instead of full.
    Ink stays --fg; a status word inside can take its own .k-pill. ---- */
 .k-well { background: var(--paper); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); }
+.k-well-title, .cc-drawer-head, .cc-peek-head {
+  margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg);
+}
+.cc-drawer-head, .cc-peek-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+}
 .k-well-ok     { background: color-mix(in srgb, var(--ok) 16%, transparent); }
 .k-well-warn   { background: color-mix(in srgb, var(--warn) 16%, transparent); }
 .k-well-bad    { background: color-mix(in srgb, var(--bad) 16%, transparent); }
@@ -463,8 +475,9 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-scrim { position: fixed; inset: 0; background: var(--scrim);
   z-index: 40; animation: k-overlay-fade var(--transition); }
 .k-overlay { position: fixed; z-index: 41; background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--radius);
+  border: var(--bw-thin) solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow-pop); animation: k-overlay-rise var(--transition); }
+.k-overlay.k-drawer { border-radius: var(--radius-drawer); box-shadow: var(--shadow-drawer); }
 .k-scrim[hidden], .k-overlay[hidden] { display: none; }
 @keyframes k-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes k-overlay-rise { from { transform: translateY(6px); opacity: 0; }
@@ -711,6 +724,10 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
 }
 
 /* ---- Card Grid Layouts ---- */
+.k-grid-shell, .k-grid-single { display: grid; grid-template-columns: minmax(0, 1fr); }
+.k-grid-split-rail { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-sm); }
+.k-grid-split-rail-lg { display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-lg); }
+.k-grid-matrix { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .card-grid-action { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap: var(--sp-4); }
 .card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-4); }
 .card-grid-risk { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-4); }

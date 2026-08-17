@@ -484,9 +484,175 @@ where the shell itself shipped a legacy-alias `:root` and passed green.
   graduates. There is **no `--ignore` bypass** — the only way to green is to fix
   the CSS. Run `python -m pytest tests/test_ui_controls.py -q` to see the state.
 
+## 8. Growing the language
+
+The design vocabulary grows through one deliberate barrier: build the behavior
+in `src/ui/controls.py` or the token family in `src/ui/tokens.py`; register the
+typed vocabulary and any governed approval in `src/ui/design_registry.py` with
+its owner and rationale; prove the contract with a self-test that turns red on
+a representative violation; then regenerate the React mirror and reconcile
+these bounded tables. Application surfaces compose the registered kit. They do
+not create a second local vocabulary.
+
+The registry preserves four different governance directions. The filesystem
+census is exact and carries no approval metadata. Permanent exemptions and
+allowlists require an owner and rationale. Quarantine is per surface and
+dimension, expires, and can only shrink. The CCAction adopter floor can grow as
+new callers adopt it but never forces adoption; it fails only when a pinned
+caller regresses. Scanner regexes and structural definitions stay with the
+scanner because they are detection logic, not approvals.
+
+The canonical registry tables below are bounded data projections. Their row
+keys are checked bidirectionally against the typed registry. The 68-path CSS
+surface census is deliberately absent: `_discovered_surfaces()` is its live
+oracle, and duplicating it in prose would recreate the drift this registry
+removes.
+
+### Shape archetypes
+
+<!-- design-registry:shapes:start -->
+| Key | Kit primitive | Sanctioned geometry |
+|---|---|---|
+| `macro-container` | `.k-card` | `radius-card` · `bw-thin` border · `shadow-card` |
+| `micro-inset` | `.k-well` | `radius` · no border · no elevation |
+| `slide-drawer` | `.k-overlay.k-drawer` | `radius-drawer` · `bw-thin` border · `shadow-drawer` |
+| `control-button` | `.k-btn` | `radius` · `bw-thin` transparent border · no elevation |
+| `pill-chip` | `.k-chip` / `.k-pill` | `radius-full` · outline/filled variants · no elevation |
+| `micro-mark` | `.k-dot` | `radius-full` · no border · no elevation |
+<!-- design-registry:shapes:end -->
+
+### Horizontal grid archetypes
+
+<!-- design-registry:grids:start -->
+| Key | Kit primitive | Column contract |
+|---|---|---|
+| `shell-ground` | `.k-grid-shell` | `minmax(0, 1fr)` |
+| `single-column` | `.k-grid-single` | `minmax(0, 1fr)` |
+| `two-column-split-rail` | `.k-grid-split-rail` / `.k-grid-split-rail-lg` | `minmax(0, 1fr) var(--rail-sm)` / `var(--rail-lg)` |
+| `three-column-matrix` | `.k-grid-matrix` | `repeat(3, minmax(0, 1fr))` |
+| `auto-fit-card-grid` | `.card-grid-stat` / `.card-grid-risk` / `.card-grid-action` | `repeat(auto-fit, minmax(...))` with `var(--grid-card-sm)`, `var(--grid-card-md)`, or `var(--grid-card-lg)` |
+<!-- design-registry:grids:end -->
+
+### Indentation ladder
+
+<!-- design-registry:indents:start -->
+| Key | Value source |
+|---|---|
+| `indent-0` | unitless reset `0` |
+| `indent-1` | `SPACING_SCALE[sp-1]` |
+| `indent-2` | `SPACING_SCALE[sp-2]` |
+| `indent-3` | `SPACING_SCALE[sp-3]` |
+| `indent-4` | `SPACING_SCALE[sp-4]` |
+<!-- design-registry:indents:end -->
+
+### Title placement
+
+<!-- design-registry:titles:start -->
+| Key | Selector | Placement |
+|---|---|---|
+| `card-title` | `.k-card-title` | Interior to a card |
+| `well-title` | `.k-well-title` | Interior to a well |
+| `drawer-head` | `.cc-drawer-head` | Interior to a drawer |
+| `peek-head` | `.cc-peek-head` | Interior to a peek |
+| `section-heading` | semantic `<h2>` | Exterior section landmark |
+<!-- design-registry:titles:end -->
+
+### Governed approvals and ratchets
+
+Permanent source exemptions remain scanner escapes, not application
+precedents.
+
+<!-- design-registry:exemptions:start -->
+| Key | Owner | Rationale |
+|---|---|---|
+| `ui/tokens.py` | design-system | Canonical palette and scale literals |
+| `report/renderers/charts_v2.py` | research-ui | Plot-geometry SVG labels and fills |
+<!-- design-registry:exemptions:end -->
+
+<!-- design-registry:quarantine:start -->
+| Key | Owner | Expiry / rationale |
+|---|---|---|
+| `report/renderers/workspace_charts.py:radius` | BHA-92 | 2026-10-01 · editorial chart micro radius |
+| `report/renderers/workspace_comments.py:radius` | BHA-92 | 2026-10-01 · serialized report migration |
+| `report/renderers/workspace_styles.py:radius` | BHA-92 | 2026-10-01 · editorial micro marks |
+| `ui/cite_marks.py:color` | BHA-92 | 2026-10-01 · minimal-host fallback color |
+| `ui/cite_marks.py:radius` | BHA-92 | 2026-10-01 · minimal-host fallback radius |
+<!-- design-registry:quarantine:end -->
+
+<!-- design-registry:bespoke-buttons:start -->
+| Key | Owner | Rationale |
+|---|---|---|
+| `cc-drawer-close` | work-os | Named drawer close glyph |
+| `tcc-drawer-close` | work-os | Named ticker drawer close glyph |
+| `cc-peek-close` | work-os | Named peek close glyph |
+| `cc-palette-close` | work-os | Named palette close glyph |
+| `tri-d-close` | research-ui | Named triage drawer close glyph |
+| `chat-close` | research-ui | Named chat close glyph |
+| `cmt-close` | research-ui | Named comment close glyph |
+| `ask-pop-close` | research-ui | Named Ask popover close glyph |
+| `cc-palette-btn` | work-os | Icon-only command launcher |
+| `cc-theme-toggle` | work-os | Icon-only theme control |
+| `cc-tab` | work-os | Specialized tab control |
+| `fact-doorway` | research-ui | Datum doorway into Ask |
+| `prep-ask` | research-ui | Earnings-prep doorway into Ask |
+| `ask-dock-ctl` | research-ui | Specialized Ask-dock control cluster |
+| `up-watch-item` | research-ui | Grandfathered interactive watch row |
+| `tri-text` | research-ui | Grandfathered triage text control |
+| `dq-peek` | research-ui | Grandfathered data-quality peek control |
+<!-- design-registry:bespoke-buttons:end -->
+
+<!-- design-registry:mono-tables:start -->
+| Key | Owner | Rationale |
+|---|---|---|
+| `.pfc-table` | portfolio | Headers are ticker identifiers, not prose labels |
+<!-- design-registry:mono-tables:end -->
+
+Per-surface font-size and radius sanctions are currently empty; a future entry
+must include owner and rationale.
+
+<!-- design-registry:sanctions:start -->
+| Key | Owner | Rationale |
+|---|---|---|
+<!-- design-registry:sanctions:end -->
+
+The CCAction floor pins current adopters without requiring adoption elsewhere.
+
+<!-- design-registry:ccaction-floor:start -->
+| Key | Owner |
+|---|---|
+| `dashboard/inbox.py` | work-os |
+| `pipeline/advisor_memos_panel.py` | work-os |
+| `pipeline/allocation_decisions_panel.py` | work-os |
+| `pipeline/allocation_recommendation_panel.py` | work-os |
+| `pipeline/cc_action.py` | work-os |
+| `pipeline/dcf_globals_panel.py` | research-ui |
+| `pipeline/decision_journal_panel.py` | research-ui |
+| `pipeline/diet_panel.py` | research-ui |
+| `pipeline/discovery_panel.py` | research-ui |
+| `pipeline/evals_panel.py` | research-ui |
+| `pipeline/explore_panel.py` | research-ui |
+| `pipeline/journal_panel.py` | research-ui |
+| `pipeline/ledger_panel.py` | research-ui |
+| `pipeline/mobile_inbox_panel.py` | work-os |
+| `pipeline/peeks.py` | work-os |
+| `pipeline/portfolio_panel.py` | portfolio |
+| `pipeline/position_lifecycle_panel.py` | portfolio |
+| `pipeline/positioning_panel.py` | portfolio |
+| `pipeline/ticker_command_center.py` | work-os |
+| `pipeline/ticker_settings_panel.py` | work-os |
+| `pipeline/triage_panel.py` | research-ui |
+| `pipeline/validation_issues_panel.py` | research-ui |
+| `pipeline/worldview_panel.py` | research-ui |
+| `redteam/brief.py` | research-ui |
+| `report/renderers/workspace_comments.py` | research-ui |
+| `report/renderers/workspace_dcf.py` | research-ui |
+| `report/renderers/workspace_decision_card.py` | research-ui |
+| `ui/controls.py` | design-system |
+<!-- design-registry:ccaction-floor:end -->
+
 ## 9. Rendered prose (`src/ui/prose.py`)
 
-(Section 8 — "Streams & identity" — is owned by the S3 inbox-identity session
+(Section 11 — "Streams & identity" — is owned by the S3 inbox-identity session
 per §6 of the interaction-paradigm directive; this section is numbered 9 to sit
 beside it.)
 
@@ -572,7 +738,7 @@ POSTs it.
 
 ---
 
-## 8. Streams & identity
+## 11. Streams & identity
 
 The inbox/feed is **one ranked stream of items with stored identity**, not a
 union of source tables wearing a render-time costume (Instrument Paradigm
@@ -624,7 +790,7 @@ at render time.
 
 ---
 
-## 11. Comments — closed under no-fit
+## 12. Comments — closed under no-fit
 
 The comment classifier is **closed under no-fit, and every commentable surface
 is steerable** (Instrument Paradigm §1 — *closed under no-fit, explainable by
@@ -673,7 +839,7 @@ backlog + journal until then.
 
 ---
 
-## Diet-vs-alert (the information-diet substrate)
+## 13. Diet-vs-alert (the information-diet substrate)
 
 A thesis-breach ALERTER and an information-diet CURATOR are **inverse products**
 and must not share one pipe. The repo's original `news` → decaying inbox scorer
@@ -722,7 +888,7 @@ diet rows is independent of the wall clock.
 
 ---
 
-## 12. The Discovery rule (weighted candidate ranking)
+## 14. The Discovery rule (weighted candidate ranking)
 
 The discovery queue is a **ranked surface**, so by the Instrument Paradigm it
 scores **by a weighted sum of typed, dated signals through a source-weight

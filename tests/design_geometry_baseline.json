@@ -56,7 +56,7 @@
   "src/report/renderers/workspace_sections/thesis_risk.py": 3,
   "src/report/renderers/workspace_styles.py": 131,
   "src/ui/cite_marks.py": 17,
-  "src/ui/controls.py": 57,
+  "src/ui/controls.py": 54,
   "src/ui/living_grid.py": 5,
   "src/ui/source_chip.py": 9,
   "src/viewspec/render.py": 5

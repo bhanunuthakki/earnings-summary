@@ -12,8 +12,8 @@ generated files:
 - ``design-system/src/tokens/tokens.generated.ts`` — typed TS mirrors of the
   same Python dicts (``PALETTE_LIGHT``, ``PALETTE_DARK``,
   ``PALETTE_WHITE_OVERRIDES``, ``FONT_TOKENS``, ``TYPE_SCALE``,
-  ``SPACING_SCALE``, ``CHROME_TOKENS``, ``CHART_SERIES``) plus derived
-  ``Theme`` and ``Tone`` types.
+  ``SPACING_SCALE``, ``INDENT_TOKENS``, ``RAIL_TOKENS``, ``CHROME_TOKENS``,
+  ``CHART_SERIES``) plus derived ``Theme`` and ``Tone`` types.
 
 Both files are committed (the JS build never needs Python at build time).
 Usage::
@@ -39,9 +39,11 @@ from ui.tokens import (  # noqa: E402
     CHART_SERIES,
     CHROME_TOKENS,
     FONT_TOKENS,
+    INDENT_TOKENS,
     PALETTE_DARK,
     PALETTE_LIGHT,
     PALETTE_WHITE_OVERRIDES,
+    RAIL_TOKENS,
     SPACING_SCALE,
     TYPE_SCALE,
     palette_css,
@@ -113,6 +115,8 @@ def render_ts() -> str:
         _ts_object_literal("FONT_TOKENS", FONT_TOKENS),
         _ts_object_literal("TYPE_SCALE", TYPE_SCALE),
         _ts_object_literal("SPACING_SCALE", SPACING_SCALE),
+        _ts_object_literal("INDENT_TOKENS", INDENT_TOKENS),
+        _ts_object_literal("RAIL_TOKENS", RAIL_TOKENS),
         _ts_object_literal("CHROME_TOKENS", CHROME_TOKENS),
         _ts_tuple_literal("CHART_SERIES", CHART_SERIES),
     ]

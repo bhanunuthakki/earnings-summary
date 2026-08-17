@@ -6,7 +6,8 @@ security-header + CSRF-origin hooks apply to this route unchanged — no new
 auth surface).
 
 Sections, each with an explicit loading/empty/stale/failed/last-valid state
-(design_language §12.2 — "not generated," "failed," and "nothing pending"
+(docs/design/personal_investment_partner_prd.md §12.2 — "not generated," "failed," and
+"nothing pending"
 must never collapse into the same blank card):
 
   1. current Incremental Dollar Recommendation — the same artifact id and
@@ -498,8 +499,9 @@ def _brief_empty_card(label: str, message: str) -> str:
 
 def _senior_partner_brief_section(db_path: Path) -> str:
     """P2.2 (src/advisor/senior_partner_brief.py, PRD §9.1): the five ordered
-    sections from the latest ``senior_partner_brief`` artifact. §12.2 states
-    kept distinct: 'not generated yet' (no artifact at all) vs. 'failed to
+    sections from the latest ``senior_partner_brief`` artifact. The
+    ``docs/design/personal_investment_partner_prd.md`` §12.2 states stay
+    distinct: 'not generated yet' (no artifact at all) vs. 'failed to
     read back' (artifact exists but content_json isn't the expected shape)
     vs. the populated card set — never collapsed into the same blank card."""
     try:

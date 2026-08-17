@@ -167,6 +167,21 @@ SPACING_SCALE: dict[str, str] = {
     "sp-6": "32px",
 }
 
+# Indentation uses the first four spacing steps so nested content cannot
+# introduce a near-duplicate horizontal rhythm. The zero level is deliberately
+# unitless: it is the CSS reset value, not a length.
+INDENT_TOKENS: dict[str, str] = {
+    "indent-0": "0",
+    **{f"indent-{step}": SPACING_SCALE[f"sp-{step}"] for step in range(1, 5)},
+}
+
+# Named rail widths make split-grid geometry explicit and reusable rather than
+# smuggling fixed widths into individual surface declarations.
+RAIL_TOKENS: dict[str, str] = {
+    "rail-sm": "360px",
+    "rail-lg": "400px",
+}
+
 # Chrome & Work OS tokens: corner radii, layout dimensions, blur filters, and motion timing.
 CHROME_TOKENS: dict[str, str] = {
     "sidebar-width": "240px",
@@ -216,7 +231,13 @@ CHROME_TOKENS: dict[str, str] = {
 }
 
 # Rides along inside every palette_css() :root block.
-_SCALE_TOKENS: dict[str, str] = {**TYPE_SCALE, **SPACING_SCALE, **CHROME_TOKENS}
+_SCALE_TOKENS: dict[str, str] = {
+    **TYPE_SCALE,
+    **SPACING_SCALE,
+    **INDENT_TOKENS,
+    **RAIL_TOKENS,
+    **CHROME_TOKENS,
+}
 
 # Token-kind annotations (design-sync 2026-07-19): a trailing ``/* @kind X */``
 # on the tokens whose ROLE isn't inferable from a color/px value — the three
@@ -246,6 +267,14 @@ _TOKEN_KINDS: dict[str, str] = {
 TYPE_SCALE_PX: frozenset[str] = frozenset(
     value for value in TYPE_SCALE.values() if value.endswith("px")
 )
+
+#: Immutable family snapshots for read-only registry/guard introspection.
+#: They are derived from the canonical mappings so no consumer can supply a
+#: divergent set of legal names or values.
+INDENT_TOKEN_NAMES: frozenset[str] = frozenset(INDENT_TOKENS)
+INDENT_TOKEN_VALUES: frozenset[str] = frozenset(INDENT_TOKENS.values())
+RAIL_TOKEN_NAMES: frozenset[str] = frozenset(RAIL_TOKENS)
+RAIL_TOKEN_VALUES: frozenset[str] = frozenset(RAIL_TOKENS.values())
 
 #: The only px ``border-radius`` literals the system allows: ``--radius`` (8px,
 #: every rectangular box) and ``--radius-full`` (999px, pills/dots). 3/4/5/6px

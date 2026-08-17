@@ -98,6 +98,19 @@ export const SPACING_SCALE = {
   "sp-6": "32px",
 } as const;
 
+export const INDENT_TOKENS = {
+  "indent-0": "0",
+  "indent-1": "4px",
+  "indent-2": "8px",
+  "indent-3": "12px",
+  "indent-4": "16px",
+} as const;
+
+export const RAIL_TOKENS = {
+  "rail-sm": "360px",
+  "rail-lg": "400px",
+} as const;
+
 export const CHROME_TOKENS = {
   "sidebar-width": "240px",
   "sidebar-collapsed-width": "72px",

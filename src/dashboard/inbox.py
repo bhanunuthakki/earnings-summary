@@ -138,7 +138,7 @@ _KIND_RICHNESS: dict[str, int] = {
 
 # Humanized alert trigger labels for the card's kind chip — the raw enum
 # (earnings_tone, material_news, …) never reaches a user-facing label
-# (design_language §8). The raw kind still rides the card's data-trigger attr,
+# (design_language §11). The raw kind still rides the card's data-trigger attr,
 # so client-side trigger filtering and the tests keep their handle on it.
 _TRIGGER_LABELS: dict[str, str] = {
     "earnings_tone": "Earnings tone",
@@ -773,7 +773,7 @@ def _render_item(
     when_attr = it.when.isoformat(timespec="seconds")
     cat_attr = f' data-cat="{_esc(it.category)}"' if it.category else ""
     # The raw trigger_kind rides a data-attr (a machine hook, like data-cat /
-    # data-kind) — never a visible label; the chip humanizes it (§8).
+    # data-kind) — never a visible label; the chip humanizes it (§11).
     trig_attr = f' data-trigger="{_esc(it.title)}"' if it.kind == "alert" else ""
     # Tier-1 severity (one definition with the ranking layer): a decisive
     # alert — owner falsifier breach, registered threshold crossing — carries
@@ -850,7 +850,7 @@ def _status_pill_tone(status: str) -> str:
 
 def _chip_label(it: InboxItem) -> str:
     """The kind chip's text. The raw enum never reaches a label (design_language
-    §8; it rides ``data-trigger`` instead):
+    §11; it rides ``data-trigger`` instead):
 
     * ``material_news`` is the one trigger the categorizer SPLITS — into News /
       Rating changes / Press releases — so its chip shows that refined category,
