@@ -468,6 +468,14 @@ where the shell itself shipped a legacy-alias `:root` and passed green.
   decoration*, hierarchy inversions) is caught by the **monthly semantic audit**
   (`directives/design_conformance_audit.md`, the advisory third layer) plus
   reviewer discipline. Composing the kit is the whole point.
+- **Registry composition dimensions.** The same scanner also checks interior
+  card/well/drawer title placement, indentation-named selectors against the
+  `--indent-*` ladder, complete card-like shape signatures against their
+  applicable archetype, and card-grid/split-rail columns against their own grid
+  archetype. Exact selector parsing preserves `:not(...)`, attributes, native
+  CSS nesting, cascade importance, and case-sensitive custom-property identity.
+  Dynamic class/tag structure or incomplete headings are reported as typed
+  **unverifiable markup** and fail closed; they are never silently counted clean.
 - **Dimension-scoped.** Layout px (width/margin/padding/gap/top/left/height) is
   NEVER touched — only color/font/radius. The px checks anchor on `font-size:` /
   `border-radius:`.
@@ -503,8 +511,8 @@ caller regresses. Scanner regexes and structural definitions stay with the
 scanner because they are detection logic, not approvals.
 
 The canonical registry tables below are bounded data projections. Their row
-keys are checked bidirectionally against the typed registry. The 68-path CSS
-surface census is deliberately absent: `_discovered_surfaces()` is its live
+keys are checked bidirectionally against the typed registry. The 69-path CSS
+surface census is deliberately absent: `discover_surfaces()` is its live
 oracle, and duplicating it in prose would recreate the drift this registry
 removes.
 
@@ -567,11 +575,17 @@ precedents.
 |---|---|---|
 | `ui/tokens.py` | design-system | Canonical palette and scale literals |
 | `report/renderers/charts_v2.py` | research-ui | Plot-geometry SVG labels and fills |
+| `ui/conformance_scan.py` | design-system | Scanner diagnostics contain the discovery signal but render no surface |
 <!-- design-registry:exemptions:end -->
 
 <!-- design-registry:quarantine:start -->
 | Key | Owner | Expiry / rationale |
 |---|---|---|
+| `pipeline/allocation_recommendation_panel.py:floating-card-title` | BHA-91 | 2026-10-01 · local card-title composition |
+| `pipeline/positioning_panel.py:floating-card-title` | BHA-91 | 2026-10-01 · local card-title composition |
+| `pipeline/data_policy_settings_panel.py:floating-card-title` | BHA-92 | 2026-10-01 · toolbar title inside an Operations card |
+| `pipeline/operations_panel.py:floating-card-title` | BHA-92 | 2026-10-01 · toolbar title inside the Operations card |
+| `pipeline/ticker_command_center.py:floating-card-title` | BHA-92 | 2026-10-01 · local research drawer/card title composition |
 | `report/renderers/workspace_charts.py:radius` | BHA-92 | 2026-10-01 · editorial chart micro radius |
 | `report/renderers/workspace_comments.py:radius` | BHA-92 | 2026-10-01 · serialized report migration |
 | `report/renderers/workspace_styles.py:radius` | BHA-92 | 2026-10-01 · editorial micro marks |

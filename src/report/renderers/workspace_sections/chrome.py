@@ -438,11 +438,13 @@ def _kpi_tile(body: StringIO, t: KpiStripTile, ticker: str) -> None:
     click delegate). Without a resolvable definition it stays today's inert
     div — never a dead button."""
     fact_ref = f"kpi:{ticker.upper()}:{t.kpi_definition_id}" if t.kpi_definition_id else None
-    tag = "button" if fact_ref else "div"
     cls = "kpi-tile fact-doorway" if fact_ref else "kpi-tile"
     type_attr = ' type="button"' if fact_ref else ""
     attrs = f" {fact_anchor_attrs(fact_ref, t.name)}" if fact_ref else ""
-    body.write(f'<{tag} class="{cls}"{type_attr}{attrs}>')
+    if fact_ref:
+        body.write(f'<button class="{cls}"{type_attr}{attrs}>')
+    else:
+        body.write(f'<div class="{cls}">')
     body.write(f'<div class="kpi-name">{_esc(t.name)}</div>')
     body.write('<div class="kpi-row">')
     body.write(f'<div class="kpi-value">{_esc(t.latest_display)}</div>')
@@ -455,7 +457,7 @@ def _kpi_tile(body: StringIO, t: KpiStripTile, ticker: str) -> None:
     body.write(f"<span>{_esc(t.labels[0][2:7])}</span>")
     body.write(f'<span class="kpi-trail">{len(t.values)}q trailing</span>')
     body.write(f"<span>{_esc(t.labels[-1][2:7])}</span>")
-    body.write(f"</div></{tag}>")
+    body.write("</div></button>" if fact_ref else "</div></div>")
 
 
 def _news_tab(body: StringIO, section: RecentDevelopmentsSection) -> None:

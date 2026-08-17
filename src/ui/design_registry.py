@@ -37,7 +37,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.0.0"
+REGISTRY_VERSION = "1.1.0"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -244,10 +244,50 @@ PERMANENT_EXEMPTIONS = (
         "research-ui",
         "Owns chart geometry-specific SVG labels and fills.",
     ),
+    PermanentExemption(
+        "ui/conformance_scan.py",
+        "design-system",
+        "Owns scanner diagnostics containing the CSS discovery signal; renders no surface.",
+    ),
 )
 
 _QUARANTINE_EXPIRY = date(2026, 10, 1)
 QUARANTINE_ENTRIES = (
+    QuarantineEntry(
+        "pipeline/allocation_recommendation_panel.py",
+        "floating-card-title",
+        "BHA-91",
+        "Portfolio recommendation headings still use local title classes inside cards.",
+        _QUARANTINE_EXPIRY,
+    ),
+    QuarantineEntry(
+        "pipeline/positioning_panel.py",
+        "floating-card-title",
+        "BHA-91",
+        "Portfolio positioning headings still use local title classes inside cards.",
+        _QUARANTINE_EXPIRY,
+    ),
+    QuarantineEntry(
+        "pipeline/data_policy_settings_panel.py",
+        "floating-card-title",
+        "BHA-92",
+        "Operations data-policy card title still composes the toolbar title class.",
+        _QUARANTINE_EXPIRY,
+    ),
+    QuarantineEntry(
+        "pipeline/operations_panel.py",
+        "floating-card-title",
+        "BHA-92",
+        "Operations card title still composes the toolbar title class.",
+        _QUARANTINE_EXPIRY,
+    ),
+    QuarantineEntry(
+        "pipeline/ticker_command_center.py",
+        "floating-card-title",
+        "BHA-92",
+        "Research drawer/card headings still use local title classes.",
+        _QUARANTINE_EXPIRY,
+    ),
     QuarantineEntry(
         "report/renderers/workspace_charts.py",
         "radius",
@@ -447,6 +487,7 @@ REGISTERED = frozenset(
         "report/renderers/workspace_reader_assets.py",
         "report/renderers/workspace_styles.py",
         "ui/cite_marks.py",
+        "ui/conformance_scan.py",
         "ui/controls.py",
         "ui/living_grid.py",
         "ui/source_chip.py",
