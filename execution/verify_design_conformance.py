@@ -9,8 +9,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import sys
 import tempfile
+import threading
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
@@ -54,6 +57,8 @@ class _NoCanaryRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 SCHEMA_VERSION = "1.0.0"
 _CANARY_READ_LIMIT = 1_000_000
+_CANARY_READ_CHUNK = 64 * 1024
+_CANARY_WALL_TIMEOUT_SECONDS = 3.0
 
 
 class _ClosedModel(BaseModel):
@@ -207,28 +212,70 @@ def _scan_static(
     )
 
 
+def _validate_canary_url(canary_url: str) -> None:
+    parsed_url = urllib.parse.urlsplit(canary_url)
+    if parsed_url.scheme not in {"http", "https"} or parsed_url.hostname is None:
+        raise ValueError("canary URL must use http or https")
+    if parsed_url.username is not None or parsed_url.password is not None:
+        raise ValueError("canary URL must not contain credentials")
+
+
+def _fetch_canary_html(canary_url: str, deadline: float) -> str:
+    request = urllib.request.Request(
+        canary_url,
+        headers={"Accept": "text/html"},
+        method="GET",
+    )
+    opener = urllib.request.build_opener(_NoCanaryRedirectHandler())
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("canary deadline expired")
+    with opener.open(request, timeout=remaining) as response:
+        payload = bytearray()
+        while len(payload) <= _CANARY_READ_LIMIT:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("canary deadline expired")
+            read_size = min(
+                _CANARY_READ_CHUNK,
+                _CANARY_READ_LIMIT + 1 - len(payload),
+            )
+            chunk = response.read(read_size)
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) > _CANARY_READ_LIMIT:
+            raise ValueError("canary response exceeded read limit")
+        charset = response.headers.get_content_charset() or "utf-8"
+        return payload.decode(charset, errors="replace")
+
+
 def _scan_canary(canary_url: str | None) -> CanaryResult:
     if canary_url is None:
         return CanaryResult(status="skipped:not-requested")
 
     try:
-        parsed_url = urllib.parse.urlsplit(canary_url)
-        if parsed_url.scheme not in {"http", "https"} or parsed_url.hostname is None:
-            raise ValueError("canary URL must use http or https")
-        if parsed_url.username is not None or parsed_url.password is not None:
-            raise ValueError("canary URL must not contain credentials")
-        request = urllib.request.Request(
-            canary_url,
-            headers={"Accept": "text/html"},
-            method="GET",
-        )
-        opener = urllib.request.build_opener(_NoCanaryRedirectHandler())
-        with opener.open(request, timeout=3.0) as response:
-            payload = response.read(_CANARY_READ_LIMIT + 1)
-            if len(payload) > _CANARY_READ_LIMIT:
-                raise ValueError("canary response exceeded read limit")
-            charset = response.headers.get_content_charset() or "utf-8"
-            html = payload.decode(charset, errors="replace")
+        _validate_canary_url(canary_url)
+        deadline = time.monotonic() + _CANARY_WALL_TIMEOUT_SECONDS
+        result_queue: queue.Queue[str | Exception] = queue.Queue(maxsize=1)
+
+        def fetch() -> None:
+            try:
+                result_queue.put(_fetch_canary_html(canary_url, deadline))
+            except Exception as exc:
+                result_queue.put(exc)
+
+        threading.Thread(
+            target=fetch,
+            name="design-conformance-canary",
+            daemon=True,
+        ).start()
+        try:
+            result = result_queue.get(timeout=_CANARY_WALL_TIMEOUT_SECONDS)
+        except queue.Empty as exc:
+            raise TimeoutError("canary deadline expired") from exc
+        if isinstance(result, Exception):
+            raise result
+        html = result
     except Exception as exc:
         return CanaryResult(
             status="skipped:unavailable",

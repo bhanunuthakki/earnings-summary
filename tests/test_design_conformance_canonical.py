@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -1147,15 +1148,12 @@ def test_cli_canary_does_not_follow_redirects(tmp_path: Path) -> None:
 
     class RedirectHandler(BaseHTTPRequestHandler):
         target_hits = 0
+        redirect_target = ""
 
         def do_GET(self) -> None:
             if self.path == "/start":
-                host, port = self.server.server_address
                 self.send_response(302)
-                self.send_header(
-                    "Location",
-                    f"http://user:secret@{host}:{port}/target",
-                )
+                self.send_header("Location", type(self).redirect_target)
                 self.end_headers()
                 return
             type(self).target_hits += 1
@@ -1163,14 +1161,18 @@ def test_cli_canary_does_not_follow_redirects(tmp_path: Path) -> None:
             self.end_headers()
             self.wfile.write(b"<main>unexpected redirect target</main>")
 
-        def log_message(self, format_string: str, *args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    address = server.server_address
+    assert isinstance(address, tuple) and len(address) == 2
+    host, port = address
+    assert isinstance(host, str) and isinstance(port, int)
+    RedirectHandler.redirect_target = f"http://user:secret@{host}:{port}/target"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        host, port = server.server_address
         redirected = _run_cli(
             "--check",
             "--source-root",
@@ -1188,6 +1190,55 @@ def test_cli_canary_does_not_follow_redirects(tmp_path: Path) -> None:
     assert redirected_canary["status"] == "skipped:unavailable"
     assert redirected_canary["reason"] == "HTTPError: canary unavailable"
     assert RedirectHandler.target_hits == 0
+
+
+def test_cli_canary_has_an_absolute_wall_deadline(tmp_path: Path) -> None:
+    source_root = _write_complete_fixture_tree(tmp_path, include_live_drift=False)
+
+    class TrickleHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            for _ in range(100):
+                try:
+                    self.wfile.write(b"x")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    break
+                time.sleep(0.25)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), TrickleHandler)
+    address = server.server_address
+    assert isinstance(address, tuple) and len(address) == 2
+    host, port = address
+    assert isinstance(host, str) and isinstance(port, int)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    started = time.monotonic()
+    try:
+        trickled = _run_cli(
+            "--check",
+            "--source-root",
+            str(source_root),
+            "--canary-url",
+            f"http://{host}:{port}/trickle",
+        )
+    finally:
+        elapsed = time.monotonic() - started
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3.0)
+
+    assert elapsed < 5.0
+    assert trickled.returncode == 0, trickled.stderr
+    trickled_canary = json.loads(trickled.stdout)["canary"]
+    assert trickled_canary["status"] == "skipped:unavailable"
+    assert trickled_canary["reason"] == "TimeoutError: canary unavailable"
 
 
 def test_cli_reports_structurally_unverifiable_markup_instead_of_passing(
