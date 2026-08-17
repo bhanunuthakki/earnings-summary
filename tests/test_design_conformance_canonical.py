@@ -1115,6 +1115,18 @@ def test_cli_modes_exit_codes_and_unavailable_canary_are_explicit(tmp_path: Path
     assert canary["status"] == "skipped:unavailable"
     assert canary["reason"]
 
+    invalid_scheme = _run_cli(
+        "--check",
+        "--source-root",
+        str(source_root),
+        "--canary-url",
+        "file:///tmp/design-conformance-canary",
+    )
+    assert invalid_scheme.returncode == 0, invalid_scheme.stderr
+    invalid_canary = json.loads(invalid_scheme.stdout)["canary"]
+    assert invalid_canary["status"] == "skipped:unavailable"
+    assert invalid_canary["reason"] == "ValueError: canary unavailable"
+
 
 def test_cli_reports_structurally_unverifiable_markup_instead_of_passing(
     tmp_path: Path,

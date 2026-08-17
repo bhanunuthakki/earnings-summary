@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from datetime import date
@@ -194,12 +195,19 @@ def _scan_canary(canary_url: str | None) -> CanaryResult:
         return CanaryResult(status="skipped:not-requested")
 
     try:
+        parsed_url = urllib.parse.urlsplit(canary_url)
+        if parsed_url.scheme not in {"http", "https"} or parsed_url.hostname is None:
+            raise ValueError("canary URL must use http or https")
+        if parsed_url.username is not None or parsed_url.password is not None:
+            raise ValueError("canary URL must not contain credentials")
         request = urllib.request.Request(
             canary_url,
             headers={"Accept": "text/html"},
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=3.0) as response:
+        with urllib.request.urlopen(  # nosec B310 - scheme is restricted above
+            request, timeout=3.0
+        ) as response:
             payload = response.read(_CANARY_READ_LIMIT + 1)
             if len(payload) > _CANARY_READ_LIMIT:
                 raise ValueError("canary response exceeded read limit")
