@@ -2462,7 +2462,13 @@ _PREP_CSS = """
 # ----------------------------------------------------------------------------
 
 
-def render_earnings_readout_peek(db_path: Path, repo_root: Path, ticker: str) -> str | None:
+def render_earnings_readout_peek(
+    db_path: Path,
+    repo_root: Path,
+    ticker: str,
+    *,
+    artifact_id: int | None = None,
+) -> str | None:
     """The persisted POST-earnings readout plus its deterministic source template.
 
     Portfolio artifacts pre-generate in the morning pipeline. Evaluation-name
@@ -2497,6 +2503,35 @@ def render_earnings_readout_peek(db_path: Path, repo_root: Path, ticker: str) ->
         if tracked is None:
             return None
         list_type = str(tracked[0])
+        if artifact_id is not None:
+            from earnings_readout import PURPOSE as _READOUT_PURPOSE
+            from llm_artifact_store import read_artifact
+
+            exact_artifact = read_artifact(artifact_id, db_path=db_path)
+            if (
+                exact_artifact is None
+                or exact_artifact.ticker != t
+                or exact_artifact.scope != "ticker"
+                or exact_artifact.purpose != _READOUT_PURPOSE
+                or exact_artifact.superseded_by_id is not None
+                or not (exact_artifact.content_md or "").strip()
+            ):
+                return None
+            persisted = (
+                '<div class="prep-sec"><h4>Persisted post-earnings readout</h4>'
+                f'<div class="synthesis-body">{render_prose((exact_artifact.content_md or "")[:30000])}</div>'
+                f'<p class="muted">quarter ended {escape(str(exact_artifact.fiscal_period or ""))} · '
+                f"artifact #{exact_artifact.id}</p></div>"
+            )
+            foot = (
+                '<div class="cc-peek-foot">'
+                f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
+            )
+            return (
+                f'<div class="cc-prep"><div class="prep-head"><span class="prep-when">'
+                f"{escape(t)} · quarter-stable artifact</span></div>{persisted}</div>{foot}"
+                f"<style>{_PREP_CSS}</style>"
+            )
         header = _readout_header(conn, t)
         surprise = _readout_surprise(conn, t)
         kpis = _readout_kpi_moves(conn, t)

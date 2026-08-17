@@ -259,6 +259,10 @@ def _production_runtime(generated_at: datetime) -> str:
     .k-action-row {{ flex-wrap: wrap; gap: var(--sp-2); }}
     .screen-view [style*="grid-template-columns"] {{ grid-template-columns: 1fr !important; }}
     .research-decision-band, .research-grid, .research-library-grid, .work-os-reader-decision {{ grid-template-columns: 1fr; }}
+    #screen-brief-library .research-toolbar {{ align-items: stretch; }}
+    #screen-brief-library .research-actions {{ display: grid; grid-template-columns: auto minmax(0, 1fr); inline-size: 100%; }}
+    #screen-brief-library .research-actions .k-select {{ min-width: 0; inline-size: 100%; }}
+    .research-actions .k-chip, .research-actions .k-btn, .research-library-card .k-btn {{ min-block-size: var(--touch-target-size); }}
     .work-os-reader {{ padding: var(--sp-3); }}
     .work-os-reader-layout {{ display: block; overflow: auto; }}
     .work-os-reader-sections {{ display: none; }}
@@ -284,6 +288,7 @@ def _production_runtime(generated_at: datetime) -> str:
   const originalNavigateTo = window.navigateTo;
   window.workOsActiveTicker = 'NU';
   let workOsPortfolioHydration = null;
+  let workOsPortfolioLoading = null;
   let workOsResearchCompanies = null;
   let workOsCompanyRequestSequence = 0;
   let workOsCompanyRequestController = null;
@@ -517,7 +522,7 @@ def _production_runtime(generated_at: datetime) -> str:
     return 'k-pill k-pill-ok';
   }}
 
-  function workOsRenderEarningsDoorway(doorway, ticker) {{
+  function workOsRenderEarningsDoorway(doorway, latestReadout, ticker) {{
     const target = document.getElementById('workOsEarningsDoorway');
     if (!target) return;
     if (doorway && doorway.status === 'available' && doorway.route) {{
@@ -527,14 +532,18 @@ def _production_runtime(generated_at: datetime) -> str:
       target.innerHTML = '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(doorway.route) + '" data-peek-title="' + escapeWorkOsHtml(title) + '">' + escapeWorkOsHtml(doorway.label) + '</button>';
       return;
     }}
+    const latestButton = latestReadout && latestReadout.route
+      ? '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(latestReadout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(ticker) + '">' + escapeWorkOsHtml(latestReadout.period_label) + ' readout &rarr;</button>'
+      : '';
     if (doorway && doorway.status === 'pending') {{
       const fallbackRoute = doorway.route || (doorway.phase === 'post'
         ? '/api/peek/earnings-readout?ticker=' + encodeURIComponent(ticker)
         : '/api/peek/earnings-prep?ticker=' + encodeURIComponent(ticker));
       const title = (doorway.phase === 'post' ? 'Post-earnings readout — ' : 'Earnings prep — ') + ticker;
-      target.innerHTML = '<button class="k-chip" type="button" data-peek-url="' + escapeWorkOsHtml(fallbackRoute) + '" data-peek-title="' + escapeWorkOsHtml(title) + '">' + escapeWorkOsHtml(doorway.label) + '</button>';
+      target.innerHTML = '<button class="k-chip" type="button" data-peek-url="' + escapeWorkOsHtml(fallbackRoute) + '" data-peek-title="' + escapeWorkOsHtml(title) + '">' + escapeWorkOsHtml(doorway.label) + '</button>' + latestButton;
       return;
     }}
+    if (latestButton) {{ target.innerHTML = latestButton; return; }}
     target.innerHTML = '<span class="k-card-meta">Earnings artifact unavailable</span>';
   }}
 
@@ -618,7 +627,11 @@ def _production_runtime(generated_at: datetime) -> str:
       if (!response.ok) {{
         throw new Error(data && data.error ? data.error : 'HTTP ' + response.status);
       }}
-      await workOsOpenPeekRoute('/api/peek/earnings-readout?ticker=' + encodeURIComponent(ticker), 'Post-earnings readout — ' + ticker);
+      const artifactId = Number(data.artifact_id);
+      if (!Number.isInteger(artifactId) || artifactId <= 0) throw new Error('Invalid artifact identity');
+      workOsPortfolioHydration = null;
+      await workOsEnsurePortfolioHydration();
+      await workOsOpenPeekRoute('/api/peek/earnings-readout?ticker=' + encodeURIComponent(ticker) + '&artifact_id=' + encodeURIComponent(String(artifactId)), 'Post-earnings readout — ' + ticker);
       if (window.workOsActiveTicker === ticker) {{
         await workOsRenderCompanyDesk(ticker);
       }}
@@ -793,7 +806,11 @@ def _production_runtime(generated_at: datetime) -> str:
         briefButton.disabled = !brief;
         briefButton.onclick = brief ? function () {{ openWorkOsBriefReader(brief); }} : null;
       }}
-      workOsRenderEarningsDoorway(desk.earnings_doorway || null, normalized);
+      workOsRenderEarningsDoorway(
+        desk.earnings_doorway || null,
+        desk.latest_earnings_readout || null,
+        normalized
+      );
       const conditions = Array.isArray(desk.conditions) ? desk.conditions : [];
       document.getElementById('deskConditions').innerHTML = conditions.length ? conditions.map(function (condition) {{
         return '<div class="k-well research-row" data-stable-id="' + escapeWorkOsHtml(condition.stable_id) + '"><div><strong>' + escapeWorkOsHtml(condition.metric) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(condition.note || 'Governed decision condition') + '</div></div><span class="k-chip k-chip-mono">' + escapeWorkOsHtml(condition.operator) + ' ' + escapeWorkOsHtml(condition.threshold) + ' ' + escapeWorkOsHtml(condition.unit) + '</span></div>';
@@ -827,11 +844,13 @@ def _production_runtime(generated_at: datetime) -> str:
   async function workOsRenderBriefLibrary() {{
     const target = document.getElementById('workOsBriefLibrary');
     if (!target) return;
+    await workOsEnsurePortfolioHydration();
     try {{ await workOsEnsureResearchCompanies(); }} catch (error) {{ workOsResearchCompanies = []; }}
     const tickerFilter = document.getElementById('briefTickerFilter');
     const roleFilter = document.getElementById('briefRoleFilter');
+    const kindFilter = document.getElementById('briefKindFilter');
+    const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies) ? workOsPortfolioHydration.companies : [];
     if (tickerFilter && !tickerFilter.dataset.bound) {{
-      const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies) ? workOsPortfolioHydration.companies : [];
       const seenTickers = new Set();
       portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (item) {{
         if (!item.ticker || seenTickers.has(item.ticker)) return false;
@@ -841,6 +860,7 @@ def _production_runtime(generated_at: datetime) -> str:
       tickerFilter.dataset.bound = '1';
     }}
     if (roleFilter && !roleFilter.dataset.bound) {{ roleFilter.addEventListener('change', workOsRenderBriefLibrary); roleFilter.dataset.bound = '1'; }}
+    if (kindFilter && !kindFilter.dataset.bound) {{ kindFilter.addEventListener('change', workOsRenderBriefLibrary); kindFilter.dataset.bound = '1'; }}
     const params = new URLSearchParams({{ limit: '100' }});
     if (tickerFilter && tickerFilter.value) params.set('ticker', tickerFilter.value);
     if (roleFilter && roleFilter.value) params.set('coverage_role', roleFilter.value);
@@ -851,10 +871,29 @@ def _production_runtime(generated_at: datetime) -> str:
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
       const items = Array.isArray(payload.items) ? payload.items : [];
-      target.innerHTML = items.length ? items.map(function (item) {{
+      const selectedTicker = tickerFilter ? tickerFilter.value : '';
+      const selectedRole = roleFilter ? roleFilter.value : '';
+      const selectedKind = kindFilter ? kindFilter.value : '';
+      const hydratedReadouts = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.earnings_readouts)
+        ? workOsPortfolioHydration.earnings_readouts : [];
+      const readoutItems = hydratedReadouts.filter(function (readout) {{
+        return (!selectedTicker || readout.ticker === selectedTicker)
+          && (!selectedRole || readout.coverage_role === selectedRole);
+      }}).sort(function (left, right) {{
+        const periodOrder = String(right.fiscal_period).localeCompare(String(left.fiscal_period));
+        return periodOrder || String(left.ticker).localeCompare(String(right.ticker));
+      }});
+      const showReadouts = !selectedKind || selectedKind === 'earnings_readout';
+      const showBriefs = !selectedKind || selectedKind === 'full_brief';
+      const readoutCards = showReadouts ? readoutItems.map(function (readout) {{
+        const generated = readout.generated_at ? String(readout.generated_at).slice(0, 10) : 'generation time unavailable';
+        return '<article class="k-card k-card-stack research-library-card" data-readout-id="' + escapeWorkOsHtml(readout.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(readout.ticker) + '</span><span class="k-pill k-pill-ok">available</span></div><div><div class="k-card-meta">earnings readout</div><h3 class="k-card-title">' + escapeWorkOsHtml(readout.ticker + ' ' + readout.period_label + ' earnings readout') + '</h3><div class="k-card-meta">quarter ended ' + escapeWorkOsHtml(readout.fiscal_period) + ' · ' + escapeWorkOsHtml(readout.coverage_role || 'tracked') + ' · generated ' + escapeWorkOsHtml(generated) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-readout data-peek-url="' + escapeWorkOsHtml(readout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(readout.ticker) + '">Read earnings readout &rarr;</button></article>';
+      }}).join('') : '';
+      const briefCards = showBriefs && items.length ? items.map(function (item) {{
         const statusClass = item.status === 'available' ? 'k-pill k-pill-ok' : 'k-pill k-pill-warn';
         return '<article class="k-card k-card-stack research-library-card" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(item.ticker) + '</span><span class="' + statusClass + '">' + escapeWorkOsHtml(item.status) + '</span></div><div><div class="k-card-meta">' + escapeWorkOsHtml(item.artifact_kind.replaceAll('_', ' ')) + '</div><h3 class="k-card-title">' + escapeWorkOsHtml(item.title) + '</h3><div class="k-card-meta">' + escapeWorkOsHtml(item.report_date) + ' · ' + escapeWorkOsHtml(item.coverage_role) + ' · ' + escapeWorkOsHtml(item.reader_mode) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-open-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">Read complete brief →</button></article>';
-      }}).join('') : '<div class="k-well">No persisted research artifacts match these filters.</div>';
+      }}).join('') : '';
+      target.innerHTML = readoutCards + briefCards || '<div class="k-well">No persisted research artifacts match these filters.</div>';
       target.querySelectorAll('[data-open-artifact]').forEach(function (button) {{
         const artifact = items.find(function (item) {{ return item.artifact_id === button.dataset.openArtifact; }});
         button.addEventListener('click', function () {{ openWorkOsBriefReader(artifact); }});
@@ -922,18 +961,24 @@ def _production_runtime(generated_at: datetime) -> str:
       rows.innerHTML = companies.map(function (company) {{
         const weight = Number.isFinite(company.current_weight_pct) ? workOsPercent(company.current_weight_pct) : 'Weight unavailable';
         const status = company.thesis_status || 'status pending';
-        const briefBtn = company.report_url ? '<button class="k-chip is-active" type="button" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Full Brief Canvas &rarr;</button>' : '<span class="k-chip">Brief pending</span>';
-        const readoutBtn = company.earnings_route
-          ? '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(company.earnings_route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(company.ticker) + '">' + escapeWorkOsHtml(company.earnings_label || 'Q2 Readout →') + '</button>'
-          : (company.earnings_label ? '<span class="k-chip">' + escapeWorkOsHtml(company.earnings_label) + '</span>' : '');
-        const combinedActions = '<div style="display: flex; gap: var(--sp-1); flex-wrap: wrap;">' + (readoutBtn ? readoutBtn + ' ' : '') + briefBtn + '</div>';
+        const readout = company.latest_earnings_readout || null;
+        const fallbackReadoutAction = company.earnings_route
+          ? '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(company.earnings_route) + '" data-peek-title="Earnings research — ' + escapeWorkOsHtml(company.ticker) + '">' + escapeWorkOsHtml(company.earnings_label || 'Open earnings research →') + '</button>'
+          : '<span class="k-chip">Readout unavailable</span>';
+        const readoutAction = readout && readout.route
+          ? '<button class="k-chip is-active" type="button" data-work-os-readout data-peek-url="' + escapeWorkOsHtml(readout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(company.ticker) + '">' + escapeWorkOsHtml(readout.period_label) + ' readout &rarr;</button>'
+          : fallbackReadoutAction;
+        const briefAction = company.report_url ? '<button class="k-chip is-active" type="button" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Full Brief Canvas &rarr;</button>' : '<span class="k-chip">Brief pending</span>';
         return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
           '<td><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono">' + workOsMoney(company.price) + ' / <strong>' + workOsMoney(company.fair_value) + '</strong></td>' +
-          '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span></td><td>' + combinedActions + '</td>' +
+          '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span></td><td><div class="research-actions">' + readoutAction + briefAction + '</div></td>' +
           '<td class="num"><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '">Review Thresholds</button></td></tr>';
       }}).join('');
     }}
-    document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ if (event.target.closest('[data-peek-url]') || event.target.closest('[data-work-os-full-brief]') || event.target.closest('[data-work-os-thresholds]')) return; switchCompanyWorkspace(node.dataset.workOsTicker); }}); }});
+    document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
+      if (node.tagName === 'TR' && event.target instanceof Element && event.target.closest('button')) return;
+      switchCompanyWorkspace(node.dataset.workOsTicker);
+    }}); }});
     document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
     document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
       event.stopPropagation();
@@ -952,24 +997,34 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
-  async function workOsHydratePortfolio() {{
-    const status = document.getElementById('workOsLiveStatus');
-    try {{
-      const response = await fetch('/api/work-os/portfolio', {{ headers: {{ Accept: 'application/json' }} }});
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const payload = await response.json();
-      if (!payload || !Array.isArray(payload.companies)) throw new Error('Invalid portfolio response');
-      workOsRenderPortfolio(payload);
-      if (status) status.textContent = payload.status === 'ok' ? 'Portfolio companies loaded' : 'Portfolio companies loaded with live weights unavailable';
-    }} catch (error) {{
-      const stats = document.getElementById('workOsPortfolioStats');
-      if (stats) stats.querySelectorAll('.stat-number').forEach(function (node) {{ node.textContent = '-'; }});
-      const queue = document.getElementById('workOsActionQueue');
-      if (queue) queue.innerHTML = '<div class="k-well" role="alert">Portfolio companies are temporarily unavailable. No prototype values are being shown.</div>';
-      const rows = document.getElementById('workOsPortfolioRows');
-      if (rows) rows.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
-      if (status) status.textContent = 'Portfolio companies could not be loaded';
+  async function workOsEnsurePortfolioHydration() {{
+    if (workOsPortfolioHydration) return;
+    if (!workOsPortfolioLoading) {{
+      workOsPortfolioLoading = (async function () {{
+        const status = document.getElementById('workOsLiveStatus');
+        try {{
+          const response = await fetch('/api/work-os/portfolio', {{ headers: {{ Accept: 'application/json' }} }});
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const payload = await response.json();
+          if (!payload || !Array.isArray(payload.companies)) throw new Error('Invalid portfolio response');
+          workOsRenderPortfolio(payload);
+          if (status) status.textContent = payload.status === 'ok' ? 'Portfolio companies loaded' : 'Portfolio companies loaded with live weights unavailable';
+        }} catch (error) {{
+          const stats = document.getElementById('workOsPortfolioStats');
+          if (stats) stats.querySelectorAll('.stat-number').forEach(function (node) {{ node.textContent = '-'; }});
+          const queue = document.getElementById('workOsActionQueue');
+          if (queue) queue.innerHTML = '<div class="k-well" role="alert">Portfolio companies are temporarily unavailable. No prototype values are being shown.</div>';
+          const rows = document.getElementById('workOsPortfolioRows');
+          if (rows) rows.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
+          if (status) status.textContent = 'Portfolio companies could not be loaded';
+        }}
+      }})().finally(function () {{ workOsPortfolioLoading = null; }});
     }}
+    await workOsPortfolioLoading;
+  }}
+
+  async function workOsHydratePortfolio() {{
+    await workOsEnsurePortfolioHydration();
     workOsApplyRequestedResearchState();
   }}
 

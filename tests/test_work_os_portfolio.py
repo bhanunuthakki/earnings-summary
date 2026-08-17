@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
-from pipeline.dashboard_status import DashboardRow
+from pipeline.dashboard_status import DashboardRow, TranscriptStatus
 from pipeline.research_cockpit import CockpitRow
+from pipeline.work_os_earnings import EarningsReadoutSummary
 from pipeline.work_os_portfolio import build_work_os_portfolio
 
 
@@ -18,13 +19,14 @@ def _row(
     pending_alerts: int = 0,
     pending_tier1_alerts: int = 0,
     new_docs: int = 0,
+    last_transcript: TranscriptStatus | None = None,
 ) -> CockpitRow:
     return CockpitRow(
         base=DashboardRow(
             ticker=ticker,
             list_type="portfolio",
             fmp_last_pulled="2026-08-08T10:00:00+00:00",
-            last_transcript=None,
+            last_transcript=last_transcript,
             last_build_at="2026-08-08T09:00:00+00:00",
             open_comments_count=0,
             breach_status=breach_status,
@@ -56,6 +58,16 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
     payload = build_work_os_portfolio(
         [_row("NU", name="Nu Holdings")],
         live,
+        latest_readouts={
+            "NU": EarningsReadoutSummary(
+                artifact_id=44,
+                ticker="NU",
+                fiscal_period="2026-06-30",
+                period_label="Q2 · Jun 2026",
+                generated_at="2026-08-14T11:44:51Z",
+                route="/api/peek/earnings-readout?ticker=NU&artifact_id=44",
+            )
+        },
         generated_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
     )
 
@@ -68,6 +80,43 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
     assert company.current_weight_pct == 12.5
     assert company.market_value == 125_000.0
     assert company.report_url == "/reports/NU"
+    assert company.latest_earnings_readout is not None
+    assert company.latest_earnings_readout.period_label == "Q2 · Jun 2026"
+    assert company.earnings_route == "/api/peek/earnings-readout?ticker=NU&artifact_id=44"
+    assert company.earnings_label == "Q2 · Jun 2026 readout →"
+
+
+def test_portfolio_hydration_surfaces_readout_projection_failure() -> None:
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        LivePortfolio(available=True, api_url="http://tracker.test"),
+        readout_warnings=["earnings_readout_projection_unavailable"],
+    )
+
+    assert payload.status == "degraded"
+    assert "earnings_readout_projection_unavailable" in payload.warnings
+
+
+def test_portfolio_hydration_keeps_generation_doorway_without_persisted_readout() -> None:
+    payload = build_work_os_portfolio(
+        [
+            _row(
+                "NU",
+                name="Nu Holdings",
+                last_transcript=TranscriptStatus(
+                    period_end="2026-06-30",
+                    has_qa_section=True,
+                    call_date="2026-08-12",
+                ),
+            )
+        ],
+        LivePortfolio(available=True, api_url="http://tracker.test"),
+    )
+
+    company = payload.companies[0]
+    assert company.latest_earnings_readout is None
+    assert company.earnings_route == "/api/peek/earnings-readout?ticker=NU"
+    assert company.earnings_label == "Generate readout →"
 
 
 def test_portfolio_hydration_fails_closed_when_tracker_is_offline() -> None:
