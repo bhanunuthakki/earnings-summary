@@ -42,7 +42,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 # degrades to a single column without a media query; `csec-wide` spans the
 # brief and the landing section across every column.
 _CONSOLE_CSS = """<style>
-.console-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+.console-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));
   gap: var(--sp-2); align-items: start; }
 .console-grid .console-sec { min-width: 0; }
 .console-grid .console-sec.csec-wide { grid-column: 1 / -1; }

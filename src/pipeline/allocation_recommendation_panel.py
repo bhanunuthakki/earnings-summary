@@ -66,8 +66,8 @@ _STYLE = """<style>
 .alloc-plan-row { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px;
   padding:5px 0; border-bottom:1px dashed var(--border); }
 .alloc-plan-row:last-child { border-bottom:none; }
-.alloc-alt-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; align-items:start; }
-@media (max-width: 900px) { .alloc-alt-grid { grid-template-columns: 1fr; } }
+.alloc-alt-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap:12px; align-items:start; }
+@media (max-width: 1100px) { .alloc-alt-grid { grid-template-columns: 1fr; } }
 .alloc-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center; }
 /* Calibration receipt (pipeline/calibration_receipt.py) — "when you've been
    here before," a muted read just ahead of the adopt/disposition buttons. */
@@ -79,8 +79,8 @@ _STYLE = """<style>
 .alloc-fallback-banner { margin-bottom:10px; }
 .alloc-rationale { margin-top:10px; }
 .alloc-rationale > summary { cursor:pointer; color:var(--fg); font-weight:600; padding:8px 0; }
-.risk-cat-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-@media (max-width: 900px) { .risk-cat-grid { grid-template-columns: 1fr; } }
+.risk-cat-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap:12px; }
+@media (max-width: 1100px) { .risk-cat-grid { grid-template-columns: 1fr; } }
 .risk-cat { padding:4px 0; }
 .risk-cat h4 { margin:0 0 6px; font-size:var(--fs-body); }
 .risk-row { display:flex; justify-content:space-between; gap:8px; padding:2px 0;
@@ -312,11 +312,11 @@ def _card_body(artifact_id: int, rec: IncrementalDollarRecommendation, db_path: 
     rationale = (
         '<details class="alloc-rationale"><summary>Why this plan &middot; '
         "uncertainties &amp; disconfirmers</summary>"
-        f'<div class="k-well"><h3>Why this plan</h3>'
+        f'<div class="k-well"><h3 class="k-well-title">Why this plan</h3>'
         f"{render_prose(rec.central_hypothesis)}"
         f"{render_prose(rec.personalization_why)}"
         f"{confidence}</div>"
-        f'<div class="k-well"><h3>Main uncertainty &amp; disconfirming evidence</h3>'
+        f'<div class="k-well"><h3 class="k-well-title">Main uncertainty &amp; disconfirming evidence</h3>'
         + (
             f"<p><strong>What could change this:</strong></p><ul>{unknowns}</ul>"
             if unknowns
@@ -331,7 +331,7 @@ def _card_body(artifact_id: int, rec: IncrementalDollarRecommendation, db_path: 
     )
     return (
         f"{fallback_banner}"
-        f'<div class="k-well"><h3>Preferred plan &middot; '
+        f'<div class="k-well"><h3 class="k-well-title">Preferred plan &middot; '
         f'<span class="k-chip k-chip-mono">{escape(rec.status.replace("_", " "))}</span></h3>'
         f"{_plan_html(rec.preferred_plan, label='Preferred')}</div>"
         f"{rationale}"

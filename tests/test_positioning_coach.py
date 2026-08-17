@@ -245,9 +245,11 @@ def test_panel_renders_default_and_intent_states(tmp_path: Path) -> None:
     html = render_positioning_panel(tmp_path / "missing.db", tmp_path)
     assert "defaulting to current book" in html
     # Wave B (B6): the section header names WHICH coach.
-    assert "<h3>Positioning coach</h3>" in html
+    assert '<h3 class="k-well-title">Positioning coach</h3>' in html
     assert "pos-chat-form" in html and "/api/positioning/coach" in html
     assert "Propose targets from this conversation" in html
+    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));" in html
+    assert "repeat(2, minmax(var(--grid-card-lg), 1fr))" not in html
     # With a saved intent → versioned card + narrative + dimensions.
     db = _intent_db(tmp_path)
     card = render_active_target_card(db, tmp_path)
@@ -276,6 +278,9 @@ def test_approval_form_round_trips_proposal_values(tmp_path: Path) -> None:
     assert 'name="sector_0"' in html and 'value="Technology"' in html
     assert 'name="sector_target_0"' in html and 'value="35"' in html
     assert 'name="sleeve_intl"' in html and 'value="15"' in html
+    assert '<h3 class="k-well-title">Proposed targets' in html
+    assert '<h4 class="k-well-title">Sector targets' in html
+    assert '<h4 class="k-well-title">Narrative' in html
     assert "Approve" in html
 
 

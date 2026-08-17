@@ -243,7 +243,7 @@ def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:
     assert client.get("/api/cron-health").status_code == 404
 
 
-def test_dashboard_page_returns_shell(client):
+def test_dashboard_page_returns_shell(client: FlaskClient) -> None:
     """GET / serves the eight-screen Work OS while panel APIs stay live."""
     resp = client.get("/")
     assert resp.status_code == 200
@@ -275,6 +275,20 @@ def test_dashboard_page_returns_shell(client):
     assert "MELI" in overview_body
     # The seeded thesis verdict renders as a kit status pill (.k-pill).
     assert "k-pill" in overview_body
+
+    allocation = client.get("/api/panel/portfolio_allocation")
+    assert allocation.status_code == 200
+    allocation_body = allocation.get_data(as_text=True)
+    assert 'hx-get="/api/panel/portfolio"' in allocation_body
+
+    health = client.get("/api/panel/portfolio_health")
+    assert health.status_code == 200
+    health_body = health.get_data(as_text=True)
+    assert 'data-src="/api/panel/portfolio_health?fragment=thesis"' in health_body
+
+    health_fragment = client.get("/api/panel/portfolio_health?fragment=thesis")
+    assert health_fragment.status_code == 200
+    assert health_fragment.mimetype == "text/html"
 
 
 def test_work_os_portfolio_api_hydrates_only_portfolio_companies(

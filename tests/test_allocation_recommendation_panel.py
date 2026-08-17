@@ -295,6 +295,22 @@ def test_fresh_llm_recommendation_shows_full_card(tmp_path: Path) -> None:
     assert _no_hex_colors(html)
 
 
+def test_recommendation_uses_interior_titles_and_registry_card_tracks(tmp_path: Path) -> None:
+    """BHA-91: card headings stay inside their wells and card grids use the
+    shared large-card track token and collapse at the L1 breakpoint."""
+    db_path = _make_db(tmp_path)
+    _insert_artifact(db_path, content=_VALID_PAYLOAD)
+    html = render_allocation_recommendation_section(db_path, tmp_path)
+    compact = " ".join(html.split())
+
+    assert '<h3 class="k-well-title">Preferred plan' in html
+    assert '<h3 class="k-well-title">Why this plan</h3>' in html
+    assert '<h3 class="k-well-title">Main uncertainty &amp; disconfirming evidence</h3>' in html
+    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));" in compact
+    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr));" in compact
+    assert "@media (max-width: 1100px)" in compact
+
+
 def test_stale_dirty_artifact_shows_stale_pill_and_refresh(tmp_path: Path) -> None:
     db_path = _make_db(tmp_path)
     _insert_artifact(db_path, content=_VALID_PAYLOAD, dirty=True)

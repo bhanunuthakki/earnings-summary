@@ -78,6 +78,14 @@ _WORK_OS_CHROME_KEYS: tuple[str, ...] = (
     "mobile-control-font-size",
     "touch-target-size",
 )
+
+
+def has_html_class(text: str, class_name: str) -> bool:
+    """Return whether a quoted HTML class attribute composes ``class_name``."""
+    class_attrs = re.finditer(r"(?<![\w:-])class\s*=\s*([\"'])(?P<classes>.*?)\1", text, re.DOTALL)
+    return any(class_name in match.group("classes").split() for match in class_attrs)
+
+
 _WORK_OS_PALETTE_KEYS: tuple[str, ...] = (
     "bg",
     "surface",
@@ -169,22 +177,19 @@ def work_os_contract_failures(
     ):
         if required not in renderer:
             failures.append(f"Work OS renderer missing production design contract {required!r}")
-    static_action_markers = (
-        'class="k-card k-card-dense k-card-interactive"',
-        'class="k-card-row-title"',
-        'class="k-card-meta"',
+    action_classes = (
+        "k-card",
+        "k-card-dense",
+        "k-card-interactive",
+        "k-card-row-title",
+        "k-card-meta",
     )
-    for marker in static_action_markers:
-        if marker not in mockup:
-            failures.append(f"Work OS static Action Queue missing {marker!r}")
-    hydrated_action_markers = (
-        'class="k-card k-card-dense k-card-interactive"',
-        'class="k-card-row-title"',
-        'class="k-card-meta"',
-    )
-    for marker in hydrated_action_markers:
-        if marker not in renderer:
-            failures.append(f"Work OS hydrated Action Queue missing {marker!r}")
+    for class_name in action_classes:
+        if not has_html_class(mockup, class_name):
+            failures.append(f"Work OS static Action Queue missing class {class_name!r}")
+    for class_name in action_classes:
+        if not has_html_class(renderer, class_name):
+            failures.append(f"Work OS hydrated Action Queue missing class {class_name!r}")
     return failures
 
 

@@ -581,8 +581,6 @@ precedents.
 <!-- design-registry:quarantine:start -->
 | Key | Owner | Expiry / rationale |
 |---|---|---|
-| `pipeline/allocation_recommendation_panel.py:floating-card-title` | BHA-91 | 2026-10-01 · local card-title composition |
-| `pipeline/positioning_panel.py:floating-card-title` | BHA-91 | 2026-10-01 · local card-title composition |
 | `pipeline/data_policy_settings_panel.py:floating-card-title` | BHA-92 | 2026-10-01 · toolbar title inside an Operations card |
 | `pipeline/operations_panel.py:floating-card-title` | BHA-92 | 2026-10-01 · toolbar title inside the Operations card |
 | `pipeline/ticker_command_center.py:floating-card-title` | BHA-92 | 2026-10-01 · local research drawer/card title composition |
