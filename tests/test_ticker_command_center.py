@@ -318,6 +318,15 @@ def test_render_holding_fragment_embeds_report(repo: Path) -> None:
     assert "1 awaiting the thesis-materiality judgment" in frag
 
 
+def test_ticker_renderer_uses_well_title_and_canonical_drawer_head_roles(repo: Path) -> None:
+    frag = render_holding_fragment(repo, "NU")
+
+    assert '<h2 class="k-well-title">Disclosure drift</h2>' in frag
+    assert "<h2>Disclosure drift</h2>" not in frag
+    assert 'class="cc-drawer-head"' in frag
+    assert 'class="tcc-drawer-head"' not in frag
+
+
 def test_render_holding_fragment_no_brief_degrades(tmp_path: Path) -> None:
     (tmp_path / "data").mkdir()
     _seed_db(tmp_path / "data" / "portfolio.db")  # no brief built

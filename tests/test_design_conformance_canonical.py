@@ -990,7 +990,7 @@ def test_nested_static_brace_specs_reconstruct_before_scanning(tmp_path: Path) -
 
 
 def test_registry_contract_is_versioned_for_importable_scanner() -> None:
-    assert registry.REGISTRY_VERSION == "1.2.0"
+    assert registry.REGISTRY_VERSION == "1.3.0"
     exemptions = {entry.surface: entry for entry in registry.PERMANENT_EXEMPTIONS}
     scanner = exemptions["ui/conformance_scan.py"]
     assert scanner.owner == "design-system"
@@ -1004,24 +1004,6 @@ def _write_complete_fixture_tree(root: Path, *, include_live_drift: bool) -> Pat
         path = source_root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"CSS = {clean!r}\n", encoding="utf-8")
-
-    known = {
-        "pipeline/data_policy_settings_panel.py": (
-            '<section class="k-card"><h2 class="k-toolbar-title">Data policy</h2></section>'
-        ),
-        "pipeline/operations_panel.py": (
-            '<section class="k-card"><h1 class="k-toolbar-title">Operations</h1></section>'
-        ),
-        "pipeline/ticker_command_center.py": (
-            '<section class="k-card"><h2 class="local-title">Research</h2></section>'
-        ),
-        "report/renderers/workspace_charts.py": ".fixture { border-radius: 4px; }",
-        "report/renderers/workspace_comments.py": ".fixture { border-radius: 4px; }",
-        "report/renderers/workspace_styles.py": ".fixture { border-radius: 4px; }",
-        "ui/cite_marks.py": ".fixture { color: #abc123; border-radius: 4px; }",
-    }
-    for rel, payload in known.items():
-        (source_root / rel).write_text(f"CSS = {(clean + payload)!r}\n", encoding="utf-8")
 
     if include_live_drift:
         violations = """
@@ -1084,7 +1066,8 @@ def test_cli_clean_fixture_and_emitted_receipt_are_deterministic(tmp_path: Path)
     assert first.stdout == second.stdout
     receipt = json.loads(first.stdout)
     assert receipt["verdict"] == "pass"
-    assert not [item for item in receipt["findings"] if item["disposition"] == "live"]
+    assert receipt["findings"] == []
+    assert receipt["stale_quarantine"] == []
 
     destination = tmp_path / "receipt.json"
     emitted = _run_cli(

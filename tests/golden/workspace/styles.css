@@ -1011,7 +1011,7 @@ body { font-family: var(--sans); font-size: var(--fs-body); line-height: 1.5; di
 }
 .news-item::before {
   content: ''; position: absolute; left: 0; top: 0; bottom: 0;
-  width: 3px; border-radius: var(--radius) 0 0 6px;
+  width: 3px; border-radius: var(--radius) 0 0 var(--radius-sm);
 }
 .news-item.tone-pos::before { background: var(--accent); }
 .news-item.tone-opt::before { background: var(--warn); }
@@ -1521,7 +1521,7 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .scenario-bar-price {
   position: absolute; top: -3px; bottom: -3px; width: 2px;
-  border-radius: 1px; background: var(--fg);
+  border-radius: var(--radius-sm); background: var(--fg);
 }
 .scenario-bar-base { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--muted); }
 .scenario-bar-legend {
@@ -2670,7 +2670,7 @@ mark.cmt-highlight {
   color: inherit;
   cursor: pointer;
   padding: 0 1px;
-  border-radius: 1px;
+  border-radius: var(--radius-sm);
   transition: background 0.12s;
 }
 mark.cmt-highlight:hover { background: color-mix(in srgb, var(--warn) 32%, transparent); }
@@ -2691,12 +2691,12 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
    badge. Accent (interactive), NOT green — green = a positive number here. */
 .cite-wrap .cite-val {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-radius: var(--radius, 6px); padding: 0 3px;
+  border-radius: var(--radius); padding: 0 3px;
 }
 .cite-wrap .cite-badge {
   font-size: var(--fs-caption); line-height: 1; vertical-align: middle;
   color: var(--accent-contrast);
-  background: var(--accent); border-radius: var(--radius-full, 999px);
+  background: var(--accent); border-radius: var(--radius-full);
   padding: 1px 5px; margin-left: 3px; white-space: nowrap;
 }
 .cite-wrap .cite-pop {
@@ -2704,10 +2704,10 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
   bottom: calc(100% + 4px); left: 0;
   min-width: 170px; max-width: 260px; padding: 7px 9px;
   background: var(--surface);
-  border: 1px solid var(--border, var(--hairline));
-  border-radius: var(--radius, 6px);
-  box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, 0.45));
-  font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-caption); font-weight: 400; line-height: 1.45;
   white-space: normal; text-align: left;
 }
 .cite-wrap:hover .cite-pop, .cite-wrap:focus-within .cite-pop { display: block; }
@@ -2720,12 +2720,12 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 .cite-pop-kind {
   font-size: var(--fs-caption); color: var(--accent);
   background: var(--accent-soft);
-  border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase;
+  border-radius: var(--radius); padding: 1px 6px; text-transform: uppercase;
   letter-spacing: 0.03em;
 }
-.cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
+.cite-pop-per { font-size: var(--fs-caption); color: var(--muted); }
 .cite-pop-value {
-  display: block; font-size: var(--fs-body, 13px); font-weight: 600;
+  display: block; font-size: var(--fs-body); font-weight: 600;
   color: var(--fg); margin-top: 3px;
 }
 .cite-pop-value-cap {
@@ -2734,7 +2734,7 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 .cite-unverified {
   display: inline-block; font-size: var(--fs-caption);
   color: var(--warn); border: 1px dashed var(--warn);
-  border-radius: var(--radius-full, 999px); padding: 1px 7px; cursor: default;
+  border-radius: var(--radius-full); padding: 1px 7px; cursor: default;
 }
 
 .chat-drawer {

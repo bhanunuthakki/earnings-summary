@@ -959,7 +959,7 @@ mark.cmt-highlight {
   color: inherit;
   cursor: pointer;
   padding: 0 1px;
-  border-radius: 1px;
+  border-radius: var(--radius-sm);
   transition: background 0.12s;
 }
 mark.cmt-highlight:hover { background: color-mix(in srgb, var(--warn) 32%, transparent); }

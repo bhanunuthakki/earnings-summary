@@ -11,7 +11,6 @@ import ast
 import re
 import sys
 from dataclasses import FrozenInstanceError, is_dataclass
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -103,7 +102,7 @@ def _documentation_rows(text: str, kind: str) -> tuple[str, ...]:
 
 
 def test_registry_is_frozen_typed_and_complete() -> None:
-    assert registry.REGISTRY_VERSION == "1.2.0"
+    assert registry.REGISTRY_VERSION == "1.3.0"
     records = (
         registry.SHAPE_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0].signatures[0],
@@ -111,7 +110,6 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         registry.GRID_ARCHETYPES[0].signatures[0],
         registry.TITLE_PLACEMENTS[0],
         registry.PERMANENT_EXEMPTIONS[0],
-        registry.QUARANTINE_ENTRIES[0],
         registry.BESPOKE_BUTTON_APPROVALS[0],
         registry.MONO_TABLE_APPROVALS[0],
         registry.SurfaceSanction("test", "radius", frozenset(), "test", "test"),
@@ -124,8 +122,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert isinstance(registry.REGISTERED, frozenset)
     assert len(registry.REGISTERED) == 69
     assert len(registry.PERMANENT_EXEMPTIONS) == 3
-    assert len(registry.QUARANTINE_ENTRIES) == 8
-    assert len({entry.surface for entry in registry.QUARANTINE_ENTRIES}) == 7
+    assert registry.QUARANTINE_ENTRIES == ()
     assert len(registry.BESPOKE_BUTTON_APPROVALS) == 17
     assert len(registry.MONO_TABLE_APPROVALS) == 1
     assert registry.SURFACE_SANCTIONS == ()
@@ -143,7 +140,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
             exec(f'registry.{name}["__mutation_probe__"] = "changed"')
 
 
-def test_metadata_is_nonblank_and_quarantine_expiry_is_typed() -> None:
+def test_metadata_is_nonblank_and_quarantine_is_empty() -> None:
     governed = (
         *registry.PERMANENT_EXEMPTIONS,
         *registry.QUARANTINE_ENTRIES,
@@ -153,9 +150,7 @@ def test_metadata_is_nonblank_and_quarantine_expiry_is_typed() -> None:
         *registry.CCACTION_REGRESSION_FLOOR,
     )
     assert all(entry.owner.strip() and entry.rationale.strip() for entry in governed)
-    assert {entry.expires_on for entry in registry.QUARANTINE_ENTRIES} == {date(2026, 10, 1)}
-    assert all(isinstance(entry.expires_on, date) for entry in registry.QUARANTINE_ENTRIES)
-    assert all(entry.expires_on > date.today() for entry in registry.QUARANTINE_ENTRIES)
+    assert registry.QUARANTINE_ENTRIES == ()
 
 
 def test_registry_shape_grid_and_title_signatures_match_the_kit() -> None:

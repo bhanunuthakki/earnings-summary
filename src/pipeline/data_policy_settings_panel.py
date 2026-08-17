@@ -790,7 +790,7 @@ def render_data_policy_settings_panel(
         '<section class="k-card k-card-stack" data-settings-panel="data-collection" '
         'aria-labelledby="data-policy-settings-title">'
         '<div class="k-toolbar">'
-        '<div><h2 class="k-toolbar-title" id="data-policy-settings-title">Data collection policy</h2>'
+        '<div><h2 class="k-card-title" id="data-policy-settings-title">Data collection policy</h2>'
         f'<div class="k-card-meta">Read-only · policy {escape(resolved.policy_version)}</div></div>'
         '<span class="k-pill k-pill-ok">Policy enforced</span></div>'
         "<p>Company priority controls collection depth. Portfolio runs automatically; evaluation "

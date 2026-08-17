@@ -996,7 +996,7 @@ def _disclosure_change_strip(db_path: Path, ticker: str) -> str:
     except sqlite3.Error:
         return (
             '<section class="disclosure-strip k-well">'
-            "<h2>Disclosure drift</h2>"
+            '<h2 class="k-well-title">Disclosure drift</h2>'
             '<p class="muted">Disclosure-change history is unavailable in this database.</p>'
             "</section>"
         )
@@ -1017,14 +1017,14 @@ def _disclosure_change_strip(db_path: Path, ticker: str) -> str:
             )
         return (
             '<section class="disclosure-strip k-well">'
-            '<div class="disclosure-head"><h2>Disclosure drift</h2>'
+            '<div class="disclosure-head"><h2 class="k-well-title">Disclosure drift</h2>'
             '<span class="k-chip">thesis-materiality gated</span></div>'
             f'<p class="muted">{escape(body)}</p></section>'
         )
 
     out = [
         '<section class="disclosure-strip k-well">',
-        '<div class="disclosure-head"><h2>Disclosure drift</h2>',
+        '<div class="disclosure-head"><h2 class="k-well-title">Disclosure drift</h2>',
         '<span class="k-chip">thesis-materiality gated</span></div>',
         '<p class="sub">Only changes an LLM judged to restrict measuring the thesis '
         f"are shown ({escape(counts_note)}). Read the verdict with the verbatim "
@@ -1089,7 +1089,7 @@ def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
         f'<div class="tcc-drawer-scrim" data-tcc-scrim="{escape(drawer_id)}" hidden></div>'
         f'<aside class="tcc-drawer" data-tcc-panel="{escape(drawer_id)}" hidden '
         f'aria-label="{escape(title, quote=True)}">'
-        f'<div class="tcc-drawer-head"><span>{escape(title)}</span>'
+        f'<div class="cc-drawer-head"><span>{escape(title)}</span>'
         f'<button type="button" class="tcc-drawer-close" data-tcc-close="{escape(drawer_id)}" '
         'aria-label="Close">&times;</button></div>'
         f'<div class="tcc-drawer-body">{body}</div></aside>'
@@ -1285,8 +1285,6 @@ a.cc-fdot { text-decoration: none; cursor: pointer; }
   display: flex; flex-direction: column; box-shadow: var(--shadow-pop);
   animation: cc-slide-in-right var(--transition); }
 .tcc-drawer[hidden], .tcc-drawer-scrim[hidden] { display: none; }
-.tcc-drawer-head { display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; }
 .tcc-drawer-close { background: transparent; border: none; color: var(--muted);
   font-size: var(--fs-display); cursor: pointer; line-height: 1; padding: 2px 6px;
   transition: color var(--transition); }

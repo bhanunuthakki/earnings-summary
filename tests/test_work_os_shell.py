@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 import shutil
 import subprocess
@@ -409,7 +410,7 @@ def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hyd
     # Ordinary research headings use explicit title roles; metric cards retain
     # their separate stat label/number semantics.
     assert '<h2 class="k-card-title" id="workOsBriefReaderTitle">' in html
-    assert '<h2 class="k-card-title">Brief Library</h2>' in html
+    assert '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>' in html
     assert '<h3 class="k-card-title">' in html
     assert 'class="k-card k-card-stack"><div class="stat-heading">Owner posture</div>' in html
     assert 'class="stat-number" id="deskOwnerState"' in html
@@ -479,6 +480,98 @@ def test_rendered_l1_shell_has_no_hidden_grid_signature_drift() -> None:
     evidence = scan_surface_evidence("rendered-work-os", render_work_os_shell())
 
     assert "off-scale-grid-column" not in evidence.violations()
+
+
+def test_l2_l3_shell_composes_semantic_mounts_and_canonical_split_rails() -> None:
+    html = render_work_os_shell()
+
+    assert 'id="screen-workspace"' in html
+    assert 'role="region" aria-labelledby="workOsCompanyDeskHeading"' in html
+    assert (
+        'id="workOsCompanyDeskHeading"><span id="companyPickerLabel">Company Desk</span></h1>'
+        in html
+    )
+    assert 'class="research-grid k-grid-split-rail-lg"' in html
+    assert 'id="screen-brief-library"' in html
+    assert 'aria-labelledby="workOsBriefLibraryHeading"' in html
+    assert 'id="workOsBriefLibraryHeading">Brief Library</h2>' in html
+    assert 'id="screen-analytics-playground"' in html
+    assert 'aria-labelledby="workOsFactPlaygroundHeading"' in html
+    assert 'id="workOsFactPlaygroundHeading">Fact &amp; Metric Playground</h2>' in html
+    assert 'id="screen-execution-queue"' in html
+    assert 'role="region" aria-label="Operations"' in html
+    assert 'class="k-grid-split-rail" data-layout-signature="k-grid-split-rail"' in html
+    assert 'id="workOsOperationsMount"' in html
+    assert '<div class="k-card-meta" role="status">Loading declared ownership' in html
+    assert "workOsLoadScreen(target, operationsMount)" in html
+    assert (
+        "#screen-workspace .research-grid.k-grid-split-rail-lg {\n"
+        "    grid-template-columns: minmax(0, 1fr) var(--rail-lg);"
+    ) in html
+    assert "grid-template-columns: minmax(0, 1fr) var(--rail-sm);" in html
+    assert "grid-template-columns: minmax(0, 1fr) var(--rail-lg);" in html
+
+
+def test_l2_l3_mobile_uses_target_scoped_block_without_mutating_rail_signature() -> None:
+    html = render_work_os_shell()
+
+    assert "#screen-workspace .k-grid-split-rail-lg" in html
+    assert "#screen-execution-queue .k-grid-split-rail" in html
+    assert "display: block;" in html
+    assert (
+        ".k-grid-split-rail { display: grid; grid-template-columns: minmax(0, 1fr) 1fr;" not in html
+    )
+    assert ".k-grid-split-rail-lg { display: grid; grid-template-columns: 1fr 1fr;" not in html
+
+
+def test_rendered_l2_l3_shell_has_no_target_scan_findings_or_unverifiable_markup() -> None:
+    evidence = scan_surface_evidence("rendered-work-os", render_work_os_shell())
+
+    target_dimensions = {
+        "floating-card-title",
+        "off-scale-grid-column",
+        "unsanctioned-shape-geometry",
+    }
+    assert not target_dimensions.intersection(evidence.violations())
+    assert evidence.unverifiable_markup == ()
+
+
+def test_rendered_shell_scan_proves_each_target_dimension_is_enforced() -> None:
+    html = render_work_os_shell()
+
+    title_mutation = html.replace(
+        '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>',
+        '<h1 class="k-toolbar-title">Brief Library</h1>',
+        1,
+    )
+    title_evidence = scan_surface_evidence("rendered-work-os", title_mutation)
+    assert "floating-card-title" in title_evidence.violations()
+
+    grid_mutation = html.replace(
+        "</head>",
+        "<style>.k-grid-split-rail-lg { grid-template-columns: 1fr 1fr; }</style></head>",
+        1,
+    )
+    grid_evidence = scan_surface_evidence("rendered-work-os", grid_mutation)
+    assert "off-scale-grid-column" in grid_evidence.violations()
+
+    shape_mutation = html.replace(
+        "</head>",
+        "<style>.k-card { border-radius: var(--radius); "
+        "border: var(--bw-thin) solid var(--border); "
+        "box-shadow: var(--shadow-pop); }</style></head>",
+        1,
+    )
+    shape_evidence = scan_surface_evidence("rendered-work-os", shape_mutation)
+    assert "unsanctioned-shape-geometry" in shape_evidence.violations()
+
+
+def test_work_os_shell_render_signature_remains_keyword_only() -> None:
+    signature = inspect.signature(render_work_os_shell)
+
+    assert tuple(signature.parameters) == ("generated_at", "db_path")
+    assert signature.parameters["generated_at"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["db_path"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_l1_dismissal_transition_survives_the_later_controls_cascade() -> None:
