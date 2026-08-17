@@ -188,8 +188,7 @@ production, not merged.
 - Golden sets to n≥8–10 for thin purposes; run the never-run judge spot-check.
 
 **B3**
-- ETF-sleeve stress treatment (after the FLKR ruling); disclosure O9/O10 residuals; FPI
-  crosstab blind spot with the next SEC-ingest touch; FMP Starter consequences either way.
+- ETF-sleeve stress treatment (after the FLKR ruling); disclosure O9/O10 residuals; FPI 6-K and 20-F durable ingestion pipeline (SHIPPED: automated 6-K/20-F discovery, evidence ledger anchoring, table/KPI extraction in `src/pipeline/sec_fpi_ingest.py` & `execution/ingest_sec_fpi_filings.py`, resolving FPI quarterly fact blind spot); FMP Starter consequences either way.
 
 ---
 

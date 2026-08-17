@@ -22,6 +22,7 @@ REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "compute.kpi_extract_summaries": 1,
     "competitive.transcript_mentions": 1,
     "competitive.category_share": 1,
+    "pipeline.sec_fpi_ingest": 1,
 }
 
 # Writers that persist a kpi_facts/financial_facts row WITHOUT going through

@@ -26,6 +26,22 @@ class FilingRegime(StrEnum):
     FORM_20F = "20-F"
     FORM_40F = "40-F"
 
+    @property
+    def is_fpi(self) -> bool:
+        return self in (FilingRegime.FORM_20F, FilingRegime.FORM_40F)
+
+    @property
+    def interim_doc_type(self) -> str:
+        return "sec_6k" if self.is_fpi else "sec_10q"
+
+    @property
+    def annual_doc_type(self) -> str:
+        if self == FilingRegime.FORM_20F:
+            return "sec_20f"
+        if self == FilingRegime.FORM_40F:
+            return "sec_40f"
+        return "sec_10k"
+
 
 class BusinessModelClass(StrEnum):
     """Coarse business-model bucket the metrics engine's ``applicability.py``
@@ -105,3 +121,21 @@ class Company(BaseModel):
     # or via a follow-up UPDATE, never inferred at read time.
     business_model_class: BusinessModelClass = BusinessModelClass.OPERATING_COMPANY
     accounting_standard: AccountingStandard = AccountingStandard.US_GAAP
+
+    @property
+    def is_fpi(self) -> bool:
+        if self.filing_regime is not None:
+            return self.filing_regime.is_fpi
+        return self.instrument_type == InstrumentType.ADR
+
+    @property
+    def interim_doc_type(self) -> str:
+        if self.filing_regime is not None:
+            return self.filing_regime.interim_doc_type
+        return "sec_6k" if self.is_fpi else "sec_10q"
+
+    @property
+    def annual_doc_type(self) -> str:
+        if self.filing_regime is not None:
+            return self.filing_regime.annual_doc_type
+        return "sec_20f" if self.is_fpi else "sec_10k"

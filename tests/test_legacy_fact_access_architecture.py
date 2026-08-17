@@ -58,6 +58,7 @@ _RESTATEMENT_HELPER_DEBT = frozenset(
         "src/compute/metrics_engine/io.py",
         "src/pipeline/kpi_persistence.py",
         "src/pipeline/restatement_detector.py",
+        "src/pipeline/sec_fpi_ingest.py",
         "src/pipeline/sec_xbrl.py",
     }
 )

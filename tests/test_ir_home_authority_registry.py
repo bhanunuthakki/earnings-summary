@@ -12,8 +12,8 @@ from ir_pipeline.ir_url_overrides import IR_URL_OVERRIDES
 def test_typed_candidates_are_unique_and_preserve_legacy_url_coverage() -> None:
     tickers = [candidate.ticker for candidate in IR_HOME_AUTHORITY_CANDIDATES]
     assert len(tickers) == len(set(tickers))
-    assert len(IR_HOME_AUTHORITY_CANDIDATES) == 32
-    assert len(IR_URL_OVERRIDES) == 33
+    assert len(IR_HOME_AUTHORITY_CANDIDATES) == 35
+    assert len(IR_URL_OVERRIDES) == 36
     assert IR_URL_OVERRIDES["GOOG"] == IR_URL_OVERRIDES["GOOGL"]
     assert all(
         candidate.required_marker_groups

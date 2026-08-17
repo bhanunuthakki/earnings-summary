@@ -238,6 +238,21 @@ IR_HOME_AUTHORITY_CANDIDATES = (
         "https://www.nintendo.co.jp/ir/en/",
         "Nintendo",
     ),
+    _candidate(
+        "IFNNY",
+        "https://www.infineon.com/cms/en/about-infineon/investor/",
+        "Infineon",
+    ),
+    _candidate(
+        "PCOR",
+        "https://investors.procore.com/",
+        "Procore",
+    ),
+    _candidate(
+        "TOST",
+        "https://investors.toasttab.com/",
+        "Toast",
+    ),
 )
 
 _BY_TICKER: dict[str, IRHomeAuthorityCandidate] = {}

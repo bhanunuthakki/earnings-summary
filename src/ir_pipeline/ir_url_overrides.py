@@ -61,6 +61,9 @@ IR_URL_OVERRIDES: dict[str, str] = {
     "CGEH": "https://ir.capstonegreenenergy.com/",  # Capstone Green Energy (DB name "Care.com" is stale)
     "BHP": "https://www.bhp.com/investors/financial-results",  # Australian — half-yearly
     "NTDOY": "https://www.nintendo.co.jp/ir/en/",  # Japanese ADR — semi-annual English IR
+    "IFNNY": "https://www.infineon.com/cms/en/about-infineon/investor/",  # German DAX ADR
+    "PCOR": "https://investors.procore.com/",
+    "TOST": "https://investors.toasttab.com/",
 }
 
 
