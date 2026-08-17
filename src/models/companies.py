@@ -43,7 +43,6 @@ class FilingRegime(StrEnum):
         return "sec_10k"
 
 
-
 class BusinessModelClass(StrEnum):
     """Coarse business-model bucket the metrics engine's ``applicability.py``
     (src/compute/metrics_engine/) uses to exclude formulas that don't apply
@@ -140,4 +139,3 @@ class Company(BaseModel):
         if self.filing_regime is not None:
             return self.filing_regime.annual_doc_type
         return "sec_20f" if self.is_fpi else "sec_10k"
-

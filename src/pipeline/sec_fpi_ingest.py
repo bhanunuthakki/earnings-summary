@@ -309,7 +309,6 @@ def register_and_anchor_fpi_document(
     out_path.write_bytes(fetched.raw_html.encode("utf-8"))
     rel_path = str(out_path.relative_to(repo_root)).replace("\\", "/")
 
-
     existing = conn.execute(
         "SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (fetched.sha256,)
     ).fetchone()
@@ -378,15 +377,24 @@ def extract_fpi_financial_facts_html(
     for table in tables:
         # Scale detection (check table text and preceding headers)
         t_text = table.get_text().lower()
-        prev_context = " ".join([h.get_text().lower() for h in table.find_all_previous(["h1", "h2", "h3", "h4", "h5", "p", "div"], limit=3)])
+        prev_context = " ".join(
+            [
+                h.get_text().lower()
+                for h in table.find_all_previous(
+                    ["h1", "h2", "h3", "h4", "h5", "p", "div"], limit=3
+                )
+            ]
+        )
         context_text = f"{t_text} {prev_context}"
         scale = Decimal(1)
-        if "in thousands" in context_text or "(in thousands" in context_text or "in thousand" in context_text:
+        if (
+            "in thousands" in context_text
+            or "(in thousands" in context_text
+            or "in thousand" in context_text
+        ):
             scale = Decimal("1000")
         elif "in millions" in context_text or "(in millions" in context_text:
             scale = Decimal("1000000")
-
-
 
         # Line item matching patterns
         rows = table.find_all("tr")
@@ -407,9 +415,8 @@ def extract_fpi_financial_facts_html(
 
             # Revenues
             if (
-                ("total revenue" in label or label == "revenues" or label == "revenue")
-                and "revenue" not in results
-            ):
+                "total revenue" in label or label == "revenues" or label == "revenue"
+            ) and "revenue" not in results:
                 results["revenue"] = (
                     first_val * scale,
                     "USD",
@@ -422,7 +429,9 @@ def extract_fpi_financial_facts_html(
                     f"Table: {cells[0]} = {raw_str}",
                 )
             elif (
-                "operating income" in label or "operating profit" in label or "operating (loss) income" in label
+                "operating income" in label
+                or "operating profit" in label
+                or "operating (loss) income" in label
             ) and "operating_income" not in results:
                 results["operating_income"] = (
                     first_val * scale,
@@ -554,7 +563,11 @@ def persist_fpi_facts(
     # 1. Insert financial facts
     for line_item, (val, currency_str, _excerpt) in financial_facts.items():
         loc = FactLocator(line_item=line_item, section_name="consolidated_financial_statements")
-        loc_str = loc.model_dump_json() if hasattr(loc, "model_dump_json") else json.dumps({"line_item": line_item})
+        loc_str = (
+            loc.model_dump_json()
+            if hasattr(loc, "model_dump_json")
+            else json.dumps({"line_item": line_item})
+        )
         conn.execute(
             """
             INSERT INTO financial_facts
@@ -591,8 +604,6 @@ def persist_fpi_facts(
                     locator=FactLocator(section_name="press_release", line_item=name),
                 )
             )
-
-
 
         for kpv in kpi_values:
             kpi_def_id = find_or_create_kpi_definition(
@@ -635,8 +646,6 @@ def persist_fpi_facts(
                 ),
             )
             kpi_inserted += 1
-
-
 
     # Force-flip tracked_companies.brief_dirty=1
     conn.execute(
@@ -706,7 +715,6 @@ def ingest_fpi_for_ticker(
             status="image_only",
             error_message="Exhibit text density below threshold (image-only slide deck)",
         )
-
 
     p_quarter = quarter or "FY"
     # Resolve company FYE

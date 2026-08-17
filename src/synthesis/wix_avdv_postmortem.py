@@ -75,7 +75,9 @@ def evaluate_wix_avdv_postmortem(
 
     # 1. Locate position entry
     if entry_id is not None:
-        entry_row = conn.execute("SELECT * FROM position_entries WHERE id = ?", (entry_id,)).fetchone()
+        entry_row = conn.execute(
+            "SELECT * FROM position_entries WHERE id = ?", (entry_id,)
+        ).fetchone()
     else:
         entry_row = conn.execute(
             "SELECT * FROM position_entries WHERE ticker = 'WIX' ORDER BY id DESC LIMIT 1"
@@ -91,7 +93,6 @@ def evaluate_wix_avdv_postmortem(
     # (no fill evidence confirmed for AVDV purchase at decision time).
     # Contract invariant: MUST be labeled 'counterfactual_not_executed'
     avdv_status: Literal["counterfactual_not_executed", "realized"] = "counterfactual_not_executed"
-
 
     # 3. Formulate multi-factor attribution
     selection_analysis = (
@@ -224,10 +225,6 @@ def persist_wix_avdv_postmortem(
             (note_body, context_json_str, result.position_entry_id, now_iso, now_iso),
         )
 
-
-
     # 3. Transition tracked_companies list_type if needed
-    conn.execute(
-        "UPDATE tracked_companies SET brief_dirty = 1 WHERE ticker = 'WIX'"
-    )
+    conn.execute("UPDATE tracked_companies SET brief_dirty = 1 WHERE ticker = 'WIX'")
     return True

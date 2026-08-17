@@ -136,9 +136,9 @@ def test_persist_fpi_facts_idempotency(migrated_db: Callable[..., Path], tmp_pat
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 
-
     # Setup test document
     import hashlib
+
     doc_content = b"<html><body>test content for evidence anchoring</body></html>"
     doc_file = project_root / "data" / "historical" / "sec" / "test_wix_doc.html"
     doc_file.parent.mkdir(parents=True, exist_ok=True)
@@ -155,9 +155,8 @@ def test_persist_fpi_facts_idempotency(migrated_db: Callable[..., Path], tmp_pat
     doc_id = int(cur.lastrowid)
 
     from provenance.evidence_backfill import ensure_legacy_document_evidence
+
     ensure_legacy_document_evidence(conn, repo_root=project_root, document_id=doc_id)
-
-
 
     dt = datetime(2026, 6, 30, tzinfo=UTC)
     financial_facts = {

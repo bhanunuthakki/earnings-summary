@@ -60,7 +60,6 @@ class DecisionCondition(BaseModel):
     origin: Literal["owner", "model"] = "model"
 
 
-
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     try:
         return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -218,11 +217,9 @@ def build_decision_projection(
                 )
             )
 
-
     # Use owner conditions when explicitly populated; otherwise fall back to model conditions
     conditions = owner_conditions if owner_conditions else model_conditions
     return projection, conditions, []
-
 
 
 __all__ = [

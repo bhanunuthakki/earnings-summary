@@ -25,29 +25,52 @@ log = logging.getLogger(__name__)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Evaluate and close WIX lifecycle with AVDV alternative postmortem")
-    parser.add_argument("--force", action="store_true", help="Force overwrite of existing postmortem notes")
-    parser.add_argument("--dry-run", action="store_true", help="Evaluate without committing changes to database")
+    parser = argparse.ArgumentParser(
+        description="Evaluate and close WIX lifecycle with AVDV alternative postmortem"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Force overwrite of existing postmortem notes"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Evaluate without committing changes to database"
+    )
     args = parser.parse_args()
 
     db_path = PROJECT_ROOT / "data" / "portfolio.db"
     conn = open_db(db_path)
 
-    sys.stderr.write(json.dumps({"event": "evaluating_wix_avdv_postmortem", "force": args.force, "dry_run": args.dry_run}) + "\n")
+    sys.stderr.write(
+        json.dumps(
+            {
+                "event": "evaluating_wix_avdv_postmortem",
+                "force": args.force,
+                "dry_run": args.dry_run,
+            }
+        )
+        + "\n"
+    )
 
     try:
         result = evaluate_wix_avdv_postmortem(conn)
-        sys.stderr.write(json.dumps({
-            "event": "evaluated",
-            "ticker": result.ticker,
-            "outcome_vs_thesis": result.outcome_vs_thesis,
-            "avdv_status": result.avdv_status,
-        }) + "\n")
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "evaluated",
+                    "ticker": result.ticker,
+                    "outcome_vs_thesis": result.outcome_vs_thesis,
+                    "avdv_status": result.avdv_status,
+                }
+            )
+            + "\n"
+        )
 
         if not args.dry_run:
             persist_wix_avdv_postmortem(conn, result, force=args.force)
             conn.commit()
-            sys.stderr.write(json.dumps({"event": "persisted", "position_entry_id": result.position_entry_id}) + "\n")
+            sys.stderr.write(
+                json.dumps({"event": "persisted", "position_entry_id": result.position_entry_id})
+                + "\n"
+            )
 
         # Summary JSON to stdout
         output = {

@@ -33,12 +33,30 @@ def _create_decisions_db() -> sqlite3.Connection:
 
 def test_build_decision_projection_owner_overrides_when_populated() -> None:
     conn = _create_decisions_db()
-    owner_conds = json.dumps([
-        {"metric": "Services Gross Margin", "op": "ge", "threshold": 75.0, "unit": "percent", "for_periods": 1, "note": "Services GM stays >=75%"}
-    ])
-    model_conds = json.dumps([
-        {"metric": "iPhone Revenue", "op": "ge", "threshold": 40.0, "unit": "billions", "for_periods": 1, "note": "iPhone revenue beats $40B"}
-    ])
+    owner_conds = json.dumps(
+        [
+            {
+                "metric": "Services Gross Margin",
+                "op": "ge",
+                "threshold": 75.0,
+                "unit": "percent",
+                "for_periods": 1,
+                "note": "Services GM stays >=75%",
+            }
+        ]
+    )
+    model_conds = json.dumps(
+        [
+            {
+                "metric": "iPhone Revenue",
+                "op": "ge",
+                "threshold": 40.0,
+                "unit": "billions",
+                "for_periods": 1,
+                "note": "iPhone revenue beats $40B",
+            }
+        ]
+    )
 
     conn.execute(
         "INSERT INTO decisions (id, ticker, recommendation_kind, decided_by, conviction, size_pct, made_at, decision_conditions) "
@@ -65,12 +83,42 @@ def test_build_decision_projection_owner_overrides_when_populated() -> None:
 def test_build_decision_projection_falls_back_to_model_when_owner_conditions_empty() -> None:
     # WIX exact reproduction case: Owner Decision 135 with empty conditions, Advisor Decision 98 with 4 active conditions
     conn = _create_decisions_db()
-    model_conds = json.dumps([
-        {"metric": "Base44 ARR", "op": "lt", "threshold": 200.0, "unit": "millions", "for_periods": 1, "note": "Base44 ARR remains below $200M"},
-        {"metric": "Creative Subscriptions CC growth", "op": "lt", "threshold": 5.0, "unit": "percent", "for_periods": 1, "note": "Creative Subs CC drops below 5%"},
-        {"metric": "FCF margin", "op": "lt", "threshold": 20.0, "unit": "percent", "for_periods": 1, "note": "FCF margin guidance cut below 20%"},
-        {"metric": "Base44 ARR", "op": "lt", "threshold": 150.0, "unit": "millions", "for_periods": 1, "note": "Base44 remains below $150M"}
-    ])
+    model_conds = json.dumps(
+        [
+            {
+                "metric": "Base44 ARR",
+                "op": "lt",
+                "threshold": 200.0,
+                "unit": "millions",
+                "for_periods": 1,
+                "note": "Base44 ARR remains below $200M",
+            },
+            {
+                "metric": "Creative Subscriptions CC growth",
+                "op": "lt",
+                "threshold": 5.0,
+                "unit": "percent",
+                "for_periods": 1,
+                "note": "Creative Subs CC drops below 5%",
+            },
+            {
+                "metric": "FCF margin",
+                "op": "lt",
+                "threshold": 20.0,
+                "unit": "percent",
+                "for_periods": 1,
+                "note": "FCF margin guidance cut below 20%",
+            },
+            {
+                "metric": "Base44 ARR",
+                "op": "lt",
+                "threshold": 150.0,
+                "unit": "millions",
+                "for_periods": 1,
+                "note": "Base44 remains below $150M",
+            },
+        ]
+    )
 
     conn.execute(
         "INSERT INTO decisions (id, ticker, recommendation_kind, decided_by, conviction, size_pct, made_at, decision_conditions) "
@@ -114,4 +162,3 @@ def test_build_decision_projection_empty_when_both_empty() -> None:
 
     assert len(conditions) == 0
     assert _issues == []
-

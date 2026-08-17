@@ -55,7 +55,9 @@ def _seed_postmortem_db(conn: sqlite3.Connection) -> None:
     )
 
 
-def test_evaluate_wix_avdv_postmortem_counterfactual_invariant(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+def test_evaluate_wix_avdv_postmortem_counterfactual_invariant(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     db_path = migrated_db(tmp_path / "postmortem_eval.db")
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -81,7 +83,9 @@ def test_evaluate_wix_avdv_postmortem_counterfactual_invariant(tmp_path: Path, m
     conn.close()
 
 
-def test_persist_wix_avdv_postmortem_idempotency(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+def test_persist_wix_avdv_postmortem_idempotency(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
     db_path = migrated_db(tmp_path / "postmortem_persist.db")
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -117,7 +121,9 @@ def test_persist_wix_avdv_postmortem_idempotency(tmp_path: Path, migrated_db: Ca
     assert ok2 is True
 
     # Ensure no duplicate notes created
-    notes_after = conn.execute("SELECT * FROM analyst_notes WHERE position_entry_id = 11").fetchall()
+    notes_after = conn.execute(
+        "SELECT * FROM analyst_notes WHERE position_entry_id = 11"
+    ).fetchall()
     assert len(notes_after) == 1
 
     conn.close()

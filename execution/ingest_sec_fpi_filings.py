@@ -50,7 +50,10 @@ def main() -> int:
         "--all-fpi", action="store_true", help="Ingest all active tracked FPI companies"
     )
     parser.add_argument(
-        "--year", type=int, default=datetime.now().year, help="Target fiscal year (default: current)"
+        "--year",
+        type=int,
+        default=datetime.now().year,
+        help="Target fiscal year (default: current)",
     )
     parser.add_argument(
         "--quarter",
@@ -78,7 +81,6 @@ def main() -> int:
     db_path = PROJECT_ROOT / "data" / "portfolio.db"
     conn = open_db(db_path)
 
-
     tickers: list[str] = []
     if args.ticker:
         tickers = [args.ticker.upper()]
@@ -86,7 +88,9 @@ def main() -> int:
         tickers = list_tracked_fpis(conn)
 
     if not tickers:
-        sys.stderr.write(json.dumps({"event": "warning", "message": "No matching FPI tickers found"}) + "\n")
+        sys.stderr.write(
+            json.dumps({"event": "warning", "message": "No matching FPI tickers found"}) + "\n"
+        )
         print(json.dumps({"status": "ok", "ingested": 0, "results": []}))
         return 0
 
