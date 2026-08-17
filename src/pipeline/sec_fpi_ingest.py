@@ -31,6 +31,10 @@ from pipeline.kpi_persistence import (
     KpiValue,
     find_or_create_kpi_definition,
 )
+from pipeline.restatement_detector import (
+    insert_kpi_with_restatement_detection,
+    insert_with_restatement_detection,
+)
 from pipeline.sec_xbrl import CIK_MAP
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from sec_identity import sec_user_agent
@@ -562,33 +566,25 @@ def persist_fpi_facts(
     kpi_inserted = 0
 
     # 1. Insert financial facts
-    for line_item, (val, currency_str, _excerpt) in financial_facts.items():
-        loc = FactLocator(
-            section="consolidated_financial_statements",
-            verbatim_snippet=line_item,
+    for line_item, (val, currency_str, excerpt) in financial_facts.items():
+        loc = FactLocator(section="consolidated_financial_statements", verbatim_snippet=excerpt)
+        loc_str = loc.to_json()
+        new_id, _ = insert_with_restatement_detection(
+            conn,
+            ticker=ticker.upper(),
+            period_end=period_end,
+            fiscal_period_type=fiscal_period_type.upper(),
+            line_item=line_item,
+            value=val,
+            currency=currency_str,
+            unit="actual",
+            source_doc_id=doc_id,
+            confidence=0.98,
+            extracted_by="sec_fpi_ingest@1",
+            locator=loc_str,
         )
-        loc_str = loc.model_dump_json()
-        conn.execute(
-            """
-            INSERT INTO financial_facts
-            (ticker, period_end, fiscal_period_type, line_item, value, unit, currency,
-             source_doc_id, locator, confidence, extracted_by)
-            VALUES (?, ?, ?, ?, ?, 'actual', ?, ?, ?, 0.98, 'sec_fpi_ingest@1')
-            ON CONFLICT (ticker, period_end, fiscal_period_type, line_item, source_doc_id) DO UPDATE
-            SET value = excluded.value, locator = excluded.locator
-            """,
-            (
-                ticker.upper(),
-                period_end,
-                fiscal_period_type.upper(),
-                line_item,
-                float(val),
-                currency_str,
-                doc_id,
-                loc_str,
-            ),
-        )
-        ff_inserted += 1
+        if new_id is not None or force:
+            ff_inserted += 1
 
     # 2. Insert KPI facts using manifest
     if kpis:
@@ -601,7 +597,7 @@ def persist_fpi_facts(
                     unit=unit_enum,
                     confidence=0.95,
                     source_excerpt=excerpt,
-                    locator=FactLocator(section="press_release", verbatim_snippet=name),
+                    locator=FactLocator(section="press_release", verbatim_snippet=excerpt),
                 )
             )
 
@@ -623,29 +619,22 @@ def persist_fpi_facts(
                 ticker=ticker.upper(),
             )
 
-            conn.execute(
-                """
-                INSERT INTO kpi_facts
-                (kpi_definition_id, ticker, period_end, fiscal_period_type, value, unit,
-                 source_doc_id, locator, source_excerpt, confidence, extracted_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sec_fpi_ingest@1')
-                ON CONFLICT (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id) DO UPDATE
-                SET value = excluded.value, locator = excluded.locator, source_excerpt = excluded.source_excerpt
-                """,
-                (
-                    kpi_def_id,
-                    ticker.upper(),
-                    period_end,
-                    fiscal_period_type.upper(),
-                    float(kpv.value),
-                    kpv.unit.value,
-                    doc_id,
-                    loc_str,
-                    kpv.source_excerpt,
-                    kpv.confidence,
-                ),
+            new_kpi_id, _ = insert_kpi_with_restatement_detection(
+                conn,
+                ticker=ticker.upper(),
+                period_end=period_end,
+                fiscal_period_type=fiscal_period_type.upper(),
+                kpi_definition_id=kpi_def_id,
+                value=kpv.value,
+                unit=kpv.unit.value,
+                source_doc_id=doc_id,
+                confidence=kpv.confidence,
+                extracted_by="sec_fpi_ingest@1",
+                locator=loc_str,
+                source_excerpt=kpv.source_excerpt,
             )
-            kpi_inserted += 1
+            if new_kpi_id is not None or force:
+                kpi_inserted += 1
 
     # Force-flip tracked_companies.brief_dirty=1
     conn.execute(
