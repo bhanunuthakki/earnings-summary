@@ -55,6 +55,13 @@
   --sp-4: 16px;
   --sp-5: 24px;
   --sp-6: 32px;
+  --indent-0: 0;
+  --indent-1: 4px;
+  --indent-2: 8px;
+  --indent-3: 12px;
+  --indent-4: 16px;
+  --rail-sm: 360px;
+  --rail-lg: 400px;
   --sidebar-width: 240px;
   --sidebar-collapsed-width: 72px;
   --main-max-width: 1240px;

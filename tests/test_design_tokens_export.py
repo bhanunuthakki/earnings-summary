@@ -13,14 +13,11 @@ docs/design_system_react_port_plan.md §3.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = PROJECT_ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS))
+from scripts import gen_design_tokens
 
-import gen_design_tokens  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_generated_token_files_match_ui_tokens() -> None:
@@ -55,3 +52,31 @@ def test_generated_ts_has_no_broken_string_literals() -> None:
     ts = gen_design_tokens.render_ts()
     assert '"sans": "\'Inter\', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",' in ts
     assert '""Inter"' not in ts
+
+
+def test_generated_outputs_and_token_barrel_expose_indent_and_rail_families() -> None:
+    """Generated mirrors and the stable React import surface expose both
+    layout families independently rather than folding them into another scale."""
+    css = gen_design_tokens.render_css()
+    ts = gen_design_tokens.render_ts()
+    barrel = (PROJECT_ROOT / "design-system" / "src" / "tokens" / "index.ts").read_text(
+        encoding="utf-8"
+    )
+
+    for name, value in {
+        "indent-0": "0",
+        "indent-1": "4px",
+        "indent-4": "16px",
+        "rail-sm": "360px",
+        "rail-lg": "400px",
+    }.items():
+        assert f"--{name}: {value};" in css
+
+    assert "export const INDENT_TOKENS" in ts
+    assert "export const RAIL_TOKENS" in ts
+    assert '"indent-0": "0",' in ts
+    assert '"indent-4": "16px",' in ts
+    assert '"rail-sm": "360px",' in ts
+    assert '"rail-lg": "400px",' in ts
+    assert "  INDENT_TOKENS," in barrel
+    assert "  RAIL_TOKENS," in barrel

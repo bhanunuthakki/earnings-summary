@@ -23,9 +23,15 @@ from ui.tokens import (  # noqa: E402
     CHROME_TOKENS,
     FAVICON_LINK,
     FONT_TOKENS,
+    INDENT_TOKEN_NAMES,
+    INDENT_TOKEN_VALUES,
+    INDENT_TOKENS,
     PALETTE_DARK,
     PALETTE_LIGHT,
     PALETTE_WHITE_OVERRIDES,
+    RAIL_TOKEN_NAMES,
+    RAIL_TOKEN_VALUES,
+    RAIL_TOKENS,
     SPACING_SCALE,
     TYPE_SCALE,
     TYPE_SCALE_PX,
@@ -105,6 +111,21 @@ def test_spacing_scale_ascends() -> None:
     assert steps == sorted(steps)
 
 
+def test_indent_and_rail_tokens_are_derived_and_introspectable() -> None:
+    expected_indent = {
+        "indent-0": "0",
+        **{f"indent-{step}": SPACING_SCALE[f"sp-{step}"] for step in range(1, 5)},
+    }
+    expected_rail = {"rail-sm": "360px", "rail-lg": "400px"}
+
+    assert expected_indent == INDENT_TOKENS
+    assert expected_rail == RAIL_TOKENS
+    assert frozenset(INDENT_TOKENS) == INDENT_TOKEN_NAMES
+    assert frozenset(INDENT_TOKENS.values()) == INDENT_TOKEN_VALUES
+    assert frozenset(RAIL_TOKENS) == RAIL_TOKEN_NAMES
+    assert frozenset(RAIL_TOKENS.values()) == RAIL_TOKEN_VALUES
+
+
 def test_chrome_tokens_pin_the_one_radius_and_standard_transition() -> None:
     assert CHROME_TOKENS["radius"] == "8px"
     assert CHROME_TOKENS["radius-card"] == "10px"
@@ -117,7 +138,7 @@ def test_chrome_tokens_pin_the_one_radius_and_standard_transition() -> None:
 def test_scale_tokens_ride_along_in_both_palette_css_modes() -> None:
     for mode in ("paper", "dark"):
         root = palette_css(mode).split("}")[0]
-        for name in (*TYPE_SCALE, *SPACING_SCALE, *CHROME_TOKENS):
+        for name in (*TYPE_SCALE, *SPACING_SCALE, *INDENT_TOKENS, *RAIL_TOKENS, *CHROME_TOKENS):
             assert f"--{name}:" in root, f"--{name} missing from palette_css({mode!r}) :root"
 
 

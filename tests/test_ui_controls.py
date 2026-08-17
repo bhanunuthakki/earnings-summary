@@ -33,10 +33,20 @@ from ui.controls import (  # noqa: E402
     panel_toolbar,
     ticker_label,
 )
-from ui.tokens import (  # noqa: E402
+from ui.design_registry import (  # noqa: E402
+    BESPOKE_BUTTON_OK,
+    CCACTION_PINNED,
     CHROME_TOKENS,
+    EXEMPT,
     FONT_FAMILY_KEYWORDS,
+    FONT_SIZE_EXEMPT,
+    MONO_TABLE_ALLOWLIST,
+    PALETTE_DARK,
+    PALETTE_LIGHT,
+    QUARANTINE,
     RADIUS_PX,
+    RADIUS_SANCTIONED,
+    REGISTERED,
     TYPE_SCALE_PX,
     palette_css,
 )
@@ -67,8 +77,6 @@ def test_paper_mode_emits_light_root_plus_dark_override() -> None:
     # Both chevron inks present: light root + dark override. Derived from the
     # palette rather than spelled as literals — the literal form of this
     # assertion silently pinned the pre-2026-07-25 cool grays.
-    from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
-
     light_ink = "%23" + PALETTE_LIGHT["muted"].lstrip("#")
     dark_ink = "%23" + PALETTE_DARK["muted"].lstrip("#")
     assert light_ink in css and dark_ink in css
@@ -618,171 +626,9 @@ DIMENSIONS = (
     "transition",
 )
 
-# All CSS-emitting modules (src-relative, posix). The registry IS the contract:
-# a filesystem surface missing here — or here but gone from the filesystem —
-# fails test_every_css_surface_is_registered until reconciled.
-REGISTERED: frozenset[str] = frozenset(
-    {
-        "dashboard/_styles.py",
-        "dashboard/inbox.py",
-        "dashboard/upcoming.py",
-        "pipeline/advisor_memos_panel.py",
-        "pipeline/allocation_decisions_panel.py",
-        "pipeline/allocation_recommendation_panel.py",
-        "pipeline/analytical_dashboard_html.py",
-        "pipeline/attribution_panel.py",
-        "pipeline/calibration_scorecard_panel.py",
-        "pipeline/cc_action.py",
-        "pipeline/cc_overlay.py",
-        "pipeline/credibility_panel.py",
-        "pipeline/cron_health_panel.py",
-        "pipeline/dashboard_html.py",
-        "pipeline/data_policy_settings_panel.py",
-        "pipeline/dcf_coverage_panel.py",
-        "pipeline/dcf_globals_panel.py",
-        "pipeline/decision_journal_panel.py",
-        "pipeline/diet_panel.py",
-        "pipeline/discovery_panel.py",
-        "pipeline/etf_workup.py",
-        "pipeline/evals_panel.py",
-        "pipeline/explore_panel.py",
-        "pipeline/fact_overrides_panel.py",
-        "pipeline/ir_coverage_panel.py",
-        "pipeline/journal_panel.py",
-        "pipeline/ledger_panel.py",
-        "pipeline/mobile_inbox_panel.py",
-        "pipeline/model_eval_panel.py",
-        "pipeline/open_loops.py",
-        "pipeline/operations_panel.py",
-        "pipeline/peeks.py",
-        "pipeline/portfolio_console_panel.py",
-        "pipeline/portfolio_panel.py",
-        "pipeline/position_lifecycle_panel.py",
-        "pipeline/positioning_panel.py",
-        "pipeline/redteam_pnl_panel.py",
-        "pipeline/research_cockpit.py",
-        "pipeline/restatements_panel.py",
-        "pipeline/section_coverage_panel.py",
-        "pipeline/senior_partner_brief_panel.py",
-        "pipeline/source_calls_panel.py",
-        "pipeline/source_viewers.py",
-        "pipeline/thesis_ledger_panel.py",
-        "pipeline/ticker_command_center.py",
-        "pipeline/ticker_settings_panel.py",
-        "pipeline/triage_panel.py",
-        "pipeline/validation_issues_panel.py",
-        "pipeline/work_os_copilot.py",
-        "pipeline/work_os_shell.py",
-        "pipeline/worldview_panel.py",
-        "redteam/brief.py",
-        "report/renderers/charts_v2.py",
-        "report/renderers/workspace_charts.py",
-        "report/renderers/workspace_chat.py",
-        "report/renderers/workspace_comments.py",
-        "report/renderers/workspace_dcf.py",
-        "report/renderers/workspace_sections/chrome.py",
-        "report/renderers/workspace_sections/company.py",
-        "report/renderers/workspace_sections/thesis_risk.py",
-        "report/renderers/workspace_reader_assets.py",
-        "report/renderers/workspace_styles.py",
-        "ui/cite_marks.py",
-        "ui/controls.py",
-        "ui/living_grid.py",
-        "ui/source_chip.py",
-        "ui/tokens.py",
-        "viewspec/render.py",
-    }
-)
-
-# The two sanctioned SOURCES (design_language §1): tokens.py defines the palette
-# (the one place raw hex lives); charts_v2 owns SVG chart internals whose
-# axis/label sizes + fills are tuned to plot geometry, not the UI scale.
-EXEMPT: frozenset[str] = frozenset({"ui/tokens.py", "report/renderers/charts_v2.py"})
-
-# All application and in-app report surfaces now share the same visible type
-# scale and radius contracts. Fully exempt token/chart sources remain above.
-_FONT_SIZE_EXEMPT: frozenset[str] = frozenset()
-_RADIUS_SANCTIONED: dict[str, frozenset[str]] = {}
-
-# Known pre-existing drift, per (surface, dimension), each with its owner. The
-# quarantine can only SHRINK (test_quarantine_only_shrinks). Seeded empirically
-# from the scanner — NOT hand-curated, so it is the true current state.
-QUARANTINE: dict[str, frozenset[str]] = {
-    # --- provenance / evals / sources / coverage console — S10 owns these.
-    #     S10 rebuilds them onto prov_row/prov_drawer this wave; S7 left them
-    #     quarantined rather than race that rebuild. The S7 mechanical sweep
-    #     graduated the dashboard / cockpit / pipeline long-tail (_styles,
-    #     upcoming, analytical_dashboard_html, ask_dock, dashboard_html,
-    #     explore_panel, portfolio_panel, research_cockpit, ticker_command_center,
-    #     workspace_sections/chrome) — those came off this map. ---
-    # --- cron_health / dcf_coverage / ir_coverage / restatements / source_calls /
-    #     source_viewers graduated in the design-language conformance sweep
-    #     (2026-06-14): their off-scale 2/3/4/9px corners were snapped to
-    #     var(--radius) (boxes/inline code) or var(--radius-full) (dots / pill
-    #     badges), so the 'radius' dimension is now clean on each. ---
-    # validation_issues_panel graduated in the S10 resolve-wiring pass: its lone
-    # off-scale 4px (.vi-note code) moved to var(--radius) when the detail rows
-    # were rebuilt onto prov_row. Now fully token-clean.
-    # evals_panel graduated in the S10 evals-drawer pass: its failed-case drawer
-    # moved onto prov_drawer/prov_case and its score/mode pills onto .k-pill, so
-    # the off-scale ev-pill/ev-score-*/ev-mode-* colors + radii + font-sizes were
-    # deleted; the surviving run-bar / log / vchip CSS went onto the type/radius
-    # tokens. All three dimensions (color/font-size/radius) now clean.
-    # (pipeline/command_center_shell.py graduated in S1 PR2 — the shell namespace
-    #  unfork; the dashboard / cockpit long-tail graduated in the S7 sweep —
-    #  legacy-alias fallbacks, the .calib-fill gradient, the .cockpit-badge tone
-    #  wells, 20px close glyphs and 2-4px radii all fixed onto tokens / color-mix.)
-    # --- the report iframe / editorial surfaces — serialized S4 → S2-report-
-    #     wiring → S10-PR2. The legacy-alias :root that chat / comments / charts /
-    #     cite_marks consume is defined in workspace_styles; unforking it is one
-    #     coupled change in that chain, not an independent S7 file-sweep. ---
-    "report/renderers/workspace_charts.py": frozenset({"radius"}),
-    # workspace_chat / workspace_comments / workspace_styles graduated their
-    # font-family dimension when the legacy --font-* alias layer was unforked onto
-    # the canonical --sans/--serif/--mono tokens (every font-family decl now reads
-    # a real token).
-    # workspace_chat's lone off-scale 3px code corner moved to var(--radius) in
-    # the 2026-06-14 sweep; its 20px close glyph joined the compact display step.
-    # UX audit (2026-07-18): workspace_chat / workspace_comments / workspace_styles
-    # / ui/cite_marks graduated their `alias` dimension — the shared legacy
-    # --panel/--panel-alt/--ink/--ink-muted/--bg-elev/--link :root block in
-    # workspace_styles was deleted and every consumer repointed at the canonical
-    # tokens (--surface/--paper/--fg/--muted/--accent). Same pass graduated
-    # `color` on workspace_chat / workspace_comments / cite_marks: their raw
-    # rgba() drop-shadows/washes moved onto var(--shadow-pop) / color-mix(var(--fg) …).
-    # workspace_comments graduated its kit-badge dimension in the deferred-items
-    # pass: .cmt-outbox-badge / .cmt-health-pill now ride the kit's .k-pill (tone
-    # set in JS) with layout/mono-micro refine only. Its 20px close glyph joined
-    # the compact display step; radius stays quarantined (report unfork).
-    "report/renderers/workspace_comments.py": frozenset({"radius"}),
-    # workspace_styles graduated its kit-badge dimension in the same pass: the
-    # .decision-badge.outcome-* filled chips moved onto .k-pill + tone (routed in
-    # thesis_risk.py). Report-spacing-rhythm pass (2026-08-02): `color`
-    # graduated too — the last two raw literals (`.twk-seg button.active` /
-    # `.twk-toggle::after` box-shadows, `rgba(0,0,0,.06)` / `rgba(0,0,0,.25)`)
-    # moved onto `color-mix(in srgb, var(--scrim) N%, transparent)`, an exact
-    # reproduction since `--scrim` is `rgba(0,0,0,0.5)` in both palettes; and
-    # the four `border-radius: 999px` literals moved onto `var(--radius-full)`
-    # (the token that value already resolves to). `radius` stays quarantined:
-    # three small marks (`.legend-swatch` 2px, `.seg-bar` 2px, `.scenario-bar-
-    # price` 1px) need a genuinely new sanctioned micro-radius, not a fix —
-    # `var(--radius)` (8px) would over-round elements that small. Flagged as a
-    # separate follow-up, not attempted here.
-    "report/renderers/workspace_styles.py": frozenset({"radius"}),
-    # cite_marks graduated `alias` in the same 2026-07-18 sweep (its --panel/--ink/
-    # --link fallback chains repointed at the canonical tokens as sole values).
-    # color/radius stay quarantined: its `var(--radius, 6px)` / `var(--shadow-pop,
-    # 0 8px 24px rgba(...))` literal fallbacks (defensive — this CSS may render on
-    # a minimal-token host with no --radius/--shadow-pop defined) still read as a
-    # raw 6px radius / raw rgba to the scanner; pre-existing, not touched here.
-    "ui/cite_marks.py": frozenset({"color", "radius"}),
-    # --- kit-badge (the 2026-06-15 component dimension): all seeded surfaces have
-    #     now GRADUATED onto .k-pill — the command-center two (allocation .ad-pill,
-    #     position_lifecycle .plc-pill) and the report two (workspace_comments
-    #     .cmt-* / workspace_styles .decision-badge) in the deferred-items pass.
-    #     No surface carries a kit-badge quarantine: a NEW reinvented filled status
-    #     badge in ANY surface now fails CI immediately. ---
-}
+# Every scanner input below comes from the typed, immutable design registry.
+# This file owns detection logic only; adding or approving vocabulary here is
+# forbidden by tests/test_design_registry.py.
 
 _STRING_TOKENS = frozenset({_token.STRING})
 _SKIP_TOKENS = frozenset(
@@ -857,12 +703,12 @@ def scan_surface(rel: str, text: str) -> dict[str, list[str]]:
     if colors:
         found["color"] = sorted(colors)
 
-    if rel not in _FONT_SIZE_EXEMPT:
+    if rel not in FONT_SIZE_EXEMPT:
         sizes = [m for m in _FONT_SIZE.findall(text) if m not in TYPE_SCALE_PX]
         if sizes:
             found["font-size"] = sorted(set(sizes))
 
-    ok_radii = RADIUS_PX | _RADIUS_SANCTIONED.get(rel, frozenset())
+    ok_radii = RADIUS_PX | RADIUS_SANCTIONED.get(rel, frozenset())
     radii = [
         px for val in _RADIUS_DECL.findall(text) for px in _PX.findall(val) if px not in ok_radii
     ]
@@ -1047,45 +893,7 @@ _BUTTON_TAG = re.compile(r"<button\b[^>]*>", re.IGNORECASE)
 _CLASS_ATTR = re.compile(r'class="([^"]*)"')
 #: A button is kit-composed if any of its classes is one of these.
 _KIT_BUTTON = frozenset({"k-btn", "k-chip"})
-#: Sanctioned + grandfathered bespoke button classes — the QUARANTINE analogue
-#: for §4 buttons (seeded from the current emitted set). Close glyphs (§3), tabs,
-#: the icon theme-toggle / ⌘K launcher, and the §4.1 doorway are sanctioned
-#: bespoke controls; the rest are grandfathered current-state to migrate
-#: opportunistically. The check's job is to stop NET-NEW reinvented buttons — a
-#: button whose class is none of these and not kit fails.
-_BESPOKE_BUTTON_OK = frozenset(
-    {
-        # close-glyph dismiss buttons (§3): drawers / peeks / palette / chat / comments
-        "cc-drawer-close",
-        "tcc-drawer-close",
-        "cc-peek-close",
-        "cc-palette-close",
-        "tri-d-close",
-        "chat-close",
-        "cmt-close",
-        # the Ask DIY-builder popover close glyph (explore_panel.py) — was
-        # classless chrome on `.ask-pop-head button` until the guard-extension
-        # wave gave it a named class matching this same close-glyph family.
-        "ask-pop-close",
-        # icon-only launcher + theme toggle (§4 specialized-control carve-out)
-        "cc-palette-btn",
-        "cc-theme-toggle",
-        # bespoke tab control
-        "cc-tab",
-        # the doorway: a datum rendered as a label that opens Ask (§4.1)
-        "fact-doorway",
-        # the earnings-prep memo's watch-item doorway (Wave 2): the owner's own
-        # note text rendered as a line that opens Ask — same §4.1 shape as
-        # fact-doorway / up-watch-item, not a skinned button.
-        "prep-ask",
-        # specialized Ask-dock control cluster
-        "ask-dock-ctl",
-        # grandfathered bespoke interactive rows / text buttons (migrate later)
-        "up-watch-item",
-        "tri-text",
-        "dq-peek",
-    }
-)
+# Bespoke approvals are typed registry data; this scanner only consumes them.
 
 
 def _emitted_button_classes(text: str) -> list[set[str]]:
@@ -1112,7 +920,7 @@ def test_buttons_compose_the_kit() -> None:
     offenders: dict[str, list[str]] = {}
     for path in sorted(SRC.rglob("*.py")):
         for classes in _emitted_button_classes(path.read_text(encoding="utf-8")):
-            if classes & _KIT_BUTTON or classes & _BESPOKE_BUTTON_OK:
+            if classes & _KIT_BUTTON or classes & BESPOKE_BUTTON_OK:
                 continue
             offenders.setdefault(path.relative_to(SRC).as_posix(), []).append(
                 " ".join(sorted(classes))
@@ -1130,9 +938,9 @@ def test_button_coverage_fires_on_reinvention() -> None:
     + allowlisted ones, and ignores dynamic / classless buttons."""
     freehand = _emitted_button_classes('<button class="my-save-btn" type="button">Save</button>')
     assert freehand == [{"my-save-btn"}]
-    assert not (freehand[0] & _KIT_BUTTON or freehand[0] & _BESPOKE_BUTTON_OK)  # → flagged
+    assert not (freehand[0] & _KIT_BUTTON or freehand[0] & BESPOKE_BUTTON_OK)  # → flagged
     assert _emitted_button_classes('<button class="k-btn k-btn-quiet">x</button>')[0] & _KIT_BUTTON
-    assert _emitted_button_classes('<button class="cc-tab">x</button>')[0] & _BESPOKE_BUTTON_OK
+    assert _emitted_button_classes('<button class="cc-tab">x</button>')[0] & BESPOKE_BUTTON_OK
     assert _emitted_button_classes('<button class="{cls}">x</button>') == []  # dynamic → skipped
     assert _emitted_button_classes("<button type='button'>x</button>") == []  # classless → skipped
 
@@ -1213,9 +1021,8 @@ def test_workspace_local_css_standardizes_primitives() -> None:
     """The report's local CSS uses shared color, type, and control primitives."""
     from report.renderers.workspace_styles import CSS as WS_CSS
     from ui.controls import controls_css as _ccss
-    from ui.tokens import palette_css as _pcss
 
-    local = WS_CSS.replace(_pcss("paper"), "").replace(_ccss("paper"), "")
+    local = WS_CSS.replace(palette_css("paper"), "").replace(_ccss("paper"), "")
     assert not _RAW_HEX.search(local), f"raw hex in workspace local CSS: {_RAW_HEX.findall(local)}"
     assert "rgba(" not in local.replace("rgba(0,0,0", "").replace("rgba(0, 0, 0", ""), (
         "non-neutral rgba wash in workspace local CSS"
@@ -1309,7 +1116,6 @@ def test_glyph_ink_tracks_the_palette() -> None:
     palette says today must be the ink in today's glyph, and the stale cool
     values must be gone from the rendered CSS.
     """
-    from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
 
     def enc(value: str) -> str:
         return "%23" + value.lstrip("#")
@@ -1620,12 +1426,8 @@ def test_overlay_head_classless_button_check_fires_on_known_violation() -> None:
 # ".sv-stmt-table" fires, ".sv-stmt-table td" and ".vx-matrix" (no "table" in
 # the name) do not.
 _BARE_TABLE_SELECTOR = re.compile(r"^\.[\w-]*table[\w-]*$")
-# .pfc-table (portfolio_panel.py ~1564, the pairwise correlation matrix) is a
-# DOCUMENTED deliberate keep: its headers ARE tickers, not prose labels, so
-# whole-table mono is the correct read there, not label/header drift. There
-# is no class literally named ".matrix" anywhere in the tree — don't allowlist
-# a name that doesn't exist.
-_MONO_TABLE_ALLOWLIST: frozenset[str] = frozenset({".pfc-table"})
+# Deliberate whole-table mono approvals are typed registry data; the selector
+# scanner remains here.
 
 
 def _whole_table_mono_selectors(text: str) -> list[str]:
@@ -1642,7 +1444,7 @@ def _whole_table_mono_selectors(text: str) -> list[str]:
             continue
         for sel in _split_top_commas(head):
             sel = sel.strip()
-            if sel in _MONO_TABLE_ALLOWLIST:
+            if sel in MONO_TABLE_ALLOWLIST:
                 continue
             if _BARE_TABLE_SELECTOR.match(sel):
                 offenders.append(sel)
@@ -1704,41 +1506,8 @@ def test_whole_table_mono_check_fires_on_known_violation() -> None:
 # i.e. a conformant surface silently regressed to the pre-#1092 pattern.
 # ---------------------------------------------------------------------------
 
-# Pinned via `grep -rl "CCAction.busy" src` at the time this ratchet was
-# added. Growing this set (a NEW adopter) is always fine and expected over
-# time; the ratchet only ever tightens by CI failing a member that vanishes.
-_CCACTION_PINNED: frozenset[str] = frozenset(
-    {
-        "dashboard/inbox.py",
-        "pipeline/advisor_memos_panel.py",
-        "pipeline/allocation_decisions_panel.py",
-        "pipeline/allocation_recommendation_panel.py",
-        "pipeline/cc_action.py",
-        "pipeline/dcf_globals_panel.py",
-        "pipeline/decision_journal_panel.py",
-        "pipeline/diet_panel.py",
-        "pipeline/discovery_panel.py",
-        "pipeline/evals_panel.py",
-        "pipeline/explore_panel.py",
-        "pipeline/journal_panel.py",
-        "pipeline/ledger_panel.py",
-        "pipeline/mobile_inbox_panel.py",
-        "pipeline/peeks.py",
-        "pipeline/portfolio_panel.py",
-        "pipeline/position_lifecycle_panel.py",
-        "pipeline/positioning_panel.py",
-        "pipeline/ticker_command_center.py",
-        "pipeline/ticker_settings_panel.py",
-        "pipeline/triage_panel.py",
-        "pipeline/validation_issues_panel.py",
-        "pipeline/worldview_panel.py",
-        "redteam/brief.py",
-        "report/renderers/workspace_comments.py",
-        "report/renderers/workspace_dcf.py",
-        "report/renderers/workspace_decision_card.py",
-        "ui/controls.py",
-    }
-)
+# Pinned adopters are typed registry data. Growing that floor remains allowed;
+# the scanner below still fails only when a pinned member regresses.
 
 
 def _ccaction_regressions(pinned: frozenset[str], read_text: Callable[[str], str]) -> list[str]:
@@ -1755,7 +1524,7 @@ def test_ccaction_adopters_do_not_regress() -> None:
     ``CCAction.busy`` references. Passes today (the pinned set is exactly
     today's adopters); it exists to catch tomorrow's regression."""
     offenders = _ccaction_regressions(
-        _CCACTION_PINNED, lambda rel: (SRC / rel).read_text(encoding="utf-8")
+        CCACTION_PINNED, lambda rel: (SRC / rel).read_text(encoding="utf-8")
     )
     assert not offenders, (
         "CCAction adopter(s) regressed to zero CCAction.busy references — restore "
