@@ -243,7 +243,7 @@ def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:
     assert client.get("/api/cron-health").status_code == 404
 
 
-def test_dashboard_page_returns_shell(client):
+def test_dashboard_page_returns_shell(client: FlaskClient) -> None:
     """GET / serves the eight-screen Work OS while panel APIs stay live."""
     resp = client.get("/")
     assert resp.status_code == 200
