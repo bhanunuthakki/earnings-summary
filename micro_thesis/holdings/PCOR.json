@@ -1,0 +1,262 @@
+{
+  "ticker": "PCOR",
+  "name": "Procore Technologies, Inc.",
+  "last_updated": "2026-08-16",
+  "thesis": "Procore is the market-leading construction management platform, uniquely positioned to capture complex infrastructure and data center construction (serving 9 of the 10 largest North American data center sites and mega-projects like King Salman International Airport). The thesis seeds emphasize the transformative acquisition of DroneDeploy, bringing 20 trillion square feet of visual reality data, autonomous drone workflows, and AI digital coworkers capable of automated fault detection and site quality verification. However, an independent thesis must evaluate critical vulnerabilities: US commercial and residential construction remains cyclically depressed under higher interest rates, creating headwinds for Gross Volume of Construction (GVC) contract expansions. Additionally, heavy spatial AI data processing carries high infrastructure/inference costs, and enterprise sales cycles in construction remain protracted. PCOR is placed on the evaluation list to monitor DroneDeploy integration, AI coworker monetization, and FCF compounding through the construction cycle.",
+  "verdict": "Evaluating",
+  "verdict_color": "blue",
+  "key_driver": "DroneDeploy spatial AI & reality capture cross-sell + data center construction wins vs commercial GVC contraction",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "FCF Margin (GAAP)",
+    "cRPO Growth"
+  ],
+  "_status": null,
+  "tier_1_kpis": [
+    {
+      "name": "Subscription Revenue YoY Growth",
+      "current": "~14-16% YoY (LTM)",
+      "prior": "18%",
+      "yoy": "Modest deceleration amid commercial construction softening",
+      "status": "On track",
+      "break_condition": "<11% YoY for 2 consecutive quarters",
+      "source": "quarterly earnings release"
+    },
+    {
+      "name": "Current Remaining Performance Obligations (cRPO) Growth",
+      "current": "~15-17% YoY",
+      "prior": null,
+      "yoy": "Leading indicator for subscription revenue",
+      "status": "On track",
+      "break_condition": "<10% YoY for 2 consecutive quarters",
+      "source": "10-Q / earnings presentation"
+    },
+    {
+      "name": "Non-GAAP Operating Margin",
+      "current": "~14-17% (2025/2026E)",
+      "prior": "11%",
+      "yoy": "+300-400 bps expansion",
+      "status": "On track",
+      "break_condition": "<10% for 2 consecutive quarters",
+      "source": "quarterly earnings release"
+    },
+    {
+      "name": "Free Cash Flow Margin",
+      "current": "~18-20% (FY25/26E)",
+      "prior": "11% (FY24)",
+      "yoy": "Strong expansion ($147M -> $237M -> $294M+)",
+      "status": "On track",
+      "break_condition": "<10% for 2 consecutive quarters",
+      "source": "cash flow statements"
+    },
+    {
+      "name": "Rule of 40 (FCF Margin + Revenue Growth)",
+      "current": "~33-36%",
+      "prior": "27%",
+      "yoy": "Approaching 40% threshold as cash conversion scales",
+      "status": "On track",
+      "break_condition": "<25% for 2 consecutive quarters",
+      "source": "derived from financial results"
+    },
+    {
+      "name": "Net Revenue Retention",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "below 1.10 for 2 consecutive quarters",
+      "source": "ir_doc",
+      "aliases": [
+        "NDR",
+        "Net Retention",
+        "Dollar-Based Net Retention",
+        "DBNR",
+        "DBNRR"
+      ],
+      "unit_kind": "pct"
+    },
+    {
+      "name": "Gross Revenue Retention",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "below 0.90 for 2 consecutive quarters",
+      "source": "ir_doc",
+      "aliases": [
+        "GRR",
+        "Gross Retention"
+      ],
+      "unit_kind": "pct"
+    },
+    {
+      "name": "Magic Number",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "below 0.5 for 2 consecutive quarters",
+      "source": "derived",
+      "aliases": [
+        "S&M Magic Number",
+        "Sales Efficiency"
+      ],
+      "unit_kind": "ratio"
+    },
+    {
+      "name": "CAC Payback Period",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "above 36 months for 2 consecutive quarters",
+      "source": "derived",
+      "aliases": [
+        "Payback Period",
+        "CAC Payback",
+        "Months to Payback"
+      ],
+      "unit_kind": "months"
+    },
+    {
+      "name": "Remaining Performance Obligations",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "RPO YoY growth turns negative",
+      "source": "10q",
+      "aliases": [
+        "RPO",
+        "cRPO",
+        "Current RPO",
+        "Backlog"
+      ],
+      "unit_kind": "usd"
+    },
+    {
+      "name": "Gross Margin (Non-GAAP)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "below 0.70 for 2 consecutive quarters",
+      "source": "earnings_release",
+      "aliases": [
+        "Non-GAAP Gross Margin",
+        "Adjusted Gross Margin"
+      ],
+      "unit_kind": "pct"
+    },
+    {
+      "name": "Rule of 40",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "below 0.40 for 2 consecutive quarters",
+      "source": "derived",
+      "aliases": [
+        "Rule-of-40",
+        "R40"
+      ],
+      "unit_kind": "pct"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "DroneDeploy Cross-Sell Attach & Customer Overlap",
+      "current": "~600 mutual enterprise customers, expanding into Procore base",
+      "source": "earnings call / investor deck"
+    },
+    {
+      "name": "Net Retention Rate (NRR)",
+      "current": "105-110%",
+      "source": "quarterly shareholder letter"
+    },
+    {
+      "name": "Stock-Based Compensation as % of Revenue",
+      "current": "~15-18% (declining trajectory)",
+      "source": "GAAP reconciliation"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "International Revenue Contribution",
+      "source": "geographic segment disclosures"
+    },
+    {
+      "name": "Data Center & Infrastructure GVC Contribution",
+      "source": "management commentary"
+    }
+  ],
+  "competitive_watchlist": [
+    "Autodesk Construction Cloud (ADSK)",
+    "Trimble (TRMB)",
+    "Bentley Systems (BSY)",
+    "Oracle Construction and Engineering (ORCL)"
+  ],
+  "thesis_breakers_qualitative": [
+    "Gross Volume of Construction (GVC) under management contracts sharply due to widespread US commercial project cancellations",
+    "Autodesk Construction Cloud offers bundled discounted drone reality capture that prevents DroneDeploy cross-sell pricing",
+    "DroneDeploy post-merger integration experiences high customer churn or key AI engineering departures",
+    "Heavy compute/inference costs for 3D point-cloud processing permanently impair SaaS gross margins below 75%",
+    "GAAP operating profitability fails to inflect due to persistent stock-based compensation dilution"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "procore_subscription_deceleration",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue growth below 10% indicates severe construction industry slowdown or market saturation."
+    },
+    {
+      "rule_id": "procore_fcf_margin_deterioration",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 8,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin falling below 8% breaks the operating leverage and cash compounding thesis."
+    }
+  ],
+  "break_rules_soft": [
+    {
+      "name": "procore_rule_of_40_warning",
+      "predicate": {
+        "type": "series_below",
+        "params": {
+          "metric": "Rule of 40",
+          "source": "kpi",
+          "threshold": 25,
+          "periods": 2
+        }
+      },
+      "evidence_template": "Rule of 40 {last_value}% below 25% for {periods}Q -- growth deceleration or margin compression"
+    }
+  ],
+  "schema_version": 2,
+  "wacc": 0.095,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 22.0
+  },
+  "segments": [
+    "Subscription Services",
+    "Professional Services & Other"
+  ],
+  "operational_kpis": [
+    "cRPO YoY Growth",
+    "Net Retention Rate",
+    "FCF Margin",
+    "DroneDeploy Attach Rate"
+  ],
+  "industry_template": "software_saas",
+  "industry_template_display": "Software / SaaS"
+}
