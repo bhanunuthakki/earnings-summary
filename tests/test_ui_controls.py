@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import re
 import sys
-import token as _token
-import tokenize
 from collections.abc import Callable
 from pathlib import Path
 
@@ -25,6 +23,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+from ui.conformance_scan import (  # noqa: E402
+    DIMENSIONS,
+    discover_surfaces,
+    scan_surface,
+    scan_surface_evidence,
+    split_top_commas,
+    strip_css_comments,
+)
+from ui.conformance_scan import (  # noqa: E402
+    css_text as _css_text,
+)
 from ui.controls import (  # noqa: E402
     controls_css,
     icon_svg,
@@ -38,16 +47,11 @@ from ui.design_registry import (  # noqa: E402
     CCACTION_PINNED,
     CHROME_TOKENS,
     EXEMPT,
-    FONT_FAMILY_KEYWORDS,
-    FONT_SIZE_EXEMPT,
     MONO_TABLE_ALLOWLIST,
     PALETTE_DARK,
     PALETTE_LIGHT,
     QUARANTINE,
-    RADIUS_PX,
-    RADIUS_SANCTIONED,
     REGISTERED,
-    TYPE_SCALE_PX,
     palette_css,
 )
 
@@ -535,7 +539,10 @@ def test_k_empty_escapes_the_line_but_not_the_chip() -> None:
 # token reference every surface stylesheet uses). That is exactly the ~41
 # modules; the registry below must equal what the filesystem yields.
 #
-# Dimensions denied (design_language §2/§3):
+# The shared scanner owns all denied dimensions (design_language §2/§3),
+# including the four registry-backed composition checks added by BHA-90:
+# floating-card-title, off-scale-indent, unsanctioned-shape-geometry, and
+# off-scale-grid-column. The existing token dimensions remain unchanged:
 #   color       raw hex — incl. ``var(--x, #hex)`` fallbacks AND hex inside
 #               ``linear-gradient(...)`` (a literal # anywhere that isn't an
 #               href fragment or %23-encoded data-URI)
@@ -565,197 +572,9 @@ def test_k_empty_escapes_the_line_but_not_the_chip() -> None:
 #     the last surface graduates, forcing this scaffolding to be removed.
 # ===========================================================================
 
-# href-safe raw hex: a literal # + 3-8 hex digits, NOT preceded by a word char
-# (so "&#8364;" entities and "var(--x" don't trip it), NOT preceded by a quote
-# (so href="#dcf" anchor fragments don't read as colors), NOT preceded by % (the
-# %23-encoded chevron data-URIs). Catches gradient-internal and var-fallback hex.
-_RAW_HEX = re.compile(r"""(?<![\w&%"'])#[0-9a-fA-F]{3,8}(?![0-9a-fA-F])""")
-_FONT_SIZE = re.compile(r"font-size:\s*([0-9.]+px)")
-_RADIUS_DECL = re.compile(r"border-radius:\s*([^;}]+)")
-_PX = re.compile(r"([0-9.]+px)")
-_FONT_FAMILY = re.compile(r"font-family:\s*([^;}]+)")
-_FONT_TOKEN = re.compile(r"^var\(\s*--(?:sans|serif|mono)\b")
-# Legacy alias var-names (longest alternatives first so --ink doesn't shadow
-# --ink-muted); the negative lookahead keeps --ink out of --ink-muted etc.
-_ALIAS = re.compile(
-    r"--(?:panel-alt|panel|bg-card|bg-elev|row-hover|ink-muted|ink|fg-muted|link"
-    r"|font-serif|font-mono|font-body)(?![\w-])"
-)
-# Raw FUNCTION-form colors — rgb()/rgba()/hsl()/hsla(). The hex regex above is
-# blind to these, which is exactly how every freehand drop-shadow, status wash,
-# and white-wash hover slipped past the color guard across the whole dashboard
-# (only the workspace had a bespoke rgba check). They fold into the "color"
-# dimension: a surface composes --scrim / --shadow-pop / color-mix(var(--token)),
-# never a raw rgba. The (?<![a-z]) lookbehind keeps the "rgb" inside
-# "color-mix(in srgb, …)" from matching. tokens.py + charts_v2 stay EXEMPT.
-_FUNC_COLOR = re.compile(r"(?<![a-z])(?:rgba?|hsla?)\([^)]*\)", re.IGNORECASE)
-# Off-scale font WEIGHT: the kit/scale tops out at 600. 700/800/900/bold is the
-# "heavier than the system" drift (design_language §1; the dominant non-guarded
-# drift this enforcement closes).
-_FONT_WEIGHT = re.compile(r"font-weight:\s*(bold|[789]00)\b")
-# transition: all is forbidden — explicit properties only (design_language §3).
-_TRANSITION_ALL = re.compile(r"transition:\s*all\b")
-
-# --- COMPONENT drift the five TOKEN dimensions above are BLIND to
-# (design_language §4): a surface that hand-rolls a FILLED STATUS BADGE — a
-# selector the author NAMED a pill / badge / chip / tag, given an ok/warn/bad
-# ``color-mix`` fill — instead of the kit's ``.k-pill``. ok/warn/bad are STATUS
-# (never category, decoration, or unread), so the signal is unambiguous: it
-# excludes tone WASHES (named differently — .chat-role, .cmt-pin, row tints),
-# ACCENT unread/count marks (.ix-badge), and the §2 report CATEGORY tags
-# (.qa-tag/.ir-type/.oi-kind — accent, not ok/warn/bad). And it catches the
-# base+modifier pill pattern (e.g. ``.x-pill { radius-full } .x-pill.bad
-# { color-mix fill }``) because the SELECTOR NAME, not the fill rule, carries the
-# badge intent. The token guard passed every reinvented pill this whole sweep
-# removed — this is the dimension that finally fails them. ``.k-pill`` /
-# ``.k-chip`` / ``.k-well`` are the kit and are excluded (``.p-pill`` was folded
-# into ``.k-pill`` — design-sync 2026-07-19). ---
-_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-_NAMED_BADGE = re.compile(r"[.#][\w-]*(?:pill|badge|chip|tag)\b", re.IGNORECASE)
-_KIT_BADGE = re.compile(r"\b(?:k-pill|k-chip|k-well)\b")
-_STATUS_FILL = re.compile(r"background(?:-color)?:\s*color-mix\(in srgb, var\(--(?:ok|warn|bad)\)")
-
-DIMENSIONS = (
-    "color",
-    "font-size",
-    "radius",
-    "font-family",
-    "alias",
-    "kit-badge",
-    "font-weight",
-    "transition",
-)
-
-# Every scanner input below comes from the typed, immutable design registry.
-# This file owns detection logic only; adding or approving vocabulary here is
-# forbidden by tests/test_design_registry.py.
-
-_STRING_TOKENS = frozenset({_token.STRING})
-_SKIP_TOKENS = frozenset(
-    {_token.NL, _token.INDENT, _token.DEDENT, _token.COMMENT, _token.ENCODING, _token.ENDMARKER}
-)
-
-
-def _css_text(path: Path) -> str:
-    """A module's CSS payload: the contents of its value string-literals,
-    EXCLUDING comments and bare-statement docstrings (so prose like "PR #424"
-    never reads as a hex color). Both ``X_CSS = "…"`` constants and inline
-    ``style="…"`` attributes inside HTML f-strings are captured; comments and
-    module/class/function docstrings are not."""
-    out: list[str] = []
-    depth = 0
-    line_start = True  # at the start of a logical line, paren depth 0 → docstring
-    with open(path, "rb") as fh:
-        try:
-            for tok in tokenize.tokenize(fh.readline):
-                ttype, tstr = tok.type, tok.string
-                if ttype == _token.OP:
-                    if tstr in "([{":
-                        depth += 1
-                    elif tstr in ")]}":
-                        depth = max(0, depth - 1)
-                if ttype == _token.NEWLINE:
-                    line_start = True
-                    continue
-                if ttype in _SKIP_TOKENS:
-                    continue
-                is_fstring = tokenize.tok_name.get(ttype, "").startswith("FSTRING")
-                if ttype in _STRING_TOKENS and line_start and depth == 0:
-                    line_start = False  # a bare string statement → a docstring → skip
-                    continue
-                if ttype in _STRING_TOKENS or is_fstring:
-                    out.append(tstr)
-                line_start = False
-        except tokenize.TokenError:
-            pass
-    return "\n".join(out)
-
-
-def _split_top_commas(value: str) -> list[str]:
-    """Split a CSS value on top-level commas only — commas inside ``var(...)``
-    stay put, so ``var(--mono, monospace)`` is ONE family, not two tokens."""
-    parts: list[str] = []
-    depth = 0
-    cur: list[str] = []
-    for ch in value:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        if ch == "," and depth == 0:
-            parts.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-    parts.append("".join(cur))
-    return [p.strip() for p in parts if p.strip()]
-
-
-def scan_surface(rel: str, text: str) -> dict[str, list[str]]:
-    """Token-conformance violations of one surface's CSS text, keyed by
-    dimension. Applies the §1 per-surface exemptions. Pure function — the tests
-    decide what to do with the result (enforce / ratchet)."""
-    if rel in EXEMPT:
-        return {}
-    found: dict[str, list[str]] = {}
-
-    colors = set(_RAW_HEX.findall(text)) | set(_FUNC_COLOR.findall(text))
-    if colors:
-        found["color"] = sorted(colors)
-
-    if rel not in FONT_SIZE_EXEMPT:
-        sizes = [m for m in _FONT_SIZE.findall(text) if m not in TYPE_SCALE_PX]
-        if sizes:
-            found["font-size"] = sorted(set(sizes))
-
-    ok_radii = RADIUS_PX | RADIUS_SANCTIONED.get(rel, frozenset())
-    radii = [
-        px for val in _RADIUS_DECL.findall(text) for px in _PX.findall(val) if px not in ok_radii
-    ]
-    if radii:
-        found["radius"] = sorted(set(radii))
-
-    families: list[str] = []
-    for val in _FONT_FAMILY.findall(text):
-        for part in _split_top_commas(val):
-            if part in FONT_FAMILY_KEYWORDS or _FONT_TOKEN.match(part):
-                continue
-            families.append(part)
-    if families:
-        found["font-family"] = sorted(set(families))
-
-    aliases = sorted({m.group(0) for m in _ALIAS.finditer(text)})
-    if aliases:
-        found["alias"] = aliases
-
-    # Component drift: a reinvented filled status badge (see the regexes above).
-    # CSS comments are stripped first so a /* … */ aside never reads as a rule.
-    badges: list[str] = []
-    for rule in re.split(r"(?<=})\s*", _CSS_COMMENT.sub("", text)):
-        head, _, body = rule.partition("{")
-        named = _NAMED_BADGE.search(head)
-        if named and not _KIT_BADGE.search(head) and _STATUS_FILL.search(body):
-            badges.append(named.group(0))
-    if badges:
-        found["kit-badge"] = sorted(set(badges))
-
-    weights = _FONT_WEIGHT.findall(text)
-    if weights:
-        found["font-weight"] = sorted(set(weights))
-
-    if _TRANSITION_ALL.search(text):
-        found["transition"] = ["all"]
-
-    return found
-
-
-def _discovered_surfaces() -> set[str]:
-    """Every CSS-emitting module under src/, by the ``var(--`` signal."""
-    return {
-        p.relative_to(SRC).as_posix()
-        for p in SRC.rglob("*.py")
-        if "var(--" in p.read_text(encoding="utf-8")
-    }
+# Every scanner input comes from the typed, immutable design registry. Detection
+# lives in ui.conformance_scan; adding or approving vocabulary here is forbidden
+# by tests/test_design_registry.py.
 
 
 def test_every_css_surface_is_registered() -> None:
@@ -763,7 +582,7 @@ def test_every_css_surface_is_registered() -> None:
     surface set. A new CSS-emitting module that no one classified — or a removed
     one still listed — fails here until reconciled with REGISTERED + (EXEMPT |
     QUARANTINE | clean)."""
-    discovered = _discovered_surfaces()
+    discovered = discover_surfaces(SRC)
     new_unregistered = discovered - REGISTERED
     stale_registered = REGISTERED - discovered
     assert not new_unregistered, (
@@ -783,7 +602,10 @@ def test_no_unquarantined_token_drift() -> None:
     status badge (kit-badge), CI fails."""
     offenders: dict[str, dict[str, list[str]]] = {}
     for rel in REGISTERED - EXEMPT:
-        violations = scan_surface(rel, _css_text(SRC / rel))
+        evidence = scan_surface_evidence(rel, _css_text(SRC / rel))
+        violations = evidence.violations()
+        if evidence.unverifiable_markup:
+            violations["unverifiable-markup"] = list(evidence.unverifiable_markup)
         tolerated = QUARANTINE.get(rel, frozenset())
         live = {dim: vals for dim, vals in violations.items() if dim not in tolerated}
         if live:
@@ -796,7 +618,8 @@ def test_no_unquarantined_token_drift() -> None:
         "  · kit-badge → you hand-rolled a FILLED STATUS PILL; use the kit's "
         "`.k-pill` (+ `.k-pill-ok/-warn/-bad`) from ui/controls.py, never a "
         "`color-mix(var(--ok|warn|bad))` background on your own .*-pill/-badge "
-        f"class (design_language §4).\n{offenders}"
+        "class (design_language §4).\n"
+        f"  · registered dimensions: {', '.join(DIMENSIONS)}\n{offenders}"
     )
 
 
@@ -1023,7 +846,10 @@ def test_workspace_local_css_standardizes_primitives() -> None:
     from ui.controls import controls_css as _ccss
 
     local = WS_CSS.replace(palette_css("paper"), "").replace(_ccss("paper"), "")
-    assert not _RAW_HEX.search(local), f"raw hex in workspace local CSS: {_RAW_HEX.findall(local)}"
+    raw_hex = [
+        value for value in scan_surface("x", local).get("color", []) if value.startswith("#")
+    ]
+    assert not raw_hex, f"raw hex in workspace local CSS: {raw_hex}"
     assert "rgba(" not in local.replace("rgba(0,0,0", "").replace("rgba(0, 0, 0", ""), (
         "non-neutral rgba wash in workspace local CSS"
     )
@@ -1438,11 +1264,11 @@ def _whole_table_mono_selectors(text: str) -> list[str]:
     above, and sufficient for the flat (non-nested) rule shapes every
     registered surface actually emits."""
     offenders: list[str] = []
-    for rule in _CSS_COMMENT.sub("", text).split("}"):
+    for rule in strip_css_comments(text).split("}"):
         head, sep, body = rule.partition("{")
         if not sep or "var(--mono" not in body:
             continue
-        for sel in _split_top_commas(head):
+        for sel in split_top_commas(head):
             sel = sel.strip()
             if sel in MONO_TABLE_ALLOWLIST:
                 continue

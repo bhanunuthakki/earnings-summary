@@ -103,7 +103,7 @@ def _documentation_rows(text: str, kind: str) -> tuple[str, ...]:
 
 
 def test_registry_is_frozen_typed_and_complete() -> None:
-    assert registry.REGISTRY_VERSION == "1.0.0"
+    assert registry.REGISTRY_VERSION == "1.1.0"
     records = (
         registry.SHAPE_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0].signatures[0],
@@ -122,10 +122,10 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         setattr(registry.SHAPE_ARCHETYPES[0], "name", "changed")
 
     assert isinstance(registry.REGISTERED, frozenset)
-    assert len(registry.REGISTERED) == 68
-    assert len(registry.PERMANENT_EXEMPTIONS) == 2
-    assert len(registry.QUARANTINE_ENTRIES) == 5
-    assert len({entry.surface for entry in registry.QUARANTINE_ENTRIES}) == 4
+    assert len(registry.REGISTERED) == 69
+    assert len(registry.PERMANENT_EXEMPTIONS) == 3
+    assert len(registry.QUARANTINE_ENTRIES) == 10
+    assert len({entry.surface for entry in registry.QUARANTINE_ENTRIES}) == 9
     assert len(registry.BESPOKE_BUTTON_APPROVALS) == 17
     assert len(registry.MONO_TABLE_APPROVALS) == 1
     assert registry.SURFACE_SANCTIONS == ()
