@@ -209,6 +209,38 @@ body { font-family: var(--sans); font-size: var(--fs-body); line-height: 1.5; di
   color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase;
 }
 .report-sidebar .tab-count { margin-left: auto; }
+/* BHA-71: sidebar collapse toggle button */
+.report-sidebar-toggle {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: var(--icon-button-size); height: var(--icon-button-size); cursor: pointer;
+  margin-top: auto; align-self: flex-start;
+  color: var(--muted); transition: color var(--transition), background var(--transition);
+}
+.report-sidebar-toggle:hover { color: var(--fg); background: var(--surface); }
+.report-sidebar-toggle svg { transition: transform var(--transition-fluid); }
+/* Collapsed state: rail shrinks to icon-only width */
+.report-sidebar.sidebar-collapsed {
+  width: var(--sidebar-collapsed-width);
+  padding: var(--sp-2);
+  transition: width var(--transition-fluid), padding var(--transition-fluid);
+}
+.report-sidebar { transition: width var(--transition-fluid), padding var(--transition-fluid); }
+.report-sidebar.sidebar-collapsed .report-sidebar-product,
+.report-sidebar.sidebar-collapsed .report-nav-label,
+.report-sidebar.sidebar-collapsed .tab-label,
+.report-sidebar.sidebar-collapsed .tab-count { display: none; }
+.report-sidebar.sidebar-collapsed .report-sidebar-brand { align-items: center; padding-inline: 0; }
+.report-sidebar.sidebar-collapsed .k-nav-item { justify-content: center; padding-inline: 0; }
+.report-sidebar.sidebar-collapsed .report-sidebar-toggle svg { transform: rotate(180deg); }
+/* Keyboard focus ring on sidebar nav items */
+.report-sidebar .tab:focus-visible {
+  outline: var(--bw-thick) solid var(--accent); outline-offset: var(--bw-thin);
+}
+/* Touch-friendly hit targets on coarse-pointer devices */
+@media (pointer: coarse) {
+  .report-sidebar .k-nav-item { min-height: var(--touch-target-size); }
+}
+
 
 .l1-root {
   flex: 1;
@@ -1807,7 +1839,9 @@ ul.flag-list li.flag-positive {
   .identity-right { flex-wrap: wrap; }
 }
 
-/* Tablet portrait: collapse the persistent sidebar to the canonical icon rail. */
+/* Tablet portrait: collapse the persistent sidebar to the canonical icon rail.
+   The .sidebar-collapsed class is the authoritative collapsed state; this media
+   query adds it automatically at narrow widths where manual toggle is unavailable. */
 @media (max-width: 768px) {
   :root { --pad-x: var(--sp-3); }
   .report-sidebar { width: var(--sidebar-collapsed-width); padding: var(--sp-2); }
@@ -1815,6 +1849,8 @@ ul.flag-list li.flag-positive {
   .report-sidebar .tab-count { display: none; }
   .report-sidebar-brand { align-items: center; padding-inline: 0; }
   .report-sidebar .k-nav-item { justify-content: center; padding-inline: 0; }
+  /* Hide the collapse toggle at narrow widths — already collapsed by media query */
+  .report-sidebar-toggle { display: none; }
   .kpi-strip { grid-template-columns: 1fr; }
   .kpi-tile { min-width: 0; }
   .kpi-spark svg { width: 100%; height: auto; }

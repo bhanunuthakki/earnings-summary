@@ -303,10 +303,14 @@ __all__ = [
     "_source_hover_title",
     "_sources_tab",
     "_strategic_targets_panel",
+    "_subtabs",
     "_sum_segments_at",
     "_summarize_rule",
     "_surprise_tone",
     "_synthesis_tab",
+    "_tab_defs",
+    "_tab_groups",
+    "_tabs",
     "_theme_list",
     "_thesis_hygiene_panels",
     "_thesis_strip",
@@ -561,7 +565,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
         ),
         (
             "exec_comp",
-            "Exec Comp",
+            "Executive Compensation",
             (
                 len(spec.exec_compensation.insider_signals) + len(spec.exec_compensation.packages)
                 if spec.exec_compensation is not None
@@ -639,9 +643,13 @@ def _tab_groups(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabGroup]:
         thesis_risk_ids.append("position")
     if by_id["decisions"][2] is not None:
         thesis_risk_ids.append("decisions")
+    # Section ordering within groups is deterministic and owner-approved (BHA-71):
+    # - overview: Company pitch first, synthesis second, executive compensation last.
+    # - quarter: Primary earnings data first, news second, Say·Do historical ledger last.
+    # No LLM inference at render time; this mapping is versioned here and regression-tested.
     plan: list[tuple[str, str, list[str]]] = [
         ("overview", "Overview & Moat", ["company", "synthesis", "exec_comp"]),
-        ("quarter", "Quarter & Guidance", ["earnings", "saydo", "news"]),
+        ("quarter", "Quarter & Guidance", ["earnings", "news", "saydo"]),
         ("financials", "Financials & DCF", ["financials"]),
         ("thesis-risk", "Thesis & Risk", thesis_risk_ids),
         ("valuation-comps", "Valuation & Comps", ["valuation", "comps"]),
@@ -715,7 +723,15 @@ def _tabs(body: StringIO, groups: list[TabGroup], *, ticker: str = "Research") -
                 f'aria-label="{_esc(label)}">{icon_svg("company")}'
                 f'<span class="tab-label">{_esc(label)}</span></button>'
             )
-    body.write("</div></nav>")
+    # Collapse toggle at foot of nav (BHA-71: compact, collapsible rail)
+    body.write(
+        '</div>'
+        '<button type="button" class="report-sidebar-toggle k-btn k-btn-quiet k-btn-sm" '
+        'id="report-sidebar-toggle" aria-label="Collapse navigation" title="Collapse navigation">'
+        f'{icon_svg("collapse")}'
+        '</button>'
+        '</nav>'
+    )
 
 
 def _subtabs(body: StringIO, sections: list[TabDef]) -> None:
