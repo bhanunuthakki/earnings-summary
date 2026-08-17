@@ -962,7 +962,7 @@ def _production_runtime(generated_at: datetime) -> str:
     if (actionQueue) {{
       actionQueue.innerHTML = payload.actions.length ? payload.actions.map(function (action) {{
         return '<div class="k-card k-card-dense k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
-          '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><div class="k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</div>' +
+          '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-title k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
           '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div></div></div>' +
           '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company &rarr;</button></div></div>';
       }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
@@ -1483,8 +1483,8 @@ def _add_production_contract(
     html = html.replace("      updateFactPlaygroundTable();\n", "", 1)
     html = _OPERATIONS_SECTION_RE.sub(render_operations_shell() + "\n      ", html, count=1)
     html = html.replace(
-        '<div class="card-grid-stat-4col">',
-        '<div class="card-grid-stat-4col" id="workOsPortfolioStats">',
+        '<div class="card-grid-stat">',
+        '<div class="card-grid-stat" id="workOsPortfolioStats">',
         1,
     )
     html = html.replace(

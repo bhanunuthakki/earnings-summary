@@ -5,9 +5,10 @@ each)."""
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
-from integrations.portfolio_tracker_client import PortfolioAnalytics
-from pipeline.portfolio_panel import compose_risk_page
+from integrations.portfolio_tracker_client import LivePortfolio, PortfolioAnalytics
+from pipeline.portfolio_panel import compose_risk_page, compose_synthesis_page
 from portfolio_risk import CrowdedName
 from portfolio_style_factors import StyleFactorLeg, StyleFactorRollup
 
@@ -84,3 +85,13 @@ def test_compose_risk_page_renders_style_in_both_branches() -> None:
     # The offline note leads, but the local-substrate style read still renders.
     assert "live portfolio tracker" in html_down
     assert "Style factor loadings" in html_down and "+0.42" in html_down
+
+
+def test_synthesis_insights_use_registry_large_card_track(tmp_path: Path) -> None:
+    html = compose_synthesis_page(
+        tmp_path / "missing.db",
+        LivePortfolio(available=False, api_url="http://x", error="offline"),
+        "",
+    )
+    compact = " ".join(html.split())
+    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));" in compact

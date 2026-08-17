@@ -31,7 +31,7 @@ from positioning.store import PositioningIntentRow, latest_intent, list_intents
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _PANEL_STYLE = """<style>
-.pos-grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:start; }
+.pos-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap:16px; align-items:start; }
 .pos-grid .pos-span { grid-column: 1 / -1; }
 @media (max-width: 1100px) { .pos-grid { grid-template-columns: 1fr; } }
 .pos-dim { display:flex; gap:10px; align-items:baseline; padding:4px 0;
@@ -234,7 +234,7 @@ def render_active_target_card(db_path: Path, repo_root: Path) -> str:
         else ""
     )
     return (
-        f'<div class="k-well" id="pos-active-card"><h3>Active target {badge}</h3>'
+        f'<div class="k-well" id="pos-active-card"><h3 class="k-well-title">Active target {badge}</h3>'
         + "".join(rows)
         + degraded_html
         + "</div>"
@@ -253,7 +253,7 @@ def _history_well(db_path: Path) -> str:
         finally:
             conn.close()
     if not rows:
-        return '<div class="k-well"><h3>History</h3><p class="muted">No versions yet.</p></div>'
+        return '<div class="k-well"><h3 class="k-well-title">History</h3><p class="muted">No versions yet.</p></div>'
     body = "".join(
         "<tr>"
         f'<td><span class="k-chip k-chip-mono">v{r.id}</span></td>'
@@ -269,7 +269,7 @@ def _history_well(db_path: Path) -> str:
         for r in rows
     )
     return (
-        '<div class="k-well"><h3>History</h3>'
+        '<div class="k-well"><h3 class="k-well-title">History</h3>'
         f'<table class="pos-hist"><tbody>{body}</tbody></table></div>'
     )
 
@@ -323,7 +323,7 @@ def render_approval_form(proposal: ProposedProfile) -> str:
     )
     life = escape("\n".join(p.life_circumstances))
     return f"""<div class="k-well" id="pos-approval-form">
-<h3>Proposed targets — review, edit, approve</h3>
+<h3 class="k-well-title">Proposed targets — review, edit, approve</h3>
 <p class="muted">{escape(proposal.rationale or "Encoded from the coach conversation.")}</p>
 {diffs}
 <form id="pos-approve-form">
@@ -342,13 +342,13 @@ def render_approval_form(proposal: ProposedProfile) -> str:
   <span class="hdr"></span>
   <label>Horizon (years)</label>{_num("horizon_years", p.horizon_years, "")}<span class="hdr"></span>
 </div>
-<h4>Sector targets <span class="pos-diff">(weight/band in %, tracker labels verbatim; blank rows ignored)</span></h4>
+<h4 class="k-well-title">Sector targets <span class="pos-diff">(weight/band in %, tracker labels verbatim; blank rows ignored)</span></h4>
 <div class="pos-form-grid">{"".join(sector_rows)}</div>
-<h4>Sleeves</h4>
+<h4 class="k-well-title">Sleeves</h4>
 <div class="pos-form-grid">{sleeves_inputs}</div>
-<h4>Life circumstances <span class="pos-diff">(one per line, your words)</span></h4>
+<h4 class="k-well-title">Life circumstances <span class="pos-diff">(one per line, your words)</span></h4>
 <textarea class="pos-narrative" name="life_circumstances">{life}</textarea>
-<h4>Narrative <span class="pos-diff">(persisted with the profile)</span></h4>
+<h4 class="k-well-title">Narrative <span class="pos-diff">(persisted with the profile)</span></h4>
 <textarea class="pos-narrative" name="narrative">{escape(proposal.summary)}</textarea>
 <div class="pos-actions">
   <button type="submit" class="k-btn k-btn-primary">Approve &amp; save</button>
@@ -536,7 +536,7 @@ def render_positioning_panel(db_path: Path, repo_root: Path) -> str:
             f'<div class="pos-span">{_history_well(db_path)}</div>',
             # "Positioning coach" (wave B B6) — disambiguates from Record's
             # Calibration coach; a bare "Coach" read as the same product twice.
-            '<div class="k-well pos-span"><h3>Positioning coach</h3>',
+            '<div class="k-well pos-span"><h3 class="k-well-title">Positioning coach</h3>',
             '<div class="pos-chat-log" id="pos-chat-log"></div>',
             '<form class="pos-chat-form" id="pos-chat-form">',
             '<textarea id="pos-chat-input" placeholder="e.g. I want more international ',

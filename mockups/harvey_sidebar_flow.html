@@ -350,7 +350,8 @@
       padding: var(--sp-1) var(--sp-2);
       font-size: var(--fs-caption);
     }
-    .stat-heading {
+    .stat-heading,
+    .k-card-title.stat-heading {
       font-size: var(--fs-caption);
       color: var(--muted);
       font-weight: 600;
@@ -363,22 +364,26 @@
       margin-top: var(--sp-1);
     }
 
-    /* Grid Layout Classes: Single Horizontal 4-Column Row for Hero Stats */
-    .card-grid-stat-4col { 
-      display: grid; 
-      grid-template-columns: repeat(4, 1fr); 
-      gap: var(--sp-4); 
-    }
-    @media (max-width: 1024px) {
-      .card-grid-stat-4col { grid-template-columns: repeat(2, 1fr); }
-    }
-    @media (max-width: 640px) {
-      .card-grid-stat-4col { grid-template-columns: 1fr; }
-    }
-
     .card-grid-action { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap: var(--sp-3); }
     .card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-4); }
     .card-grid-risk { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-4); }
+    #screen-cockpit [style*="display: flex"][style*="justify-content: space-between"] {
+      flex-wrap: wrap;
+      gap: var(--sp-2);
+    }
+    @media (max-width: 1100px) {
+      #screen-cockpit .card-grid-stat,
+      #screen-performance .card-grid-stat,
+      #screen-allocation .card-grid-stat {
+        inline-size: 100%;
+        max-inline-size: calc(var(--grid-card-sm) + var(--grid-card-sm) + var(--sp-4));
+      }
+      #screen-performance [style*="display: flex"][style*="justify-content: space-between"],
+      #screen-allocation [style*="display: flex"][style*="justify-content: space-between"] {
+        flex-wrap: wrap;
+        gap: var(--sp-2);
+      }
+    }
     
     .stat-number { font-family: var(--mono); font-size: var(--fs-display); font-weight: 600; margin-top: var(--sp-1); }
 
@@ -595,6 +600,9 @@
       transform: translateY(var(--lift-md));
       box-shadow: var(--shadow-card-hover);
       border-color: var(--border-2);
+    }
+    #screen-cockpit .k-card-interactive {
+      transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms ease, opacity 220ms cubic-bezier(0.16, 1, 0.3, 1), max-height 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms, margin 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms, padding 280ms cubic-bezier(0.16, 1, 0.3, 1) 60ms;
     }
     .card-dismissing {
       transform: scale(0.97) translateY(var(--lift-md)) !important;
@@ -944,25 +952,25 @@
            ========================================================================== -->
       <section id="screen-cockpit" class="screen-view is-active">
         
-        <!-- CONSOLIDATED 4-CARD SINGLE HORIZONTAL ROW FOR PORTFOLIO RISK & PERFORMANCE -->
-        <div class="card-grid-stat-4col">
+        <!-- TOKEN-BACKED PORTFOLIO RISK & PERFORMANCE CARD GRID -->
+        <div class="card-grid-stat">
           <div class="k-card">
-            <div class="stat-heading">Portfolio NAV & Reserve</div>
+            <h3 class="k-card-title stat-heading">Portfolio NAV & Reserve</h3>
             <div class="stat-number t-mono" style="color: var(--fg);">$12.45M</div>
             <div class="stat-subtext">14.0% Free Cash Reserve ($1.68M)</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">Sharpe & Risk Profile</div>
+            <h3 class="k-card-title stat-heading">Sharpe & Risk Profile</h3>
             <div class="stat-number t-mono" style="color: var(--accent);">2.15</div>
             <div class="stat-subtext">Beta: 0.85 vs SPY · Sortino: 2.85</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">1Y Max Drawdown</div>
+            <h3 class="k-card-title stat-heading">1Y Max Drawdown</h3>
             <div class="stat-number t-mono" style="color: var(--fg);">-6.4%</div>
             <div class="stat-subtext">vs SPY (-11.2%) · Recovery: 14d</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">1Y Return & Alpha</div>
+            <h3 class="k-card-title stat-heading">1Y Return & Alpha</h3>
             <div class="stat-number t-mono" style="color: var(--ok);">+32.4%</div>
             <div class="stat-subtext">vs SPY (+18.2%) · <strong style="color: var(--accent);">+8.3% Alpha</strong></div>
           </div>
@@ -985,7 +993,7 @@
                 <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
                   <div class="k-ticker"><a onclick="switchCompanyWorkspace('BKNG')" class="k-ticker-symbol t-mono">BKNG</a></div>
                   <div>
-                    <div class="k-card-row-title">Confirm Add Execution (+0.5% weight)</div>
+                    <h3 class="k-card-title k-card-row-title">Confirm Add Execution (+0.5% weight)</h3>
                     <div class="k-card-meta">Drafted post-Q2 call. Falsifier & conviction score sign-off needed.</div>
                   </div>
                 </div>
@@ -1003,9 +1011,9 @@
                 <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
                   <div class="k-ticker"><a onclick="switchCompanyWorkspace('NU')" class="k-ticker-symbol t-mono">NU</a></div>
                   <div>
-                    <div class="k-card-row-title">
+                    <h3 class="k-card-title k-card-row-title">
                       Set NPL 90+ Disconfirmation Limit <span class="k-pill k-pill-warn">Missing Limit</span>
-                    </div>
+                    </h3>
                     <div class="k-card-meta">Click to set disconfirming metric threshold on Company Desk.</div>
                   </div>
                 </div>
@@ -1022,9 +1030,9 @@
                 <div style="display: flex; align-items: center; gap: var(--sp-3); flex: 1;">
                   <div class="k-ticker"><a onclick="switchCompanyWorkspace('TSM')" class="k-ticker-symbol t-mono">TSM</a></div>
                   <div>
-                    <div class="k-card-row-title">
+                    <h3 class="k-card-title k-card-row-title">
                       Evaluate Geopolitical Risk Exposure <span class="k-pill k-pill-warn">Macro Risk</span>
-                    </div>
+                    </h3>
                     <div class="k-card-meta">Semiconductor export restrictions update requires review.</div>
                   </div>
                 </div>
@@ -1124,22 +1132,22 @@
         <!-- PERFORMANCE STATS SUMMARY CARDS -->
         <div class="card-grid-stat">
           <div class="k-card">
-            <div class="stat-heading">Portfolio Return (1Y)</div>
+            <h3 class="k-card-title stat-heading">Portfolio Return (1Y)</h3>
             <div class="stat-number" style="color: var(--ok);">+32.4%</div>
             <div class="stat-subtext">vs S&P 500 (+18.2%) · <strong style="color: var(--accent);">+8.3% Alpha</strong></div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">Sharpe Ratio</div>
+            <h3 class="k-card-title stat-heading">Sharpe Ratio</h3>
             <div class="stat-number" style="color: var(--fg);">2.15</div>
             <div class="stat-subtext">Risk-Free: 4.2% · Sortino Ratio: 2.85</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">Max Drawdown (1Y)</div>
+            <h3 class="k-card-title stat-heading">Max Drawdown (1Y)</h3>
             <div class="stat-number" style="color: var(--fg);">-6.4%</div>
             <div class="stat-subtext">vs SPY Max DD: -11.2% · Recovery: 14 days</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">Portfolio Beta</div>
+            <h3 class="k-card-title stat-heading">Portfolio Beta</h3>
             <div class="stat-number" style="color: var(--accent);">0.85</div>
             <div class="stat-subtext">Correlation vs SPY: 0.72</div>
           </div>
@@ -1150,7 +1158,7 @@
           <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3);">
             <div>
               <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Exploratory Analytics Playground</div>
-              <div style="font-weight: 600; font-size: var(--fs-title);">Custom Metric & Time Horizon Analysis Engine</div>
+              <h2 class="k-card-title">Custom Metric & Time Horizon Analysis Engine</h2>
             </div>
             <div style="display: flex; gap: var(--sp-1);" class="picker-container">
               <button class="k-chip is-active" id="playModeChart" onclick="setPlaygroundMode('chart')">Chart Time-Series</button>
@@ -1266,7 +1274,7 @@
 
         <!-- VISUAL BENCHMARK BAR COMPARATOR -->
         <div class="k-card">
-          <div style="font-weight: 600; font-size: var(--fs-title); margin-bottom: var(--sp-3);">1-Year Relative Return Comparison</div>
+          <h2 class="k-card-title" style="margin-bottom: var(--sp-3);">1-Year Relative Return Comparison</h2>
           
           <div style="display: flex; flex-direction: column; gap: var(--sp-3);">
             <div>
@@ -1367,30 +1375,30 @@
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3);">
             <div>
               <div style="font-size: var(--fs-caption); color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Risk Architecture & Regime Gauge</div>
-              <div style="font-weight: 600; font-size: var(--fs-title);">Portfolio Risk-On Intensity & Total Factor Exposure</div>
+              <h2 class="k-card-title">Portfolio Risk-On Intensity & Total Factor Exposure</h2>
             </div>
             <span class="k-pill k-pill-ok">RISK-ON INTENSITY: 68% · MODERATE GROWTH</span>
           </div>
 
           <!-- REGIME METRICS STRIP -->
-          <div class="card-grid-stat-4col" style="margin-bottom: var(--sp-4);">
+          <div class="card-grid-stat" style="margin-bottom: var(--sp-4);">
             <div class="k-well">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Portfolio Beta</div>
+              <h3 class="k-well-title">Portfolio Beta</h3>
               <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--fg);">0.85</div>
               <div style="font-size: var(--fs-caption); color: var(--ok);">Defensive vs SPY (1.00)</div>
             </div>
             <div class="k-well">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Active Share</div>
+              <h3 class="k-well-title">Active Share</h3>
               <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--accent);">84.5%</div>
               <div style="font-size: var(--fs-caption); color: var(--fg-soft);">High Conviction Active</div>
             </div>
             <div class="k-well">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Value-at-Risk (95% 1M)</div>
+              <h3 class="k-well-title">Value-at-Risk (95% 1M)</h3>
               <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--warn);">-4.2% NAV</div>
               <div style="font-size: var(--fs-caption); color: var(--muted);">$504,000 Max Drawdown</div>
             </div>
             <div class="k-well">
-              <div style="font-size: var(--fs-caption); color: var(--muted);">Factor Risk Contribution</div>
+              <h3 class="k-well-title">Factor Risk Contribution</h3>
               <div class="t-mono" style="font-size: var(--fs-title); font-weight: 600; color: var(--fg);">42.0%</div>
               <div style="font-size: var(--fs-caption); color: var(--fg-soft);">58.0% Idiosyncratic Risk</div>
             </div>
@@ -1398,7 +1406,7 @@
 
           <!-- TOTAL FACTOR EXPOSURE & SENSITIVITY MATRIX -->
           <div style="margin-bottom: var(--sp-4);">
-            <div style="font-weight: 600; font-size: var(--fs-body); margin-bottom: var(--sp-2);">Total Factor Exposure & Sensitivity Matrix</div>
+            <h3 class="k-card-title" style="margin-bottom: var(--sp-2);">Total Factor Exposure & Sensitivity Matrix</h3>
             <table class="matrix-table t-mono">
               <thead>
                 <tr>
@@ -1482,7 +1490,7 @@
         <div class="k-card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3);">
             <div>
-              <div style="font-weight: 600; font-size: var(--fs-title);">Cross-Asset Pairwise Correlation Matrix</div>
+              <h2 class="k-card-title">Cross-Asset Pairwise Correlation Matrix</h2>
               <div style="font-size: var(--fs-caption); color: var(--muted);">Symmetric 90-day daily return correlation matrix for active holdings vs benchmarks</div>
             </div>
             <span style="font-size: var(--fs-caption); color: var(--muted);">Updated: Real-Time DMA Stream</span>
@@ -1551,24 +1559,24 @@
         </div>
 
         <!-- RISK BUDGET SUMMARY CARDS (CONSOLIDATED) -->
-        <div class="card-grid-stat-4col">
+        <div class="card-grid-stat">
           <div class="k-card">
-            <div class="stat-heading">Risk Budget Capacity</div>
+            <h3 class="k-card-title stat-heading">Risk Budget Capacity</h3>
             <div class="stat-number" style="color: var(--ok);">14.0% Free</div>
             <div class="stat-subtext">$1.68M Cash Reserve</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">Top Holding Weight</div>
+            <h3 class="k-card-title stat-heading">Top Holding Weight</h3>
             <div class="stat-number" style="color: var(--fg);">12.5% (NU)</div>
             <div class="stat-subtext">Position Cap: 15.0%</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">Sharpe Ratio</div>
+            <h3 class="k-card-title stat-heading">Sharpe Ratio</h3>
             <div class="stat-number" style="color: var(--accent);">2.15</div>
             <div class="stat-subtext">Sortino: 2.85</div>
           </div>
           <div class="k-card">
-            <div class="stat-heading">Portfolio Beta</div>
+            <h3 class="k-card-title stat-heading">Portfolio Beta</h3>
             <div class="stat-number" style="color: var(--fg);">0.85</div>
             <div class="stat-subtext">vs SPY (1.00)</div>
           </div>

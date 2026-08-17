@@ -990,7 +990,7 @@ def test_nested_static_brace_specs_reconstruct_before_scanning(tmp_path: Path) -
 
 
 def test_registry_contract_is_versioned_for_importable_scanner() -> None:
-    assert registry.REGISTRY_VERSION == "1.1.0"
+    assert registry.REGISTRY_VERSION == "1.2.0"
     exemptions = {entry.surface: entry for entry in registry.PERMANENT_EXEMPTIONS}
     scanner = exemptions["ui/conformance_scan.py"]
     assert scanner.owner == "design-system"
@@ -1006,12 +1006,6 @@ def _write_complete_fixture_tree(root: Path, *, include_live_drift: bool) -> Pat
         path.write_text(f"CSS = {clean!r}\n", encoding="utf-8")
 
     known = {
-        "pipeline/allocation_recommendation_panel.py": (
-            '<section class="k-card"><h3 class="local-title">Allocation</h3></section>'
-        ),
-        "pipeline/positioning_panel.py": (
-            '<section class="k-card"><h3 class="local-title">Positioning</h3></section>'
-        ),
         "pipeline/data_policy_settings_panel.py": (
             '<section class="k-card"><h2 class="k-toolbar-title">Data policy</h2></section>'
         ),

@@ -81,3 +81,18 @@ def test_work_os_contract_checks_the_runtime_prototype_and_mobile_rail() -> None
     regressed = renderer.replace("k-card-row-title", "stat-heading", 1)
     failures = check_design_sync.work_os_contract_failures(renderer_source=regressed)
     assert any("hydrated Action Queue" in failure for failure in failures)
+
+
+def test_work_os_contract_accepts_composed_classes_and_rejects_substrings() -> None:
+    assert check_design_sync.has_html_class(
+        '<h3 class="k-card-title k-card-row-title">Queue</h3>', "k-card-row-title"
+    )
+    assert check_design_sync.has_html_class(
+        "<h3 class='k-card-row-title k-card-title'>Queue</h3>", "k-card-row-title"
+    )
+    assert not check_design_sync.has_html_class(
+        '<h3 class="not-k-card-row-title">Queue</h3>', "k-card-row-title"
+    )
+    assert not check_design_sync.has_html_class(
+        '<h3 data-class="k-card-row-title">Queue</h3>', "k-card-row-title"
+    )

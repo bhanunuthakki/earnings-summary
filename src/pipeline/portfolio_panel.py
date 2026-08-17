@@ -300,7 +300,7 @@ _ANALYTICS_CSS = (
 .pf-chart { width: 100%; height: auto; display: block; }
 .pf-policy { font-size: var(--fs-caption); margin: 10px 0 0; }
 .pf-warn { color: var(--warn); }
-.pf-alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+.pf-alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));
   gap: 10px 32px; margin-top: 4px; }
 .pf-alloc-row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 2fr 52px 76px;
   gap: 10px; align-items: center; font-size: var(--fs-body); padding: 3px 0; }
@@ -354,7 +354,7 @@ _ANALYTICS_CSS = (
 # the next-dollar distribution rows. Same token-variable discipline as
 # _ANALYTICS_CSS; a separate block so each tab ships only the rules it renders.
 _INSIGHTS_CSS = """<style>
-.pf-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+.pf-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));
   gap: 0 18px; align-items: start; }
 .pf-th-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .pf-exp-row { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 44px; gap: 10px;

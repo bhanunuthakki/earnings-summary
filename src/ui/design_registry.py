@@ -37,7 +37,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.1.0"
+REGISTRY_VERSION = "1.2.0"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -253,20 +253,6 @@ PERMANENT_EXEMPTIONS = (
 
 _QUARANTINE_EXPIRY = date(2026, 10, 1)
 QUARANTINE_ENTRIES = (
-    QuarantineEntry(
-        "pipeline/allocation_recommendation_panel.py",
-        "floating-card-title",
-        "BHA-91",
-        "Portfolio recommendation headings still use local title classes inside cards.",
-        _QUARANTINE_EXPIRY,
-    ),
-    QuarantineEntry(
-        "pipeline/positioning_panel.py",
-        "floating-card-title",
-        "BHA-91",
-        "Portfolio positioning headings still use local title classes inside cards.",
-        _QUARANTINE_EXPIRY,
-    ),
     QuarantineEntry(
         "pipeline/data_policy_settings_panel.py",
         "floating-card-title",
