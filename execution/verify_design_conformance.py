@@ -15,8 +15,9 @@ import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from datetime import date
+from http.client import HTTPMessage
 from pathlib import Path
-from typing import Literal
+from typing import IO, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -34,6 +35,22 @@ from ui.design_registry import (  # noqa: E402
     REGISTERED,
     REGISTRY_VERSION,
 )
+
+
+class _NoCanaryRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects so every fetched URL is the validated CLI input."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> None:
+        return None
+
 
 SCHEMA_VERSION = "1.0.0"
 _CANARY_READ_LIMIT = 1_000_000
@@ -205,9 +222,8 @@ def _scan_canary(canary_url: str | None) -> CanaryResult:
             headers={"Accept": "text/html"},
             method="GET",
         )
-        with urllib.request.urlopen(  # nosec B310 - scheme is restricted above
-            request, timeout=3.0
-        ) as response:
+        opener = urllib.request.build_opener(_NoCanaryRedirectHandler())
+        with opener.open(request, timeout=3.0) as response:
             payload = response.read(_CANARY_READ_LIMIT + 1)
             if len(payload) > _CANARY_READ_LIMIT:
                 raise ValueError("canary response exceeded read limit")

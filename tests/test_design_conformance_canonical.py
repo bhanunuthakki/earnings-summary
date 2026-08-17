@@ -6,6 +6,8 @@ import ast
 import json
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -1126,6 +1128,66 @@ def test_cli_modes_exit_codes_and_unavailable_canary_are_explicit(tmp_path: Path
     invalid_canary = json.loads(invalid_scheme.stdout)["canary"]
     assert invalid_canary["status"] == "skipped:unavailable"
     assert invalid_canary["reason"] == "ValueError: canary unavailable"
+
+    credentialed = _run_cli(
+        "--check",
+        "--source-root",
+        str(source_root),
+        "--canary-url",
+        "http://user:secret@127.0.0.1:1/design-conformance-canary",
+    )
+    assert credentialed.returncode == 0, credentialed.stderr
+    credentialed_canary = json.loads(credentialed.stdout)["canary"]
+    assert credentialed_canary["status"] == "skipped:unavailable"
+    assert credentialed_canary["reason"] == "ValueError: canary unavailable"
+
+
+def test_cli_canary_does_not_follow_redirects(tmp_path: Path) -> None:
+    source_root = _write_complete_fixture_tree(tmp_path, include_live_drift=False)
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        target_hits = 0
+
+        def do_GET(self) -> None:
+            if self.path == "/start":
+                host, port = self.server.server_address
+                self.send_response(302)
+                self.send_header(
+                    "Location",
+                    f"http://user:secret@{host}:{port}/target",
+                )
+                self.end_headers()
+                return
+            type(self).target_hits += 1
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<main>unexpected redirect target</main>")
+
+        def log_message(self, format_string: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        redirected = _run_cli(
+            "--check",
+            "--source-root",
+            str(source_root),
+            "--canary-url",
+            f"http://{host}:{port}/start",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3.0)
+
+    assert redirected.returncode == 0, redirected.stderr
+    redirected_canary = json.loads(redirected.stdout)["canary"]
+    assert redirected_canary["status"] == "skipped:unavailable"
+    assert redirected_canary["reason"] == "HTTPError: canary unavailable"
+    assert RedirectHandler.target_hits == 0
 
 
 def test_cli_reports_structurally_unverifiable_markup_instead_of_passing(
