@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from pathlib import Path
 from typing import Literal
 
@@ -72,7 +73,12 @@ def _status(repo_root: Path, artifact: ReportArtifactRef) -> BriefStatus:
     return "available" if (repo_root / artifact.body_path).is_file() else "degraded"
 
 
-def build_brief_descriptor(repo_root: Path, artifact: ReportArtifactRef) -> BriefLibraryItem:
+def build_brief_descriptor(
+    repo_root: Path,
+    artifact: ReportArtifactRef,
+    *,
+    coverage_role: CoverageRole | None = None,
+) -> BriefLibraryItem:
     """Normalize every Work OS launcher onto one stable reader descriptor."""
 
     status = _status(repo_root, artifact)
@@ -81,7 +87,7 @@ def build_brief_descriptor(repo_root: Path, artifact: ReportArtifactRef) -> Brie
         ticker=artifact.ticker,
         title=artifact.title,
         artifact_kind=artifact.artifact_kind,
-        coverage_role=artifact.coverage_role,
+        coverage_role=coverage_role or artifact.coverage_role,
         report_date=artifact.report_date.isoformat(),
         generated_at=artifact.generated_at.isoformat().replace("+00:00", "Z"),
         reader_mode=artifact.reader_mode,
@@ -96,9 +102,39 @@ def build_brief_descriptor(repo_root: Path, artifact: ReportArtifactRef) -> Brie
     )
 
 
+def _current_coverage_roles(
+    conn: sqlite3.Connection | None, artifacts: tuple[ReportArtifactRef, ...]
+) -> dict[str, CoverageRole]:
+    """Return active governed coverage without opening an additional connection."""
+
+    if conn is None:
+        return {}
+    tickers = sorted({artifact.ticker.upper() for artifact in artifacts})
+    if not tickers:
+        return {}
+    placeholders = ", ".join("?" for _ in tickers)
+    rows = conn.execute(
+        "SELECT ticker, list_type FROM tracked_companies "
+        f"WHERE archived_at IS NULL AND UPPER(ticker) IN ({placeholders})",  # nosec B608 -- placeholder count is internal; ticker values remain bound
+        tickers,
+    ).fetchall()
+    resolved: dict[str, CoverageRole] = {}
+    for row in rows:
+        raw_role = str(row["list_type"] if isinstance(row, sqlite3.Row) else row[1]).lower()
+        ticker = str(row["ticker"] if isinstance(row, sqlite3.Row) else row[0]).upper()
+        if raw_role == "portfolio":
+            resolved[ticker] = "portfolio"
+        elif raw_role == "evaluation":
+            resolved[ticker] = "evaluation"
+        else:
+            resolved[ticker] = "unknown"
+    return resolved
+
+
 def build_brief_library(
     repo_root: Path,
     *,
+    conn: sqlite3.Connection | None = None,
     ticker: str | None = None,
     coverage_role: CoverageRole | None = None,
     status: BriefStatus | None = None,
@@ -121,11 +157,15 @@ def build_brief_library(
         key=lambda artifact: (artifact.generated_at, artifact.artifact_id),
         reverse=True,
     )
+    current_roles = _current_coverage_roles(conn, tuple(current))
     filtered = [
         artifact
         for artifact in current
         if (ticker is None or artifact.ticker == ticker.upper())
-        and (coverage_role is None or artifact.coverage_role == coverage_role)
+        and (
+            coverage_role is None
+            or current_roles.get(artifact.ticker.upper(), artifact.coverage_role) == coverage_role
+        )
         and (status is None or _status(repo_root, artifact) == status)
     ]
     start = 0
@@ -140,7 +180,14 @@ def build_brief_library(
     has_more = start + limit < len(filtered)
     return BriefLibraryResponse(
         inventory_revision=index.generated_at.isoformat().replace("+00:00", "Z"),
-        items=tuple(build_brief_descriptor(repo_root, artifact) for artifact in page),
+        items=tuple(
+            build_brief_descriptor(
+                repo_root,
+                artifact,
+                coverage_role=current_roles.get(artifact.ticker.upper()),
+            )
+            for artifact in page
+        ),
         next_cursor=page[-1].artifact_id if has_more and page else None,
     )
 

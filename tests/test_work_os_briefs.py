@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
+from pipeline.work_os_briefs import build_brief_library
 from report.artifacts import (
     RenderedReportBody,
     ReportInteractionManifest,
@@ -142,6 +143,72 @@ def test_brief_library_returns_stable_indexed_artifacts(
         }
     ]
     assert payload["next_cursor"] is None
+
+
+def test_brief_library_uses_current_coverage_for_display_and_role_filtering(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    """A historical artifact role cannot outlive governed tracked coverage."""
+
+    body = _persist_shared_brief(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute("UPDATE tracked_companies SET list_type = 'evaluation' WHERE ticker = 'NU'")
+    conn.commit()
+    conn.close()
+
+    evaluation = work_os_client.get(
+        "/api/work-os/briefs", query_string={"coverage_role": "evaluation"}
+    ).get_json()
+    portfolio = work_os_client.get(
+        "/api/work-os/briefs", query_string={"coverage_role": "portfolio"}
+    ).get_json()
+
+    assert [item["artifact_id"] for item in evaluation["items"]] == [body.artifact_id]
+    assert evaluation["items"][0]["coverage_role"] == "evaluation"
+    assert portfolio["items"] == []
+
+    # An archived row no longer establishes current coverage, so the durable
+    # artifact role remains the truthful fallback.
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "UPDATE tracked_companies SET archived_at = '2026-08-20T00:00:00Z' WHERE ticker = 'NU'"
+    )
+    conn.commit()
+    conn.close()
+    fallback = work_os_client.get("/api/work-os/briefs").get_json()
+    assert fallback["items"][0]["coverage_role"] == "portfolio"
+
+
+def test_brief_library_marks_active_unsupported_coverage_unknown(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    body = _persist_shared_brief(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.execute("UPDATE tracked_companies SET list_type = 'watchlist' WHERE ticker = 'NU'")
+    conn.commit()
+    conn.close()
+
+    unknown = work_os_client.get(
+        "/api/work-os/briefs", query_string={"coverage_role": "unknown"}
+    ).get_json()
+    portfolio = work_os_client.get(
+        "/api/work-os/briefs", query_string={"coverage_role": "portfolio"}
+    ).get_json()
+
+    assert [item["artifact_id"] for item in unknown["items"]] == [body.artifact_id]
+    assert unknown["items"][0]["coverage_role"] == "unknown"
+    assert portfolio["items"] == []
+
+
+def test_brief_library_fails_closed_when_a_supplied_connection_is_unavailable(
+    work_os_app_repo: Path,
+) -> None:
+    _persist_shared_brief(work_os_app_repo)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.close()
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        build_brief_library(work_os_app_repo, conn=conn)
 
 
 def test_report_body_route_serves_complete_persisted_fragment(
