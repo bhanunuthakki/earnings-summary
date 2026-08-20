@@ -102,6 +102,43 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
     if pp is None or pp.status == SectionStatus.NOT_APPLICABLE:
         return
     out.write(f"## Your position in {spec.ticker}\n\n")
+    warnings_rendered = False
+    if pp.source_lagging_account_ids:
+        ids = ", ".join(str(account_id) for account_id in pp.source_lagging_account_ids)
+        out.write(
+            "**Lagging account coverage:** current held/not-held status is unproven "
+            f"for account IDs {ids}.\n\n"
+        )
+    if pp.status == SectionStatus.MISSING_DATA:
+        out.write(
+            "**Portfolio-tracker source unavailable.** "
+            f"{pp.missing.detail if pp.missing and pp.missing.detail else 'No canonical portfolio evidence was available.'}\n\n"
+        )
+        if pp.source_warnings:
+            out.write("**Source warnings:**\n\n")
+            for warning in pp.source_warnings:
+                out.write(
+                    f"- `{warning.get('code') or 'WARNING'}`: "
+                    f"{warning.get('message') or 'Source warning'}\n"
+                )
+            out.write("\n")
+            warnings_rendered = True
+        if pp.recent_transactions or pp.open_decisions or pp.closed_decisions:
+            out.write("**Historical position evidence (current source unavailable).**\n\n")
+        else:
+            out.write("---\n\n")
+            return
+    if pp.source_is_stale:
+        as_of = pp.position_as_of.isoformat() if pp.position_as_of else "unknown date"
+        out.write(f"**Source evidence is stale** · snapshot as of {as_of}.\n\n")
+    if pp.source_warnings and not warnings_rendered:
+        out.write("**Source warnings:**\n\n")
+        for warning in pp.source_warnings:
+            out.write(
+                f"- `{warning.get('code') or 'WARNING'}`: "
+                f"{warning.get('message') or 'Source warning'}\n"
+            )
+        out.write("\n")
     if pp.held and pp.total_market_value is not None:
         pct_str = (
             f"{pp.total_unrealized_pct * 100:+.1f}%" if pp.total_unrealized_pct is not None else "—"

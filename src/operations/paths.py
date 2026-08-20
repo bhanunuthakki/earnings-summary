@@ -17,4 +17,13 @@ def service_receipt_path(repo_root: Path) -> Path:
     return operations_runtime_directory(repo_root) / "services.latest.json"
 
 
-__all__ = ["operations_runtime_directory", "scheduler_receipt_path", "service_receipt_path"]
+def portfolio_tracker_receipt_path(repo_root: Path) -> Path:
+    return operations_runtime_directory(repo_root) / "portfolio-tracker.latest.json"
+
+
+__all__ = [
+    "operations_runtime_directory",
+    "portfolio_tracker_receipt_path",
+    "scheduler_receipt_path",
+    "service_receipt_path",
+]

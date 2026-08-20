@@ -24,6 +24,7 @@ from operations.models import (
     LLMCallsObservation,
     OperationsRegistry,
     OperationsSnapshot,
+    PortfolioTrackerRuntimeObservation,
     RuntimeProbeAttempt,
     RuntimeReceiptPair,
     SchedulerExpectation,
@@ -42,7 +43,9 @@ from operations.models import (
     SourceCallRow,
     SourceCallsObservation,
 )
+from operations.paths import portfolio_tracker_receipt_path
 from runtime.job_runtime import health_receipt_directory
+from runtime.portfolio_tracker import RuntimeReceipt
 
 _MAX_ROWS = 100
 _MAX_RECEIPT_BYTES = 64 * 1024
@@ -456,6 +459,79 @@ def _runtime_state(
         ),
         values=tuple(service_values),
         detail=detail,
+    )
+
+
+def _portfolio_tracker_runtime_state(
+    *, receipt_path: Path, observed_at: datetime
+) -> PortfolioTrackerRuntimeObservation:
+    """Load one bounded typed receipt; absence and bad evidence stay distinct."""
+
+    source = "portfolio_tracker_runtime:cached_receipt"
+    try:
+        receipt_stat = receipt_path.lstat()
+    except FileNotFoundError:
+        return PortfolioTrackerRuntimeObservation(
+            state="missing",
+            observed_at=observed_at,
+            evidence_source=source,
+            detail="no Portfolio Tracker runtime receipt supplied",
+        )
+    except OSError as exc:
+        return PortfolioTrackerRuntimeObservation(
+            state="invalid",
+            observed_at=observed_at,
+            evidence_source=str(receipt_path),
+            detail=f"receipt metadata read failed: {type(exc).__name__}",
+        )
+    if not stat.S_ISREG(receipt_stat.st_mode):
+        return PortfolioTrackerRuntimeObservation(
+            state="invalid",
+            observed_at=observed_at,
+            evidence_source=str(receipt_path),
+            detail="receipt path is not a regular file",
+        )
+    try:
+        receipt = _read_receipt(receipt_path, RuntimeReceipt)
+        if receipt.recorded_at > observed_at:
+            raise _ReceiptError("future Portfolio Tracker receipt clock")
+    except _ReceiptError as exc:
+        return PortfolioTrackerRuntimeObservation(
+            state="invalid",
+            observed_at=observed_at,
+            evidence_source=str(receipt_path),
+            detail=str(exc),
+        )
+    age_stale = observed_at - receipt.recorded_at > _RUNTIME_RECEIPT_TTL
+    stale_planes: list[str] = []
+    invalid_planes: list[str] = []
+    plane_times = {
+        "listener": receipt.listener.health_checked_at or receipt.recorded_at,
+        "scheduler": receipt.scheduler.observed_at if receipt.scheduler else None,
+        "daily refresh": receipt.refresh.completed_at if receipt.refresh else None,
+    }
+    for name, timestamp in plane_times.items():
+        if timestamp is None:
+            continue
+        if timestamp.tzinfo is None or timestamp > observed_at:
+            invalid_planes.append(name)
+        elif observed_at - timestamp > _RUNTIME_RECEIPT_TTL:
+            stale_planes.append(name)
+    state = "invalid" if invalid_planes else "stale" if age_stale or stale_planes else "current"
+    detail_parts: list[str] = []
+    if invalid_planes:
+        detail_parts.append("invalid runtime evidence: " + ", ".join(invalid_planes))
+    if age_stale:
+        detail_parts.append("cached Portfolio Tracker receipt is older than 15 minutes")
+    if stale_planes:
+        detail_parts.append("stale runtime evidence: " + ", ".join(stale_planes))
+    return PortfolioTrackerRuntimeObservation(
+        state=state,
+        observed_at=observed_at,
+        evidence_source=str(receipt_path),
+        evidence_recorded_at=receipt.recorded_at,
+        receipt=receipt,
+        detail="; ".join(detail_parts) if detail_parts else None,
     )
 
 
@@ -911,4 +987,7 @@ def collect_operations_snapshot(
         llm_calls=llm,
         fmp_backlog=backlog,
         fmp_circuit=circuit,
+        portfolio_tracker_runtime=_portfolio_tracker_runtime_state(
+            receipt_path=portfolio_tracker_receipt_path(repo_root), observed_at=observed_at
+        ),
     )

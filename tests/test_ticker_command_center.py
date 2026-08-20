@@ -236,7 +236,7 @@ def test_build_and_to_dict_round_trips(repo: Path) -> None:
     assert tcc.thesis.present is True
     assert tcc.thesis.tier1[0].name == "ROE"
     assert tcc.position.available is False  # no portfolio-tracker sibling in tmp
-    assert tcc.tracker_url == "http://localhost:5173/holdings?ticker=NU"
+    assert tcc.tracker_url is None
     json.loads(json.dumps(tcc.to_dict()))  # JSON round-trips cleanly
 
 
@@ -246,8 +246,8 @@ def test_render_has_all_panels(repo: Path) -> None:
     assert html.startswith("<!doctype html>")
     for marker in ("Analyses run", "Artifacts", "Thesis", "Position", "Recent decisions"):
         assert marker in html
-    assert "Open in Portfolio Tracker" in html  # deep link present
-    assert 'href="http://localhost:5173/holdings?ticker=NU"' in html
+    assert "Open in Portfolio Tracker" not in html  # no guessed tracker endpoint
+    assert "localhost:5173" not in html
     assert "/trade-analysis?" not in html
 
 
@@ -284,7 +284,7 @@ def test_render_ticker_fragment_is_one_band(repo: Path) -> None:
     assert 'data-current="NU"' in frag
     assert 'href="/reports/NU"' in frag
     assert 'href="/dcf/NU"' in frag
-    assert 'href="http://localhost:5173/holdings?ticker=NU"' in frag
+    assert "Portfolio Tracker" not in frag  # no configured tracker UI endpoint
     assert 'data-tcc-drawer="ops"' in frag
     assert "data-cc-notes-open" in frag  # Notes opens the SHARED drawer
     assert 'data-tcc-drawer="notes"' not in frag  # the holding-local one is retired
@@ -603,7 +603,7 @@ def test_ticker_api_returns_json(client) -> None:
     payload = resp.get_json()
     assert payload["identity"]["ticker"] == "NU"
     assert payload["thesis"]["present"] is True
-    assert payload["tracker_url"] == "http://localhost:5173/holdings?ticker=NU"
+    assert payload["tracker_url"] is None
 
 
 def test_ticker_page_redirects_to_shell(client) -> None:

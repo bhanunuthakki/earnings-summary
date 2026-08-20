@@ -58,11 +58,11 @@ Design contract, matched to the sibling doc's rules:
   Validation-error summaries use only Pydantic's ``loc``/``type`` — never
   ``input_value`` (which can be the balance itself).
 
-Discovery: base URL from the ``PORTFOLIO_TRACKER_API_URL`` env var (the same
-variable name honored by the legacy client), defaulting to
-``http://127.0.0.1:8000`` — 127.0.0.1 rather than "localhost" for the same
-double-DNS-family latency reason documented in
-``integrations.portfolio_tracker_client``.
+Discovery: production callers must provide the explicit
+``PORTFOLIO_TRACKER_API_URL`` (the same variable name honored by the legacy
+client). The low-level client retains the compatibility fallback
+``http://127.0.0.1:8000``; canonical report/runtime paths reject an omitted
+endpoint before any read.
 """
 
 from __future__ import annotations
