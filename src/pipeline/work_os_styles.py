@@ -41,11 +41,11 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 .work-os-company-picker { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .company-identity-switcher { position: relative; min-width: 0; border-radius: var(--radius); }
 .company-identity-row { display: flex; align-items: center; gap: var(--sp-2); min-block-size: var(--touch-target-size); }
-.company-picker-trigger { opacity: 0; transform: translateX(var(--lift-sm)); transition: opacity var(--transition), transform var(--transition); }
+.company-picker-trigger { opacity: 1; transform: none; transition: opacity var(--transition), transform var(--transition); }
 .company-identity-switcher:hover .company-picker-trigger, .company-identity-switcher:focus-within .company-picker-trigger { opacity: 1; transform: translateX(0); }
 .company-picker-popover { position: absolute; inset-block-start: calc(100% + var(--sp-1)); inset-inline-start: 0; z-index: 220; inline-size: var(--grid-card-md); max-inline-size: calc(100vw - var(--sp-6)); box-shadow: var(--shadow-pop); }
 .company-picker-popover[hidden] { display: none !important; }
-.company-picker-popover input[type="search"] { inline-size: 100%; min-block-size: var(--touch-target-size); }
+.company-picker-popover input[type="search"] { inline-size: 100%; min-inline-size: 0; box-sizing: border-box; min-block-size: var(--touch-target-size); }
 .company-picker-list { max-block-size: var(--grid-card-sm); overflow-y: auto; }
 .company-picker-list [role="option"] { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); }
 .company-picker-list [aria-selected="true"] { background: var(--paper); color: var(--accent); }
@@ -53,6 +53,7 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 .work-os-action-copy { display: flex; align-items: center; gap: var(--sp-3); flex: 1; }
 .research-screen { display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }
 .research-toolbar, .research-panel-head, .research-actions { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.research-toolbar.k-card { overflow: visible; }
 .research-decision-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); }
 .research-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; }
 .research-list { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }

@@ -918,6 +918,20 @@ def test_company_switcher_is_attached_to_identity_and_accessible() -> None:
     assert "min-block-size: var(--touch-target-size)" in html
 
 
+def test_company_switcher_overlay_is_not_clipped_or_hidden_by_the_toolbar() -> None:
+    html = render_work_os_shell()
+
+    assert ".research-toolbar.k-card { overflow: visible; }" in html
+    assert (
+        '.company-picker-popover input[type="search"] { inline-size: 100%; '
+        "min-inline-size: 0; box-sizing: border-box;"
+    ) in html
+    assert (
+        ".company-picker-trigger { opacity: 1; transform: none; "
+        "transition: opacity var(--transition), transform var(--transition); }"
+    ) in html
+
+
 def test_company_picker_supports_search_keyboard_dismissal_and_focus_restore() -> None:
     html = render_work_os_shell()
 
