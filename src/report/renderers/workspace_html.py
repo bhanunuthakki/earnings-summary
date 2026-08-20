@@ -725,12 +725,12 @@ def _tabs(body: StringIO, groups: list[TabGroup], *, ticker: str = "Research") -
             )
     # Collapse toggle at foot of nav (BHA-71: compact, collapsible rail)
     body.write(
-        '</div>'
+        "</div>"
         '<button type="button" class="report-sidebar-toggle k-btn k-btn-quiet k-btn-sm" '
         'id="report-sidebar-toggle" aria-label="Collapse navigation" title="Collapse navigation">'
-        f'{icon_svg("collapse")}'
-        '</button>'
-        '</nav>'
+        f"{icon_svg('collapse')}"
+        "</button>"
+        "</nav>"
     )
 
 

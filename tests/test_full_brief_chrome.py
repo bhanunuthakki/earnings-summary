@@ -48,7 +48,7 @@ def test_shared_body_sanitization_preserves_semantic_status_classes() -> None:
     """When inline styles are stripped during shared-body extraction, semantic .k-pill-ok classes must survive."""
     badge_html = _verdict_badge("intact", datetime(2026, 5, 20, 12, 0, 0), "Q1 2026")
     mock_source = f'<div class="l1-root"><div class="company-row">{badge_html}</div></div>'
-    
+
     extracted = extract_legacy_reader_body(mock_source, artifact_id="test_meli_brief")
     soup = BeautifulSoup(extracted.body_html, "html.parser")
     pill = soup.select_one(".k-pill")

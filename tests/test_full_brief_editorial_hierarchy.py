@@ -22,10 +22,13 @@ from report.renderers.workspace_sections._shared import TabDef, TabGroup
 # Fixtures: minimal tab groups matching the six-group approved hierarchy
 # ---------------------------------------------------------------------------
 
+
 def _make_noop_fn():
     """Return a no-op render function for testing."""
+
     def _fn(b: StringIO) -> None:
         pass
+
     return _fn
 
 
@@ -34,30 +37,54 @@ def _make_tab(tab_id: str, label: str, count: int | None = None) -> TabDef:
 
 
 APPROVED_GROUPS: list[TabGroup] = [
-    ("overview", "Overview & Moat", [
-        _make_tab("company", "Company"),
-        _make_tab("synthesis", "Synthesis"),
-        _make_tab("exec_comp", "Executive Compensation"),
-    ]),
-    ("quarter", "Quarter & Guidance", [
-        _make_tab("earnings", "Earnings", 4),
-        _make_tab("news", "News"),
-        _make_tab("saydo", "Say · Do", 3),
-    ]),
-    ("financials", "Financials & DCF", [
-        _make_tab("financials", "Financials", 8),
-    ]),
-    ("thesis-risk", "Thesis & Risk", [
-        _make_tab("thesis", "Thesis", 5),
-        _make_tab("bear", "Bear case", 2),
-    ]),
-    ("valuation-comps", "Valuation & Comps", [
-        _make_tab("valuation", "Valuation"),
-        _make_tab("comps", "Comps", 3),
-    ]),
-    ("sources", "Sources & Citations", [
-        _make_tab("sources", "Sources", 10),
-    ]),
+    (
+        "overview",
+        "Overview & Moat",
+        [
+            _make_tab("company", "Company"),
+            _make_tab("synthesis", "Synthesis"),
+            _make_tab("exec_comp", "Executive Compensation"),
+        ],
+    ),
+    (
+        "quarter",
+        "Quarter & Guidance",
+        [
+            _make_tab("earnings", "Earnings", 4),
+            _make_tab("news", "News"),
+            _make_tab("saydo", "Say · Do", 3),
+        ],
+    ),
+    (
+        "financials",
+        "Financials & DCF",
+        [
+            _make_tab("financials", "Financials", 8),
+        ],
+    ),
+    (
+        "thesis-risk",
+        "Thesis & Risk",
+        [
+            _make_tab("thesis", "Thesis", 5),
+            _make_tab("bear", "Bear case", 2),
+        ],
+    ),
+    (
+        "valuation-comps",
+        "Valuation & Comps",
+        [
+            _make_tab("valuation", "Valuation"),
+            _make_tab("comps", "Comps", 3),
+        ],
+    ),
+    (
+        "sources",
+        "Sources & Citations",
+        [
+            _make_tab("sources", "Sources", 10),
+        ],
+    ),
 ]
 
 
@@ -77,6 +104,7 @@ def _render_subtabs(sections: list[TabDef]) -> str:
 # Test 1: Canonical group labels present, NO legacy labels
 # ---------------------------------------------------------------------------
 
+
 class TestCanonicalLabels:
     def test_six_approved_group_labels_present(self) -> None:
         html = _render_tabs()
@@ -94,7 +122,9 @@ class TestCanonicalLabels:
     def test_exec_comp_legacy_label_absent(self) -> None:
         """'Exec Comp' sub-tab label must not appear; should be 'Executive Compensation'."""
         html = _render_subtabs(APPROVED_GROUPS[0][2])  # overview sections
-        assert "Exec Comp" not in html, "'Exec Comp' legacy label found — must be 'Executive Compensation'"
+        assert "Exec Comp" not in html, (
+            "'Exec Comp' legacy label found — must be 'Executive Compensation'"
+        )
         assert "Executive Compensation" in html
 
     def test_saydo_legacy_label_absent(self) -> None:
@@ -114,6 +144,7 @@ class TestCanonicalLabels:
 # ---------------------------------------------------------------------------
 # Test 2: Within-group ordering matches approved sequence
 # ---------------------------------------------------------------------------
+
 
 class TestGroupOrdering:
     def test_quarter_group_ordering(self) -> None:
@@ -142,6 +173,7 @@ class TestGroupOrdering:
 # Test 3: Sidebar collapse toggle button present
 # ---------------------------------------------------------------------------
 
+
 class TestSidebarToggle:
     def test_toggle_button_present(self) -> None:
         html = _render_tabs()
@@ -161,17 +193,28 @@ class TestSidebarToggle:
 # Test 4: data-tab pane IDs are stable (deep link regression guard)
 # ---------------------------------------------------------------------------
 
+
 class TestDeepLinkStability:
     EXPECTED_TAB_IDS: ClassVar[set[str]] = {
-        "overview", "quarter", "financials", "thesis-risk",
-        "valuation-comps", "sources",
+        "overview",
+        "quarter",
+        "financials",
+        "thesis-risk",
+        "valuation-comps",
+        "sources",
     }
     EXPECTED_SECTION_IDS: ClassVar[set[str]] = {
-        "company", "synthesis", "exec_comp",
-        "earnings", "news", "saydo",
+        "company",
+        "synthesis",
+        "exec_comp",
+        "earnings",
+        "news",
+        "saydo",
         "financials",
-        "thesis", "bear",
-        "valuation", "comps",
+        "thesis",
+        "bear",
+        "valuation",
+        "comps",
         "sources",
     }
 
@@ -195,6 +238,7 @@ class TestDeepLinkStability:
 # Test 5: Six-group sequence integrity (structural guard)
 # ---------------------------------------------------------------------------
 
+
 class TestSixGroupSequence:
     def test_exactly_six_groups(self) -> None:
         assert len(APPROVED_GROUPS) == 6, f"Expected 6 groups, got {len(APPROVED_GROUPS)}"
@@ -209,7 +253,9 @@ class TestSixGroupSequence:
             ("sources", "Sources & Citations"),
         ]
         actual = [(gid, glabel) for gid, glabel, _ in APPROVED_GROUPS]
-        assert actual == expected, f"Group sequence mismatch:\n  expected: {expected}\n  actual:   {actual}"
+        assert actual == expected, (
+            f"Group sequence mismatch:\n  expected: {expected}\n  actual:   {actual}"
+        )
 
     def test_nav_layers_are_present(self) -> None:
         """Three-layer nav structure (L1/L2/L3) present in rendered tabs."""
