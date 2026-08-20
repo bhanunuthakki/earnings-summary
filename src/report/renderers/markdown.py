@@ -102,6 +102,12 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
         return
     out.write(f"## Your position in {spec.ticker}\n\n")
     warnings_rendered = False
+    if pp.source_lagging_account_ids:
+        ids = ", ".join(str(account_id) for account_id in pp.source_lagging_account_ids)
+        out.write(
+            "**Lagging account coverage:** current held/not-held status is unproven "
+            f"for account IDs {ids}.\n\n"
+        )
     if pp.status == SectionStatus.MISSING_DATA:
         out.write(
             "**Portfolio-tracker source unavailable.** "

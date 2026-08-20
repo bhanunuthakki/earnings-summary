@@ -651,9 +651,9 @@ def produce_daily_refresh_receipt(
     )
     from integrations.portfolio_tracker_v1 import PositionsV1Result, TrackerV1Client
 
-    # ``listener_owner`` is retained as a compatibility alias for older callers;
-    # the evidence field is deliberately named for the writer it governs.
-    refresh_owner = listener_owner or daily_refresh_owner
+    # ``daily_refresh_owner`` and ``listener_owner`` remain compatibility
+    # parameters for older callers. A read-only probe never trusts either as
+    # evidence of the unattended writer that would own a refresh completion.
     key = derive_daily_refresh_idempotency_key(now)
     lease = AtomicFileLease(receipt_path.with_suffix(".lease"))
     if not lease.acquire():
@@ -701,10 +701,18 @@ def produce_daily_refresh_receipt(
                 detail = "portfolio snapshot is partial"
             elif snapshot.meta.is_stale or snapshot.equity_fraction.is_stale:
                 detail = "portfolio snapshot is stale"
+            elif snapshot.meta.account_coverage.lagging_account_ids:
+                ids = ", ".join(
+                    str(account_id)
+                    for account_id in snapshot.meta.account_coverage.lagging_account_ids
+                )
+                detail = f"portfolio snapshot account coverage is lagging for account ids: {ids}"
             elif (equity_error := validate_equity_evidence(snapshot)) is not None:
                 detail = equity_error[1]
             elif (snapshot.meta.as_of is None) != (health.latest_snapshot_date is None):
                 detail = "health and positions must both provide the portfolio snapshot date"
+            elif snapshot.meta.as_of is None and health.latest_snapshot_date is None:
+                detail = "portfolio snapshot has no observation date"
             elif snapshot.meta.as_of != health.latest_snapshot_date:
                 detail = "health and positions snapshot dates do not match"
             else:
@@ -723,12 +731,14 @@ def produce_daily_refresh_receipt(
                     terminal = "success"
                     detail = None
                     refresh = RefreshEvidence(
-                        owner=refresh_owner,
+                        # A read-only API probe cannot identify an unattended
+                        # writer or prove that a refresh job completed.
+                        owner=None,
                         snapshot_as_of=snapshot.meta.as_of.isoformat()
                         if snapshot.meta.as_of is not None
                         else None,
-                        completed_at=now,
-                        terminal_result=terminal,
+                        completed_at=None,
+                        terminal_result="activation_required",
                     )
                 else:
                     detail = reconciliation_error[1]

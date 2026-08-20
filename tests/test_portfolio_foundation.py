@@ -83,6 +83,10 @@ def _snapshot_from_positions(positions: PositionsV1Result) -> PortfolioSnapshotV
     snapshot = PortfolioSnapshotV1.model_validate(payload)
     return snapshot.model_copy(
         update={
+            "accounts": [
+                account.model_copy(update={"holdings_as_of": positions.snapshot_date})
+                for account in snapshot.accounts
+            ],
             "meta": snapshot.meta.model_copy(update={"as_of": positions.snapshot_date}),
             "equity_fraction": snapshot.equity_fraction.model_copy(
                 update={
@@ -181,6 +185,138 @@ def test_canonical_adapter_rejects_official_partial_snapshot_fixture() -> None:
     assert result.error_code == "portfolio_snapshot_partial"
     assert result.provenance is not None
     assert result.provenance.is_partial is True
+
+
+def test_canonical_adapter_fails_closed_on_untruthful_lagging_coverage() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    base = _snapshot_from_positions(_positions(ticker="NU"))
+    lagging = base.model_copy(
+        update={
+            "meta": base.meta.model_copy(
+                update={
+                    "account_coverage": base.meta.account_coverage.model_copy(
+                        update={"lagging_account_ids": [1]}
+                    )
+                }
+            )
+        }
+    )
+
+    class _LaggingClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=_health())
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=lagging)
+
+    result = PortfolioPositionAdapter(_LaggingClient()).resolve("MELI")
+
+    assert result.state == "source_unavailable"
+    assert result.error_code == "portfolio_snapshot_account_coverage_lagging"
+    assert result.provenance is not None
+    assert result.provenance.lagging_account_ids == [1]
+    assert result.provenance.is_partial is True
+
+    unlisted = lagging.model_copy(
+        update={
+            "meta": lagging.meta.model_copy(
+                update={
+                    "account_coverage": lagging.meta.account_coverage.model_copy(
+                        update={"lagging_account_ids": []}
+                    )
+                }
+            ),
+            "accounts": [
+                lagging.accounts[0].model_copy(update={"holdings_as_of": date(2026, 8, 19)}),
+                *lagging.accounts[1:],
+            ],
+        }
+    )
+
+    class _UnlistedLaggingClient(_LaggingClient):
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=unlisted)
+
+    unlisted_result = PortfolioPositionAdapter(_UnlistedLaggingClient()).resolve("MELI")
+    assert unlisted_result.state == "source_unavailable"
+    assert unlisted_result.error_code == "account_coverage_invalid"
+
+
+def test_canonical_adapter_rejects_snapshot_with_no_observation_date() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    base = _snapshot_from_positions(_positions(ticker="NU"))
+    snapshot = base.model_copy(
+        update={
+            "meta": base.meta.model_copy(update={"as_of": None}),
+            "equity_fraction": base.equity_fraction.model_copy(update={"holdings_as_of": None}),
+        }
+    )
+    health = _health().model_copy(update={"latest_snapshot_date": None})
+
+    class _NoDateClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_NoDateClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "snapshot_date_missing"
+
+
+def test_report_surfaces_lagging_account_ids_without_not_held_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from integrations.portfolio_position import PortfolioPositionResult, PositionProvenance
+    from report.models import ReportSpec, SectionStatus
+    from report.renderers.markdown import _portfolio_position  # pyright: ignore[reportPrivateUsage]
+    from report.renderers.workspace_sections.position import _position_tab
+    from report.sections import portfolio_position
+
+    def lagging_position(_ticker: str) -> PortfolioPositionResult:
+        return PortfolioPositionResult(
+            state="source_unavailable",
+            error_code="portfolio_snapshot_account_coverage_lagging",
+            error_detail="current held/not-held status is unproven",
+            provenance=PositionProvenance(
+                source_identity="test-source",
+                snapshot_as_of=date(2026, 8, 20),
+                account_coverage=0,
+                lagging_account_ids=[1],
+                is_stale=False,
+                is_partial=True,
+            ),
+        )
+
+    monkeypatch.setattr(portfolio_position, "resolve_configured_position", lagging_position)
+    section = portfolio_position.build("MELI", Path("detached-checkout"))
+    assert section.status is SectionStatus.MISSING_DATA
+    assert section.source_lagging_account_ids == [1]
+
+    html = StringIO()
+    _position_tab(html, section, ticker="MELI")
+    rendered_html = html.getvalue()
+    assert "LAGGING_ACCOUNT_COVERAGE" in rendered_html
+    assert "account IDs 1" in rendered_html
+    assert "shows no position in this name" not in rendered_html
+
+    markdown = StringIO()
+    _portfolio_position(
+        markdown,
+        ReportSpec.model_construct(
+            ticker="MELI",
+            generation_date=date(2026, 8, 20),
+            repo_root=".",
+            portfolio_position=section,
+        ),
+    )
+    rendered_markdown = markdown.getvalue()
+    assert "Lagging account coverage" in rendered_markdown
+    assert "account IDs 1" in rendered_markdown
+    assert "NOT HELD" not in rendered_markdown.upper()
 
 
 def test_canonical_adapter_requires_explicit_consistent_currency() -> None:
@@ -1435,9 +1571,97 @@ def test_daily_refresh_producer_derives_key_and_never_activates(
     )
     assert receipt.idempotency_key == "portfolio-tracker-refresh:2026-08-20"
     assert receipt.refresh is not None and receipt.refresh.snapshot_as_of == "2026-08-20"
+    assert receipt.refresh.owner is None
+    assert receipt.refresh.completed_at is None
+    assert receipt.refresh.terminal_result == "activation_required"
     assert receipt.scheduler is not None
     assert receipt.scheduler.terminal_result == "activation_required"
     assert receipt.lifecycle_state == "already_running"
+
+
+def test_daily_refresh_rejects_snapshot_with_no_observation_date(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from integrations.portfolio_tracker_v1 import V1Fetch
+    from runtime.portfolio_tracker import produce_daily_refresh_receipt
+
+    base = _snapshot_from_positions(_positions())
+    snapshot = base.model_copy(
+        update={
+            "meta": base.meta.model_copy(update={"as_of": None}),
+            "equity_fraction": base.equity_fraction.model_copy(update={"holdings_as_of": None}),
+        }
+    )
+
+    class _NoDateClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def get_health(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(
+                available=True,
+                endpoint="/health",
+                data=_health().model_copy(update={"latest_snapshot_date": None}),
+            )
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    import integrations.portfolio_tracker_v1 as v1
+
+    monkeypatch.setattr(v1, "TrackerV1Client", _NoDateClient)
+    receipt = produce_daily_refresh_receipt(
+        api_url="http://tracker.test",
+        receipt_path=tmp_path / "receipt.json",
+        now=datetime(2026, 8, 20, 12, tzinfo=UTC),
+    )
+    assert receipt.lifecycle_state == "failed"
+    assert receipt.refresh is None
+    assert receipt.failure_detail == "portfolio snapshot has no observation date"
+
+
+def test_daily_refresh_rejects_lagging_account_coverage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from integrations.portfolio_tracker_v1 import V1Fetch
+    from runtime.portfolio_tracker import produce_daily_refresh_receipt
+
+    base = _snapshot_from_positions(_positions())
+    snapshot = base.model_copy(
+        update={
+            "meta": base.meta.model_copy(
+                update={
+                    "account_coverage": base.meta.account_coverage.model_copy(
+                        update={"lagging_account_ids": [1]}
+                    )
+                }
+            )
+        }
+    )
+
+    class _LaggingClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def get_health(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=_health())
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    import integrations.portfolio_tracker_v1 as v1
+
+    monkeypatch.setattr(v1, "TrackerV1Client", _LaggingClient)
+    receipt = produce_daily_refresh_receipt(
+        api_url="http://tracker.test",
+        receipt_path=tmp_path / "receipt.json",
+        now=datetime(2026, 8, 20, 12, tzinfo=UTC),
+    )
+    assert receipt.lifecycle_state == "failed"
+    assert receipt.refresh is None
+    assert receipt.failure_detail == (
+        "portfolio snapshot account coverage is lagging for account ids: 1"
+    )
 
 
 def test_daily_refresh_rejects_stale_or_currency_inconsistent_snapshot(
@@ -1724,6 +1948,42 @@ def test_operations_panel_does_not_greenwash_stale_runtime_planes(stale_plane: s
     assert evidence.tone == "warn"
     assert "stale planes" in evidence.state
     assert stale_plane.replace("refresh", "daily refresh") in evidence.detail
+
+
+def test_operations_panel_does_not_greenwash_read_only_refresh_probe() -> None:
+    from operations.models import PortfolioTrackerRuntimeObservation
+    from pipeline.operations_panel import (  # pyright: ignore[reportPrivateUsage]
+        _portfolio_tracker_evidence,  # pyright: ignore[reportPrivateUsage]
+    )
+    from runtime.portfolio_tracker import (
+        ListenerObservation,
+        RefreshEvidence,
+        RuntimeReceipt,
+    )
+
+    observed = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    receipt = RuntimeReceipt(
+        idempotency_key="portfolio-tracker-refresh:2026-08-20",
+        lifecycle_state="already_running",
+        recorded_at=observed,
+        listener=ListenerObservation(healthy=True, health=_health()),
+        refresh=RefreshEvidence(
+            owner=None,
+            snapshot_as_of="2026-08-20",
+            completed_at=None,
+            terminal_result="activation_required",
+        ),
+    )
+    evidence = _portfolio_tracker_evidence(
+        PortfolioTrackerRuntimeObservation(
+            state="current",
+            observed_at=observed,
+            evidence_source="test:runtime-receipt",
+            receipt=receipt,
+        )
+    )
+    assert evidence.tone == "bad"
+    assert evidence.detail is not None and "refresh activation_required" in evidence.detail
 
 
 def test_operations_snapshot_marks_stale_runtime_plane_even_with_fresh_envelope(

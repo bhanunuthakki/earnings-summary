@@ -338,7 +338,7 @@ def _position_coaching(
 
 
 def _source_warnings(body: StringIO, pp: PortfolioPositionSection) -> None:
-    if not pp.source_warnings:
+    if not pp.source_warnings and not pp.source_lagging_account_ids:
         return
     body.write(
         '<div class="k-well position-source-warnings"><div class="eyebrow">Source warnings</div><ul>'
@@ -347,6 +347,12 @@ def _source_warnings(body: StringIO, pp: PortfolioPositionSection) -> None:
         code = _esc(str(warning.get("code") or "WARNING"))
         message = str(warning.get("message") or "Source warning")
         body.write(f'<li><span class="k-chip k-chip-warn">{code}</span> {_esc(message)}</li>')
+    if pp.source_lagging_account_ids:
+        ids = ", ".join(str(account_id) for account_id in pp.source_lagging_account_ids)
+        body.write(
+            '<li><span class="k-chip k-chip-warn">LAGGING_ACCOUNT_COVERAGE</span> '
+            f"Current held/not-held status is unproven for account IDs {_esc(ids)}.</li>"
+        )
     body.write("</ul></div>")
 
 

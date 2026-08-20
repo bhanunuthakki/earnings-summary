@@ -172,6 +172,11 @@ class PortfolioPositionAdapter:
                 "snapshot_date_incomplete",
                 "health and portfolio snapshot must both provide the snapshot date",
             )
+        if meta.as_of is None and health.latest_snapshot_date is None:
+            return _unavailable(
+                "snapshot_date_missing",
+                "portfolio snapshot has no observation date; current position is unproven",
+            )
         if meta.as_of != health.latest_snapshot_date:
             return _unavailable(
                 "snapshot_date_mismatch",
@@ -203,6 +208,8 @@ class PortfolioPositionAdapter:
                 "duplicate_ticker_position", "tracker snapshot contains duplicate ticker positions"
             )
         position = matching_positions[0] if matching_positions else None
+        raw_partial = meta.is_partial or snapshot.equity_fraction.is_partial
+        lagging_account_ids = list(meta.account_coverage.lagging_account_ids)
         provenance = PositionProvenance(
             source_identity=self._source_identity,
             snapshot_as_of=meta.as_of or health.latest_snapshot_date,
@@ -210,10 +217,12 @@ class PortfolioPositionAdapter:
             snapshot_account_coverage=len(meta.account_coverage.included_account_ids),
             included_account_ids=list(meta.account_coverage.included_account_ids),
             excluded_account_ids=list(meta.account_coverage.excluded_account_ids),
-            lagging_account_ids=list(meta.account_coverage.lagging_account_ids),
+            lagging_account_ids=lagging_account_ids,
             is_stale=health.is_stale or meta.is_stale or snapshot.equity_fraction.is_stale,
             schema_version=meta.schema_version,
-            is_partial=meta.is_partial or snapshot.equity_fraction.is_partial,
+            # An explicitly lagging account makes the whole position result
+            # incomplete even when the provider forgot to set is_partial.
+            is_partial=raw_partial or bool(lagging_account_ids),
             currency=meta.currency,
             warnings=(
                 list(meta.warnings)
@@ -221,10 +230,18 @@ class PortfolioPositionAdapter:
                 + [warning for account in snapshot.accounts for warning in account.warnings]
             ),
         )
-        if provenance.is_partial:
+        if raw_partial:
             return _unavailable(
                 "portfolio_snapshot_partial",
                 "partial provider evidence cannot be presented as a complete position",
+                provenance=provenance,
+            )
+        if lagging_account_ids:
+            ids = ", ".join(str(account_id) for account_id in lagging_account_ids)
+            return _unavailable(
+                "portfolio_snapshot_account_coverage_lagging",
+                "portfolio snapshot account coverage is lagging for account ids: "
+                f"{ids}; current held/not-held status is unproven",
                 provenance=provenance,
             )
         if provenance.is_stale:
@@ -609,6 +626,24 @@ def validate_snapshot_account_coverage(
             "account_coverage_invalid",
             "health active account count does not match included active envelope accounts",
         )
+    lagging = set(coverage.lagging_account_ids)
+    if len(lagging) != len(coverage.lagging_account_ids) or not lagging.issubset(active):
+        return (
+            "account_coverage_invalid",
+            "lagging account ids must be unique active included accounts",
+        )
+    if snapshot.meta.as_of is not None:
+        for account in snapshot.accounts:
+            if not account.active or not account.included_in_totals:
+                continue
+            if account.account_id not in included:
+                continue
+            if account.holdings_as_of != snapshot.meta.as_of and account.account_id not in lagging:
+                return (
+                    "account_coverage_invalid",
+                    f"active account {account.account_id} holdings date is not covered by "
+                    "the portfolio snapshot envelope",
+                )
     equity_included = snapshot.equity_fraction.included_account_ids
     equity_excluded = snapshot.equity_fraction.excluded_account_ids
     if (
