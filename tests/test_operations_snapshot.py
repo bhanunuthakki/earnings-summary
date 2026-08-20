@@ -10,12 +10,19 @@ from unittest.mock import Mock
 import pytest
 from pydantic import ValidationError
 
+from operations.models import (
+    RuntimeProbeAttempt,
+    SchedulerReceipt,
+    SchedulerRuntimeReceipt,
+    SchedulerTaskReceipt,
+)
 from operations.registry import build_operations_registry
 from operations.snapshot import (
     _database_identity,  # pyright: ignore[reportPrivateUsage]
     _metadata_tables,  # pyright: ignore[reportPrivateUsage]
     collect_operations_snapshot,
 )
+from pipeline.operations_panel import build_operations_panel_view
 from runtime.job_runtime import health_receipt_directory
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +43,19 @@ def _runtime_receipt(
         payload = {
             "schema_version": "1",
             "observed_at": recorded.isoformat(),
-            "tasks": [{"task_name": row.task_name, "state": "Ready"} for row in tasks],
+            "tasks": [
+                {
+                    "task_name": row.task_name,
+                    "state": (
+                        "Missing"
+                        if row.service_owned
+                        else "Disabled"
+                        if row.scheduler_expectation == "required_disabled"
+                        else "Ready"
+                    ),
+                }
+                for row in tasks
+            ],
         }
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -194,12 +213,13 @@ def test_runtime_receipts_distinguish_partial_duplicate_future_stale_and_invalid
     assert stale.scheduler.state == "stale"
 
     payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["observed_at"] = now.isoformat()
     payload["tasks"] = payload["tasks"][:1]
     path.write_text(json.dumps(payload), encoding="utf-8")
     partial = collect_operations_snapshot(
         registry, repo_root=tmp_path, conn=conn, observed_at=now, scheduler_receipt_path=path
     )
-    assert partial.scheduler.state == "invalid"
+    assert partial.scheduler.state == "current"
     assert any(row.registry_match == "missing" for row in partial.scheduler.values)
 
     payload["tasks"] = [payload["tasks"][0], payload["tasks"][0]]
@@ -214,6 +234,62 @@ def test_runtime_receipts_distinguish_partial_duplicate_future_stale_and_invalid
         registry, repo_root=tmp_path, conn=conn, observed_at=now, scheduler_receipt_path=path
     )
     assert future.scheduler.state == "invalid"
+
+
+def test_unavailable_probe_attempt_keeps_last_successful_runtime_evidence_visible(
+    tmp_path: Path,
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    now = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    path = tmp_path / "scheduler.json"
+    path.write_text(
+        SchedulerRuntimeReceipt(
+            probe_attempt=RuntimeProbeAttempt(
+                attempted_at=now,
+                availability="unavailable",
+                detail="Scheduler command timed out",
+            ),
+            last_successful=SchedulerReceipt(
+                observed_at=now - timedelta(minutes=2),
+                tasks=tuple(
+                    SchedulerTaskReceipt(
+                        task_name=task.task_name,
+                        state=(
+                            "Missing"
+                            if task.service_owned
+                            else "Disabled"
+                            if task.scheduler_expectation == "required_disabled"
+                            else "Ready"
+                        ),
+                    )
+                    for task in registry.scheduled_tasks
+                ),
+            ),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    snapshot = collect_operations_snapshot(
+        registry,
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=now + timedelta(minutes=1),
+        scheduler_receipt_path=path,
+    )
+
+    assert snapshot.scheduler.state == "unavailable"
+    assert snapshot.scheduler.evidence_recorded_at == now
+    assert "Scheduler command timed out" in (snapshot.scheduler.detail or "")
+    assert "retained successful evidence" in (snapshot.scheduler.detail or "")
+    assert any(row.state == "Ready" for row in snapshot.scheduler.values)
+    view = build_operations_panel_view(registry, snapshot)
+    assert (
+        next(task for task in view.tasks if not task.service_owned).runtime.state == "Unavailable"
+    )
+    assert (
+        "Scheduler command timed out"
+        in next(task for task in view.tasks if not task.service_owned).runtime.detail
+    )
 
 
 def test_runtime_receipt_existing_directories_are_invalid(tmp_path: Path) -> None:
