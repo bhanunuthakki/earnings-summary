@@ -19,7 +19,7 @@ import json
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from report.models import (
     SectionStatus,
@@ -42,6 +42,7 @@ from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_segment_signals,
 )
+from timeseries.loaders import SOURCE_QUALITY_TIER_RANK
 
 MetricKey = Literal[
     "revenue_by_product",
@@ -150,10 +151,20 @@ def _load_segment_definitions(ticker: str, repo_root: Path) -> tuple[dict[str, s
     cache_path = repo_root / "data" / "segment_definitions" / f"{ticker.upper()}.json"
     if not cache_path.exists():
         return ({}, None)
-    cached = json.loads(cache_path.read_text(encoding="utf-8"))
-    raw = cached.get("definitions") or {}
-    out = {str(k): str(v) for k, v in raw.items() if isinstance(v, str) and v.strip()}
-    return (out, cached.get("fiscal_year"))
+    decoded: object = json.loads(cache_path.read_text(encoding="utf-8"))
+    if not isinstance(decoded, dict):
+        return ({}, None)
+    cached = cast(dict[str, object], decoded)
+    raw: object = cached.get("definitions") or {}
+    if not isinstance(raw, dict):
+        return ({}, None)
+    definitions = cast(dict[str, object], raw)
+    out: dict[str, str] = {}
+    for key, value in definitions.items():
+        if isinstance(value, str) and value.strip():
+            out[key] = value
+    fiscal_year = cached.get("fiscal_year")
+    return (out, fiscal_year if isinstance(fiscal_year, int) else None)
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +190,15 @@ def _load_segment_rows(conn: sqlite3.Connection, ticker: str) -> list[dict[str, 
         f"""
         SELECT
             sp.period_end AS period_end,
+            sp.id AS segment_period_id,
+            sd.id AS segment_dimension_id,
+            d.id AS document_id,
+            d.fetched_at AS fetched_at,
             sd.dim_name AS segment_name,
             CASE
                 WHEN sd.dim_type = 'product' AND sd.metric = 'revenue'
+                    THEN 'revenue_by_product'
+                WHEN sd.dim_type = 'business_unit' AND sd.metric = 'revenue'
                     THEN 'revenue_by_product'
                 WHEN sd.dim_type = 'geography' AND sd.metric = 'revenue'
                     THEN 'revenue_by_geography'
@@ -193,13 +210,19 @@ def _load_segment_rows(conn: sqlite3.Connection, ticker: str) -> list[dict[str, 
                     THEN 'headcount'
             END AS metric,
             sd.value AS value,
-            sp.fiscal_period_type AS fiscal_period_type
+            COALESCE(sd.unit, sp.unit) AS unit,
+            sp.currency AS currency,
+            sp.fiscal_period_type AS fiscal_period_type,
+            d.source_type AS source_type,
+            d.source_quality_tier AS source_quality_tier
         FROM segment_periods sp
         JOIN segment_dimensions sd ON sd.period_id = sp.id
+        JOIN documents d ON d.id = sp.source_doc_id
         WHERE sp.ticker = ?
           AND sp.fiscal_period_type IN ({placeholders})
           AND (
             (sd.dim_type = 'product' AND sd.metric = 'revenue')
+            OR (sd.dim_type = 'business_unit' AND sd.metric = 'revenue')
             OR (sd.dim_type = 'geography' AND sd.metric = 'revenue')
             OR (sd.dim_type = 'business_unit' AND sd.metric IN (
                 'operating_income', 'capex', 'headcount'
@@ -208,7 +231,53 @@ def _load_segment_rows(conn: sqlite3.Connection, ticker: str) -> list[dict[str, 
         """,
         (ticker.upper(), *QUARTERLY_PERIOD_TYPES),
     )
-    return [dict(r) for r in cursor.fetchall()]
+    return _prefer_issuer_rows([dict(r) for r in cursor.fetchall()])
+
+
+_ISSUER_DOCUMENT_SOURCE_TYPES = frozenset({"ir_doc", "sec_xbrl", "transcript_audio"})
+
+
+def _prefer_issuer_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Choose one source only for an identical segment cell.
+
+    A partial issuer breakout (for example MELI Commerce) must not erase the
+    vendor's distinct Product/Service row.  Quality tier decides first; issuer
+    provenance only breaks a same-tier tie for the same quarter, metric, and
+    segment name.
+    """
+    grouped: dict[tuple[tuple[int, int], str, str, str, str], list[dict[str, object]]] = (
+        defaultdict(list)
+    )
+    for row in rows:
+        selection_name = str(row.get("_selection_identity") or row["segment_name"])
+        grouped[
+            (
+                calendar_quarter_key(row["period_end"]),
+                str(row["metric"]),
+                selection_name,
+                str(row.get("unit") or "actual"),
+                str(row.get("currency") or ""),
+            )
+        ].append(row)
+    selected: list[dict[str, object]] = []
+    for candidates in grouped.values():
+        candidates.sort(
+            key=lambda row: (
+                SOURCE_QUALITY_TIER_RANK.get(str(row.get("source_quality_tier") or ""), 0),
+                int(str(row.get("source_type") or "") in _ISSUER_DOCUMENT_SOURCE_TYPES),
+                ord_period(row["period_end"]),
+                str(row.get("fetched_at") or ""),
+                int(str(row.get("document_id") or 0)),
+                int(str(row.get("segment_period_id") or 0)),
+                int(str(row.get("segment_dimension_id") or 0)),
+            ),
+            reverse=True,
+        )
+        selected.append(candidates[0])
+    return selected
+
+
+prefer_issuer_rows = _prefer_issuer_rows
 
 
 def _apply_rules(rows: list[dict[str, object]], rules: TickerRules) -> list[dict[str, object]]:
@@ -219,7 +288,12 @@ def _apply_rules(rows: list[dict[str, object]], rules: TickerRules) -> list[dict
         if canonical is None:
             continue
         out.append({**r, "segment_name": canonical})
-    return out
+    # Canonical aliases can turn previously distinct raw names into the same
+    # logical segment cell. Re-run tier-first selection after that collapse.
+    return _prefer_issuer_rows(out)
+
+
+apply_segment_rules = _apply_rules
 
 
 def _dedupe_by_quarter(rows: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -228,12 +302,16 @@ def _dedupe_by_quarter(rows: list[dict[str, object]]) -> list[dict[str, object]]
     Prefer rows with a 'Qx' fiscal_period_type over 'quarterly'; for the
     same bucket prefer the most recent period_end.
     """
-    groups: dict[tuple[tuple[int, int], str, str], list[dict[str, object]]] = defaultdict(list)
+    groups: dict[tuple[tuple[int, int], str, str, str, str], list[dict[str, object]]] = defaultdict(
+        list
+    )
     for r in rows:
         key = (
             calendar_quarter_key(r["period_end"]),
             str(r["segment_name"]),
             str(r["metric"]),
+            str(r.get("unit") or "actual"),
+            str(r.get("currency") or ""),
         )
         groups[key].append(r)
 
@@ -310,34 +388,53 @@ def _build_grids(
     quarters_full: list[tuple[int, int]],
     display_labels: list[str],
 ) -> dict[MetricKey, list[SegmentSeries]]:
-    by_metric_segment: dict[MetricKey, dict[str, dict[tuple[int, int], float]]] = {
+    by_metric_segment: dict[MetricKey, dict[tuple[str, str, str], dict[tuple[int, int], float]]] = {
         bucket: defaultdict(dict) for bucket in _BUCKETS
     }
+    by_metric_segment_source: dict[
+        MetricKey, dict[tuple[str, str, str], dict[tuple[int, int], str]]
+    ] = {bucket: defaultdict(dict) for bucket in _BUCKETS}
     for r in rows:
         metric = str(r["metric"])
         bucket = _METRIC_TO_BUCKET.get(metric)
         if bucket is None:
             continue
         seg = str(r["segment_name"])
-        by_metric_segment[bucket][seg][calendar_quarter_key(r["period_end"])] = float(r["value"])
+        unit = str(r.get("unit") or "actual")
+        currency = str(r.get("currency") or "")
+        identity = (seg, unit, currency)
+        quarter = calendar_quarter_key(r["period_end"])
+        by_metric_segment[bucket][identity][quarter] = float(str(r["value"]))
+        by_metric_segment_source[bucket][identity][quarter] = str(r.get("source_type") or "")
 
     grids: dict[MetricKey, list[SegmentSeries]] = {bucket: [] for bucket in _BUCKETS}
     display_quarter_count = len(display_labels)
     for bucket in _BUCKETS:
         prepared: list[tuple[SegmentSeries, float | None]] = []
-        bucket_unit = _bucket_display_unit(bucket)
-        for segment_name, qmap in by_metric_segment[bucket].items():
-            raw_series = [_to_display_units(qmap.get(q), bucket) for q in quarters_full]
+        name_variant_counts: dict[str, int] = defaultdict(int)
+        for segment_name, _unit, _currency in by_metric_segment[bucket]:
+            name_variant_counts[segment_name] += 1
+        for (segment_name, unit, currency), qmap in by_metric_segment[bucket].items():
+            raw_series = [_to_display_units(qmap.get(q), bucket, unit) for q in quarters_full]
             cleaned_series = _drop_outliers(raw_series)
             display_values = cleaned_series[-display_quarter_count:]
             latest = _last_non_null(display_values)
+            latest_source = _latest_segment_source(
+                by_metric_segment_source[bucket][(segment_name, unit, currency)],
+                cleaned_series,
+                quarters_full,
+            )
+            display_name = segment_name
+            if name_variant_counts[segment_name] > 1:
+                display_name = f"{segment_name} ({currency or 'currency unverified'})"
             series = SegmentSeries(
-                segment_name=segment_name,
+                segment_name=display_name,
                 metric=bucket,
                 quarters=display_labels,
                 values=display_values,
                 growth=compute_growth(cleaned_series),
-                unit=bucket_unit,
+                unit=_bucket_display_unit(bucket, unit, currency),
+                source_label=_segment_source_label(latest_source),
                 levels_full=cleaned_series,
             )
             prepared.append((series, latest))
@@ -345,14 +442,39 @@ def _build_grids(
     return grids
 
 
-def _bucket_display_unit(bucket: MetricKey) -> str:
+build_grids = _build_grids
+
+
+def _latest_segment_source(
+    source_by_quarter: dict[tuple[int, int], str],
+    displayed_values: list[float | None],
+    quarters_full: list[tuple[int, int]],
+) -> str:
+    """Source type for the latest present observation in one segment series."""
+    for quarter, value in reversed(list(zip(quarters_full, displayed_values, strict=True))):
+        if value is not None:
+            return source_by_quarter.get(quarter, "")
+    return ""
+
+
+def _segment_source_label(source_type: str) -> str:
+    if source_type == "fmp":
+        return "vendor fallback"
+    if source_type in _ISSUER_DOCUMENT_SOURCE_TYPES:
+        return "issuer-reported"
+    return "source unavailable"
+
+
+def _bucket_display_unit(bucket: MetricKey, unit: str = "actual", currency: str = "") -> str:
     """SegmentSeries.unit value for a bucket — drives matrix-row tooltips."""
     if bucket == "headcount_by_segment":
         return "employees"
-    return "USD millions"
+    if unit == "count":
+        return "employees"
+    return f"{currency or 'currency unverified'} millions"
 
 
-def _to_display_units(value: float | None, bucket: MetricKey) -> float | None:
+def _to_display_units(value: float | None, bucket: MetricKey, unit: str = "actual") -> float | None:
     """Scale a raw segment_facts value to its bucket's display unit.
 
     Currency buckets (revenue / OI / capex) are stored in raw dollars by the
@@ -363,7 +485,15 @@ def _to_display_units(value: float | None, bucket: MetricKey) -> float | None:
         return None
     if bucket == "headcount_by_segment":
         return value
-    return value / 1_000_000.0
+    if unit == "actual":
+        return value / 1_000_000.0
+    if unit == "thousands":
+        return value / 1_000.0
+    if unit == "millions":
+        return value
+    if unit == "billions":
+        return value * 1_000.0
+    return value
 
 
 def _sort_and_rollup(
@@ -376,21 +506,45 @@ def _sort_and_rollup(
     Magnitude-based for OI too — a -$5B losing segment is more material than a
     $50M one regardless of sign, so both buckets use abs() to filter and sort.
     """
-    total_magnitude = sum(abs(latest) for _, latest in prepared if latest is not None)
-    if total_magnitude == 0:
-        return [s for s, _ in sorted(prepared, key=lambda p: p[0].segment_name)]
     kept: list[tuple[SegmentSeries, float | None]] = []
     rolled: list[SegmentSeries] = []
+    compatible_partitions: dict[str, list[tuple[SegmentSeries, float | None]]] = defaultdict(list)
     for series, latest in prepared:
-        share = (abs(latest) / total_magnitude) if latest is not None else 0.0
-        if share < _MIN_SHARE_OF_BUCKET:
-            rolled.append(series)
-        else:
-            kept.append((series, latest))
+        # ``unit`` is the rendered typed identity (for example ``BRL
+        # millions``).  Compute materiality inside that partition: a sole BRL
+        # series is 100% of the BRL observation, never sub-1% of a USD total.
+        compatible_partitions[series.unit].append((series, latest))
+    for partition in compatible_partitions.values():
+        total_magnitude = sum(abs(latest) for _, latest in partition if latest is not None)
+        if total_magnitude == 0:
+            kept.extend(partition)
+            continue
+        for series, latest in partition:
+            share = (abs(latest) / total_magnitude) if latest is not None else 0.0
+            if share < _MIN_SHARE_OF_BUCKET:
+                rolled.append(series)
+            else:
+                kept.append((series, latest))
     kept.sort(key=lambda p: abs(p[1] or 0.0), reverse=True)
     out = [s for s, _ in kept]
     if rolled:
-        out.append(_aggregate_other(rolled, display_labels, bucket))
+        # A displayed number has one unit, currency, and provenance class.
+        # Never fabricate a cross-currency/cross-source ``Other`` total.
+        rollup_groups: dict[tuple[str, str], list[SegmentSeries]] = defaultdict(list)
+        for series in rolled:
+            rollup_groups[(series.unit, series.source_label)].append(series)
+        multi_group = len(rollup_groups) > 1
+        for (unit, source_label), compatible_rows in sorted(rollup_groups.items()):
+            out.append(
+                _aggregate_other(
+                    compatible_rows,
+                    display_labels,
+                    bucket,
+                    unit=unit,
+                    source_label=source_label,
+                    label_suffix=(f"; {unit}; {source_label}" if multi_group else ""),
+                )
+            )
     return out
 
 
@@ -398,6 +552,10 @@ def _aggregate_other(
     rolled: list[SegmentSeries],
     display_labels: list[str],
     bucket: MetricKey,
+    *,
+    unit: str,
+    source_label: str,
+    label_suffix: str,
 ) -> SegmentSeries:
     n = len(display_labels)
     summed: list[float | None] = []
@@ -414,7 +572,7 @@ def _aggregate_other(
             if i < len(s.levels_full) and s.levels_full[i] is not None
         ]
         summed_full.append(sum(col_full) if col_full else None)  # type: ignore[arg-type]
-    label = f"Other ({len(rolled)} segments < 1%)"
+    label = f"Other ({len(rolled)} segments < 1%){label_suffix}"
     return SegmentSeries(
         segment_name=label,
         metric=bucket,
@@ -422,6 +580,8 @@ def _aggregate_other(
         values=summed,
         growth=compute_growth(summed),
         levels_full=summed_full,
+        unit=unit,
+        source_label=source_label,
     )
 
 
@@ -455,12 +615,12 @@ def _primary_segment_names(
 
 
 def _junction_tables_present(conn: sqlite3.Connection) -> bool:
-    """Both junction tables must exist for an expansion to be possible."""
+    """The junction and document provenance tables must exist for an expansion."""
     rows = conn.execute(
         "SELECT name FROM sqlite_master "
-        "WHERE type='table' AND name IN ('segment_periods', 'segment_dimensions')"
+        "WHERE type='table' AND name IN ('documents', 'segment_periods', 'segment_dimensions')"
     ).fetchall()
-    return len(rows) >= 2
+    return len(rows) == 3
 
 
 def _build_secondary_expansions(
@@ -491,10 +651,14 @@ def _build_secondary_expansions(
     placeholders = ",".join("?" * len(period_types))
     rows = conn.execute(
         f"""
-        SELECT sp.period_end, sp.fiscal_period_type, sd.dim_type, sd.dim_name,
-               sd.value, sd.metric
+        SELECT sp.period_end, sp.fiscal_period_type, sp.id AS segment_period_id,
+               sd.id AS segment_dimension_id, d.id AS document_id, d.fetched_at,
+               d.source_type, d.source_quality_tier, sd.dim_type, sd.dim_name,
+               sd.value, sd.metric, COALESCE(sd.unit, sp.unit) AS unit,
+               sp.currency AS currency
         FROM segment_periods sp
         JOIN segment_dimensions sd ON sd.period_id = sp.id
+        JOIN documents d ON d.id = sp.source_doc_id
         WHERE sp.ticker = ?
           AND sp.fiscal_period_type IN ({placeholders})
           AND (
@@ -506,7 +670,20 @@ def _build_secondary_expansions(
         """,
         (ticker.upper(), *period_types),
     ).fetchall()
-    if not rows:
+    selected_rows = _prefer_issuer_rows(
+        [
+            {
+                **dict(row),
+                "segment_name": str(row["dim_name"]),
+                # Secondary axes may reuse a dim name (for example "United
+                # States") across different dimensions.  Keep the same
+                # tier/source/revision winner policy without collapsing axes.
+                "_selection_identity": f"{row['dim_type']}\x1f{row['dim_name']}",
+            }
+            for row in rows
+        ]
+    )
+    if not selected_rows:
         return []
     # Sort so annual rows are processed FIRST and quarterly rows LAST. The
     # dict assignment ``by_axis[...][qkey] = v`` is last-write-wins, so this
@@ -515,18 +692,26 @@ def _build_secondary_expansions(
     # disclose both. For tickers with only annual data (the common 10-K
     # case), the annual rows survive unmodified.
     annual_set = set(ANNUAL_PERIOD_TYPES)
-    sorted_rows = sorted(rows, key=lambda r: 0 if str(r["fiscal_period_type"]) in annual_set else 1)
+    sorted_rows = sorted(
+        selected_rows,
+        key=lambda r: 0 if str(r["fiscal_period_type"]) in annual_set else 1,
+    )
 
     # Group by (dim_type, metric) so AWS_revenue-by-geography is its own
     # expansion, distinct from the global revenue-by-geography table that
     # already appears in the primary grids.
-    by_axis: dict[tuple[str, str], dict[str, dict[tuple[int, int], float]]] = defaultdict(
+    by_axis: dict[tuple[str, str, str, str], dict[str, dict[tuple[int, int], float]]] = defaultdict(
         lambda: defaultdict(dict)
+    )
+    by_axis_source: dict[tuple[str, str, str, str], dict[str, dict[tuple[int, int], str]]] = (
+        defaultdict(lambda: defaultdict(dict))
     )
     for r in sorted_rows:
         dim_type = str(r["dim_type"])
         metric_str = str(r["metric"])
         dim_name = str(r["dim_name"])
+        unit = str(r["unit"] or "actual")
+        currency = str(r["currency"] or "")
         # Skip cells already represented in a primary grid (avoid double-render)
         # — but ONLY when the metric is the generic 'revenue', because a more
         # specific metric (AWS_revenue) is genuinely a different cross-section.
@@ -536,17 +721,21 @@ def _build_secondary_expansions(
         if qkey not in quarters_full:
             continue
         try:
-            v = float(r["value"])
+            v = float(str(r["value"]))
         except (TypeError, ValueError):
             continue
-        by_axis[(dim_type, metric_str)][dim_name][qkey] = v
+        axis = (dim_type, metric_str, unit, currency)
+        by_axis[axis][dim_name][qkey] = v
+        by_axis_source[axis][dim_name][qkey] = str(r.get("source_type") or "")
 
     display_quarter_count = len(display_labels)
     out: list[SegmentSecondaryExpansion] = []
-    for (dim_type, metric_str), by_name in by_axis.items():
+    for (dim_type, metric_str, unit, currency), by_name in by_axis.items():
         rows_out: list[SegmentSeries] = []
         for name, qmap in by_name.items():
-            full_series = [_optional_millions(qmap.get(q)) for q in quarters_full]
+            full_series = [
+                _to_display_units(qmap.get(q), "revenue_by_product", unit) for q in quarters_full
+            ]
             display_values = full_series[-display_quarter_count:]
             rows_out.append(
                 SegmentSeries(
@@ -556,6 +745,14 @@ def _build_secondary_expansions(
                     values=display_values,
                     growth=compute_growth(full_series),
                     levels_full=full_series,
+                    unit=_bucket_display_unit("revenue_by_product", unit, currency),
+                    source_label=_segment_source_label(
+                        _latest_segment_source(
+                            by_axis_source[(dim_type, metric_str, unit, currency)][name],
+                            full_series,
+                            quarters_full,
+                        )
+                    ),
                 )
             )
         if not rows_out:
@@ -580,3 +777,6 @@ def _build_secondary_expansions(
         )
     out.sort(key=lambda e: (e.dim_type, e.parent_label or ""))
     return out
+
+
+build_secondary_expansions = _build_secondary_expansions

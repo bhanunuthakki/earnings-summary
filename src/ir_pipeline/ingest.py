@@ -33,7 +33,7 @@ from pathlib import Path
 from compute.kpi_resolver import canonical_metric_name
 from ir_pipeline.config import IrConfig, SheetKpi
 from models.documents import SourceType, tier_for_source_type
-from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
+from models.facts import Currency, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
 from models.runs import StageStatus
 from pipeline.invocation_fingerprint import file_fingerprint, payload_sha256
@@ -155,6 +155,35 @@ def _canonicalize_parsed(
     return series_by_name, unit_by_name, origins
 
 
+def _currency_by_name(
+    conn: sqlite3.Connection, ticker: str, config: IrConfig
+) -> dict[str, Currency | None]:
+    """Resolve explicit spreadsheet currencies onto canonical KPI names."""
+    currencies: dict[str, Currency | None] = {}
+    monetary = {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
+    for spec in config.spreadsheet_kpis:
+        name, unit, _ = _resolve_definition(conn, ticker, spec)
+        if unit not in monetary:
+            currencies.setdefault(name, None)
+            continue
+        declared_currency = spec.currency or config.reporting_currency
+        if declared_currency is None:
+            raise ValueError(
+                f"monetary IR spreadsheet KPI {spec.kpi_name!r} has no explicit currency"
+            )
+        try:
+            currency = Currency(declared_currency.upper())
+        except ValueError as exc:
+            raise ValueError(
+                f"IR spreadsheet KPI {spec.kpi_name!r} has unsupported currency {declared_currency!r}"
+            ) from exc
+        existing = currencies.get(name)
+        if existing is not None and existing is not currency:
+            raise ValueError(f"canonical IR spreadsheet KPI {name!r} has conflicting currencies")
+        currencies[name] = currency
+    return currencies
+
+
 def ingest_spreadsheet_kpis(
     conn: sqlite3.Connection,
     ticker: str,
@@ -176,6 +205,7 @@ def ingest_spreadsheet_kpis(
             raise ValueError("post-cutover IR spreadsheet ingest requires repo_root")
         ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=doc_id)
     series_by_name, unit_by_name, origins = _canonicalize_parsed(conn, ticker, config, parsed)
+    currency_by_name = _currency_by_name(conn, ticker, config)
 
     # Regroup to one manifest per period_end (each manifest = a period's KPIs).
     by_period: dict[_dt.datetime, dict[str, float]] = {}
@@ -208,6 +238,7 @@ def ingest_spreadsheet_kpis(
                     name=name,
                     value=Decimal(str(val)),
                     unit=unit_by_name.get(name, Unit.ACTUAL),
+                    currency=currency_by_name.get(name),
                     confidence=1.0,
                     locator=_NO_LOCATOR,
                 )

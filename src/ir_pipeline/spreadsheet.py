@@ -70,6 +70,11 @@ def _header_row(rows: list[tuple[object, ...]]) -> tuple[int, dict[int, _dt.date
     return best_idx, best_map
 
 
+# Shared builder seam: callers outside this module should use the public name
+# rather than reaching into the parser's private implementation.
+header_row = _header_row
+
+
 def _label_matches(cell: object, want: str, *, exact: bool) -> bool:
     """Whether a label cell matches ``want`` (already lower-cased).
 

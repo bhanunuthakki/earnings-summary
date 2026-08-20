@@ -46,7 +46,7 @@ from typing import cast
 from compute.kpi_resolver import resolve_kpi_definition_name
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceQualityTier, SourceType
-from models.facts import FiscalPeriodType, Unit
+from models.facts import Currency, FiscalPeriodType, Unit
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
@@ -131,7 +131,40 @@ class QuarterlyFacts:
     total_stockholders_equity: Decimal | None = None
 
 
-def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[QuarterlyFacts]:
+class FmpDerivationReason(StrEnum):
+    """Closed, externally reportable reasons for skipped source fundamentals."""
+
+    MISSING_MONETARY_CURRENCY = "missing_monetary_currency"
+    INCOMPATIBLE_MONETARY_CURRENCY = "incompatible_monetary_currency"
+    MISSING_SEGMENT_CURRENCY = "missing_segment_currency"
+    INVALID_SEGMENT_CURRENCY = "invalid_segment_currency"
+    INCOMPATIBLE_SEGMENT_MARGIN_CURRENCY = "incompatible_segment_margin_currency"
+    INCOMPATIBLE_SEGMENT_GROWTH_CURRENCY = "incompatible_segment_growth_currency"
+
+
+@dataclass(frozen=True)
+class FmpDerivationOutcome:
+    """Typed scheduled-run receipt; unlike an empty result, it is explainable."""
+
+    rows_emitted: int
+    rows_inserted: int
+    not_computable: int
+    reasons: tuple[FmpDerivationReason, ...]
+
+
+def _monetary_fact_pair(value: object) -> tuple[Decimal, Currency] | None:
+    """Return a validated (value, currency) pair from the SQL aggregation bucket."""
+    if not isinstance(value, tuple):
+        return None
+    pair = cast("tuple[object, ...]", value)
+    if len(pair) != 2 or not isinstance(pair[0], Decimal) or not isinstance(pair[1], Currency):
+        return None
+    return (pair[0], pair[1])
+
+
+def _fetch_quarterly_facts(
+    conn: sqlite3.Connection, ticker: str
+) -> tuple[list[QuarterlyFacts], list[FmpDerivationReason]]:
     """Pull standalone-quarter fundamentals for a ticker.
 
     Accepts rows from any `fmp_income_statement` / `fmp_cashflow` document
@@ -166,7 +199,8 @@ def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[Quarte
     tier_rank = reader_tier_rank_sql(conn)
     cur = conn.execute(
         f"""
-        SELECT ff.period_end, ff.fiscal_period_type, ff.line_item, ff.value, ff.source_doc_id
+        SELECT ff.period_end, ff.fiscal_period_type, ff.line_item, ff.value, ff.currency,
+               ff.source_doc_id
         FROM financial_facts ff
         JOIN documents d ON d.id = ff.source_doc_id
         WHERE ff.ticker = ?
@@ -186,7 +220,16 @@ def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[Quarte
             pe = datetime.fromisoformat(pe)
         key = (pe, row["fiscal_period_type"])
         bucket = grouped.setdefault(key, {})
-        bucket[row["line_item"]] = Decimal(str(row["value"]))
+        # These are monetary source facts. Do not let the historic FMP
+        # deriver manufacture a ratio from a missing or incompatible currency:
+        # a percentage is dimensionless, but its numerator and denominator are
+        # not. Invalid currencies are retained as an unavailable cell so the
+        # period receives the same fail-closed treatment as a missing input.
+        try:
+            currency = Currency(str(row["currency"])) if row["currency"] is not None else None
+        except ValueError:
+            currency = None
+        bucket[row["line_item"]] = (Decimal(str(row["value"])), currency)
         # Anchor provenance to the winning revenue cell's document (revenue is
         # the required base of every derivation). Rows arrive tier-ascending, so
         # the last revenue write is the tier-winner.
@@ -194,17 +237,60 @@ def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[Quarte
             bucket["_source_doc_id"] = int(row["source_doc_id"])
 
     results: list[QuarterlyFacts] = []
+    degradations: list[FmpDerivationReason] = []
     for (pe, fpt), bucket in sorted(grouped.items(), key=lambda kv: kv[0][0]):
         if not all(li in bucket for li in _REQUIRED_LINE_ITEMS):
             continue
-        rev = bucket["revenue"]
-        if not isinstance(rev, Decimal) or rev == 0:
+        required_pairs = [
+            _monetary_fact_pair(bucket[line_item]) for line_item in _REQUIRED_LINE_ITEMS
+        ]
+        if any(pair is None for pair in required_pairs):
+            log.warning(
+                "fmp_derived_kpis_not_computable",
+                extra={
+                    "ticker": ticker.upper(),
+                    "period_end": pe.date().isoformat(),
+                    "reason_code": "missing_monetary_currency",
+                },
+            )
+            degradations.append(FmpDerivationReason.MISSING_MONETARY_CURRENCY)
             continue
-        ocf = bucket.get("operating_cash_flow")
-        capex = bucket.get("capital_expenditure")
-        fcf = bucket.get("free_cash_flow")
-        equity = bucket.get("total_stockholders_equity")
-        equity_dec = equity if isinstance(equity, Decimal) else None
+        validated_pairs = [pair for pair in required_pairs if pair is not None]
+        required_currencies = {currency for _, currency in validated_pairs}
+        if len(required_currencies) != 1:
+            log.warning(
+                "fmp_derived_kpis_not_computable",
+                extra={
+                    "ticker": ticker.upper(),
+                    "period_end": pe.date().isoformat(),
+                    "reason_code": "incompatible_monetary_currency",
+                },
+            )
+            degradations.append(FmpDerivationReason.INCOMPATIBLE_MONETARY_CURRENCY)
+            continue
+        rev, operating_income, net_income, gross_profit = (value for value, _ in validated_pairs)
+        if rev == 0:
+            continue
+        required_currency = next(iter(required_currencies))
+
+        optional_pairs = {
+            line_item: _monetary_fact_pair(bucket.get(line_item))
+            for line_item in _OPTIONAL_LINE_ITEMS + _BALANCE_LINE_ITEMS
+        }
+        ocf_pair = optional_pairs["operating_cash_flow"]
+        capex_pair = optional_pairs["capital_expenditure"]
+        fcf_pair = optional_pairs["free_cash_flow"]
+        equity_pair = optional_pairs["total_stockholders_equity"]
+        ocf = ocf_pair[0] if ocf_pair is not None and ocf_pair[1] == required_currency else None
+        capex = (
+            capex_pair[0] if capex_pair is not None and capex_pair[1] == required_currency else None
+        )
+        fcf = fcf_pair[0] if fcf_pair is not None and fcf_pair[1] == required_currency else None
+        equity_dec = (
+            equity_pair[0]
+            if equity_pair is not None and equity_pair[1] == required_currency
+            else None
+        )
         # FMP coverage-gap signature: when OCF, Capex, AND FCF are all
         # simultaneously exactly zero in a quarter with non-zero revenue, the
         # upstream parser failed (NTDOY's JP filing format and HDB's IN filing
@@ -221,17 +307,17 @@ def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[Quarte
                 period_end=pe,
                 fiscal_period_type=FiscalPeriodType(fpt),
                 revenue=rev,
-                operating_income=bucket["operating_income"],
-                net_income=bucket["net_income"],
-                gross_profit=bucket["gross_profit"],
-                source_doc_id=int(bucket["_source_doc_id"]),
-                capital_expenditure=capex,  # type: ignore[arg-type]
-                free_cash_flow=fcf,  # type: ignore[arg-type]
-                operating_cash_flow=ocf,  # type: ignore[arg-type]
+                operating_income=operating_income,
+                net_income=net_income,
+                gross_profit=gross_profit,
+                source_doc_id=int(cast("int", bucket["_source_doc_id"])),
+                capital_expenditure=capex,
+                free_cash_flow=fcf,
+                operating_cash_flow=ocf,
                 total_stockholders_equity=equity_dec,
             )
         )
-    return results
+    return results, degradations
 
 
 @dataclass(frozen=True)
@@ -249,6 +335,7 @@ class DerivedKpiRow:
     # ("derived from: …" plus one mini-chip per input). None only when a
     # deriver predates lineage capture.
     computed_from: str | None = None
+    currency: Currency | None = None
 
 
 def _lineage(display: str, inputs: list[dict[str, object]]) -> str:
@@ -498,8 +585,18 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
     return out
 
 
-def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedKpiRow]:
+def derive_segment_kpis(
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    degradations: list[FmpDerivationReason] | None = None,
+) -> list[DerivedKpiRow]:
     """Derive segment-level growth and margins dynamically based on holdings.json."""
+
+    def record_degradation(reason: FmpDerivationReason) -> None:
+        if degradations is not None and reason not in degradations:
+            degradations.append(reason)
+
     # Junction tables must exist for any segment-derived KPI to make sense —
     # test fixtures without segment data fall through to an empty result.
     table_check = conn.execute(
@@ -530,11 +627,16 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
         try:
             with open(holdings_path, encoding="utf-8") as f:
                 data = json.load(f)
+            payload = cast("dict[str, object]", data) if isinstance(data, dict) else {}
             kpi_names: set[str] = set()
             for key in ("tier_1_kpis", "tier_2_kpis", "tier_3_kpis", "business_model_rules"):
-                items = data.get(key) or []
+                candidate = payload.get(key)
+                items = cast("list[object]", candidate) if isinstance(candidate, list) else []
                 for item in items:
-                    name = item.get("name") or item.get("kpi_name")
+                    if not isinstance(item, dict):
+                        continue
+                    entry = cast("dict[str, object]", item)
+                    name = entry.get("name") or entry.get("kpi_name")
                     if name:
                         kpi_names.add(str(name).strip())
 
@@ -591,6 +693,7 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                     THEN 'operating_income'
             END AS metric,
             sd.value AS value,
+            sp.currency AS currency,
             sp.source_doc_id AS source_doc_id
         FROM segment_periods sp
         JOIN segment_dimensions sd ON sd.period_id = sp.id
@@ -608,8 +711,7 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
     if not rows:
         return []
 
-    grouped: dict[tuple[datetime, str], dict[str, dict[str, Decimal]]] = {}
-    source_docs: dict[tuple[datetime, str], int] = {}
+    grouped: dict[tuple[datetime, str], dict[str, dict[str, tuple[Decimal, Currency, int]]]] = {}
     for r in rows:
         pe = r["period_end"]
         if isinstance(pe, str):
@@ -617,19 +719,29 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
         key = (pe, r["fiscal_period_type"])
         seg = r["segment_name"]
         metric = r["metric"]
+        raw_currency = r["currency"]
+        if raw_currency is None:
+            record_degradation(FmpDerivationReason.MISSING_SEGMENT_CURRENCY)
+            continue
+        try:
+            currency = Currency(str(raw_currency))
+        except ValueError:
+            record_degradation(FmpDerivationReason.INVALID_SEGMENT_CURRENCY)
+            continue
         val = Decimal(str(r["value"]))
-        source_docs[key] = int(r["source_doc_id"])
-
-        grouped.setdefault(key, {}).setdefault(seg, {})[metric] = val
+        grouped.setdefault(key, {}).setdefault(seg, {})[metric] = (
+            val,
+            currency,
+            int(r["source_doc_id"]),
+        )
 
     out: list[DerivedKpiRow] = []
-    history: dict[str, dict[str, dict[str, dict[int, tuple[Decimal, int]]]]] = {}
+    history: dict[str, dict[str, dict[str, dict[int, tuple[Decimal, Currency, int]]]]] = {}
 
     sorted_keys = sorted(grouped.keys(), key=lambda k: k[0])
     for key in sorted_keys:
         pe, fpt = key
         segments_data = grouped[key]
-        doc_id = source_docs[key]
 
         for kpi_name, seg_name, metric_type in kpi_targets:
             if seg_name not in segments_data:
@@ -638,9 +750,14 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
 
             if metric_type == "operating_margin":
                 rev = seg_data.get("revenue_by_product")
-                oi = seg_data.get("operating_income")
-                if rev and oi is not None:
-                    margin = (oi / rev) * Decimal(100)
+                operating_income = seg_data.get("operating_income")
+                if (
+                    rev is not None
+                    and operating_income is not None
+                    and rev[0] != 0
+                    and rev[1] == operating_income[1]
+                ):
+                    margin = (operating_income[0] / rev[0]) * Decimal(100)
                     out.append(
                         DerivedKpiRow(
                             pe,
@@ -648,32 +765,37 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                             kpi_name,
                             margin,
                             Unit.PERCENT,
-                            doc_id,
+                            rev[2],
                             computed_from=_lineage(
                                 f"{seg_name} operating_income ÷ {seg_name} revenue (%)",
                                 [
                                     _input_ref(
-                                        "segment_fact", f"{seg_name} operating_income", pe, doc_id
+                                        "segment_fact",
+                                        f"{seg_name} operating_income",
+                                        pe,
+                                        operating_income[2],
                                     ),
-                                    _input_ref("segment_fact", f"{seg_name} revenue", pe, doc_id),
+                                    _input_ref("segment_fact", f"{seg_name} revenue", pe, rev[2]),
                                 ],
                             ),
                         )
                     )
+                elif rev is not None and operating_income is not None and degradations is not None:
+                    record_degradation(FmpDerivationReason.INCOMPATIBLE_SEGMENT_MARGIN_CURRENCY)
 
             elif metric_type == "revenue_growth":
                 rev = seg_data.get("revenue_by_product")
-                if rev:
+                if rev is not None:
                     history.setdefault(seg_name, {}).setdefault("revenue", {}).setdefault(fpt, {})[
                         pe.year
-                    ] = (rev, doc_id)
+                    ] = rev
 
             elif metric_type == "operating_income_growth":
-                oi = seg_data.get("operating_income")
-                if oi is not None:
+                operating_income = seg_data.get("operating_income")
+                if operating_income is not None:
                     history.setdefault(seg_name, {}).setdefault("operating_income", {}).setdefault(
                         fpt, {}
-                    )[pe.year] = (oi, doc_id)
+                    )[pe.year] = operating_income
 
     for seg_name, metrics in history.items():
         for metric_name, fpt_map in metrics.items():
@@ -690,16 +812,15 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                 continue
 
             for fpt, year_map in fpt_map.items():
-                for year, (val, doc_id) in year_map.items():
+                for year, (value, currency, doc_id) in year_map.items():
                     prior_year = year - 1
                     if prior_year in year_map:
-                        prior_val, _ = year_map[prior_year]
-                        if prior_val > 0:
-                            yoy = ((val - prior_val) / prior_val) * Decimal(100)
+                        prior_value, prior_currency, prior_doc_id = year_map[prior_year]
+                        if prior_value > 0 and prior_currency == currency:
+                            yoy = ((value - prior_value) / prior_value) * Decimal(100)
                             pe_current = next(
                                 k[0] for k in sorted_keys if k[0].year == year and k[1] == fpt
                             )
-                            prior_doc_id = year_map[prior_year][1]
                             pe_prior = next(
                                 (
                                     k[0]
@@ -737,6 +858,10 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                                         ),
                                     )
                                 )
+                        elif prior_currency != currency and degradations is not None:
+                            record_degradation(
+                                FmpDerivationReason.INCOMPATIBLE_SEGMENT_GROWTH_CURRENCY
+                            )
 
     return out
 
@@ -1016,6 +1141,11 @@ def _input_doc_tiers(conn: sqlite3.Connection, rows: list[DerivedKpiRow]) -> dic
     tier column is absent (legacy fixtures) — inputs then stay tier-less."""
     doc_ids: set[int] = set()
     for row in rows:
+        if (
+            row.unit in {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
+            and row.currency is None
+        ):
+            raise ValueError(f"derived monetary KPI {row.name!r} has no explicit currency")
         if row.computed_from is None:
             continue
         try:
@@ -1108,6 +1238,7 @@ def persist_derived_kpis(
             kpi_definition_id=kpi_def_id,
             value=row.value,
             unit=row.unit.value,
+            currency=row.currency.value if row.currency is not None else None,
             source_doc_id=row.source_doc_id,
             confidence=confidence,
             extracted_by=extracted_by,
@@ -1124,8 +1255,8 @@ def persist_derived_kpis(
     return inserted
 
 
-def derive_for_ticker(conn: sqlite3.Connection, ticker: str) -> tuple[int, int]:
-    """End-to-end: derive KPIs and persist. Returns (rows_emitted, rows_inserted).
+def derive_for_ticker_outcome(conn: sqlite3.Connection, ticker: str) -> FmpDerivationOutcome:
+    """End-to-end typed receipt for FMP derivation and its fail-closed skips.
 
     Two phases. Phase 1 derives category-1 metrics from `financial_facts`
     (margins + Revenue YoY Growth + segment KPIs) and persists them. Phase 2
@@ -1135,11 +1266,13 @@ def derive_for_ticker(conn: sqlite3.Connection, ticker: str) -> tuple[int, int]:
     reads a populated base. Each phase is idempotent (UNIQUE index dedupes), so
     re-running inserts nothing new.
     """
-    facts = _fetch_quarterly_facts(conn, ticker)
+    facts, degradations = _fetch_quarterly_facts(conn, ticker)
     rows: list[DerivedKpiRow] = []
     if facts:
         rows.extend(derive_for_facts(facts))
-    rows.extend(_derive_segment_kpis(conn, ticker))
+    segment_degradations: list[FmpDerivationReason] = []
+    rows.extend(derive_segment_kpis(conn, ticker, degradations=segment_degradations))
+    degradations.extend(segment_degradations)
 
     inserted = 0
     if rows:
@@ -1156,4 +1289,15 @@ def derive_for_ticker(conn: sqlite3.Connection, ticker: str) -> tuple[int, int]:
             extracted_by="kpi_transform_derived",
         )
 
-    return (len(rows) + len(transform_rows), inserted)
+    return FmpDerivationOutcome(
+        rows_emitted=len(rows) + len(transform_rows),
+        rows_inserted=inserted,
+        not_computable=len(degradations),
+        reasons=tuple(degradations),
+    )
+
+
+def derive_for_ticker(conn: sqlite3.Connection, ticker: str) -> tuple[int, int]:
+    """Compatibility wrapper returning ``(rows_emitted, rows_inserted)``."""
+    outcome = derive_for_ticker_outcome(conn, ticker)
+    return (outcome.rows_emitted, outcome.rows_inserted)

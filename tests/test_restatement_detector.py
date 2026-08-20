@@ -96,6 +96,7 @@ def _make_schema(db_path: Path) -> None:
                 kpi_definition_id INTEGER NOT NULL,
                 value NUMERIC(24,6) NOT NULL,
                 unit TEXT NOT NULL,
+                currency TEXT,
                 source_doc_id INTEGER NOT NULL,
                 confidence FLOAT NOT NULL DEFAULT 1.0,
                 extracted_by TEXT,
@@ -1121,6 +1122,89 @@ def test_kpi_same_document_replay_is_noop(fixture_db: Path) -> None:
             ("RBRK",),
         ).fetchone()
         assert rows[0] == 1
+    finally:
+        conn.close()
+
+
+def test_kpi_same_document_currency_backfill_and_conflict_fail_closed(fixture_db: Path) -> None:
+    """A legacy NULL currency can be healed once; a conflicting retry cannot."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        doc = _insert_document(
+            conn,
+            ticker="NVO",
+            source_type="ir_doc",
+            doc_type="ir_presentation",
+            period_end="2026-06-30 00:00:00",
+            fetched_at="2026-08-05 12:00:00",
+            sha256="c" * 64,
+        )
+        definition_id = _seed_kpi_definition(conn, ticker="NVO", name="Obesity care sales")
+        row_id, _ = insert_kpi_with_restatement_detection(
+            conn,
+            ticker="NVO",
+            period_end=datetime.fromisoformat("2026-06-30"),
+            fiscal_period_type="Q2",
+            kpi_definition_id=definition_id,
+            value=Decimal("100"),
+            unit="actual",
+            source_doc_id=doc,
+        )
+        assert row_id is not None
+        backfilled_id, _ = insert_kpi_with_restatement_detection(
+            conn,
+            ticker="NVO",
+            period_end=datetime.fromisoformat("2026-06-30"),
+            fiscal_period_type="Q2",
+            kpi_definition_id=definition_id,
+            value=Decimal("100"),
+            unit="actual",
+            currency="USD",
+            source_doc_id=doc,
+        )
+        assert backfilled_id == row_id
+        assert (
+            conn.execute("SELECT currency FROM kpi_facts WHERE id=?", (row_id,)).fetchone()[0]
+            == "USD"
+        )
+        # Currency may only backfill a NULL row when value and unit are the
+        # same fact, never as a way to synthesize a mixed scale/currency row.
+        other_row_id, _ = insert_kpi_with_restatement_detection(
+            conn,
+            ticker="NVO",
+            period_end=datetime.fromisoformat("2026-03-31"),
+            fiscal_period_type="Q1",
+            kpi_definition_id=definition_id,
+            value=Decimal("100"),
+            unit="actual",
+            source_doc_id=doc,
+        )
+        assert other_row_id is not None
+        with pytest.raises(ValueError, match="backfill conflicts with persisted fact identity"):
+            insert_kpi_with_restatement_detection(
+                conn,
+                ticker="NVO",
+                period_end=datetime.fromisoformat("2026-03-31"),
+                fiscal_period_type="Q1",
+                kpi_definition_id=definition_id,
+                value=Decimal("200"),
+                unit="millions",
+                currency="USD",
+                source_doc_id=doc,
+            )
+        with pytest.raises(ValueError, match="currency conflicts"):
+            insert_kpi_with_restatement_detection(
+                conn,
+                ticker="NVO",
+                period_end=datetime.fromisoformat("2026-06-30"),
+                fiscal_period_type="Q2",
+                kpi_definition_id=definition_id,
+                value=Decimal("100"),
+                unit="actual",
+                currency="EUR",
+                source_doc_id=doc,
+            )
     finally:
         conn.close()
 

@@ -5,7 +5,7 @@ directly via `FormulaDef.applies_to`. `_TICKER_EFFICIENCY_OVERRIDES` is the
 finer-grained per-ticker exception list (e.g. `inventory_turnover` for a
 zero-inventory business) — same "owner-maintained exception list" pattern
 the repo already uses for the AMZN segment-KPI defaults in
-`compute.fmp_derived_kpis._derive_segment_kpis`.
+`compute.fmp_derived_kpis.derive_segment_kpis`.
 
 Phase 2: populated from a real, read-only query against `data/portfolio.db`
 (never guessed) — every portfolio/evaluation-roster ticker's most recent

@@ -481,7 +481,7 @@ def _sql_payload_fingerprint(*values: object) -> str:
 def _payload_fingerprint_sql(fact_table: _FactTable) -> str:
     financial_values = "fact.line_item, fact.currency, NULL, NULL, NULL, NULL, NULL"
     kpi_values = (
-        "NULL, NULL, fact.kpi_definition_id, fact.source_excerpt, "
+        "NULL, fact.currency, fact.kpi_definition_id, fact.source_excerpt, "
         "fact.computed_from, fact.formula_id, fact.formula_version"
     )
     table_values = financial_values if fact_table == "financial_facts" else kpi_values
@@ -730,6 +730,7 @@ def _fact_payload(
             "schema_version": "kpi_fact_payload.v1",
             "fact_table": "kpi_facts",
             "kpi_definition_id": int(cast("int", row["kpi_definition_id"])),
+            "currency": (None if row.get("currency") is None else str(row["currency"])),
             "source_excerpt": (
                 None if row.get("source_excerpt") is None else str(row["source_excerpt"])
             ),

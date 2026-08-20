@@ -9,17 +9,17 @@ from decimal import Decimal
 import pytest
 
 from models.documents import SourceType
-from models.facts import FactLocator, FiscalPeriodType, Unit
+from models.facts import Currency, FactLocator, FiscalPeriodType, Unit
 from models.validation import Severity, ValidationRule
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     PersistResult,
-    _reconcile_unit,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     find_or_create_kpi_definition,
     guard_llm_extracted_parent,
     persist_manifest,
     purge_duplicate_kpi_facts,
+    reconcile_unit,
     record_validation_issue,
 )
 
@@ -372,6 +372,7 @@ def test_cumulative_guard_scoped_to_marked_kpis_only(conn: sqlite3.Connection) -
                 name="Monthly ARPAC (USD)",
                 value=Decimal("12"),
                 unit=Unit.ACTUAL,
+                currency=Currency.USD,
                 locator=_NO_LOCATOR,
             )
         ],
@@ -386,6 +387,7 @@ def test_cumulative_guard_scoped_to_marked_kpis_only(conn: sqlite3.Connection) -
                 name="Monthly ARPAC (USD)",
                 value=Decimal("9"),
                 unit=Unit.ACTUAL,
+                currency=Currency.USD,
                 locator=_NO_LOCATOR,
             )
         ],
@@ -606,21 +608,21 @@ def test_reconcile_unit_passthrough_and_rescale_and_mismatch() -> None:
     """The helper: passthrough when no/equal canonical, rescale within a family,
     keep-original-and-flag across families."""
     # No canonical → unchanged.
-    assert _reconcile_unit(Decimal("5"), Unit.ACTUAL, None) == (Decimal("5"), Unit.ACTUAL, False)
+    assert reconcile_unit(Decimal("5"), Unit.ACTUAL, None) == (Decimal("5"), Unit.ACTUAL, False)
     # Canonical equals extracted → unchanged (no needless conversion).
-    assert _reconcile_unit(Decimal("17.8"), Unit.PERCENT, Unit.PERCENT) == (
+    assert reconcile_unit(Decimal("17.8"), Unit.PERCENT, Unit.PERCENT) == (
         Decimal("17.8"),
         Unit.PERCENT,
         False,
     )
     # Same family, different unit → rescaled into the canonical unit.
-    assert _reconcile_unit(Decimal("115000000"), Unit.ACTUAL, Unit.MILLIONS) == (
+    assert reconcile_unit(Decimal("115000000"), Unit.ACTUAL, Unit.MILLIONS) == (
         Decimal("115"),
         Unit.MILLIONS,
         False,
     )
     # Cross family → original kept, flagged.
-    assert _reconcile_unit(Decimal("123456"), Unit.ACTUAL, Unit.PERCENT) == (
+    assert reconcile_unit(Decimal("123456"), Unit.ACTUAL, Unit.PERCENT) == (
         Decimal("123456"),
         Unit.ACTUAL,
         True,
@@ -643,6 +645,7 @@ def test_persist_manifest_reconciles_actual_to_canonical_millions(conn: sqlite3.
                 name="Net new subscription ARR ($)",
                 value=Decimal("115000000"),
                 unit=Unit.ACTUAL,
+                currency=Currency.USD,
                 locator=_NO_LOCATOR,
             )
         ],
@@ -710,7 +713,11 @@ def test_persist_manifest_flags_cross_family_canonical_and_keeps_original(
         canonical_units={"Some Margin": Unit.PERCENT},
         values=[
             KpiValue(
-                name="Some Margin", value=Decimal("123456"), unit=Unit.ACTUAL, locator=_NO_LOCATOR
+                name="Some Margin",
+                value=Decimal("123456"),
+                unit=Unit.ACTUAL,
+                currency=Currency.USD,
+                locator=_NO_LOCATOR,
             )
         ],
     )
@@ -737,7 +744,13 @@ def test_persist_manifest_no_canonical_is_unchanged_passthrough(conn: sqlite3.Co
         source_doc_id=1,
         primary_source=SourceType.IR_DOC,
         values=[
-            KpiValue(name="GMV", value=Decimal("5000000000"), unit=Unit.ACTUAL, locator=_NO_LOCATOR)
+            KpiValue(
+                name="GMV",
+                value=Decimal("5000000000"),
+                unit=Unit.ACTUAL,
+                currency=Currency.USD,
+                locator=_NO_LOCATOR,
+            )
         ],
     )
     result = persist_manifest(conn, run_id="r4", manifest=manifest)

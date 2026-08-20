@@ -38,6 +38,7 @@ class LivePrice:
     price: float
     fetched_at: datetime  # UTC
     source_name: str  # "yfinance" | "fmp_cache"
+    currency: str | None = None  # explicit exchange/adapter declaration; never assumed
 
 
 def read_live_price(repo_root: Path, ticker: str) -> LivePrice | None:
@@ -72,6 +73,7 @@ def _try_yfinance(ticker: str) -> LivePrice | None:
         # `fast_info` is the modern lightweight call — last_price + currency, no DataFrame.
         # `.info` is the legacy heavy call (full snapshot); use as a fallback.
         price: float | None = None
+        currency: str | None = None
         fast = getattr(tkr, "fast_info", None)
         if fast is not None:
             raw = (
@@ -81,11 +83,20 @@ def _try_yfinance(ticker: str) -> LivePrice | None:
             )
             if isinstance(raw, (int, float)) and raw > 0:
                 price = float(raw)
+            raw_currency = getattr(fast, "currency", None)
+            if raw_currency is None and hasattr(fast, "get"):
+                raw_currency = fast.get("currency")
+            if isinstance(raw_currency, str) and raw_currency.strip():
+                currency = raw_currency.strip().upper()
 
         if price is None:
-            info = getattr(tkr, "info", None) or {}
+            raw_info = getattr(tkr, "info", None)
+            info = cast("dict[str, object]", raw_info) if isinstance(raw_info, dict) else {}
+            raw_currency = info.get("currency")
+            if isinstance(raw_currency, str) and raw_currency.strip():
+                currency = raw_currency.strip().upper()
             for key in ("regularMarketPrice", "currentPrice", "previousClose"):
-                v = info.get(key) if isinstance(info, dict) else None
+                v = info.get(key)
                 if isinstance(v, (int, float)) and v > 0:
                     price = float(v)
                     break
@@ -113,6 +124,7 @@ def _try_yfinance(ticker: str) -> LivePrice | None:
             price=price,
             fetched_at=datetime.now(UTC),
             source_name="yfinance",
+            currency=currency,
         )
     except Exception as e:
         log_call(
@@ -171,6 +183,7 @@ def _try_fmp_cache(repo_root: Path, ticker: str) -> LivePrice | None:
         return None
 
     raw_price = rec.get("price")
+    raw_currency = rec.get("currency")
     if not isinstance(raw_price, (int, float)) or raw_price <= 0:
         log_call(
             source_name="fmp_cache",
@@ -195,4 +208,7 @@ def _try_fmp_cache(repo_root: Path, ticker: str) -> LivePrice | None:
         price=float(raw_price),
         fetched_at=mtime,
         source_name="fmp_cache",
+        currency=raw_currency.strip().upper()
+        if isinstance(raw_currency, str) and raw_currency.strip()
+        else None,
     )

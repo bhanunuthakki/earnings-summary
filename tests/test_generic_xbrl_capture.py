@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from models.documents import SourceType  # noqa: E402
-from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit  # noqa: E402
+from models.facts import Currency, FiscalPeriodType, LegacyEscapeHatch, Unit  # noqa: E402
 from models.kpis import DefinitionOrigin  # noqa: E402
 from pipeline.kpi_persistence import (  # noqa: E402
     KpiExtractionManifest,
@@ -405,7 +405,11 @@ def test_capture_mode_canonicalizes_onto_existing_analyst_def() -> None:
         manifest=_capture_manifest(
             [
                 KpiValue(
-                    name="GMV (USD)", value=Decimal("5"), unit=Unit.MILLIONS, locator=_NO_LOCATOR
+                    name="GMV (USD)",
+                    value=Decimal("5"),
+                    unit=Unit.MILLIONS,
+                    currency=Currency.USD,
+                    locator=_NO_LOCATOR,
                 )
             ],
             DefinitionOrigin.CAPTURE,
@@ -426,6 +430,7 @@ def test_capture_mode_mints_new_capture_origin() -> None:
                     name="Brand New Long-Tail Metric",
                     value=Decimal("9"),
                     unit=Unit.ACTUAL,
+                    currency=Currency.USD,
                     locator=_NO_LOCATOR,
                 )
             ],
@@ -448,6 +453,7 @@ def test_analyst_mode_stores_name_verbatim() -> None:
                     name="Monthly ARPAC (USD)",
                     value=Decimal("11"),
                     unit=Unit.ACTUAL,
+                    currency=Currency.USD,
                     locator=_NO_LOCATOR,
                 )
             ],
@@ -470,12 +476,14 @@ def test_capture_within_batch_dedup() -> None:
                     name="Total bookings",
                     value=Decimal("5"),
                     unit=Unit.MILLIONS,
+                    currency=Currency.USD,
                     locator=_NO_LOCATOR,
                 ),
                 KpiValue(
                     name="total   bookings (USD)",
                     value=Decimal("5"),
                     unit=Unit.MILLIONS,
+                    currency=Currency.USD,
                     locator=_NO_LOCATOR,
                 ),
             ],
@@ -503,7 +511,11 @@ def test_persist_drops_absurd_actual_magnitude() -> None:
         manifest=_capture_manifest(
             [
                 KpiValue(
-                    name="Treasury stock", value=mis_scaled, unit=Unit.ACTUAL, locator=_NO_LOCATOR
+                    name="Treasury stock",
+                    value=mis_scaled,
+                    unit=Unit.ACTUAL,
+                    currency=Currency.USD,
+                    locator=_NO_LOCATOR,
                 )
             ],
             DefinitionOrigin.CAPTURE,
@@ -531,6 +543,7 @@ def test_persist_keeps_largest_plausible_actual() -> None:
                     name="Gross notional",
                     value=Decimal("60000000000000"),
                     unit=Unit.ACTUAL,
+                    currency=Currency.USD,
                     locator=_NO_LOCATOR,
                 )
             ],

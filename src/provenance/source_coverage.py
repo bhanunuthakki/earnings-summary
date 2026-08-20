@@ -13,7 +13,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, Self, TypeAlias
+from typing import Literal, Self, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -251,7 +251,71 @@ class CoverageAssessment(_CoverageRecord):
         return json.dumps(dict(self.reason_details), sort_keys=True, separators=(",", ":"))
 
 
-CoverageRecord: TypeAlias = SourceInventorySnapshot | ExpectedDocument | CoverageAssessment
+class IssuerFactCoverageReceiptRecord(_CoverageRecord):
+    """One immutable fact-level receipt from issuer-document reconciliation."""
+
+    record_id: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=64, max_length=64)
+    reconciliation_key: str = Field(min_length=1, max_length=512)
+    document_id: int = Field(gt=0)
+    ticker: str = Field(min_length=1, max_length=16)
+    fact_identity: str = Field(min_length=1, max_length=512)
+    receipt_json: str = Field(min_length=2)
+    receipt_sha256: str
+    recorded_at: datetime
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _idempotency_hash(cls, value: str) -> str:
+        return _sha256(value)
+
+    _receipt_hash = field_validator("receipt_sha256")(_sha256)
+
+    @model_validator(mode="after")
+    def _receipt_content_matches_hash(self) -> Self:
+        if hashlib.sha256(self.receipt_json.encode("utf-8")).hexdigest() != self.receipt_sha256:
+            raise ValueError("receipt_sha256 does not match receipt_json")
+        try:
+            decoded: object = json.loads(self.receipt_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("receipt_json must be valid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("receipt_json must be an object")
+        payload = cast(dict[str, object], decoded)
+        raw_receipt = payload.get("receipt")
+        if not isinstance(raw_receipt, dict):
+            raise ValueError("receipt_json must contain a receipt object")
+        result: object = payload.get("result")
+        if self.fact_identity == "__zero_expected_population__":
+            if result is not None:
+                raise ValueError("zero-population receipt must have null result")
+            result_rows: list[object] = []
+        elif not isinstance(result, dict):
+            raise ValueError("fact receipt must contain an expected fact result")
+        else:
+            result_rows = [result]
+        # Import lazily: pipeline coverage owns the public receipt schema while
+        # this ledger remains the persistence boundary it imports.
+        from pipeline.issuer_document_coverage import IssuerDocumentCoverageReceipt
+
+        receipt = IssuerDocumentCoverageReceipt.model_validate(
+            cast(dict[str, object], raw_receipt) | {"results": result_rows}
+        )
+        if receipt.document_id != self.document_id or receipt.ticker != self.ticker:
+            raise ValueError("receipt payload must match document and ticker envelope")
+        if self.fact_identity != "__zero_expected_population__" and (
+            receipt.results[0].expected.identity_key != self.fact_identity
+        ):
+            raise ValueError("typed receipt fact identity must match ledger envelope")
+        return self
+
+
+CoverageRecord: TypeAlias = (
+    SourceInventorySnapshot
+    | ExpectedDocument
+    | CoverageAssessment
+    | IssuerFactCoverageReceiptRecord
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +351,20 @@ class SourceCoverageLedger:
             raise
         self._conn.execute("RELEASE SAVEPOINT persist_source_coverage_record")
         return result
+
+    def persist_many(
+        self, records: tuple[IssuerFactCoverageReceiptRecord, ...]
+    ) -> tuple[PersistResult, ...]:
+        """Persist one document receipt atomically, including exact replays."""
+        self._conn.execute("SAVEPOINT persist_issuer_fact_coverage_receipt")
+        try:
+            results = tuple(self.persist(record) for record in records)
+        except Exception:
+            self._conn.execute("ROLLBACK TO SAVEPOINT persist_issuer_fact_coverage_receipt")
+            self._conn.execute("RELEASE SAVEPOINT persist_issuer_fact_coverage_receipt")
+            raise
+        self._conn.execute("RELEASE SAVEPOINT persist_issuer_fact_coverage_receipt")
+        return results
 
     def _persist_row(
         self,
@@ -437,6 +515,32 @@ class SourceCoverageLedger:
         return rows[0]
 
     def _validate_references(self, record: CoverageRecord) -> None:
+        if isinstance(record, IssuerFactCoverageReceiptRecord):
+            document = self._conn.execute(
+                "SELECT ticker,source_type,doc_type,fetched_at FROM documents WHERE id = ?",
+                (record.document_id,),
+            ).fetchone()
+            if document is None or str(document[0]).upper() != record.ticker.upper():
+                raise ValueError(
+                    "issuer fact receipt must reference an existing same-ticker document"
+                )
+            payload = cast(dict[str, object], json.loads(record.receipt_json))
+            raw_receipt = cast(dict[str, object], payload["receipt"])
+            result = payload.get("result")
+            from pipeline.issuer_document_coverage import (
+                IssuerDocumentCoverageReceipt,
+                validate_receipt_against_sqlite,
+            )
+
+            receipt = IssuerDocumentCoverageReceipt.model_validate(
+                raw_receipt | {"results": [] if result is None else [result]}
+            )
+            if receipt.source_type != str(document[1]) or receipt.doc_type != str(document[2]):
+                raise ValueError("receipt source provenance must match referenced document")
+            if receipt.source_fetched_at.date().isoformat() != str(document[3])[:10]:
+                raise ValueError("receipt fetched-at provenance must match referenced document")
+            validate_receipt_against_sqlite(self._conn, receipt)
+            return
         if isinstance(record, SourceInventorySnapshot):
             if record.revision > 1:
                 parent = self._conn.execute(
@@ -522,6 +626,36 @@ class SourceCoverageLedger:
     def _statement(
         record: CoverageRecord,
     ) -> tuple[str, tuple[str, ...], tuple[object, ...], str, str, str]:
+        if isinstance(record, IssuerFactCoverageReceiptRecord):
+            columns = (
+                "record_id",
+                "idempotency_key",
+                "reconciliation_key",
+                "document_id",
+                "ticker",
+                "fact_identity",
+                "receipt_json",
+                "receipt_sha256",
+                "recorded_at",
+            )
+            return (
+                "issuer_fact_coverage_receipts",
+                columns,
+                (
+                    record.record_id,
+                    record.idempotency_key,
+                    record.reconciliation_key,
+                    record.document_id,
+                    record.ticker,
+                    record.fact_identity,
+                    record.receipt_json,
+                    record.receipt_sha256,
+                    record.recorded_at,
+                ),
+                "reconciliation_key",
+                record.reconciliation_key,
+                record.record_id,
+            )
         if isinstance(record, SourceInventorySnapshot):
             columns = (
                 "snapshot_id",

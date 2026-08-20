@@ -798,6 +798,25 @@ def test_kpi_null_original_locator_can_accept_strict_companyfacts_relocation(
         conn.close()
 
 
+def test_kpi_payload_currency_changes_canonical_fingerprint() -> None:
+    payload = KpiFactPayloadV1(
+        schema_version="kpi_fact_payload.v1",
+        fact_table="kpi_facts",
+        fact_row_id=1,
+        ticker="ACME",
+        period_end="2026-06-30",
+        fiscal_period_type="Q2",
+        kpi_definition_id=1,
+        value="100",
+        currency="USD",
+        unit="actual",
+        source_doc_id=1,
+    )
+    assert (
+        payload.canonical_sha256 != payload.model_copy(update={"currency": "BRL"}).canonical_sha256
+    )
+
+
 def test_accepted_match_requires_all_six_checks_and_is_exactly_replayable(
     tmp_path: Path,
 ) -> None:
