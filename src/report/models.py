@@ -1333,6 +1333,21 @@ class PortfolioPositionSection(BaseModel):
     # this position. None when no dated snapshot rows were returned. The position
     # is a build-time snapshot, so this exposes how stale the figures are.
     position_as_of: date | None = None
+    source_identity: str | None = None
+    source_account_coverage: int | None = None
+    source_snapshot_account_coverage: int | None = None
+    source_included_account_ids: list[int] = Field(default_factory=list[int])
+    source_excluded_account_ids: list[int] = Field(default_factory=list[int])
+    source_lagging_account_ids: list[int] = Field(default_factory=list[int])
+    source_is_stale: bool | None = None
+    source_schema_version: str | None = None
+    source_is_partial: bool | None = None
+    source_currency: str | None = None
+    source_warnings: list[dict[str, str | None]] = Field(
+        default_factory=list[dict[str, str | None]]
+    )
+    history_state: Literal["available", "partial", "unavailable"] = "unavailable"
+    history_error: str | None = None
     recent_transactions: list[PortfolioPositionTransaction] = Field(
         default_factory=list[PortfolioPositionTransaction]
     )

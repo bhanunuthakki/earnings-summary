@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from runtime.portfolio_tracker import RuntimeReceipt
+
 ObservationState = Literal["current", "missing", "stale", "invalid"]
 SchedulerTaskState = Literal["Ready", "Running", "Disabled", "Unknown", "Missing"]
 ServiceState = Literal["Running", "Stopped", "Paused", "Unknown", "Missing"]
@@ -311,6 +313,12 @@ class FMPCircuitObservation(ObservationEnvelope):
     values: tuple[FMPCircuitRow, ...] = ()
 
 
+class PortfolioTrackerRuntimeObservation(ObservationEnvelope):
+    """Bounded, typed evidence emitted by the Portfolio Tracker owner."""
+
+    receipt: RuntimeReceipt | None = None
+
+
 class OperationsSnapshot(FrozenModel):
     snapshot_version: Literal["1"] = "1"
     observed_at: datetime
@@ -325,6 +333,7 @@ class OperationsSnapshot(FrozenModel):
     llm_calls: LLMCallsObservation
     fmp_backlog: FMPBacklogObservation
     fmp_circuit: FMPCircuitObservation
+    portfolio_tracker_runtime: PortfolioTrackerRuntimeObservation
 
     @field_validator("observed_at")
     @classmethod

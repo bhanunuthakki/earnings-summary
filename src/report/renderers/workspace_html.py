@@ -35,7 +35,7 @@ from report.artifacts import (
     ReportInteractionManifest,
     ReportSectionRef,
 )
-from report.models import ReportFlavor, ReportSpec
+from report.models import ReportFlavor, ReportSpec, SectionStatus
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.workspace_chat import CSS as CHAT_CSS
 from report.renderers.workspace_chat import JS as CHAT_JS
@@ -590,7 +590,16 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
     # before entry (or lingering after exit) must never be invisible just
     # because the tracker shows zero shares.
     standing = p3.standing_rules
-    if (pos is not None and pos.held) or (standing is not None and standing.rows):
+    if (
+        pos is not None
+        and (
+            pos.held
+            or pos.missing is not None
+            or pos.source_is_stale is True
+            or pos.status == SectionStatus.PARTIAL
+            or bool(pos.recent_transactions or pos.open_decisions or pos.closed_decisions)
+        )
+    ) or (standing is not None and standing.rows):
         db_path = Path(spec.repo_root) / "data" / "portfolio.db"
         graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path)
         # "You said" strip (owner-ratified design review, 2026-08-02):

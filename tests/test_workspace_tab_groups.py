@@ -30,6 +30,7 @@ from report.models import (  # noqa: E402
     FinancialsSection,
     IrDocsSection,
     KpiLedgerRow,
+    MissingReason,
     PortfolioPositionSection,
     ProvenanceSection,
     RecentDevelopmentsSection,
@@ -63,6 +64,7 @@ def _make_spec(
     held: bool = False,
     repo_root: str = ".",
     kpi_rows: int = 0,
+    position_unavailable: bool = False,
 ) -> ReportSpec:
     """Minimal real ReportSpec — every section in its empty/OK state."""
     ledger = [
@@ -100,7 +102,14 @@ def _make_spec(
         provenance=ProvenanceSection(status=SectionStatus.OK),
         appendix=AppendixSection(status=SectionStatus.OK),
         portfolio_position=(
-            PortfolioPositionSection(status=SectionStatus.OK, held=True) if held else None
+            PortfolioPositionSection(
+                status=SectionStatus.MISSING_DATA,
+                missing=MissingReason(stage="tracker", fix_command="configure API_URL"),
+            )
+            if position_unavailable
+            else PortfolioPositionSection(status=SectionStatus.OK, held=True)
+            if held
+            else None
         ),
     )
 
@@ -162,6 +171,12 @@ def test_not_held_no_decisions_hides_position_group() -> None:
         "valuation-comps",
         "sources",
     ]
+
+
+def test_unavailable_position_keeps_position_group_visible() -> None:
+    got = _group_map(_make_spec(position_unavailable=True), WorkspaceP3Panels.empty())
+    thesis_risk = next(group for group in got if group[0] == "thesis-risk")
+    assert "position" in thesis_risk[2]
 
 
 def test_exited_name_keeps_decisions_in_thesis_risk() -> None:

@@ -13,7 +13,6 @@ layer is shared with a static exporter and therefore split out.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
@@ -39,8 +38,6 @@ from ui.prose import render_prose
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
-
-_DEFAULT_TRACKER_URL = "http://localhost:5173"
 
 
 # --------------------------------------------------------------------------- #
@@ -205,7 +202,7 @@ def build_ticker_command_center(repo_root: Path, ticker: str) -> TickerCommandCe
         recent_decisions=decisions,
         thesis=_thesis_view(repo_root, t),
         position=_position_strip(repo_root, t),
-        tracker_url=_tracker_url(t),
+        tracker_url=tracker_url(t),
         report_date=_report_date_from_artifacts(artifacts),
     )
 
@@ -336,15 +333,11 @@ def _position_strip(repo_root: Path, t: str) -> PositionStrip:
     # Lazy import: keep the heavy report.* import chain out of server boot.
     from report.models import SectionStatus
     from report.sections import portfolio_position
-    from report.sections._common import open_portfolio_tracker_db
-
-    probe = open_portfolio_tracker_db(repo_root)
-    if probe is None:
-        return PositionStrip(available=False)
-    probe.close()
 
     section = portfolio_position.build(t, repo_root)
-    if section.status != SectionStatus.OK:
+    if section.status == SectionStatus.MISSING_DATA:
+        return PositionStrip(available=False)
+    if section.status not in (SectionStatus.OK, SectionStatus.PARTIAL):
         return PositionStrip(available=True, held=False)
     last_decision: str | None = None
     if section.open_decisions:
@@ -371,8 +364,13 @@ def _position_strip(repo_root: Path, t: str) -> PositionStrip:
     )
 
 
-def _tracker_url(t: str) -> str:
-    base = os.environ.get("PORTFOLIO_TRACKER_URL", _DEFAULT_TRACKER_URL).rstrip("/")
+def tracker_url(t: str) -> str | None:
+    from os import environ
+
+    base = environ.get("PORTFOLIO_TRACKER_UI_URL")
+    if not base:
+        return None
+    base = base.rstrip("/")
     return f"{base}/holdings?ticker={t}"
 
 
@@ -1457,7 +1455,8 @@ def _position_section(pos: PositionStrip) -> str:
     if not pos.available:
         return (
             '<section class="panel"><h2>Position</h2>'
-            '<p class="muted">Portfolio-tracker not connected. Set PORTFOLIO_TRACKER_URL and run it '
+            '<p class="muted">Portfolio-tracker not connected. Configure PORTFOLIO_TRACKER_UI_URL for navigation '
+            "and PORTFOLIO_TRACKER_API_URL (or PORTFOLIO_TRACKER_SNAPSHOT_PATH) for canonical data, then run it "
             "alongside this app to see live shares / cost / P&amp;L here.</p></section>"
         )
     if not pos.held:

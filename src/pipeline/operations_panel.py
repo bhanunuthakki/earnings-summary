@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Literal
@@ -15,6 +15,7 @@ from operations.models import (
     ObservationEnvelope,
     OperationsRegistry,
     OperationsSnapshot,
+    PortfolioTrackerRuntimeObservation,
     ScheduledTaskDefinition,
     ServiceObservation,
     ServiceRow,
@@ -22,6 +23,7 @@ from operations.models import (
 )
 from operations.readme_governance import ReadmeGovernanceStatus
 from pipeline.provenance_panel import PROVENANCE_SECTIONS
+from runtime.portfolio_tracker import health_is_healthy
 
 Tone = Literal["ok", "warn", "bad"]
 _BAD_JOB_STATUSES = frozenset({"failed", "blocked_schema_drift"})
@@ -196,9 +198,19 @@ OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS = (
         destination="runtime_recovery",
         rationale="Shows provider circuit state, recency, and vocabulary drift.",
     ),
+    SurfaceDisposition(
+        field="portfolio_tracker_runtime",
+        destination="runtime_recovery",
+        rationale="Shows typed Portfolio Tracker runtime and daily-refresh receipt freshness.",
+    ),
 )
 
 OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS = (
+    SurfaceDisposition(
+        field="portfolio_tracker_runtime",
+        destination="runtime_recovery",
+        rationale="Portfolio Tracker runtime evidence is rendered as a linked runtime row without authorizing activation.",
+    ),
     SurfaceDisposition(
         field="readme_status",
         destination="governance",
@@ -253,6 +265,7 @@ class OperationsPanelView(_ViewModel):
     tasks: tuple[TaskView, ...]
     runtime_rows: tuple[RuntimeRowView, ...]
     readme_status: ReadmeGovernanceStatus | None = None
+    portfolio_tracker_runtime: EvidenceView | None = None
 
 
 def _clock(value: datetime | None, *, prefix: str) -> str:
@@ -350,6 +363,85 @@ def _unavailable(label: str, observed_at: datetime) -> EvidenceView:
         observed_label=_clock(observed_at, prefix="Observed"),
         recorded_label="Evidence time unavailable",
         detail=f"{label} unavailable",
+    )
+
+
+def _portfolio_tracker_evidence(
+    observation: PortfolioTrackerRuntimeObservation,
+) -> EvidenceView:
+    """Project the typed producer receipt without treating launch as health."""
+
+    base = _evidence(observation)
+    receipt = observation.receipt
+    if receipt is None:
+        return base
+    lifecycle = receipt.lifecycle_state
+    problems: list[str] = []
+    stale_planes: list[str] = []
+
+    def plane_state(timestamp: datetime | None) -> str:
+        if timestamp is None or timestamp.tzinfo is None:
+            return "missing"
+        if timestamp > observation.observed_at:
+            return "invalid"
+        return "stale" if observation.observed_at - timestamp > timedelta(minutes=15) else "current"
+
+    listener_time = receipt.listener.health_checked_at or receipt.recorded_at
+    listener_plane = plane_state(listener_time)
+    if listener_plane == "stale":
+        stale_planes.append("listener")
+    elif listener_plane == "missing":
+        problems.append("listener evidence timestamp missing")
+    elif listener_plane == "invalid":
+        problems.append("listener evidence timestamp invalid")
+    if not receipt.listener.healthy or not health_is_healthy(
+        receipt.listener.health, now=observation.observed_at
+    ):
+        problems.append("listener health is not proven")
+    if receipt.listener.owner is None:
+        problems.append("listener owner is not proven")
+    if receipt.scheduler is None:
+        problems.append("scheduler evidence missing")
+    else:
+        scheduler_plane = plane_state(receipt.scheduler.observed_at)
+        if scheduler_plane == "stale":
+            stale_planes.append("scheduler")
+        elif scheduler_plane in {"missing", "invalid"}:
+            problems.append("scheduler evidence timestamp invalid")
+        if receipt.scheduler.terminal_result != "success":
+            problems.append(f"scheduler {receipt.scheduler.terminal_result}")
+    if receipt.refresh is None:
+        problems.append("daily refresh evidence missing")
+    else:
+        refresh_plane = plane_state(receipt.refresh.completed_at)
+        if refresh_plane == "stale":
+            stale_planes.append("daily refresh")
+        elif refresh_plane in {"missing", "invalid"}:
+            problems.append("daily refresh evidence timestamp invalid")
+        if receipt.refresh.terminal_result != "success":
+            problems.append(f"refresh {receipt.refresh.terminal_result}")
+        elif receipt.refresh.owner is None:
+            problems.append("daily refresh owner is not proven")
+    if stale_planes:
+        problems.append("stale evidence: " + ", ".join(stale_planes))
+    failed = lifecycle in {"failed", "ownership_conflict"} or any(
+        "not proven" in problem or problem.startswith(("scheduler failed", "refresh failed"))
+        for problem in problems
+    )
+    detail = f"Lifecycle {lifecycle} · idempotency {receipt.idempotency_key}"
+    if problems:
+        detail += " · " + "; ".join(problems)
+    if receipt.failure_detail:
+        detail += f" · {_safe(receipt.failure_detail)}"
+    state_suffix = f" · {lifecycle}"
+    if stale_planes:
+        state_suffix += " · stale planes"
+    return base.model_copy(
+        update={
+            "state": f"{base.state}{state_suffix}",
+            "tone": "bad" if failed else "warn" if problems else base.tone,
+            "detail": detail,
+        }
     )
 
 
@@ -581,6 +673,19 @@ def build_operations_panel_view(
             )
         )
     runtime_rows = _runtime_rows(registry, snapshot)
+    portfolio_tracker_runtime = _portfolio_tracker_evidence(snapshot.portfolio_tracker_runtime)
+    tracker_receipt = snapshot.portfolio_tracker_runtime.receipt
+    tracker_value = "Activation required"
+    if tracker_receipt is not None:
+        tracker_value = tracker_receipt.lifecycle_state.replace("_", " ").title()
+    runtime_rows = (
+        *runtime_rows,
+        RuntimeRowView(
+            label="Portfolio Tracker runtime",
+            value=tracker_value,
+            evidence=portfolio_tracker_runtime,
+        ),
+    )
     attention = sum(task.attention for task in tasks) + sum(
         row.evidence.tone != "ok" for row in runtime_rows
     )
@@ -595,6 +700,7 @@ def build_operations_panel_view(
         ),
         runtime_rows=runtime_rows,
         readme_status=readme_status,
+        portfolio_tracker_runtime=portfolio_tracker_runtime,
     )
 
 

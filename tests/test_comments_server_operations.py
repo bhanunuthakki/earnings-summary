@@ -5,6 +5,7 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import Mock
 
 import pytest
@@ -15,11 +16,18 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
+from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch  # noqa: E402
 from operations.models import OperationsRegistry, OperationsSnapshot  # noqa: E402
 from operations.paths import scheduler_receipt_path, service_receipt_path  # noqa: E402
 from operations.registry import build_operations_registry  # noqa: E402
 from operations.snapshot import collect_operations_snapshot  # noqa: E402
 from pipeline.operations_panel import OperationsPanelView, render_operations_panel  # noqa: E402
+from runtime.portfolio_tracker import (  # noqa: E402
+    ListenerObservation,
+    RuntimeConfig,
+    RuntimeReceipt,
+    write_runtime_receipt,
+)
 
 
 def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_miss(
@@ -94,6 +102,207 @@ def test_operations_registry_comes_from_code_root_not_minimal_runtime_root(
 
     assert app.config["OPERATIONS_REGISTRY"] is registry
     build_registry.assert_called_once_with(code_root.resolve())
+
+
+def test_start_tracker_route_uses_runtime_manager_and_persists_typed_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker_root = tmp_path.parent / "portfolio-tracker"
+    tracker_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
+    captured: dict[str, object] = {}
+    now = datetime.now(UTC)
+    health = HealthV1.model_validate(
+        {
+            "status": "ok",
+            "schema_version": "1.0.0",
+            "generated_at": now.isoformat(),
+            "database_ok": True,
+            "migration_version": "0023",
+            "providers": [],
+            "active_account_count": 1,
+            "latest_snapshot_date": now.date().isoformat(),
+            "is_stale": False,
+            "links": {},
+        }
+    )
+
+    class _Manager:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def ensure_running(self, **kwargs: object) -> RuntimeReceipt:
+            config = captured["config"]
+            assert isinstance(config, RuntimeConfig)
+            receipt = RuntimeReceipt(
+                idempotency_key=config.idempotency_key,
+                lifecycle_state="started",
+                recorded_at=now,
+                listener=ListenerObservation(
+                    healthy=True,
+                    owner="portfolio-tracker-service",
+                    pid=123,
+                    job_id="job_tracker",
+                    health=health,
+                ),
+            )
+            path = kwargs["receipt_path"]
+            assert isinstance(path, Path)
+            return write_runtime_receipt(path, receipt)
+
+    monkeypatch.setattr(comments_server, "PortfolioTrackerRuntimeManager", _Manager)
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8123")
+    client = comments_server.create_app(tmp_path).test_client()
+    response = client.post("/actions/start-tracker")
+
+    assert response.status_code == 200
+    config = captured["config"]
+    assert isinstance(config, RuntimeConfig)
+    assert config.idempotency_key.startswith("portfolio-tracker-refresh:")
+    receipt_path = tmp_path / ".tmp" / "operations" / "runtime" / "portfolio-tracker.latest.json"
+    assert (
+        RuntimeReceipt.model_validate_json(receipt_path.read_bytes()).lifecycle_state == "started"
+    )
+
+
+def test_start_tracker_route_requires_explicit_api_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker_root = tmp_path.parent / "portfolio-tracker"
+    tracker_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
+    monkeypatch.delenv("PORTFOLIO_TRACKER_API_URL", raising=False)
+
+    response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
+
+    assert response.status_code == 400
+    assert "PORTFOLIO_TRACKER_API_URL is required" in response.get_json()["error"]
+
+
+def test_start_tracker_route_rejects_healthy_listener_without_matching_registry_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker_root = tmp_path.parent / "portfolio-tracker"
+    tracker_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
+    now = datetime.now(UTC)
+    health = HealthV1.model_validate(
+        {
+            "status": "ok",
+            "schema_version": "1.0.0",
+            "generated_at": now.isoformat(),
+            "database_ok": True,
+            "migration_version": "0023",
+            "providers": [],
+            "active_account_count": 1,
+            "latest_snapshot_date": now.date().isoformat(),
+            "is_stale": False,
+            "links": {},
+        }
+    )
+
+    class _Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+    class _Registry:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def list_jobs(self) -> list[dict[str, object]]:
+            return []
+
+        def get(self, _job_id: str) -> None:
+            return None
+
+        def start(self, **_: object) -> None:
+            pytest.fail("unrelated healthy listener must not start a tracker job")
+
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8123")
+    monkeypatch.setattr(comments_server, "TrackerV1Client", _Client)
+    monkeypatch.setattr(comments_server, "Registry", _Registry)
+
+    response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
+
+    assert response.status_code == 503
+    assert "health/ownership proof" in response.get_json()["error"]
+
+
+def test_start_tracker_route_rejects_exited_popen_even_when_registry_job_says_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker_root = tmp_path.parent / "portfolio-tracker"
+    tracker_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
+    now = datetime.now(UTC)
+    health = HealthV1.model_validate(
+        {
+            "status": "ok",
+            "schema_version": "1.0.0",
+            "generated_at": now.isoformat(),
+            "database_ok": True,
+            "migration_version": "0023",
+            "providers": [],
+            "active_account_count": 1,
+            "latest_snapshot_date": now.date().isoformat(),
+            "is_stale": False,
+            "links": {},
+        }
+    )
+
+    class _Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+    class _ExitedProcess:
+        pid = 4242
+
+        def poll(self) -> int:
+            return 0
+
+    class _Job:
+        job_id = "job-exited"
+        is_running = True
+        cwd = str(tracker_root)
+        argv: ClassVar[list[str]] = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8123",
+        ]
+        _process = _ExitedProcess()
+
+    class _Registry:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def list_jobs(self) -> list[dict[str, object]]:
+            return [{"kind": "tracker-server", "is_running": True, "job_id": "job-exited"}]
+
+        def get(self, _job_id: str) -> _Job:
+            return _Job()
+
+        def start(self, **_: object) -> None:
+            pytest.fail("an exited Popen cannot prove a live listener")
+
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8123")
+    monkeypatch.setattr(comments_server, "TrackerV1Client", _Client)
+    monkeypatch.setattr(comments_server, "Registry", _Registry)
+
+    response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
+
+    assert response.status_code == 503
+    assert "health/ownership proof" in response.get_json()["error"]
 
 
 def test_operations_route_uses_runtime_root_canonical_receipts(

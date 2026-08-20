@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from io import StringIO
 
-from report.models import PortfolioPositionSection
+from report.models import PortfolioPositionSection, SectionStatus
 from report.renderers.workspace_data import StandingRulesPanel
 from report.renderers.workspace_sections._shared import _empty_panel, _esc, _fmt_usd, _panel_head
 from ui import living_grid as lg
@@ -40,24 +40,80 @@ def _position_tab(
     you_said_html: str | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
-    held = pp is not None and pp.held
-    has_standing_rules = standing_rules is not None and bool(standing_rules.rows)
-    if not held and not has_standing_rules:
+    has_history = pp is not None and bool(
+        pp.recent_transactions or pp.open_decisions or pp.closed_decisions
+    )
+    if pp is not None and pp.missing is not None and not pp.held:
         _empty_panel(
             body,
             "Position",
-            "The portfolio tracker shows no position in this name.",
-            reason="not held",
+            f"Broker data unavailable: {pp.missing.detail or 'Portfolio tracker source is unavailable.'}",
+            reason="source unavailable",
         )
+        _source_warnings(body, pp)
+        if has_history:
+            body.write('<div class="eyebrow">Historical position evidence</div>')
+            body.write(
+                '<h2 class="section-title">Source unavailable; preserving canonical history.</h2>'
+            )
+            if pp.history_error:
+                body.write(
+                    f'<p class="muted xsmall">History evidence: {_esc(pp.history_error)}</p>'
+                )
+            _history_only(body, pp)
+        if standing_rules is not None and bool(standing_rules.rows):
+            _standing_rules_block(body, standing_rules)
+        body.write("</div>")
+        return
+    held = pp is not None and pp.held
+    has_standing_rules = standing_rules is not None and bool(standing_rules.rows)
+    if not held and not has_standing_rules and not has_history:
+        _empty_panel(
+            body,
+            "Position",
+            (
+                "No current position was observed, but canonical transaction/open/closed "
+                "history is unavailable."
+                if pp is not None and pp.status is SectionStatus.PARTIAL
+                else "The portfolio tracker shows no position in this name."
+            ),
+            reason=(
+                "history unavailable"
+                if pp is not None and pp.status is SectionStatus.PARTIAL
+                else "not held"
+            ),
+        )
+        if pp is not None:
+            _source_warnings(body, pp)
+        body.write("</div>")
+        return
+
+    if not held and has_history and pp is not None:
+        body.write('<div class="eyebrow">Historical position evidence</div>')
+        body.write(
+            '<h2 class="section-title">No current broker position; preserving canonical history.</h2>'
+        )
+        if pp.history_error:
+            body.write(f'<p class="muted xsmall">History evidence: {_esc(pp.history_error)}</p>')
+        _source_warnings(body, pp)
+        _history_only(body, pp)
+        _standing_rules_block(body, standing_rules)
         body.write("</div>")
         return
 
     if pp is not None and pp.held:
         body.write('<div class="row-split"><div>')
         body.write('<div class="eyebrow">Your position</div>')
+        if pp.source_is_stale:
+            body.write('<div class="k-pill k-pill-warn">Source evidence stale</div>')
+        _source_warnings(body, pp)
+        if pp.history_state != "available":
+            body.write(
+                '<div class="k-pill k-pill-warn">Transaction/decision history unavailable or partial</div>'
+            )
         body.write(
             '<h2 class="section-title">'
-            f"{pp.total_quantity:.0f} shares across {len(pp.accounts)} account"
+            f"{pp.total_quantity:g} shares across {len(pp.accounts)} account"
             f"{'s' if len(pp.accounts) != 1 else ''}."
             "</h2>"
         )
@@ -72,6 +128,9 @@ def _position_tab(
             body.write(f'<div class="position-yousaid">{you_said_html}</div>')
 
         _position_coaching(body, ticker, position_review_count, graded_sell_line)
+
+        if pp.history_state != "available" and pp.history_error:
+            body.write(f'<p class="muted xsmall">History evidence: {_esc(pp.history_error)}</p>')
 
         body.write('<div class="position-stats">')
         _position_stat(body, "Cost basis", _fmt_usd(pp.total_cost_basis))
@@ -276,6 +335,46 @@ def _position_coaching(
             'target="_blank" rel="noopener">Review this position &rarr;</a>'
         )
     body.write("</div>")
+
+
+def _source_warnings(body: StringIO, pp: PortfolioPositionSection) -> None:
+    if not pp.source_warnings:
+        return
+    body.write(
+        '<div class="k-well position-source-warnings"><div class="eyebrow">Source warnings</div><ul>'
+    )
+    for warning in pp.source_warnings:
+        code = _esc(str(warning.get("code") or "WARNING"))
+        message = str(warning.get("message") or "Source warning")
+        body.write(f'<li><span class="k-chip k-chip-warn">{code}</span> {_esc(message)}</li>')
+    body.write("</ul></div>")
+
+
+def _history_only(body: StringIO, pp: PortfolioPositionSection) -> None:
+    if pp.recent_transactions:
+        body.write(_panel_head("Recent transactions", sub=f"{len(pp.recent_transactions)} logged"))
+        body.write(
+            '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr><th>Date</th><th>Account</th><th>Type</th><th>Shares</th><th>Amount</th></tr></thead><tbody>'
+        )
+        for transaction in pp.recent_transactions:
+            body.write(
+                f"<tr><td>{transaction.date.isoformat()}</td><td>{_esc(transaction.account_name)}</td>"
+                f'<td>{_esc(transaction.type)}</td><td class="num">{transaction.quantity:+.0f}</td>'
+                f'<td class="num">{_fmt_usd(transaction.amount)}</td></tr>'
+            )
+        body.write("</tbody></table></div>")
+    for title, decisions in (
+        ("Open decisions", pp.open_decisions),
+        ("Closed decisions", pp.closed_decisions),
+    ):
+        if not decisions:
+            continue
+        body.write(_panel_head(title, sub=f"{len(decisions)} logged"))
+        for decision in decisions:
+            body.write(
+                f'<div class="decision-card"><div class="decision-head"><span class="decision-date">{decision.decision_date.isoformat()}</span>'
+                f'<span class="decision-action">{_esc(decision.action)}</span></div><p class="decision-thesis">{_esc(decision.thesis)}</p></div>'
+            )
 
 
 def _position_stat(body: StringIO, label: str, value: str, *, tone: str = "") -> None:

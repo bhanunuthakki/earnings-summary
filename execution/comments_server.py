@@ -150,9 +150,10 @@ from dashboard.upcoming import render_upcoming_strip  # noqa: E402
 from dcf import persist as dcf_persist  # noqa: E402
 from dcf import redesign as dcf_redesign  # noqa: E402
 from discovery.store import BUILDABLE_STATUSES  # noqa: E402
-from dispatch_registry import Registry, RegistryConflict  # noqa: E402
+from dispatch_registry import Job, Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
 from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
+from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from log_redact import redact  # noqa: E402
 from logging_config import (  # noqa: E402
@@ -162,7 +163,11 @@ from logging_config import (  # noqa: E402
     set_correlation_id,
 )
 from operations.models import OperationsRegistry  # noqa: E402
-from operations.paths import scheduler_receipt_path, service_receipt_path  # noqa: E402
+from operations.paths import (  # noqa: E402
+    portfolio_tracker_receipt_path,
+    scheduler_receipt_path,
+    service_receipt_path,
+)
 from operations.readme_governance import (  # noqa: E402
     ReadmeGovernanceStatus,
     collect_readme_governance_status,
@@ -199,6 +204,17 @@ from research.proposal_approval import (  # noqa: E402
 )
 from run_lock import RunLockHeldError  # noqa: E402
 from runtime.job_runtime import portfolio_db_path  # noqa: E402
+from runtime.portfolio_tracker import (  # noqa: E402
+    AtomicFileLease,
+    ListenerObservation,
+    PortfolioTrackerRuntimeManager,
+    RuntimeConfig,
+    derive_daily_refresh_idempotency_key,
+    endpoint_owner_matches_pid,
+    health_is_healthy,
+    parse_tracker_bind_url,
+    write_runtime_receipt,
+)
 from runtime.python_process import managed_python_argv  # noqa: E402
 from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
 from schema_compat import SchemaRevisionMismatch  # noqa: E402
@@ -4201,43 +4217,177 @@ def create_app(
 
     @app.route("/actions/start-tracker", methods=["POST", "OPTIONS"])
     def start_tracker_server():
-        """Start the companion portfolio-tracker API on :8000 (UX redesign
-        PR6) — the Portfolio tab's offline card gets a button instead of a
-        prose CLI hint. Runs the tracker's OWN venv python from the sibling
-        checkout (so it finds its .env + data files) as a registry job whose
-        startup log streams over the standard /actions/stream channel.
-        409 when a tracker job is already running; 404 when the sibling
-        checkout is missing."""
+        """Start the companion Portfolio Tracker from explicit API/root config.
+
+        The offline Portfolio tab gets a button instead of a prose CLI hint.
+        The configured root supplies the tracker's environment/data files, and
+        the registry job's startup log streams over ``/actions/stream``.
+        Success requires the exact owned command, a live process, endpoint
+        ownership, and healthy HealthV1; 503 means that proof is unavailable.
+        A missing configured root is a 404.
+        """
         if request.method == "OPTIONS":
             return ("", 204)
-        tracker_root = repo_root.parent / "portfolio-tracker"
+        owner = "portfolio-tracker-service"
+        api_url = os.environ.get("PORTFOLIO_TRACKER_API_URL")
+        if not api_url:
+            return (
+                {"error": "PORTFOLIO_TRACKER_API_URL is required for tracker activation"},
+                400,
+            )
+        tracker_root_raw = os.environ.get("PORTFOLIO_TRACKER_ROOT")
+        if not tracker_root_raw:
+            return (
+                {"error": "PORTFOLIO_TRACKER_ROOT is required for tracker activation"},
+                400,
+            )
+        tracker_root = Path(tracker_root_raw).expanduser().resolve()
         if not tracker_root.exists():
             return (
-                {"error": f"portfolio-tracker checkout not found at {tracker_root}"},
+                {"error": f"configured Portfolio Tracker root not found at {tracker_root}"},
                 404,
             )
+        bind = parse_tracker_bind_url(api_url)
+        if bind is None:
+            return ({"error": "configured Portfolio Tracker API URL cannot be safely bound"}, 400)
+        bind_host, bind_port = bind
         venv_python = tracker_root / (
             ".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python"
         )
         python_bin = str(venv_python) if venv_python.exists() else sys.executable
-        argv = [
+        expected_argv = [
             python_bin,
             "-m",
             "uvicorn",
             "portfolio_tracker.api.main:app",
+            "--host",
+            bind_host,
             "--port",
-            "8000",
+            str(bind_port),
         ]
-        try:
+        start_job: list[Job] = []
+
+        def inspect_listener() -> ListenerObservation:
+            fetch = TrackerV1Client(base_url=api_url).probe_v1()
+            tracked = None
+            for item in job_registry.list_jobs():
+                job_id = item.get("job_id")
+                if (
+                    item.get("kind") != "tracker-server"
+                    or item.get("is_running") is not True
+                    or not isinstance(job_id, str)
+                ):
+                    continue
+                job = job_registry.get(job_id)
+                process = getattr(job, "_process", None)
+                pid = getattr(process, "pid", None)
+                host_index = job.argv.index("--host") + 1 if job and "--host" in job.argv else -1
+                port_index = job.argv.index("--port") + 1 if job and "--port" in job.argv else -1
+                if (
+                    job is not None
+                    and job.is_running
+                    and job.cwd == str(tracker_root)
+                    and job.argv == expected_argv
+                    and host_index > 0
+                    and port_index > 0
+                    and host_index < len(job.argv)
+                    and port_index < len(job.argv)
+                    and isinstance(pid, int)
+                    and pid > 0
+                    and process is not None
+                    and process.poll() is None
+                    and endpoint_owner_matches_pid(bind_host, bind_port, pid) is True
+                    and job.argv[host_index] == bind_host
+                    and job.argv[port_index] == str(bind_port)
+                ):
+                    tracked = {**item, "pid": pid}
+                    break
+            attributed_owner = (
+                owner
+                if fetch.data is not None
+                and health_is_healthy(fetch.data, now=datetime.now(UTC))
+                and tracked is not None
+                else None
+            )
+            tracked_pid = tracked.get("pid") if tracked is not None else None
+            tracked_job_id = tracked.get("job_id") if tracked is not None else None
+            return ListenerObservation(
+                healthy=fetch.available and health_is_healthy(fetch.data, now=datetime.now(UTC)),
+                owner=attributed_owner,
+                pid=tracked_pid if isinstance(tracked_pid, int) else None,
+                job_id=tracked_job_id if isinstance(tracked_job_id, str) else None,
+                health_checked_at=datetime.now(UTC),
+                health=fetch.data,
+            )
+
+        def start_listener(config: RuntimeConfig) -> None:
+            del config
             job = job_registry.start(
                 ticker="_REPO",
                 kind="tracker-server",
-                argv=argv,
+                argv=expected_argv,
                 cwd=str(tracker_root),
                 write_sets=[],
             )
-        except RegistryConflict as e:
-            return ({"error": str(e)}, 409)
+            start_job.append(job)
+
+        now = datetime.now(UTC)
+        manager = PortfolioTrackerRuntimeManager(
+            config=RuntimeConfig(
+                listener_owner=owner,
+                daily_refresh_owner=owner,
+                idempotency_key=derive_daily_refresh_idempotency_key(now),
+            ),
+            inspect_listener=inspect_listener,
+            start_listener=start_listener,
+            now=lambda: datetime.now(UTC),
+            lease=AtomicFileLease(portfolio_tracker_receipt_path(repo_root).with_suffix(".lease")),
+        )
+        persisted = manager.ensure_running(receipt_path=portfolio_tracker_receipt_path(repo_root))
+        if persisted.lifecycle_state in {"started", "already_running"} and (
+            not persisted.listener.healthy
+            or not health_is_healthy(persisted.listener.health, now=persisted.recorded_at)
+            or persisted.listener.owner != owner
+            or persisted.listener.pid is None
+            or persisted.listener.job_id is None
+        ):
+            # Keep a terminal, truthful receipt if an injected/legacy manager
+            # violates the manager contract at this boundary.
+            failed = persisted.model_copy(
+                update={
+                    "lifecycle_state": "failed",
+                    "listener": persisted.listener.model_copy(update={"healthy": False}),
+                    "failure_detail": "listener HealthV1 health/ownership proof is missing",
+                }
+            )
+            repair_lease = AtomicFileLease(
+                portfolio_tracker_receipt_path(repo_root).with_suffix(".lease")
+            )
+            if repair_lease.acquire():
+                try:
+                    write_runtime_receipt(portfolio_tracker_receipt_path(repo_root), failed)
+                finally:
+                    repair_lease.release()
+            return ({"error": failed.failure_detail}, 503)
+        if (
+            persisted.lifecycle_state == "ownership_conflict"
+            or persisted.failure_detail == "RegistryConflict"
+        ):
+            return (
+                {"error": persisted.failure_detail or "tracker runtime ownership conflict"},
+                409,
+            )
+        if persisted.lifecycle_state == "failed":
+            return ({"error": persisted.failure_detail or "tracker runtime start failed"}, 503)
+        job = start_job[0] if start_job else None
+        if job is None:
+            return (
+                {
+                    "lifecycle_state": persisted.lifecycle_state,
+                    "idempotency_key": persisted.idempotency_key,
+                },
+                200,
+            )
         return (
             {
                 "job_id": job.job_id,
@@ -4245,6 +4395,7 @@ def create_app(
                 "kind": job.kind,
                 "stream_url": f"/actions/stream/{job.job_id}",
                 "started_at": job.started_at.isoformat(),
+                "idempotency_key": persisted.idempotency_key,
             },
             201,
         )

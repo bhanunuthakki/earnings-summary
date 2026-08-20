@@ -514,14 +514,14 @@ _START_TRACKER_JS = """
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
     }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, status: r.status, j: j}; }); })
       .then(function (res) {
-        // 409 = a tracker job is ALREADY starting (e.g. a prior page open
-        // kicked it off) — not an error, just begin polling for :8000.
+        // 409 = a tracker owner is ALREADY starting (e.g. a prior page open
+        // kicked it off) — not an error, just begin polling the configured API.
         if (!res.ok && res.status !== 409) {
           msg.textContent = 'error: ' + (res.j.error || 'failed to start tracker');
           CCAction.release(btn);
           return;
         }
-        msg.textContent = 'starting — waiting for :8000 to answer…';
+        msg.textContent = 'starting — waiting for the configured tracker API…';
         log.style.display = 'block';
         if (res.ok && res.j.stream_url) {
           try {
@@ -550,7 +550,7 @@ _START_TRACKER_JS = """
     // Another mounted banner already started the shared tracker. This banner
     // still refreshes its own section when the service becomes reachable.
     CCAction.busy(btn);
-    msg.textContent = 'starting — waiting for :8000 to answer…';
+    msg.textContent = 'starting — waiting for the configured tracker API…';
     pollPanel(30);
   }
   }
@@ -3475,9 +3475,9 @@ def _tracker_offline_banner(
 ) -> str:
     """The page's gate: the whole Portfolio page reads from the companion
     tracker, so when it is down this LEADS the page (prominent, not buried) and
-    auto-starts on open. One-click start runs ``/actions/start-tracker`` (the
-    tracker's own venv, from its checkout) and the panel re-fetches itself until
-    :8000 answers; the raw requests repr stays in the collapsed details."""
+    auto-starts on open. One-click start runs the ownership-checked
+    ``/actions/start-tracker`` action and the panel re-fetches itself until the
+    configured API answers; the raw requests repr stays in the collapsed details."""
     return (
         # Class hooks, not ids (Phase-5 verifier): this banner renders in BOTH
         # the Health console (Synthesis) and the Allocation console
@@ -3498,8 +3498,9 @@ def _tracker_offline_banner(
         '<pre class="pf-start-log cli-hint" '
         'style="display:none; max-height:180px; overflow:auto"></pre>'
         '<details class="offline-tech"><summary>Start it manually · technical detail</summary>'
-        '<pre class="cli-hint">cd ../portfolio-tracker &amp;&amp; '
-        "uvicorn portfolio_tracker.api.main:app --port 8000</pre>"
+        '<pre class="cli-hint">Configure PORTFOLIO_TRACKER_API_URL, then run '
+        "uvicorn portfolio_tracker.api.main:app --host &lt;configured-host&gt; "
+        "--port &lt;configured-port&gt; or use the ownership-checked Start tracker action.</pre>"
         f'<p class="muted">API endpoint: <code>{escape(live.api_url)}</code>'
         f"{f' — {escape(live.error)}' if live.error else ''}</p>"
         "</details>"

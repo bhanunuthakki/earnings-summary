@@ -74,21 +74,30 @@ the dashboard's budget panel and `execution/manage_llm_budget.py`.
 ### Two-app topology (research ↔ portfolio tracker)
 
 The command center and the **portfolio-tracker** app stay separate (own repos,
-own ports) and link **read-only**:
+own ports) and link **read-only**. Integration is explicit configuration; this
+repo does not discover a sibling checkout or assume a tracker port:
 
-- **research → tracker** — each `/ticker/<T>` page shows a live position strip
-  (shares / cost / value / unrealized P&L / last trade decision) read from the
-  tracker's SQLite at `../portfolio-tracker/portfolio.db` (opened read-only),
-  plus an **Open in Portfolio Tracker ↗** deep link to
-  `<PORTFOLIO_TRACKER_URL>/holdings?ticker=<T>` (default
-  `http://localhost:5173`; the tracker highlights and scrolls to the ticker).
-  Set `PORTFOLIO_TRACKER_URL` if the tracker runs elsewhere.
+- **research → tracker** — each `/ticker/<T>` page may show a typed live
+  position strip (shares / cost / value / unrealized P&L / history evidence)
+  from the configured v1 API endpoint `PORTFOLIO_TRACKER_API_URL`, plus an
+  **Open in Portfolio Tracker ↗** deep link using the explicitly configured
+  `PORTFOLIO_TRACKER_UI_URL` (`/holdings?ticker=<T>`). For detached builds,
+  `PORTFOLIO_TRACKER_SNAPSHOT_PATH` is an explicit immutable read-only source.
 - **tracker → research** — the tracker reads this repo's DB for next-earnings +
   thesis status and links to the latest brief via its
   `/api/earnings-summary/brief/<T>` passthrough.
 
-Both sides degrade gracefully when the sibling isn't running — the strip hides,
-the links still render.
+If the configured API/UI source is absent, stale, or invalid, the report says
+unavailable/stale and preserves any separately supplied history; it never
+reclassifies an unobserved ticker as not held. No sibling checkout or port
+default is implied.
+
+Compatibility note: the legacy analytics facade in
+`integrations.portfolio_tracker_client` retains its historical loopback
+fallback for older read-only callers. The typed runtime and
+`/actions/start-tracker` activation path require explicit
+`PORTFOLIO_TRACKER_API_URL` and `PORTFOLIO_TRACKER_ROOT` values and never use
+that compatibility fallback or discover a sibling checkout.
 
 ---
 
