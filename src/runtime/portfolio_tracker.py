@@ -12,7 +12,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -138,6 +138,15 @@ def derive_daily_refresh_idempotency_key(recorded_at: datetime) -> str:
 ProcessLiveness = Literal["alive", "dead", "unknown"]
 
 
+def _windows_last_error() -> int | None:
+    """Read the Win32 error seam when available; POSIX test doubles lack it."""
+
+    get_last_error = getattr(ctypes, "get_last_error", None)
+    if not callable(get_last_error):
+        return None
+    return cast("Callable[[], int]", get_last_error)()
+
+
 def _pid_liveness(pid: int) -> ProcessLiveness:
     if pid <= 0:
         return "dead"
@@ -159,7 +168,9 @@ def _pid_liveness(pid: int) -> ProcessLiveness:
             pass
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
-            return "unknown" if ctypes.get_last_error() == 5 else "dead"
+            # A missing Win32 error seam is also inconclusive: never classify a
+            # failed query as dead merely because a POSIX ctypes build lacks it.
+            return "unknown" if _windows_last_error() in {None, 5} else "dead"
         exit_code = ctypes.c_ulong()
         try:
             if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):

@@ -820,7 +820,7 @@ def test_tracker_navigation_requires_an_explicit_ui_endpoint(
         ("http://0.0.0.0:8123", None),
         ("http://[::]:8123", None),
         ("ftp://127.0.0.1:8123", None),
-        ("http://user:secret@127.0.0.1:8123", None),
+        ("http://user@127.0.0.1:8123", None),
         ("http://127.0.0.1:8123/api", None),
         ("http://127.0.0.1:99999", None),
     ),
@@ -1500,7 +1500,7 @@ def test_windows_access_denied_pid_probe_is_unknown_not_dead(
 
     monkeypatch.setattr(runtime.sys, "platform", "win32")
     monkeypatch.setattr(runtime.ctypes, "WinDLL", fake_dll, raising=False)
-    monkeypatch.setattr(runtime.ctypes, "get_last_error", access_denied)
+    monkeypatch.setattr(runtime, "_windows_last_error", access_denied)
 
     probe = cast(
         "Callable[[int], Literal['alive', 'dead', 'unknown']]", getattr(runtime, "_pid_liveness")
