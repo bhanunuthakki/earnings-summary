@@ -435,7 +435,7 @@ _START_TRACKER_JS = """
           return;
         }
         msg.textContent = 'starting — waiting for the configured tracker API…';
-        log.style.display = 'block';
+        log.hidden = false;
         if (res.ok && res.j.stream_url) {
           try {
             var es = new EventSource(res.j.stream_url);
