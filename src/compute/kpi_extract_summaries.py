@@ -43,7 +43,15 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 import parser  # first-party src/parser.py (untyped legacy module — read PDFs via _read_pdf_text)
 from compute.kpi_resolver import normalize_kpi_name
@@ -51,7 +59,7 @@ from llm.structured import call_llm_structured
 from llm.untrusted import spotlight
 from llm_client import FAST_CLASSIFIER_MODEL
 from models.documents import SourceType, tier_for_source_type
-from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
+from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
 from models.runs import StageStatus
 from models.unit_convert import same_family
@@ -67,7 +75,7 @@ from pipeline.kpi_persistence import (
     record_validation_issue,
 )
 from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
-from pipeline.restatement_detector import _table_has_column
+from pipeline.restatement_detector import table_has_column
 from pipeline.run_accounting import (
     JsonValue,
     PipelineRunSuppressedError,
@@ -115,8 +123,15 @@ class _KpiSummaryValue(BaseModel):
 
     value: Decimal
     unit: Literal["percent", "actual", "count", "ratio", "bps"]
+    currency: Currency | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     source_excerpt: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _require_currency_for_actual(self) -> _KpiSummaryValue:
+        if self.unit == "actual" and self.currency is None:
+            raise ValueError("actual monetary KPI values require an explicit currency")
+        return self
 
 
 class _KpiSummaryResponse(RootModel[dict[str, _KpiSummaryValue]]):
@@ -131,6 +146,7 @@ class _EnumeratedKpi(BaseModel):
     label: str = Field(min_length=1, max_length=200)
     value: Decimal
     unit: Literal["percent", "actual", "count", "ratio", "bps"]
+    currency: Currency | None = None
     source_excerpt: str = Field(min_length=1, max_length=200)
 
     @field_validator("label", "source_excerpt")
@@ -140,6 +156,12 @@ class _EnumeratedKpi(BaseModel):
         if not stripped:
             raise ValueError("must not be blank")
         return stripped
+
+    @model_validator(mode="after")
+    def _require_currency_for_actual(self) -> _EnumeratedKpi:
+        if self.unit == "actual" and self.currency is None:
+            raise ValueError("actual monetary KPI values require an explicit currency")
+        return self
 
 
 # Both extraction stages below (allowlist Stage A / enumerate Stage B) read an
@@ -390,16 +412,19 @@ def _read_holdings(repo_root: Path, ticker: str) -> dict[str, object] | None:
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    decoded: object = json.loads(path.read_text(encoding="utf-8"))
+    return cast("dict[str, object]", decoded) if isinstance(decoded, dict) else None
 
 
 def _tier_1_names(holdings: dict[str, object]) -> list[str]:
-    raw = holdings.get("tier_1_kpis") or []
-    if not isinstance(raw, list):
+    candidate = holdings.get("tier_1_kpis")
+    if not isinstance(candidate, list):
         return []
+    raw = cast("list[object]", candidate)
     out: list[str] = []
-    for k in raw:
-        if isinstance(k, dict):
+    for item in raw:
+        if isinstance(item, dict):
+            k = cast("dict[str, object]", item)
             name = str(k.get("name", "")).strip()
             if name:
                 out.append(name)
@@ -580,7 +605,7 @@ def _ensure_summary_document_row(
         len(raw),
         parent_document_id,
     )
-    if _table_has_column(conn, "documents", "source_quality_tier"):
+    if table_has_column(conn, "documents", "source_quality_tier"):
         tier = tier_for_source_type(SourceType.LLM_EXTRACTED).value
         cur = conn.execute(
             """
@@ -663,7 +688,8 @@ For EACH of the KPI names below, find the value reported FOR THIS QUARTER (not g
       * "count"    — headcount / customers / subscribers / accounts, as the full integer (e.g. "12.5 million customers" → 12500000).
       * "ratio"    — unitless multiples reported with an "x" (e.g. coverage 1.8x → 1.8).
       * "bps"      — only when the document states the metric in basis points.
-    Use only those five tokens; if unsure between "actual" and a scaled form, always pick "actual" with the full figure.
+  - "currency": required ISO code for every "actual" monetary value (for example "USD", "BRL", or "EUR"); omit it for counts and rates. Do not infer a currency.
+    Use only those five unit tokens; if unsure between "actual" and a scaled form, always pick "actual" with the full figure.
   - "confidence": float 0.0-1.0; lower if you had to estimate from context
   - "source_excerpt": the VERBATIM snippet (under 200 characters) copied character-for-character from the document that contains the reported value — the sentence or table line you read it from. Never paraphrase or reformat; if you cannot quote it exactly, omit this field.
 
@@ -793,10 +819,16 @@ def _build_manifest(
             unit = Unit(unit_raw)
         except ValueError:
             unit = Unit.ACTUAL
+        currency_raw = payload.get("currency")
+        currency = _currency_for_monetary_value(currency_raw, unit, name)
         conf_raw = payload.get("confidence", 0.85)
         try:
-            confidence = max(0.0, min(1.0, float(conf_raw)))
-        except (TypeError, ValueError):
+            confidence = (
+                max(0.0, min(1.0, float(conf_raw)))
+                if isinstance(conf_raw, (str, int, float))
+                else 0.85
+            )
+        except ValueError:
             confidence = 0.85
         excerpt_raw = payload.get("source_excerpt")
         excerpt = (
@@ -819,6 +851,7 @@ def _build_manifest(
                 name=name,
                 value=v,
                 unit=unit,
+                currency=currency,
                 confidence=confidence,
                 source_excerpt=excerpt,
                 locator=locator,
@@ -835,6 +868,10 @@ def _build_manifest(
         canonical_units=canonical_units or {},
         values=values,
     )
+
+
+# Public deterministic construction seam for callers and regression tests.
+build_manifest = _build_manifest
 
 
 # ---------------------------------------------------------------------------
@@ -896,12 +933,14 @@ Return a JSON ARRAY. Each element:
   "label": "<the metric's name as a clean noun phrase — e.g. 'Gross merchandise volume', NOT a whole sentence>",
   "value": <numeric only, no unit symbols>,
   "unit": EXACTLY ONE of "percent" | "actual" | "count" | "ratio" | "bps",
+  "currency": "ISO currency code required for every actual monetary value (e.g. USD, BRL, DKK); omit for counts and rates",
   "source_excerpt": "<verbatim snippet under 200 characters, copied character-for-character, that contains the value>"
 }}
 
 Unit conventions (identical to our standard):
   - "percent" — rates/margins/growth/retention (NRR 120% -> 120; NIM 17.8% -> 17.8). Drop the % sign; do NOT divide by 100.
   - "actual"  — ALL monetary amounts, as the FULL figure in the issuer's base currency, NEVER pre-scaled ("$1.2 billion" -> 1200000000; ARPAC "$11.20" -> 11.20).
+    Include its explicit ISO "currency" code; never infer one.
   - "count"   — headcount/customers/subscribers/accounts as the full integer ("12.5 million customers" -> 12500000).
   - "ratio"   — unitless multiples reported with an "x" (coverage 1.8x -> 1.8).
   - "bps"     — only when the document states the metric in basis points.
@@ -975,6 +1014,7 @@ def _build_capture_manifest(
             unit = Unit(str(row.get("unit") or "actual"))
         except ValueError:
             unit = Unit.ACTUAL
+        currency = _currency_for_monetary_value(row.get("currency"), unit, name)
         excerpt_raw = row.get("source_excerpt")
         excerpt = (
             excerpt_raw.strip()[:1024]
@@ -1000,6 +1040,7 @@ def _build_capture_manifest(
                 name=name,
                 value=v,
                 unit=unit,
+                currency=currency,
                 confidence=0.85,
                 source_excerpt=excerpt,
                 locator=located_or_hatch,
@@ -1187,6 +1228,20 @@ def _coerce_period_end(raw: object) -> datetime | None:
     return None
 
 
+def _currency_for_monetary_value(raw: object, unit: Unit, name: str) -> Currency | None:
+    """Accept an explicit extractor currency; never supply a ticker default."""
+    if unit not in {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}:
+        return None
+    if isinstance(raw, Currency):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"monetary KPI {name!r} has no explicit source currency")
+    try:
+        return Currency(raw.strip().upper())
+    except ValueError as exc:
+        raise ValueError(f"monetary KPI {name!r} has unsupported currency {raw!r}") from exc
+
+
 def _list_ir_capture_pdf_docs(
     conn: sqlite3.Connection,
     repo_root: Path,
@@ -1324,10 +1379,15 @@ def write_log(repo_root: Path, results: list[TickerExtractionLog]) -> Path:
     """Append/overwrite ticker entries in `data/kpi_extraction_log.json`."""
     log_path = repo_root / "data" / "kpi_extraction_log.json"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    existing = json.loads(log_path.read_text(encoding="utf-8")) if log_path.exists() else {}
-    if not isinstance(existing, dict):
-        existing = {}
+    decoded: object = json.loads(log_path.read_text(encoding="utf-8")) if log_path.exists() else {}
+    existing: dict[str, object] = (
+        cast("dict[str, object]", decoded) if isinstance(decoded, dict) else {}
+    )
     for r in results:
-        existing.setdefault(r.ticker, {})[r.stage] = asdict(r)
+        ticker_log = existing.get(r.ticker)
+        if not isinstance(ticker_log, dict):
+            ticker_log = {}
+            existing[r.ticker] = ticker_log
+        cast("dict[str, object]", ticker_log)[r.stage] = asdict(r)
     log_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     return log_path

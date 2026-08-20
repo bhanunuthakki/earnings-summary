@@ -24,7 +24,7 @@ from bs4 import BeautifulSoup
 
 from log_redact import redact as _redact
 from models.documents import SourceType
-from models.facts import FactLocator, Unit
+from models.facts import Currency, FactLocator, Unit
 from models.kpis import DefinitionOrigin
 from pipeline import locators
 from pipeline.kpi_persistence import (
@@ -366,6 +366,26 @@ def parse_numeric(val_str: str) -> Decimal | None:
         return None
 
 
+def _declared_currency(text: str) -> Currency | None:
+    """Return an explicitly declared filing currency; a dollar glyph is ambiguous."""
+    upper = text.upper()
+    found: set[Currency] = set()
+    for currency in Currency:
+        if re.search(rf"\b{currency.value}\b", upper):
+            found.add(currency)
+    aliases = (
+        (r"\bUS\s*\$|\bU\.?S\.?\s+DOLLARS?\b|\bUS\s+DOLLARS?\b", Currency.USD),
+        (r"\bDANISH\s+KRONER?\b", Currency.DKK),
+        (r"\bBRAZILIAN\s+REAIS?\b", Currency.BRL),
+        (r"\bEUROS?\b", Currency.EUR),
+        (r"\bPOUNDS?\s+STERLING\b", Currency.GBP),
+    )
+    for pattern, currency in aliases:
+        if re.search(pattern, upper):
+            found.add(currency)
+    return next(iter(found)) if len(found) == 1 else None
+
+
 def extract_fpi_financial_facts_html(
     html_text: str, ticker: str, period_end: datetime, fiscal_period_type: str
 ) -> dict[str, tuple[Decimal, str, str]]:
@@ -380,23 +400,28 @@ def extract_fpi_financial_facts_html(
     for table in tables:
         # Scale detection (check table text and preceding headers)
         t_text = table.get_text().lower()
-        prev_context = " ".join(
-            [
-                h.get_text().lower()
-                for h in table.find_all_previous(
-                    ["h1", "h2", "h3", "h4", "h5", "p", "div"], limit=3
-                )
-            ]
+        caption = table.find("caption")
+        nearest_heading = table.find_previous(["h1", "h2", "h3", "h4", "h5"])
+        local_context = " ".join(
+            part
+            for part in (
+                t_text,
+                caption.get_text(" ", strip=True).lower() if caption is not None else "",
+                nearest_heading.get_text(" ", strip=True).lower()
+                if nearest_heading is not None
+                else "",
+            )
+            if part
         )
-        context_text = f"{t_text} {prev_context}"
+        context_text = local_context
+        currency = _declared_currency(context_text)
+        if currency is None:
+            # Never turn an unqualified "$" into USD.
+            continue
         scale = Decimal(1)
-        if (
-            "in thousands" in context_text
-            or "(in thousands" in context_text
-            or "in thousand" in context_text
-        ):
+        if re.search(r"\bin\s+(?:[a-z]{3}\s+)?thousands?\b", context_text):
             scale = Decimal("1000")
-        elif "in millions" in context_text or "(in millions" in context_text:
+        elif re.search(r"\bin\s+(?:[a-z]{3}\s+)?millions?\b", context_text):
             scale = Decimal("1000000")
 
         # Line item matching patterns
@@ -424,13 +449,13 @@ def extract_fpi_financial_facts_html(
             ) and "revenue" not in results:
                 results["revenue"] = (
                     first_val * scale,
-                    "USD",
+                    currency.value,
                     f"Table: {cells[0]} = {raw_str}",
                 )
             elif "gross profit" in label and "gross_profit" not in results:
                 results["gross_profit"] = (
                     first_val * scale,
-                    "USD",
+                    currency.value,
                     f"Table: {cells[0]} = {raw_str}",
                 )
             elif (
@@ -440,7 +465,7 @@ def extract_fpi_financial_facts_html(
             ) and "operating_income" not in results:
                 results["operating_income"] = (
                     first_val * scale,
-                    "USD",
+                    currency.value,
                     f"Table: {cells[0]} = {raw_str}",
                 )
             elif (
@@ -448,7 +473,7 @@ def extract_fpi_financial_facts_html(
             ) and "net_income" not in results:
                 results["net_income"] = (
                     first_val * scale,
-                    "USD",
+                    currency.value,
                     f"Table: {cells[0]} = {raw_str}",
                 )
             elif (
@@ -458,7 +483,7 @@ def extract_fpi_financial_facts_html(
             ) and "operating_cash_flow" not in results:
                 results["operating_cash_flow"] = (
                     first_val * scale,
-                    "USD",
+                    currency.value,
                     f"Table: {cells[0]} = {raw_str}",
                 )
             elif (
@@ -469,18 +494,22 @@ def extract_fpi_financial_facts_html(
                 # Store capex as negative per FMP/system convention
                 results["capital_expenditure"] = (
                     -abs(first_val * scale),
-                    "USD",
+                    currency.value,
                     f"Table: {cells[0]} = {raw_str}",
                 )
 
     # If both OCF and Capex exist, compute FCF
-    if "operating_cash_flow" in results and "capital_expenditure" in results:
+    if (
+        "operating_cash_flow" in results
+        and "capital_expenditure" in results
+        and results["operating_cash_flow"][1] == results["capital_expenditure"][1]
+    ):
         ocf: Decimal = results["operating_cash_flow"][0]
         capex: Decimal = results["capital_expenditure"][0]
         fcf: Decimal = ocf + capex  # capex is negative
         results["free_cash_flow"] = (
             fcf,
-            "USD",
+            results["operating_cash_flow"][1],
             f"Derived: OCF ({ocf}) + Capex ({capex})",
         )
 
@@ -489,9 +518,10 @@ def extract_fpi_financial_facts_html(
 
 def extract_fpi_kpis_narrative(
     html_text: str, plain_text: str, ticker: str
-) -> list[tuple[str, Decimal, Unit, str]]:
+) -> list[tuple[str, Decimal, Unit, Currency | None, str]]:
     """Extract key metrics and KPIs mentioned in 6-K press releases."""
-    kpis: list[tuple[str, Decimal, Unit, str]] = []
+    kpis: list[tuple[str, Decimal, Unit, Currency | None, str]] = []
+    declared_currency = _declared_currency(plain_text)
 
     # Bookings regex: e.g. "Total bookings in the second quarter of 2026 were $569.1 million"
     b_match = re.search(
@@ -499,9 +529,9 @@ def extract_fpi_kpis_narrative(
         plain_text,
         re.IGNORECASE,
     )
-    if b_match:
+    if b_match and declared_currency is not None:
         val = Decimal(b_match.group(1)) * Decimal("1000000")
-        kpis.append(("bookings", val, Unit.ACTUAL, b_match.group(0)[:250]))
+        kpis.append(("bookings", val, Unit.ACTUAL, declared_currency, b_match.group(0)[:250]))
 
     # Free cash flow ex-restructuring or FCF margin
     fcf_m = re.search(
@@ -511,7 +541,7 @@ def extract_fpi_kpis_narrative(
     )
     if fcf_m:
         val = Decimal(fcf_m.group(1))
-        kpis.append(("free_cash_flow_margin", val, Unit.PERCENT, fcf_m.group(0)[:250]))
+        kpis.append(("free_cash_flow_margin", val, Unit.PERCENT, None, fcf_m.group(0)[:250]))
 
     # Creative subscriptions revenue / bookings for Wix
     if ticker.upper() == "WIX":
@@ -520,13 +550,14 @@ def extract_fpi_kpis_narrative(
             plain_text,
             re.IGNORECASE,
         )
-        if cs_rev:
+        if cs_rev and declared_currency is not None:
             val = Decimal(cs_rev.group(1)) * Decimal("1000000")
             kpis.append(
                 (
                     "creative_subscriptions_revenue",
                     val,
                     Unit.ACTUAL,
+                    declared_currency,
                     cs_rev.group(0)[:250],
                 )
             )
@@ -536,13 +567,14 @@ def extract_fpi_kpis_narrative(
             plain_text,
             re.IGNORECASE,
         )
-        if cs_book:
+        if cs_book and declared_currency is not None:
             val = Decimal(cs_book.group(1)) * Decimal("1000000")
             kpis.append(
                 (
                     "creative_subscriptions_bookings",
                     val,
                     Unit.ACTUAL,
+                    declared_currency,
                     cs_book.group(0)[:250],
                 )
             )
@@ -558,7 +590,7 @@ def persist_fpi_facts(
     fiscal_period_type: str,
     doc_id: int,
     financial_facts: dict[str, tuple[Decimal, str, str]],
-    kpis: list[tuple[str, Decimal, Unit, str]],
+    kpis: list[tuple[str, Decimal, Unit, Currency | None, str]],
     force: bool = False,
 ) -> tuple[int, int]:
     """Persist financial_facts and kpi_facts with transactional replacement when force=True."""
@@ -589,12 +621,13 @@ def persist_fpi_facts(
     # 2. Insert KPI facts using manifest
     if kpis:
         kpi_values: list[KpiValue] = []
-        for name, val, unit_enum, excerpt in kpis:
+        for name, val, unit_enum, currency, excerpt in kpis:
             kpi_values.append(
                 KpiValue(
                     name=name,
                     value=val,
                     unit=unit_enum,
+                    currency=currency,
                     confidence=0.95,
                     source_excerpt=excerpt,
                     locator=FactLocator(section="press_release", verbatim_snippet=excerpt),
@@ -627,6 +660,7 @@ def persist_fpi_facts(
                 kpi_definition_id=kpi_def_id,
                 value=kpv.value,
                 unit=kpv.unit.value,
+                currency=kpv.currency.value if kpv.currency is not None else None,
                 source_doc_id=doc_id,
                 confidence=kpv.confidence,
                 extracted_by="sec_fpi_ingest@1",

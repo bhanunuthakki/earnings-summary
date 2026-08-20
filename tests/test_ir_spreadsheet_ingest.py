@@ -27,7 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import ir_pipeline.ingest as ingest_module  # noqa: E402
-from ir_pipeline.config import IrConfig, SheetKpi  # noqa: E402
+from ir_pipeline.config import IrConfig, SheetKpi, get_config  # noqa: E402
 from ir_pipeline.config_builder import build_ir_config, widen_config  # noqa: E402
 from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
 from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
@@ -37,6 +37,14 @@ _Q = [dt.datetime(2025, 6, 30), dt.datetime(2025, 9, 30), dt.datetime(2025, 12, 
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+
+def test_committed_nu_config_declares_monthly_arpac_currency() -> None:
+    config = get_config("NU", PROJECT_ROOT)
+    assert config is not None
+    arpac = next(spec for spec in config.spreadsheet_kpis if spec.kpi_name == "Monthly ARPAC (USD)")
+    assert config.reporting_currency == "USD"
+    assert arpac.currency == "USD"
 
 
 def _capture_kwargs(
@@ -163,7 +171,13 @@ def test_capture_only_ticker_ingests_at_ir_doc_with_capture_origin(tmp_path: Pat
     path = tmp_path / "co.xlsx"
     _write_sheet(path)
     cfg = build_ir_config(
-        "CO", path, platform="mz", results_center_url="", repo_root=tmp_path, persist=False
+        "CO",
+        path,
+        platform="mz",
+        results_center_url="",
+        repo_root=tmp_path,
+        persist=False,
+        reporting_currency="USD",
     )
     parsed = parse_spreadsheet(path, cfg, max_quarters=8)
     inserted, doc_id = ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
@@ -201,7 +215,13 @@ def test_ingest_fingerprints_source_config_and_parsed_values(
     path = tmp_path / "co.xlsx"
     _write_sheet(path)
     cfg = build_ir_config(
-        "CO", path, platform="mz", results_center_url="", repo_root=tmp_path, persist=False
+        "CO",
+        path,
+        platform="mz",
+        results_center_url="",
+        repo_root=tmp_path,
+        persist=False,
+        reporting_currency="USD",
     )
     parsed = parse_spreadsheet(path, cfg, max_quarters=8)
     captured: dict[str, object] = {}
@@ -247,6 +267,7 @@ def test_curated_analyst_series_not_disturbed_by_widening(tmp_path: Path) -> Non
         ticker="CO",
         platform="mz",
         results_center_url="",
+        reporting_currency="USD",
         spreadsheet_kpis=(
             SheetKpi("Net Fee Revenue (USD)", "Indicators", "Fee Revenue", "usd", 1.0),
         ),
@@ -281,7 +302,13 @@ def test_capture_label_reuses_existing_definition(tmp_path: Path) -> None:
     path = tmp_path / "co.xlsx"
     _write_sheet(path)
     cfg = build_ir_config(
-        "CO", path, platform="mz", results_center_url="", repo_root=tmp_path, persist=False
+        "CO",
+        path,
+        platform="mz",
+        results_center_url="",
+        repo_root=tmp_path,
+        persist=False,
+        reporting_currency="USD",
     )
     parsed = parse_spreadsheet(path, cfg, max_quarters=8)
     ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
@@ -314,7 +341,13 @@ def test_ir_doc_value_supersedes_llm_incumbent_for_same_metric(tmp_path: Path) -
     path = tmp_path / "co.xlsx"
     _write_sheet(path)
     cfg = build_ir_config(
-        "CO", path, platform="mz", results_center_url="", repo_root=tmp_path, persist=False
+        "CO",
+        path,
+        platform="mz",
+        results_center_url="",
+        repo_root=tmp_path,
+        persist=False,
+        reporting_currency="USD",
     )
     parsed = parse_spreadsheet(path, cfg, max_quarters=8)
     ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
@@ -347,7 +380,7 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
         ticker="CO",
         platform="mz",
         results_center_url="https://example.invalid/results",
-        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual", currency="USD"),),
     )
     period = dt.datetime(2025, 12, 31)
 

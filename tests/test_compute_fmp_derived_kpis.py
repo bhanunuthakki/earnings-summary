@@ -14,9 +14,11 @@ from compute.fmp_derived_kpis import (
     KPI_OPERATING_MARGIN_GAAP,
     KPI_REVENUE_YOY_USD,
     KPI_ROE,
+    FmpDerivationReason,
     QuarterlyFacts,
     derive_for_facts,
     derive_for_ticker,
+    derive_for_ticker_outcome,
 )
 from models.facts import FiscalPeriodType, Unit
 
@@ -105,12 +107,13 @@ def _insert_fact(
     line_item: str,
     value: float,
     source_doc_id: int,
+    currency: str | None = "USD",
 ) -> None:
     conn.execute(
         "INSERT INTO financial_facts "
         "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, source_doc_id) "
-        "VALUES (?, ?, ?, ?, ?, 'USD', 'actual', ?)",
-        (ticker, period_end, fpt, line_item, str(value), source_doc_id),
+        "VALUES (?, ?, ?, ?, ?, ?, 'actual', ?)",
+        (ticker, period_end, fpt, line_item, str(value), currency, source_doc_id),
     )
 
 
@@ -299,6 +302,37 @@ def test_derive_for_ticker_idempotent(conn: sqlite3.Connection) -> None:
     _, inserted_second = derive_for_ticker(conn, "Y")
     assert inserted_first == 3
     assert inserted_second == 0
+
+
+def test_derive_for_ticker_rejects_incompatible_required_monetary_currency(
+    conn: sqlite3.Connection,
+) -> None:
+    """A percentage cannot be derived from USD revenue and BRL operating income."""
+    doc_id = _insert_doc(conn, "FX", "data/historical/fmp/FX_income_statement_quarterly.json")
+    pe = datetime(2024, 12, 31)
+    for line, value, currency in [
+        ("revenue", 100, "USD"),
+        ("operating_income", 20, "BRL"),
+        ("net_income", 15, "USD"),
+        ("gross_profit", 40, "USD"),
+    ]:
+        _insert_fact(
+            conn,
+            ticker="FX",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=value,
+            source_doc_id=doc_id,
+            currency=currency,
+        )
+    conn.commit()
+
+    outcome = derive_for_ticker_outcome(conn, "FX")
+    assert (outcome.rows_emitted, outcome.rows_inserted) == (0, 0)
+    assert outcome.not_computable == 1
+    assert outcome.reasons == (FmpDerivationReason.INCOMPATIBLE_MONETARY_CURRENCY,)
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts WHERE ticker = 'FX'").fetchone()[0] == 0
 
 
 def test_derive_for_ticker_skips_period_missing_required_line_items(
@@ -531,9 +565,9 @@ def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
 
-    from compute.fmp_derived_kpis import _derive_segment_kpis
+    from compute.fmp_derived_kpis import derive_segment_kpis
 
-    derived = _derive_segment_kpis(conn, "AMZN")
+    derived = derive_segment_kpis(conn, "AMZN")
 
     by_name_and_pe: dict[tuple[str, datetime], Decimal] = {
         (r.name, r.period_end): r.value for r in derived
@@ -554,6 +588,86 @@ def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
 
     assert by_name_and_pe[("AWS revenue growth (YoY)", datetime(2024, 12, 31))] == Decimal("50")
     assert by_name_and_pe[("AWS Revenue YoY Growth", datetime(2024, 12, 31))] == Decimal("50")
+
+
+def test_derive_segment_kpis_rejects_incompatible_currency_inputs(conn: sqlite3.Connection) -> None:
+    """A segment percentage/growth never spans USD and BRL source periods."""
+    conn.executescript(
+        """
+        CREATE TABLE segment_periods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL, period_end DATETIME NOT NULL,
+            fiscal_period_type TEXT NOT NULL, source_doc_id INTEGER NOT NULL,
+            currency TEXT, unit TEXT NOT NULL
+        );
+        CREATE TABLE segment_dimensions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_id INTEGER NOT NULL, dim_type TEXT NOT NULL, dim_name TEXT NOT NULL,
+            value NUMERIC NOT NULL, metric TEXT NOT NULL
+        );
+        """
+    )
+    usd_doc = _insert_doc(conn, "AMZN", "data/historical/fmp/AMZN_usd_quarterly.json")
+    brl_doc = _insert_doc(conn, "AMZN", "data/historical/fmp/AMZN_brl_quarterly.json")
+    period_ids: list[int] = []
+    for doc_id, currency in ((usd_doc, "USD"), (brl_doc, "BRL")):
+        cur = conn.execute(
+            "INSERT INTO segment_periods "
+            "(ticker, period_end, fiscal_period_type, source_doc_id, currency, unit) "
+            "VALUES ('AMZN', '2024-12-31', 'Q4', ?, ?, 'actual')",
+            (doc_id, currency),
+        )
+        assert cur.lastrowid is not None
+        period_ids.append(cur.lastrowid)
+    conn.executemany(
+        "INSERT INTO segment_dimensions (period_id, dim_type, dim_name, value, metric) "
+        "VALUES (?, ?, 'AWS', ?, ?)",
+        [
+            (period_ids[0], "product", 100, "revenue"),
+            (period_ids[1], "business_unit", 20, "operating_income"),
+        ],
+    )
+    prior_doc = _insert_doc(conn, "AMZN", "data/historical/fmp/AMZN_prior_quarterly.json")
+    prior_period = conn.execute(
+        "INSERT INTO segment_periods "
+        "(ticker, period_end, fiscal_period_type, source_doc_id, currency, unit) "
+        "VALUES ('AMZN', '2025-12-31', 'Q4', ?, 'BRL', 'actual')",
+        (prior_doc,),
+    )
+    assert prior_period.lastrowid is not None
+    conn.execute(
+        "INSERT INTO segment_dimensions (period_id, dim_type, dim_name, value, metric) "
+        "VALUES (?, 'product', 'AWS', 100, 'revenue')",
+        (prior_period.lastrowid,),
+    )
+    for currency, segment_name in ((None, "Missing currency"), ("INVALID", "Invalid currency")):
+        doc_id = _insert_doc(conn, "AMZN", f"data/historical/fmp/AMZN_{segment_name}.json")
+        cur = conn.execute(
+            "INSERT INTO segment_periods "
+            "(ticker, period_end, fiscal_period_type, source_doc_id, currency, unit) "
+            "VALUES ('AMZN', '2024-12-31', 'Q4', ?, ?, 'actual')",
+            (doc_id, currency),
+        )
+        assert cur.lastrowid is not None
+        conn.execute(
+            "INSERT INTO segment_dimensions (period_id, dim_type, dim_name, value, metric) "
+            "VALUES (?, 'product', ?, 1, 'revenue')",
+            (cur.lastrowid, segment_name),
+        )
+    conn.commit()
+
+    from compute.fmp_derived_kpis import derive_segment_kpis
+
+    assert derive_segment_kpis(conn, "AMZN") == []
+    outcome = derive_for_ticker_outcome(conn, "AMZN")
+    assert outcome.rows_emitted == 0
+    assert outcome.not_computable == 4
+    assert set(outcome.reasons) == {
+        FmpDerivationReason.MISSING_SEGMENT_CURRENCY,
+        FmpDerivationReason.INVALID_SEGMENT_CURRENCY,
+        FmpDerivationReason.INCOMPATIBLE_SEGMENT_MARGIN_CURRENCY,
+        FmpDerivationReason.INCOMPATIBLE_SEGMENT_GROWTH_CURRENCY,
+    }
 
 
 _FPT = {

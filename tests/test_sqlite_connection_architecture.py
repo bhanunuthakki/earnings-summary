@@ -76,6 +76,9 @@ INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
     # to prove the read path observes uncheckpointed data.
     "src/sqlite_overview_benchmark.py": 1,
     "src/sqlite_runtime.py": 2,
+    # Coverage reconciliation is a read-only observation CLI over an explicit
+    # URI; routing it through the writer runtime would change its contract.
+    "execution/reconcile_issuer_document_coverage.py": 1,
 }
 SQLITE_RUNTIME_CALLS = 2
 

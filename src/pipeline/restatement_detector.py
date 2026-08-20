@@ -120,6 +120,10 @@ def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool
     return False
 
 
+# Schema-tolerant public read seam for legacy writers during staged migrations.
+table_has_column = _table_has_column
+
+
 def is_later_filing(
     conn: sqlite3.Connection,
     *,
@@ -565,6 +569,7 @@ def insert_kpi_with_restatement_detection(
     kpi_definition_id: int,
     value: Decimal,
     unit: str,
+    currency: str | None = None,
     source_doc_id: int,
     confidence: float = 1.0,
     extracted_by: str | None = None,
@@ -641,7 +646,10 @@ def insert_kpi_with_restatement_detection(
     # formula_id/formula_version: 0162) — same drop-on-legacy tolerance as
     # the audit columns.
     tail_cols: list[str] = []
-    tail_vals: list[str | int] = []
+    tail_vals: list[str | int | None] = []
+    if _table_has_column(conn, "kpi_facts", "currency"):
+        tail_cols.append("currency")
+        tail_vals.append(currency)
     if locator is not None and _table_has_column(conn, "kpi_facts", "locator"):
         tail_cols.append("locator")
         tail_vals.append(locator)
@@ -657,6 +665,39 @@ def insert_kpi_with_restatement_detection(
     if formula_version is not None and _table_has_column(conn, "kpi_facts", "formula_version"):
         tail_cols.append("formula_version")
         tail_vals.append(formula_version)
+    if currency is not None and _table_has_column(conn, "kpi_facts", "currency"):
+        existing_currency = conn.execute(
+            "SELECT id, value, unit, currency FROM kpi_facts WHERE ticker=? AND period_end=? "
+            "AND fiscal_period_type=? AND kpi_definition_id=? AND source_doc_id=?",
+            (ticker.upper(), period_end, fiscal_period_type, kpi_definition_id, source_doc_id),
+        ).fetchone()
+        if existing_currency is not None:
+            stored = (
+                existing_currency["currency"]
+                if hasattr(existing_currency, "keys")
+                else existing_currency[3]
+            )
+            if stored is None:
+                stored_value = (
+                    existing_currency["value"]
+                    if hasattr(existing_currency, "keys")
+                    else existing_currency[1]
+                )
+                stored_unit = (
+                    existing_currency["unit"]
+                    if hasattr(existing_currency, "keys")
+                    else existing_currency[2]
+                )
+                if not _decimal_eq(stored_value, value) or str(stored_unit) != unit:
+                    raise ValueError(
+                        "same-document KPI currency backfill conflicts with persisted fact identity"
+                    )
+                conn.execute(
+                    "UPDATE kpi_facts SET currency=? WHERE id=?", (currency, existing_currency[0])
+                )
+                return (int(existing_currency[0]), supersedes_id)
+            if str(stored) != currency:
+                raise ValueError("same-document KPI currency conflicts with persisted fact")
     try:
         if has_audit_cols:
             tail_names = "".join(f", {c}" for c in tail_cols)

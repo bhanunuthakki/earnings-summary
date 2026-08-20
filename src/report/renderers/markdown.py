@@ -37,6 +37,7 @@ from report.models import (
     SnapshotSection,
     SoftRuleEvaluation,
     SurpriseScorecardCard,
+    ThemeRollup,
     ThesisSection,
     TranscriptEntry,
     ValuationSnapshot,
@@ -595,7 +596,7 @@ def _break_rule_table_md(out: StringIO, evaluations: list[BreakRuleEvaluation]) 
         comp = _COMPARATOR_SYMBOL_MD.get(ev.comparator, ev.comparator)
         threshold = f"{comp} {ev.threshold:g} for {ev.consecutive_periods} consecutive periods"
         if ev.observations:
-            latest_cells = []
+            latest_cells: list[str] = []
             for o in ev.observations[: max(2, ev.consecutive_periods)]:
                 unit = "%" if o.unit == "percent" else (f" {o.unit}" if o.unit else "")
                 latest_cells.append(f"{o.period_end}: **{o.value:.2f}{unit}**")
@@ -715,11 +716,11 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
 
 
 def _segments_table(out: StringIO, quarters: list[str], rows: list[SegmentSeries]) -> None:
-    headers = ["Segment", "Unit", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]
+    headers = ["Segment", "Source", "Unit", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]
     out.write("| " + " | ".join(headers) + " |\n")
     out.write("|" + "|".join(["---"] * len(headers)) + "|\n")
     for r in rows:
-        cells: list[str] = [r.segment_name, r.unit]
+        cells: list[str] = [r.segment_name, r.source_label, r.unit]
         cells.extend(_fmt_num(v, 0) for v in r.values)
         cells.extend(
             [
@@ -775,7 +776,7 @@ def _themes_block(out: StringIO, s: EarningsSection) -> None:
             _theme_block(out, theme)
 
 
-def _theme_block(out: StringIO, theme) -> None:
+def _theme_block(out: StringIO, theme: ThemeRollup) -> None:
     sparkline = ""
     if theme.mentions_per_quarter:
         # Oldest → newest for the sparkline so the most recent quarter is

@@ -14,19 +14,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from compute.fmp_derived_kpis import derive_for_ticker  # noqa: E402
+from compute.fmp_derived_kpis import derive_for_ticker_outcome  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
 
 
-def _resolve_tickers(conn, args: argparse.Namespace) -> list[str]:
+def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
     """Return list of tickers. --ticker overrides --all."""
     if args.ticker:
         return [args.ticker.upper()]
@@ -56,7 +57,7 @@ def main() -> int:
 
         for ticker in tickers:
             try:
-                emitted, inserted = derive_for_ticker(conn, ticker)
+                outcome = derive_for_ticker_outcome(conn, ticker)
             except (ValueError, KeyError) as e:
                 failed += 1
                 record_stage(
@@ -70,14 +71,24 @@ def main() -> int:
                 sys.stderr.write(f"FAILED {ticker}: {type(e).__name__}: {e}\n")
                 continue
 
-            status = StageStatus.OK if emitted > 0 else StageStatus.SKIPPED
-            record_stage(conn, run_id, ticker, StageName.COMPUTE, status)
-            total_inserted += inserted
+            status = StageStatus.OK if outcome.rows_emitted > 0 else StageStatus.SKIPPED
+            reason_summary = ",".join(reason.value for reason in outcome.reasons)
+            record_stage(
+                conn,
+                run_id,
+                ticker,
+                StageName.COMPUTE,
+                status,
+                error_msg=reason_summary[:500] if reason_summary else None,
+            )
+            total_inserted += outcome.rows_inserted
             per_ticker.append(
                 {
                     "ticker": ticker,
-                    "rows_emitted": emitted,
-                    "rows_inserted": inserted,
+                    "rows_emitted": outcome.rows_emitted,
+                    "rows_inserted": outcome.rows_inserted,
+                    "not_computable": outcome.not_computable,
+                    "degradations": [reason.value for reason in outcome.reasons],
                 }
             )
 

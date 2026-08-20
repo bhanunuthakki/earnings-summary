@@ -43,21 +43,13 @@ from pathlib import Path
 
 from models.companies import AccountingStandard, BusinessModelClass
 from models.documents import SourceQualityTier, SourceType
-from models.facts import DerivedInputRef, DerivedRef
+from models.facts import Currency, DerivedInputRef, DerivedRef, Unit
 from pipeline import locators
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 from report.sections._common import calendar_quarter_key
-
-# Reused directly per docs/design/bottoms_up_metrics_engine.md section 0 --
-# the module docstring above explains why this private helper (not just
-# calendar_quarter_key) is still needed. Scoped suppression, not a blanket
-# type: ignore: this is the one documented, intentional cross-module reuse
-# of a private symbol.
-from report.sections.financials import (
-    _dedupe_by_calendar_quarter,  # pyright: ignore[reportPrivateUsage]
-)
+from report.sections.financials import dedupe_by_calendar_quarter
 from sources.price import LivePrice, read_live_price
 from timeseries.loaders import reader_tier_rank_sql
 
@@ -156,6 +148,8 @@ PriceReader = Callable[[Path, str], LivePrice | None]
 # financial_facts document backing a vendor quote, unlike every other
 # concept this engine resolves.
 LineageEntry = tuple[CanonicalConcept, datetime, int | None]
+
+_MONETARY_UNITS = frozenset({Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS})
 
 # Phase 3: formula_keys whose formula consumes MARKET_CAP/PRICE. These are
 # computed ONLY at the LATEST calendar quarter (compute_for_ticker skips
@@ -263,7 +257,7 @@ def _resolve_valuation_spot(
     repo_root: Path,
     ticker: str,
     latest_cell: QuarterCell,
-) -> tuple[dict[CanonicalConcept, Decimal], datetime | None, str | None]:
+) -> tuple[dict[CanonicalConcept, Decimal], datetime | None, str | None, str | None]:
     """PRICE + MARKET_CAP for the LATEST calendar quarter, from a live price fetch.
 
     market_cap is computed bottoms-up (live price * the latest quarter's
@@ -280,16 +274,17 @@ def _resolve_valuation_spot(
     """
     shares = latest_cell.values.get(CanonicalConcept.WEIGHTED_AVG_SHARES_DILUTED)
     if shares is None or shares <= 0:
-        return {}, None, None
+        return {}, None, None, None
     live = price_reader(repo_root, ticker)
     if live is None:
-        return {}, None, None
+        return {}, None, None, None
     price = Decimal(str(live.price))
     market_cap = price * shares
     return (
         {CanonicalConcept.PRICE: price, CanonicalConcept.MARKET_CAP: market_cap},
         live.fetched_at,
         live.source_name,
+        live.currency,
     )
 
 
@@ -558,7 +553,7 @@ def _build_quarter_cells(
             bucket[f"__doc__{field_name}"] = int(row["source_doc_id"])
 
     raw_rows = [grouped[k] for k in sorted(grouped, key=lambda k: k[0])]
-    deduped_rows = _dedupe_by_calendar_quarter(raw_rows) if raw_rows else []
+    deduped_rows = dedupe_by_calendar_quarter(raw_rows) if raw_rows else []
 
     cells: list[QuarterCell] = []
     for row in deduped_rows:
@@ -803,13 +798,54 @@ def _resolve_inputs(
 
 
 def _input_fingerprint(
+    conn: sqlite3.Connection,
     lineage: list[LineageEntry],
+    *,
+    standard: AccountingStandard,
+    live_price_currency: str | None,
 ) -> str:
-    """sha256 of the sorted (concept, period_end, doc_id) tuples that fed a
-    computation -- the recompute-skip key (docs/design/
-    bottoms_up_metrics_engine.md section 2 "Recompute triggers")."""
-    parts = sorted(f"{c.value}|{pe.date().isoformat()}|{doc_id}" for c, pe, doc_id in lineage)
+    """Hash exact lineage identity *and* its declared currencies.
+
+    A currency correction changes a formula's admission outcome even when the
+    numeric values and document ids do not, so it is part of the recompute key.
+    """
+    parts: list[str] = []
+    fact_table_available = _financial_facts_table_available(conn)
+    for concept, period, document_id in lineage:
+        base = f"{concept.value}|{period.date().isoformat()}|{document_id}"
+        if document_id is None:
+            parts.append(f"{base}|live_currency={live_price_currency or ''}")
+            continue
+        line_item = resolve_concept(standard, concept)
+        if line_item is None:
+            parts.append(f"{base}|currency=unmapped")
+            continue
+        if not fact_table_available:
+            # Isolated locator fixtures predate financial_facts. Production
+            # runs always have the migrated table, where explicit currency is
+            # enforced; retaining this deterministic marker keeps that fixture
+            # hermetic without pretending currency was known.
+            parts.append(f"{base}|currency=unavailable_schema")
+            continue
+        rows = conn.execute(
+            "SELECT currency, unit FROM financial_facts WHERE source_doc_id = ? "
+            "AND line_item = ? AND date(period_end) = ? ORDER BY id",
+            (document_id, line_item, period.date().isoformat()),
+        ).fetchall()
+        currency_shape = ",".join(
+            f"{row['unit']!s}:{str(row['currency']) if row['currency'] is not None else ''}"
+            for row in rows
+        )
+        parts.append(f"{base}|currency={currency_shape}")
+    parts.sort()
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _financial_facts_table_available(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'financial_facts'"
+    ).fetchone()
+    return row is not None
 
 
 def _existing_attempt(
@@ -861,7 +897,111 @@ def _lineage_json(formula: FormulaDef, lineage: list[LineageEntry]) -> str:
     )
 
 
-def _persist_attempt(
+def _derived_monetary_currency(
+    conn: sqlite3.Connection,
+    formula: FormulaDef,
+    lineage: list[LineageEntry],
+    *,
+    standard: AccountingStandard,
+    live_price_currency: str | None,
+) -> Currency | None:
+    """Return one declared currency from the exact resolved lineage inputs."""
+    if not _financial_facts_table_available(conn):
+        return None
+    currencies: set[str] = set()
+    for concept, period, document_id in lineage:
+        if document_id is None:
+            if concept not in _LIVE_PRICE_CONCEPTS or not live_price_currency:
+                return None
+            currencies.add(live_price_currency.upper())
+            continue
+        line_item = resolve_concept(standard, concept)
+        if line_item is None:
+            return None
+        rows = conn.execute(
+            "SELECT currency, unit FROM financial_facts "
+            "WHERE source_doc_id = ? AND line_item = ? AND date(period_end) = ?",
+            (document_id, line_item, period.date().isoformat()),
+        ).fetchall()
+        if not rows:
+            return None
+        for row in rows:
+            if str(row["unit"]) not in {unit.value for unit in _MONETARY_UNITS}:
+                continue
+            if row["currency"] is None:
+                return None
+            currencies.add(str(row["currency"]).upper())
+    if len(currencies) != 1:
+        return None
+    try:
+        return Currency(currencies.pop())
+    except ValueError:
+        return None
+
+
+# Deterministic provenance seam for currency-admission regressions.
+derived_monetary_currency = _derived_monetary_currency
+
+
+def _lineage_requires_currency_compatibility(
+    conn: sqlite3.Connection,
+    lineage: list[LineageEntry],
+    *,
+    standard: AccountingStandard,
+) -> bool:
+    """Whether the computed value combines a monetary exact-lineage input."""
+    if not _financial_facts_table_available(conn):
+        return False
+    monetary_units = {unit.value for unit in _MONETARY_UNITS}
+    for concept, period, document_id in lineage:
+        if document_id is None:
+            if concept in _LIVE_PRICE_CONCEPTS:
+                return True
+            continue
+        line_item = resolve_concept(standard, concept)
+        if line_item is None:
+            continue
+        rows = conn.execute(
+            "SELECT unit FROM financial_facts WHERE source_doc_id = ? "
+            "AND line_item = ? AND date(period_end) = ?",
+            (document_id, line_item, period.date().isoformat()),
+        ).fetchall()
+        if any(str(row["unit"]) in monetary_units for row in rows):
+            return True
+    return False
+
+
+def _admit_result_currency(
+    conn: sqlite3.Connection,
+    result: ComputedValue | NotComputable,
+    formula: FormulaDef,
+    lineage: list[LineageEntry],
+    *,
+    standard: AccountingStandard,
+    live_price_currency: str | None,
+) -> ComputedValue | NotComputable:
+    """Apply all deterministic admission gates before idempotency comparison."""
+    admitted = _apply_lineage_admission(conn, result, lineage)
+    if not isinstance(admitted, ComputedValue):
+        return admitted
+    if not _lineage_requires_currency_compatibility(conn, lineage, standard=standard):
+        return admitted
+    currency = _derived_monetary_currency(
+        conn,
+        formula,
+        lineage,
+        standard=standard,
+        live_price_currency=live_price_currency,
+    )
+    if currency is not None:
+        return admitted
+    return NotComputable(
+        reason_code=ReasonCode.MISSING_INPUT,
+        reason_detail="monetary formula inputs lack one explicit compatible currency",
+    )
+
+
+def persist_attempt(
     conn: sqlite3.Connection,
     *,
     ticker: str,
@@ -871,13 +1011,31 @@ def _persist_attempt(
     formula_id: int,
     result: ComputedValue | NotComputable,
     lineage: list[LineageEntry],
+    standard: AccountingStandard = AccountingStandard.US_GAAP,
+    live_price_currency: str | None = None,
 ) -> None:
-    fingerprint = _input_fingerprint(lineage)
+    fingerprint = _input_fingerprint(
+        conn, lineage, standard=standard, live_price_currency=live_price_currency
+    )
     kpi_fact_id: int | None = None
     reason_code: str | None = None
     reason_detail: str | None = None
 
-    result = _apply_lineage_admission(conn, result, lineage)
+    result = _admit_result_currency(
+        conn,
+        result,
+        formula,
+        lineage,
+        standard=standard,
+        live_price_currency=live_price_currency,
+    )
+    currency = _derived_monetary_currency(
+        conn,
+        formula,
+        lineage,
+        standard=standard,
+        live_price_currency=live_price_currency,
+    )
 
     if isinstance(result, ComputedValue):
         status = "ok"
@@ -937,6 +1095,9 @@ def _persist_attempt(
             kpi_definition_id=kpi_def_id,
             value=result.value,
             unit=formula.unit.value,
+            currency=currency.value
+            if formula.unit in _MONETARY_UNITS and currency is not None
+            else None,
             source_doc_id=anchor_doc_id,
             confidence=confidence,
             extracted_by="metrics_engine",
@@ -983,6 +1144,11 @@ def _persist_attempt(
     )
 
 
+# Compatibility alias for older callers; new cross-module consumers use the
+# public ``persist_attempt`` seam above.
+_persist_attempt = persist_attempt
+
+
 def compute_for_ticker(
     conn: sqlite3.Connection,
     ticker: str,
@@ -1015,8 +1181,9 @@ def compute_for_ticker(
     spot_values: dict[CanonicalConcept, Decimal] = {}
     price_asof: datetime | None = None
     price_source: str | None = None
+    price_currency: str | None = None
     if quarterly_cells and repo_root is not None:
-        spot_values, price_asof, price_source = _resolve_valuation_spot(
+        spot_values, price_asof, price_source, price_currency = _resolve_valuation_spot(
             price_reader, repo_root, ticker, quarterly_cells[-1]
         )
 
@@ -1080,8 +1247,24 @@ def compute_for_ticker(
                         method_flags=(*result.method_flags, f"price_source_{price_source}"),
                     )
 
-            result = _apply_lineage_admission(conn, result, lineage)
-            fingerprint = _input_fingerprint(lineage)
+            # Currency admission is deliberately before the idempotency check.
+            # A value that used to compute may become not-computable when the
+            # source corrects its currency, even if its numeric value and
+            # document identity are unchanged.
+            result = _admit_result_currency(
+                conn,
+                result,
+                formula,
+                lineage,
+                standard=standard,
+                live_price_currency=price_currency,
+            )
+            fingerprint = _input_fingerprint(
+                conn,
+                lineage,
+                standard=standard,
+                live_price_currency=price_currency,
+            )
             expected_attempt = (
                 fingerprint,
                 ENGINE_VERSION,
@@ -1097,7 +1280,7 @@ def compute_for_ticker(
                     skipped += 1
                     continue
 
-            _persist_attempt(
+            persist_attempt(
                 conn,
                 ticker=ticker,
                 period_end=cell.period_end,
@@ -1106,6 +1289,8 @@ def compute_for_ticker(
                 formula_id=formula_id,
                 result=result,
                 lineage=lineage,
+                standard=standard,
+                live_price_currency=price_currency,
             )
             attempts += 1
             if isinstance(result, ComputedValue):

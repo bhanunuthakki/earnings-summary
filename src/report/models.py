@@ -637,6 +637,10 @@ class SegmentSeries(BaseModel):
     values: list[float | None] = Field(default_factory=list[float | None])
     growth: GrowthMetrics = Field(default_factory=GrowthMetrics)
     unit: str = "USD millions"
+    # Latest displayed observation's source class.  Unlike a generic source
+    # chip this is deliberately plain-language: a vendor-only segment breakout
+    # must never look equivalent to an issuer-reported business axis.
+    source_label: str = "source unavailable"
     # Full-history values aligned to SegmentsSection.quarter_labels_full —
     # used by the YoY matrix renderer. Empty when section was built without
     # full-history support.

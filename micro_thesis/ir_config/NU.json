@@ -2,6 +2,7 @@
   "ticker": "NU",
   "platform": "mz",
   "results_center_url": "https://www.investidores.nu/en/financials/results-center/",
+  "reporting_currency": "USD",
   "label_col": 1,
   "spreadsheet_kpis": [
     {
@@ -9,6 +10,7 @@
       "sheet": "Managerial indicators",
       "row_label": "Average Revenue per Active Customer",
       "unit": "usd",
+      "currency": "USD",
       "scale": 1.0,
       "origin": "analyst",
       "exact_label": false
@@ -198,6 +200,7 @@
       "sheet": "Managerial indicators",
       "row_label": "Cost to Serve per Active Customer - US$",
       "unit": "usd",
+      "currency": "USD",
       "scale": 1.0,
       "origin": "capture",
       "exact_label": true

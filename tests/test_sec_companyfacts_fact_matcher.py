@@ -152,6 +152,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             extracted_by TEXT,
             supersedes_id INTEGER,
             locator TEXT,
+            currency TEXT,
             source_excerpt TEXT,
             computed_from TEXT,
             formula_id INTEGER,

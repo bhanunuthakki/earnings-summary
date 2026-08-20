@@ -220,6 +220,10 @@ def _upgrade_pdf_locators(
     return manifest.model_copy(update={"values": upgraded})
 
 
+# Public seam used by the manifest-application regression suite.
+upgrade_pdf_locators = _upgrade_pdf_locators
+
+
 def _apply_manifest(
     conn: sqlite3.Connection,
     manifest_file: ManifestFile,

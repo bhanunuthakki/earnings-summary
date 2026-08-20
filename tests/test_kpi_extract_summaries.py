@@ -28,7 +28,7 @@ from compute.kpi_extract_summaries import (
     _period_end,
     parse_decimal_value,
 )
-from models.facts import FiscalPeriodType, Unit
+from models.facts import Currency, FiscalPeriodType, Unit
 from models.validation import Severity, ValidationRule
 
 
@@ -60,7 +60,14 @@ def test_llm_extract_prompt_offers_only_valid_unit_enum_tokens(
 
     def fake_call(prompt: str, **_: object) -> dict[str, dict[str, object]]:
         captured["prompt"] = prompt
-        return {"GMV": {"value": 1200000000, "unit": "actual", "confidence": 0.9}}
+        return {
+            "GMV": {
+                "value": 1200000000,
+                "unit": "actual",
+                "currency": "USD",
+                "confidence": 0.9,
+            }
+        }
 
     monkeypatch.setattr(kes, "call_llm_structured", fake_call)
     out = _llm_extract("MELI", "Q1 2026", ["GMV"], "GMV reached $1.2 billion this quarter.")
@@ -76,7 +83,14 @@ def test_llm_extract_prompt_offers_only_valid_unit_enum_tokens(
     # The money convention is spelled out with a full-figure example.
     assert "1200000000" in prompt
     # Sanity: the canned response still parses through the existing path.
-    assert out == {"GMV": {"value": 1200000000, "unit": "actual", "confidence": 0.9}}
+    assert out == {
+        "GMV": {
+            "value": Decimal("1200000000"),
+            "unit": "actual",
+            "currency": Currency.USD,
+            "confidence": 0.9,
+        }
+    }
 
 
 # --- Canonical-unit mapping from holdings break-rules (problem 2) -------------
@@ -276,7 +290,12 @@ def test_build_manifest_threads_canonical_units_onto_manifest() -> None:
     persist_manifest can reconcile; the extracted unit itself is left intact at
     build time (reconciliation happens at persist)."""
     extracted: dict[str, dict[str, object]] = {
-        "Net new subscription ARR ($)": {"value": 115000000, "unit": "actual", "confidence": 0.9},
+        "Net new subscription ARR ($)": {
+            "value": 115000000,
+            "unit": "actual",
+            "currency": "USD",
+            "confidence": 0.9,
+        },
     }
     canonical = {"Net new subscription ARR ($)": Unit.MILLIONS}
     manifest = _build_manifest(
@@ -296,7 +315,7 @@ def test_build_manifest_threads_canonical_units_onto_manifest() -> None:
 def test_build_manifest_canonical_units_default_empty() -> None:
     """Called without a canonical map (back-compat), the manifest carries none."""
     extracted: dict[str, dict[str, object]] = {
-        "GMV": {"value": 5, "unit": "actual", "confidence": 0.9}
+        "GMV": {"value": 5, "unit": "actual", "currency": "USD", "confidence": 0.9}
     }
     manifest = _build_manifest("YY", datetime(2026, 3, 31), FiscalPeriodType.Q1, 1, extracted)
     assert manifest.canonical_units == {}
@@ -311,7 +330,7 @@ def test_build_manifest_without_source_text_keeps_legacy_locator() -> None:
     from models.facts import LegacyEscapeHatch
 
     extracted: dict[str, dict[str, object]] = {
-        "GMV": {"value": 5, "source_excerpt": "GMV was $5 this quarter."}
+        "GMV": {"value": 5, "currency": "USD", "source_excerpt": "GMV was $5 this quarter."}
     }
     manifest = _build_manifest("YY", datetime(2026, 3, 31), FiscalPeriodType.Q1, 1, extracted)
     assert isinstance(manifest.values[0].locator, LegacyEscapeHatch)
@@ -326,6 +345,7 @@ def test_build_manifest_verified_excerpt_upgrades_to_html_span() -> None:
     extracted: dict[str, dict[str, object]] = {
         "GMV": {
             "value": 1200000000,
+            "currency": "USD",
             "source_excerpt": "GMV reached $1.2 billion this quarter.",
         }
     }
@@ -364,6 +384,7 @@ def test_build_manifest_fabricated_excerpt_rejected_and_logged() -> None:
     extracted: dict[str, dict[str, object]] = {
         "GMV": {
             "value": 1200000000,
+            "currency": "USD",
             # Plausible but NOT a verbatim substring of source_text.
             "source_excerpt": "GMV surged past $1.2 billion, a new all-time record.",
         }

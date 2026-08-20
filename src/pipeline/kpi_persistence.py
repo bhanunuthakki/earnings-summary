@@ -18,12 +18,12 @@ import sqlite3
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from compute.kpi_resolver import canonical_metric_name, normalize_kpi_name
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
-from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
+from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin, ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
@@ -57,6 +57,7 @@ class KpiValue(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     value: Decimal
     unit: Unit
+    currency: Currency | None = None
     confidence: float = Field(ge=0.0, le=1.0, default=0.95)
     # Verbatim snippet from the source document that supports the value —
     # lands in kpi_facts.source_excerpt (clipped to _SOURCE_EXCERPT_MAX).
@@ -70,6 +71,15 @@ class KpiValue(BaseModel):
     # persist_manifest below, for how the two branches serialize at the
     # actual kpi_facts INSERT.
     locator: FactLocator | LegacyEscapeHatch
+
+    @model_validator(mode="after")
+    def _monetary_currency_required(self) -> KpiValue:
+        if (
+            self.unit in {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
+            and self.currency is None
+        ):
+            raise ValueError("monetary KPI values require currency")
+        return self
 
 
 class KpiExtractionManifest(BaseModel):
@@ -312,6 +322,10 @@ def _reconcile_unit(
     return converted, canonical, False
 
 
+# Public deterministic seam for callers/tests that need to explain unit handling.
+reconcile_unit = _reconcile_unit
+
+
 # ---------------------------------------------------------------------------
 # Cumulative-series sanity guard (red-team PR2 item 4,
 # directives/monthly_red_team.md Phase 1 "KPI series sanity"): a KPI marked
@@ -413,6 +427,7 @@ def _insert_kpi_fact(
     kpi_definition_id: int,
     value: Decimal,
     unit: Unit,
+    currency: Currency | None = None,
     source_doc_id: int,
     confidence: float = 1.0,
     extracted_by: str | None = None,
@@ -440,6 +455,7 @@ def _insert_kpi_fact(
         kpi_definition_id=kpi_definition_id,
         value=value,
         unit=unit.value,
+        currency=currency.value if currency is not None else None,
         source_doc_id=source_doc_id,
         confidence=confidence,
         extracted_by=extracted_by,
@@ -706,6 +722,7 @@ def persist_manifest(
             kpi_definition_id=kpi_def_id,
             value=value,
             unit=unit,
+            currency=kpi.currency,
             source_doc_id=manifest.source_doc_id,
             # The deterministic tier+method prior scaled by the extractor's
             # per-value self-report (pipeline.confidence's documented formula) —

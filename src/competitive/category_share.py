@@ -24,11 +24,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from competitive._docs import ensure_synthetic_document
 from models.documents import SourceType
-from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
+from models.facts import Currency, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import ReportingCadence
 from models.runs import StageStatus
 from pipeline.invocation_fingerprint import file_fingerprint
@@ -66,9 +66,20 @@ class CategoryShareEntry(BaseModel):
     fiscal_year: int
     value: Decimal | None
     unit: Unit
+    currency: Currency | None = None
     source: str
     label: str | None = None
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _monetary_currency_required(self) -> CategoryShareEntry:
+        if (
+            self.value is not None
+            and self.unit in {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
+            and self.currency is None
+        ):
+            raise ValueError("monetary category-share entries require source currency")
+        return self
 
 
 class CategoryShareSeed(BaseModel):
@@ -151,6 +162,7 @@ def ingest_category_share(conn: sqlite3.Connection, repo_root: Path, ticker: str
                     name=e.metric,
                     value=cast("Decimal", e.value),
                     unit=e.unit,
+                    currency=e.currency,
                     confidence=1.0,
                     source_excerpt=_excerpt(e),
                     locator=_NO_LOCATOR,

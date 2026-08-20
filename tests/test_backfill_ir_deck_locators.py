@@ -7,6 +7,7 @@ from __future__ import annotations
 import sqlite3
 import sys
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ import backfill_ir_deck_locators as bfl  # noqa: E402
 import extract_kpis_from_ir as ekfi  # noqa: E402
 
 from models.facts import (  # noqa: E402
+    Currency,
     FactLocator,
     FiscalPeriodType,
     LegacyEscapeHatch,
@@ -191,16 +193,15 @@ def test_upgrade_promotes_v1_pdf_page_with_bbox(tmp_path: Path) -> None:
         [
             KpiValue(
                 name="Revenue",
-                value=1200000000,
+                value=Decimal("1200000000"),
                 unit=Unit.ACTUAL,
+                currency=Currency.USD,
                 source_excerpt=_QUOTE,
                 locator=FactLocator(pdf_page=2),
             )
         ]
     )
-    upgraded = ekfi._upgrade_pdf_locators(  # pyright: ignore[reportPrivateUsage]
-        conn, manifest, repo_root=tmp_path
-    )
+    upgraded = ekfi.upgrade_pdf_locators(conn, manifest, repo_root=tmp_path)
     loc = upgraded.values[0].locator
     assert isinstance(loc, FactLocator)
     assert loc.locator_version == 2
@@ -217,16 +218,15 @@ def test_upgrade_requires_excerpt_for_pdf_page(tmp_path: Path) -> None:
         [
             KpiValue(
                 name="Revenue",
-                value=1200000000,
+                value=Decimal("1200000000"),
                 unit=Unit.ACTUAL,
+                currency=Currency.USD,
                 locator=FactLocator(pdf_page=2),
             )
         ]
     )
     with pytest.raises(ValueError, match="source_excerpt"):
-        ekfi._upgrade_pdf_locators(  # pyright: ignore[reportPrivateUsage]
-            conn, manifest, repo_root=tmp_path
-        )
+        ekfi.upgrade_pdf_locators(conn, manifest, repo_root=tmp_path)
     conn.close()
 
 
@@ -234,13 +234,13 @@ def test_upgrade_leaves_escape_hatch_and_v2_untouched(tmp_path: Path) -> None:
     conn = _seed(tmp_path)
     hatch = KpiValue(
         name="Other",
-        value=1,
+        value=Decimal("1"),
         unit=Unit.COUNT,
         locator=LegacyEscapeHatch(reason="fixture value not under locator test"),
     )
     already = KpiValue(
         name="NIM",
-        value=17.8,
+        value=Decimal("17.8"),
         unit=Unit.PERCENT,
         source_excerpt="NIM of 17.8%",
         locator=FactLocator(
@@ -252,8 +252,6 @@ def test_upgrade_leaves_escape_hatch_and_v2_untouched(tmp_path: Path) -> None:
         ),
     )
     manifest = _manifest([hatch, already])
-    upgraded = ekfi._upgrade_pdf_locators(  # pyright: ignore[reportPrivateUsage]
-        conn, manifest, repo_root=tmp_path
-    )
+    upgraded = ekfi.upgrade_pdf_locators(conn, manifest, repo_root=tmp_path)
     assert upgraded is manifest  # nothing to change -> same object, no churn
     conn.close()

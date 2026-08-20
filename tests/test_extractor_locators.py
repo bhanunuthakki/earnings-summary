@@ -17,8 +17,8 @@ import pytest
 from compute._common import extract_facts_with_spec
 from compute.as_reported import extract_facts_from_record as extract_as_reported
 from compute.income_statement import extract_income_statement_facts
-from compute.kpi_extract_summaries import _build_manifest  # pyright: ignore[reportPrivateUsage]
-from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
+from compute.kpi_extract_summaries import build_manifest
+from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.fmp_payloads import FmpAsReportedRecord, FmpIncomeStatementRecord
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
@@ -310,6 +310,7 @@ def test_persist_manifest_writes_excerpt_and_locator() -> None:
             name="ARPAC",
             value=Decimal("11.2"),
             unit=Unit.ACTUAL,
+            currency=Currency.USD,
             locator=LegacyEscapeHatch(
                 reason="test fixture value -- provenance not under test here"
             ),
@@ -385,10 +386,15 @@ def test_build_manifest_passes_source_excerpt_through() -> None:
             "confidence": 0.95,
             "source_excerpt": "  NIM expanded to 17.8%  ",
         },
-        "ARPAC": {"value": 11.2, "unit": "actual", "confidence": 0.9},
-        "Deposits": {"value": 1, "unit": "actual", "source_excerpt": 42},  # non-str -> dropped
+        "ARPAC": {"value": 11.2, "unit": "actual", "currency": "USD", "confidence": 0.9},
+        "Deposits": {
+            "value": 1,
+            "unit": "actual",
+            "currency": "USD",
+            "source_excerpt": 42,
+        },  # non-str -> dropped
     }
-    manifest = _build_manifest("NU", datetime(2026, 3, 31), FiscalPeriodType.Q1, 5, extracted)
+    manifest = build_manifest("NU", datetime(2026, 3, 31), FiscalPeriodType.Q1, 5, extracted)
     by_name = {v.name: v for v in manifest.values}
     assert by_name["NIM"].source_excerpt == "NIM expanded to 17.8%"
     assert by_name["ARPAC"].source_excerpt is None

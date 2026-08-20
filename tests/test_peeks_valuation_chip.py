@@ -139,7 +139,12 @@ def _seed_pe_inputs(conn: sqlite3.Connection, ticker: str) -> None:
 
 
 def _stub_price(repo_root: Path, ticker: str) -> LivePrice:
-    return LivePrice(price=55.0, fetched_at=datetime.now(UTC), source_name="stub")
+    return LivePrice(
+        price=55.0,
+        currency="USD",
+        fetched_at=datetime.now(UTC),
+        source_name="stub",
+    )
 
 
 def test_latest_pe_ttm_returns_none_before_engine_has_run(conn: sqlite3.Connection) -> None:

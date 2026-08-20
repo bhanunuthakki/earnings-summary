@@ -27,6 +27,7 @@ from compute.kpi_resolver import (  # noqa: E402
     QUARTERLY_FACT_PERIOD_TYPES,
     canonical_metric_name,
     engine_formula_definition,
+    matching_kpi_definition_ids,
     normalize_kpi_name,
     resolve_kpi_definition_name,
 )
@@ -66,6 +67,7 @@ def _make_db() -> sqlite3.Connection:
             period_end VARCHAR NOT NULL,
             value NUMERIC,
             unit VARCHAR,
+            currency VARCHAR,
             kpi_definition_id INTEGER NOT NULL,
             fiscal_period_type VARCHAR NOT NULL,
             source_doc_id INTEGER NOT NULL DEFAULT 1
@@ -100,14 +102,15 @@ def _add_facts(
     *,
     period_type: str | None = None,
     unit: str = "actual",
+    currency: str | None = None,
 ) -> None:
     """Insert one fact per period_end. `period_type` overrides the derived 'Qn'."""
     for end in ends:
         fpt = period_type or f"Q{(int(end[5:7]) - 1) // 3 + 1}"
         conn.execute(
-            "INSERT INTO kpi_facts (ticker, period_end, value, unit, kpi_definition_id, "
-            "fiscal_period_type) VALUES (?, ?, ?, ?, ?, ?)",
-            (ticker, end, 1.0, unit, def_id, fpt),
+            "INSERT INTO kpi_facts (ticker, period_end, value, unit, currency, kpi_definition_id, "
+            "fiscal_period_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticker, end, 1.0, unit, currency, def_id, fpt),
         )
     conn.commit()
 
@@ -454,3 +457,22 @@ def test_engine_formula_definition_resolves_a_registry_formula_key() -> None:
 def test_engine_formula_definition_none_for_non_registry_name() -> None:
     assert engine_formula_definition("Monthly ARPAC (USD)") is None
     assert engine_formula_definition("not_a_real_formula") is None
+
+
+def test_matching_alias_family_never_unions_incompatible_units() -> None:
+    conn = _make_db()
+    actual = _add_def(conn, "MELI", "Revenue", unit="actual")
+    millions = _add_def(conn, "MELI", "Revenue (USD)", unit="millions")
+    _add_facts(conn, "MELI", actual, _QUARTER_ENDS[:1], unit="actual")
+    _add_facts(conn, "MELI", millions, _QUARTER_ENDS[:1], unit="millions")
+    assert matching_kpi_definition_ids(conn, "MELI", "Revenue") == (actual,)
+    assert matching_kpi_definition_ids(conn, "MELI", "Revenue (USD)") == (millions,)
+
+
+def test_matching_alias_family_never_unions_incompatible_currencies() -> None:
+    conn = _make_db()
+    usd = _add_def(conn, "MELI", "Revenue (USD)")
+    brl = _add_def(conn, "MELI", "Revenue (BRL)")
+    _add_facts(conn, "MELI", usd, _QUARTER_ENDS[:1], currency="USD")
+    _add_facts(conn, "MELI", brl, _QUARTER_ENDS[:1], currency="BRL")
+    assert matching_kpi_definition_ids(conn, "MELI", "Revenue (USD)") == (usd,)

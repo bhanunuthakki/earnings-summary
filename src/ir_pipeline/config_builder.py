@@ -33,7 +33,7 @@ import openpyxl
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter
 
 from ir_pipeline.config import IrConfig, SheetKpi, save_config
-from ir_pipeline.spreadsheet import SheetDataRow, _header_row, enumerate_numeric_rows
+from ir_pipeline.spreadsheet import SheetDataRow, enumerate_numeric_rows, header_row
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,7 +82,8 @@ def _target_kpi_names(ticker: str, repo_root: Path) -> list[str]:
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
     if not path.exists():
         return []
-    holdings = json.loads(path.read_text(encoding="utf-8"))
+    raw_holdings = json.loads(path.read_text(encoding="utf-8"))
+    holdings = cast("dict[str, object]", raw_holdings) if isinstance(raw_holdings, dict) else {}
     out: list[str] = []
     seen: set[str] = set()
 
@@ -92,10 +93,19 @@ def _target_kpi_names(ticker: str, repo_root: Path) -> list[str]:
             seen.add(name)
             out.append(name)
 
-    for k in holdings.get("tier_1_kpis") or []:
+    tier_1_kpis = holdings.get("tier_1_kpis")
+    tier_1_items = cast("list[object]", tier_1_kpis) if isinstance(tier_1_kpis, list) else []
+    for k in tier_1_items:
         if isinstance(k, dict):
-            _add(str(k.get("name", "")))
-    for name in holdings.get("chart_priorities") or []:
+            entry = cast("dict[str, object]", k)
+            name = entry.get("name")
+            if isinstance(name, str):
+                _add(name)
+    chart_priorities = holdings.get("chart_priorities")
+    chart_priority_items = (
+        cast("list[object]", chart_priorities) if isinstance(chart_priorities, list) else []
+    )
+    for name in chart_priority_items:
         if isinstance(name, str):
             _add(name)
     return out
@@ -114,7 +124,7 @@ def dump_sheet_structure(xlsx_path: Path, label_col: int = 1, max_rows_per_sheet
             "list[tuple[object, ...]]",
             [tuple(r) for r in wb[sheet].iter_rows(values_only=True)],
         )
-        _, col_map = _header_row(rows)
+        _, col_map = header_row(rows)
         if not col_map:
             continue
         recent = sorted(col_map)[-2:]
@@ -216,6 +226,7 @@ def _analyst_kpis(ticker: str, xlsx_path: Path, repo_root: Path, label_col: int)
                 sheet=str(spec["sheet"]),
                 row_label=str(spec["row_label"]),
                 unit=str(spec.get("unit", "actual")),
+                currency=_explicit_currency(name, str(spec["row_label"])),
                 scale=scale,
                 origin="analyst",
             )
@@ -240,6 +251,18 @@ _FOOTNOTE_RX = re.compile(
 _MAX_CAPTURE_LABEL = 90
 # Currency markers that pin a row to a dollar/real amount (→ "usd").
 _CURRENCY_MARKERS = ("US$", "USD", "R$", "$", "€", "£", "¥")
+_EXPLICIT_CURRENCY_MARKERS: tuple[tuple[str, str], ...] = (
+    ("USD", "USD"),
+    ("US$", "USD"),
+    ("BRL", "BRL"),
+    ("R$", "BRL"),
+    ("EUR", "EUR"),
+    ("€", "EUR"),
+    ("GBP", "GBP"),
+    ("£", "GBP"),
+    ("JPY", "JPY"),
+    ("¥", "JPY"),
+)
 # Phrases that explicitly signal a COUNT — deliberately specific so an ambiguous
 # mention ("Loans to customers" is a dollar balance, not a count) defaults to a
 # level. A bare "customers"/"accounts" is NOT enough.
@@ -286,6 +309,15 @@ def _classify_unit_scale(label: str, samples: list[float]) -> tuple[str, float]:
     return "actual", 1.0
 
 
+def _explicit_currency(*labels: str) -> str | None:
+    """Read a printed currency code or symbol, never a ticker-level default."""
+    text = " ".join(labels).upper()
+    for marker, currency in _EXPLICIT_CURRENCY_MARKERS:
+        if marker.upper() in text:
+            return currency
+    return None
+
+
 def _claims(analyst: list[SheetKpi]) -> list[tuple[str, str]]:
     """`(sheet, lower-cased row_label)` each analyst row already covers — capture
     skips any sheet row whose label contains one of these so a curated KPI's row
@@ -325,6 +357,7 @@ def _capture_kpis(rows: list[SheetDataRow], *, analyst: list[SheetKpi]) -> list[
                 sheet=row.sheet,
                 row_label=row.label.strip(),
                 unit=unit,
+                currency=_explicit_currency(row.label),
                 scale=scale,
                 origin="capture",
                 exact_label=True,
@@ -342,6 +375,7 @@ def build_ir_config(
     repo_root: Path | None = None,
     label_col: int = 1,
     persist: bool = True,
+    reporting_currency: str | None = None,
 ) -> IrConfig:
     """Build `ticker`'s parser config: curated analyst layer + capture-all layer.
 
@@ -360,6 +394,7 @@ def build_ir_config(
         ticker=ticker.upper(),
         platform=platform,
         results_center_url=results_center_url,
+        reporting_currency=reporting_currency,
         spreadsheet_kpis=tuple(analyst) + tuple(capture),
         label_col=label_col,
     )
@@ -385,6 +420,7 @@ def widen_config(cfg: IrConfig, xlsx_path: Path) -> IrConfig:
         ticker=cfg.ticker,
         platform=cfg.platform,
         results_center_url=cfg.results_center_url,
+        reporting_currency=cfg.reporting_currency,
         spreadsheet_kpis=tuple(analyst) + tuple(capture),
         label_col=cfg.label_col,
     )

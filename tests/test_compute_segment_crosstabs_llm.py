@@ -26,7 +26,7 @@ import pytest
 from compute import segment_crosstabs_llm
 from compute.segment_crosstabs_llm import extract_for_ticker
 from report.sections._common import calendar_quarter_key
-from report.sections.segments import _build_secondary_expansions
+from report.sections.segments import build_secondary_expansions
 
 # ---------------------------------------------------------------------------
 # Schema + fixtures
@@ -75,7 +75,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             dim_type VARCHAR(16) NOT NULL,
             dim_name VARCHAR(128) NOT NULL,
             value NUMERIC(20, 4) NOT NULL,
-            metric VARCHAR(32) NOT NULL
+            metric VARCHAR(32) NOT NULL,
+            unit VARCHAR(16)
         );
         CREATE INDEX ix_segment_dimensions_period_type_metric
         ON segment_dimensions (period_id, dim_type, metric);
@@ -303,11 +304,10 @@ def test_extract_skips_when_no_doc_row(
     junction writer requires a real documents.id FK."""
     _write_10k_payload(tmp_path, "AMZN", 2024)
 
-    monkeypatch.setattr(
-        segment_crosstabs_llm,
-        "call_llm_structured",
-        lambda *a, **k: json.loads(_VALID_LLM_RESPONSE),
-    )
+    def fake_call(*_args: object, **_kwargs: object) -> object:
+        return json.loads(_VALID_LLM_RESPONSE)
+
+    monkeypatch.setattr(segment_crosstabs_llm, "call_llm_structured", fake_call)
 
     result = extract_for_ticker("AMZN", tmp_path, conn)
     assert result.skipped_reason is not None
@@ -369,11 +369,11 @@ def test_build_secondary_expansions_surfaces_parent_label_aws(
             ]
         }
     )
-    monkeypatch.setattr(
-        segment_crosstabs_llm,
-        "call_llm_structured",
-        lambda *a, **k: json.loads(aws_quarterly),
-    )
+
+    def fake_call(*_args: object, **_kwargs: object) -> object:
+        return json.loads(aws_quarterly)
+
+    monkeypatch.setattr(segment_crosstabs_llm, "call_llm_structured", fake_call)
 
     extract_for_ticker("AMZN", tmp_path, conn)
 
@@ -383,7 +383,7 @@ def test_build_secondary_expansions_surfaces_parent_label_aws(
     quarters_full = [(2025, 1), (2025, 2), q3_2025, (2025, 4)]
     display_labels = ["2025 Q1", "2025 Q2", "2025 Q3", "2025 Q4"]
 
-    expansions = _build_secondary_expansions(
+    expansions = build_secondary_expansions(
         conn,
         "AMZN",
         quarters_full,
@@ -401,6 +401,64 @@ def test_build_secondary_expansions_surfaces_parent_label_aws(
     assert {r.segment_name for r in exp.rows} == {"United States", "EMEA", "APAC"}
     # Rows sort by most-recent value descending — US ($20B) leads, then EMEA, then APAC.
     assert [r.segment_name for r in exp.rows] == ["United States", "EMEA", "APAC"]
+
+
+def test_secondary_expansion_is_tier_aware_and_reversal_invariant() -> None:
+    """Secondary axes use the primary reader's tier/source/revision policy."""
+
+    def render(order: tuple[tuple[str, str, float], ...]) -> tuple[float | None, str]:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        _create_schema(connection)
+        try:
+            for source_type, fetched_at, value in order:
+                cursor = connection.execute(
+                    "INSERT INTO documents "
+                    "(ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size,source_quality_tier) "
+                    "VALUES ('MELI', ?, 'ir_presentation', ?, ?, ?, 'fetched', 1, 'fmp_normalized')",
+                    (
+                        source_type,
+                        f"fixture-{source_type}.json",
+                        f"{source_type[0]}" * 64,
+                        fetched_at,
+                    ),
+                )
+                assert cursor.lastrowid is not None
+                document_id = int(cursor.lastrowid)
+                period = connection.execute(
+                    "INSERT INTO segment_periods "
+                    "(ticker,period_end,fiscal_period_type,source_doc_id,currency,unit) "
+                    "VALUES ('MELI','2026-06-30','Q2',?,'BRL','actual')",
+                    (document_id,),
+                )
+                assert period.lastrowid is not None
+                connection.execute(
+                    "INSERT INTO segment_dimensions (period_id,dim_type,dim_name,value,metric) "
+                    "VALUES (?,'geography','Brazil',?,'Commerce_revenue')",
+                    (int(period.lastrowid), value),
+                )
+            expansions = build_secondary_expansions(
+                connection,
+                "MELI",
+                [(2026, 2)],
+                ["2026 Q2"],
+                primary_segment_names=set(),
+            )
+            brazil = next(
+                expansion for expansion in expansions if expansion.dim_type == "geography"
+            )
+            row = next(series for series in brazil.rows if series.segment_name == "Brazil")
+            return row.values[0], row.source_label
+        finally:
+            connection.close()
+
+    vendor_then_issuer = (
+        ("fmp", "2026-08-06T00:00:00Z", 900_000_000.0),
+        ("ir_doc", "2026-08-05T00:00:00Z", 100_000_000.0),
+    )
+    issuer_then_vendor = tuple(reversed(vendor_then_issuer))
+    assert render(vendor_then_issuer) == (100.0, "issuer-reported")
+    assert render(issuer_then_vendor) == (100.0, "issuer-reported")
 
 
 def test_extract_one_axis_fallback_writes_revenue_metric(
@@ -448,11 +506,11 @@ def test_extract_one_axis_fallback_writes_revenue_metric(
             ]
         }
     )
-    monkeypatch.setattr(
-        segment_crosstabs_llm,
-        "call_llm_structured",
-        lambda *a, **k: json.loads(one_axis_response),
-    )
+
+    def fake_call(*_args: object, **_kwargs: object) -> object:
+        return json.loads(one_axis_response)
+
+    monkeypatch.setattr(segment_crosstabs_llm, "call_llm_structured", fake_call)
 
     result = extract_for_ticker("AMZN", tmp_path, conn)
     assert result.skipped_reason is None
@@ -562,15 +620,15 @@ def test_build_secondary_expansions_multi_word_subject(
             ]
         }
     )
-    monkeypatch.setattr(
-        segment_crosstabs_llm,
-        "call_llm_structured",
-        lambda *a, **k: json.loads(payload),
-    )
+
+    def fake_call(*_args: object, **_kwargs: object) -> object:
+        return json.loads(payload)
+
+    monkeypatch.setattr(segment_crosstabs_llm, "call_llm_structured", fake_call)
 
     extract_for_ticker("AMZN", tmp_path, conn)
 
-    expansions = _build_secondary_expansions(
+    expansions = build_secondary_expansions(
         conn,
         "AMZN",
         [(2025, 3)],
