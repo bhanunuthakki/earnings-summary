@@ -110,6 +110,8 @@ class _CanaryPage(Protocol):
 
     def content(self) -> str: ...
 
+    def set_content(self, html: str, *, wait_until: str, timeout: int) -> None: ...
+
 
 class _CanaryContext(Protocol):
     def new_page(self) -> _CanaryPage: ...
@@ -118,7 +120,13 @@ class _CanaryContext(Protocol):
 
 
 class _CanaryBrowser(Protocol):
-    def new_context(self, *, service_workers: str) -> _CanaryContext: ...
+    def new_context(
+        self,
+        *,
+        service_workers: str,
+        reduced_motion: str | None = None,
+        viewport: dict[str, int] | None = None,
+    ) -> _CanaryContext: ...
 
     def close(self) -> None: ...
 
@@ -182,6 +190,23 @@ _BROWSER_CANARY_PRIMITIVES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] 
     ),
 )
 
+# These fixtures are deterministic rendered specimens, not a second product
+# route registry.  They exercise the existing primitive contracts at both
+# supported responsive widths; the fixture's data-route value is checked by
+# the browser evaluator below.
+_ROUTE_CANARY_MATRIX: tuple[tuple[str, str, tuple[int, int]], ...] = tuple(
+    (route, viewport, size)
+    for route in (
+        "cockpit",
+        "company-desk",
+        "fact-metric-playground",
+        "operations",
+        "full-brief",
+    )
+    for viewport, size in (("desktop", (1440, 900)), ("narrow", (390, 844)))
+)
+_ROUTE_CANARY_SETTLE_MILLISECONDS = 400
+
 
 class _ClosedModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -238,6 +263,15 @@ class CanaryResult(_ClosedModel):
     unverifiable_markup: tuple[str, ...] = ()
 
 
+class RouteCanaryResult(_ClosedModel):
+    route: str
+    viewport: Literal["desktop", "narrow"]
+    fixture: str
+    status: Literal["passed", "failed", "unavailable"]
+    reason: str | None = None
+    findings: tuple[str, ...] = ()
+
+
 class ConformanceReceipt(_ClosedModel):
     schema_version: Literal["1.2.0"] = SCHEMA_VERSION
     registry_version: str
@@ -254,6 +288,7 @@ class ConformanceReceipt(_ClosedModel):
     static_status: Literal["clean", "known-debt", "known-quarantine", "failed"]
     canary: CanaryResult
     verdict: Literal["pass", "fail", "hold"]
+    route_canaries: tuple[RouteCanaryResult, ...] = ()
 
 
 def _canonical_json(model: BaseModel) -> str:
@@ -535,7 +570,11 @@ def _canary_origin(url: str) -> tuple[str, str, int]:
     return scheme, hostname, port
 
 
-def _browser_canary_findings(page: _CanaryPage) -> tuple[str, ...]:
+def _browser_canary_findings(
+    page: _CanaryPage,
+    *,
+    expected_route: str | None = None,
+) -> tuple[str, ...]:
     """Return deterministic computed-style mismatches from a Playwright page."""
 
     # Keep DOM inspection in the browser process.  In particular, reading
@@ -543,12 +582,18 @@ def _browser_canary_findings(page: _CanaryPage) -> tuple[str, ...]:
     # mutations made by JavaScript after the original response was received.
     payload: object = page.evaluate(
         """
-        ({rootProperties, primitiveContracts}) => {
+        ({rootProperties, primitiveContracts, expectedRoute}) => {
           const root = getComputedStyle(document.documentElement);
           const rootValues = Object.fromEntries(
             rootProperties.map((name) => [name, root.getPropertyValue(name).trim()])
           );
           const findings = [];
+          const routeRoot = document.querySelector('[data-conformance-route]');
+          if (expectedRoute && !routeRoot) {
+            findings.push({kind: "route", actual: "missing data-conformance-route root"});
+          } else if (expectedRoute && routeRoot.getAttribute('data-conformance-route') !== expectedRoute) {
+            findings.push({kind: "route", actual: `expected ${expectedRoute}, got ${routeRoot.getAttribute('data-conformance-route')}`});
+          }
           const inspectInline = (node, selector, index) => {
             // Inline declarations are outside the canonical primitive CSS;
             // inspect every declaration, including custom properties, rather
@@ -587,11 +632,74 @@ def _browser_canary_findings(page: _CanaryPage) -> tuple[str, ...]:
               }
             });
           }
+          const visible = (node) => {
+            const style = getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' &&
+              Number.parseFloat(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+          };
+          const roles = document.querySelectorAll('[data-conformance-role]');
+          if (expectedRoute && !roles.length) {
+            findings.push({kind: "role", actual: "no registered conformance roles"});
+          }
+          roles.forEach((node, index) => {
+            const role = node.getAttribute('data-conformance-role') || '';
+            if (!role || !visible(node)) {
+              findings.push({kind: "role", actual: `${role || 'unnamed'}[${index}] is not visible`});
+            }
+            const style = getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+              const parentStyle = getComputedStyle(parent);
+              if (!/(hidden|clip)/.test(parentStyle.overflow + ' ' + parentStyle.overflowX + ' ' + parentStyle.overflowY)) continue;
+              const parentRect = parent.getBoundingClientRect();
+              if (rect.left < parentRect.left || rect.right > parentRect.right ||
+                  rect.top < parentRect.top || rect.bottom > parentRect.bottom) {
+                findings.push({kind: "geometry", actual: `${role}[${index}] clipped by ${parent.tagName.toLowerCase()}`});
+                break;
+              }
+            }
+            if (role === 'overlay') {
+              const centerX = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2));
+              const centerY = Math.min(window.innerHeight - 1, Math.max(0, rect.top + rect.height / 2));
+              const hit = document.elementFromPoint(centerX, centerY);
+              if (!hit || !(hit === node || node.contains(hit))) {
+                findings.push({kind: "geometry", actual: `overlay[${index}] occluded`});
+              }
+              if (style.position !== 'fixed' && style.position !== 'absolute') {
+                findings.push({kind: "geometry", actual: `overlay[${index}] is not positioned`});
+              }
+            }
+          });
+          const focusables = [...document.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')]
+            .filter((node) => visible(node) && !node.hasAttribute('disabled') && node.getAttribute('tabindex') !== '-1');
+          if (expectedRoute && !focusables.length) {
+            findings.push({kind: "keyboard", actual: "no visible keyboard target"});
+          }
+          if (expectedRoute) {
+            focusables.forEach((node, index) => {
+              node.focus({preventScroll: true});
+              if (document.activeElement !== node) {
+                findings.push({kind: "keyboard", actual: `focus target[${index}] is unreachable`});
+              }
+            });
+          }
+          const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          if (expectedRoute && !reduced) {
+            findings.push({kind: "motion", actual: "reduced-motion media query is not active"});
+          }
+          document.querySelectorAll('[data-conformance-motion]').forEach((node, index) => {
+            const style = getComputedStyle(node);
+            if (expectedRoute && reduced && (style.transitionDuration !== '0s' || style.animationDuration !== '0s')) {
+              findings.push({kind: "motion", actual: `motion[${index}] is not reduced`});
+            }
+          });
           return {rootValues, findings};
         }
         """,
         {
             "rootProperties": list(_BROWSER_CANARY_ROOT_PROPERTIES),
+            "expectedRoute": expected_route,
             "primitiveContracts": [
                 [selector, [list(check) for check in checks]]
                 for selector, checks in _BROWSER_CANARY_PRIMITIVES
@@ -618,21 +726,33 @@ def _browser_canary_findings(page: _CanaryPage) -> tuple[str, ...]:
         if not isinstance(item, dict):
             raise ValueError("browser canary returned invalid style finding")
         item_dict = cast(dict[str, object], item)
-        selector = item_dict.get("selector")
+        selector = item_dict.get("selector", "browser")
         index = item_dict.get("index")
         property_name = item_dict.get("property")
         actual = item_dict.get("actual")
         variable = item_dict.get("variable")
         expected = item_dict.get("expected")
-        if not isinstance(selector, str) or not isinstance(index, int):
+        if not isinstance(selector, str):
             raise ValueError("browser canary returned invalid style finding")
-        if not isinstance(property_name, str) or not isinstance(actual, str):
-            raise ValueError("browser canary returned invalid style finding")
+        if not isinstance(index, int):
+            index = 0
         kind = item_dict.get("kind")
+        if not isinstance(actual, str):
+            raise ValueError("browser canary returned invalid style finding")
         if kind == "inline":
+            if not isinstance(property_name, str):
+                raise ValueError("browser canary returned invalid style finding")
             findings.append(f"{selector}[{index}] inline {property_name}: {actual!r}")
             continue
-        if kind != "computed" or not isinstance(variable, str) or not isinstance(expected, str):
+        if kind in {"route", "role", "geometry", "keyboard", "motion"}:
+            findings.append(f"{kind}: {actual!r}")
+            continue
+        if (
+            kind != "computed"
+            or not isinstance(property_name, str)
+            or not isinstance(variable, str)
+            or not isinstance(expected, str)
+        ):
             raise ValueError("browser canary returned invalid style finding")
         findings.append(
             f"{selector}[{index}] {property_name}: computed {actual!r} != {variable} ({expected!r})"
@@ -692,6 +812,87 @@ def _fetch_browser_canary(canary_url: str, deadline: float) -> tuple[str, tuple[
                 context.close()
         finally:
             browser.close()
+
+
+def _route_fixture_path(project_root: Path, route: str, viewport: str) -> Path:
+    return project_root / "tests" / "fixtures" / "design_canaries" / f"{route}.{viewport}.html"
+
+
+def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanaryResult, ...]:
+    """Inspect the committed route fixtures at desktop and narrow widths.
+
+    The matrix is deliberately local and deterministic.  It does not contact
+    the running application or invent a second route/registry abstraction;
+    the fixtures exercise the same primitive contracts as the opt-in canary.
+    """
+
+    fixtures: list[tuple[str, str, Path, tuple[int, int]]] = []
+    for route, viewport, size in _ROUTE_CANARY_MATRIX:
+        path = _route_fixture_path(project_root, route, viewport)
+        fixtures.append((route, viewport, path, size))
+
+    try:
+        playwright_api = cast(
+            _CanaryPlaywrightModule,
+            importlib.import_module("playwright.sync_api"),
+        )
+        html_by_fixture = {
+            path: path.read_text("utf-8") for _route, _viewport, path, _size in fixtures
+        }
+        with cast(_CanaryPlaywrightContext, playwright_api.sync_playwright()) as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                results: list[RouteCanaryResult] = []
+                for route, viewport, path, size in fixtures:
+                    context: _CanaryContext | None = None
+                    fixture_name = path.relative_to(project_root).as_posix()
+                    try:
+                        context = browser.new_context(
+                            service_workers="block",
+                            reduced_motion="reduce",
+                            viewport={"width": size[0], "height": size[1]},
+                        )
+                        page = context.new_page()
+                        page.set_content(html_by_fixture[path], wait_until="load", timeout=5000)
+                        page.wait_for_timeout(_ROUTE_CANARY_SETTLE_MILLISECONDS)
+                        findings = _browser_canary_findings(page, expected_route=route)
+                        results.append(
+                            RouteCanaryResult(
+                                route=route,
+                                viewport=cast(Literal["desktop", "narrow"], viewport),
+                                fixture=fixture_name,
+                                status="failed" if findings else "passed",
+                                findings=findings,
+                            )
+                        )
+                    except Exception as exc:
+                        results.append(
+                            RouteCanaryResult(
+                                route=route,
+                                viewport=cast(Literal["desktop", "narrow"], viewport),
+                                fixture=fixture_name,
+                                status="unavailable",
+                                reason=f"{type(exc).__name__}: route canary unavailable",
+                            )
+                        )
+                    finally:
+                        if context is not None:
+                            context.close()
+                return tuple(results)
+            finally:
+                browser.close()
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: route canary unavailable"
+        return tuple(
+            RouteCanaryResult(
+                route=route,
+                viewport=cast(Literal["desktop", "narrow"], viewport),
+                fixture=path.relative_to(project_root).as_posix(),
+                status="unavailable",
+                reason=reason,
+            )
+            for route, viewport, path, _size in fixtures
+        )
 
 
 def _fetch_canary_html(canary_url: str, deadline: float) -> str:
@@ -787,6 +988,7 @@ def _build_receipt(
     *,
     require_canary: bool = False,
     browser_canary: bool = False,
+    route_canaries: bool = False,
 ) -> ConformanceReceipt:
     (
         checked,
@@ -802,7 +1004,12 @@ def _build_receipt(
         static_status,
     ) = _scan_static(source_root)
     canary = _scan_canary(canary_url, browser_canary=browser_canary)
-    failed = static_status == "failed" or canary.status == "failed"
+    route_results = _scan_route_canaries(source_root.parent) if route_canaries else ()
+    failed = (
+        static_status == "failed"
+        or canary.status == "failed"
+        or any(result.status != "passed" for result in route_results)
+    )
     held = require_canary and canary.status in {
         "skipped:not-requested",
         "skipped:unavailable",
@@ -822,6 +1029,7 @@ def _build_receipt(
         static_status=static_status,
         canary=canary,
         verdict="fail" if failed else "hold" if held else "pass",
+        route_canaries=route_results,
     )
 
 
@@ -883,6 +1091,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="fail closed with HOLD when rendered canary evidence is unavailable",
     )
+    parser.add_argument(
+        "--route-canaries",
+        action="store_true",
+        help="run the committed five-route desktop+narrow Playwright matrix",
+    )
     return parser
 
 
@@ -901,6 +1114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.canary_url,
             require_canary=args.require_canary,
             browser_canary=args.browser_canary,
+            route_canaries=args.route_canaries,
         )
     except (OSError, UnicodeError, ValueError) as exc:
         _emit_event("design_conformance_input_error", error=type(exc).__name__)

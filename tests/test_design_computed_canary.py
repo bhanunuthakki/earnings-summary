@@ -6,10 +6,14 @@ import importlib
 import threading
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
-from execution.verify_design_conformance import _scan_canary  # pyright: ignore[reportPrivateUsage]
+from execution.verify_design_conformance import (  # pyright: ignore[reportPrivateUsage]
+    _scan_canary,  # pyright: ignore[reportPrivateUsage]
+    _scan_route_canaries,  # pyright: ignore[reportPrivateUsage]
+)
 from ui.conformance_scan import scan_surface_evidence
 
 ROOT_TOKENS = """
@@ -150,6 +154,105 @@ def test_browser_canary_catches_evil_inline_style_and_custom_property(
     assert result.status == "failed"
     assert any("inline border-" in finding and "radius" in finding for finding in result.findings)
     assert any("inline --radius" in finding for finding in result.findings)
+
+
+def test_route_canary_matrix_covers_all_required_routes_and_viewports() -> None:
+    """The hosted gate must exercise every required fixture at both widths."""
+
+    _require_playwright()
+    results = _scan_route_canaries()
+    assert len(results) == 10
+    assert {(item.route, item.viewport) for item in results} == {
+        (route, viewport)
+        for route in (
+            "cockpit",
+            "company-desk",
+            "fact-metric-playground",
+            "operations",
+            "full-brief",
+        )
+        for viewport in ("desktop", "narrow")
+    }
+    assert all(item.status == "passed" for item in results), results
+
+
+def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "cockpit.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</style>", ".k-btn { border-radius: 41px !important; } </style>"
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(root)
+        if item.route == "cockpit" and item.viewport == "desktop"
+    )
+    assert result.status == "failed"
+    assert any("border-radius" in finding for finding in result.findings)
+
+
+def test_route_canary_rejects_clipped_or_occluded_overlay(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "operations.narrow.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</style>", ".k-overlay { right: -500px !important; } </style>"
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(root)
+        if item.route == "operations" and item.viewport == "narrow"
+    )
+    assert result.status == "failed"
+    assert any("occluded" in finding or "clipped" in finding for finding in result.findings)
+
+
+def test_route_canary_rejects_delayed_runtime_mutation(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "full-brief.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</body>",
+            "<script>setTimeout(() => document.querySelector('.k-btn').style.setProperty('border-radius', '41px', 'important'), 250);</script></body>",
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(root)
+        if item.route == "full-brief" and item.viewport == "desktop"
+    )
+    assert result.status == "failed"
+    assert any("border-radius" in finding for finding in result.findings)
+
+
+def _copy_route_fixtures(tmp_path: Path) -> Path:
+    fixture_root = tmp_path / "tests" / "fixtures" / "design_canaries"
+    fixture_root.mkdir(parents=True)
+    source_root = Path(__file__).parent / "fixtures" / "design_canaries"
+    for source in source_root.glob("*.html"):
+        (fixture_root / source.name).write_text(
+            source.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    return tmp_path
+
+
+def _require_playwright() -> None:
+    try:
+        playwright_api = importlib.import_module("playwright.sync_api")
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        pytest.fail(f"Playwright Chromium unavailable: {type(exc).__name__}")
 
 
 def _playwright_or_skip() -> None:

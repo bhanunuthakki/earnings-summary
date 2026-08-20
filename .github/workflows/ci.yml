@@ -202,7 +202,10 @@ jobs:
           cache: npm
           cache-dependency-path: design-system/package-lock.json
       - name: Install runtime dependencies
-        run: pip install --require-hashes -r requirements.lock
+        run: |
+          pip install --require-hashes -r requirements.lock
+          pip install playwright==1.60.0
+          python -m playwright install --with-deps chromium
       - name: Verify canonical design tokens and production Work OS contract
         env:
           DESIGN_DEBT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -214,6 +217,10 @@ jobs:
         run: |
           npm ci
           npm run check
+      - name: Run mandatory rendered route canary matrix
+        run: |
+          python -m pytest -q tests/test_design_computed_canary.py
+          python execution/verify_design_conformance.py --check --route-canaries
 
   quality:
     needs: [changes]
