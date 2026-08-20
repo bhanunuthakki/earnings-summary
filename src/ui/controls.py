@@ -54,8 +54,8 @@ Composition contract — ``controls_css(default)`` rides immediately after
   registered horizontal grid archetypes. Surfaces add placement and gaps only.
 * ``.k-dot`` (+ ``-ok/-warn/-bad/-muted``) — the one filled circular STATUS dot
   (freshness ticks, cron run-marks, system-status marks). Fill is
-  ``currentColor``, so a tone modifier only sets ``color``; a surface sizes it
-  via ``--k-dot-size`` and adds layout only. THE replacement for the four
+  ``currentColor``, so a tone modifier only sets ``color``; the master owns its
+  diameter and a surface adds layout only. THE replacement for the four
   duplicated dot-tone systems (``.dot-*`` / ``.fdot-*`` / ``.ch-dot-*`` /
   ``.cc-system-dot-*``).
 * ``.k-num-pos`` / ``.k-num-neg`` — the one green/red NUMBER-text tone (P&L
@@ -85,7 +85,7 @@ Composition contract — ``controls_css(default)`` rides immediately after
   the panel's ``<h2>`` so an in-shell single-sub-tab panel never re-prints its
   section name. ``panel_toolbar(sticky=True)`` adds ``.k-toolbar-sticky``
   (owner directive 2026-08-02): pins the band below the shell topbar
-  (``var(--cc-topbar-h)``) with a background + hairline, for section-nav /
+  (``var(--header-height)``) with a background + hairline, for section-nav /
   chip-tab bands only — ``.k-chip-tabs-sticky`` is the same treatment for a
   bare chip row with no toolbar wrapper (the Health console's pane switcher).
 * ``.prose`` (+ its ``h3``-``h6`` / ``p`` / ``ul`` / ``li`` / ``strong`` /
@@ -198,6 +198,12 @@ def icon_svg(name: str, *, classes: str = "") -> str:
 # theme-dependent declarations (color-scheme, chevron ink) are prepended by
 # controls_css().
 _CONTROLS_BODY = """
+/* ---- Global application baseline ---- */
+:where(body) {
+  font-family: var(--sans); font-size: var(--fs-body);
+  color: var(--fg); background: var(--bg);
+}
+
 /* ---- Work OS application chrome: one sidebar, nav item, and icon family ---- */
 .k-sidebar {
   width: var(--sidebar-width); background: var(--surface);
@@ -368,7 +374,8 @@ button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var
 a.k-tick-sym:hover { color: var(--accent); }
 .k-tick-name { font-family: var(--sans); font-weight: 400; font-size: var(--fs-caption);
   color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: var(--k-tick-max, 20ch); }
+  max-width: var(--ticker-name-width); }
+.k-tick-wide .k-tick-name { max-width: var(--ticker-name-wide-width); }
 
 /* ---- shared popover list (combobox results, palette rows) ---- */
 .k-menu { margin: 0; padding: 4px 0; list-style: none;
@@ -442,9 +449,9 @@ a.k-tick-sym:hover { color: var(--accent); }
    under .dot-*, .fdot-*, .ch-dot-*, .cc-system-dot-*. Fill is `currentColor`, so a
    tone modifier only sets `color` (mirrors the .k-prov-tick idiom): the same
    class colors a bg circle here and — where a surface still needs a neutral or
-   bespoke shade — takes any local `color`. A surface sets --k-dot-size (default
-   8px) and adds layout only (margin, position, a ring border), never a fill. ---- */
-.k-dot { display: inline-block; width: var(--k-dot-size, 8px); height: var(--k-dot-size, 8px);
+   bespoke shade — takes any local `color`. Diameter comes from the one
+   master-owned dot token; surfaces add layout only. ---- */
+.k-dot { display: inline-block; width: var(--dot-size); height: var(--dot-size);
   border-radius: var(--radius-full); background: currentColor; vertical-align: middle; }
 .k-dot-ok    { color: var(--ok); }
 .k-dot-warn  { color: var(--warn); }
@@ -516,9 +523,7 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
 
 /* ---- sticky chip-tab / section-nav bands (owner directive 2026-08-02):
    "sticky, cut the vertical space, accentuate with a line or shade — not
-   height". Pinned just below the shell topbar (--cc-topbar-h, set by
-   command_center_shell.py; the 0px fallback keeps this safe to compose on a
-   surface with no shell topbar) with a background + one hairline so content
+   height". Pinned just below the master shell header with a background + one hairline so content
    scrolling underneath stays readable, and its own padding trimmed to the
    low end of the --sp scale so pinning it never grows the page.
    .k-toolbar-sticky is the panel_toolbar(sticky=True) modifier (a console's
@@ -526,7 +531,7 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
    row that isn't a full toolbar (the Health console's per-card pane
    switcher) — ONE offset + one look, two attachment points. ---- */
 .k-toolbar-sticky, .k-chip-tabs-sticky {
-  position: sticky; top: var(--cc-topbar-h, 0px); z-index: 20;
+  position: sticky; top: var(--header-height); z-index: 20;
   background: var(--bg); border-bottom: 1px solid var(--border);
   padding: var(--sp-1) 0; margin-bottom: var(--sp-2);
 }
@@ -549,7 +554,7 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
 .prose li { margin-bottom: var(--sp-1); }
 .prose strong { font-weight: 600; color: var(--fg); }
 .prose em { font-style: italic; }
-.prose code { font-family: var(--mono); font-size: 0.93em;
+.prose code { font-family: var(--mono); font-size: var(--fs-caption);
   background: var(--paper); border-radius: var(--radius); padding: 0.05em 0.35em; }
 .prose hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-4) 0; }
 .prose table { width: 100%; border-collapse: collapse; font-size: var(--fs-body);
@@ -572,23 +577,23 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
    reserved rail is empty everywhere a note isn't, which on a long page is a
    dead strip down the whole surface. Sections with nothing to annotate are
    full-bleed and use the entire measure. ---- */
-/* The measure. --k-measure is the READING column; the document is that column
+/* The master reading measure defines the document column; the document is that column
    PLUS the note rail, so prose keeps a real measure whether or not a section
    carries a note, and full-bleed sections (tables, bands) still get the whole
    width. Setting .k-doc to a flat 76ch was wrong and browser measurement caught
    it: the 13.5rem note rail ate the measure from the inside, leaving ~40ch of
    prose in every annotated section. Prose is capped independently so a
    full-bleed section does not run to a 100ch line. */
-.k-doc { --k-measure: 66ch;
-  max-width: calc(var(--k-measure) + var(--k-note-w, 13.5rem) + var(--sp-5)); }
-.k-doc .prose { max-width: var(--k-measure); }
+.k-doc {
+  max-width: calc(var(--reading-measure) + var(--note-rail-width) + var(--sp-5)); }
+.k-doc .prose { max-width: var(--reading-measure); }
 /* A document that inherits its host's width. The workspace report owns its own
    page width (--pad-x) and spans wide financial tables, so it takes the
    document SEMANTICS — prose capped at the measure, notes, section rhythm —
    without the outer clamp. Everything else about .k-doc still applies. */
 .k-doc-fluid { max-width: none; }
 .k-doc-row { display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--k-note-w, 13.5rem);
+  grid-template-columns: minmax(0, 1fr) var(--note-rail-width);
   gap: 0 var(--sp-5); align-items: start; }
 
 /* Masthead: identity + stamps over one rule, with the mark as a short accent
@@ -611,13 +616,13 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
 
 /* Footnote marker. Sized in em, not px: a reference mark must scale with the
    prose it sits in rather than pin to a UI step. */
-.k-fn { font-size: 0.72em; font-weight: 600; color: var(--mark);
+.k-fn { font-size: var(--fs-caption); font-weight: 600; color: var(--mark);
   vertical-align: super; margin-left: 1px; }
 
 /* The stat band: a full-bleed strip of read-only figures between two rules.
    Compose .k-label for each cell's caption — no band-local caption class. */
 .k-band { display: grid;
-  grid-template-columns: repeat(var(--k-band-cols, 4), minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0 var(--sp-5); padding: var(--sp-3) 0;
   border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .k-band-v { display: block; font-family: var(--mono); font-size: var(--fs-title);
@@ -786,14 +791,14 @@ def ticker_label(
     name: str | None = None,
     *,
     href: str | None = None,
-    name_max: str | None = None,
+    wide: bool = False,
     classes: str = "",
 ) -> str:
     """The canonical ticker + company-name label (escaped HTML).
 
     Mono ticker symbol, regular-weight muted company name beside it,
-    ellipsis-truncated at ``--k-tick-max`` (default 20ch, override per call
-    via ``name_max``); the FULL name always rides in ``title``. ``href``
+    ellipsis-truncated at the master-owned width. ``wide=True`` selects the
+    registered wide variant; the FULL name always rides in ``title``. ``href``
     links the symbol only — the name stays plain text so long names never
     become long links. Replaces every ``f"{ticker} · {name}"`` /
     ``f"{ticker} — {name}"`` concatenation.
@@ -801,16 +806,15 @@ def ticker_label(
     from html import escape
 
     t = escape(ticker.upper())
-    cls = f"k-tick {classes}".strip()
+    cls = f"k-tick {'k-tick-wide' if wide else ''} {classes}".strip()
     title = f' title="{escape(name, quote=True)}"' if name else ""
-    style = f' style="--k-tick-max:{escape(name_max, quote=True)}"' if name_max else ""
     sym = (
         f'<a class="k-tick-sym" href="{escape(href, quote=True)}">{t}</a>'
         if href
         else f'<span class="k-tick-sym">{t}</span>'
     )
     nm = f'<span class="k-tick-name">{escape(name)}</span>' if name else ""
-    return f'<span class="{cls}"{title}{style}>{sym}{nm}</span>'
+    return f'<span class="{cls}"{title}>{sym}{nm}</span>'
 
 
 def panel_section_title(title: str, *, suppressed: bool = False) -> str:
@@ -847,7 +851,7 @@ def panel_toolbar(
 
     ``sticky=True`` adds ``.k-toolbar-sticky`` (owner directive 2026-08-02):
     the band pins ``position: sticky`` just below the shell topbar
-    (``var(--cc-topbar-h)``, set by ``command_center_shell.py``) with a
+    (``var(--header-height)``) with a
     background + bottom hairline so content scrolling underneath stays
     readable, and trims its padding to the low end of the ``--sp`` scale so
     pinning it never grows the page. Reserved for section-nav / chip-tab

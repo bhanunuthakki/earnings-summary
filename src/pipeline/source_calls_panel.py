@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from sources.registry import (
     CacheEffectivenessOverview,
     SourceCallSummary,
@@ -27,18 +28,7 @@ from sources.registry import (
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 
-_PANEL_STYLE = """<style>
-.sc-table td.src { font-weight:600; }
-.sc-skip-hi { color:var(--ok); }
-.sc-skip-lo { color:var(--muted); }
-.sc-err { color:var(--bad); }
-.sc-note { margin-top:14px; padding:10px 13px; background:var(--paper);
-  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
-  line-height:1.55; }
-.sc-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
-.au-strip { display:flex; flex-wrap:wrap; gap:var(--sp-2); align-items:center; }
-.au-strip .k-pill { display:inline-flex; gap:var(--sp-1); align-items:baseline; }
-</style>"""
+_PANEL_STYLE = RESEARCH_PANEL_STYLE
 
 
 def render_source_calls_panel(db_path: Path) -> str:

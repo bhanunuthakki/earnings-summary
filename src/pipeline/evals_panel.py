@@ -36,6 +36,7 @@ from pathlib import Path
 
 from evals.capture_quality_specs import CAPTURE_QUALITY_PURPOSES, CAPTURE_QUALITY_SPECS
 from llm.calibration import VersionSummary, summarize_by_prompt_version
+from pipeline.operations_styles import EVALS_STYLE as _PANEL_CSS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import prov_case, prov_drawer
@@ -554,28 +555,6 @@ def _health_data(h: CallHealthRow) -> str:
 # failed-case drawer rides .k-prov-drawer/.k-prov-case (controls.py), so this
 # carries only the run bar, the log, the version chip, and a couple of table
 # tweaks — all on the type/radius/color tokens.
-_PANEL_CSS = """<style>
-.ev-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
-.ev-capture-group { width: 100%; }
-.ev-capture-buttons { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 8px; }
-.ev-note { font-size: var(--fs-caption); }
-.ev-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
-  border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
-  font-size: var(--fs-caption); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
-.ev-drawer-row > td { padding: 0 0 10px 12px; border: none; }
-/* The version locator rides the kit's .k-chip.k-chip-mono; only the inter-chip
-   separation + tooltip affordance are layout-local. */
-.ev-vchip { margin-right: 8px; cursor: help; }
-.ev-bad { color: var(--bad); font-weight: 600; }
-.ev-warn { color: var(--warn); font-weight: 600; }
-/* Purpose names are sans labels (NOT tickers) — emphasis without mono. */
-.ev-purpose { font-weight: 600; }
-/* Genuine mono locators only (prompt_version, run timestamp). */
-.ev-loc { font-family: var(--mono); }
-</style>"""
-
 # Run-bar wiring — same POST + SSE + refetch shape as the Memos panel.
 # Plain string: braces are literal JS.
 _RUN_JS = r"""

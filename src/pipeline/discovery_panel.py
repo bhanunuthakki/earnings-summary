@@ -38,6 +38,7 @@ from discovery.scoring import score_evidence_line
 from discovery.sources import SourceRow, list_sources
 from discovery.store import CANDIDATE_STATUSES, CandidateRow, list_candidates
 from identity import DEFAULT_USER_ID
+from pipeline.operations_styles import DISCOVERY_STYLE as _PANEL_STYLE
 from ui.controls import panel_toolbar, ticker_label
 
 _STATUS_FILTERS: tuple[str, ...] = ("live", *CANDIDATE_STATUSES)
@@ -58,64 +59,6 @@ _STATUS_TONE: dict[str, str] = {
 
 # Layout only — the kit owns every color/font/shape. (No raw hex, no off-scale
 # font-size, no font-family: this surface is conformant so S7 skips it.)
-_PANEL_STYLE = """<style>
-.dq-count { color: var(--muted); font-size: var(--fs-caption); }
-/* The list fragment carries the count as its first node; the panel JS lifts it
-   onto the toolbar band (#dq-count) so it never costs its own row. Hidden inside
-   the list so it never flashes there before the lift. */
-#dq-list .dq-count { display: none; }
-/* A candidate row/card is click-to-expand: clicking the score / status / "why"
-   area reveals its evidence (interactive children opt out in the JS handler). */
-#dq-list [data-cand-id] { cursor: pointer; }
-#dq-list tr[data-cand-id]:hover > td { background: var(--paper); }
-.dq-why { color: var(--fg-soft); }
-.dq-why-line { display: flex; align-items: baseline; gap: var(--sp-2); }
-.dq-peek { background: none; border: none; color: var(--muted); cursor: pointer;
-  font-size: var(--fs-caption); padding: 0; }
-.dq-peek:hover { color: var(--accent); }
-.dq-detail[hidden] { display: none; }
-.dq-detail td { padding-top: 0; }
-.dq-evtable { width: 100%; border-collapse: collapse; font-size: var(--fs-caption);
-  font-variant-numeric: tabular-nums; color: var(--muted); }
-.dq-evtable td { padding: 2px var(--sp-2); border: none; }
-.dq-evtable .dq-src { font-family: var(--mono); color: var(--fg-soft); }
-.dq-acts { display: flex; gap: var(--sp-1); flex-wrap: wrap; align-items: center; }
-.dq-srcwt { width: 4.5rem; }
-/* Top-ten candidate cards (PRD §8.2, P1-B) — the primary view's richer unit,
-   one .k-well per name; the "More candidates" bucket stays the compact table. */
-.dq-cards { display: flex; flex-direction: column; gap: var(--sp-3); }
-.dq-card-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.dq-card-head .dq-peek { margin-left: auto; }
-.dq-card-row { display: flex; gap: var(--sp-2); align-items: baseline; margin-top: var(--sp-2);
-  font-size: var(--fs-body); }
-.dq-card-label { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
-  letter-spacing: 0.05em; min-width: 6.5rem; flex-shrink: 0; }
-.dq-card .dq-detail { margin-top: var(--sp-2); }
-.dq-more { margin-top: var(--sp-3); }
-.dq-more > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-caption); }
-.dq-sources { margin-top: var(--sp-3); }
-.dq-saved { color: var(--ok); font-size: var(--fs-caption); margin-left: var(--sp-2);
-  opacity: 0; transition: opacity var(--transition); }
-.dq-saved.is-on { opacity: 1; }
-.dq-log { margin-top: var(--sp-3); max-height: 280px; overflow-y: auto;
-  font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
-  white-space: pre-wrap; display: none; }
-.dq-log.is-on { display: block; }
-.dq-hint { color: var(--muted); font-size: var(--fs-caption); margin-top: var(--sp-3); }
-.dq-empty { color: var(--muted); padding: var(--sp-4) 0; }
-/* In-card Dismiss editor (replaces the two sequential window.prompt calls —
-   ledger_panel.beginRewrite / journal_panel.beginEdit idiom): swaps the row's
-   own evidence-detail cell for a reason + revisit-condition form, unhiding it
-   if collapsed and restoring the prior content on cancel. */
-.dq-dismiss-label { display: block; color: var(--muted); font-size: var(--fs-caption);
-  margin: var(--sp-2) 0 var(--sp-1); }
-.dq-dismiss-label:first-child { margin-top: 0; }
-.dq-dismiss-ta, .dq-dismiss-revisit { width: 100%; box-sizing: border-box;
-  font-family: var(--sans); font-size: var(--fs-body); }
-.dq-dismiss-ta { min-height: 48px; resize: vertical; }
-.dq-dismiss-row { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
-</style>"""
-
 # Plain string (not an f-string) so braces pass through untouched.
 _PANEL_JS = """
 (function () {
@@ -739,7 +682,7 @@ def render_discovery_panel(
         f'<div class="dq-statuschips">{chips}</div>'
         '<label class="k-label">min score</label>'
         f'<input id="dq-min-score" type="number" min="0" max="10" step="0.5" '
-        f'value="{min_score:g}" style="width:4rem">'
+        f'value="{min_score:g}" class="dq-srcwt">'
     )
     actions = (
         '<button type="button" id="dq-sources-toggle" class="k-btn k-btn-sm k-btn-quiet"'

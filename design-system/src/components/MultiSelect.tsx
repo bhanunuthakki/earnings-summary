@@ -32,7 +32,6 @@ export interface MultiSelectProps {
   name?: string;
   disabled?: boolean;
   className?: string;
-  style?: React.CSSProperties;
   "aria-label"?: string;
 }
 
@@ -47,7 +46,6 @@ export function MultiSelect({
   name,
   disabled,
   className,
-  style,
   "aria-label": ariaLabel,
 }: MultiSelectProps): React.JSX.Element {
   const isControlled = value !== undefined;
@@ -142,7 +140,7 @@ export function MultiSelect({
     );
 
   return (
-    <div ref={rootRef} className={className ? `k-pop ${className}` : "k-pop"} style={style}>
+    <div ref={rootRef} className={className ? `k-pop ${className}` : "k-pop"}>
       <button
         ref={triggerRef}
         type="button"

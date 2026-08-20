@@ -12,7 +12,8 @@ import * as React from "react";
 /** The `input[type="..."]` variants styled by the controls.css baseline. */
 export type KitInputType = "text" | "search" | "number" | "date" | "email" | "url" | "password";
 
-export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
+export interface InputProps
+  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type" | "style"> {
   /** Omit for the untyped `input:not([type])` baseline (renders as text). */
   type?: KitInputType;
 }

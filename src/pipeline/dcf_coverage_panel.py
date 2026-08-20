@@ -36,6 +36,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from pipeline.operations_styles import DCF_STYLE as _PANEL_STYLE
 from pipeline.queries import ANALYZED_LIST_TYPE_VALUES, BRIEFED_LIST_TYPE_VALUES
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
@@ -48,19 +49,6 @@ STALE_DAYS = 30  # older than a month = loudly stale
 # legacy DB facade merely to resolve list semantics.
 _ACTIVE_LIST_TYPES = ANALYZED_LIST_TYPE_VALUES
 _BRIEFED_LIST_TYPES = BRIEFED_LIST_TYPE_VALUES
-
-_PANEL_STYLE = """<style>
-.dcv-tick { font-weight:600; white-space:nowrap; }
-.dcv-ok   { color:var(--ok); font-weight:600; }
-.dcv-warn { color:var(--warn); font-weight:600; }
-.dcv-bad  { color:var(--bad); font-weight:600; }
-.dcv-muted { color:var(--muted); }
-.dcv-note { margin-top:14px; padding:10px 13px; background:var(--paper);
-  border:1px solid var(--border); border-radius:var(--radius);
-  font-size:var(--fs-body); line-height:1.55; }
-.dcv-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
-.dcv-mono { font-family:var(--mono); }
-</style>"""
 
 
 @dataclass(slots=True)

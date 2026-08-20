@@ -102,7 +102,7 @@ def render_alert_card(
 
     if actions:
         body.write('<div class="queued-actions">')
-        body.write("<h4>Queued actions</h4>")
+        body.write('<div class="k-card-row-title">Queued actions</div>')
         for qa in actions:
             render_queued_action(body, qa)
         body.write("</div>")

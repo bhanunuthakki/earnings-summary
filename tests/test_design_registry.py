@@ -92,17 +92,8 @@ def _expected_grid_signature(item: registry.GridSignature) -> str:
     )
 
 
-def _documentation_rows(text: str, kind: str) -> tuple[str, ...]:
-    start = f"<!-- design-registry:{kind}:start -->"
-    end = f"<!-- design-registry:{kind}:end -->"
-    assert text.count(start) == 1 and text.count(end) == 1
-    section = text.split(start, 1)[1].split(end, 1)[0]
-    rows = re.findall(r"^\|\s*`([^`]+)`\s*\|", section, flags=re.MULTILINE)
-    return tuple(rows)
-
-
 def test_registry_is_frozen_typed_and_complete() -> None:
-    assert registry.REGISTRY_VERSION == "1.3.0"
+    assert registry.REGISTRY_VERSION == "1.7.0"
     records = (
         registry.SHAPE_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0].signatures[0],
@@ -120,15 +111,53 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         setattr(registry.SHAPE_ARCHETYPES[0], "name", "changed")
 
     assert isinstance(registry.REGISTERED, frozenset)
-    assert len(registry.REGISTERED) == 69
-    assert len(registry.PERMANENT_EXEMPTIONS) == 3
+    assert isinstance(registry.GOVERNED, frozenset)
+    assert len(registry.REGISTERED) == 106
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 150
+    assert len(registry.GOVERNED) == 127
+    assert (
+        frozenset(
+            {
+                "ui/controls.py",
+                "ui/cite_marks.py",
+                "ui/source_chip.py",
+                "dashboard/_styles.py",
+                "execution/build_earnings_calendar.py",
+                "pipeline/analysis_styles.py",
+                "pipeline/portfolio_styles.py",
+                "pipeline/operations_styles.py",
+                "pipeline/research_panel_styles.py",
+                "report/renderers/workspace_styles.py",
+                "pipeline/work_os_styles.py",
+                "report/renderers/workspace_charts.py",
+                "ui/living_grid.py",
+                "viewspec/render.py",
+                "design-system/src/styles/controls.css",
+                "design-system/src/tokens/tokens.css",
+            }
+        )
+        == registry.MASTER_SOURCES
+    )
+    assert (
+        frozenset(
+            {
+                "ui/controls.py",
+                "design-system/src/styles/controls.css",
+                "design-system/src/tokens/tokens.css",
+            }
+        )
+        == registry.GLOBAL_MASTER_SOURCES
+    )
+    assert (
+        registry.FAMILY_MASTER_SOURCES == registry.MASTER_SOURCES - registry.GLOBAL_MASTER_SOURCES
+    )
+    assert registry.MASTER_SOURCES <= registry.GOVERNED
+    assert len(registry.PERMANENT_EXEMPTIONS) == 2
     assert registry.QUARANTINE_ENTRIES == ()
     assert len(registry.BESPOKE_BUTTON_APPROVALS) == 17
     assert len(registry.MONO_TABLE_APPROVALS) == 1
     assert registry.SURFACE_SANCTIONS == ()
     assert len(registry.CCACTION_REGRESSION_FLOOR) == 28
-    with pytest.raises(TypeError):
-        exec('registry.DOCUMENTATION_PROJECTIONS["shapes"] = ()')
     for name in (
         "CHROME_TOKENS",
         "INDENT_TOKENS",
@@ -138,6 +167,104 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     ):
         with pytest.raises(TypeError):
             exec(f'registry.{name}["__mutation_probe__"] = "changed"')
+
+
+def test_visual_emitter_manifest_is_complete_immutable_and_drives_registered() -> None:
+    assert all(is_dataclass(entry) for entry in registry.VISUAL_EMITTER_MANIFEST)
+    assert all(
+        entry.path and entry.owner.strip() and entry.rationale.strip()
+        for entry in registry.VISUAL_EMITTER_MANIFEST
+    )
+    assert all(
+        entry.adapter_kinds and entry.evidence_modes for entry in registry.VISUAL_EMITTER_MANIFEST
+    )
+    assert (
+        frozenset(
+            entry.path
+            for entry in registry.VISUAL_EMITTER_MANIFEST
+            if entry.disposition is registry.EmitterDisposition.PRODUCTION
+        )
+        == registry.REGISTERED
+    )
+    with pytest.raises(FrozenInstanceError):
+        setattr(registry.VISUAL_EMITTER_MANIFEST[0], "path", "changed")
+
+
+def test_visual_emitter_manifest_rejects_conflicting_records_and_blank_metadata() -> None:
+    valid = registry.VisualEmitterEntry(
+        "ui/example.py",
+        registry.EmitterDisposition.PRODUCTION,
+        frozenset({registry.EvidenceAdapter.HTML}),
+        frozenset({registry.EvidenceMode.STATIC}),
+        "design-system",
+        "Example governed emitter.",
+    )
+    duplicate = registry.VisualEmitterEntry(
+        "ui/example.py",
+        registry.EmitterDisposition.PRODUCTION,
+        frozenset({registry.EvidenceAdapter.HTML}),
+        frozenset({registry.EvidenceMode.STATIC}),
+        "design-system",
+        "Same path with conflicting evidence.",
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        registry.validate_visual_emitter_manifest((valid, duplicate))
+    with pytest.raises(ValueError, match="owner"):
+        registry.validate_visual_emitter_manifest(
+            (
+                registry.VisualEmitterEntry(
+                    "ui/example.py",
+                    registry.EmitterDisposition.PRODUCTION,
+                    frozenset({registry.EvidenceAdapter.HTML}),
+                    frozenset({registry.EvidenceMode.STATIC}),
+                    " ",
+                    "Example governed emitter.",
+                ),
+            )
+        )
+
+
+def test_shipped_visual_emitters_cannot_receive_blanket_exemption() -> None:
+    manifest_paths = {entry.path for entry in registry.VISUAL_EMITTER_MANIFEST}
+    assert manifest_paths >= registry.EXEMPT
+    assert {"ui/tokens.py", "ui/conformance_scan.py"} == registry.EXEMPT
+    charts = next(
+        entry
+        for entry in registry.VISUAL_EMITTER_MANIFEST
+        if entry.path == "report/renderers/charts_v2.py"
+    )
+    assert registry.EvidenceAdapter.SVG in charts.adapter_kinds
+    assert registry.EvidenceMode.SCOPED in charts.evidence_modes
+
+
+def test_local_property_contracts_are_scoped_and_immutable() -> None:
+    assert len(registry.LOCAL_PROPERTY_CONTRACTS) == 10
+    assert all(
+        contract.name.startswith("--")
+        and contract.surfaces
+        and contract.owner.strip()
+        and contract.rationale.strip()
+        and contract.value_grammar
+        for contract in registry.LOCAL_PROPERTY_CONTRACTS
+    )
+    with pytest.raises(FrozenInstanceError):
+        setattr(registry.LOCAL_PROPERTY_CONTRACTS[0], "name", "--changed")
+
+
+def test_every_master_has_one_pinned_geometry_recipe() -> None:
+    contracts = registry.MASTER_GEOMETRY_CONTRACTS
+    assert {contract.surface for contract in contracts} == registry.MASTER_SOURCES
+    assert len(contracts) == len(registry.MASTER_SOURCES)
+    assert all(re.fullmatch(r"[0-9a-f]{64}", contract.digest) for contract in contracts)
+    assert all(contract.owner and contract.rationale for contract in contracts)
+
+
+def test_dynamic_visual_recipes_are_pinned_and_typed() -> None:
+    contracts = registry.DYNAMIC_VISUAL_CONTRACTS
+    surfaces = [contract.surface for contract in contracts]
+    assert len(surfaces) == len(set(surfaces))
+    assert all(re.fullmatch(r"[0-9a-f]{64}", contract.digest) for contract in contracts)
+    assert all(contract.owner and contract.rationale for contract in contracts)
 
 
 def test_metadata_is_nonblank_and_quarantine_is_empty() -> None:
@@ -192,22 +319,30 @@ def test_signature_comparators_turn_red_for_one_changed_value() -> None:
         _shape_signature_for_selector(duplicate_override, ".k-card")
 
 
-def test_documentation_projection_is_bidirectional() -> None:
-    text = (PROJECT_ROOT / "directives" / "design_language.md").read_text(encoding="utf-8")
-    assert tuple(registry.DOCUMENTATION_PROJECTIONS) == (
-        "shapes",
-        "grids",
-        "indents",
-        "titles",
-        "exemptions",
-        "quarantine",
-        "bespoke-buttons",
-        "mono-tables",
-        "sanctions",
-        "ccaction-floor",
-    )
-    for kind, projection in registry.DOCUMENTATION_PROJECTIONS.items():
-        assert _documentation_rows(text, kind) == projection
+def test_agent_facing_design_contract_is_compact_and_points_to_executable_authority() -> None:
+    directive = (PROJECT_ROOT / "directives" / "design_language.md").read_text(encoding="utf-8")
+    agent_contract = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    # Near-current ratchets: a real rule may be added only by consolidating the
+    # contract, not by restarting the accumulation this migration removes.
+    assert len(directive.splitlines()) <= 190
+    assert len(directive.encode("utf-8")) <= 9_000
+    assert "<!-- design-registry:" not in directive
+    assert "Historical note" not in directive
+    for executable_owner in (
+        "src/ui/tokens.py",
+        "src/ui/controls.py",
+        "src/ui/design_registry.py",
+        "src/ui/conformance_scan.py",
+        "execution/verify_design_conformance.py",
+        "scripts/check_design_sync.py",
+    ):
+        assert executable_owner in directive
+
+    ui_section = agent_contract.split("## UI / Front-end", 1)[1].split("\n## ", 1)[0]
+    assert len(ui_section.splitlines()) <= 10
+    assert "The guard is partial" not in ui_section
+    assert "scripts/check_design_sync.py" in ui_section
 
 
 def test_registry_is_not_a_discovered_surface() -> None:

@@ -131,7 +131,7 @@ def test_badge_is_injected_and_updated() -> None:
     # Badge text is "Queued: N" when n > 0, hidden when empty.
     badge_block = COMMENTS_JS.split("function updateOutboxBadge")[1].split("\n  }")[0]
     assert "'Queued: '" in badge_block
-    assert "display = n ? 'inline-block' : 'none'" in badge_block
+    assert "badge.hidden = !n" in badge_block
 
 
 def test_badge_css_exists() -> None:

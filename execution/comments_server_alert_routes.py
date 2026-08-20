@@ -125,7 +125,7 @@ def create_alert_blueprint(context: AppContext) -> Blueprint:
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
                 f"<title>Confirm {verb.lower()}</title>{FAVICON_LINK}"
                 f"<style>{palette_css('dark')}{controls_css('dark')}</style></head><body>"
-                '<main class="k-well"><h1>Confirm action</h1>'
+                '<main class="k-well"><h2 class="k-card-title">Confirm action</h2>'
                 f"<p>{verb} {escape(target_name)} #{target_id}?</p>"
                 '<form method="post" action="/approve">'
                 f'<input type="hidden" name="{id_name}" value="{target_id}">'

@@ -173,7 +173,7 @@ ${r?'Expression: "'+r+`"
       .querySelectorAll('[data-quarter-card][data-quarter-group="' + groupId + '"]')
       .forEach(function (card) {
         var match = card.getAttribute('data-quarter') === q;
-        card.style.display = match ? '' : 'none';
+        card.hidden = !match;
       });
   }
   quarterGroups.forEach(function (group) {
@@ -199,8 +199,8 @@ ${r?'Expression: "'+r+`"
       if (!targetId) return;
       var target = document.getElementById(targetId);
       if (!target) return;
-      var isOpen = target.style.display !== 'none';
-      target.style.display = isOpen ? 'none' : '';
+      var isOpen = !target.hidden;
+      target.hidden = isOpen;
       var chev = row.querySelector('.fin-chev');
       if (chev) chev.textContent = isOpen ? '▶' : '▼';
     });
@@ -273,7 +273,7 @@ ${r?'Expression: "'+r+`"
     helpEl.setAttribute('role', 'dialog');
     helpEl.setAttribute('aria-label', 'Keyboard shortcuts');
     helpEl.innerHTML =
-      '<div class="ws-kbd-card"><div class="ws-kbd-title">Keyboard shortcuts</div>' +
+      '<div class="ws-kbd-surface"><div class="ws-kbd-title">Keyboard shortcuts</div>' +
       '<dl class="ws-kbd-list">' +
       '<dt>j / k</dt><dd>next / previous panel</dd>' +
       '<dt>/</dt><dd>focus the table filter</dd>' +
@@ -400,11 +400,6 @@ ${r?'Expression: "'+r+`"
       ensureScrim();
       scrim.classList.remove('cc-scrim-out');
       scrim.style.zIndex = String(zOf(s.el) - 1);
-      // Default scrim alpha rides the .k-scrim class (var(--scrim)); a custom
-      // scrimOpacity composes a neutral black veil at that alpha without a raw
-      // rgba literal (token discipline — see tests/test_ui_controls.py color dim).
-      scrim.style.background = (s.opts.scrimOpacity != null)
-        ? 'color-mix(in srgb, black ' + (s.opts.scrimOpacity * 100) + '%, transparent)' : '';
       scrim.hidden = false;
     } else {
       scrim.classList.remove('cc-scrim-out');
@@ -806,7 +801,7 @@ ${r?'Expression: "'+r+`"
     if (!badge) return;
     var n = loadOutbox().length;
     badge.textContent = n ? ('Queued: ' + n) : '';
-    badge.style.display = n ? 'inline-block' : 'none';
+    badge.hidden = !n;
   }
 
   // Sequentially POST queued entries. Stops on the first failure so
@@ -894,9 +889,10 @@ ${r?'Expression: "'+r+`"
     if (!pill) return;
     // Filled status pill = the control kit's .k-pill (+ tone by meaning);
     // unknown -> neutral bare. cmt-health-* kept as the state hook.
-    var tone = healthState === 'online' ? ' k-pill-ok'
-             : healthState === 'offline' ? ' k-pill-bad' : '';
-    pill.className = 'k-pill' + tone + ' cmt-health-pill cmt-health-' + healthState;
+    pill.className = 'k-pill cmt-health-pill';
+    pill.classList.toggle('k-pill-ok', healthState === 'online');
+    pill.classList.toggle('k-pill-bad', healthState === 'offline');
+    pill.dataset.health = healthState;
     pill.title = healthState === 'online'
       ? 'Server reachable.'
       : healthState === 'offline'
@@ -910,7 +906,7 @@ ${r?'Expression: "'+r+`"
   function renderOfflineBanner() {
     var banner = document.getElementById('cmt-offline-banner');
     if (!banner) return;
-    banner.style.display = healthState === 'offline' ? 'block' : 'none';
+    banner.hidden = healthState !== 'offline';
   }
 
   function pollHealth() {
@@ -1008,7 +1004,7 @@ ${r?'Expression: "'+r+`"
       var badge = document.createElement('span');
       badge.id = 'cmt-outbox-badge';
       badge.className = 'k-pill k-pill-warn cmt-outbox-badge';
-      badge.style.display = 'none';
+      badge.hidden = true;
       badge.title = 'Comments queued locally — will retry until the server is back.';
       head.appendChild(badge);
       updateOutboxBadge();
@@ -1034,7 +1030,7 @@ ${r?'Expression: "'+r+`"
       var banner = document.createElement('div');
       banner.id = 'cmt-offline-banner';
       banner.className = 'cmt-offline-banner';
-      banner.style.display = 'none';
+      banner.hidden = true;
       banner.textContent = 'Server offline — your comment will queue locally and sync on recovery.';
       formEl.insertBefore(banner, formEl.firstChild);
     }
@@ -1048,8 +1044,7 @@ ${r?'Expression: "'+r+`"
     if (!sidebar) return;
     sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
     sidebar.classList.toggle('open', open);
-    if (open) document.documentElement.style.setProperty('--sidebar-open-width', '380px');
-    else document.documentElement.style.removeProperty('--sidebar-open-width');
+    document.documentElement.classList.toggle('comments-sidebar-open', open);
   }
 
   // CCOverlay registration (S4, Law 3): a gesture push-sidebar. scrim:false is
@@ -1275,7 +1270,7 @@ ${r?'Expression: "'+r+`"
     if (floater) return floater;
     floater = document.createElement('div');
     floater.className = 'cmt-floater';
-    floater.style.display = 'none';
+    floater.hidden = true;
     floater.innerHTML = '<button type="button" class="cmt-floater-btn k-btn k-btn-primary k-btn-sm">+ Comment</button>';
     document.body.appendChild(floater);
     floater.querySelector('button').addEventListener('mousedown', function(ev) {
@@ -1285,7 +1280,7 @@ ${r?'Expression: "'+r+`"
     });
     return floater;
   }
-  function hideFloater() { if (floater) floater.style.display = 'none'; }
+  function hideFloater() { if (floater) floater.hidden = true; }
 
   function onSelectionChange() {
     var sel = window.getSelection();
@@ -1306,7 +1301,7 @@ ${r?'Expression: "'+r+`"
     var rect = range.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return hideFloater();
     ensureFloater();
-    floater.style.display = 'block';
+    floater.hidden = false;
     floater.style.left = Math.round(rect.left + window.scrollX + rect.width / 2 - 56) + 'px';
     floater.style.top = Math.round(rect.bottom + window.scrollY + 6) + 'px';
   }
@@ -1476,7 +1471,7 @@ ${r?'Expression: "'+r+`"
   // CCOverlay registration. The sidebar's own close (x) stays wired to closeSidebar.
   if (window.CCOverlay) {
     window.CCOverlay.addPopoverDismisser(function() {
-      if (floater && floater.style.display !== 'none') { hideFloater(); return true; }
+      if (floater && !floater.hidden) { hideFloater(); return true; }
       return false;
     });
   }
@@ -1644,8 +1639,7 @@ ${r?'Expression: "'+r+`"
       sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
       sidebar.classList.toggle('open', open);
       toggle.classList.toggle('open', open);
-      if (open) document.documentElement.style.setProperty('--sidebar-open-width', 'var(--sidebar-width)');
-      else document.documentElement.style.removeProperty('--sidebar-open-width');
+      document.documentElement.classList.toggle('chat-sidebar-open', open);
     }
 
     var chatOv = window.CCOverlay && window.CCOverlay.register(sidebar, {
@@ -1747,7 +1741,8 @@ ${r?'Expression: "'+r+`"
 
   function setStatus(msg, tone) {
     elStatus.textContent = msg || '';
-    elStatus.className = 'dcf-edit-status' + (tone ? ' is-' + tone : '');
+    elStatus.className = 'dcf-edit-status';
+    elStatus.dataset.tone = tone || 'neutral';
   }
   function fmtMoney(x) {
     if (x === null || x === undefined || isNaN(x)) return '—';
@@ -1895,7 +1890,8 @@ ${r?'Expression: "'+r+`"
     [['bear', 'Bear'], ['base', 'Base'], ['bull', 'Bull']].forEach(function (pair) {
       var key = pair[0];
       var cell = document.createElement('div');
-      cell.className = 'dcf-scn' + (key === 'base' ? ' base' : '');
+      cell.className = 'dcf-scn';
+      cell.dataset.scenario = key;
       var lab = document.createElement('div');
       lab.className = 'dcf-scn-label'; lab.textContent = pair[1];
       var val = document.createElement('div');
@@ -1904,10 +1900,11 @@ ${r?'Expression: "'+r+`"
       var fv = sc[key];
       if (fv !== null && fv !== undefined && price) {
         var pct = (fv - price) / price * 100;
-        up.className = 'dcf-scn-up ' + (pct >= 0 ? 'pos' : 'neg');
+        up.className = 'dcf-scn-up';
+        up.dataset.tone = pct >= 0 ? 'positive' : 'negative';
         up.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(0) + '%';
       } else {
-        up.className = 'dcf-scn-up muted'; up.textContent = '—';
+        up.className = 'dcf-scn-up'; up.dataset.tone = 'muted'; up.textContent = '—';
       }
       cell.appendChild(lab); cell.appendChild(val); cell.appendChild(up);
       elScenarios.appendChild(cell);
@@ -1949,12 +1946,11 @@ ${r?'Expression: "'+r+`"
         td.textContent = fmtMoney(v);
         var rel = price > 0 ? (v - price) / price : 0;
         var mag = Math.min(1, Math.abs(rel) / 0.5);
-        var tone = rel >= 0 ? 'var(--ok)' : 'var(--bad)';
-        var tint = Math.round(8 + mag * 30);
-        td.style.background = 'color-mix(in srgb, ' + tone + ' ' + tint + '%, transparent)';
+        td.dataset.tone = rel >= 0 ? 'positive' : 'negative';
+        td.dataset.intensity = String(Math.round(mag * 3));
         td.title = fmtMult(sens.multiple_axis[i]) + ' · ' + fmtPct(sens.wacc_axis[j])
           + ' → ' + fmtMoney(v);
-        if (i === mid && j === mid) td.className = 'base';
+        if (i === mid && j === mid) td.classList.add('base');
         tr.appendChild(td);
       });
       tbody.appendChild(tr);

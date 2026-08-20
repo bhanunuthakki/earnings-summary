@@ -79,8 +79,8 @@ def test_brief_inherits_the_workspace_visual_language() -> None:
     assert "font-family: var(--serif)" not in html
     assert ".k-doc {" in html
     assert "background: var(--surface)" in html
-    assert "inherits the same Warm Obsidian palette" in normalized_design_language
-    assert "does not introduce a paper palette" in normalized_design_language
+    assert "global tokens and controls" in normalized_design_language
+    assert "Consumers must not add local visual CSS" in normalized_design_language
 
 
 def test_mockup_uses_the_dashboard_type_and_density_rhythm() -> None:
@@ -103,8 +103,8 @@ def test_mockup_uses_the_dashboard_type_and_density_rhythm() -> None:
     )
     assert ".doc-section { padding: var(--sp-4) var(--sp-5);" in css
     normalized_design_language = " ".join(DESIGN_LANGUAGE.read_text(encoding="utf-8").split())
-    assert "four visible sizes" in normalized_design_language
-    assert "Cards use `--sp-3`" in normalized_design_language
+    assert "four visible roles: display, title, body, and meta" in normalized_design_language
+    assert "Use the spacing ladder and registered grid" in normalized_design_language
 
 
 def test_contextual_card_actions_are_accessible_and_cataloged() -> None:

@@ -37,6 +37,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
@@ -67,71 +68,9 @@ _SPEAKER_RE = re.compile(r"^([A-Z][\w.\- ',()]{0,70}?):(\s|$)")
 # Content rules shared by the full pages and the ``fragment=1`` payloads.
 # The command-center shell appends this block to its own stylesheet so a
 # fragment injected into the peek renders identically to the full page.
-VIEWER_CONTENT_CSS = """
-.sv-title { font-size: var(--fs-title); font-weight: 600; }
-.sv-meta { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); }
-.sv-lines { list-style: none; margin: 0; padding: 0; counter-reset: ln; }
-.sv-lines li { counter-increment: ln; padding: 1px 8px 1px 0; display: flex; gap: 14px; }
-.sv-lines li::before { content: counter(ln); color: var(--muted); width: 42px;
-  flex: none; text-align: right; font-family: var(--mono); font-size: var(--fs-caption);
-  padding-top: 2px; user-select: none; }
-.sv-lines li:target { background: color-mix(in srgb, var(--warn) 14%, transparent);
-  outline: 1px solid var(--warn); border-radius: var(--radius); }
-.sv-lines .ln-text { white-space: pre-wrap; word-break: break-word; }
-.sv-lines .ln-speaker { font-weight: 600; color: var(--fg); }
-.sv-secnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
-.sv-secnav a { text-decoration: none; }
-.sv-sec-row { padding: 4px 0; border-bottom: 1px solid var(--hairline); }
-.sv-sec-key { color: var(--muted); font-size: var(--fs-caption); }
-.sv-sec-val { white-space: pre-wrap; word-break: break-word; }
-.sv-frag-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
-  margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.sv-stmt-wrap { overflow-x: auto; }
-.sv-stmt-table { border-collapse: collapse;
-  font-size: var(--fs-caption); white-space: nowrap; }
-.sv-stmt-table th, .sv-stmt-table td { padding: 4px 10px; text-align: right;
-  border-bottom: 1px solid var(--hairline); }
-/* Canonical table rule (viewspec/render.py's .vx-matrix): numbers mono,
-   labels/headers sans. Only the VALUE cells (<td>, not the first-child period
-   column) carry mono; the sticky label column and every <th> inherit body's
-   sans instead of the whole table pinning mono across the label too. */
-.sv-stmt-table td:not(:first-child) { font-family: var(--mono); }
-.sv-stmt-table th:first-child, .sv-stmt-table td:first-child {
-  text-align: left; color: var(--muted); position: sticky; left: 0; background: var(--bg); }
-.sv-stmt-table th { color: var(--muted); font-weight: 600; }
-.sv-cell-hit { background: color-mix(in srgb, var(--warn) 16%, transparent);
-  outline: 1px solid var(--warn); border-radius: var(--radius); }
-.sv-stmt-foot { margin-top: 12px; font-size: var(--fs-caption); }
-/* PDF page-image view (pdf_slide locators — provenance click-through Phase B).
-   The stage is position:relative so the bbox highlight overlays the rendered
-   page image in percentage coordinates (layout only; highlight tones reuse the
-   same warn color-mix treatment as .sv-cell-hit / .sv-lines li:target). */
-.sv-pdf-stage { position: relative; display: inline-block; max-width: 100%; }
-.sv-pdf-stage img { display: block; max-width: 100%; height: auto;
-  border: 1px solid var(--border); border-radius: var(--radius); }
-.sv-pdf-hit { position: absolute; pointer-events: none;
-  outline: 2px solid var(--warn); border-radius: var(--radius);
-  background: color-mix(in srgb, var(--warn) 18%, transparent); }
-.sv-pdf-pager { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
-  margin: 10px 0; font-size: var(--fs-caption); }
-.sv-pdf-pager .sv-pdf-page-n { color: var(--muted); font-family: var(--mono); }
-.sv-pdf-snippet { margin-top: 10px; }
-"""
+VIEWER_CONTENT_CSS = ""
 
-_PAGE_CSS = (
-    """
-body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
-  font-size: var(--fs-body); line-height: 1.55; }
-a { color: var(--accent); }
-.sv-head { padding: 14px 22px; border-bottom: 1px solid var(--border);
-  display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
-  position: sticky; top: 0; background: var(--bg); z-index: 5; }
-.sv-body { max-width: 980px; margin: 0 auto; padding: 18px 22px 80px; }
-.sv-fallback { max-width: 720px; margin: 60px auto; padding: 22px;
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-"""
-    + VIEWER_CONTENT_CSS
-)
+_PAGE_CSS = ""
 
 
 @dataclass(slots=True)
@@ -198,7 +137,9 @@ def _page(title: str, head_extra: str, body: str) -> str:
         '<html lang="en" data-theme="dark"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(title)}</title>{FAVICON_LINK}"
-        f"<style>{palette_css('dark')}{controls_css('dark')}{_PAGE_CSS}</style></head><body>"
+        f"<style>{palette_css('dark')}{controls_css('dark')}"
+        f"{RESEARCH_PANEL_STYLE.removeprefix('<style>').removesuffix('</style>')}"
+        f"{_PAGE_CSS}</style></head><body>"
         f'<div class="sv-head">{head_extra}</div>'
         f'<div class="sv-body">{body}</div>'
         "</body></html>"
@@ -226,7 +167,7 @@ def _doc_meta_html(doc: _DocRow) -> str:
     if doc.source_url and doc.source_url.strip().lower().startswith(("http://", "https://")):
         bits.append(
             f'<a href="{escape(doc.source_url)}" target="_blank" rel="noopener" '
-            'style="font-size:var(--fs-caption);">original source ↗</a>'
+            'class="sv-original-link">original source ↗</a>'
         )
     return "".join(bits)
 

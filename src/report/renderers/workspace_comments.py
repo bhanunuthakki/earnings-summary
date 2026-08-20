@@ -11,6 +11,8 @@ operations (via `comments_server.py`); falls back to a notice when the
 server isn't running.
 """
 
+from report.renderers.workspace_styles import COMMENTS_CSS
+
 JS = r"""
 (function() {
   // ---------------------------------------------------------------
@@ -116,7 +118,7 @@ JS = r"""
     if (!badge) return;
     var n = loadOutbox().length;
     badge.textContent = n ? ('Queued: ' + n) : '';
-    badge.style.display = n ? 'inline-block' : 'none';
+    badge.hidden = !n;
   }
 
   // Sequentially POST queued entries. Stops on the first failure so
@@ -204,9 +206,10 @@ JS = r"""
     if (!pill) return;
     // Filled status pill = the control kit's .k-pill (+ tone by meaning);
     // unknown -> neutral bare. cmt-health-* kept as the state hook.
-    var tone = healthState === 'online' ? ' k-pill-ok'
-             : healthState === 'offline' ? ' k-pill-bad' : '';
-    pill.className = 'k-pill' + tone + ' cmt-health-pill cmt-health-' + healthState;
+    pill.className = 'k-pill cmt-health-pill';
+    pill.classList.toggle('k-pill-ok', healthState === 'online');
+    pill.classList.toggle('k-pill-bad', healthState === 'offline');
+    pill.dataset.health = healthState;
     pill.title = healthState === 'online'
       ? 'Server reachable.'
       : healthState === 'offline'
@@ -220,7 +223,7 @@ JS = r"""
   function renderOfflineBanner() {
     var banner = document.getElementById('cmt-offline-banner');
     if (!banner) return;
-    banner.style.display = healthState === 'offline' ? 'block' : 'none';
+    banner.hidden = healthState !== 'offline';
   }
 
   function pollHealth() {
@@ -318,7 +321,7 @@ JS = r"""
       var badge = document.createElement('span');
       badge.id = 'cmt-outbox-badge';
       badge.className = 'k-pill k-pill-warn cmt-outbox-badge';
-      badge.style.display = 'none';
+      badge.hidden = true;
       badge.title = 'Comments queued locally — will retry until the server is back.';
       head.appendChild(badge);
       updateOutboxBadge();
@@ -344,7 +347,7 @@ JS = r"""
       var banner = document.createElement('div');
       banner.id = 'cmt-offline-banner';
       banner.className = 'cmt-offline-banner';
-      banner.style.display = 'none';
+      banner.hidden = true;
       banner.textContent = 'Server offline — your comment will queue locally and sync on recovery.';
       formEl.insertBefore(banner, formEl.firstChild);
     }
@@ -358,8 +361,7 @@ JS = r"""
     if (!sidebar) return;
     sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
     sidebar.classList.toggle('open', open);
-    if (open) document.documentElement.style.setProperty('--sidebar-open-width', '380px');
-    else document.documentElement.style.removeProperty('--sidebar-open-width');
+    document.documentElement.classList.toggle('comments-sidebar-open', open);
   }
 
   // CCOverlay registration (S4, Law 3): a gesture push-sidebar. scrim:false is
@@ -585,7 +587,7 @@ JS = r"""
     if (floater) return floater;
     floater = document.createElement('div');
     floater.className = 'cmt-floater';
-    floater.style.display = 'none';
+    floater.hidden = true;
     floater.innerHTML = '<button type="button" class="cmt-floater-btn k-btn k-btn-primary k-btn-sm">+ Comment</button>';
     document.body.appendChild(floater);
     floater.querySelector('button').addEventListener('mousedown', function(ev) {
@@ -595,7 +597,7 @@ JS = r"""
     });
     return floater;
   }
-  function hideFloater() { if (floater) floater.style.display = 'none'; }
+  function hideFloater() { if (floater) floater.hidden = true; }
 
   function onSelectionChange() {
     var sel = window.getSelection();
@@ -616,7 +618,7 @@ JS = r"""
     var rect = range.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return hideFloater();
     ensureFloater();
-    floater.style.display = 'block';
+    floater.hidden = false;
     floater.style.left = Math.round(rect.left + window.scrollX + rect.width / 2 - 56) + 'px';
     floater.style.top = Math.round(rect.bottom + window.scrollY + 6) + 'px';
   }
@@ -786,7 +788,7 @@ JS = r"""
   // CCOverlay registration. The sidebar's own close (x) stays wired to closeSidebar.
   if (window.CCOverlay) {
     window.CCOverlay.addPopoverDismisser(function() {
-      if (floater && floater.style.display !== 'none') { hideFloater(); return true; }
+      if (floater && !floater.hidden) { hideFloater(); return true; }
       return false;
     });
   }
@@ -801,171 +803,4 @@ JS = r"""
 })();
 """
 
-CSS = r"""
-/* ============================================================
-   Inline comments — pin markers + sidebar + form
-   ============================================================ */
-[data-commentable="true"] { position: relative; }
-.cmt-pin-host {
-  position: absolute; top: 4px; right: 4px;
-  pointer-events: none; z-index: 5;
-}
-.cmt-pin {
-  pointer-events: auto;
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 20px; height: 20px; padding: 0 6px;
-  font-family: var(--mono); font-size: var(--fs-caption); font-weight: 600;
-  background: color-mix(in srgb, var(--fg) 4%, transparent);
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  color: var(--muted); cursor: pointer; opacity: 0.45;
-  transition: opacity 0.15s, background 0.15s, border-color 0.15s;
-}
-[data-commentable="true"]:hover .cmt-pin { opacity: 1; }
-.cmt-pin:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); border-color: var(--muted); color: var(--fg); }
-.cmt-pin.has-open { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); opacity: 1; }
-.cmt-pin.all-addressed { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); opacity: 0.9; }
-
-.cmt-sidebar {
-  /* True push-sidebar: flex sibling to .l1-root */
-  flex-shrink: 0;
-  width: 0;
-  height: 100vh;
-  overflow: hidden;
-  background: var(--surface);
-  border-left: 0 solid var(--hairline);
-  transition: width 0.2s ease, border-left-width 0s 0.2s;
-  display: flex; flex-direction: column;
-  position: sticky; top: 0;
-}
-.cmt-sidebar.open {
-  width: 380px;
-  border-left-width: 1px;
-  transition: width 0.2s ease, border-left-width 0s;
-  box-shadow: var(--shadow-pop);
-}
-.cmt-sidebar-head {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  padding: 14px 16px; border-bottom: 1px solid var(--hairline);
-}
-.cmt-sidebar-title { font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
-.cmt-sidebar-sub {
-  font-size: var(--fs-caption); color: var(--muted); margin-top: 2px;
-  font-family: var(--mono);
-}
-.cmt-close {
-  background: transparent; border: none; color: var(--muted);
-  font-size: 20px; line-height: 1; padding: 0 6px; cursor: pointer;
-}
-.cmt-close:hover { color: var(--fg); }
-
-/* Outbox status badge — shown in the sidebar header when the local queue is
-   non-empty. Rides the control kit's .k-pill (k-pill-warn = "pending recovery",
-   set in JS); this rule adds only layout (right-aligned) + its mono-micro refine.
-   The warn tone fill lives on .k-pill-warn now, not here. */
-.cmt-outbox-badge {
-  margin: 2px 8px 0 auto;
-  font-size: var(--fs-caption);
-  font-family: var(--mono);
-  text-transform: uppercase; letter-spacing: 0.04em;
-}
-
-/* Health pill — server reachability indicator in the sidebar header. Rides the
-   kit's .k-pill (+ k-pill-ok online / k-pill-bad offline / neutral bare while the
-   first poll is in flight, tone set in renderHealthPill); layout + mono-micro
-   refine only here. */
-.cmt-health-pill {
-  margin: 2px 6px 0 6px;
-  font-size: var(--fs-caption);
-  font-family: var(--mono);
-  text-transform: uppercase; letter-spacing: 0.04em;
-}
-
-/* Offline banner inside the form — telegraphs the failure mode BEFORE
-   the user submits, instead of after the click. */
-.cmt-offline-banner {
-  margin-bottom: 8px;
-  padding: 6px 10px;
-  font-size: var(--fs-caption);
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
-  border-radius: var(--radius);
-  line-height: 1.4;
-}
-
-.cmt-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
-.cmt-empty { color: var(--muted); font-size: var(--fs-caption); padding: 8px 0; }
-.cmt-card {
-  background: var(--paper);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: 10px 12px;
-  margin-bottom: 10px;
-  font-size: var(--fs-body);
-}
-.cmt-card-head {
-  display: flex; align-items: center; gap: 6px;
-  font-size: var(--fs-caption); color: var(--muted);
-  margin-bottom: 6px;
-  text-transform: uppercase; letter-spacing: 0.04em;
-}
-.cmt-status { font-weight: 600; }
-.cmt-status-open { color: var(--warn); }
-.cmt-status-addressed { color: var(--ok); }
-.cmt-status-dismissed { color: var(--muted); }
-.cmt-intent { background: color-mix(in srgb, var(--fg) 5%, transparent); padding: 1px 6px; border-radius: 3px; }
-.cmt-time { margin-left: auto; font-family: var(--mono); }
-.cmt-body { color: var(--fg); line-height: 1.5; white-space: pre-wrap; }
-.cmt-resolution {
-  margin-top: 8px; padding: 8px 10px;
-  background: color-mix(in srgb, var(--ok) 8%, transparent); border-left: 2px solid var(--ok);
-  border-radius: 3px; font-size: var(--fs-caption); color: var(--muted);
-}
-.cmt-thread { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--hairline); }
-.cmt-thread-turn { display: flex; gap: 8px; padding: 4px 0; font-size: var(--fs-caption); }
-.cmt-thread-role { font-family: var(--sans); color: var(--muted); width: 60px; flex-shrink: 0; }
-.cmt-thread-text { color: var(--fg); }
-.cmt-role-assistant .cmt-thread-role { color: var(--accent); }
-/* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm,
-   added in the JS markup); this layout-only rule keeps the row spacing. */
-.cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
-
-.cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg); }
-/* Textarea/select: skinned by the shared control kit (ui/controls.py). */
-.cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
-.cmt-form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
-.cmt-form select { flex: 1; font-size: var(--fs-caption); }
-/* The Post submit + Save-to-journal buttons are the kit's .k-btn primary/quiet
-   (added in the boot.py markup) — no freehand button skin here. */
-.cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
-
-/* Floating "+ Comment" button on text selection (Google-Docs style). The
-   button itself is the kit's small primary (.k-btn.k-btn-primary.k-btn-sm,
-   added in the JS markup); only the floater's drop shadow + pill radius are
-   surface-specific. */
-.cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
-.cmt-floater-btn {
-  border-radius: var(--radius-full);
-  box-shadow: var(--shadow-pop);
-}
-
-/* Free-text highlight (the underlined excerpt the user commented on). Open =
-   warn-tinted, addressed = ok-tinted, both routed through the status tokens
-   via color-mix (no raw rgba). */
-mark.cmt-highlight {
-  background: color-mix(in srgb, var(--warn) 18%, transparent);
-  border-bottom: 2px solid var(--warn);
-  color: inherit;
-  cursor: pointer;
-  padding: 0 1px;
-  border-radius: var(--radius-sm);
-  transition: background 0.12s;
-}
-mark.cmt-highlight:hover { background: color-mix(in srgb, var(--warn) 32%, transparent); }
-mark.cmt-highlight.addressed {
-  background: color-mix(in srgb, var(--ok) 14%, transparent);
-  border-bottom-color: var(--ok);
-}
-mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
-"""
+CSS = COMMENTS_CSS

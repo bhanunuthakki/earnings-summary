@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import cast
 
 import llm_artifact_store
+from pipeline.analysis_styles import ANALYSIS_STYLE
 from ui.time import stamp_html
 
 PURPOSE = "senior_partner_brief"
@@ -44,12 +45,6 @@ PURPOSE = "senior_partner_brief"
 _CHIP_FRAGMENT_RE = re.compile(
     r'<a class="k-chip k-chip-btn".*?</a>\s*<span class="muted">.*?</span>', re.DOTALL
 )
-
-_STYLE = """<style>
-.cc-spb-today { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap;
-  margin: 0 0 var(--sp-2); }
-.cc-spb-today .muted { color: var(--muted); font-size: var(--fs-caption); }
-</style>"""
 
 
 def _current_iso_week(now: datetime | None = None) -> tuple[int, int]:
@@ -112,7 +107,7 @@ def render_brief_today_card(
     stale_note = " · stale" if is_stale else ""
     stamp = stamp_html(artifact.generated_at, mode="rel")
     return (
-        f"{_STYLE}"
+        f"{ANALYSIS_STYLE}"
         f'<div class="cc-spb-today k-well" data-artifact-id="{artifact.id}">'
         f'<a class="k-chip k-chip-btn" href="/mobile/inbox">{escape(headline)}{escape(mode_note)}</a>'
         f'<span class="muted">{stamp}{escape(stale_note)}</span></div>'
@@ -164,7 +159,7 @@ def render_today_doorways_card(
     parts: list[str] = []
     chips = [c for c in (brief_chip, alloc_chip) if c is not None]
     if chips:
-        parts.append(f'{_STYLE}<div class="cc-spb-today k-well">{"".join(chips)}</div>')
+        parts.append(f'{ANALYSIS_STYLE}<div class="cc-spb-today k-well">{"".join(chips)}</div>')
     if brief_chip is None and brief_html:
         parts.append(brief_html)
     if alloc_chip is None and alloc_html:

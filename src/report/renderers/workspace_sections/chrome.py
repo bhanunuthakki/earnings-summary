@@ -23,7 +23,7 @@ from report.models import (
     ThesisSection,
 )
 from report.renderers.numfmt import fmt_date, fmt_reltime
-from report.renderers.workspace_charts import sparkline
+from report.renderers.workspace_charts import SparklineSize, sparkline
 from report.renderers.workspace_data import (
     KpiStripTile,
     NewsTile,
@@ -225,10 +225,10 @@ def _verdict_badge(
     The proxy remains only as the fallback when no ingestion date is known.
     """
     mapping = {
-        "intact": ("Thesis Intact", "var(--ok)"),
-        "watch": ("Watch", "var(--warn)"),
-        "broken": ("Broken", "var(--bad)"),
-        "pending": ("Pending", "var(--muted)"),
+        "intact": ("Thesis Intact", "ok"),
+        "watch": ("Watch", "warn"),
+        "broken": ("Broken", "bad"),
+        "pending": ("Pending", "muted"),
     }
     label, dot = mapping.get(verdict, mapping["pending"])
     is_stale = False
@@ -255,7 +255,7 @@ def _verdict_badge(
             title_bits.append(stale_bit)
         title_attr = f' title="{_esc(" — ".join(title_bits))}"'
     return (
-        f'<span class="badge"{title_attr}><span class="dot" style="background:{dot}"></span>'
+        f'<span class="badge"{title_attr}><span class="dot dot-{dot}" aria-hidden="true"></span>'
         f"{_esc(label)}{as_of_html}</span>"
     )
 
@@ -452,7 +452,7 @@ def _kpi_tile(body: StringIO, t: KpiStripTile, ticker: str) -> None:
         cls_delta = f"kpi-delta {t.delta_sign}"
         body.write(f'<div class="{cls_delta}">{_esc(t.delta_display)}</div>')
     body.write("</div>")
-    body.write(f'<div class="kpi-spark">{sparkline(t.values, width=230, height=36)}</div>')
+    body.write(f'<div class="kpi-spark">{sparkline(t.values, size=SparklineSize.KPI)}</div>')
     body.write('<div class="kpi-axis">')
     body.write(f"<span>{_esc(t.labels[0][2:7])}</span>")
     body.write(f'<span class="kpi-trail">{len(t.values)}q trailing</span>')
@@ -552,7 +552,7 @@ def _forgone_strip(body: StringIO, forgone: list[BudgetSkip]) -> None:
     word = "analysis" if n == 1 else "analyses"
     names = _esc(", ".join(f.section for f in forgone))
     body.write(
-        '<div class="forgone-strip k-well k-well-warn" style="margin:8px 0;">'
+        '<div class="forgone-strip k-well k-well-warn">'
         f"⏭ <strong>{n} {word} forgone to stay under budget:</strong> {names}. "
         "Raise the cap or override, then rebuild."
         "</div>"

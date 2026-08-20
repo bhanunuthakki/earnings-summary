@@ -8,7 +8,8 @@
  * docs/design_system_react_port_plan.md for the full rollout.
  */
 import "./index.css";
-import * as React from "react";
+import { jsx } from "react/jsx-runtime";
+import type * as React from "react";
 
 export * from "./tokens";
 export * from "./components";
@@ -24,5 +25,5 @@ export interface PlaceholderProps {
  * and export pipeline works end-to-end. Not part of the ported kit.
  */
 export function Placeholder({ label = "design-system placeholder" }: PlaceholderProps): React.JSX.Element {
-  return React.createElement("div", { className: "ds-placeholder" }, label);
+  return jsx("div", { className: "ds-placeholder", children: label });
 }

@@ -36,16 +36,7 @@ export interface SelectProps {
   name?: string;
   disabled?: boolean;
   className?: string;
-  style?: React.CSSProperties;
   "aria-label"?: string;
-}
-
-/** In native mode a `background` shorthand wipes the `--k-chevron`
- * `background-image` (arrowless box). Translate it to `backgroundColor`. */
-function sanitizeStyle(style?: React.CSSProperties): React.CSSProperties | undefined {
-  if (!style || style.background === undefined) return style;
-  const { background, backgroundColor, ...rest } = style;
-  return { ...rest, backgroundColor: backgroundColor ?? (background as string) };
 }
 
 function labelOf(options: SelectOption[], value: string | undefined): React.ReactNode | undefined {
@@ -64,7 +55,6 @@ export function Select({
   name,
   disabled,
   className,
-  style,
   "aria-label": ariaLabel,
 }: SelectProps): React.JSX.Element {
   const isControlled = value !== undefined;
@@ -87,7 +77,6 @@ export function Select({
         name={name}
         disabled={disabled}
         className={className}
-        style={sanitizeStyle(style)}
         aria-label={ariaLabel}
         value={current ?? ""}
         onChange={(e) => commit(e.target.value)}
@@ -191,7 +180,7 @@ export function Select({
   const base = id ?? "sel";
 
   return (
-    <div ref={rootRef} className={className ? `k-pop ${className}` : "k-pop"} style={style}>
+    <div ref={rootRef} className={className ? `k-pop ${className}` : "k-pop"}>
       <button
         ref={triggerRef}
         type="button"

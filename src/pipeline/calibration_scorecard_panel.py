@@ -25,6 +25,7 @@ from __future__ import annotations
 from html import escape
 
 from calibration_coach import CalibrationScorecard, NamedBias
+from pipeline.operations_styles import CALIBRATION_SCORECARD_STYLE as SCORECARD_CSS
 
 
 def render_scorecard_section(card: CalibrationScorecard | None, *, n_graded: int = 0) -> str:
@@ -116,27 +117,7 @@ def _experiment_block(card: CalibrationScorecard) -> str:
     )
 
 
-SCORECARD_CSS = """
-/* Calibration scorecard (L8): coach's-read cards. */
-.cs-gate { font-size: var(--fs-caption); margin: 2px 0 8px; }
-.cs-gate-ok { color: var(--ok); }
-.cs-gate-bad { color: var(--bad); }
-.cs-biases { display: flex; flex-direction: column; gap: 10px; }
-.cs-bias { border-left: 3px solid var(--border); padding: 2px 0 2px 12px; }
-.cs-bias-name { font-size: var(--fs-body); font-weight: 600; margin: 0 0 2px;
-  text-transform: none; letter-spacing: 0; }
-.cs-bias-pattern { font-size: var(--fs-body); margin: 0 0 4px; }
-.cs-evidence { margin: 0 0 4px; padding-left: 18px; font-size: var(--fs-caption);
-  color: var(--muted); }
-.cs-tell, .cs-exp-test { font-size: var(--fs-caption); margin: 2px 0; }
-.cs-tell-k { font-family: var(--sans); color: var(--muted); text-transform: uppercase;
-  font-size: var(--fs-caption); letter-spacing: 0.04em; margin-right: 6px; }
-.cs-experiment { margin-top: 12px; }
-.cs-exp-hyp { font-size: var(--fs-body); font-weight: 600; margin: 0 0 2px; }
-.cs-exp-why { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 4px; }
-.cs-note { font-size: var(--fs-caption); margin: 6px 0 0; }
-.cs-caption { font-size: var(--fs-caption); margin: 2px 0 0; }
-"""
+""""""
 
 
 __all__ = ["SCORECARD_CSS", "render_scorecard_section"]

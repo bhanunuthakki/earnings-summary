@@ -33,6 +33,7 @@ from html import escape
 from pathlib import Path
 
 from identity import DEFAULT_USER_ID
+from pipeline.operations_styles import TRIAGE_STYLE as _PANEL_STYLE
 from ui import living_grid as lg
 from ui.controls import panel_toolbar, ticker_label
 from user_state.notes import ROUTABLE_INTENTS, AnalystNoteRow, list_triage_notes
@@ -51,71 +52,10 @@ _INTENT_LABELS: dict[str, str] = {
     "rewrite_section": "Rewrite section",
 }
 
+
 # Token-only scoped styles (guard-clean: color via palette vars / color-mix,
 # radius via --radius, type via the --fs-* scale; width/inset px are layout, not
 # guard-scoped). The drawer is an S4 .k-overlay positioned as a right rail.
-_PANEL_STYLE = """<style>
-.tri-sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 var(--sp-3);
-  line-height: 1.55; max-width: 70ch; }
-.tri-anchor { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);
-  white-space: nowrap; }
-.tri-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tri-text { background: none; border: none; padding: 0; text-align: left; cursor: pointer;
-  font: inherit; color: var(--fg); }
-.tri-text:hover { color: var(--accent); text-decoration: underline; }
-.tri-acts { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
-/* Route picker: the kit's <select> baseline owns border/radius/chevron/focus —
-   this only adds dense-row layout (caption type), never re-skins the control. */
-.tri-route { font-size: var(--fs-caption); padding-top: 3px; padding-bottom: 3px; }
-.tri-empty { color: var(--muted); padding: var(--sp-4) 0; }
-/* Embedded (composite-console) section heading — the console band owns the
-   tab title, so the panel_toolbar collapses to a section-level h3. */
-.tri-h { font-size: var(--fs-title); font-weight: 600; color: var(--fg);
-  margin: var(--sp-4) 0 var(--sp-1); display: flex; align-items: baseline; gap: var(--sp-2); }
-/* In-row Resolve editor (replaces window.prompt — the blocking OS modal the
-   ledger banned in PR9 survived here). Same sizing family as the ledger's
-   in-card rewrite textarea. */
-.tri-resolve-ta { width: 100%; min-height: 48px; resize: vertical;
-  font-family: var(--sans); font-size: var(--fs-body); margin-bottom: var(--sp-2); }
-/* S4 drill-in: a right-side .k-overlay (look + open motion from the kit). Sized
-   to its CONTENT — a parked comment is a short disposition form, not a report —
-   with a viewport cap that only turns on scroll when a comment runs long. The
-   old rule pinned BOTH top+bottom insets, forcing a full-height rail: a ~120px
-   card stretched to ~800px left ~85% dead space under every short comment (the
-   "too much space" §3.1 never caught because drawer height is per-surface
-   layout, not guard-scoped).
-
-   The `display:flex` MUST be scoped to :not([hidden]): an ID selector (1,0,0)
-   outranks the kit's `.k-overlay[hidden]{display:none}` (0,2,0), so a bare
-   `#triage-drawer{display:flex}` re-shows the drawer regardless of its `hidden`
-   attribute — it rode open+empty on every load and CCOverlay's close (which
-   toggles `hidden`) could never dismiss it ("Parked comment cannot be
-   minimized", owner 2026-07-17). Gating on :not([hidden]) keeps the kit's
-   hide-when-hidden contract intact while still content-sizing when shown. */
-#triage-drawer { top: var(--sp-3); right: var(--sp-3);
-  width: min(420px, 92vw);
-  max-height: calc(100vh - var(--sp-3) * 2);
-  max-height: calc(100dvh - var(--sp-3) * 2);
-  padding: var(--sp-4); overflow: auto; gap: var(--sp-3); }
-#triage-drawer:not([hidden]) { display: flex; flex-direction: column; }
-.tri-d-bar { display: flex; align-items: baseline; gap: var(--sp-2); }
-.tri-d-bar h3 { font-size: var(--fs-title); font-weight: 600; margin: 0; margin-right: auto; }
-/* Drawer close glyph — the §3 convention: top type step, muted → fg, no border
-   (CCOverlay owns the dismissal wiring). */
-.tri-d-close { background: none; border: none; cursor: pointer; color: var(--muted);
-  font-size: var(--fs-display); line-height: 1; padding: 0 var(--sp-1); }
-.tri-d-close:hover { color: var(--fg); }
-.tri-d-meta { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono);
-  line-height: 1.6; }
-.tri-d-sel { color: var(--fg-soft); border-left: 2px solid var(--border);
-  padding-left: var(--sp-3); }
-.tri-d-body { font-size: var(--fs-body); line-height: 1.6; color: var(--fg); white-space: pre-wrap; }
-/* The drawer's disposition strip is a footer: a hairline lifts it off the
-   comment body so Route/Resolve/Dismiss don't crowd the text. */
-#tri-d-acts { border-top: 1px solid var(--hairline); padding-top: var(--sp-3); }
-</style>"""
-
-
 def _truncate(text: str, limit: int = 160) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"

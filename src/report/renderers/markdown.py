@@ -891,7 +891,7 @@ def _ir_docs(out: StringIO, s: IrDocsSection) -> None:
     for c in s.cards:
         out.write(f"### {c.quarter} {c.year} — {c.doc_type}\n\n")
         if c.source_url:
-            out.write(f"_Source: <{c.source_url}>_\n\n")
+            out.write(f"_Source: [open source]({c.source_url})_\n\n")
         if c.summary_md:
             out.write(c.summary_md.strip() + "\n\n")
 

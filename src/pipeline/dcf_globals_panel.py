@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import cast
 
 from dcf import global_assumptions as ga
+from pipeline.operations_styles import DCF_GLOBALS_STYLE
 
 # Field → (human label, "= X%" example). Order is the render order.
 _FIELDS: tuple[tuple[str, str], ...] = (
@@ -105,7 +106,7 @@ _SCRIPT = """<script>
         + 'models and can take several minutes.')) return;
     CCAction.busy(rb, 'Starting\\u2026');
     msg.textContent = '';
-    log.style.display = 'block'; log.textContent = '';
+    log.hidden = false; log.textContent = '';
     fetch('/actions/rebuild-dcfs', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
     }).then(function (r) {
@@ -156,17 +157,17 @@ def _row_html(field: str, label: str, value: float, overrides: list[str]) -> str
     else:
         ov = '<div class="dcfg-overrides muted">No per-ticker overrides — all names track this global.</div>'
     return (
-        f'<div class="dcfg-row" data-field="{escape(field)}" style="margin-bottom:16px;">'
-        '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">'
-        f'<label class="k-label" style="min-width:220px;" for="dcfg-{escape(field)}">{escape(label)}</label>'
+        f'<div class="dcfg-row" data-field="{escape(field)}">'
+        '<div class="dcfg-controls">'
+        f'<label class="k-label dcfg-label" for="dcfg-{escape(field)}">{escape(label)}</label>'
         f'<input id="dcfg-{escape(field)}" class="dcfg-input" type="number" min="0" max="1" '
-        f'step="0.001" value="{value:.4f}" style="width:90px; padding:6px 8px;" '
+        f'step="0.001" value="{value:.4f}" '
         f'aria-label="{escape(label)} (decimal ratio)" '
         f'title="Decimal ratio, e.g. 0.043 = 4.3%">'
-        f'<span class="muted" style="min-width:64px;">= {escape(pct)}%</span>'
+        f'<span class="muted dcfg-pct">= {escape(pct)}%</span>'
         '<button type="button" class="dcfg-save k-btn k-btn-quiet k-btn-sm" '
         f'title="Apply this global {escape(label)} to every DCF model">Save</button>'
-        '<span class="dcfg-msg muted" style="font-size:var(--fs-caption);"></span>'
+        '<span class="dcfg-msg muted"></span>'
         "</div>"
         f"{ov}"
         "</div>"
@@ -185,24 +186,23 @@ def render_dcf_globals_panel(db_path: Path) -> str:
         for field, label in _FIELDS
     )
     return (
-        '<section class="panel"><h2>Global DCF assumptions</h2>'
+        DCF_GLOBALS_STYLE + '<section class="panel"><h2>Global DCF assumptions</h2>'
         '<p class="sub">One editable default for the macro inputs shared across every DCF model. '
         "Saving updates the default used by the next build; a per-ticker value still wins where set "
         "(listed under each field). Values are decimal ratios "
         "(<code>0.043</code> = 4.3%).</p>"
         f"{rows}"
-        '<p class="muted" style="font-size:var(--fs-caption); margin-top:10px;">'
+        '<p class="muted dcfg-reach">'
         "Reach: risk-free &amp; ERP drive the discount rate for the FCFF and bank (CAPM) models, "
         "and tax drives NOPAT there and in the NU platform model. The fintech SOTP and NU platform "
         "models use an explicit cost of equity, so risk-free/ERP reach them only via their opt-in "
         "CAPM setting; the holdco NAV model is multiples-based, so these are informational for it.</p>"
-        '<div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">'
+        '<div class="dcfg-controls dcfg-rebuild-controls">'
         '<button type="button" id="dcfg-rebuild" class="k-btn k-btn-primary" '
         'title="Re-run every DCF model so a global change propagates into the workbooks and dcf_runs">'
         "Rebuild affected models</button>"
-        '<span id="dcfg-rebuild-msg" class="muted" style="font-size:var(--fs-caption);"></span>'
+        '<span id="dcfg-rebuild-msg" class="muted dcfg-rebuild-msg"></span>'
         "</div>"
-        '<pre id="dcfg-rebuild-log" style="display:none; max-height:240px; overflow:auto; '
-        'white-space:pre-wrap; font-family:var(--mono); font-size:var(--fs-body); margin-top:8px;"></pre>'
+        '<pre id="dcfg-rebuild-log" class="dcfg-rebuild-log" hidden></pre>'
         "</section>" + _SCRIPT
     )

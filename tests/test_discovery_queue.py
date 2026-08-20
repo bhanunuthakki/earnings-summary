@@ -424,7 +424,8 @@ def test_compare_peek_up_to_three_columns(client: FlaskClient) -> None:
     res = client.get("/api/peek/discovery-compare?tickers=WDC,EVR,OLD")
     assert res.status_code == 200
     body = res.get_data(as_text=True)
-    assert body.count("<th>") - 1 == 3  # one blank corner th + one per ticker
+    table_head = body.split("</thead>", 1)[0]
+    assert table_head.count("<th>") - 1 == 3  # one blank corner th + one per ticker
     for t in ("WDC", "EVR", "OLD"):
         assert t in body
 
