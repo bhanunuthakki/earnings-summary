@@ -12,10 +12,12 @@ they work inlined or injected (the shell re-executes scripts on injection).
 
 from __future__ import annotations
 
+from dashboard._styles import ACTIONS_CSS
+
 
 def render_actions_panel() -> str:
     """The Governance → Actions fragment: IR-KPI refresh + repo maintenance."""
-    return _ACTIONS_BLOCK + _MAINTENANCE_BLOCK
+    return (_ACTIONS_BLOCK + _MAINTENANCE_BLOCK).replace("{ACTIONS_CSS}", ACTIONS_CSS)
 
 
 # The "Refresh IR KPIs" control. Rendered into the page via a `{actions_block}`
@@ -45,31 +47,7 @@ _ACTIONS_BLOCK = """
   </form>
   <pre id="ir-output" class="actions-output" hidden></pre>
 </section>
-<style>
-.actions-section { margin: 0 0 var(--sp-4); padding: 14px 16px; background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--radius); }
-.actions-section h2 { margin: 0 0 6px; }
-.actions-help { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 12px;
-  max-width: 760px; }
-.actions-help code { font-family: var(--mono); font-size: 0.93em; }
-.actions-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-/* Inputs: skinned by the shared control kit (ui/controls.py). input.ir-ticker
-   outranks the kit's input[type] baseline so the mono face survives. */
-input.ir-ticker { width: 170px; text-transform: uppercase; font-family: var(--mono); }
-.ir-quarters-label { font-size: var(--fs-caption); color: var(--muted); display: inline-flex;
-  align-items: center; gap: 6px; }
-.ir-quarters { width: 60px; }
-/* #ir-submit (primary) + the maintenance buttons (quiet) ride the shared kit
-   (.k-btn, controls.py); the shell composes controls_css for this fragment. */
-.actions-status { font-size: var(--fs-caption); font-weight: 500; }
-.actions-status.running { color: var(--warn); }
-.actions-status.ok { color: var(--ok); }
-.actions-status.error { color: var(--bad); }
-.actions-output { margin: 12px 0 0; padding: 10px 12px; max-height: 320px; overflow-y: auto;
-  background: var(--bg); color: var(--fg-soft); border-radius: var(--radius);
-  font-family: var(--mono);
-  font-size: var(--fs-caption); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-</style>
+<style>{ACTIONS_CSS}</style>
 <script>
 (function () {
   var form = document.getElementById('refresh-ir-form');
@@ -85,7 +63,8 @@ input.ir-ticker { width: 170px; text-transform: uppercase; font-family: var(--mo
 
   function setStatus(text, cls) {
     statusEl.textContent = text;
-    statusEl.className = 'actions-status' + (cls ? ' ' + cls : '');
+    statusEl.className = 'actions-status';
+    statusEl.dataset.tone = cls || 'neutral';
   }
   function elapsed() {
     var s = Math.floor((Date.now() - t0) / 1000);
@@ -198,10 +177,7 @@ _MAINTENANCE_BLOCK = """
     command palette.
   </p>
 </section>
-<style>
-.maint-sep { color: var(--muted); margin: 0 4px; }
-.maint-export { margin: 12px 0 0; }
-</style>
+<style>{ACTIONS_CSS}</style>
 <script>
 (function () {
   var btns = document.querySelectorAll('.maint-btn');
@@ -214,7 +190,7 @@ _MAINTENANCE_BLOCK = """
     var s = Math.floor((Date.now() - t0) / 1000);
     return '[' + Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2) + '] ';
   }
-  function setStatus(t, c) { statusEl.textContent = t; statusEl.className = 'actions-status' + (c ? ' ' + c : ''); }
+  function setStatus(t, c) { statusEl.textContent = t; statusEl.className = 'actions-status'; statusEl.dataset.tone = c || 'neutral'; }
   function appendLine(l) { outputEl.hidden = false; outputEl.textContent += elapsed() + l + '\\n'; outputEl.scrollTop = outputEl.scrollHeight; }
   function enable() { btns.forEach(function (b) { b.disabled = false; }); }
   function run(action, ticker) {

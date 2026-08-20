@@ -248,7 +248,7 @@ def test_panel_renders_default_and_intent_states(tmp_path: Path) -> None:
     assert '<h3 class="k-well-title">Positioning coach</h3>' in html
     assert "pos-chat-form" in html and "/api/positioning/coach" in html
     assert "Propose targets from this conversation" in html
-    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));" in html
+    assert "grid-template-columns:repeat(auto-fit,minmax(var(--grid-card-lg),1fr))" in html
     assert "repeat(2, minmax(var(--grid-card-lg), 1fr))" not in html
     # With a saved intent → versioned card + narrative + dimensions.
     db = _intent_db(tmp_path)

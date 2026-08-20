@@ -30,6 +30,14 @@ from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from pipeline.freshness import freshness_verdict
+from pipeline.work_os_styles import (
+    TCC_COMBO_STYLE,
+    TCC_DISCLOSURE_STYLE,
+    TCC_DRAWER_STYLE,
+    TCC_PAGE_CSS,
+    TCC_QUICK_NOTE_STYLE,
+    TCC_YOU_SAID_STYLE,
+)
 from pipeline.you_said import render_you_said_strip_for_path
 from provenance.selection import selected_transcripts_relation
 from report.renderers.numfmt import fmt_date, fmt_reltime
@@ -427,17 +435,7 @@ def build_holding_rail(repo_root: Path, ticker: str) -> HoldingRail:
 # Lives here (not in the shell module) because it reuses the holding rail's
 # substrate + renderers — open notes and, when ticker-scoped, recent alerts.
 # --------------------------------------------------------------------------- #
-_QUICK_NOTE_STYLE = """<style>
-.cc-quicknote .qn-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-/* Inputs/selects/textarea: skinned by the shared control kit (ui/controls.py). */
-.cc-quicknote textarea { width: 100%; box-sizing: border-box; resize: vertical;
-  margin-bottom: 8px; }
-.cc-quicknote .qn-ticker { width: 120px; text-transform: uppercase; }
-.cc-quicknote .qn-msg { font-size: var(--fs-caption); }
-.cc-quicknote .qn-musing-label { display: flex; align-items: center; gap: 4px;
-  color: var(--muted); font-size: var(--fs-caption); cursor: pointer; }
-.cc-notes-foot { color: var(--muted); font-size: var(--fs-caption); }
-</style>"""
+_QUICK_NOTE_STYLE = TCC_QUICK_NOTE_STYLE
 
 _QUICK_NOTE_SCRIPT = """<script>
 (function () {
@@ -652,7 +650,7 @@ def _refresh_section(ticker: str) -> str:
         f'<button type="button" class="tcc-refresh k-btn k-btn-quiet" data-ticker="{t}" data-bypass="1">'
         "Run anyway (ignore caps)</button> "
         '<span class="tcc-refresh-msg muted"></span>'
-        '<p style="margin-top:8px">'
+        '<p class="tcc-refresh-note">'
         f'<label><input type="checkbox" class="tcc-bypass-toggle" data-ticker="{t}"> '
         "Always ignore budget caps for this ticker (persistent)</label> "
         '<span class="tcc-bypass-msg muted"></span></p>' + _REFRESH_SCRIPT + "</section>"
@@ -670,8 +668,8 @@ _DCF_SHEETS_SCRIPT = """<script>
     fetch('/api/dcf-sheet/' + encodeURIComponent(tk))
       .then(function (r) { return r.json(); })
       .then(function (s) {
-        if (s && s.url) { openLink.href = s.url; openLink.style.display = ''; }
-        else { openLink.style.display = 'none'; }
+        if (s && s.url) { openLink.href = s.url; openLink.hidden = false; }
+        else { openLink.hidden = true; }
       }).catch(function () {});
   }
   function post(url, label, btn) {
@@ -715,8 +713,8 @@ def _dcf_sheets_section(ticker: str) -> str:
         "<code>dcf_runs</code>.</p>"
         '<button type="button" class="tcc-dcf-export k-btn k-btn-primary">Push to Sheets</button> '
         '<button type="button" class="tcc-dcf-import k-btn k-btn-quiet">Re-ingest from Sheets</button> '
-        '<a class="tcc-dcfsheets-open" href="#" target="_blank" rel="noopener" '
-        'style="display:none">Open in Google Sheets ↗</a> '
+        '<a class="tcc-dcfsheets-open" href="#" target="_blank" rel="noopener" hidden>'
+        "Open in Google Sheets ↗</a> "
         '<span class="tcc-dcfsheets-msg muted"></span>' + _DCF_SHEETS_SCRIPT + "</section>"
     )
 
@@ -725,11 +723,10 @@ def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> s
     ident = tcc.identity
     # The canonical two-part ticker label (mono symbol + muted name), display
     # size — never the "T · Name" single string.
-    heading = ticker_label(ident.ticker, ident.name, name_max="36ch")
+    heading = ticker_label(ident.ticker, ident.name, wide=True)
     parts: list[str] = [
-        _PAGE_HEAD.format(
-            ticker=escape(ident.ticker),
-            generated_at=stamp_html(generated_at, prefix="updated "),
+        _PAGE_HEAD.replace("{ticker}", escape(ident.ticker)).replace(
+            "{generated_at}", stamp_html(generated_at, prefix="updated ")
         ),
         f"<header><div><h1>{heading}</h1>",
         '<nav class="top-nav">',
@@ -1096,70 +1093,14 @@ def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
     )
 
 
-_COMBO_STYLE = """<style>
-.cc-combo { position: relative; flex: 1 1 280px; max-width: 420px; min-width: 200px; }
-/* The input itself is skinned by the shared control kit (ui/controls.py);
-   the results list is anchored furniture fused to the bar (see .cc-combo-list
-   below), NOT a floating .k-menu popover (feedback #4 / Law 3).
-   (.cc-combo prefix: outranks the kit's input[type] baseline so the mono
-   ticker face survives the baseline's `font: inherit`.) */
-.cc-combo .cc-combo-input { width: 100%; box-sizing: border-box; padding: 6px 11px;
-  font-family: var(--mono); font-weight: 600; letter-spacing: 0.02em; }
-.cc-combo .cc-combo-input::placeholder { font-family: var(--sans); font-weight: 400;
-  letter-spacing: normal; }
-/* The two-part label inside the field: muted company name, right-aligned,
-   out of the way while typing. */
-.cc-combo-name { position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-  color: var(--muted); font-size: var(--fs-caption); max-width: 58%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  pointer-events: none; }
-.cc-combo:focus-within .cc-combo-name { display: none; }
-/* The results are in-section furniture, not a floating overlay (Law 3 / §6.1):
-   they sit flush under the search bar (no gap, no pop shadow) and share the
-   focused input's accent border, so the input + results read as ONE seated
-   control belonging to the Holding band — not a tooltip hovering over the
-   report. Absolute positioning keeps the band height stable. */
-.cc-combo-list { position: absolute; z-index: 25; top: 100%; left: 0; right: 0;
-  margin: 0; padding: 4px 0; list-style: none; max-height: 320px; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--accent); border-top: none;
-  border-radius: 0 0 var(--radius) var(--radius); }
-.cc-combo-list[hidden] { display: none; }
-/* While the results are open the input squares its bottom edge so it meets the
-   flush results panel cleanly at the corners (its own 1px bottom border is the
-   divider between the search field and its results). */
-.cc-combo .cc-combo-input[aria-expanded="true"] { border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0; }
-.cc-combo-list li { display: flex; align-items: baseline; gap: 8px; padding: 6px 12px;
-  cursor: pointer; font-size: var(--fs-body); }
-.cc-combo-list li.sel, .cc-combo-list li:hover { background: var(--paper); }
-.cc-combo-tk { font-family: var(--mono); font-weight: 600; color: var(--fg); }
-.cc-combo-nm { color: var(--muted); font-size: var(--fs-caption);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cc-combo-none { color: var(--muted); cursor: default; }
-.cc-holding-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.cc-holding-hint { color: var(--muted); font-size: var(--fs-caption); }
-</style>"""
+_COMBO_STYLE = TCC_COMBO_STYLE
 
-_DISCLOSURE_STYLE = """<style>
-.disclosure-strip { margin: 10px 0; }
-.disclosure-head, .disclosure-row-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.disclosure-head { justify-content:space-between; }
-.disclosure-head h2 { margin:0; }
-.disclosure-rows { display:grid; gap:8px; margin-top:8px; }
-.disclosure-row { display:grid; gap:5px; padding-top:8px; border-top:1px solid var(--border); }
-.disclosure-row-head strong { margin-right:auto; }
-.disclosure-receipt, .disclosure-gate, .disclosure-interpretation p { margin:0; }
-.disclosure-receipt { color:var(--fg); }
-</style>"""
+_DISCLOSURE_STYLE = TCC_DISCLOSURE_STYLE
 
 # "You said" strip (pipeline/you_said.py) — near the Holding tab's utility
 # band, above the disclosure strip: the owner's own last decision on this
 # name, ambient rather than a click away.
-_YOUSAID_STYLE = """<style>
-.tcc-yousaid { margin: 4px 0 10px; font-size: var(--fs-body); }
-.tcc-yousaid .ys-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
-.tcc-yousaid .k-empty { padding: 0; }
-</style>"""
+_YOUSAID_STYLE = TCC_YOU_SAID_STYLE
 
 # Self-contained combobox wiring, re-run on every fragment inject (the shell's
 # injectHtml re-creates <script> tags). Guards on data-wired so a re-inject only
@@ -1269,33 +1210,8 @@ _COMBO_SCRIPT = """<script>
 </script>"""
 
 
-_TCC_DRAWER_STYLE = """<style>
-/* The one-line holding utility band (UX9c): ~40px, combobox left, the
-   verdict/freshness/links/icons cluster right. */
-.cc-holding-head { display: flex; justify-content: space-between; align-items: center;
-  flex-wrap: wrap; gap: 12px; min-height: 40px; margin-bottom: 14px; padding-bottom: 10px;
-  border-bottom: 1px solid var(--border); }
-.cc-fdot { cursor: help; margin-left: 6px; }
-a.cc-fdot { text-decoration: none; cursor: pointer; }
-.tcc-report-main .cc-report-frame { height: calc(100vh - 200px); height: calc(100dvh - 200px); }
-.tcc-drawer-scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 34;
-  animation: cc-fade-in var(--transition); }
-.tcc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 94vw);
-  background: var(--bg); border-left: 1px solid var(--border); z-index: 35;
-  display: flex; flex-direction: column; box-shadow: var(--shadow-pop);
-  animation: cc-slide-in-right var(--transition); }
-.tcc-drawer[hidden], .tcc-drawer-scrim[hidden] { display: none; }
-.tcc-drawer-close { background: transparent; border: none; color: var(--muted);
-  font-size: var(--fs-display); cursor: pointer; line-height: 1; padding: 2px 6px;
-  transition: color var(--transition); }
-.tcc-drawer-close:hover { color: var(--fg); }
-.tcc-drawer-body { overflow-y: auto; padding: 14px 18px 40px; }
-/* Standardized overlay motion (mirrors the shell keyframes for the
-   standalone /ticker page, which does not load SHELL_CSS). */
-@keyframes cc-slide-in-right { from { transform: translateX(18px); opacity: 0; }
-  to { transform: none; opacity: 1; } }
-@keyframes cc-fade-in { from { opacity: 0; } to { opacity: 1; } }
-</style>"""
+_TCC_DRAWER_STYLE = TCC_DRAWER_STYLE
+
 
 _TCC_DRAWER_SCRIPT = """<script>
 (function () {
@@ -1340,7 +1256,7 @@ def _report_embed_section(ticker: str, report_date: str | None) -> str:
     # Report-first (PR4): no panel heading/sub — the report carries its own
     # identity header; this wrapper exists only for the frame border.
     return (
-        '<section class="panel cc-report-embed" style="padding:6px">'
+        '<section class="panel cc-report-embed">'
         f'<iframe class="cc-report-frame" src="/reports/{t}" '
         f'title="{t} workspace report" loading="lazy"></iframe>'
         "</section>"
@@ -1657,8 +1573,8 @@ def _size(n: int | None) -> str:
     return f"{n} B"
 
 
-# The whole head goes through str.format(ticker=, generated_at=), so the
-# palette block's literal CSS braces are doubled before splicing.
+# Replace the two explicit placeholders instead of formatting the whole head;
+# canonical master CSS contains literal braces and must remain byte-for-byte.
 _PAGE_HEAD = (
     """<!doctype html>
 <html lang="en">
@@ -1667,44 +1583,12 @@ _PAGE_HEAD = (
 <title>{ticker} · command center</title>
 """
     + FAVICON_LINK
-    + "\n<style>\n"
-    + (palette_css("dark") + controls_css("dark")).replace("{", "{{").replace("}", "}}")
+    + (palette_css("dark") + controls_css("dark"))
+    + TCC_PAGE_CSS
     + """
-  body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
-  header {{ margin-bottom: var(--sp-3); border-bottom: 1px solid var(--border); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: flex-start; }}
-  h1 {{ font-size: var(--fs-display); margin: 0 0 4px; font-weight: 600; }}
-  h1 .k-tick-name {{ font-size: var(--fs-body); }}
-  h2 {{ font-size: var(--fs-title); margin: 0 0 8px; font-weight: 600; }}
-  a {{ transition: color var(--transition); }}
-  .top-nav {{ font-size: var(--fs-caption); }}
-  .top-nav a {{ color: var(--accent); text-decoration: none; }}
-  .top-nav a:hover {{ text-decoration: underline; }}
-  .badges {{ text-align: right; }}
-  /* identity badges → the kit (.k-chip list_type + .k-pill breach status). */
-  .panel {{ margin-bottom: var(--sp-4); background: var(--surface); border-radius: var(--radius); padding: 14px 16px; }}
-  .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 12px; }}
-  .panel-h3 {{ font-size: var(--fs-title); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}
-  .muted {{ color: var(--muted); }}
-  table {{ width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
-  th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
-  td {{ padding: 6px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
-  tbody tr:hover td {{ background: var(--paper); }}
-  td.num {{ text-align: right; }}
-  code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }}
-  .fresh-strip {{ display: flex; gap: 1px; margin-bottom: var(--sp-4); background: var(--border); border-radius: var(--radius); overflow: hidden; }}
-  .fresh-cell {{ background: var(--surface); padding: 8px 14px; flex: 1; }}
-  .fresh-label {{ font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
-  .fresh-val {{ font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
-  .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1px; margin-bottom: 12px; background: var(--border); border-radius: var(--radius); overflow: hidden; }}
-  .kpi-card {{ background: var(--surface); padding: 10px 12px; }}
-  .kpi-label {{ font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
-  .kpi-value {{ font-size: var(--fs-title); font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }}
-  ul {{ margin: 6px 0; padding-left: 20px; }}
-  li {{ margin-bottom: 3px; }}
-</style>
 </head>
 <body>
-<div class="stamp" style="display:none">{generated_at}</div>
+<div class="stamp" hidden>{generated_at}</div>
 """
 )
 

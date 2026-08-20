@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from html import escape
 from pathlib import Path
 
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from ui import living_grid as lg
 from ui.prose import render_prose
 from user_state.ledger import ThesisLedgerEntryRow, list_recent_entries
@@ -33,12 +34,7 @@ _KIND_LABELS: Mapping[str, str] = {
     "red_team_refute": "Red Team refute",
 }
 
-_PANEL_STYLE = """<style>
-.tl-table td.tk { white-space:nowrap; }
-.tl-table td.when { color:var(--muted); white-space:nowrap; }
-.tl-body { font-size:var(--fs-body); line-height:1.5; }
-.tl-kpi-text { font-size:var(--fs-body); font-weight:600; margin:2px 0; color:var(--fg); }
-</style>"""
+_PANEL_STYLE = RESEARCH_PANEL_STYLE
 
 # entry_kind -> filled status-pill tone (kit .k-pill modifier). A bear-case append
 # is a negative/risk note (-bad); a thesis update is a positive confirmation (-ok);

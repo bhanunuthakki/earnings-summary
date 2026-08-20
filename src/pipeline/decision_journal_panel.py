@@ -41,24 +41,11 @@ import sqlite3
 from html import escape
 from pathlib import Path
 
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import panel_toolbar, ticker_label
 
-_PANEL_STYLE = """<style>
-.dj-h { font-size:var(--fs-title); font-weight:600; color:var(--fg);
-  margin:var(--sp-4) 0 var(--sp-1); }
-.dj-row { display:flex; align-items:baseline; gap:var(--sp-2); flex-wrap:wrap;
-  border:1px solid var(--border); border-radius:var(--radius); background:var(--surface);
-  padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-2); }
-.dj-when { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
-.dj-kind { font-family:var(--mono); }
-.dj-advice { color:var(--muted); font-size:var(--fs-caption); }
-.dj-note { color:var(--fg-soft); font-size:var(--fs-body); flex-basis:100%; margin-top:var(--sp-1); }
-.dj-pq { display:flex; gap:var(--sp-2); align-items:center; flex-basis:100%;
-  margin-top:var(--sp-1); }
-.dj-empty { color:var(--muted); padding:var(--sp-4) 0; }
-.dj-count { color:var(--muted); font-size:var(--fs-caption); margin-left:auto; }
-</style>"""
+_PANEL_STYLE = RESEARCH_PANEL_STYLE
 
 _FILTERS: tuple[str, ...] = ("owner", "adopted", "all", "lessons", "coaching")
 _FILTER_LABEL: dict[str, str] = {

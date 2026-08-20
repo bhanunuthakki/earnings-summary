@@ -94,4 +94,4 @@ def test_synthesis_insights_use_registry_large_card_track(tmp_path: Path) -> Non
         "",
     )
     compact = " ".join(html.split())
-    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));" in compact
+    assert "grid-template-columns:repeat(auto-fit,minmax(var(--grid-card-lg),1fr))" in compact

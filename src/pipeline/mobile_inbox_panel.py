@@ -42,37 +42,10 @@ from typing import cast
 from capture.decision_draft import ACTION_VOCAB as _RECEIPT_ACTION_VOCAB
 from pipeline.calibration_receipt import render_calibration_receipt_for
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
+from pipeline.operations_styles import MOBILE_INBOX_STYLE as _STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css, ticker_label
 from ui.tokens import palette_css
-
-_STYLE = """<style>
-:root { color-scheme: light; }
-body { margin:0; padding:var(--sp-3); background:var(--paper); font-family:var(--sans);
-  max-width:560px; margin-left:auto; margin-right:auto; }
-.mi-h1 { font-size:var(--fs-title); font-weight:600; color:var(--fg); margin:0 0 var(--sp-3); }
-.mi-sec { margin-bottom:var(--sp-5); }
-.mi-sec-h { font-size:var(--fs-caption); font-weight:600; color:var(--muted);
-  text-transform:uppercase; letter-spacing:0.06em; margin:0 0 var(--sp-2); }
-.mi-card { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface);
-  padding:var(--sp-3); margin-bottom:var(--sp-2); }
-.mi-card-head { display:flex; align-items:baseline; gap:var(--sp-2); flex-wrap:wrap;
-  margin-bottom:var(--sp-1); }
-.mi-body { color:var(--fg-soft); font-size:var(--fs-body); line-height:1.5; margin:var(--sp-1) 0; }
-/* Calibration receipt (pipeline/calibration_receipt.py) — "when you've been
-   here before," a muted read on the confirm card, ahead of the actions. */
-.cr-receipt { color:var(--muted); font-size:var(--fs-caption); margin:var(--sp-1) 0; }
-.mi-actions { display:flex; gap:var(--sp-2); flex-wrap:wrap; margin-top:var(--sp-2); }
-.mi-correct-form { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-2);
-  margin-top:var(--sp-2); }
-.mi-correct-form label { display:grid; gap:var(--sp-1); color:var(--muted);
-  font-size:var(--fs-caption); }
-.mi-correct-form .mi-wide { grid-column:1 / -1; }
-.mi-empty, .mi-failed, .mi-not-generated { color:var(--muted); font-size:var(--fs-body);
-  padding:var(--sp-3) 0; }
-.mi-failed { color:var(--bad); }
-.mi-recover { display:block; margin-top:var(--sp-1); font-size:var(--fs-caption); }
-</style>"""
 
 _HEAD = (
     '<meta charset="utf-8">'
@@ -682,7 +655,7 @@ _JS = """
       // Deliberately client-only: defer writes nothing server-side, so the
       // receipt must say exactly that rather than imply a persisted state.
       CCAction.receipt(btn, 'Deferred (this session only)');
-      card.style.opacity = '0.4';
+      card.classList.add('mi-deferred');
       return;
     }
     if (act === 'correct') {

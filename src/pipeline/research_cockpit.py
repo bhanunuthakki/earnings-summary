@@ -55,6 +55,7 @@ from cockpit_fundamentals import (
     read_materialized_fundamentals,
 )
 from compute.thesis_evaluation_episodes import episode_history_source
+from dashboard._styles import COCKPIT_CSS
 from dcf.latest import latest_dcf_rows
 from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
@@ -1520,35 +1521,4 @@ def _staleness_dot(row: CockpitRow, now: datetime) -> str:
     )
 
 
-_COCKPIT_CSS = """
-<style>
-.cockpit-section h2 { display: flex; align-items: baseline; gap: 6px; }
-.cockpit-degraded { font-size: var(--fs-caption); color: var(--warn); margin: 2px 0 8px;
-  display: flex; align-items: center; gap: 6px; }
-.cockpit-table sup { font-size: var(--fs-caption); color: var(--muted); margin-left: 1px; }
-.cockpit-table td { white-space: nowrap; }
-.cockpit-table td.kpi-moves { white-space: normal; }
-/* The Evaluation table is secondary to the Portfolio table — tighter padding
-   (density) marks it as the lower-importance grid, NOT a smaller type tier:
-   size encodes importance, not which table you're in, so body cells stay
-   --fs-body (13px, via the shell `table` baseline) and headers stay
-   --fs-caption (via the shell `th` rule) exactly like the Portfolio table. */
-.cockpit-thin td, .cockpit-thin th { padding: 4px 10px; }
-/* Five reinvented badge/chip systems collapsed onto the kit (controls.py): the
-   status verdict → .k-pill (filled tone); the KPI-move / attractiveness-score /
-   portfolio-fit doorways → .k-chip-mono (outline mono, + tone); the alert/doc/
-   comment counts → .k-pill. Only LAYOUT survives locally: the score/fit chips
-   are <a> peek-doorways (reset the anchor underline + give the kit hover); the
-   KPI move's inter-chip margin; the count-pill flex row; and the "partial data"
-   dashed border (a semantic the kit chip has no tone for). */
-a.k-chip { text-decoration: none; }
-a.k-chip:hover { color: var(--fg); border-color: var(--border-2); }
-.chip-partial { border-style: dashed; }
-.kpi-move { margin: 1px 4px 1px 0; }
-.cell-pills { display: inline-flex; gap: 4px; flex-wrap: wrap; }
-.er-soon { color: var(--warn); font-weight: 600; }
-.stale-dot { cursor: help; }
-a.stale-dot { text-decoration: none; cursor: pointer; }
-.dot-col { text-align: center; width: 28px; }
-</style>
-""".strip()
+_COCKPIT_CSS = f"<style>{COCKPIT_CSS}</style>"

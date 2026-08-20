@@ -83,11 +83,10 @@ def _saydo_tab(
 
     # Per-quarter detail blocks — one visible at a time, swapped by the selector.
     for i, card in enumerate(cards):
-        display = "" if i == 0 else "display:none"
+        hidden = "" if i == 0 else " hidden"
         qid = f"{card.current_quarter} {card.current_year}"
         body.write(
-            f'<div data-quarter-card data-quarter-group="saydo" '
-            f'data-quarter="{_esc(qid)}" style="{display}">'
+            f'<div data-quarter-card data-quarter-group="saydo" data-quarter="{_esc(qid)}"{hidden}>'
         )
         body.write('<div class="row-split"><div>')
         body.write(

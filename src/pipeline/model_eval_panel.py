@@ -44,6 +44,7 @@ from typing import cast
 
 from llm.eval_scopes import EVAL_SCOPES
 from llm.model_ladder import estimated_call_usd, model_rank
+from pipeline.operations_styles import MODEL_EVAL_STYLE as _PANEL_CSS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The eval-machinery scopes — traffic these tables account for that is NOT real
@@ -963,28 +964,3 @@ def _costs_section(costs: list[PurposeCostRow]) -> str:
 # Token-clean local CSS. All status color rides the kit (.k-pill / .k-chip /
 # .k-well from controls.py); this carries only layout + the mono locator / sans
 # label distinctions + a couple of table tweaks, on the type/space/color tokens.
-_PANEL_CSS = """<style>
-.me-alarm { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
-.me-alarm-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
-.me-alarm-chip { gap: var(--sp-2); }
-.me-alarm-cost { font-family: var(--mono); }
-.me-rollup { font-size: var(--fs-body); margin: 0 0 var(--sp-3); }
-.me-savings { font-family: var(--mono); color: var(--ok); font-weight: 600; }
-/* Purpose names are sans labels (NOT tickers): emphasis without mono. */
-.me-purpose { font-weight: 600; }
-.me-vs { font-weight: 400; }
-/* Genuine mono locators: model ids, timestamps, token counts. */
-.me-loc { font-family: var(--mono); }
-.me-total { font-weight: 600; }
-.me-cost-total > td { border-top: 2px solid var(--border); }
-/* Verdict grid: purpose in col 1, candidate chips in col 2. */
-.me-verdicts { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
-.me-verdicts td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border);
-  text-align: left; vertical-align: top; }
-.me-cand { display: inline-flex; align-items: center; gap: var(--sp-2);
-  margin: 0 var(--sp-3) var(--sp-1) 0; }
-/* The infra flag: an outline red chip, deliberately NOT a filled quality pill. */
-.me-infra { cursor: help; }
-/* Thin-frame honesty chips (INSUFFICIENT_FRAME): informational, hover for why. */
-.me-frame-chip { cursor: help; }
-</style>"""

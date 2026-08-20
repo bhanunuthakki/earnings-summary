@@ -24,7 +24,6 @@ from urllib.parse import quote_plus
 
 from dashboard._styles import CSS
 from dashboard.inbox import (
-    INBOX_CSS,
     INBOX_JS,
     InboxItem,
     collect_inbox_counted,
@@ -198,7 +197,6 @@ def _document(body: str) -> str:
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
 <style>{CSS}
-{INBOX_CSS}
 {CC_ACTION_CSS}</style>
 </head>
 <body>

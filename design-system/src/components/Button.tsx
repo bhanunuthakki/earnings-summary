@@ -12,7 +12,8 @@
  */
 import * as React from "react";
 
-export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps
+  extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "style"> {
   /** `k-btn-primary` / `k-btn-quiet` / `k-btn-danger`. Omit for the bare `.k-btn` base look. */
   variant?: "primary" | "quiet" | "danger";
   /** `k-btn-sm` — the compact row size. */

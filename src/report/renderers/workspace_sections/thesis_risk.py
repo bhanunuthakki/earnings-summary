@@ -25,7 +25,7 @@ from report.models import (
     ValuationSnapshot,
 )
 from report.renderers.numfmt import fmt_date, fmt_reltime
-from report.renderers.workspace_charts import sparkline
+from report.renderers.workspace_charts import SparklineSize, sparkline
 from report.renderers.workspace_data import format_ledger_value, kpi_is_stale, kpi_trend_delta
 from report.renderers.workspace_dcf import (
     dcf_inject_button,
@@ -472,7 +472,7 @@ def _kpi_ledger_row(
     # Trend cell — sparkline + YoY/QoQ delta. Needs ≥2 real observations.
     values = [v for _, v in r.history if v is not None]
     if len(values) >= 2:
-        spark = sparkline(values, width=84, height=22)
+        spark = sparkline(values, size=SparklineSize.MICRO)
         label, sign = kpi_trend_delta(r.history, r.unit, r.name)
         delta_html = f' <span class="ledger-delta {sign}">{_esc(label)}</span>' if label else ""
         trend_html = f'<span class="ledger-spark">{spark}</span>{delta_html}'
@@ -546,11 +546,11 @@ def _most_underweighted_panel(body: StringIO, bear: BearCaseSection) -> None:
         body.write(f'<div class="prose-pad">{_render_markdown(bear.most_underweighted)}</div>')
     if bear.out_of_scope_flags:
         body.write(
-            '<div class="prose-pad" style="border-top:1px solid var(--hairline)">'
+            '<div class="prose-pad out-of-scope-flags">'
             "<strong>Out-of-scope flags</strong> "
             '<span class="muted xsmall">— risks real but not derivable from these '
             "inputs (regulatory, macro, etc.)</span>"
-            "<ul class=\"thesis-list\" style='padding-left:18px;margin-top:8px'>"
+            '<ul class="thesis-list out-of-scope-list">'
         )
         for flag in bear.out_of_scope_flags:
             body.write(f"<li>{_esc(flag)}</li>")

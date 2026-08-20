@@ -29,6 +29,7 @@ from __future__ import annotations
 from io import StringIO
 
 from report.renderers.workspace_sections._shared import _esc
+from report.renderers.workspace_styles import DCF_CSS
 
 __all__ = ["CSS", "JS", "dcf_inject_button", "dcf_inject_for_kpi", "render_dcf_editor"]
 
@@ -142,63 +143,7 @@ def render_dcf_editor(body: StringIO, ticker: str) -> None:
     )
 
 
-CSS = """
-.dcf-edit { margin-top: var(--sp-3); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: var(--sp-3); background: var(--surface); }
-.dcf-edit-toggle { font-size: var(--fs-caption); }
-.dcf-edit-body { margin-top: var(--sp-3); }
-.dcf-edit-status { font-size: var(--fs-caption); color: var(--muted);
-  min-height: 1.2em; margin-bottom: var(--sp-2); }
-.dcf-edit-status.is-bad { color: var(--bad); }
-.dcf-edit-status.is-ok { color: var(--ok); }
-.dcf-edit-cols { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-  gap: var(--sp-4); align-items: start; }
-@media (max-width: 720px) { .dcf-edit-cols { grid-template-columns: 1fr; } }
-.dcf-edit-group { margin-bottom: var(--sp-3); }
-.dcf-edit-group-title { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-2); }
-.dcf-edit-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-  gap: var(--sp-2); }
-.dcf-edit-field { display: flex; flex-direction: column; gap: 2px; }
-.dcf-edit-field label { font-size: var(--fs-caption); color: var(--muted); }
-.dcf-edit-field input, .dcf-edit-field select { font-size: var(--fs-caption);
-  padding: 3px 6px; font-variant-numeric: tabular-nums; }
-.dcf-edit-field.is-derived input { color: var(--muted); font-style: italic; }
-.dcf-seg-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--sp-2);
-  align-items: center; }
-.dcf-seg-grid .dcf-seg-name { font-size: var(--fs-caption); color: var(--fg-soft);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dcf-seg-grid input { width: 5.5em; font-size: var(--fs-caption); padding: 3px 6px;
-  font-variant-numeric: tabular-nums; }
-.dcf-seg-head { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase;
-  letter-spacing: 0.04em; text-align: center; }
-.dcf-edit-scenarios { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3); }
-.dcf-scn { flex: 1; border: 1px solid var(--border); border-radius: var(--radius);
-  padding: var(--sp-2); text-align: center; }
-.dcf-scn-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase;
-  letter-spacing: 0.05em; }
-.dcf-scn-val { font-size: var(--fs-body); font-weight: 600; color: var(--fg);
-  font-variant-numeric: tabular-nums; }
-.dcf-scn-up { font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
-.dcf-scn-up.pos { color: var(--ok); }
-.dcf-scn-up.neg { color: var(--bad); }
-.dcf-scn-up.muted { color: var(--muted); }
-.dcf-scn.base { border-color: var(--accent); }
-.dcf-heatmap { overflow-x: auto; }
-.dcf-hm-cap { font-size: var(--fs-caption); color: var(--muted); margin-bottom: var(--sp-1); }
-.dcf-hm-table { border-collapse: collapse; font-size: var(--fs-caption);
-  font-variant-numeric: tabular-nums; }
-.dcf-hm-table th, .dcf-hm-table td { padding: var(--sp-1) var(--sp-2); text-align: right;
-  border: 1px solid var(--hairline); }
-.dcf-hm-table th { color: var(--muted); font-weight: 600; }
-.dcf-hm-table td.base { outline: 2px solid var(--accent); outline-offset: -2px; font-weight: 600; }
-.dcf-hm-axis { font-size: var(--fs-caption); color: var(--muted); }
-/* Wave 5: a captured report value injected into a driver flashes; the report's
-   "-> DCF" affordance is a quiet accent micro-button. */
-.dcf-edit-field input.dcf-injected { outline: 2px solid var(--accent); outline-offset: 1px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.dcf-inject-btn { color: var(--accent); margin-left: var(--sp-1); white-space: nowrap; }
-"""
+CSS = DCF_CSS
 
 
 # Vanilla IIFE (no framework, matching workspace_comments/_chat). Plain string —
@@ -255,7 +200,8 @@ JS = r"""
 
   function setStatus(msg, tone) {
     elStatus.textContent = msg || '';
-    elStatus.className = 'dcf-edit-status' + (tone ? ' is-' + tone : '');
+    elStatus.className = 'dcf-edit-status';
+    elStatus.dataset.tone = tone || 'neutral';
   }
   function fmtMoney(x) {
     if (x === null || x === undefined || isNaN(x)) return '—';
@@ -403,7 +349,8 @@ JS = r"""
     [['bear', 'Bear'], ['base', 'Base'], ['bull', 'Bull']].forEach(function (pair) {
       var key = pair[0];
       var cell = document.createElement('div');
-      cell.className = 'dcf-scn' + (key === 'base' ? ' base' : '');
+      cell.className = 'dcf-scn';
+      cell.dataset.scenario = key;
       var lab = document.createElement('div');
       lab.className = 'dcf-scn-label'; lab.textContent = pair[1];
       var val = document.createElement('div');
@@ -412,10 +359,11 @@ JS = r"""
       var fv = sc[key];
       if (fv !== null && fv !== undefined && price) {
         var pct = (fv - price) / price * 100;
-        up.className = 'dcf-scn-up ' + (pct >= 0 ? 'pos' : 'neg');
+        up.className = 'dcf-scn-up';
+        up.dataset.tone = pct >= 0 ? 'positive' : 'negative';
         up.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(0) + '%';
       } else {
-        up.className = 'dcf-scn-up muted'; up.textContent = '—';
+        up.className = 'dcf-scn-up'; up.dataset.tone = 'muted'; up.textContent = '—';
       }
       cell.appendChild(lab); cell.appendChild(val); cell.appendChild(up);
       elScenarios.appendChild(cell);
@@ -457,12 +405,11 @@ JS = r"""
         td.textContent = fmtMoney(v);
         var rel = price > 0 ? (v - price) / price : 0;
         var mag = Math.min(1, Math.abs(rel) / 0.5);
-        var tone = rel >= 0 ? 'var(--ok)' : 'var(--bad)';
-        var tint = Math.round(8 + mag * 30);
-        td.style.background = 'color-mix(in srgb, ' + tone + ' ' + tint + '%, transparent)';
+        td.dataset.tone = rel >= 0 ? 'positive' : 'negative';
+        td.dataset.intensity = String(Math.round(mag * 3));
         td.title = fmtMult(sens.multiple_axis[i]) + ' · ' + fmtPct(sens.wacc_axis[j])
           + ' → ' + fmtMoney(v);
-        if (i === mid && j === mid) td.className = 'base';
+        if (i === mid && j === mid) td.classList.add('base');
         tr.appendChild(td);
       });
       tbody.appendChild(tr);

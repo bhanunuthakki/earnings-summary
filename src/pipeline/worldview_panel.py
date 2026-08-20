@@ -19,6 +19,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from pipeline.analysis_styles import ANALYSIS_STYLE
 from synthesis.insights import InsightRow, list_insights
 from synthesis.tenets import list_tenets
 from ui.controls import chip_tone_class
@@ -36,19 +37,6 @@ _ADOPTED_WINDOW_DAYS = 7
 def worldview_enabled() -> bool:
     return os.environ.get("LEDGER_WORLDVIEW", "0").strip().lower() in _ON
 
-
-_WORLDVIEW_STYLE = """<style>
-.wv-add { background: var(--surface); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-3); }
-.wv-add textarea { width: 100%; min-height: 48px; resize: vertical; font-family: var(--sans); font-size: var(--fs-body); }
-.wv-add input { width: 100%; margin-top: var(--sp-2); font-family: var(--sans); font-size: var(--fs-caption); }
-.wv-add-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); flex-wrap: wrap; }
-.wv-status { font-size: var(--fs-caption); color: var(--muted); }
-.wv-scope { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); text-transform: lowercase; }
-.wv-prov { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.wv-proposed-badge { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
-.wv-tension { font-size: var(--fs-caption); font-weight: 600; color: var(--warn); text-transform: uppercase; letter-spacing: 0.05em; }
-.wv-tension-note { font-size: var(--fs-caption); color: var(--warn); margin-top: var(--sp-1); }
-</style>"""
 
 _WORLDVIEW_JS = """<script>(function(){
   if(window.__worldviewWired){ return; }
@@ -294,4 +282,4 @@ def render_worldview_section(db_path: Path | str | None) -> str:
     else:
         heading = f'<h3 class="ledger-sec-h" title="{escape(_WORLDVIEW_TUTORIAL, quote=True)}">Worldview</h3>'
         sub = ""
-    return _WORLDVIEW_STYLE + heading + sub + body + _WORLDVIEW_JS
+    return ANALYSIS_STYLE + heading + sub + body + _WORLDVIEW_JS

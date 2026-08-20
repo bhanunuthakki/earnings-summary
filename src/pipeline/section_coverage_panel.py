@@ -37,6 +37,7 @@ from industry_classifier import (
     SECTION_STRATEGIC_TARGETS,
     suppressed_sections_for_ticker,
 )
+from pipeline.operations_styles import SECTION_COVERAGE_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 
@@ -226,28 +227,6 @@ def load_section_coverage(
     out.sort(key=lambda r: (list_rank.get(r.list_type, 9), -r.gap_count, r.ticker))
     return out
 
-
-_PANEL_STYLE = """<style>
-/* The matrix rides .p-table; .sc-matrix is layout-only (centered dots, compact
-   dense rows, nowrap) — the kit owns the base table rhythm. */
-.sc-scroll { overflow-x:auto; }
-.sc-matrix.p-table th, .sc-matrix.p-table td {
-  padding:5px 7px; text-align:center; white-space:nowrap; }
-.sc-matrix.p-table th { font-size:var(--fs-caption); letter-spacing:.05em; }
-.sc-matrix.p-table td { font-size:var(--fs-caption); }
-.sc-matrix.p-table th:first-child, .sc-matrix.p-table td:first-child,
-.sc-matrix.p-table th:nth-child(2), .sc-matrix.p-table td:nth-child(2) { text-align:left; }
-.sc-tkr { font-family:var(--mono); font-weight:600; }
-.sc-list { color:var(--muted); font-size:var(--fs-caption); }
-.sc-filled { color:var(--ok); }
-.sc-empty { color:var(--muted); }
-.sc-na { color:var(--border-2); }
-.sc-noreport { color:var(--warn); font-size:var(--fs-caption); }
-.sc-gaps { font-variant-numeric:tabular-nums; color:var(--muted); }
-.sc-note { margin-top:14px; padding:10px 13px; background:var(--paper);
-  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
-  line-height:1.55; color:var(--muted); }
-</style>"""
 
 _CELL_GLYPH: dict[str, tuple[str, str, str]] = {
     # state -> (glyph, css class, hover)

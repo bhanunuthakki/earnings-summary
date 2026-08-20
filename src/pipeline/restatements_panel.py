@@ -16,20 +16,9 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 
+from pipeline.operations_styles import RESTATEMENTS_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
-
-_PANEL_STYLE = """<style>
-.rs-was { color:var(--muted); text-decoration:line-through; }
-.rs-now { font-weight:600; }
-.rs-up { color:var(--ok); }
-.rs-down { color:var(--bad); }
-.rs-note { margin-top:14px; padding:10px 13px; background:var(--paper);
-  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
-  line-height:1.55; }
-.rs-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
-.rs-doc { font-size:var(--fs-caption); font-family:var(--mono); }
-</style>"""
 
 _LIMIT = 50
 

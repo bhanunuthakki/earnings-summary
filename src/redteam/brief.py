@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from html import escape
 
+from pipeline.analysis_styles import ANALYSIS_STYLE
 from redteam.gate import MonthStatus
 from redteam.models import RedTeamItemRow
 from ui.controls import panel_toolbar, ticker_label
@@ -30,27 +31,6 @@ from ui.prose import render_prose
 # never a raw hex or off-scale value. Registered as "redteam/brief.py" in
 # tests/test_ui_controls.py's REGISTERED set.
 # ---------------------------------------------------------------------------
-_BRIEF_CSS = """<style>
-.rt-brief { display: flex; flex-direction: column; gap: var(--sp-3); }
-.rt-empty { color: var(--muted); font-size: var(--fs-body); padding: var(--sp-4) 0; }
-.rt-group-title { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.06em; margin: var(--sp-2) 0 0; }
-.rt-item { display: flex; flex-direction: column; gap: var(--sp-2); }
-.rt-item-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.rt-item-cross { color: var(--fg-soft); font-size: var(--fs-body); font-weight: 600; }
-.rt-item .prose { margin-top: var(--sp-1); }
-.rt-item .prose p { margin: 0 0 var(--sp-2); }
-.rt-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-1); flex-wrap: wrap; }
-/* In-card Refute editor (replaces window.prompt — the ledger's PR9 idiom:
-   ledger_panel.beginRewrite / journal_panel.beginEdit). Appended into the
-   same .rt-actions holder the buttons live in, not a swap, so REFUTE stays
-   visible for the double-open guard's benefit. */
-.rt-refute-box { flex-basis: 100%; margin-top: var(--sp-1); }
-.rt-refute-ta { width: 100%; box-sizing: border-box; min-height: 56px; resize: vertical;
-  font-family: var(--sans); font-size: var(--fs-body); }
-.rt-refute-row { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
-</style>"""
-
 _SEVERITY_TONE: dict[str, str] = {"high": "bad", "med": "warn", "low": "ok"}
 _STATUS_TONE: dict[str, str] = {
     "open": "accent",
@@ -164,13 +144,13 @@ def render_red_team_brief(
             "generates one adversarial attack per held name plus the three "
             "cross-book passes — see <code>execution/run_red_team.py</code>.</p>"
         )
-        return f"{_BRIEF_CSS}{toolbar}{empty}"
+        return f"{ANALYSIS_STYLE}{toolbar}{empty}"
 
     per_name = [i for i in items if i.kind == "per_name"]
     cross = [i for i in items if i.kind == "cross_book"]
 
     parts: list[str] = [
-        _BRIEF_CSS,
+        ANALYSIS_STYLE,
         toolbar,
         '<div class="rt-brief">',
     ]

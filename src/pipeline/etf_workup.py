@@ -27,25 +27,9 @@ from etf_overlap import EtfOverlap, compute_lookthrough_overlap
 from etf_role_synthesis import read_role_synthesis, synthesis_generated_at
 from etf_score_cache import read_materialized_etf_loadings, read_materialized_etf_whatif
 from instrument_store import get_etf_profile
+from pipeline.analysis_styles import ANALYSIS_STYLE
 from portfolio_weights import read_materialized_weights
 from ui.prose import render_prose
-
-_WORKUP_CSS = """<style>
-.etfw { display: flex; flex-direction: column; gap: 12px; }
-.etfw h4 { margin: 0 0 4px; font-size: var(--fs-caption); color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.05em; }
-.etfw-strip { display: flex; flex-wrap: wrap; gap: 6px; }
-.etfw-row { display: grid; grid-template-columns: 120px 1fr; gap: 8px; padding: 4px 0;
-  border-bottom: 1px solid var(--hairline); font-size: var(--fs-body); }
-.etfw-row:last-child { border-bottom: none; }
-.etfw-row .v { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.etfw-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
-.etfw-table td, .etfw-table th { padding: 4px 8px 4px 0; text-align: left; }
-.etfw-table td.num { font-family: var(--mono); }
-.etfw-miss { color: var(--muted); font-size: var(--fs-body); }
-.etfw-src { color: var(--muted); font-size: var(--fs-caption); }
-.etfw-verdict { margin-bottom: 6px; }
-</style>"""
 
 _VERDICT_TONES: dict[str, str] = {
     "closes_target_gap": "k-pill k-pill-ok",
@@ -76,7 +60,7 @@ def render_etf_workup(
         f'<div class="cc-peek-foot"><a href="/ticker/{escape(t, quote=True)}">'
         "open the holding &rarr;</a></div>"
     )
-    return f'<div class="etfw">{"".join(blocks)}</div>{foot}{_WORKUP_CSS}'
+    return f'<div class="etfw">{"".join(blocks)}</div>{foot}{ANALYSIS_STYLE}'
 
 
 def _is_tracked_etf(conn: sqlite3.Connection, ticker: str) -> bool:

@@ -23,15 +23,8 @@ from calibration_guard import confidence_note
 from credibility.calibration import ReliabilityTable, build_reliability_table
 from credibility.priors import MeasuredPriors, build_measured_priors
 from pipeline.confidence import TIER_BASE, UNKNOWN_TIER_BASE
+from pipeline.operations_styles import CREDIBILITY_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-
-_PANEL_STYLE = """<style>
-.cred-note { margin-top:14px; }
-.cred-over { color:var(--bad); }
-.cred-under { color:var(--ok); }
-.cred-spark { font-weight:600; }
-.cred-thin { color:var(--muted); font-size:var(--fs-caption); }
-</style>"""
 
 
 def render_credibility_panel(db_path: Path, *, user_id: str = "bhanu") -> str:

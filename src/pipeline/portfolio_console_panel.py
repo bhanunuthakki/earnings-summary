@@ -35,24 +35,14 @@ from pathlib import Path
 
 from identity import DEFAULT_USER_ID
 from pipeline.console_scaffold import ConsoleSection, render_console
+from pipeline.portfolio_styles import console_css
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The D1 tile grid + Band-1 brief. Tokens only (design_language §2): auto-fit
 # tiles ≥460px so a wide desktop viewport gets 2-3 columns and a narrow one
 # degrades to a single column without a media query; `csec-wide` spans the
 # brief and the landing section across every column.
-_CONSOLE_CSS = """<style>
-.console-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));
-  gap: var(--sp-2); align-items: start; }
-.console-grid .console-sec { min-width: 0; }
-.console-grid .console-sec.csec-wide { grid-column: 1 / -1; }
-.console-brief { background: var(--surface); border-radius: var(--radius);
-  padding: 11px 14px; }
-.console-brief h2 { margin: 0 0 4px; font-size: var(--fs-title); }
-.console-brief .cb-sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 6px; }
-.console-brief p.cb-line { margin: 0 0 3px; font-size: var(--fs-body); line-height: 1.5; }
-.console-brief .cb-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
-</style>"""
+_CONSOLE_CSS = console_css()
 
 
 def _lazy_section_placeholder(endpoint: str, label: str) -> str:
@@ -78,12 +68,7 @@ def _lazy_section_placeholder(endpoint: str, label: str) -> str:
 # never a filled pill) swap panes in place; each pane fetches its fragment on
 # first activation, so the console shell paints instantly. Layout-only CSS —
 # the chips/pills/sticky band are all the kit (.k-chip-tabs-sticky).
-_HEALTH_CSS = """<style>
-.hc-card { min-width: 0; }
-.hc-h { margin: 0 0 4px; font-size: var(--fs-title); }
-.hc-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
-.hc-pane[hidden] { display: none; }
-</style>"""
+_HEALTH_CSS = console_css()
 
 # Chip switcher + fetch-on-first-activation pane loader. One guarded
 # document-level listener (re-injected fragments never double-wire); the
