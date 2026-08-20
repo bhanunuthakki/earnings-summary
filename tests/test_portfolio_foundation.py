@@ -677,7 +677,12 @@ def test_tracker_navigation_requires_an_explicit_ui_endpoint(
     ("api_url", "expected"),
     (
         ("http://127.0.0.1:8123", ("127.0.0.1", 8123)),
-        ("https://tracker.example:9443/", ("tracker.example", 9443)),
+        ("http://[::1]:8123", ("::1", 8123)),
+        ("https://127.0.0.1:9443/", None),
+        ("https://tracker.example:9443/", None),
+        ("http://192.168.1.5:8123", None),
+        ("http://0.0.0.0:8123", None),
+        ("http://[::]:8123", None),
         ("ftp://127.0.0.1:8123", None),
         ("http://user:secret@127.0.0.1:8123", None),
         ("http://127.0.0.1:8123/api", None),

@@ -212,6 +212,7 @@ from runtime.portfolio_tracker import (  # noqa: E402
     derive_daily_refresh_idempotency_key,
     endpoint_owner_matches_pid,
     health_is_healthy,
+    is_loopback_bind_host,
     parse_tracker_bind_url,
     write_runtime_receipt,
 )
@@ -4248,7 +4249,7 @@ def create_app(
                 404,
             )
         bind = parse_tracker_bind_url(api_url)
-        if bind is None:
+        if bind is None or not is_loopback_bind_host(bind[0]):
             return ({"error": "configured Portfolio Tracker API URL cannot be safely bound"}, 400)
         bind_host, bind_port = bind
         venv_python = tracker_root / (

@@ -179,6 +179,29 @@ def test_start_tracker_route_requires_explicit_api_url(
     assert "PORTFOLIO_TRACKER_API_URL is required" in response.get_json()["error"]
 
 
+def test_start_tracker_route_rejects_non_loopback_bind_from_parser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracker_root = tmp_path.parent / "portfolio-tracker"
+    tracker_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("PORTFOLIO_TRACKER_ROOT", str(tracker_root))
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8123")
+
+    def unsafe_parser(_api_url: str) -> tuple[str, int]:
+        return "0.0.0.0", 8123
+
+    monkeypatch.setattr(
+        comments_server,
+        "parse_tracker_bind_url",
+        unsafe_parser,
+    )
+
+    response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
+
+    assert response.status_code == 400
+    assert "cannot be safely bound" in response.get_json()["error"]
+
+
 def test_start_tracker_route_rejects_healthy_listener_without_matching_registry_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

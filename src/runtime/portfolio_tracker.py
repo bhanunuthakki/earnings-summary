@@ -62,20 +62,36 @@ def health_is_healthy(health: HealthV1 | None, *, now: datetime) -> bool:
 
 
 def parse_tracker_bind_url(api_url: str) -> tuple[str, int] | None:
-    """Parse a configured API URL into safe uvicorn bind arguments."""
+    """Parse a configured localhost API URL into safe uvicorn bind arguments."""
 
     parsed = urlsplit(api_url)
-    if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+    if parsed.scheme != "http" or parsed.username or parsed.password:
         return None
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment or not parsed.hostname:
         return None
     try:
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        port = parsed.port or 80
     except ValueError:
         return None
     if not 1 <= port <= 65_535:
         return None
+    if not is_loopback_bind_host(parsed.hostname):
+        return None
     return parsed.hostname, port
+
+
+def is_loopback_bind_host(host: str) -> bool:
+    """Return true only for literal IPv4/IPv6 loopback addresses.
+
+    Hostnames are intentionally rejected: resolving a name is outside this
+    bounded configuration check and could turn a nominally local listener
+    into a network-facing one.
+    """
+
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class SchedulerEvidence(BaseModel):
