@@ -164,6 +164,60 @@ def resolve_kpi_definition_name(
     return best_name
 
 
+def matching_kpi_definition_ids(
+    conn: sqlite3.Connection, ticker: str, requested: str
+) -> tuple[int, ...]:
+    """All definition IDs in the read-side normalized KPI family.
+
+    Readers must reconcile aliases *before* filtering and window partitioning;
+    choosing a single rich definition first leaves a same-period fact under a
+    less-populated alias invisible.  This is intentionally read-only and uses
+    the existing conservative normalized-name contract.
+    """
+    want = normalize_kpi_name(requested)
+    rows = conn.execute(
+        "SELECT id, name, unit FROM kpi_definitions WHERE ticker = ? ORDER BY id",
+        (ticker.upper(),),
+    ).fetchall()
+    family = [row for row in rows if normalize_kpi_name(str(row["name"])) == want]
+    if not family:
+        return ()
+    exact = [row for row in family if str(row["name"]) == requested]
+    anchor = exact[0] if exact else family[0]
+    anchor_unit = str(anchor["unit"])
+    # Names alone are not a fact identity: readers cannot merge an actual-dollar
+    # row with a millions-scaled alias and silently alter a displayed value. Nor
+    # may a USD alias pull a BRL observation into the same report cell. Currency
+    # is a fact (not definition) attribute, so compare each definition's observed
+    # currency set; a definition with no observations is harmless to retain.
+    fact_columns = {
+        str(column["name"]) for column in conn.execute("PRAGMA table_info(kpi_facts)").fetchall()
+    }
+    if "currency" not in fact_columns:
+        return tuple(int(row["id"]) for row in family if str(row["unit"]) == anchor_unit)
+    fact_currency_rows = conn.execute(
+        "SELECT kpi_definition_id, currency FROM kpi_facts WHERE ticker = ?",
+        (ticker.upper(),),
+    ).fetchall()
+    currencies_by_definition: dict[int, set[str | None]] = {}
+    for fact in fact_currency_rows:
+        definition_id = int(fact["kpi_definition_id"])
+        currencies_by_definition.setdefault(definition_id, set()).add(
+            str(fact["currency"]) if fact["currency"] is not None else None
+        )
+    anchor_currencies = currencies_by_definition.get(int(anchor["id"]), set())
+    return tuple(
+        int(row["id"])
+        for row in family
+        if str(row["unit"]) == anchor_unit
+        and (
+            not anchor_currencies
+            or not currencies_by_definition.get(int(row["id"]))
+            or currencies_by_definition[int(row["id"])] == anchor_currencies
+        )
+    )
+
+
 def engine_formula_definition(name: str) -> str | None:
     """If ``name`` is a ``metrics_engine`` REGISTRY ``formula_key``, return a
     rich "display_formula — method_notes" tooltip string; ``None`` otherwise

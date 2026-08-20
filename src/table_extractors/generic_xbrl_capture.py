@@ -58,7 +58,7 @@ from pathlib import Path
 from typing import cast
 
 from models.documents import SourceType
-from models.facts import FiscalPeriodType, Unit
+from models.facts import Currency, FiscalPeriodType, Unit
 from models.kpis import DefinitionOrigin
 from models.runs import StageStatus
 from pipeline import locators
@@ -367,6 +367,7 @@ def _walk_section(
                     name=name,
                     value=value,
                     unit=Unit.ACTUAL,
+                    currency=Currency(units.currency),
                     # 1.0 for a normal monetary cell (deterministic table read); a
                     # haircut for a percent/ratio-shaped residual-risk magnitude
                     # (see _classify_value / _RESIDUAL_RISK_*). persist_manifest

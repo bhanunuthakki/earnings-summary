@@ -272,7 +272,9 @@ def test_fmp_derived_fetch_is_deterministic_within_fmp_scope(repo: Path) -> None
                 (li, str(new_v)),
             )
         conn.commit()
-        facts = fmp_derived._fetch_quarterly_facts(conn, "TST")  # pyright: ignore[reportPrivateUsage]
+        facts, _degradations = fmp_derived._fetch_quarterly_facts(  # pyright: ignore[reportPrivateUsage]
+            conn, "TST"
+        )
         q1 = [f for f in facts if str(f.period_end)[:10] == "2026-03-31"]
         assert len(q1) == 1
         f = q1[0]

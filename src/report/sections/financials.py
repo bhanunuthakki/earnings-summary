@@ -21,6 +21,7 @@ from typing import cast
 from compute.kpi_resolver import (
     ANNUAL_FACT_PERIOD_TYPES,
     QUARTERLY_FACT_PERIOD_TYPES,
+    matching_kpi_definition_ids,
     reporting_cadence_for,
     resolve_kpi_definition_name,
 )
@@ -58,6 +59,7 @@ from report.sections._common import (
 from timeseries.loaders import (
     load_financial_cell_provenance,
     load_financial_fact_provenance,
+    reader_source_order_sql,
     reader_tier_join_sql,
     reader_tier_rank_sql,
 )
@@ -145,7 +147,7 @@ def build(
         )
 
     deduped_quarterly = _dedupe_by_calendar_quarter(quarterly_rows)[-UNDERLYING_QUARTERS:]
-    quarter_labels_full = [quarter_label(r["period_end"]) for r in deduped_quarterly]
+    quarter_labels_full = [quarter_label(str(r["period_end"])) for r in deduped_quarterly]
     display_labels = quarter_labels_full[-DISPLAY_QUARTERS:]
 
     # Per-cell source provenance for the P3.3 chips — one query for every
@@ -289,10 +291,14 @@ def _read_chart_priorities_request(ticker: str, repo_root: Path) -> list[str]:
     if not holdings_path.exists():
         return list(_DEFAULT_CHART_PRIORITIES)
     with open(holdings_path, encoding="utf-8") as f:
-        holdings = json.load(f)
-    raw = holdings.get("chart_priorities") or []
+        decoded: object = json.load(f)
+    if not isinstance(decoded, dict):
+        return list(_DEFAULT_CHART_PRIORITIES)
+    holdings = cast(dict[str, object], decoded)
+    raw: object = holdings.get("chart_priorities") or []
     if isinstance(raw, list):
-        cleaned = [str(x) for x in raw if isinstance(x, str)]
+        values = cast(list[object], raw)
+        cleaned = [x for x in values if isinstance(x, str)]
         if cleaned:
             return cleaned
     return list(_DEFAULT_CHART_PRIORITIES)
@@ -364,13 +370,18 @@ def _kpi_cell_sources_for(
     period_end ISO date (YYYY-MM-DD) — the kpi_facts twin of
     ``load_financial_cell_provenance`` (KPI chip universality, S2 PR2).
 
-    Row pick matches ``_kpi_series_for`` / ``_annual_kpi_raw_for`` exactly
-    (highest ``source_doc_id`` per logical key) so the chip always describes
-    the number the series displays. Best-effort: ``{}`` on legacy DBs
+    Row pick matches ``_kpi_series_for`` / ``_annual_kpi_raw_for`` exactly:
+    source-quality tier first, issuer document over a same-tier generic vendor
+    row, then fact id.  Thus the chip always describes the number the series
+    displays. Best-effort: ``{}`` on legacy DBs
     without a documents table or the 0054/0075 provenance columns — the
     series then renders without chips, never breaks.
     """
+    definition_ids = matching_kpi_definition_ids(conn, ticker, resolved_name)
+    if not definition_ids:
+        return {}
     placeholders = ",".join("?" * len(period_types))
+    definition_placeholders = ",".join("?" * len(definition_ids))
     issue_signals = load_unresolved_issues(conn)
     kf_cols = _kpi_facts_columns(conn)
     extracted_by_select = "kf.extracted_by" if "extracted_by" in kf_cols else "NULL AS extracted_by"
@@ -380,29 +391,29 @@ def _kpi_cell_sources_for(
     try:
         rows = conn.execute(
             f"""
-            SELECT kf.period_end, kf.locator, kf.confidence,
-                   kf.id AS fact_id,
-                   kf.source_doc_id, kf.value,
-                   {extracted_by_select},
-                   {computed_from_select},
-                   d.fetched_at, d.source_url, d.doc_type,
-                   d.accession_number, d.filing_date,
-                   d.source_quality_tier AS source
-            FROM kpi_facts kf
-            JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-            JOIN documents d ON d.id = kf.source_doc_id
-            WHERE kf.ticker = ?
-              AND kd.name = ?
-              AND kf.fiscal_period_type IN ({placeholders})
-              AND kf.source_doc_id = (
-                  SELECT MAX(k2.source_doc_id) FROM kpi_facts k2
-                  WHERE k2.ticker = kf.ticker
-                    AND k2.kpi_definition_id = kf.kpi_definition_id
-                    AND k2.period_end = kf.period_end
-                    AND k2.fiscal_period_type = kf.fiscal_period_type
-              )
+            WITH ranked AS (
+                SELECT kf.period_end, kf.locator, kf.confidence,
+                       kf.id AS fact_id,
+                       kf.source_doc_id, kf.value,
+                       {extracted_by_select},
+                       {computed_from_select},
+                       d.fetched_at, d.source_url, d.doc_type,
+                       d.accession_number, d.filing_date,
+                       d.source_quality_tier AS source,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY kf.period_end, kf.fiscal_period_type
+                           ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
+                       ) AS rn
+                FROM kpi_facts kf
+                JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+                JOIN documents d ON d.id = kf.source_doc_id
+                WHERE kf.ticker = ?
+                  AND kf.kpi_definition_id IN ({definition_placeholders})
+                  AND kf.fiscal_period_type IN ({placeholders})
+            )
+            SELECT * FROM ranked WHERE rn = 1
             """,
-            (ticker.upper(), resolved_name, *period_types),
+            (ticker.upper(), *definition_ids, *period_types),
         ).fetchall()
     except sqlite3.Error:
         return {}
@@ -475,6 +486,24 @@ def _kpi_facts_columns(conn: sqlite3.Connection) -> set[str]:
         return set()
 
 
+def _kpi_source_order_sql(conn: sqlite3.Connection) -> str:
+    """Report-only canonical KPI winner order.
+
+    It preserves the global quality-tier contract, while using issuer origin as
+    a deterministic tie-break over a same-tier FMP row.  The latter is needed
+    because both IR-document and FMP-normalized facts historically share the
+    ``fmp_normalized`` tier.
+    """
+    if not has_table(conn, "documents"):
+        return "NULL"
+    return reader_source_order_sql(conn)
+
+
+def _kpi_source_join_sql(conn: sqlite3.Connection) -> str:
+    """Document join paired with :func:`_kpi_source_order_sql`."""
+    return reader_tier_join_sql(conn, fact_alias="kf")
+
+
 def _quarter_label_for_period(period_end_iso: str) -> str | None:
     """``YYYY-MM-DD`` → the report's ``"YYYY Qn"`` label; None on bad input."""
     try:
@@ -493,35 +522,40 @@ def _annual_kpi_raw_for(
     when nothing resolves.
 
     Reads only ``FY``/``annual`` rows (``ANNUAL_FACT_PERIOD_TYPES``) so interim
-    prints on an otherwise-annual metric never pollute the annual axis; dedupes to
-    the latest-ingested source per period (highest ``source_doc_id``), matching
-    every other kpi_facts reader. ``period_end`` year is the axis key.
+    prints on an otherwise-annual metric never pollute the annual axis; dedupes
+    by quality tier, issuer preference, then fact id. ``period_end`` year is the
+    axis key.
     """
     resolved_name = resolve_kpi_definition_name(
         conn, ticker, kpi_name, period_types=ANNUAL_FACT_PERIOD_TYPES
     )
     if resolved_name is None:
         return None
+    definition_ids = matching_kpi_definition_ids(conn, ticker, resolved_name)
+    if not definition_ids:
+        return None
     placeholders = ",".join("?" * len(ANNUAL_FACT_PERIOD_TYPES))
+    definition_placeholders = ",".join("?" * len(definition_ids))
     cur = conn.cursor()
     cur.execute(
         f"""
-        SELECT kf.period_end, kf.value, kf.unit, kd.name
-        FROM kpi_facts kf
-        JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-        WHERE kf.ticker = ?
-          AND kd.name = ?
-          AND kf.fiscal_period_type IN ({placeholders})
-          AND kf.source_doc_id = (
-              SELECT MAX(k2.source_doc_id) FROM kpi_facts k2
-              WHERE k2.ticker = kf.ticker
-                AND k2.kpi_definition_id = kf.kpi_definition_id
-                AND k2.period_end = kf.period_end
-                AND k2.fiscal_period_type = kf.fiscal_period_type
-          )
-        ORDER BY kf.period_end ASC
+        WITH ranked AS (
+            SELECT kf.period_end, kf.value, kf.unit, kd.name,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY kf.period_end, kf.fiscal_period_type
+                       ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
+                   ) AS rn
+            FROM kpi_facts kf
+            JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+            {_kpi_source_join_sql(conn)}
+            WHERE kf.ticker = ?
+              AND kf.kpi_definition_id IN ({definition_placeholders})
+              AND kf.fiscal_period_type IN ({placeholders})
+        )
+        SELECT period_end, value, unit, name FROM ranked
+        WHERE rn = 1 ORDER BY period_end ASC
         """,
-        (ticker.upper(), resolved_name, *ANNUAL_FACT_PERIOD_TYPES),
+        (ticker.upper(), *definition_ids, *ANNUAL_FACT_PERIOD_TYPES),
     )
     rows = cur.fetchall()
     if not rows:
@@ -611,31 +645,33 @@ def _kpi_series_for(
     )
     if resolved_name is None:
         return None
+    definition_ids = matching_kpi_definition_ids(conn, ticker, resolved_name)
+    if not definition_ids:
+        return None
+    definition_placeholders = ",".join("?" * len(definition_ids))
     cur = conn.cursor()
     # When several sources report the same KPI for one period (e.g. an LLM brief
-    # value later restated by the issuer's IR spreadsheet, which coexist as
-    # separate rows), keep only the latest-ingested row per logical key —
-    # highest source_doc_id wins, matching purge_duplicate_kpi_facts' dedup. This
-    # makes the higher-tier IR-spreadsheet figure authoritative and the series
-    # deterministic (no arbitrary tie-break between duplicate period rows).
+    # value later restated by the issuer's IR spreadsheet), retain the quality-
+    # tier winner and break same-tier ties in favour of the issuer document.
     cur.execute(
-        """
-        SELECT kf.period_end, kf.value, kf.unit, kd.name
-        FROM kpi_facts kf
-        JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-        WHERE kf.ticker = ?
-          AND kd.name = ?
-          AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
-          AND kf.source_doc_id = (
-              SELECT MAX(k2.source_doc_id) FROM kpi_facts k2
-              WHERE k2.ticker = kf.ticker
-                AND k2.kpi_definition_id = kf.kpi_definition_id
-                AND k2.period_end = kf.period_end
-                AND k2.fiscal_period_type = kf.fiscal_period_type
-          )
-        ORDER BY kf.period_end ASC
+        f"""
+        WITH ranked AS (
+            SELECT kf.period_end, kf.value, kf.unit, kd.name,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY kf.period_end, kf.fiscal_period_type
+                       ORDER BY {_kpi_source_order_sql(conn)}, kf.id DESC
+                   ) AS rn
+            FROM kpi_facts kf
+            JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+            {_kpi_source_join_sql(conn)}
+            WHERE kf.ticker = ?
+              AND kf.kpi_definition_id IN ({definition_placeholders})
+              AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
+        )
+        SELECT period_end, value, unit, name FROM ranked
+        WHERE rn = 1 ORDER BY period_end ASC
         """,
-        (ticker.upper(), resolved_name),
+        (ticker.upper(), *definition_ids),
     )
     rows = cur.fetchall()
     if not rows:
@@ -696,6 +732,9 @@ def _kpi_series_for(
             else []
         ),
     )
+
+
+kpi_series_for = _kpi_series_for
 
 
 def _pretty_unit(raw_unit: str) -> str:
@@ -817,6 +856,11 @@ def _dedupe_by_calendar_quarter(rows: list[dict[str, object]]) -> list[dict[str,
         ordered = sorted(group, key=_priority)
         merged.append(_coalesce_rows(ordered))
     return merged
+
+
+def dedupe_by_calendar_quarter(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Public cross-surface seam for the canonical quarterly winner rule."""
+    return _dedupe_by_calendar_quarter(rows)
 
 
 def _priority(row: dict[str, object]) -> tuple[int, str]:

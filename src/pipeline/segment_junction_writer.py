@@ -384,6 +384,10 @@ _LEGACY_METRIC_TO_JUNCTION_METRIC: dict[str, str] = {
     "headcount": "headcount",
 }
 
+# Public read-side mapping seam; keep private names for existing write callers.
+LEGACY_METRIC_TO_DIM_TYPE = _LEGACY_METRIC_TO_DIM_TYPE
+LEGACY_METRIC_TO_JUNCTION_METRIC = _LEGACY_METRIC_TO_JUNCTION_METRIC
+
 
 def segment_fact_to_dimension(
     segment_name: str,

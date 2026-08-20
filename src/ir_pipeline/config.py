@@ -58,6 +58,7 @@ class SheetKpi:
     scale: float = 1.0  # multiply the raw cell (e.g. 100 for a decimal-percent row)
     origin: str = "analyst"  # "analyst" (curated) | "capture" (auto-mapped long tail)
     exact_label: bool = False  # match row_label exactly (capture rows) vs substring
+    currency: str | None = None  # required for monetary rows; never inferred from ticker
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class IrConfig:
     ticker: str
     platform: str  # discovery adapter key: "mz" | "q4cdn"
     results_center_url: str
+    reporting_currency: str | None = None  # explicit workbook/config declaration only
     spreadsheet_kpis: tuple[SheetKpi, ...] = ()
     label_col: int = 1  # 0-based column holding the row labels in this issuer's sheets
 
@@ -115,6 +117,7 @@ def _to_dict(cfg: IrConfig) -> dict[str, object]:
         "ticker": cfg.ticker,
         "platform": cfg.platform,
         "results_center_url": cfg.results_center_url,
+        "reporting_currency": cfg.reporting_currency,
         "label_col": cfg.label_col,
         "spreadsheet_kpis": [
             {
@@ -122,6 +125,7 @@ def _to_dict(cfg: IrConfig) -> dict[str, object]:
                 "sheet": s.sheet,
                 "row_label": s.row_label,
                 "unit": s.unit,
+                "currency": s.currency,
                 "scale": s.scale,
                 "origin": s.origin,
                 "exact_label": s.exact_label,
@@ -132,9 +136,10 @@ def _to_dict(cfg: IrConfig) -> dict[str, object]:
 
 
 def _from_dict(d: dict[str, object]) -> IrConfig:
-    raw = d.get("spreadsheet_kpis") or []
+    candidate = d.get("spreadsheet_kpis")
     kpis: list[SheetKpi] = []
-    if isinstance(raw, list):
+    if isinstance(candidate, list):
+        raw = cast("list[object]", candidate)
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -145,6 +150,7 @@ def _from_dict(d: dict[str, object]) -> IrConfig:
                     sheet=str(k["sheet"]),
                     row_label=str(k["row_label"]),
                     unit=str(k.get("unit", "actual")),
+                    currency=(str(k["currency"]) if k.get("currency") is not None else None),
                     scale=float(cast("float", k.get("scale", 1.0))),
                     # Back-compat: a pre-capture config (e.g. the hand-built NU.json)
                     # has neither field — default to a curated analyst row matched by
@@ -157,6 +163,9 @@ def _from_dict(d: dict[str, object]) -> IrConfig:
         ticker=str(d["ticker"]),
         platform=str(d["platform"]),
         results_center_url=str(d.get("results_center_url", "")),
+        reporting_currency=(
+            str(d["reporting_currency"]) if d.get("reporting_currency") is not None else None
+        ),
         spreadsheet_kpis=tuple(kpis),
         label_col=int(cast("int", d.get("label_col", 1))),
     )

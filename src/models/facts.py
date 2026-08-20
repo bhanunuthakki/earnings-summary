@@ -292,9 +292,19 @@ class KpiFact(BaseModel):
     fiscal_period_type: FiscalPeriodType
     kpi_definition_id: int
     value: Decimal
+    currency: Currency | None = None
     unit: Unit
     source_doc_id: int
     locator: FactLocator | None = None
+
+    @model_validator(mode="after")
+    def _monetary_currency_required(self) -> KpiFact:
+        if (
+            self.unit in {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
+            and self.currency is None
+        ):
+            raise ValueError("monetary KPI facts require currency")
+        return self
 
 
 class SegmentDimType(StrEnum):

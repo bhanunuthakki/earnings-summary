@@ -325,6 +325,29 @@ def reader_tier_rank_sql(
     return "NULL"
 
 
+def issuer_origin_rank_sql(source_type_column: str) -> str:
+    """Stable same-tier tie-break for issuer-originated document facts.
+
+    Reader quality is always decided by :func:`reader_tier_rank_sql` first.
+    This expression deliberately has no opinion across tiers: it only keeps an
+    issuer document ahead of a vendor normalization when their quality tier is
+    equal.
+    """
+    return f"CASE {source_type_column} WHEN 'ir_doc' THEN 1 WHEN 'sec_xbrl' THEN 1 ELSE 0 END"
+
+
+def reader_source_order_sql(
+    conn: sqlite3.Connection, *, source_type_column: str = "d.source_type"
+) -> str:
+    """Canonical reader ordering: quality tier, issuer tie-break, stable id.
+
+    Callers append their fact-id tie-break so this helper remains usable for
+    different fact tables.  Keeping the two policy components together avoids
+    a report surface silently elevating issuer origin above a higher-tier fact.
+    """
+    return f"{reader_tier_rank_sql(conn)} DESC, {issuer_origin_rank_sql(source_type_column)} DESC"
+
+
 def reader_tier_join_sql(
     conn: sqlite3.Connection,
     *,
@@ -1602,11 +1625,11 @@ def load_segment_series(
     # at import time — the writer module pulls in pydantic models we don't
     # otherwise need to evaluate just to load a series.
     from pipeline.segment_junction_writer import (
-        _LEGACY_METRIC_TO_DIM_TYPE,
-        _LEGACY_METRIC_TO_JUNCTION_METRIC,
+        LEGACY_METRIC_TO_DIM_TYPE,
+        LEGACY_METRIC_TO_JUNCTION_METRIC,
     )
 
-    dim_type_enum = _LEGACY_METRIC_TO_DIM_TYPE.get(metric)
+    dim_type_enum = LEGACY_METRIC_TO_DIM_TYPE.get(metric)
     if dim_type_enum is None:
         # Unknown legacy metric: fall through with the original metric
         # string so the junction loader can still match documents that
@@ -1616,7 +1639,7 @@ def load_segment_series(
         junction_metric = metric
     else:
         dim_type = dim_type_enum.value
-        junction_metric = _LEGACY_METRIC_TO_JUNCTION_METRIC.get(metric, metric)
+        junction_metric = LEGACY_METRIC_TO_JUNCTION_METRIC.get(metric, metric)
 
     return load_segment_junction_series(
         ticker,

@@ -151,6 +151,7 @@ class KpiFactPayloadV1(BaseModel):
     fiscal_period_type: str = Field(min_length=1, max_length=32)
     kpi_definition_id: int = Field(gt=0)
     value: str = Field(min_length=1)
+    currency: str | None = Field(default=None, min_length=1, max_length=8)
     unit: str = Field(min_length=1, max_length=64)
     source_doc_id: int = Field(gt=0)
     extracted_by: str | None = Field(default=None, min_length=1, max_length=256)
@@ -554,7 +555,7 @@ class LegacyFactEvidenceMatchLedger:
         fact_table: FactTable,
         fact_row_id: int,
     ) -> FinancialFactPayloadV1 | KpiFactPayloadV1:
-        columns = (
+        columns: tuple[str, ...] = (
             (
                 "id",
                 "ticker",
@@ -586,6 +587,14 @@ class LegacyFactEvidenceMatchLedger:
                 "formula_version",
             )
         )
+        if fact_table == "kpi_facts":
+            kpi_columns = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(kpi_facts)").fetchall()
+            }
+            if "currency" in kpi_columns:
+                currency_index = columns.index("unit")
+                columns = (*columns[:currency_index], "currency", *columns[currency_index:])
         row = self._conn.execute(
             f"SELECT {','.join(columns)} FROM {fact_table} WHERE id = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (fact_row_id,),
@@ -603,6 +612,8 @@ class LegacyFactEvidenceMatchLedger:
             key: (str(value) if key in {"period_end", "value"} else value)
             for key, value in values.items()
         }
+        if fact_table == "kpi_facts":
+            payload_values.setdefault("currency", None)
         loaded_fact_row_id = payload_values.pop("id")
         if not isinstance(loaded_fact_row_id, int):
             raise ValueError(f"{fact_table} row id must be an integer")

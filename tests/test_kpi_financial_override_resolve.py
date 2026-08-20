@@ -82,7 +82,8 @@ _SCHEMA_DDL = (
     CREATE TABLE kpi_definitions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ticker TEXT NOT NULL,
-        name TEXT NOT NULL
+        name TEXT NOT NULL,
+        unit TEXT NOT NULL DEFAULT 'actual'
     );
     CREATE TABLE kpi_facts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,7 +118,10 @@ def _seed(conn: sqlite3.Connection) -> None:
         "(1, 'GOOG', 'fmp', 'fmp_key_metrics', 'x', ?, '2026-01-01 00:00:00', 'ok', 1)",
         ("0" * 64,),
     )
-    conn.execute("INSERT INTO kpi_definitions (id, ticker, name) VALUES (1, 'GOOG', ?)", (_KPI,))
+    conn.execute(
+        "INSERT INTO kpi_definitions (id, ticker, name, unit) VALUES (1, 'GOOG', ?, 'percent')",
+        (_KPI,),
+    )
     # FMP's (wrong) values: GCP growth 75% for Q4, 70% for Q3.
     conn.executemany(
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "

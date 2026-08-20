@@ -18,13 +18,14 @@ import pytest
 from compute.metrics_engine.engine import ComputedValue
 from compute.metrics_engine.inputs import CanonicalConcept
 from compute.metrics_engine.io import (
-    _persist_attempt,  # pyright: ignore[reportPrivateUsage]
     compute_for_ticker,
+    derived_monetary_currency,
+    persist_attempt,
     resolve_classification,
 )
 from compute.metrics_engine.registry import REGISTRY, ReasonCode
 from models.companies import AccountingStandard, BusinessModelClass
-from models.facts import FactLocator, LocatorKind
+from models.facts import Currency, FactLocator, LocatorKind
 from sources.price import LivePrice
 
 
@@ -163,6 +164,44 @@ def _insert_fact(
     )
 
 
+def test_derived_currency_reads_only_exact_lineage_inputs(conn: sqlite3.Connection) -> None:
+    period_end = datetime(2026, 6, 30)
+    doc_id = _insert_doc(conn, "TEST", period_end)
+    for line_item in ("total_debt", "cash_and_equivalents", "short_term_investments"):
+        _insert_fact(
+            conn,
+            ticker="TEST",
+            period_end=period_end,
+            fpt="Q2",
+            line_item=line_item,
+            value="1",
+            source_doc_id=doc_id,
+        )
+    # Same document, deliberately incompatible, but not an input to net debt.
+    conn.execute(
+        "INSERT INTO financial_facts "
+        "(ticker,period_end,fiscal_period_type,line_item,value,currency,unit,source_doc_id) "
+        "VALUES ('TEST',?,'Q2','revenue','1','BRL','actual',?)",
+        (period_end, doc_id),
+    )
+    formula = REGISTRY[("net_debt_strict", 1)]
+    lineage: list[tuple[CanonicalConcept, datetime, int | None]] = [
+        (CanonicalConcept.TOTAL_DEBT, period_end, doc_id),
+        (CanonicalConcept.CASH_AND_EQUIVALENTS, period_end, doc_id),
+        (CanonicalConcept.SHORT_TERM_INVESTMENTS, period_end, doc_id),
+    ]
+    assert (
+        derived_monetary_currency(
+            conn,
+            formula,
+            lineage,
+            standard=AccountingStandard.US_GAAP,
+            live_price_currency=None,
+        )
+        is Currency.USD
+    )
+
+
 @pytest.mark.parametrize(
     ("source_types", "formula_key", "lineage", "expected_detail"),
     [
@@ -218,7 +257,7 @@ def test_cutover_defers_unsealed_derived_kpi_before_fact_insert(
     formula = REGISTRY[(formula_key, 1)]
 
     for _ in range(2):
-        _persist_attempt(
+        persist_attempt(
             conn,
             ticker="TEST",
             period_end=datetime(2026, 6, 30),
@@ -763,10 +802,15 @@ _VALUATION_FORMULA_KEYS = frozenset(
 
 
 def _stub_price_reader(
-    price: float, source_name: str = "stub"
+    price: float, source_name: str = "stub", currency: str | None = "USD"
 ) -> Callable[[Path, str], LivePrice | None]:
     def _reader(repo_root: Path, ticker: str) -> LivePrice | None:
-        return LivePrice(price=price, fetched_at=datetime.now(UTC), source_name=source_name)
+        return LivePrice(
+            price=price,
+            fetched_at=datetime.now(UTC),
+            source_name=source_name,
+            currency=currency,
+        )
 
     return _reader
 
@@ -785,6 +829,50 @@ def test_compute_for_ticker_valuation_only_attempts_latest_quarter(
         matches = [r for r in rows if r["formula_key"] == formula_key]
         assert len(matches) == 1, f"{formula_key}: expected exactly 1 attempt, got {len(matches)}"
         assert matches[0]["status"] == "ok"
+
+
+def test_currency_incompatible_live_price_blocks_ratio_valuation_formulas(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(
+        conn,
+        "TEST",
+        repo_root=Path("."),
+        price_reader=_stub_price_reader(50.0, currency="BRL"),
+    )
+    for formula_key in ("ps_ttm", "pb", "ev_sales"):
+        row = _latest_attempt(conn, "TEST", formula_key)
+        assert row["status"] == "not_computable"
+        assert row["reason_code"] == ReasonCode.MISSING_INPUT.value
+
+
+def test_currency_admission_precedes_idempotency_and_accounts_final_result(
+    conn: sqlite3.Connection,
+) -> None:
+    """A changed quote currency recomputes and persists the admitted outcome."""
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+
+    first = compute_for_ticker(
+        conn, "TEST", repo_root=Path("."), price_reader=_stub_price_reader(50.0, currency="USD")
+    )
+    assert first.computed_ok > 0
+
+    incompatible = compute_for_ticker(
+        conn, "TEST", repo_root=Path("."), price_reader=_stub_price_reader(50.0, currency="BRL")
+    )
+    assert incompatible.not_computable >= 3
+    for formula_key in ("ps_ttm", "pb", "ev_sales"):
+        assert _latest_attempt(conn, "TEST", formula_key)["status"] == "not_computable"
+
+    replay = compute_for_ticker(
+        conn, "TEST", repo_root=Path("."), price_reader=_stub_price_reader(50.0, currency="BRL")
+    )
+    assert replay.attempts_written == 0
+    assert replay.not_computable == 0
+    assert replay.skipped_unchanged == first.attempts_written
 
 
 def test_compute_for_ticker_pe_ttm_happy_path_value(conn: sqlite3.Connection) -> None:

@@ -54,7 +54,10 @@ _SCHEMA_DDL = (
         source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized', source_url TEXT,
         accession_number TEXT, filing_date TEXT
     );
-    CREATE TABLE kpi_definitions (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, name TEXT);
+    CREATE TABLE kpi_definitions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, name TEXT,
+        unit TEXT NOT NULL DEFAULT 'actual'
+    );
     CREATE TABLE kpi_facts (
         id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, period_end TIMESTAMP NOT NULL,
         fiscal_period_type TEXT NOT NULL, kpi_definition_id INTEGER NOT NULL, value NUMERIC NOT NULL,
@@ -80,7 +83,10 @@ def _seed(conn: sqlite3.Connection) -> None:
         "(1,'GOOG','fmp','fmp_key_metrics','x',?, '2026-01-01', 'ok', 1, 'fmp_normalized')",
         ("0" * 64,),
     )
-    conn.execute("INSERT INTO kpi_definitions (id, ticker, name) VALUES (1,'GOOG',?)", (_KPI,))
+    conn.execute(
+        "INSERT INTO kpi_definitions (id, ticker, name, unit) VALUES (1,'GOOG',?,'percent')",
+        (_KPI,),
+    )
     conn.execute(
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, value, "
         "unit, source_doc_id, confidence, extracted_by) VALUES "

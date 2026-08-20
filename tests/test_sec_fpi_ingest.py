@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from models.facts import Unit
+from models.facts import Currency, Unit
 from pipeline.sec_fpi_ingest import (
     LocatedFpiExhibit,
     extract_fpi_financial_facts_html,
@@ -86,7 +86,7 @@ def test_extract_fpi_financial_facts_html() -> None:
 def test_extract_fpi_kpis_narrative() -> None:
     html = """
     <p>
-      Total bookings in the second quarter of 2026 were $569.1 million, up 12% YoY.
+      All monetary amounts are in US dollars. Total bookings in the second quarter of 2026 were $569.1 million, up 12% YoY.
       Creative Subscriptions revenue was $398.4 million.
       Creative Subscriptions bookings were $410.2 million.
       Free cash flow margin was 10.8% for the quarter.
@@ -95,15 +95,36 @@ def test_extract_fpi_kpis_narrative() -> None:
     plain = strip_html(html)
     kpis = extract_fpi_kpis_narrative(html, plain, "WIX")
 
-    kpi_dict = {name: (val, unit) for name, val, unit, _ in kpis}
+    kpi_dict = {name: (val, unit, currency) for name, val, unit, currency, _ in kpis}
     assert "bookings" in kpi_dict
     assert kpi_dict["bookings"][0] == Decimal("569100000")
+    assert kpi_dict["bookings"][2] is Currency.USD
     assert "free_cash_flow_margin" in kpi_dict
     assert kpi_dict["free_cash_flow_margin"][0] == Decimal("10.8")
     assert "creative_subscriptions_revenue" in kpi_dict
     assert kpi_dict["creative_subscriptions_revenue"][0] == Decimal("398400000")
     assert "creative_subscriptions_bookings" in kpi_dict
     assert kpi_dict["creative_subscriptions_bookings"][0] == Decimal("410200000")
+
+
+def test_extract_fpi_financial_facts_uses_declared_dkk_and_skips_unknown_currency() -> None:
+    declared = (
+        "<h3>Income statement (in DKK millions)</h3><table>"
+        "<tr><td>Revenue</td><td>12</td></tr></table>"
+    )
+    facts = extract_fpi_financial_facts_html(declared, "NVO", datetime(2026, 6, 30), "Q2")
+    assert facts["revenue"][:2] == (Decimal("12000000"), "DKK")
+    unknown = "<table><tr><td>Revenue</td><td>$12</td></tr></table>"
+    assert extract_fpi_financial_facts_html(unknown, "NVO", datetime(2026, 6, 30), "Q2") == {}
+
+
+def test_extract_fpi_currency_is_local_to_the_matched_table() -> None:
+    html = """
+    <h3>Prior table (in USD millions)</h3><table><tr><td>Other</td><td>1</td></tr></table>
+    <h3>Current table (in DKK millions)</h3><table><tr><td>Revenue</td><td>12</td></tr></table>
+    """
+    facts = extract_fpi_financial_facts_html(html, "NVO", datetime(2026, 6, 30), "Q2")
+    assert facts["revenue"][:2] == (Decimal("12000000"), "DKK")
 
 
 def test_fetch_fpi_exhibit_image_only_guard() -> None:
@@ -164,9 +185,9 @@ def test_persist_fpi_facts_idempotency(migrated_db: Callable[..., Path], tmp_pat
         "revenue": (Decimal("563058000"), "USD", "Table: Revenue = 563,058"),
         "operating_income": (Decimal("55120000"), "USD", "Table: Operating income = 55,120"),
     }
-    kpis = [
-        ("bookings", Decimal("569100000"), Unit.ACTUAL, "Total bookings: $569.1M"),
-        ("free_cash_flow_margin", Decimal("10.8"), Unit.PERCENT, "FCF margin: 10.8%"),
+    kpis: list[tuple[str, Decimal, Unit, Currency | None, str]] = [
+        ("bookings", Decimal("569100000"), Unit.ACTUAL, Currency.USD, "Total bookings: $569.1M"),
+        ("free_cash_flow_margin", Decimal("10.8"), Unit.PERCENT, None, "FCF margin: 10.8%"),
     ]
 
     # First insertion

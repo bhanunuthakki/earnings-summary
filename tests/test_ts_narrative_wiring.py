@@ -66,7 +66,10 @@ def _create_minimal_schema(db_path: Path) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker TEXT NOT NULL,
                 period_end TEXT NOT NULL,
-                fiscal_period_type TEXT NOT NULL
+                fiscal_period_type TEXT NOT NULL,
+                source_doc_id INTEGER NOT NULL DEFAULT 1,
+                unit TEXT NOT NULL DEFAULT 'actual',
+                currency TEXT
             );
             CREATE TABLE segment_dimensions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +77,16 @@ def _create_minimal_schema(db_path: Path) -> None:
                 dim_type TEXT NOT NULL,
                 dim_name TEXT NOT NULL,
                 metric TEXT NOT NULL,
-                value NUMERIC NOT NULL
+                value NUMERIC NOT NULL,
+                unit TEXT
+            );
+            CREATE TABLE documents (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized',
+                fetched_at TEXT NOT NULL,
+                source_url TEXT
             );
             CREATE TABLE transcripts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +133,10 @@ def _create_minimal_schema(db_path: Path) -> None:
                 source_excerpt TEXT
             );
             """
+        )
+        conn.execute(
+            "INSERT INTO documents (id, ticker, source_type, fetched_at) "
+            "VALUES (1, 'TST', 'fmp', '2026-04-01')"
         )
         conn.commit()
     finally:
