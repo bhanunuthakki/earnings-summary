@@ -16,6 +16,7 @@ from operations.models import (
     OperationsRegistry,
     OperationsSnapshot,
     ScheduledTaskDefinition,
+    SchedulerObservation,
     ServiceObservation,
     ServiceRow,
     ServiceState,
@@ -289,6 +290,8 @@ def _source_label(source: str) -> str:
     if source.startswith("sqlite:"):
         return "SQLite " + source.removeprefix("sqlite:").replace("_", " ")
     normalized = source.replace("\\", "/").casefold()
+    if normalized.endswith("operations.runtime.pair.latest.json"):
+        return "Scheduler/service runtime pair receipt"
     if source.startswith("scheduler:") or normalized.endswith("scheduler.latest.json"):
         return "Scheduler cached receipt"
     if source.startswith("service:") or normalized.endswith("services.latest.json"):
@@ -309,6 +312,8 @@ def _detail(observation: ObservationEnvelope) -> str:
         )
     if observation.state == "stale":
         return "Evidence exists but is outside its declared freshness contract."
+    if observation.state == "unavailable":
+        return observation.detail or "The current runtime probe is unavailable."
     return "Evidence could not be validated against its declared contract."
 
 
@@ -352,6 +357,19 @@ def _unavailable(label: str, observed_at: datetime) -> EvidenceView:
         recorded_label="Evidence time unavailable",
         detail=f"{label} unavailable",
     )
+
+
+def _scheduler_task_evidence(observation: SchedulerObservation) -> EvidenceView:
+    if observation.state == "missing":
+        return EvidenceView(
+            state="Unavailable",
+            tone="warn",
+            label=_source_label(observation.evidence_source),
+            observed_label=_clock(observation.observed_at, prefix="Observed"),
+            recorded_label="Evidence time unavailable",
+            detail="Scheduler evidence unavailable",
+        )
+    return _evidence(observation)
 
 
 def _schedule_label(task: ScheduledTaskDefinition) -> str:
@@ -469,8 +487,18 @@ def _runtime_rows(
 def _service_evidence(observation: ServiceObservation, row: ServiceRow | None) -> EvidenceView:
     evidence = _evidence(observation)
     if observation.state != "current":
-        return evidence
-    state: ServiceState = row.state if row is not None else "Missing"
+        if row is None or row.state == "Missing":
+            return evidence
+        return evidence.model_copy(
+            update={
+                "state": "Unavailable",
+                "tone": "warn",
+                "detail": observation.detail or "Managed-service observation unavailable",
+            }
+        )
+    if row is None:
+        return _unavailable(_source_label(observation.evidence_source), observation.observed_at)
+    state: ServiceState = row.state
     return evidence.model_copy(update={"state": state, "tone": _service_tone(state)})
 
 
@@ -493,6 +521,7 @@ def build_operations_panel_view(
         steps = tuple(step for step in registry.job_steps if step.wrapper == task.wrapper)
         service_runtime_state: ServiceState | None
         service_runtime_tone: Tone | None
+        scheduler_row = scheduler_rows.get(task.task_name)
         if task.service_owned:
             declared_owner = "Managed service"
             runtime_owner = (
@@ -500,26 +529,67 @@ def build_operations_panel_view(
                 if capture_service is not None
                 else "Managed service · unavailable"
             )
-            scheduler_state = "N/A - service-owned"
-            service_row = service_rows.get(capture_service.name) if capture_service else None
-            service_runtime_state = service_row.state if service_row is not None else "Missing"
-            service_runtime_tone = _service_tone(service_runtime_state)
-            runtime_attention = snapshot.services.state != "current" or (
-                service_runtime_state != "Running"
+            scheduler_evidence_current = snapshot.scheduler.state == "current"
+            observed_scheduler_state = (
+                scheduler_row.state if scheduler_row is not None else "Missing"
             )
-            runtime = _evidence(snapshot.services)
+            if not scheduler_evidence_current:
+                scheduler_state = "Unavailable"
+            elif observed_scheduler_state == "Missing":
+                scheduler_state = "Absent (service-owned)"
+            else:
+                scheduler_state = f"{observed_scheduler_state} (forbidden for service-owned task)"
+            service_row = service_rows.get(capture_service.name) if capture_service else None
+            service_observation_current = snapshot.services.state == "current"
+            service_runtime_state = (
+                service_row.state
+                if service_observation_current and service_row is not None
+                else None
+            )
+            service_runtime_tone = (
+                _service_tone(service_runtime_state) if service_runtime_state is not None else None
+            )
+            runtime_attention = (
+                not scheduler_evidence_current
+                or not service_observation_current
+                or (service_runtime_state != "Running")
+                or (scheduler_row is not None and scheduler_row.expectation_match is False)
+            )
+            runtime = (
+                _service_evidence(snapshot.services, service_row)
+                if scheduler_evidence_current and not service_observation_current
+                else _evidence(snapshot.services)
+                if scheduler_evidence_current
+                else _scheduler_task_evidence(snapshot.scheduler)
+            )
         else:
             declared_owner = "Windows Task Scheduler"
             runtime_owner = f"Scheduled task · {task.task_name}"
-            scheduler_row = scheduler_rows.get(task.task_name)
-            scheduler_state = scheduler_row.state if scheduler_row is not None else "Missing"
+            scheduler_evidence_current = snapshot.scheduler.state == "current"
+            observed_scheduler_state = (
+                scheduler_row.state if scheduler_row is not None else "Missing"
+            )
+            if not scheduler_evidence_current:
+                scheduler_state = "Unavailable"
+            elif (
+                observed_scheduler_state == "Disabled"
+                and task.scheduler_expectation == "required_disabled"
+            ):
+                scheduler_state = "Disabled (expected)"
+            elif scheduler_row is not None and scheduler_row.expectation_match is False:
+                scheduler_state = (
+                    f"{observed_scheduler_state} (forbidden for {task.scheduler_expectation})"
+                )
+            else:
+                scheduler_state = observed_scheduler_state
             runtime_attention = snapshot.scheduler.state != "current" or scheduler_state not in {
                 "Ready",
                 "Running",
+                "Disabled (expected)",
             }
             service_runtime_state = None
             service_runtime_tone = None
-            runtime = _evidence(snapshot.scheduler)
+            runtime = _scheduler_task_evidence(snapshot.scheduler)
         step_views = tuple(
             StepView(
                 ordinal=step.ordinal,
@@ -579,6 +649,82 @@ def build_operations_panel_view(
                 steps=step_views,
                 attention=runtime_attention or receipt_attention,
                 attention_rank=attention_rank,
+            )
+        )
+    unexpected_rows = tuple(
+        row for row in snapshot.scheduler.values if row.registry_match == "unexpected"
+    )
+    scheduler_evidence = _evidence(snapshot.scheduler)
+    for row in unexpected_rows:
+        if snapshot.scheduler.state == "current":
+            scheduler_state = f"{row.state} (unexpected)"
+            runtime_owner = "Unexpected live Scheduler task"
+            unexpected_detail = (
+                f"Unexpected Scheduler task {row.task_name}: observed state {row.state}; "
+                "task is outside the declared operations registry."
+            )
+        else:
+            scheduler_state = f"{row.state} (historical)"
+            runtime_owner = "Historical Scheduler evidence"
+            chronology = snapshot.scheduler.detail or "No current Scheduler probe detail recorded."
+            unexpected_detail = (
+                f"Historical Scheduler task {row.task_name}: retained state {row.state}; "
+                f"current observation is {snapshot.scheduler.state}. {chronology}"
+            )
+        tasks.append(
+            TaskView(
+                task_name=row.task_name,
+                wrapper="unregistered_scheduler_task",
+                schedule_label="Observed outside registry",
+                service_owned=False,
+                declared_owner="Windows Task Scheduler",
+                runtime_owner=runtime_owner,
+                scheduler_state=scheduler_state,
+                service_runtime_state=None,
+                service_runtime_tone=None,
+                runtime=scheduler_evidence.model_copy(update={"detail": unexpected_detail}),
+                steps=(),
+                attention=True,
+                attention_rank=0,
+            )
+        )
+    unexpected_service_rows = tuple(
+        row for row in snapshot.services.values if row.registry_match == "unexpected"
+    )
+    service_evidence = _evidence(snapshot.services)
+    for row in unexpected_service_rows:
+        if snapshot.services.state == "current":
+            runtime_owner = "Unexpected live managed service"
+            service_state = row.state
+            service_tone = _service_tone(row.state)
+            detail = (
+                f"Unexpected managed service {row.name}: observed state {row.state}; "
+                "service is outside the declared operations registry."
+            )
+        else:
+            runtime_owner = "Historical managed-service evidence"
+            service_state = None
+            service_tone = None
+            detail = (
+                f"Historical managed service {row.name}: retained state {row.state}; "
+                f"current observation is {snapshot.services.state}. "
+                f"{snapshot.services.detail or 'No current service probe detail recorded.'}"
+            )
+        tasks.append(
+            TaskView(
+                task_name=row.name,
+                wrapper="unregistered_managed_service",
+                schedule_label="Observed outside registry",
+                service_owned=True,
+                declared_owner="Managed service registry",
+                runtime_owner=runtime_owner,
+                scheduler_state="Not a Scheduler task",
+                service_runtime_state=service_state,
+                service_runtime_tone=service_tone,
+                runtime=service_evidence.model_copy(update={"detail": detail}),
+                steps=(),
+                attention=True,
+                attention_rank=0,
             )
         )
     runtime_rows = _runtime_rows(registry, snapshot)
