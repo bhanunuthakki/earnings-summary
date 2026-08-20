@@ -512,6 +512,24 @@ def test_l2_l3_shell_composes_semantic_mounts_and_canonical_split_rails() -> Non
     assert "grid-template-columns: minmax(0, 1fr) var(--rail-lg);" in html
 
 
+def test_brief_library_filters_rebuild_tickers_and_expose_accessible_clear_action() -> None:
+    html = render_work_os_shell()
+
+    assert 'class="k-btn k-btn-quiet k-btn-sm"' in html
+    assert "data-clear-brief-filters" in html
+    assert 'aria-label="Clear Brief Library filters"' in html
+    assert "function workOsPopulateBriefTickerOptions" in html
+    assert "const compatibleCompanies = companies.filter(function (company)" in html
+    assert "const selectedTickerIsCompatible = Array.from(tickerFilter.options).some" in html
+    assert "if (!selectedTickerIsCompatible) tickerFilter.value = '';" in html
+    assert "roleFilter.addEventListener('change', function ()" in html
+    assert "workOsPopulateBriefTickerOptions(tickerFilter, roleFilter.value);" in html
+    assert (
+        "data-clear-brief-filters"
+        in html.split("No persisted research artifacts match these filters.", 1)[1]
+    )
+
+
 def test_l2_l3_mobile_uses_target_scoped_block_without_mutating_rail_signature() -> None:
     html = render_work_os_shell()
 

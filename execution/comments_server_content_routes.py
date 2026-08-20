@@ -421,6 +421,7 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         try:
             payload = build_brief_library(
                 repo_root,
+                conn=context.get_read_db(),
                 ticker=ticker,
                 coverage_role=coverage_role,
                 status=status,

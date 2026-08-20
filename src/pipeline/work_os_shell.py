@@ -857,6 +857,48 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
+  function workOsBriefFilterCompanies() {{
+    const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies)
+      ? workOsPortfolioHydration.companies : [];
+    const seenTickers = new Set();
+    return portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (item) {{
+      const ticker = String(item.ticker || '').toUpperCase();
+      if (!ticker || seenTickers.has(ticker)) return false;
+      seenTickers.add(ticker);
+      return true;
+    }}).map(function (item) {{
+      return {{ ticker: String(item.ticker).toUpperCase(), name: item.name || item.ticker, coverage_role: item.coverage_role || 'unknown' }};
+    }});
+  }}
+
+  function workOsPopulateBriefTickerOptions(tickerFilter, selectedRole) {{
+    if (!tickerFilter) return;
+    const previouslySelected = tickerFilter.value;
+    tickerFilter.replaceChildren(new Option('All companies', ''));
+    const companies = workOsBriefFilterCompanies();
+    const compatibleCompanies = companies.filter(function (company) {{
+      return !selectedRole || company.coverage_role === selectedRole;
+    }});
+    compatibleCompanies.forEach(function (company) {{
+      tickerFilter.add(new Option(company.ticker + ' · ' + company.name, company.ticker));
+    }});
+    const selectedTickerIsCompatible = Array.from(tickerFilter.options).some(function (option) {{
+      return option.value === previouslySelected;
+    }});
+    if (selectedTickerIsCompatible) tickerFilter.value = previouslySelected;
+    if (!selectedTickerIsCompatible) tickerFilter.value = '';
+  }}
+
+  function workOsClearBriefFilters() {{
+    const tickerFilter = document.getElementById('briefTickerFilter');
+    const roleFilter = document.getElementById('briefRoleFilter');
+    const kindFilter = document.getElementById('briefKindFilter');
+    if (roleFilter) roleFilter.value = '';
+    if (kindFilter) kindFilter.value = '';
+    workOsPopulateBriefTickerOptions(tickerFilter, '');
+    workOsRenderBriefLibrary();
+  }}
+
   async function workOsRenderBriefLibrary() {{
     const target = document.getElementById('workOsBriefLibrary');
     if (!target) return;
@@ -865,17 +907,17 @@ def _production_runtime(generated_at: datetime) -> str:
     const tickerFilter = document.getElementById('briefTickerFilter');
     const roleFilter = document.getElementById('briefRoleFilter');
     const kindFilter = document.getElementById('briefKindFilter');
-    const portfolioCompanies = workOsPortfolioHydration && Array.isArray(workOsPortfolioHydration.companies) ? workOsPortfolioHydration.companies : [];
+    if (tickerFilter) {{
+      workOsPopulateBriefTickerOptions(tickerFilter, roleFilter ? roleFilter.value : '');
+    }}
     if (tickerFilter && !tickerFilter.dataset.bound) {{
-      const seenTickers = new Set();
-      portfolioCompanies.concat(workOsResearchCompanies || []).filter(function (item) {{
-        if (!item.ticker || seenTickers.has(item.ticker)) return false;
-        seenTickers.add(item.ticker); return true;
-      }}).forEach(function (item) {{ tickerFilter.add(new Option(item.ticker + ' · ' + item.name, item.ticker)); }});
       tickerFilter.addEventListener('change', workOsRenderBriefLibrary);
       tickerFilter.dataset.bound = '1';
     }}
-    if (roleFilter && !roleFilter.dataset.bound) {{ roleFilter.addEventListener('change', workOsRenderBriefLibrary); roleFilter.dataset.bound = '1'; }}
+    if (roleFilter && !roleFilter.dataset.bound) {{ roleFilter.addEventListener('change', function () {{
+      workOsPopulateBriefTickerOptions(tickerFilter, roleFilter.value);
+      workOsRenderBriefLibrary();
+    }}); roleFilter.dataset.bound = '1'; }}
     if (kindFilter && !kindFilter.dataset.bound) {{ kindFilter.addEventListener('change', workOsRenderBriefLibrary); kindFilter.dataset.bound = '1'; }}
     const params = new URLSearchParams({{ limit: '100' }});
     if (tickerFilter && tickerFilter.value) params.set('ticker', tickerFilter.value);
@@ -909,10 +951,13 @@ def _production_runtime(generated_at: datetime) -> str:
         const statusClass = item.status === 'available' ? 'k-pill k-pill-ok' : 'k-pill k-pill-warn';
         return '<article class="k-card k-card-stack research-library-card" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(item.ticker) + '</span><span class="' + statusClass + '">' + escapeWorkOsHtml(item.status) + '</span></div><div><div class="k-card-meta">' + escapeWorkOsHtml(item.artifact_kind.replaceAll('_', ' ')) + '</div><h3 class="k-card-title">' + escapeWorkOsHtml(item.title) + '</h3><div class="k-card-meta">' + escapeWorkOsHtml(item.report_date) + ' · ' + escapeWorkOsHtml(item.coverage_role) + ' · ' + escapeWorkOsHtml(item.reader_mode) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-open-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">Read complete brief →</button></article>';
       }}).join('') : '';
-      target.innerHTML = readoutCards + briefCards || '<div class="k-well">No persisted research artifacts match these filters.</div>';
+      target.innerHTML = readoutCards + briefCards || '<div class="k-well"><p>No persisted research artifacts match these filters.</p><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-clear-brief-filters aria-label="Clear Brief Library filters">Clear filters</button></div>';
       target.querySelectorAll('[data-open-artifact]').forEach(function (button) {{
         const artifact = items.find(function (item) {{ return item.artifact_id === button.dataset.openArtifact; }});
         button.addEventListener('click', function () {{ openWorkOsBriefReader(artifact); }});
+      }});
+      target.querySelectorAll('[data-clear-brief-filters]').forEach(function (button) {{
+        button.addEventListener('click', workOsClearBriefFilters);
       }});
     }} catch (error) {{
       target.innerHTML = '<div class="k-well" role="alert">Brief Library inventory is temporarily unavailable.</div>';
