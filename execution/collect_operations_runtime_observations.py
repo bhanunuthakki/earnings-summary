@@ -66,6 +66,18 @@ PAIR_COMMITTED_MARKER_FILENAME = ".operations-runtime-receipts.pair.committed.js
 RetentionStatus = Literal["available", "absent", "rejected"]
 
 
+def _is_windows_platform() -> bool:
+    """Return whether the host provides the Windows runtime probes.
+
+    Keep this decision behind a narrow seam so tests can exercise the Windows
+    command paths without mutating the process-global ``os.name`` value.  The
+    latter also controls pathlib's concrete path class and makes a Linux test
+    process attempt to instantiate ``WindowsPath``.
+    """
+
+    return os.name == "nt"
+
+
 @dataclass(frozen=True, slots=True)
 class _RetainedSchedulerRead:
     receipt: SchedulerReceipt | None
@@ -152,7 +164,7 @@ def _service_state(output: str, returncode: int) -> ServiceRuntimeState:
 def collect_scheduler_tasks_from_system(timeout: float = 4.0) -> SchedulerProbe:
     """Read all Scheduler task states once, with no Scheduler mutation or task run."""
 
-    if os.name != "nt":
+    if not _is_windows_platform():
         return SchedulerProbe.unavailable("Windows Task Scheduler is unavailable on this platform")
 
     # Redirect stdout to a temporary file so a malformed or unexpectedly large
@@ -286,7 +298,7 @@ def collect_services_from_system(
 ) -> ServiceProbe:
     """Read declared Windows service states; no port, HTTP, or process inference occurs."""
 
-    if os.name != "nt":
+    if not _is_windows_platform():
         return ServiceProbe.unavailable("Windows service manager is unavailable on this platform")
 
     discovered_names = _enumerate_repo_service_names(registry, timeout)

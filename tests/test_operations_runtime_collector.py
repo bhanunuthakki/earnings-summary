@@ -572,7 +572,7 @@ def test_scheduler_overflow_is_an_unavailable_probe(monkeypatch: MonkeyPatch) ->
         stdout.write(b"x" * (MAX_SCHEDULER_OUTPUT_BYTES + 1))
         return Completed()
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", completed)
 
     probe = collector.collect_scheduler_tasks_from_system()
@@ -602,7 +602,7 @@ def test_scheduler_probe_preserves_canonical_unexpected_tasks_and_excludes_other
         )
         return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", completed)
 
     probe = collect_scheduler_tasks_from_system()
@@ -633,7 +633,7 @@ def test_scheduler_probe_rejects_malformed_csv_rows(
         cast(BinaryIO, kwargs["stdout"]).write(payload)
         return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", completed)
 
     probe = collect_scheduler_tasks_from_system()
@@ -652,7 +652,7 @@ def test_scheduler_probe_rejects_duplicate_canonical_task_identity(
         cast(BinaryIO, kwargs["stdout"]).write(payload)
         return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", completed)
 
     probe = collect_scheduler_tasks_from_system()
@@ -681,7 +681,7 @@ def test_service_missing_row_is_available_on_production_probe_path(
             stderr="",
         )
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", missing)
 
     probe = collector.collect_services_from_system(registry)
@@ -702,7 +702,7 @@ def test_service_namespace_nonzero_is_unavailable_without_declared_fallback(
         cast(BinaryIO, kwargs["stderr"]).write(b"access denied\n")
         return subprocess.CompletedProcess(args=command, returncode=5, stdout="", stderr="")
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", failed)
     probe = collector.collect_services_from_system(registry)
 
@@ -722,7 +722,7 @@ def test_service_namespace_output_is_bounded_before_materialization(
         cast(BinaryIO, kwargs["stdout"]).write(b"x" * (MAX_SCHEDULER_OUTPUT_BYTES + 1))
         return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", oversized)
     probe = collector.collect_services_from_system(registry)
 
@@ -743,7 +743,7 @@ def test_service_namespace_garbage_or_malformed_records_are_unavailable(
         cast(BinaryIO, kwargs["stdout"]).write(output.encode())
         return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", garbage)
     probe = collector.collect_services_from_system(registry)
 
@@ -808,7 +808,7 @@ def test_production_service_probe_discovers_bounded_es_namespace_extra(
             stderr="",
         )
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", query)
     probe = collector.collect_services_from_system(registry)
 
@@ -838,7 +838,7 @@ def test_service_launch_or_timeout_failure_is_unavailable(
     def failed(*args: object, **kwargs: object) -> object:
         raise failure
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", failed)
 
     probe = collector.collect_services_from_system(registry)
@@ -873,7 +873,7 @@ def test_mixed_service_missing_and_launch_failure_is_fail_closed(
             )
         raise subprocess.TimeoutExpired(cmd=["sc.exe", "query"], timeout=2)
 
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", mixed)
 
     probe = collector.collect_services_from_system(registry)
@@ -905,7 +905,7 @@ def test_service_unavailable_emit_retains_prior_success_in_v2_envelope(
         return registry
 
     monkeypatch.setattr(collector, "build_operations_registry", registry_for_root)
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", failed)
 
     assert collector.main(["--repo-root", str(tmp_path), "--emit-receipts"]) == 0
@@ -950,7 +950,7 @@ def test_collector_clock_rollback_drops_future_retained_v2_evidence(
 
     monkeypatch.setattr(collector, "build_operations_registry", registry_for_root)
     monkeypatch.setattr(collector, "datetime", FrozenDateTime)
-    monkeypatch.setattr(collector.os, "name", "nt")
+    monkeypatch.setattr(collector, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(collector.subprocess, "run", failed)
 
     assert collector.main(["--repo-root", str(tmp_path), "--emit-receipts"]) == 0
