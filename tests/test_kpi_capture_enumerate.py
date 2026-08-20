@@ -55,7 +55,7 @@ def _const_caller(response: str) -> Callable[..., object]:
 
 _ENUMERATE_JSON = (
     "[\n"
-    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "source_excerpt": "Revenue was $1.2 billion"},\n'
+    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "Revenue was $1.2 billion"},\n'
     '  {"label": "Net interest margin", "value": 17.8, "unit": "percent", "source_excerpt": "NIM of 17.8%"},\n'
     '  {"label": "Customers", "value": 118000000, "unit": "count", "source_excerpt": "118 million customers"}\n'
     "]"
@@ -111,9 +111,7 @@ def test_enumerate_rejects_non_array_but_blank_input_short_circuits(
 
 
 def test_enumerate_rejects_malformed_items(monkeypatch: pytest.MonkeyPatch) -> None:
-    bad = (
-        '[{"label": "Revenue", "value": 5, "unit": "actual"}, {"value": 9}, "junk", {"label": "X"}]'
-    )
+    bad = '[{"label": "Revenue", "value": 5, "unit": "actual", "currency": "USD"}, {"value": 9}, "junk", {"label": "X"}]'
     monkeypatch.setattr(kes, "call_llm_structured", _const_caller(bad))
     with pytest.raises(ValidationError, match="source_excerpt"):
         _llm_extract_enumerate("NU", "Q1 2025", "text")
@@ -126,10 +124,21 @@ def test_enumerate_rejects_malformed_items(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_build_capture_manifest_is_capture_origin_and_parses_rows() -> None:
     rows: list[dict[str, object]] = [
-        {"label": "Revenue", "value": 1200000000, "unit": "actual", "source_excerpt": "x"},
+        {
+            "label": "Revenue",
+            "value": 1200000000,
+            "unit": "actual",
+            "currency": "USD",
+            "source_excerpt": "x",
+        },
         {"label": "Bad value", "value": "N/A", "unit": "actual"},  # unparseable -> skipped
         {"label": "", "value": 5, "unit": "actual"},  # blank label -> skipped
-        {"label": "Take rate", "value": 1.5, "unit": "bogus"},  # bad unit -> ACTUAL fallback
+        {
+            "label": "Take rate",
+            "value": 1.5,
+            "unit": "bogus",
+            "currency": "USD",
+        },  # bad unit -> ACTUAL fallback
     ]
     m = _build_capture_manifest("NU", datetime(2025, 3, 31), FiscalPeriodType.Q1, 42, rows)
     assert m.origin is DefinitionOrigin.CAPTURE
@@ -147,7 +156,13 @@ def test_build_capture_manifest_verifies_excerpt_against_source_text() -> None:
     from models.facts import FactLocator, LegacyEscapeHatch, LocatorKind
 
     rows: list[dict[str, object]] = [
-        {"label": "GMV", "value": 1200000000, "unit": "actual", "source_excerpt": "GMV was $1.2B"},
+        {
+            "label": "GMV",
+            "value": 1200000000,
+            "unit": "actual",
+            "currency": "USD",
+            "source_excerpt": "GMV was $1.2B",
+        },
     ]
     no_text = _build_capture_manifest("NU", datetime(2025, 3, 31), FiscalPeriodType.Q1, 42, rows)
     assert isinstance(no_text.values[0].locator, LegacyEscapeHatch)
@@ -302,8 +317,8 @@ def test_capture_for_ticker_persists_capture_facts_and_canonicalizes(
 # ACTUAL magnitude cap must drop it while the sane Revenue fact lands.
 _ABSURD_ENUMERATE_JSON = (
     "[\n"
-    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "source_excerpt": "x"},\n'
-    '  {"label": "Treasury stock", "value": 4609988545000000, "unit": "actual", "source_excerpt": "y"}\n'
+    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "x"},\n'
+    '  {"label": "Treasury stock", "value": 4609988545000000, "unit": "actual", "currency": "USD", "source_excerpt": "y"}\n'
     "]"
 )
 

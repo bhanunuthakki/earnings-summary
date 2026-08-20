@@ -350,7 +350,7 @@ def _captured_kpi_ids(
         () if expected.currency is None else (expected.currency.value,)
     )
     rows = conn.execute(
-        "SELECT kf.id, kd.name FROM kpi_facts kf "
+        "SELECT kf.id, kd.name FROM kpi_facts kf "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
         "WHERE kf.ticker = ? AND kf.source_doc_id = ? AND kf.period_end = ? "
         f"AND kf.fiscal_period_type = ? AND kf.unit = ? AND {currency_sql} ORDER BY kf.id",
@@ -375,7 +375,7 @@ def _captured_segment_ids(
         () if expected.currency is None else (expected.currency.value,)
     )
     rows = conn.execute(
-        "SELECT sd.id FROM segment_periods sp "
+        "SELECT sd.id FROM segment_periods sp "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "JOIN segment_dimensions sd ON sd.period_id = sp.id "
         "WHERE sp.ticker = ? AND sp.source_doc_id = ? AND sp.period_end = ? "
         "AND sp.fiscal_period_type = ? AND sd.dim_type = ? AND sd.dim_name = ? "
@@ -456,7 +456,7 @@ def _downstream_kpi(
           AND kf.unit = ? AND {currency_sql}{as_of_sql}
         ORDER BY {reader_source_order_sql(conn)} ,
                  julianday(d.fetched_at) DESC, kf.id DESC
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (
             expected.ticker.upper(),
             _iso_date(expected.period_end),
@@ -473,7 +473,7 @@ def _downstream_kpi(
     if availability.status is not DownstreamAvailabilityStatus.NOT_AVAILABLE_AS_OF:
         return availability
     later = conn.execute(
-        "SELECT kd.name FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id=kf.kpi_definition_id "
+        "SELECT kd.name FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id=kf.kpi_definition_id "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "JOIN documents d ON d.id=kf.source_doc_id WHERE kf.ticker=? AND kf.period_end=? "
         "AND kf.fiscal_period_type=? AND kf.unit=? AND "
         f"{currency_sql}",
@@ -519,7 +519,7 @@ def _downstream_segment(
         ORDER BY {reader_source_order_sql(conn)} ,
                  julianday(d.fetched_at) DESC, sd.id DESC
         LIMIT 1
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (
             expected.ticker.upper(),
             _iso_date(expected.period_end),
@@ -538,7 +538,7 @@ def _downstream_segment(
     if availability.status is not DownstreamAvailabilityStatus.NOT_AVAILABLE_AS_OF:
         return availability
     later = conn.execute(
-        "SELECT 1 FROM segment_periods sp JOIN segment_dimensions sd ON sd.period_id=sp.id "
+        "SELECT 1 FROM segment_periods sp JOIN segment_dimensions sd ON sd.period_id=sp.id "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE sp.ticker=? AND sp.period_end=? AND sp.fiscal_period_type=? "
         "AND sd.dim_type=? AND sd.dim_name=? AND sd.metric=? "
         f"AND COALESCE(sd.unit,sp.unit)=? AND {currency_sql}",
