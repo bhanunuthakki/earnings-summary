@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from runtime.portfolio_tracker import RuntimeReceipt
 
-ObservationState = Literal["current", "missing", "stale", "invalid"]
+ObservationState = Literal["current", "missing", "stale", "invalid", "unavailable"]
 SchedulerTaskState = Literal["Ready", "Running", "Disabled", "Unknown", "Missing"]
 ServiceState = Literal["Running", "Stopped", "Paused", "Unknown", "Missing"]
 RegistryMatch = Literal["expected", "missing", "unexpected"]
+SchedulerExpectation = Literal["required_enabled", "required_disabled", "absent_service_owned"]
+ProbeAvailability = Literal["available", "unavailable"]
+RUNTIME_PAIR_RECEIPT_FILENAME = "operations.runtime.pair.latest.json"
 JobHealthStatus = Literal[
     "ok",
     "degraded_corpus",
@@ -43,6 +46,7 @@ class ScheduledTaskDefinition(FrozenModel):
     wrapper: str
     schedule: ScheduleDefinition
     service_owned: bool
+    scheduler_expectation: SchedulerExpectation
 
 
 class JobStepDefinition(FrozenModel):
@@ -125,6 +129,9 @@ class SchedulerTaskRow(FrozenModel):
     task_name: str
     state: SchedulerTaskState
     registry_match: RegistryMatch
+    scheduler_expectation: SchedulerExpectation | None = None
+    expectation_match: bool | None = None
+    attention_detail: str | None = None
 
 
 class SchedulerObservation(ObservationEnvelope):
@@ -139,6 +146,187 @@ class ServiceRow(FrozenModel):
 
 class ServiceObservation(ObservationEnvelope):
     values: tuple[ServiceRow, ...] = ()
+
+
+class SchedulerTaskReceipt(FrozenModel):
+    task_name: str
+    state: SchedulerTaskState
+
+
+class SchedulerReceipt(FrozenModel):
+    """One successful, bounded Scheduler probe retained as durable evidence."""
+
+    schema_version: Literal["1"] = "1"
+    observed_at: datetime
+    tasks: tuple[SchedulerTaskReceipt, ...]
+
+    @field_validator("observed_at")
+    @classmethod
+    def _aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("scheduler receipt observed_at must be aware")
+        return value
+
+
+class ServiceReceiptRow(FrozenModel):
+    name: str
+    state: ServiceState
+
+
+class ServiceReceipt(FrozenModel):
+    """One successful, bounded managed-service probe retained as evidence."""
+
+    schema_version: Literal["1"] = "1"
+    observed_at: datetime
+    services: tuple[ServiceReceiptRow, ...]
+
+    @field_validator("observed_at")
+    @classmethod
+    def _aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("service receipt observed_at must be aware")
+        return value
+
+
+class RuntimeProbeAttempt(FrozenModel):
+    """The current probe result, distinct from the evidence it may retain."""
+
+    schema_version: Literal["1"] = "1"
+    attempted_at: datetime
+    availability: ProbeAvailability
+    detail: str | None = None
+
+    @field_validator("attempted_at")
+    @classmethod
+    def _aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("probe attempt timestamps must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def _unavailability_has_reason(self) -> RuntimeProbeAttempt:
+        if self.availability == "unavailable" and not self.detail:
+            raise ValueError("unavailable probe attempts require a detail")
+        return self
+
+
+class SchedulerRuntimeReceipt(FrozenModel):
+    """Current Scheduler probe availability plus independently retained evidence."""
+
+    schema_version: Literal["2"] = "2"
+    probe_attempt: RuntimeProbeAttempt
+    last_successful: SchedulerReceipt | None = None
+
+    @classmethod
+    def success(
+        cls, *, observed_at: datetime, tasks: tuple[SchedulerTaskReceipt, ...]
+    ) -> SchedulerRuntimeReceipt:
+        return cls(
+            probe_attempt=RuntimeProbeAttempt(attempted_at=observed_at, availability="available"),
+            last_successful=SchedulerReceipt(observed_at=observed_at, tasks=tasks),
+        )
+
+    @model_validator(mode="after")
+    def _available_attempt_has_evidence(self) -> SchedulerRuntimeReceipt:
+        if self.probe_attempt.availability == "available":
+            if self.last_successful is None:
+                raise ValueError("available Scheduler probe attempts require successful evidence")
+            if self.last_successful.observed_at != self.probe_attempt.attempted_at:
+                raise ValueError(
+                    "available Scheduler probe evidence must match the probe attempt timestamp"
+                )
+        elif (
+            self.last_successful is not None
+            and self.last_successful.observed_at > self.probe_attempt.attempted_at
+        ):
+            raise ValueError(
+                "unavailable Scheduler probe evidence cannot be newer than the probe attempt"
+            )
+        return self
+
+
+class ServiceRuntimeReceipt(FrozenModel):
+    """Current service probe availability plus independently retained evidence."""
+
+    schema_version: Literal["2"] = "2"
+    probe_attempt: RuntimeProbeAttempt
+    last_successful: ServiceReceipt | None = None
+
+    @classmethod
+    def success(
+        cls, *, observed_at: datetime, services: tuple[ServiceReceiptRow, ...]
+    ) -> ServiceRuntimeReceipt:
+        return cls(
+            probe_attempt=RuntimeProbeAttempt(attempted_at=observed_at, availability="available"),
+            last_successful=ServiceReceipt(observed_at=observed_at, services=services),
+        )
+
+    @model_validator(mode="after")
+    def _available_attempt_has_evidence(self) -> ServiceRuntimeReceipt:
+        if self.probe_attempt.availability == "available":
+            if self.last_successful is None:
+                raise ValueError("available service probe attempts require successful evidence")
+            if self.last_successful.observed_at != self.probe_attempt.attempted_at:
+                raise ValueError(
+                    "available service probe evidence must match the probe attempt timestamp"
+                )
+        elif (
+            self.last_successful is not None
+            and self.last_successful.observed_at > self.probe_attempt.attempted_at
+        ):
+            raise ValueError(
+                "unavailable service probe evidence cannot be newer than the probe attempt"
+            )
+        return self
+
+
+class RuntimeReceiptPair(FrozenModel):
+    """One atomically published Scheduler/service evidence generation."""
+
+    schema_version: Literal["1"] = "1"
+    generation: str = Field(min_length=1, max_length=128)
+    scheduler: SchedulerRuntimeReceipt
+    services: ServiceRuntimeReceipt
+
+
+class SchedulerRuntimeDomainSummary(FrozenModel):
+    """Summary counts whose keys can only be Scheduler task states."""
+
+    state: Literal["current", "unavailable"]
+    counts: dict[SchedulerTaskState, Annotated[int, Field(ge=0)]] = Field(
+        default_factory=lambda: dict[SchedulerTaskState, int]()
+    )
+
+
+class ServiceRuntimeDomainSummary(FrozenModel):
+    """Summary counts whose keys can only be managed-service states."""
+
+    state: Literal["current", "unavailable"]
+    counts: dict[ServiceState, Annotated[int, Field(ge=0)]] = Field(
+        default_factory=lambda: dict[ServiceState, int]()
+    )
+
+
+class RecurringCollectionDisposition(FrozenModel):
+    state: Literal["activation_required"]
+    detail: str
+
+
+class RuntimeCollectionSummary(FrozenModel):
+    """Schema-validated CLI output; it does not claim the collector is scheduled."""
+
+    status: Literal["observed"]
+    observed_at: datetime
+    scheduler: SchedulerRuntimeDomainSummary
+    services: ServiceRuntimeDomainSummary
+    recurring_collection: RecurringCollectionDisposition
+
+    @field_validator("observed_at")
+    @classmethod
+    def _aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("summary observed_at must be timezone-aware")
+        return value
 
 
 class JobHealthRow(FrozenModel):

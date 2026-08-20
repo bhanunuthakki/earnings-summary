@@ -6,9 +6,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from operations.models import (
+    RUNTIME_PAIR_RECEIPT_FILENAME,
     DatabaseIdentityObservation,
     DatabaseIdentityRow,
     DatabaseRunsObservation,
@@ -24,13 +25,20 @@ from operations.models import (
     OperationsRegistry,
     OperationsSnapshot,
     PortfolioTrackerRuntimeObservation,
+    RuntimeProbeAttempt,
+    RuntimeReceiptPair,
+    SchedulerExpectation,
     SchedulerObservation,
+    SchedulerReceipt,
+    SchedulerRuntimeReceipt,
     SchedulerTaskRow,
     SchedulerTaskState,
     SchemaRevisionObservation,
     SchemaRevisionRow,
     ServiceObservation,
+    ServiceReceipt,
     ServiceRow,
+    ServiceRuntimeReceipt,
     ServiceState,
     SourceCallRow,
     SourceCallsObservation,
@@ -57,46 +65,6 @@ class _ReceiptError(ValueError):
     pass
 
 
-class _SchedulerTaskReceipt(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    task_name: str
-    state: Literal["Ready", "Running", "Disabled", "Unknown"]
-
-
-class _SchedulerReceipt(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal["1"]
-    observed_at: datetime
-    tasks: tuple[_SchedulerTaskReceipt, ...]
-
-    @field_validator("observed_at")
-    @classmethod
-    def _aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None:
-            raise ValueError("scheduler receipt observed_at must be aware")
-        return value
-
-
-class _ServiceReceiptRow(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    name: str
-    state: Literal["Running", "Stopped", "Paused", "Unknown"]
-
-
-class _ServiceReceipt(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal["1"]
-    observed_at: datetime
-    services: tuple[_ServiceReceiptRow, ...]
-
-    @field_validator("observed_at")
-    @classmethod
-    def _aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None:
-            raise ValueError("service receipt observed_at must be aware")
-        return value
-
-
 def _read_receipt(path: Path, model: type[_T]) -> _T:
     """Read one immutable cached receipt through a shared byte-bounded boundary."""
 
@@ -111,6 +79,43 @@ def _read_receipt(path: Path, model: type[_T]) -> _T:
         return model.model_validate_json(payload)
     except ValidationError as exc:
         raise _ReceiptError("receipt schema validation failed") from exc
+
+
+def _read_runtime_receipt(
+    path: Path, kind: Literal["scheduler", "service"]
+) -> tuple[RuntimeProbeAttempt | None, SchedulerReceipt | ServiceReceipt | None]:
+    """Accept historical v1 evidence and the v2 probe-attempt envelope."""
+
+    try:
+        with path.open("rb") as handle:
+            payload = handle.read(_MAX_RECEIPT_BYTES + 1)
+    except OSError as exc:
+        raise _ReceiptError(type(exc).__name__) from exc
+    if len(payload) > _MAX_RECEIPT_BYTES:
+        raise _ReceiptError("receipt exceeds 64 KiB")
+    if path.name == RUNTIME_PAIR_RECEIPT_FILENAME:
+        try:
+            pair = RuntimeReceiptPair.model_validate_json(payload)
+        except ValidationError as exc:
+            raise _ReceiptError("receipt schema validation failed") from exc
+        if kind == "scheduler":
+            return pair.scheduler.probe_attempt, pair.scheduler.last_successful
+        return pair.services.probe_attempt, pair.services.last_successful
+    adapter: (
+        TypeAdapter[SchedulerReceipt | SchedulerRuntimeReceipt]
+        | TypeAdapter[ServiceReceipt | ServiceRuntimeReceipt]
+    )
+    if kind == "scheduler":
+        adapter = TypeAdapter(SchedulerReceipt | SchedulerRuntimeReceipt)
+    else:
+        adapter = TypeAdapter(ServiceReceipt | ServiceRuntimeReceipt)
+    try:
+        parsed = adapter.validate_json(payload)
+    except ValidationError as exc:
+        raise _ReceiptError("receipt schema validation failed") from exc
+    if isinstance(parsed, (SchedulerRuntimeReceipt, ServiceRuntimeReceipt)):
+        return parsed.probe_attempt, parsed.last_successful
+    return None, parsed
 
 
 def _metadata_tables(conn: sqlite3.Connection) -> tuple[set[str] | None, str | None]:
@@ -215,84 +220,125 @@ def _runtime_state(
     observed_at: datetime,
     expected: tuple[str, ...],
     kind: Literal["scheduler", "service"],
+    scheduler_expectations: dict[str, SchedulerExpectation] | None = None,
+    receipt_override: SchedulerRuntimeReceipt | ServiceRuntimeReceipt | None = None,
+    receipt_error: str | None = None,
 ) -> SchedulerObservation | ServiceObservation:
     source = f"{kind}:cached_receipt"
-    if receipt_path is None:
+
+    def missing_values() -> tuple[SchedulerTaskRow, ...] | tuple[ServiceRow, ...]:
+        if kind == "scheduler":
+            return tuple(
+                SchedulerTaskRow(
+                    task_name=name,
+                    state="Missing",
+                    registry_match="missing",
+                    scheduler_expectation=(scheduler_expectations or {}).get(name.casefold()),
+                )
+                for name in expected
+            )
+        return tuple(
+            ServiceRow(name=name, state="Missing", registry_match="missing") for name in expected
+        )
+
+    if receipt_error is not None:
+        observation_type = SchedulerObservation if kind == "scheduler" else ServiceObservation
+        return observation_type(
+            state="invalid",
+            observed_at=observed_at,
+            evidence_source=str(receipt_path),
+            detail=receipt_error,
+        )
+    if receipt_override is not None:
+        if kind == "scheduler":
+            runtime_receipt = cast(SchedulerRuntimeReceipt, receipt_override)
+            probe_attempt = runtime_receipt.probe_attempt
+            receipt: SchedulerReceipt | ServiceReceipt | None = runtime_receipt.last_successful
+        else:
+            runtime_receipt = cast(ServiceRuntimeReceipt, receipt_override)
+            probe_attempt = runtime_receipt.probe_attempt
+            receipt = runtime_receipt.last_successful
+    elif receipt_path is None:
         if kind == "scheduler":
             return SchedulerObservation(
                 state="missing",
                 observed_at=observed_at,
                 evidence_source=source,
-                values=tuple(
-                    SchedulerTaskRow(task_name=name, state="Missing", registry_match="missing")
-                    for name in expected
-                ),
+                values=cast(tuple[SchedulerTaskRow, ...], missing_values()),
                 detail="no typed scheduler receipt supplied",
             )
         return ServiceObservation(
             state="missing",
             observed_at=observed_at,
             evidence_source=source,
-            values=tuple(
-                ServiceRow(name=name, state="Missing", registry_match="missing")
-                for name in expected
-            ),
+            values=cast(tuple[ServiceRow, ...], missing_values()),
             detail="no typed service receipt supplied",
         )
-    try:
-        receipt_stat = receipt_path.lstat()
-    except FileNotFoundError:
-        if kind == "scheduler":
-            return SchedulerObservation(
+    else:
+        try:
+            receipt_stat = receipt_path.lstat()
+        except FileNotFoundError:
+            if kind == "scheduler":
+                return SchedulerObservation(
+                    state="missing",
+                    observed_at=observed_at,
+                    evidence_source=str(receipt_path),
+                    values=cast(tuple[SchedulerTaskRow, ...], missing_values()),
+                    detail="typed scheduler receipt is absent",
+                )
+            return ServiceObservation(
                 state="missing",
                 observed_at=observed_at,
                 evidence_source=str(receipt_path),
-                values=tuple(
-                    SchedulerTaskRow(task_name=name, state="Missing", registry_match="missing")
-                    for name in expected
-                ),
-                detail="typed scheduler receipt is absent",
+                values=cast(tuple[ServiceRow, ...], missing_values()),
+                detail="typed service receipt is absent",
             )
-        return ServiceObservation(
-            state="missing",
-            observed_at=observed_at,
-            evidence_source=str(receipt_path),
-            values=tuple(
-                ServiceRow(name=name, state="Missing", registry_match="missing")
-                for name in expected
-            ),
-            detail="typed service receipt is absent",
-        )
-    except OSError as exc:
-        observation_type = SchedulerObservation if kind == "scheduler" else ServiceObservation
-        return observation_type(
-            state="invalid",
-            observed_at=observed_at,
-            evidence_source=str(receipt_path),
-            detail=f"receipt metadata read failed: {type(exc).__name__}",
-        )
-    if not stat.S_ISREG(receipt_stat.st_mode):
-        observation_type = SchedulerObservation if kind == "scheduler" else ServiceObservation
-        return observation_type(
-            state="invalid",
-            observed_at=observed_at,
-            evidence_source=str(receipt_path),
-            detail="receipt path is not a regular file",
-        )
+        except OSError as exc:
+            observation_type = SchedulerObservation if kind == "scheduler" else ServiceObservation
+            return observation_type(
+                state="invalid",
+                observed_at=observed_at,
+                evidence_source=str(receipt_path),
+                detail=f"receipt metadata read failed: {type(exc).__name__}",
+            )
+        if not stat.S_ISREG(receipt_stat.st_mode):
+            observation_type = SchedulerObservation if kind == "scheduler" else ServiceObservation
+            return observation_type(
+                state="invalid",
+                observed_at=observed_at,
+                evidence_source=str(receipt_path),
+                detail="receipt path is not a regular file",
+            )
+        try:
+            probe_attempt, receipt = _read_runtime_receipt(receipt_path, kind)
+        except _ReceiptError as exc:
+            observation_type = SchedulerObservation if kind == "scheduler" else ServiceObservation
+            return observation_type(
+                state="invalid",
+                observed_at=observed_at,
+                evidence_source=str(receipt_path),
+                detail=str(exc),
+            )
+
     try:
-        if kind == "scheduler":
-            receipt = _read_receipt(receipt_path, _SchedulerReceipt)
-            recorded_at = receipt.observed_at
-            supplied = [(row.task_name, row.state) for row in receipt.tasks]
+        if receipt is None:
+            supplied: list[tuple[str, SchedulerTaskState | ServiceState]] = []
+            recorded_at: datetime | None = None
+        elif kind == "scheduler":
+            scheduler_receipt = cast(SchedulerReceipt, receipt)
+            supplied = [(row.task_name, row.state) for row in scheduler_receipt.tasks]
+            recorded_at = scheduler_receipt.observed_at
         else:
-            service_receipt = _read_receipt(receipt_path, _ServiceReceipt)
-            recorded_at = service_receipt.observed_at
+            service_receipt = cast(ServiceReceipt, receipt)
             supplied = [(row.name, row.state) for row in service_receipt.services]
+            recorded_at = service_receipt.observed_at
         names = [name.casefold() for name, _state in supplied]
         if len(names) != len(set(names)):
             raise _ReceiptError(f"duplicate {kind} identities")
-        if recorded_at > observed_at:
+        if recorded_at is not None and recorded_at > observed_at:
             raise _ReceiptError(f"future {kind} receipt clock")
+        if probe_attempt is not None and probe_attempt.attempted_at > observed_at:
+            raise _ReceiptError(f"future {kind} probe clock")
     except _ReceiptError as exc:
         observation_type = SchedulerObservation if kind == "scheduler" else ServiceObservation
         return observation_type(
@@ -306,27 +352,48 @@ def _runtime_state(
     supplied_by_key = {name.casefold(): (name, state) for name, state in supplied}
     gaps = set(expected_by_key) - set(supplied_by_key)
     extras = set(supplied_by_key) - set(expected_by_key)
-    age_stale = observed_at - recorded_at > _RUNTIME_RECEIPT_TTL
-    state = "invalid" if gaps or extras else "stale" if age_stale else "current"
-    detail = (
-        f"missing={len(gaps)} unexpected={len(extras)}"
-        if gaps or extras
-        else "cached runtime receipt is older than 15 minutes"
-        if age_stale
-        else None
-    )
+    age_stale = recorded_at is not None and observed_at - recorded_at > _RUNTIME_RECEIPT_TTL
+    state = "stale" if age_stale else "current"
+    detail_parts: list[str] = []
+    if gaps or extras:
+        detail_parts.append(f"missing={len(gaps)} unexpected={len(extras)}")
+    if age_stale:
+        detail_parts.append("cached runtime receipt is older than 15 minutes")
+    detail = "; ".join(detail_parts) or None
+    if age_stale and recorded_at is not None:
+        detail = f"{detail}; retained successful evidence at {recorded_at.isoformat()}"
     if kind == "scheduler":
-        values = [
-            SchedulerTaskRow(
-                task_name=expected_by_key[key],
-                state=cast(
-                    SchedulerTaskState,
-                    supplied_by_key[key][1] if key in supplied_by_key else "Missing",
-                ),
-                registry_match="expected" if key in supplied_by_key else "missing",
+        values: list[SchedulerTaskRow] = []
+        policy_violations: list[str] = []
+        for key, name in expected_by_key.items():
+            task_state = cast(
+                SchedulerTaskState,
+                supplied_by_key[key][1] if key in supplied_by_key else "Missing",
             )
-            for key in expected_by_key
-        ]
+            expectation = (scheduler_expectations or {}).get(key)
+            expectation_match = (
+                task_state in {"Ready", "Running"}
+                if expectation == "required_enabled"
+                else task_state == "Disabled"
+                if expectation == "required_disabled"
+                else task_state == "Missing"
+                if expectation == "absent_service_owned"
+                else None
+            )
+            attention_detail = None
+            if expectation_match is False:
+                attention_detail = f"Scheduler state {task_state} violates {expectation}"
+                policy_violations.append(name)
+            values.append(
+                SchedulerTaskRow(
+                    task_name=name,
+                    state=task_state,
+                    registry_match="expected" if key in supplied_by_key else "missing",
+                    scheduler_expectation=expectation,
+                    expectation_match=expectation_match,
+                    attention_detail=attention_detail,
+                )
+            )
         values.extend(
             SchedulerTaskRow(
                 task_name=supplied_by_key[key][0],
@@ -335,11 +402,24 @@ def _runtime_state(
             )
             for key in sorted(extras)
         )
+        if policy_violations:
+            policy_detail = f"scheduler expectation violations={len(policy_violations)}"
+            detail = f"{detail}; {policy_detail}" if detail else policy_detail
+        if probe_attempt is not None and probe_attempt.availability == "unavailable":
+            state = "unavailable"
+            retained = (
+                f"; retained successful evidence at {recorded_at.isoformat()}"
+                if recorded_at is not None
+                else ""
+            )
+            detail = f"{probe_attempt.detail}{retained}"
         return SchedulerObservation(
             state=state,
             observed_at=observed_at,
             evidence_source=str(receipt_path),
-            evidence_recorded_at=recorded_at,
+            evidence_recorded_at=(
+                probe_attempt.attempted_at if probe_attempt is not None else recorded_at
+            ),
             values=tuple(values),
             detail=detail,
         )
@@ -362,11 +442,21 @@ def _runtime_state(
         )
         for key in sorted(extras)
     )
+    if probe_attempt is not None and probe_attempt.availability == "unavailable":
+        state = "unavailable"
+        retained = (
+            f"; retained successful evidence at {recorded_at.isoformat()}"
+            if recorded_at is not None
+            else ""
+        )
+        detail = f"{probe_attempt.detail}{retained}"
     return ServiceObservation(
         state=state,
         observed_at=observed_at,
         evidence_source=str(receipt_path),
-        evidence_recorded_at=recorded_at,
+        evidence_recorded_at=(
+            probe_attempt.attempted_at if probe_attempt is not None else recorded_at
+        ),
         values=tuple(service_values),
         detail=detail,
     )
@@ -850,17 +940,39 @@ def collect_operations_snapshot(
     runs, sources, llm, backlog, circuit = _database_observations(
         conn, tables, registry, observed_at, metadata_error
     )
+    pair_base = scheduler_receipt_path or service_receipt_path
+    pair_path = (
+        pair_base.with_name(RUNTIME_PAIR_RECEIPT_FILENAME) if pair_base is not None else None
+    )
+    pair_available = pair_path is not None and pair_path.exists()
+    pair_receipt: RuntimeReceiptPair | None = None
+    pair_error: str | None = None
+    if pair_available and pair_path is not None:
+        try:
+            pair_receipt = _read_receipt(pair_path, RuntimeReceiptPair)
+        except _ReceiptError as exc:
+            pair_error = str(exc)
+    scheduler_source = pair_path if pair_available else scheduler_receipt_path
+    service_source = pair_path if pair_available else service_receipt_path
     scheduler = _runtime_state(
-        receipt_path=scheduler_receipt_path,
+        receipt_path=scheduler_source,
         observed_at=observed_at,
         expected=tuple(task.task_name for task in registry.scheduled_tasks),
         kind="scheduler",
+        scheduler_expectations={
+            task.task_name.casefold(): task.scheduler_expectation
+            for task in registry.scheduled_tasks
+        },
+        receipt_override=pair_receipt.scheduler if pair_receipt is not None else None,
+        receipt_error=pair_error,
     )
     services = _runtime_state(
-        receipt_path=service_receipt_path,
+        receipt_path=service_source,
         observed_at=observed_at,
         expected=tuple(service.name for service in registry.services),
         kind="service",
+        receipt_override=pair_receipt.services if pair_receipt is not None else None,
+        receipt_error=pair_error,
     )
     return OperationsSnapshot(
         observed_at=observed_at,

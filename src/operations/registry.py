@@ -31,7 +31,7 @@ from pipeline.source_policy import (
 )
 from runtime.job_runtime import effective_scheduler_write_sets
 from runtime.service_registry import managed_services
-from scheduler_manifest import SERVICE_OWNED_TASKS, load_manifest
+from scheduler_manifest import SERVICE_OWNED_TASKS, extract_xml_metadata, load_manifest
 from schema_compat import expected_head
 
 _RUN_PYTHON = re.compile(
@@ -112,6 +112,13 @@ def build_operations_registry(repo_root: Path) -> OperationsRegistry:
                 months=task.schedule.months,
             ),
             service_owned=task.task_name.casefold() in SERVICE_OWNED_TASKS,
+            scheduler_expectation=(
+                "absent_service_owned"
+                if task.task_name.casefold() in SERVICE_OWNED_TASKS
+                else "required_enabled"
+                if extract_xml_metadata(root / "cron" / task.xml).enabled
+                else "required_disabled"
+            ),
         )
         for task in manifest.tasks
     )
