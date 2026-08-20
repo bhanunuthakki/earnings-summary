@@ -660,6 +660,10 @@ def _browser_canary_findings(
               }
             }
             if (role === 'overlay') {
+              if (rect.left < 0 || rect.right > window.innerWidth ||
+                  rect.top < 0 || rect.bottom > window.innerHeight) {
+                findings.push({kind: "geometry", actual: `overlay[${index}] clipped by viewport`});
+              }
               const centerX = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2));
               const centerY = Math.min(window.innerHeight - 1, Math.max(0, rect.top + rect.height / 2));
               const hit = document.elementFromPoint(centerX, centerY);

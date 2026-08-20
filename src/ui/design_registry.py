@@ -38,7 +38,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.7.0"
+REGISTRY_VERSION = "1.8.0"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -948,9 +948,9 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/operations_styles.py": "74b499524634752191345da39ba30ec8eda4eac95f17030063eb1111dc46af68",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "0f48dcb63f566c7f9366a7b40a3d25beb52642f892b35f5bf2c6edebe79c9d64",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "bc6ab81e1e1f485adc04076ca1cb9b5f9dd957656dee36edbda3052c2e13c58b",  # pragma: allowlist secret
-        "pipeline/work_os_styles.py": "4ca37008fd83b862c4342fe9fb64d2f33798ebc9d529894659904e3824926454",  # pragma: allowlist secret
+        "pipeline/work_os_styles.py": "5ccbc29c5fb49d25ebb4199c157b9353c8ec17094508b9254cb39154206e35e0",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "336342e7b5aca1deb2a8bd6fba06d1ee38b309469b69ec367a143e52978c65e6",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "bd80802a6f4b4cb7537c6f356e0b221ba4a3a48f62d92f95a58c0ab0ba4d4056",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
         "ui/controls.py": "b9a28ce4ff2f768da335ef8040d3b70a0bc32524c3cb5e3371301135cbd849eb",  # pragma: allowlist secret
         "ui/living_grid.py": "4ee064ab577f8a28166df930322f9b8ebee59fd675de2eef1fdb9c158b30b6b4",  # pragma: allowlist secret
@@ -990,13 +990,13 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "b23e8cbe7a9989b544ce86a6bf92a9ae15d978be2d1dc3a5873218c55dae50f0",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "3021693766b377f955a2ca46d1235ddd587f0bfceb703bdffceb0af9b11683ae",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "c823aec34a4603c39f5bb4a710070b1998f47fb96408f3473eca15528a389e4b",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret
         "report/renderers/workspace_sections/company.py": "a2a7e88bb845c9eafa39e7673ac009ee3220e068430e91dc0160c3ef62b53551",  # pragma: allowlist secret
         "report/renderers/workspace_sections/thesis_risk.py": "ea6efda97e1eba69cdeb02e03744784f89ff7e606dcb86ccddceb1d4d12c0fea",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "eb18fdf7ecb4763bd9d13d9899a126c2a7ba46e1a69496c3ff6c870aab132311",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "e41562deaf855abbcb1f9218007ea7786a9ac08b936694f10ace1a786607be60",  # pragma: allowlist secret
         "ui/cite_marks.py": "3f76335ae581654995341743785185a7c317ac131a9c2e95182775ba1c4a6a7d",  # pragma: allowlist secret
         "ui/controls.py": "e4480459ae842f18982fc17967c6c6673a87588887097786508ce94f17e2483d",  # pragma: allowlist secret
         "viewspec/render.py": "7c533b52604f1cd0ad7564644dbeee92631041a047434299cc88fcc32fbf7e74",  # pragma: allowlist secret

@@ -140,7 +140,7 @@ def test_portfolio_group_map_held() -> None:
     got = _group_map(_make_spec(held=True), WorkspaceP3Panels.empty())
     assert got == [
         ("overview", "Overview & Moat", ["company", "synthesis", "exec_comp"]),
-        ("quarter", "Quarter & Guidance", ["earnings", "saydo", "news"]),
+        ("quarter", "Quarter & Guidance", ["earnings", "news", "saydo"]),
         ("financials", "Financials & DCF", ["financials"]),
         ("thesis-risk", "Thesis & Risk", ["thesis", "bear", "position"]),
         ("valuation-comps", "Valuation & Comps", ["valuation", "comps"]),
@@ -153,7 +153,7 @@ def test_evaluation_group_map_uses_the_same_brief_canvas() -> None:
     got = _group_map(_make_spec(flavor=ReportFlavor.EVALUATION), WorkspaceP3Panels.empty())
     assert got == [
         ("overview", "Overview & Moat", ["company", "synthesis", "exec_comp"]),
-        ("quarter", "Quarter & Guidance", ["earnings", "saydo", "news"]),
+        ("quarter", "Quarter & Guidance", ["earnings", "news", "saydo"]),
         ("financials", "Financials & DCF", ["financials"]),
         ("thesis-risk", "Thesis & Risk", ["thesis", "bear"]),
         ("valuation-comps", "Valuation & Comps", ["valuation", "comps"]),

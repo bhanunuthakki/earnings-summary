@@ -1059,7 +1059,10 @@ def _production_runtime(generated_at: datetime) -> str:
     const relationshipNode = document.getElementById('workOsBriefDecisionRelationship');
     if (relationshipNode) {{
       relationshipNode.textContent = relationship.replaceAll('_', ' ').toUpperCase() + (freshness ? ' · ' + freshness : '');
-      relationshipNode.className = relationship === 'agree' ? 'k-pill k-pill-ok' : relationship === 'conflict' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn';
+      relationshipNode.className = 'k-pill';
+      relationshipNode.classList.toggle('k-pill-ok', relationship === 'agree');
+      relationshipNode.classList.toggle('k-pill-bad', relationship === 'conflict');
+      relationshipNode.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
     }}
   }}
 
