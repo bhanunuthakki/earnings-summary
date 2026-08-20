@@ -117,13 +117,13 @@ def render_ticker_settings_panel(db_path: Path) -> str:
         "makes every LLM build for the ticker ignore the per-purpose budget caps "
         "(the one-shot bypass lives on the per-ticker Refresh panel).</p>"
         f"{table}"
-        '<div style="margin-top:12px; display:flex; gap:8px; align-items:center;">'
-        '<input id="ts-add-ticker" placeholder="TICKER" style="width:110px" '
+        '<div class="ts-add-row">'
+        '<input id="ts-add-ticker" class="ts-add-ticker" placeholder="TICKER" '
         'aria-label="Ticker symbol">'
-        '<label style="font-size:var(--fs-body);"><input type="checkbox" id="ts-add-bypass"> '
+        '<label class="ts-add-label"><input type="checkbox" id="ts-add-bypass"> '
         "bypass budget</label>"
         '<button id="ts-add-btn" type="button" class="k-btn k-btn-primary">Save</button>'
-        '<span id="ts-add-note" class="muted" style="font-size:var(--fs-caption);"></span>'
+        '<span id="ts-add-note" class="muted ts-add-note"></span>'
         "</div>"
         "</section>" + _SCRIPT
     )

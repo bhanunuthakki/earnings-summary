@@ -22,6 +22,7 @@ from operations.models import (
     ServiceState,
 )
 from operations.readme_governance import ReadmeGovernanceStatus
+from pipeline.operations_styles import OPERATIONS_STYLE
 from pipeline.provenance_panel import PROVENANCE_SECTIONS
 
 Tone = Literal["ok", "warn", "bad"]
@@ -894,28 +895,7 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     )
     return f"""
 <section class="k-card k-card-stack operations-panel" aria-labelledby="operations-title">
-  <style>
-    .operations-panel {{ gap: var(--sp-4); }}
-    .operations-related, .operations-tabs, .operations-filter {{ display: flex; gap: var(--sp-2); flex-wrap: wrap; }}
-    .operations-tabs [role="tab"], .operations-related .k-btn, .operations-filter .k-chip, .ops-task-card summary {{ min-block-size: var(--touch-target-size); }}
-    .operations-filter .k-chip:focus-visible {{ outline: var(--bw-thin) solid var(--accent); outline-offset: var(--sp-1); }}
-    .ops-summary-grid, .ops-runtime-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap: var(--sp-3); }}
-    .ops-job-tools {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--sp-3); }}
-    .ops-job-tools > .k-label {{ grid-column: 1 / -1; }}
-    .ops-job-tools input {{ min-block-size: var(--touch-target-size); }}
-    .ops-task-list {{ display: grid; gap: var(--sp-3); }}
-    .ops-task-card, .ops-task-card ol {{ display: grid; gap: var(--sp-3); }}
-    .ops-task-facts {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }}
-    .ops-readme-facts {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }}
-    .ops-governance-actions {{ display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); }}
-    .ops-governance-actions .k-btn {{ min-block-size: var(--touch-target-size); }}
-    @media (max-width: 48rem) {{
-      .ops-job-tools, .ops-task-facts, .ops-readme-facts {{ grid-template-columns: 1fr; }}
-      .operations-related .k-btn, .operations-filter .k-chip {{ flex: 1 1 auto; }}
-    }}
-    .operations-panel [role="tabpanel"] {{ display: grid; gap: var(--sp-3); }}
-    .operations-panel [role="tabpanel"][hidden] {{ display: none; }}
-  </style>
+  {OPERATIONS_STYLE}
   <div class="k-toolbar">
     <div><h1 class="k-card-title" id="operations-title">Operations</h1>
       <div class="k-card-meta">Read-only declared ownership, runtime receipts, and recovery evidence · {_html(view.observed_label)}</div></div>
@@ -923,10 +903,10 @@ def render_operations_panel(view: OperationsPanelView) -> str:
   </div>
   <div class="operations-related" aria-label="Related Operations views">{related_views}</div>
   <div class="operations-tabs" role="tablist" aria-label="Operations views">
-    <button type="button" class="k-chip k-chip-btn k-chip-tab is-on" style="min-block-size:var(--touch-target-size);" id="operations-tab-overview" role="tab" aria-selected="true" aria-controls="operations-pane-overview" tabindex="0">Overview</button>
-    <button type="button" class="k-chip k-chip-btn k-chip-tab" style="min-block-size:var(--touch-target-size);" id="operations-tab-jobs" role="tab" aria-selected="false" aria-controls="operations-pane-jobs" tabindex="-1">Jobs</button>
-    <button type="button" class="k-chip k-chip-btn k-chip-tab" style="min-block-size:var(--touch-target-size);" id="operations-tab-runtime" role="tab" aria-selected="false" aria-controls="operations-pane-runtime" tabindex="-1">Runtime &amp; Recovery</button>
-    <button type="button" class="k-chip k-chip-btn k-chip-tab" style="min-block-size:var(--touch-target-size);" id="operations-tab-governance" role="tab" aria-selected="false" aria-controls="operations-pane-governance" tabindex="-1">Governance</button>
+    <button type="button" class="k-chip k-chip-btn k-chip-tab is-on operations-tab" id="operations-tab-overview" role="tab" aria-selected="true" aria-controls="operations-pane-overview" tabindex="0">Overview</button>
+    <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-jobs" role="tab" aria-selected="false" aria-controls="operations-pane-jobs" tabindex="-1">Jobs</button>
+    <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-runtime" role="tab" aria-selected="false" aria-controls="operations-pane-runtime" tabindex="-1">Runtime &amp; Recovery</button>
+    <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-governance" role="tab" aria-selected="false" aria-controls="operations-pane-governance" tabindex="-1">Governance</button>
   </div>
   <div id="operations-pane-overview" role="tabpanel" aria-labelledby="operations-tab-overview">{_overview(view)}</div>
   <div id="operations-pane-jobs" role="tabpanel" aria-labelledby="operations-tab-jobs" hidden>{_jobs(view)}</div>
@@ -1012,7 +992,10 @@ def render_operations_panel(view: OperationsPanelView) -> str:
       const pill = root.querySelector('[data-readme-state]');
       if (pill) {{
         pill.textContent = labels[body.state] || 'Invalid';
-        pill.className = 'k-pill k-pill-' + body.tone;
+        pill.classList.remove('k-pill-ok', 'k-pill-warn', 'k-pill-bad');
+        if (body.tone === 'ok') pill.classList.add('k-pill-ok');
+        else if (body.tone === 'warn') pill.classList.add('k-pill-warn');
+        else pill.classList.add('k-pill-bad');
       }}
       const sha = root.querySelector('[data-readme-sha]');
       if (sha) sha.textContent = body.current_sha256 ? body.current_sha256.slice(0, 12) : 'Unavailable';

@@ -29,6 +29,7 @@ from onmymind.feed import (
 )
 from onmymind.respond import is_answerable_capture
 from owner_profile.store import OwnerProfileFactRow
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from pipeline.worldview_panel import render_worldview_section
 from research.proposals import (
     ResearchProposal,
@@ -51,81 +52,7 @@ from user_state.notes import AnalystNoteRow, list_notes
 _DECISIONS_PANEL = "decisions_record"
 _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
 
-_PANEL_STYLE = """<style>
-/* ONE card shape (visual conformance pass, requirement E): every card-like
-   block on the Ledger tab — capture box, musing, stance, coach card — shares
-   the SAME background/radius/padding/margin-bottom. Before this pass
-   .ledger-cap alone carried a smaller sp-2/sp-3 padding and a sp-3 (not
-   sp-2) margin-bottom, a visible size/gap mismatch against every card below
-   it; it now shares the one card treatment via this grouped selector. */
-.ledger-cap, .ledger-musing, .ledger-stance, .ledger-coach-card {
-  background: var(--surface); border-radius: var(--radius);
-  padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2);
-}
-.ledger-stance, .ledger-coach-card { border-left: 3px solid var(--border-2); }
-.ledger-coach-card { position: relative; }
-.ledger-cap textarea { width: 100%; min-height: 44px; resize: vertical; font-family: var(--sans); font-size: var(--fs-body); }
-.ledger-cap-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
-.ledger-cap-status { font-size: var(--fs-caption); color: var(--muted); }
-.ledger-musing-head, .ledger-stance-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
-.ledger-when { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); margin-left: auto; white-space: nowrap; }
-/* ONE micro-tag treatment (requirement E): every uppercase muted label chip
-   — channel tag, unattributed marker — shares this rule instead of three
-   near-identical copies. */
-.ledger-chan, .ledger-unattr { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.ledger-needs { color: var(--warn); font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-.ledger-body { font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft); overflow-wrap: anywhere; }
-.ledger-body > :first-child { margin-top: 0; }
-.ledger-body > :last-child { margin-bottom: 0; }
-.ledger-empty { color: var(--muted); font-style: italic; padding: var(--sp-3) 0; }
-/* ONE heading scale for every section/sub-heading on the tab (requirement E)
-   — .ledger-armed-h used to be its own smaller, uppercase, letter-spaced
-   treatment (a step below every other section heading), reading as a
-   different heading LEVEL for no reason; it now shares .ledger-sec-h. */
-.ledger-sec-h, .ledger-armed-h { font-size: var(--fs-title); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-1); }
-.ledger-sec-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--sp-3); }
-.ledger-stance-meta { color: var(--muted); font-size: var(--fs-caption); margin-left: auto; }
-.ledger-coach-body { font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft); white-space: normal; }
-.ledger-coach-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
-.ledger-coach-row input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
-.ledger-coach-x { position: absolute; top: var(--sp-2); right: var(--sp-2); }
-.ledger-coach-receipt { color: var(--fg-soft); font-size: var(--fs-caption); }
-/* Ratify receipt (consequence receipts PR) — a transient one-line notice
-   above the Reconcile list; a sibling of #ledger-reconcile so the fragment
-   reload's outerHTML swap never clobbers it before it's read. */
-.ledger-receipt { color: var(--fg-soft); font-size: var(--fs-caption);
-  padding: var(--sp-2) 0; }
-.ledger-armed-table { width: 100%; border-collapse: collapse; font-size: var(--fs-caption); }
-.ledger-armed-table th { text-align: left; color: var(--muted); font-weight: 600;
-  padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border); }
-.ledger-armed-table td { padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--hairline); }
-.ledger-armed-ticker { font-family: var(--mono); font-weight: 600; }
-.ledger-armed-since { color: var(--muted); white-space: nowrap; }
-.ledger-armed-num a { color: var(--muted); text-decoration: none; }
-.ledger-armed-num a:hover { color: var(--accent); }
-/* Jump-chip toolbar (PR9) — mirrors the Provenance console's anchor-nav band;
-   one operating row above the sections, wraps on narrow widths. */
-.ledger-jump-toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-4); }
-/* Set-ticker chips (PR9) — the needs_ticker musing card's one-tap attribution
-   row; reuses .ledger-cap-row's flex layout via the extra class below. */
-.ledger-set-ticker { flex-wrap: wrap; }
-/* In-card Rewrite / Steer textareas (PR9, replaces window.prompt) — same
-   sizing family as the capture box's own textarea. */
-.ledger-rewrite-ta, .ledger-steer-ta { width: 100%; min-height: 56px; resize: vertical;
-  font-family: var(--sans); font-size: var(--fs-body); margin-bottom: var(--sp-2); }
-/* Queues (overhaul P4): the four machinery sections (research / reconcile /
-   worldview / stances) collapse into ONE block below the feed, so the tab reads
-   conversation-first. Closed by default; a count on the summary surfaces pending
-   work without re-inflating the wall of sections. Token-only. */
-.ledger-queues { margin-top: var(--sp-4); border-top: 1px solid var(--border); }
-.ledger-queues-sum { cursor: pointer; padding: var(--sp-3) 0; font-size: var(--fs-body); font-weight: 600; color: var(--fg); list-style: none; display: flex; align-items: baseline; gap: var(--sp-2); }
-.ledger-queues-sum::-webkit-details-marker { display: none; }
-.ledger-queues-sum::before { content: "\\25B8"; color: var(--muted); font-size: var(--fs-caption); }
-.ledger-queues[open] .ledger-queues-sum::before { content: "\\25BE"; }
-.ledger-queues-hint { font-size: var(--fs-caption); font-weight: 400; color: var(--muted); }
-.ledger-queues-count { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); }
-.ledger-queues-body { padding-top: var(--sp-2); }
-</style>"""
+_PANEL_STYLE = ""
 
 _CAPTURE_JS = """<script>(function(){
   var btn=document.getElementById('ledger-cap-btn');
@@ -1159,55 +1086,7 @@ def _reconcile_section(db_path: Path | str | None) -> str:
 # Reconcile / stance sections the parallel session owns.
 # ---------------------------------------------------------------------------
 
-_ONMYMIND_STYLE = """<style>
-/* Reuses the panel's own micro-tag / warn-tag treatment (.ledger-chan,
-   .ledger-needs — see _PANEL_STYLE) rather than a second copy of the same
-   rule under a card-local name; only the accent ladder badge is genuinely
-   new here. */
-.om-ladder { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
-.om-ladder:empty { display: none; }
-.om-actions { flex-wrap: wrap; }
-/* Backlink from a research item to its source note + the brief highlight the
-   scroll applies on arrival (owner feedback 2026-07-14). */
-.ledger-backlink { margin-left: auto; }
-.om-flash { animation: om-flash-kf 1.6s ease-out; }
-@keyframes om-flash-kf {
-  0%, 100% { background: transparent; }
-  20% { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-}
-.om-body a { overflow-wrap: anywhere; }
-.om-brief { margin-top: var(--sp-2); }
-.om-brief summary { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); cursor: pointer; }
-.om-brief-body { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--border-2); font-size: var(--fs-caption); color: var(--fg-soft); }
-.om-brief-takeaways { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); }
-.om-brief-line { margin: var(--sp-1) 0; }
-.om-brief-src { margin: var(--sp-2) 0 0; color: var(--muted); font-size: var(--fs-caption); }
-/* The inline answer (overhaul): the Ledger's response to a question-shaped
-   capture, generated once at capture time and stored on the note. A quiet
-   accent-bordered block under the captured thought — distinct from the thought
-   itself, token-only. */
-.om-answer { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); font-size: var(--fs-caption); line-height: 1.55; color: var(--fg-soft); }
-.om-answer > :first-child { margin-top: 0; }
-.om-answer > :last-child { margin-bottom: 0; }
-.om-answer-label { display: block; font-size: var(--fs-caption); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1); }
-/* The answer is being generated on a background thread — an honest quiet
-   in-progress state the poll swaps for the real answer when it lands. */
-.om-answer-pending { color: var(--muted); font-style: italic; }
-/* Inline chat (overhaul P3): "Ask more" / "Discuss" expands a real thread with
-   the Ask brain right inside the card — no navigation, no popup. Token-only. */
-.om-chat { margin-top: var(--sp-2); border-top: 1px solid var(--hairline); padding-top: var(--sp-2); }
-.om-chat-thread { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-2); }
-.om-chat-msg { font-size: var(--fs-caption); line-height: 1.5; padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); max-width: 90%; overflow-wrap: anywhere; }
-.om-chat-user { align-self: flex-end; background: var(--accent-soft); color: var(--fg); }
-.om-chat-assistant { align-self: flex-start; background: var(--surface); color: var(--fg-soft); }
-.om-chat-pending { color: var(--muted); }
-.om-chat-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
-/* The universal reply box (Phase B) — one input per card, routed by the
-   reply-intent classifier; the receipt bubble is the acted-path acknowledgement. */
-.om-reply-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
-.om-chat-receipt { color: var(--accent); font-weight: 600; }
-#onmymind-more { margin-top: var(--sp-2); }
-</style>"""
+_ONMYMIND_STYLE = ""
 
 _ONMYMIND_JS = """<script>(function(){
   if(window.__onMyMindWired){ return; }
@@ -1703,27 +1582,7 @@ def _jump_chip_counts(db_path: Path | str | None) -> dict[str, int]:
 # handlers work unchanged inside the walk.
 # ---------------------------------------------------------------------------
 
-_PACKET_STYLE = """<style>
-.ledger-packet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
-.pk-band { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
-.pk-count { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
-.pk-hint, .pk-payoff { font-size: var(--fs-caption); color: var(--muted); }
-.pk-payoff { flex-basis: 100%; }
-.pk-progress { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-2) 0; flex-wrap: wrap; }
-.pk-tally { color: var(--accent); font-weight: 600; }
-.pk-item > .ledger-musing, .pk-item > .ledger-stance { margin-bottom: 0; }
-.pk-class-header { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 var(--sp-1); }
-.pk-class-why { font-size: var(--fs-caption); color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: normal; margin-left: var(--sp-2); }
-.pk-clear { color: var(--ok); font-weight: 600; padding: var(--sp-3) 0; }
-.pk-receipt { color: var(--ok); font-weight: 600; font-size: var(--fs-body); padding: var(--sp-3) var(--sp-4); }
-.pk-fail { color: var(--bad); font-size: var(--fs-caption); margin-top: var(--sp-2); }
-.ledger-consequence { font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-1) 0 0; }
-.ledger-profile-update-form { margin-top: var(--sp-2); }
-/* Homogeneous bulk-affirm group card (requirement C): the same .ledger-musing
-   shape, with the individual narratives listed inside so nothing hides. */
-.ledger-group-list { margin: var(--sp-2) 0; padding-left: var(--sp-4); font-size: var(--fs-caption); color: var(--fg-soft); }
-.ledger-group-list li { margin: var(--sp-1) 0; }
-</style>"""
+_PACKET_STYLE = ""
 
 # The DOM event bus every card-level action script emits onto after its own
 # fetch resolves (success or failure) — the ONE place "did this register?"
@@ -2553,6 +2412,7 @@ def render_ledger_panel(
     )
     return (
         _PANEL_STYLE
+        + RESEARCH_PANEL_STYLE
         + f'<section class="panel">{h2}'
         + panel_sub
         + ("" if embedded else _jump_chip_toolbar(counts, onmymind_on=bool(onmymind)))

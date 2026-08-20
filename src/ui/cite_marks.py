@@ -50,7 +50,7 @@ CITE_MARKS_CSS = """
 .cite-wrap { position: relative; display: inline; }
 .cite-wrap .cite-mark {
   color: var(--accent); text-decoration: none;
-  font-size: 0.8em; vertical-align: super; cursor: pointer; white-space: nowrap;
+  font-size: var(--fs-caption); vertical-align: super; cursor: pointer; white-space: nowrap;
 }
 /* When a [n] marker sits right after a financial value, the value itself gets
    the accent-tinted "this is cited" wash and the marker becomes a small round

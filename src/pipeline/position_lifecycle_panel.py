@@ -21,33 +21,10 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from pipeline.portfolio_styles import lifecycle_css
 from position_lifecycle import OUTCOME_VOCAB, PositionEntry, list_entries
 
-_PANEL_STYLE = """<style>
-.plc-timeline { list-style:none; margin:8px 0 0; padding:0; }
-.plc-timeline li { position:relative; padding:0 0 14px 22px;
-  border-left:2px solid var(--border); margin-left:6px; }
-.plc-timeline li:last-child { padding-bottom:2px; }
-.plc-timeline li::before { content:""; position:absolute; left:-6px; top:4px;
-  width:10px; height:10px; border-radius:var(--radius-full);
-  background:var(--muted); border:2px solid var(--surface); }
-.plc-timeline li.open::before { background:var(--ok); }
-.plc-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
-.plc-dates { font-family:var(--mono); font-weight:600; font-size:var(--fs-body); }
-.plc-price { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
-.plc-meta { color:var(--muted); font-size:var(--fs-caption); margin-top:2px; }
-.plc-thesis { font-size:var(--fs-caption); line-height:1.5; margin:4px 0 0;
-  color:var(--muted); }
-.plc-conds { margin:4px 0 0; padding-left:16px; font-size:var(--fs-caption);
-  color:var(--muted); }
-.plc-conds li { padding:1px 0; border:none; margin:0; }
-.plc-conds li::before { display:none; }
-.plc-grade { margin-top:6px; display:grid; gap:6px; max-width:520px; }
-.plc-grade textarea, .plc-grade select { width:100%; box-sizing:border-box; }
-.plc-grade .plc-grade-row { display:flex; gap:8px; align-items:center; }
-.plc-lessons { font-size:var(--fs-caption); line-height:1.5; margin:4px 0 0; }
-.plc-note { color:var(--muted); font-size:var(--fs-caption); }
-</style>"""
+_PANEL_STYLE = lifecycle_css()
 
 _OUTCOME_LABELS: dict[str, str] = {
     "played_out": "thesis played out",

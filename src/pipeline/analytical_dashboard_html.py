@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from html import escape
 
+from dashboard._styles import CSS
 from pipeline.analytical_dashboard import (
     AnalyticalDashboard,
     DecisionsPanel,
@@ -26,10 +27,10 @@ from pipeline.analytical_dashboard import (
     TriggerLadderRow,
 )
 from ui import living_grid as lg
-from ui.controls import controls_css, k_empty, ticker_label
+from ui.controls import k_empty, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
-from ui.tokens import FAVICON_LINK, palette_css
+from ui.tokens import FAVICON_LINK
 
 _TRIGGER_TONE: dict[str, str] = {
     "sell": "tone-sell",
@@ -173,7 +174,7 @@ def _decisions_section(panel: DecisionsPanel) -> str:
             out.append(
                 '<div class="calib-row">'
                 f'<div class="calib-label">{escape(conv)}</div>'
-                f'<div class="calib-bar"><div class="calib-fill" style="width:{bar_width}%"></div></div>'
+                f'<div class="calib-bar"><meter class="calib-fill" min="0" max="100" value="{bar_width}" aria-label="{hit_str} correct"></meter></div>'
                 f'<div class="calib-value">{hit_str} ({graded})</div>'
                 "</div>"
             )
@@ -365,7 +366,7 @@ def _budget_row_html(r: LlmBudgetRow) -> str:
         f'value="{r.monthly_cap_usd:.2f}" aria-label="cap for {purpose_esc}" '
         f'title="Monthly cap in USD for {purpose_esc}"></td>'
         f'<td class="burn-cell"><div class="burn-bar">'
-        f'<div class="burn-fill {bar_tone}" style="width: {min(100, bar_width_pct)}%"></div>'
+        f'<meter class="burn-fill {bar_tone}" min="0" max="100" value="{min(100, bar_width_pct)}" aria-label="{bar_width_pct}% of cap used"></meter>'
         f"</div></td>"
         f'<td class="num">{r.headroom_pct * 100:+.0f}%</td>'
         f'<td><select class="budget-mode" aria-label="mode for {purpose_esc}" '
@@ -749,118 +750,14 @@ _PAGE_HEAD = (
 <title>Portfolio · analytical dashboard</title>
 """
     + FAVICON_LINK
-    + "\n<style>\n"
-    + (palette_css("dark") + controls_css("dark")).replace("{", "{{").replace("}", "}}")
+    + "<style>"
+    + CSS.replace("{", "{{").replace("}", "}}")
+    + "</style>"
     + """
-  body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
-  h1 {{ font-size: var(--fs-display); margin: 0 0 8px; font-weight: 600; }}
-  h2 {{ font-size: var(--fs-title); margin: 0 0 6px; font-weight: 600; }}
-  .stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); margin-bottom: var(--sp-3); }}
-  .panel {{ margin-bottom: var(--sp-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }}
-  .panel-head {{ padding: 10px 16px; border-bottom: 1px solid var(--hairline); }}
-  .panel-head h2 {{ margin: 0; }}
-  .panel-head .sub {{ margin: 4px 0 0; }}
-  .panel-body {{ padding: 14px 16px; }}
-  .panel-foot {{ padding: 10px 16px; border-top: 1px solid var(--hairline); background: var(--paper); }}
-  .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 10px; }}
-  .muted {{ color: var(--muted); }}
-  table {{ width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
-  th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
-  td {{ padding: 6px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
-  tbody tr:hover td {{ background: var(--paper); }}
-  td.num {{ text-align: right; }}
-  td.muted {{ color: var(--muted); }}
-  tr.tone-sell {{ background: color-mix(in srgb, var(--bad) 6%, transparent); }}
-  tr.tone-trim {{ background: color-mix(in srgb, var(--warn) 4%, transparent); }}
-  tr.tone-init {{ background: color-mix(in srgb, var(--ok) 6%, transparent); }}
-  tr.tx-buy {{ background: color-mix(in srgb, var(--ok) 4%, transparent); }}
-  tr.tx-sell {{ background: color-mix(in srgb, var(--bad) 2%, transparent); }}
-  td.trigger-cell {{ font-family: var(--sans); font-size: var(--fs-caption); text-transform: uppercase; }}
-  tr.tl-group td {{ color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.06em; padding-top: 10px; border-bottom: 0; }}
-  tr.tone-sell .trigger-cell {{ color: var(--bad); }}
-  tr.tone-trim .trigger-cell {{ color: var(--warn); }}
-  tr.tone-init .trigger-cell {{ color: var(--ok); }}
-  td.signal-strong {{ color: var(--ok); font-weight: 600; }}
-  td.signal-medium {{ color: var(--warn); }}
-  td.signal-weak {{ color: var(--muted); }}
-  /* Synthesis panel — lead panel distinguished by placement + panel anatomy,
-     not a decorative status rail (status color is reserved for value status). */
-  .synthesis-body {{ font-size: var(--fs-body); line-height: 1.65; }}
-  .synthesis-body h2, .synthesis-body h3, .synthesis-body h4,
-  .synthesis-body h5, .synthesis-body h6 {{ color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }}
-  .synthesis-body h2 {{ font-size: var(--fs-title); }}
-  .synthesis-body h3 {{ font-size: var(--fs-title); }}
-  /* h4-h6 share the body size: the one prose boundary maps deep markdown
-     headings (###/####) here, and panels own the h2/h3 levels above them. */
-  .synthesis-body h4, .synthesis-body h5, .synthesis-body h6 {{ font-size: var(--fs-body); color: var(--fg); }}
-  .synthesis-body strong {{ color: var(--fg); }}
-  .synthesis-body code {{ background: var(--paper); padding: 1px 5px; border-radius: var(--radius); font-family: var(--mono); font-size: 0.93em; }}
-  .synthesis-body ul {{ padding-left: 22px; }}
-  .synthesis-body li {{ margin-bottom: 4px; }}
-  .synthesis-body hr {{ border: none; border-top: 1px solid var(--border); margin: 16px 0; }}
-  /* Reread grid */
-  .reread-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; margin-top: 8px; }}
-  .reread-card {{ background: var(--surface); border-radius: var(--radius); padding: 12px 14px; }}
-  .reread-card summary {{ cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: baseline; font-size: var(--fs-title); font-weight: 600; }}
-  .reread-card summary::-webkit-details-marker {{ display: none; }}
-  .reread-card summary::before {{ content: '▸ '; color: var(--muted); font-family: var(--mono); }}
-  .reread-card[open] summary::before {{ content: '▾ '; }}
-  .reread-stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); font-weight: 400; }}
-  .reread-body {{ font-size: var(--fs-body); line-height: 1.55; margin-top: 10px; }}
-  .reread-body h2, .reread-body h3, .reread-body h4 {{ color: var(--fg); margin: 10px 0 4px; }}
-  .reread-body h2 {{ font-size: var(--fs-title); color: var(--fg); }}
-  .reread-body h3 {{ font-size: var(--fs-body); }}
-  .reread-body strong {{ color: var(--fg); }}
-  .reread-body ul {{ padding-left: 18px; }}
-  .reread-body hr {{ border: none; border-top: 1px solid var(--border); margin: 10px 0; }}
-  .cli-hint {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 10px 12px; background: var(--paper); border-radius: var(--radius); color: var(--fg-soft); overflow-x: auto; margin: 6px 0 0; }}
-  /* Decisions panel */
-  .panel-h3 {{ font-size: var(--fs-title); margin: 18px 0 8px; font-weight: 600; color: var(--fg); }}
-  .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0 12px; }}
-  .kpi-card {{ background: var(--paper); border-radius: var(--radius); padding: 10px 12px; text-align: center; }}
-  .kpi-card.tone-good {{ border-left: 3px solid var(--ok); }}
-  .kpi-card.tone-warn {{ border-left: 3px solid var(--warn); }}
-  .kpi-card.tone-bad {{ border-left: 3px solid var(--bad); }}
-  .kpi-card.tone-muted {{ border-left: 3px solid var(--muted); }}
-  .kpi-label {{ font-size: var(--fs-caption); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }}
-  .kpi-value {{ font-size: var(--fs-display); font-weight: 600; margin: 2px 0; color: var(--fg); font-variant-numeric: tabular-nums; }}
-  .kpi-sub {{ font-size: var(--fs-caption); color: var(--muted); font-family: var(--sans); }}
-  .calib-strip {{ display: flex; flex-direction: column; gap: 6px; margin: 8px 0 18px; }}
-  .calib-row {{ display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: var(--fs-caption); }}
-  .calib-label {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }}
-  .calib-bar {{ background: var(--paper); border-radius: var(--radius-full); height: 14px; overflow: hidden; }}
-  .calib-fill {{ background: linear-gradient(90deg, var(--bad) 0%, var(--warn) 50%, var(--ok) 100%); height: 100%; }}
-  .calib-value {{ font-family: var(--mono); color: var(--fg-soft); text-align: right; }}
-  .decisions-table td.outcome-correct {{ color: var(--ok); }}
-  .decisions-table td.outcome-wrong {{ color: var(--bad); }}
-  .decisions-table td.outcome-mixed {{ color: var(--warn); }}
-  .decisions-table td.outcome-pending {{ color: var(--muted); }}
-  /* LLM budget panel */
-  .budget-table td code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg); background: transparent; padding: 0; }}
-  .budget-table .budget-cap {{ width: 80px; }}
-  .burn-cell {{ width: 200px; padding: 6px 10px; }}
-  .burn-bar {{ width: 100%; height: 8px; background: var(--paper); border-radius: var(--radius-full); overflow: hidden; }}
-  .burn-fill {{ height: 100%; transition: width var(--transition); }}
-  .burn-ok {{ background: var(--ok); }}
-  .burn-warn {{ background: var(--warn); }}
-  .burn-over {{ background: var(--bad); }}
-  .block-hard {{ font-family: var(--mono); font-size: var(--fs-caption); color: var(--bad); font-weight: 600; }}
-  .block-soft {{ font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }}
-  .budget-footer {{ margin-top: 12px; font-size: var(--fs-body); color: var(--fg-soft); }}
-  .budget-footer strong {{ color: var(--fg); }}
-  /* Tier coverage strip */
-  .tier-strip {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 14px; margin-bottom: var(--sp-4); font-size: var(--fs-body); display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }}
-  .tier-strip-label {{ color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }}
-  a.k-chip {{ text-decoration: none; }}
-  .tier-stale-count {{ color: var(--bad); font-weight: 600; }}
-  .tier-stale-count-muted {{ color: var(--muted); font-weight: 400; }}
-</style>
 </head>
-<body>
+<body class="analytical-dashboard">
 <h1>Portfolio · analytical dashboard</h1>
 <div class="stamp">{generated_at}</div>
 """
 )
-
 _PAGE_FOOT = "</body></html>"

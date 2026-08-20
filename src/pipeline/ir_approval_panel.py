@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, mo
 from models.documents import DocType
 from pipeline.approved_ir_catalog import CatalogDisposition
 from pipeline.ir_approval_store import DecisionAction
+from pipeline.operations_styles import IR_APPROVAL_STYLE
 from pipeline.source_policy import issuer_policy
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import ticker_label
@@ -355,7 +356,7 @@ def _render_candidate(candidate: IrCandidateReview) -> str:
         title="Unavailable until captured document bytes have a server-owned hash",
     )
     return (
-        '<article class="k-well k-card-stack" style="min-width:0;" '
+        '<article class="k-well k-card-stack ir-approval-card" '
         f'data-ir-approval-candidate="{candidate_id}">'
         '<div class="k-toolbar">'
         f"<div>{ticker_label(candidate.ticker, candidate.title)}"
@@ -369,14 +370,14 @@ def _render_candidate(candidate: IrCandidateReview) -> str:
         f'<span class="k-chip k-chip-mono">{escape(revision)}</span></div>'
         "<dl>"
         '<dt class="k-label">Candidate canonical URL</dt>'
-        '<dd style="min-width:0;overflow-wrap:anywhere;">'
+        '<dd class="ir-approval-value">'
         f"<code>{escape(candidate.canonical_url)}</code></dd>"
         '<dt class="k-label">Approved issuer / authority surface</dt>'
-        '<dd style="min-width:0;overflow-wrap:anywhere;">'
+        '<dd class="ir-approval-value">'
         f"<code>{escape(candidate.issuer_id)}</code> &middot; "
         f"<code>{escape(candidate.authority_url)}</code></dd>"
         '<dt class="k-label">Observed source hash</dt>'
-        '<dd style="min-width:0;overflow-wrap:anywhere;">'
+        '<dd class="ir-approval-value">'
         f"<code>{escape(candidate.observation_content_sha256)}</code></dd>"
         '<dt class="k-label">Current owner decision</dt>'
         f"<dd>{escape(_decision_label(candidate))}</dd>"
@@ -385,12 +386,12 @@ def _render_candidate(candidate: IrCandidateReview) -> str:
         '<dt class="k-label">Owner reason</dt>'
         f"<dd>{escape(reason)}</dd>"
         '<dt class="k-label">Selected exact URL</dt>'
-        '<dd style="min-width:0;overflow-wrap:anywhere;">'
+        '<dd class="ir-approval-value">'
         f"<code>{escape(selected_url)}</code></dd>"
         '<dt class="k-label">Selected document type</dt>'
         f"<dd>{escape(selected_doc_type)}</dd>"
         '<dt class="k-label">Selected content hash</dt>'
-        '<dd style="min-width:0;overflow-wrap:anywhere;">'
+        '<dd class="ir-approval-value">'
         f"<code>{escape(selected_hash)}</code></dd>"
         "</dl>"
         f'<label class="k-label" for="ir-approval-reason-{candidate_id}">Owner reason</label>'
@@ -477,7 +478,7 @@ def render_ir_approval_panel(view: IrApprovalReviewView) -> str:
     else:
         content = "".join(_render_candidate(candidate) for candidate in view.candidates)
     return (
-        '<section class="k-card-stack" data-ir-approval-panel="review-queue" '
+        IR_APPROVAL_STYLE + '<section class="k-card-stack" data-ir-approval-panel="review-queue" '
         'aria-labelledby="ir-approval-review-title">'
         '<div class="k-toolbar"><div>'
         '<h3 class="k-card-title" id="ir-approval-review-title">IR document review queue</h3>'

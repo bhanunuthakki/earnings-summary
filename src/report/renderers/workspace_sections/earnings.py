@@ -93,11 +93,11 @@ def _earnings_tab(
     if not cards:
         _missing_panel(body, section.status, section.missing, title="Earnings calls")
     for i, card in enumerate(cards):
-        display = "" if i == 0 else "display:none"
+        hidden = "" if i == 0 else " hidden"
         qid = f"{card.quarter} {card.year}"
         body.write(
             f'<div data-quarter-card data-quarter-group="earnings" '
-            f'data-quarter="{_esc(qid)}" style="{display}">'
+            f'data-quarter="{_esc(qid)}"{hidden}>'
         )
         _financial_highlights_panel(body, card, _financials_for_card(card, financials))
         _earnings_narrative_panel(body, card, ticker, repo_root)
@@ -413,11 +413,11 @@ def _qa_roster_panel(
         return
     body.write(_panel_head("Analyst Q&A", sub="questions from the analyst call"))
     for i, card in enumerate(cards):
-        display = "" if i == 0 else "display:none"
+        hidden = "" if i == 0 else " hidden"
         qid = f"{card.quarter} {card.year}"
         body.write(
             f'<div data-quarter-card data-quarter-group="earnings" '
-            f'data-quarter="{_esc(qid)}" style="{display}">'
+            f'data-quarter="{_esc(qid)}"{hidden}>'
         )
         matching = _find_qa_quarter(qa, card.quarter, card.year)
         if matching is None:

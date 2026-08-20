@@ -72,7 +72,7 @@ def test_health_console_is_brief_plus_two_chip_cards(tmp_path: Path, probe_down:
 def test_console_grid_uses_registry_large_card_track(tmp_path: Path, probe_down: None) -> None:
     html = render_portfolio_health_panel(tmp_path / "missing.db")
     compact = " ".join(html.split())
-    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));" in compact
+    assert "grid-template-columns:repeat(auto-fit,minmax(var(--grid-card-lg),1fr))" in compact
 
 
 def test_health_pane_switcher_is_sticky_with_underline_active_chips(

@@ -43,6 +43,7 @@ from advisor.store import AdvisorMemoRow, StanceScoreRow, list_memos, list_score
 from identity import DEFAULT_USER_ID
 from pipeline.allocation_decisions_panel import portfolio_holdings
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
+from pipeline.portfolio_styles import memos_css, page_css
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import controls_css, ticker_label
@@ -344,51 +345,7 @@ def _memo_card(m: AdvisorMemoRow, score: StanceScoreRow | None = None) -> str:
     )
 
 
-_PANEL_CSS = """<style>
-.am-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
-.am-note { font-size: var(--fs-caption); }
-.am-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
-  border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
-  font-size: var(--fs-caption); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
-.am-screen td { vertical-align: middle; }
-.am-cleared { color: var(--warn); font-weight: 600; }
-.am-card { background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 10px 14px; margin-bottom: 10px; }
-.am-card summary { cursor: pointer; list-style: none; display: flex; align-items: baseline;
-  gap: 10px; flex-wrap: wrap; }
-.am-card summary::-webkit-details-marker { display: none; }
-.am-card summary::before { content: '\\25B8  '; color: var(--muted); font-family: var(--mono); }
-.am-card[open] summary::before { content: '\\25BE  '; }
-/* Memo kind tag rides the kit's neutral .k-chip (outline, micro, uppercase) —
-   the label text differentiates; color stays reserved for status/semantics. */
-.am-scope { font-family: var(--mono); font-weight: 600; }
-.am-title { color: var(--fg-soft); font-size: var(--fs-body); }
-.am-stamp { margin-left: auto; color: var(--muted); font-size: var(--fs-caption);
-  font-family: var(--mono); }
-.am-body { font-size: var(--fs-body); line-height: 1.6; margin-top: 10px; }
-.am-body h2, .am-body h3, .am-body h4 { color: var(--fg); margin: 12px 0 4px; }
-.am-body h3 { font-size: var(--fs-title); }
-.am-body ul { padding-left: 20px; }
-.am-sep { width: 1px; height: 20px; background: var(--border); display: inline-block; }
-.am-runbar select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption);
-  font-family: var(--mono); }
-/* Stance pill rides the kit's neutral .k-pill; .am-stance adds only its
-   typographic refinement (uppercase micro, help cursor) — no color. */
-.am-stance { text-transform: uppercase; letter-spacing: 0.06em;
-  font-size: var(--fs-caption); cursor: help; }
-.soc-q { margin: 12px 0; }
-.soc-q label { display: block; font-size: var(--fs-body); color: var(--fg); margin-bottom: 6px; }
-.soc-q textarea { width: 100%; resize: vertical; }
-.soc-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
-.soc-controls select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption); }
-.soc-status { font-size: var(--fs-caption); }
-.soc-saved { color: var(--ok); font-size: var(--fs-body); }
-.am-track { font-size: var(--fs-body); margin: 0 0 12px; font-variant-numeric: tabular-nums; }
-/* Verdict pills migrated to the control kit's .k-pill (+ -ok/-warn/-bad);
-   the muted/pending verdict is the neutral bare .k-pill. */
-</style>"""
+_PANEL_CSS = memos_css()
 
 # Run-bar wiring: POST the action, stream the job's SSE frames into the log,
 # refetch the panel on done. Plain string — braces are literal JS.
@@ -663,18 +620,7 @@ _SOCRATIC_JS = r"""
 """.strip()
 
 
-_SOCRATIC_PAGE_CSS = """
-* { box-sizing: border-box; }
-body { margin: 0; padding: var(--sp-4) 24px 40px; font-family: var(--sans);
-  background: var(--bg); color: var(--fg); line-height: 1.55; font-size: var(--fs-body); }
-main { max-width: 860px; margin: 0 auto; }
-h1 { font-size: var(--fs-display); margin: 0 0 4px; }
-h2 { font-size: var(--fs-title); margin: 0 0 6px; }
-.panel { background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 14px 16px; margin-bottom: var(--sp-4); }
-.panel .sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 10px; }
-.muted { color: var(--muted); }
-"""
+_SOCRATIC_PAGE_CSS = page_css()
 
 
 def render_socratic_page(ticker: str) -> str:
@@ -696,7 +642,7 @@ def render_socratic_page(ticker: str) -> str:
         "</head><body><main>"
         f"<h1>Socratic think-through · {t}</h1>"
         '<p class="muted">The only path to a stance: your read first, then the memo. '
-        f'Saved memos render under <a href="/#portfolio_record" style="color:var(--accent)">'
+        f'Saved memos render under <a class="soc-record-link" href="/#portfolio_record">'
         "Portfolio &rarr; Record</a>.</p>"
         f'<section class="panel" id="soc-flow" data-autostart-ticker="{t}">'
         "<h2>Think it through</h2>"

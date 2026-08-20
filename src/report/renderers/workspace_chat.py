@@ -6,7 +6,8 @@ reference to the production Copilot controller when it is available, with a
 same-origin Work OS link as the standalone fallback.
 """
 
-from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS
+from report.renderers.workspace_styles import CHAT_CSS
+from ui.cite_marks import CITE_MARKS_JS
 
 JS = (
     CITE_MARKS_JS
@@ -64,8 +65,7 @@ JS = (
       sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
       sidebar.classList.toggle('open', open);
       toggle.classList.toggle('open', open);
-      if (open) document.documentElement.style.setProperty('--sidebar-open-width', 'var(--sidebar-width)');
-      else document.documentElement.style.removeProperty('--sidebar-open-width');
+      document.documentElement.classList.toggle('chat-sidebar-open', open);
     }
 
     var chatOv = window.CCOverlay && window.CCOverlay.register(sidebar, {
@@ -118,43 +118,4 @@ JS = (
 """
 )
 
-CSS = (
-    CITE_MARKS_CSS
-    + r"""
-.chat-drawer {
-  position: fixed; bottom: var(--sp-4);
-  right: calc(var(--sidebar-open-width, 0) + var(--sp-4));
-  z-index: 95;
-}
-.chat-toggle { border-radius: var(--radius-full); box-shadow: var(--shadow-pop); }
-.chat-toggle.open { background: var(--muted); }
-.chat-toggle-icon { font-family: var(--mono); }
-.chat-sidebar {
-  flex-shrink: 0; width: 0; height: 100dvh; overflow: hidden;
-  background: var(--surface); border-left: 0 solid var(--hairline);
-  display: flex; flex-direction: column; position: sticky; top: 0;
-}
-.chat-sidebar.open {
-  width: var(--sidebar-width); border-left-width: var(--bw-thin);
-  box-shadow: var(--shadow-pop);
-}
-.chat-head {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  gap: var(--sp-2); padding: var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline);
-}
-.chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
-.chat-sub { font-size: var(--fs-caption); color: var(--muted); margin-top: var(--sp-1); font-family: var(--mono); }
-.chat-close { margin-inline-start: auto; }
-.chat-handoff {
-  display: flex; flex-direction: column; align-items: flex-start;
-  gap: var(--sp-3); margin: var(--sp-3);
-}
-@media (max-width: 47.5rem) {
-  .chat-sidebar.open { width: 100%; }
-  .chat-sidebar .k-btn { min-block-size: var(--touch-target-size); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .chat-sidebar, .chat-drawer { transition: none; animation: none; }
-}
-"""
-)
+CSS = CHAT_CSS

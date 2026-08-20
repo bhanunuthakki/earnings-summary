@@ -45,75 +45,11 @@ from journal_links import (
     pending_reconciliation,
     targets_for_notes,
 )
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from ui.prose import render_prose
 from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
 
-_PANEL_STYLE = """<style>
-.jr-filters { display:flex; gap:8px; align-items:center; margin:4px 0 14px; flex-wrap:wrap; }
-/* Inputs/selects: skinned by the shared control kit (ui/controls.py). */
-.jr-filters input { width:90px; text-transform:uppercase; }
-.jr-count { color:var(--muted); font-size:var(--fs-caption); margin-left:auto; }
-.jr-note { border:1px solid var(--border); border-radius:var(--radius);
-  background:var(--surface); padding:10px 14px; margin-bottom:10px; }
-.jr-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px; }
-/* kind tag → quiet .k-chip (dashboards stay category-quiet, §2); ticker →
-   .k-tick-sym; the linked-object chip → .k-chip-mono. All from the shared kit. */
-.jr-status { font-size:var(--fs-caption); text-transform:uppercase; letter-spacing:.04em; }
-.jr-status-open { color:var(--warn); }
-.jr-status-resolved { color:var(--ok); }
-.jr-status-superseded, .jr-status-archived { color:var(--muted); }
-.jr-when, .jr-src { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
-.jr-body { font-size:var(--fs-body); line-height:1.5; color:var(--fg-soft); }
-/* Note bodies render through ui.prose (markdown → block HTML); collapse the
-   first/last paragraph margins so a one-line note keeps its old tight box. */
-.jr-body > :first-child { margin-top:0; }
-.jr-body > :last-child { margin-bottom:0; }
-.jr-body p { margin:0 0 8px; }
-.jr-body ul { margin:0 0 8px; padding-left:20px; }
-.jr-body li { margin-bottom:3px; }
-.jr-resolution { margin-top:6px; font-size:var(--fs-caption); color:var(--muted); }
-.jr-anchor { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
-.jr-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center; }
-.jr-actions select { padding:3px 9px; }
-.jr-note-new { margin:0 0 16px; }
-.jr-note-new textarea { width:100%; box-sizing:border-box; min-height:54px; }
-.jr-note-new .jr-row { display:flex; gap:8px; margin-top:6px; }
-.jr-empty { color:var(--muted); padding:18px 0; }
-.jr-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
-/* Embedded (composite-console) section heading — the console band owns the
-   tab title, so the <h2> collapses to a section-level h3. */
-.jr-h { font-size:var(--fs-title); font-weight:600; color:var(--fg);
-  margin:var(--sp-4) 0 var(--sp-1); }
-/* In-card Resolve / Supersede editor (replaces window.prompt — the blocking
-   OS modal the ledger banned in PR9 survived here). */
-.jr-edit-ta { width:100%; box-sizing:border-box; min-height:48px; resize:vertical;
-  font-family:var(--sans); font-size:var(--fs-body); margin-top:8px; }
-/* S15 links: the linked-object chip is a .k-chip-mono (+ .k-chip-warn when the
-   linked object has concluded); only the link-control row layout is local. */
-.jr-link-box { display:inline-flex; align-items:center; gap:6px; }
-.jr-link-box select { max-width:300px; }
-.jr-auto { display:inline-flex; align-items:center; gap:4px;
-  font-size:var(--fs-caption); color:var(--muted); }
-/* Pending reconciliation strip. */
-.jr-rec-sec { margin:0 0 16px; }
-.jr-rec-head { display:flex; align-items:baseline; gap:8px; margin-bottom:8px; }
-/* Reconciliation card = the kit warn well (.k-well .k-well-warn); .jr-rec keeps
-   only layout (padding/margin) and is the parent hook for .jr-rec-row. */
-.jr-rec { padding:9px 12px; margin-bottom:8px; }
-.jr-rec .jr-rec-row { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
-.jr-rec-concl { font-size:var(--fs-caption); color:var(--warn); margin:4px 0 6px; }
-/* Machine-authored silo (S11): advisor/synthesis memos demote out of the
-   owner's journal into a collapsed, recessed section — the journal analog of
-   the inbox's identity-based synthesis demotion. */
-.jr-synthesis { margin-top:16px; border-top:1px solid var(--border); padding-top:10px; }
-.jr-synthesis > summary { cursor:pointer; display:flex; align-items:baseline; gap:8px;
-  padding:4px 0; list-style:none; }
-.jr-synthesis > summary::-webkit-details-marker { display:none; }
-/* Demoted memo card: the --paper inset surface alone signals 'recessed'; no
-   dashed edge (not in the de-emphasis ladder — hairline/border/border-2 only). */
-.jr-synth-note { border-radius:var(--radius);
-  background:var(--paper); padding:10px 14px; margin-bottom:8px; }
-</style>"""
+_PANEL_STYLE = RESEARCH_PANEL_STYLE
 
 _STATUS_FILTERS = ("open", "resolved", "superseded", "archived", "all")
 

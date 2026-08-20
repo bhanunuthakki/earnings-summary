@@ -20,17 +20,9 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from pipeline.operations_styles import FACT_OVERRIDES_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
-
-_PANEL_STYLE = """<style>
-.fov-tick { font-weight:600; white-space:nowrap; }
-.fov-act-replace { color:var(--ok); font-weight:600; }
-.fov-act-drop { color:var(--bad); font-weight:600; }
-.fov-act-qualify { color:var(--warn); font-weight:600; }
-.fov-muted { color:var(--muted); }
-.fov-src { font-family:var(--mono); font-size:var(--fs-caption); color:var(--muted); white-space:nowrap; }
-</style>"""
 
 
 @dataclass(slots=True)

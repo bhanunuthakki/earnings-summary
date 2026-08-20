@@ -73,6 +73,7 @@ from integrations.portfolio_tracker_client import (
     fetch_live_portfolio,
     fetch_portfolio_analytics,
 )
+from pipeline.portfolio_styles import decisions_css
 from pipeline.research_cockpit import latest_dcf_runs, latest_dcf_scenarios
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
@@ -1421,25 +1422,23 @@ def _trend_sparkline(cohorts: list[CohortPeriod]) -> str:
             continue
         px, py = x_at(i), y_at(c.hit_rate)
         current.append(f"{px:.1f},{py:.1f}")
-        fill = "var(--accent)" if is_confident(c.graded) else "var(--bg)"
+        dot_class = "adc-dot-confident" if is_confident(c.graded) else "adc-dot-thin"
         dots.append(
-            f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3" fill="{fill}" '
-            f'stroke="var(--accent)" stroke-width="1.5"><title>'
+            f'<circle class="adc-dot {dot_class}" cx="{px:.1f}" cy="{py:.1f}" r="3"><title>'
             f"{escape(c.period)}: {c.hit_rate * 100:.0f}% (n={c.graded})</title></circle>"
         )
     if current:
         segments.append(current)
     mid_y = y_at(0.5)
     lines = "".join(
-        f'<polyline points="{" ".join(seg)}" fill="none" stroke="var(--accent)" stroke-width="2" />'
+        f'<polyline class="adc-trend-line" points="{" ".join(seg)}" />'
         for seg in segments
         if len(seg) >= 2
     )
     return (
         f'<svg class="adc-spark" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
         f'role="img" aria-label="Decision hit-rate by period">'
-        f'<line x1="{pad}" y1="{mid_y:.1f}" x2="{w - pad}" y2="{mid_y:.1f}" '
-        'stroke="var(--border)" stroke-width="1" stroke-dasharray="3 3" />'
+        f'<line class="adc-trend-midline" x1="{pad}" y1="{mid_y:.1f}" x2="{w - pad}" y2="{mid_y:.1f}" />'
         f"{lines}{''.join(dots)}</svg>"
     )
 
@@ -1995,59 +1994,7 @@ def _money(v: float | None, *, signed: bool = False) -> str:
     return f"{sign}${v:,.2f}" if v >= 0 else f"-${abs(v):,.2f}"
 
 
-_PANEL_CSS = """<style>
-.ad-table td, .ad-timeline td { vertical-align: middle; }
-.ad-note { font-size: var(--fs-caption); margin: 0 0 10px; }
-/* verdict / outcome badges → the kit filled status pill (.k-pill + tone). */
-.ad-score { color: var(--warn); font-variant-numeric: tabular-nums; margin-right: 8px; }
-/* reason chips compose the kit .k-chip (micro/uppercase/outline); the surface
-   adds only the wrap-spacing so several chips stack inside the Mismatch cell. */
-.ad-chip { margin: 1px 4px 1px 0; }
-.ad-mismatch { max-width: 420px; }
-.ad-aligned { font-size: var(--fs-caption); }
-.ad-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: var(--fs-caption); padding: 4px 0; }
-.ad-editor span { color: var(--muted); }
-/* Editor inputs/selects: skinned by the shared control kit (ui/controls.py). */
-.ad-editor select, .ad-editor input { padding: 3px 6px; font-size: var(--fs-caption); }
-.ad-editor select { padding-right: 26px; }
-.ad-editor input.ad-target { width: 70px; }
-.ad-editor input.ad-note-input { flex: 1; min-width: 180px; }
-.ad-timeline td.tk { font-weight: 600; white-space: nowrap; font-family: var(--mono); }
-.ad-timeline td.when { color: var(--muted); white-space: nowrap; }
-/* Decision calibration (S15): KPI strip + compact aggregate tables. */
-.adc-kpis { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 10px;
-  font-size: var(--fs-body); color: var(--muted); }
-.adc-kpi b { color: var(--fg); font-variant-numeric: tabular-nums; margin-right: 4px; }
-.adc-table { margin-bottom: 10px; }
-.adc-line { font-size: var(--fs-caption); color: var(--muted); margin: 4px 0; }
-.adc-sub { font-size: var(--fs-body); font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 4px; }
-/* Timeline kinds: the filled status pill is now the control kit's .k-pill
-   (+ k-pill-bad for bear append, k-pill-ok for thesis update; every other kind
-   is the neutral bare .k-pill). Tone is mapped in _TIMELINE_PILL_TONE. */
-.ad-body { font-size: var(--fs-body); line-height: 1.5; }
-/* Cohort trend curve (L8): sparkline + per-period table. */
-.adc-spark { width: 100%; max-width: 560px; height: 56px; display: block; margin: 2px 0 8px; }
-.adc-trend th, .adc-trend td { padding-top: 2px; padding-bottom: 2px; }
-.adc-trend sup { color: var(--muted); font-size: 0.7em; }
-/* Skill decomposition (L8): money KPIs stack a value over a label. */
-.sk-kpis .adc-kpi { display: flex; flex-direction: column; gap: 1px; }
-.sk-val { font-variant-numeric: tabular-nums; font-size: var(--fs-body); }
-.sk-lbl { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase;
-  letter-spacing: 0.04em; }
-.sk-read { font-size: var(--fs-body); color: var(--fg); margin: 2px 0 10px; }
-/* Mirror-first hoist (S15 PR3): the calibration KPI strip repeated as the
-   page's opening line, above the sizing audit. */
-.cpnl-hoist { margin: 0 0 12px; }
-.cpnl-hoist .adc-kpis { margin: 0; }
-/* Coach P&L + pings/mutes/digest (S15 PR3, REQ-6/7/12): dense one-liners,
-   the established .adc-line rhythm. */
-.cpnl-line { font-size: var(--fs-caption); color: var(--muted); margin: 4px 0; }
-.cpnl-line b { color: var(--fg); font-variant-numeric: tabular-nums; }
-.cpnl-list { display: flex; flex-direction: column; gap: 2px; }
-.cpnl-unmute-btn { margin-left: 6px; }
-</style>"""
+_PANEL_CSS = decisions_css()
 
 # Editor wiring: toggle a row's intent editor, POST to /api/sizing-intents,
 # then refetch this panel fragment (re-running its scripts — innerHTML alone

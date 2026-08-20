@@ -6,160 +6,10 @@ session and streaming APIs.  Backend support for richer session/research
 context is additive: current servers safely ignore those planned fields.
 """
 
+from pipeline.work_os_styles import WORK_OS_COPILOT_CSS as WORK_OS_COPILOT_CSS_MASTER
 from ui.controls import icon_svg
 
-WORK_OS_COPILOT_CSS = """
-.work-os-copilot-launcher {
-  position: fixed;
-  inset-inline-end: calc(var(--sp-4) + env(safe-area-inset-right, 0));
-  inset-block-end: calc(var(--sp-4) + env(safe-area-inset-bottom, 0));
-  z-index: 230;
-  box-shadow: var(--shadow-pop);
-  transition: opacity var(--transition);
-}
-.work-os-copilot-launcher[aria-expanded="true"] { opacity: 0; pointer-events: none; }
-.work-os-copilot {
-  position: fixed; inset: 0 0 0 var(--sidebar-width); z-index: 240;
-  display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 2.3fr);
-  min-width: 0; min-height: 0; overflow: hidden;
-  background: var(--bg); color: var(--fg);
-  border-inline-start: var(--bw-thin) solid var(--border);
-}
-.work-os-copilot[hidden] { display: none; }
-.work-os-copilot[data-mode="fullscreen"] { inset-inline-start: 0; }
-.work-os-copilot-history {
-  display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  overflow: hidden; background: var(--paper);
-  border-inline-end: var(--bw-thin) solid var(--border);
-}
-.work-os-copilot-history-head,
-.work-os-copilot-toolbar,
-.work-os-copilot-filter-row,
-.work-os-copilot-composer-actions,
-.work-os-copilot-evidence-head,
-.work-os-copilot-proposal-head {
-  display: flex; align-items: center; gap: var(--sp-2);
-}
-.work-os-copilot-history-head,
-.work-os-copilot-toolbar,
-.work-os-copilot-evidence-head {
-  justify-content: space-between; padding: var(--sp-3);
-  border-bottom: var(--bw-thin) solid var(--border);
-}
-.work-os-copilot-history-head .k-btn { flex: 0 0 auto; }
-.work-os-copilot-history-search { min-width: 0; flex: 1; }
-.work-os-copilot-filter-stack {
-  display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
-  border-bottom: var(--bw-thin) solid var(--border);
-}
-.work-os-copilot-filter-row { flex-wrap: wrap; }
-.work-os-copilot-filter-row .k-select { min-width: 0; flex: 1; }
-.work-os-copilot-filter-context {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center; gap: var(--sp-1);
-}
-.work-os-copilot-filter-context .k-label { white-space: nowrap; }
-.work-os-copilot-filter-context .k-select { width: 100%; }
-.work-os-copilot-sessions {
-  display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0;
-  min-height: 0; overflow-x: hidden; overflow-y: auto; padding: var(--sp-2);
-}
-.work-os-copilot-session {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-1);
-  align-items: center; min-width: 0;
-}
-.work-os-copilot-session-main { justify-content: flex-start; min-width: 0; text-align: start; }
-.work-os-copilot-session-copy { display: flex; flex-direction: column; min-width: 0; }
-.work-os-copilot-session-title,
-.work-os-copilot-session-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.work-os-copilot-session-title { color: var(--fg); font-size: var(--fs-body); }
-.work-os-copilot-session-meta { color: var(--muted); font-size: var(--fs-nano); }
-.work-os-copilot-session-actions { display: flex; gap: var(--sp-half); }
-.work-os-copilot-main {
-  position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
-  min-width: 0; min-height: 0; overflow: hidden;
-}
-.work-os-copilot-heading { min-width: 0; flex: 1; }
-.work-os-copilot-title { color: var(--fg); font-size: var(--fs-title); font-weight: 600; }
-.work-os-copilot-subtitle { color: var(--muted); font-size: var(--fs-caption); }
-.work-os-copilot-toolbar-actions { display: flex; gap: var(--sp-1); }
-.work-os-copilot-thread {
-  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
-  min-height: 0; overflow-x: hidden; overflow-y: auto; padding: var(--sp-4);
-}
-.work-os-copilot-turn { max-width: 100%; min-width: 0; }
-.work-os-copilot-turn-user { align-self: flex-end; }
-.work-os-copilot-turn-user .k-well { background: var(--accent-soft); }
-.work-os-copilot-turn-copy { color: var(--fg-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
-.work-os-copilot-stage { color: var(--muted); font-size: var(--fs-caption); }
-.work-os-copilot-fragment { max-width: 100%; overflow-x: auto; }
-.work-os-copilot-citations { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-2); }
-.work-os-copilot-suggestions { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
-.work-os-copilot-composer {
-  display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4);
-  border-top: var(--bw-thin) solid var(--border); background: var(--paper);
-}
-.work-os-copilot-composer textarea { width: 100%; min-height: calc(var(--sp-6) + var(--sp-5)); resize: vertical; }
-.work-os-copilot-composer-actions { justify-content: space-between; flex-wrap: wrap; }
-.work-os-copilot-context { display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
-.work-os-copilot-evidence {
-  position: absolute; inset: 0 0 0 auto; z-index: 1; width: min(100%, calc(var(--sidebar-width) * 2));
-  display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0;
-  overflow: hidden; background: var(--surface); border-inline-start: var(--bw-thin) solid var(--border);
-  box-shadow: var(--shadow-drawer);
-}
-.work-os-copilot-evidence[hidden] { display: none; }
-.work-os-copilot-evidence-body {
-  display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0;
-  overflow-x: hidden; overflow-y: auto; padding: var(--sp-3);
-}
-.work-os-copilot-source { display: flex; flex-direction: column; gap: var(--sp-1); }
-.work-os-copilot-source-actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
-.work-os-copilot-proposal { display: flex; flex-direction: column; gap: var(--sp-2); }
-.work-os-copilot-proposal-head { justify-content: space-between; flex-wrap: wrap; }
-.work-os-copilot-proposal-action { margin-inline-start: auto; }
-.work-os-copilot-proposal-actions { margin-inline-start: auto; display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-1); flex-wrap: wrap; }
-.work-os-copilot-proposal-status { flex: 1 1 auto; }
-.work-os-copilot-proposal [data-proposal-body] { display: flex; flex-direction: column; gap: var(--sp-2); }
-.work-os-copilot-proposal-grid {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-2);
-}
-.work-os-copilot-proposal-cell { min-width: 0; overflow-wrap: anywhere; }
-.work-os-copilot-proposal-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }
-.work-os-copilot-kpi-changes { display: flex; flex-direction: column; min-width: 0; }
-.work-os-copilot-kpi-row {
-  display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--sp-2); min-width: 0; padding: var(--sp-1) 0;
-  border-top: var(--bw-thin) solid var(--border);
-}
-.work-os-copilot-kpi-row > * { min-width: 0; overflow-wrap: anywhere; }
-.work-os-copilot-proposal-error { display: flex; flex-direction: column; gap: var(--sp-1); }
-@media (max-width: 47.5rem) {
-  .work-os-copilot,
-  .work-os-copilot[data-mode="fullscreen"] {
-    inset: 0; grid-template-columns: 1fr; grid-template-rows: minmax(0, 0.85fr) minmax(0, 2.15fr);
-  }
-  .work-os-copilot-history { border-inline-end: 0; border-bottom: var(--bw-thin) solid var(--border); }
-  .work-os-copilot-history-head,
-  .work-os-copilot-toolbar,
-  .work-os-copilot-filter-stack,
-  .work-os-copilot-thread,
-  .work-os-copilot-composer { padding: var(--sp-2); }
-  .work-os-copilot .k-btn,
-  .work-os-copilot .k-chip,
-  .work-os-copilot input,
-  .work-os-copilot select,
-  .work-os-copilot textarea { min-block-size: var(--touch-target-size); }
-  .work-os-copilot input,
-  .work-os-copilot select,
-  .work-os-copilot textarea { font-size: var(--mobile-control-font-size); }
-  #workOsCopilotFullscreen { display: none; }
-  .work-os-copilot-evidence { width: 100%; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .work-os-copilot, .work-os-copilot * { scroll-behavior: auto; transition: none; animation: none; }
-}
-"""
+WORK_OS_COPILOT_CSS = WORK_OS_COPILOT_CSS_MASTER
 
 
 _WORK_OS_COPILOT_HTML = """
@@ -442,7 +292,8 @@ WORK_OS_COPILOT_JS = r"""
 
   function appendTurn(role, text) {
     var turn = document.createElement('article');
-    turn.className = 'work-os-copilot-turn work-os-copilot-turn-' + role;
+    turn.className = 'work-os-copilot-turn';
+    turn.dataset.role = role;
     var well = document.createElement('div');
     well.className = 'k-well';
     var copy = document.createElement('div');

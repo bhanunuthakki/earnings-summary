@@ -40,6 +40,7 @@ from urllib.parse import urlsplit
 
 from calendar_clock import calendar_today
 from expected_earnings import last_reported_by_ticker, upcoming_by_ticker
+from pipeline.research_panel_styles import DIET_PANEL_STYLE
 from signals.store import (
     SIGNAL_CONSENSUS_RATING,
     SIGNAL_GENERAL_NEWS,
@@ -103,31 +104,6 @@ def _drop_headline_news(rows: list[SignalRow]) -> list[SignalRow]:
     ]
 
 
-# Token-only scoped styles (guard-clean: every value is a token — radius via
-# --radius, type via the --fs-* scale, color via palette vars / color-mix).
-_PANEL_STYLE = """<style>
-.diet-sec { margin-top: var(--sp-5); }
-.diet-sec.first { margin-top: var(--sp-3); }
-.diet-sec-h { font-size: var(--fs-title); font-weight: 600; color: var(--fg);
-  margin: 0 0 var(--sp-2); }
-.diet-fresh { color: var(--muted); font-size: var(--fs-caption); font-weight: 400;
-  white-space: nowrap; }
-.diet-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.diet-sig a { color: var(--fg); text-decoration: none; }
-.diet-sig a:hover { color: var(--accent); text-decoration: underline; }
-.diet-firm { color: var(--muted); font-size: var(--fs-caption); }
-.diet-date { font-family: var(--mono); font-weight: 600; color: var(--fg);
-  font-variant-numeric: tabular-nums; white-space: nowrap; }
-.diet-empty { color: var(--muted); font-style: italic; padding: var(--sp-3) 0; }
-/* D3 group headers inside the stream: kind + a deterministic summary. */
-.diet-group-h { font-size: var(--fs-body); font-weight: 600; color: var(--fg);
-  margin: var(--sp-4) 0 var(--sp-1); }
-.diet-group-sum { font-weight: 400; color: var(--muted); font-size: var(--fs-caption);
-  margin-left: 6px; }
-.diet-scaffold { margin-top: var(--sp-4); font-size: var(--fs-caption);
-  color: var(--muted); }
-</style>"""
-
 # signal_type → (display label, .k-pill tone class). Categories stay QUIET on a
 # dashboard (bare .k-pill, neutral --paper fill): accent is reserved for
 # interactive/selected/unread/status, not a decorative category tint. Only the
@@ -150,7 +126,7 @@ def render_diet_panel(db_path: Path, *, today: date | None = None) -> str:
     stream.sort(key=lambda r: _BOOK_PRIORITY.get(list_types.get(r.ticker, ""), 9))
     return "".join(
         [
-            _PANEL_STYLE,
+            DIET_PANEL_STYLE,
             '<section class="panel"><h2 title="Pull lane — what to READ on your names, '
             "separate from the inbox's push lane (what needs action). Nothing here decays "
             "or fires an alert; a thesis breach still reaches the inbox. General-news "

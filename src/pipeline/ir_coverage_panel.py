@@ -18,16 +18,8 @@ from html import escape
 from pathlib import Path
 
 from ir_fetch_status import IrCoverageRow, briefed_roster, coverage_rows
+from pipeline.operations_styles import IR_STYLE as _PANEL_STYLE
 from ui import living_grid as lg
-
-_PANEL_STYLE = """<style>
-.ir-cov-table td.tk { font-weight:600; font-family:var(--mono); }
-.ir-reason { font-size:var(--fs-caption); color:var(--muted); margin-top:3px; }
-.ir-note { margin-top:14px; padding:10px 13px; background:var(--paper);
-  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
-  line-height:1.55; }
-.ir-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
-</style>"""
 
 
 def render_ir_coverage_panel(db_path: Path) -> str:

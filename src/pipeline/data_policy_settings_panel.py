@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from models.companies import ListType
 from pipeline.ir_approval_panel import read_ir_approval_review, render_ir_approval_panel
+from pipeline.operations_styles import OPERATIONS_STYLE
 from pipeline.source_policy import (
     DISPLAY_ROLE_ORDER,
     POLICY_VERSION,
@@ -599,11 +600,7 @@ def _render_roles(view: DataPolicySettingsView) -> str:
         "</article>"
         for role in view.roles
     )
-    return (
-        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax('
-        'var(--grid-card-sm),1fr));gap:var(--sp-3);">'
-        f"{cards}</div>"
-    )
+    return f'<div class="policy-grid">{cards}</div>'
 
 
 def _render_matrix(view: DataPolicySettingsView) -> str:
@@ -621,7 +618,7 @@ def _render_matrix(view: DataPolicySettingsView) -> str:
         for row in view.rows
     )
     return (
-        '<div style="overflow-x:auto;">'
+        '<div class="policy-scroll">'
         '<table class="p-table" aria-label="Collection behavior by company priority">'
         f"<thead><tr><th>Source and artifact</th>{header}</tr></thead>"
         f"<tbody>{body}</tbody></table></div>"
@@ -631,15 +628,14 @@ def _render_matrix(view: DataPolicySettingsView) -> str:
 def _render_issuers(view: DataPolicySettingsView) -> str:
     cards = "".join(
         '<article class="k-well">'
-        '<div style="display:flex;align-items:center;justify-content:space-between;'
-        'gap:var(--sp-3);flex-wrap:wrap;">'
+        '<div class="policy-toolbar">'
         f'<div><span class="k-ticker-symbol">{escape(issuer.ticker)}</span>'
         f'<div class="k-card-meta">Adapter <code>{escape(issuer.adapter_key)}</code> · '
         f"policy <code>{escape(issuer.policy_sha256[:12])}</code></div></div>"
         f'<a class="k-btn k-btn-quiet k-btn-sm" data-capability="source-policy.open-authority" '
         f'href="{escape(issuer.authority_url, quote=True)}" target="_blank" rel="noopener">'
         "Open approved IR page ↗</a></div>"
-        '<div style="display:flex;gap:var(--sp-2);flex-wrap:wrap;margin-top:var(--sp-3);">'
+        '<div class="policy-chips policy-chips-top">'
         f'<span class="k-chip">Last {issuer.quarter_window} reported quarters</span>'
         f'<span class="k-chip k-chip-mono">SEC {escape(", ".join(issuer.sec_forms))}</span>'
         f'<span class="k-chip">Text transcripts {"allowed" if issuer.accepts_text_transcripts else "excluded"}</span>'
@@ -647,7 +643,7 @@ def _render_issuers(view: DataPolicySettingsView) -> str:
         "</div></article>"
         for issuer in view.approved_issuers
     )
-    return f'<div style="display:grid;gap:var(--sp-3);">{cards}</div>'
+    return f'<div class="policy-stack">{cards}</div>'
 
 
 def _render_sec_coverage(coverage: SecCoverageSummaryView) -> str:
@@ -658,8 +654,7 @@ def _render_sec_coverage(coverage: SecCoverageSummaryView) -> str:
             '<p class="k-card-meta">No tracked company records found in the database. SEC collection requires registered company targets.</p></div>'
         )
     cards = (
-        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax('
-        'var(--grid-card-sm),1fr));gap:var(--sp-3);margin-bottom:var(--sp-3);">'
+        '<div class="policy-grid">'
         f'<div class="k-well"><div class="k-label">Portfolio issuers</div><div class="k-card-row-title">{coverage.portfolio_count}</div><div class="k-card-meta">Automatic SEC collection</div></div>'
         f'<div class="k-well"><div class="k-label">Evaluation issuers</div><div class="k-card-row-title">{coverage.evaluation_count}</div><div class="k-card-meta">On-demand collection</div></div>'
         f'<div class="k-well"><div class="k-label">Watchlist / Index</div><div class="k-card-row-title">{coverage.watchlist_count}</div><div class="k-card-meta">Crawl excluded by policy</div></div>'
@@ -677,7 +672,7 @@ def _render_sec_coverage(coverage: SecCoverageSummaryView) -> str:
         for c in coverage.companies
     )
     table = (
-        '<div style="overflow-x:auto;">'
+        '<div class="policy-scroll">'
         '<table class="p-table" aria-label="SEC Collection Priority and Company Coverage">'
         "<thead><tr><th>Company</th><th>Priority role</th><th>Regime</th><th>SEC status</th><th>Policy notes</th></tr></thead>"
         f"<tbody>{rows}</tbody></table></div>"
@@ -739,21 +734,19 @@ def _render_fmp_state(state: FmpOperationalReadModel) -> str:
             for ev in state.recent_events
         )
         events_html = (
-            '<div style="margin-top:var(--sp-3);">'
+            '<div class="policy-events">'
             '<div class="k-label">Recent recovery receipts &amp; transitions</div>'
-            '<div style="overflow-x:auto;"><table class="p-table" aria-label="Recent FMP recovery events">'
+            '<div class="policy-scroll"><table class="p-table" aria-label="Recent FMP recovery events">'
             "<thead><tr><th>Timestamp</th><th>Event type</th><th>Reason</th><th>State transition</th></tr></thead>"
             f"<tbody>{event_rows}</tbody></table></div></div>"
         )
     return (
         '<div class="k-well">'
-        '<div style="display:flex;align-items:center;justify-content:space-between;'
-        'gap:var(--sp-3);flex-wrap:wrap;">'
+        '<div class="policy-toolbar">'
         '<div class="k-card-row-title">FMP recovery telemetry</div>'
         f'<span class="k-pill {tone}">{escape(availability_labels[state.provider_availability])}</span>'
         "</div>"
-        '<dl style="display:grid;grid-template-columns:repeat(auto-fit,minmax('
-        'var(--grid-card-sm),1fr));gap:var(--sp-3);margin:var(--sp-3) 0 0;">'
+        '<dl class="policy-dl">'
         f'<div><dt class="k-label">Circuit state</dt><dd>{escape(state.circuit_state)}</dd></div>'
         f'<div><dt class="k-label">Network admission</dt><dd>{escape(admission_labels[state.circuit_admission])}</dd></div>'
         f'<div><dt class="k-label">Provider availability</dt><dd>{escape(availability_labels[state.provider_availability])}</dd></div>'
@@ -768,8 +761,7 @@ def _render_fmp_state(state: FmpOperationalReadModel) -> str:
         f'<div><dt class="k-label">Latest corpus capture</dt><dd>{escape(corpus_last_seen)}</dd></div>'
         "</dl>"
         + (
-            '<div class="k-label">Queued companies</div>'
-            f'<div style="display:flex;gap:var(--sp-2);flex-wrap:wrap;">{queue}</div>'
+            f'<div class="k-label">Queued companies</div><div class="policy-chips">{queue}</div>'
             if queue
             else ""
         )
@@ -787,7 +779,8 @@ def render_data_policy_settings_panel(
 
     resolved = view or build_data_policy_settings_view(db_path=db_path)
     return (
-        '<section class="k-card k-card-stack" data-settings-panel="data-collection" '
+        OPERATIONS_STYLE
+        + '<section class="k-card k-card-stack" data-settings-panel="data-collection" '
         'aria-labelledby="data-policy-settings-title">'
         '<div class="k-toolbar">'
         '<div><h2 class="k-card-title" id="data-policy-settings-title">Data collection policy</h2>'
@@ -821,11 +814,11 @@ def render_operations_settings_shell(*, db_path: Path | None = None) -> str:
         '<div class="k-toolbar-controls" role="tablist" aria-label="Operations hub views">'
         '<button type="button" id="opsTabQueue" class="k-chip k-chip-btn k-chip-tab is-on" '
         'role="tab" aria-selected="true" aria-controls="opsPaneQueue" '
-        'style="min-block-size:var(--touch-target-size);" tabindex="0" '
+        'tabindex="0" '
         "onclick=\"switchOpsTab('queue')\">Operations</button>"
         '<button type="button" id="opsTabSettings" class="k-chip k-chip-btn k-chip-tab" '
         'role="tab" aria-selected="false" aria-controls="opsPaneSettings" '
-        'style="min-block-size:var(--touch-target-size);" tabindex="-1" '
+        'tabindex="-1" '
         "onclick=\"switchOpsTab('settings')\">Settings</button>"
         "</div></div>"
         '<div id="opsPaneQueue" role="tabpanel" aria-labelledby="opsTabQueue">'

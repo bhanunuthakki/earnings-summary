@@ -651,7 +651,7 @@ def _line_items_levels_panel(body: StringIO, fin: FinancialsSection, seg: Segmen
         if drillable:
             n_cols = 1 + len(last_labels) + 3
             body.write(
-                f'<tr class="fin-drill" id="{row_id}" style="display:none">'
+                f'<tr class="fin-drill" id="{row_id}" hidden>'
                 f'<td colspan="{n_cols}" class="fin-drill-cell">'
             )
             _segment_drill_table(body, real_segments, fin.quarter_labels)

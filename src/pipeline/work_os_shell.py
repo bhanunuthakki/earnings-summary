@@ -17,8 +17,8 @@ from functools import lru_cache
 from html import escape
 from pathlib import Path
 
-from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
-from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
+from pipeline.cc_action import CC_ACTION_JS
+from pipeline.cc_overlay import CC_OVERLAY_JS
 from pipeline.explore_panel import EXPLORE_PANEL_JS
 from pipeline.operations_panel import render_operations_shell
 from pipeline.work_os_copilot import render_work_os_copilot
@@ -28,6 +28,7 @@ from pipeline.work_os_research import (
     render_company_desk_shell,
     render_fact_playground_shell,
 )
+from pipeline.work_os_styles import WORK_OS_CSS
 from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -176,110 +177,7 @@ def _production_runtime(generated_at: datetime) -> str:
     stamp = escape(generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     return f"""
 <style id="work-os-production-css">
-  {CC_ACTION_CSS}
-  {CC_OVERLAY_CSS}
-  html, body {{ min-height: 100dvh; }}
-  body {{ padding-bottom: env(safe-area-inset-bottom); }}
-  .k-scrim {{ position: fixed; inset: 0; background: var(--scrim); z-index: 250; }}
-  .k-scrim[hidden], .drawer-scrim {{ display: none !important; }}
-  .work-os-live-status {{ position: absolute; inline-size: var(--bw-thin); block-size: var(--bw-thin); overflow: hidden; clip: rect(0 0 0 0); }}
-  .work-os-report-frame {{ width: 100%; min-height: calc(100dvh - var(--header-height) - var(--sp-6)); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); }}
-  .work-os-report-host {{ display: block; min-height: 100%; border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); overflow: hidden; }}
-  .work-os-reader {{ position: fixed; inset: 0; z-index: var(--z-modal); display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; padding: var(--sp-4); background: var(--bg); overflow: hidden; }}
-  .work-os-reader[hidden] {{ display: none !important; }}
-  .work-os-reader-header {{ position: sticky; inset-block-start: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3); background: var(--bg); }}
-  .work-os-reader-masthead {{ min-width: 0; text-align: center; }}
-  .work-os-reader-actions {{ display: flex; align-items: center; gap: var(--sp-2); }}
-  .work-os-reader-decision {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; }}
-  .work-os-reader-layout {{ display: grid; grid-template-columns: var(--grid-card-sm) minmax(0, 1fr); gap: var(--sp-4); flex: 1 1 auto; min-height: 0; max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; overflow: hidden; }}
-  .work-os-reader-sections {{ display: flex; flex-direction: column; align-self: start; gap: var(--sp-1); max-block-size: 100%; overflow-y: auto; }}
-  .work-os-reader-sections:empty {{ display: none; }}
-  .work-os-reader-body {{ flex: 1 1 auto; min-height: 0; overflow: auto; }}
-  .work-os-company-desk {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
-  .work-os-company-toolbar {{ display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }}
-  .work-os-company-picker {{ display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }}
-  .company-identity-switcher {{ position: relative; min-width: 0; border-radius: var(--radius); }}
-  .company-identity-row {{ display: flex; align-items: center; gap: var(--sp-2); min-block-size: var(--touch-target-size); }}
-  .company-picker-trigger {{ opacity: 0; transform: translateX(var(--lift-sm)); transition: opacity var(--transition), transform var(--transition); }}
-  .company-identity-switcher:hover .company-picker-trigger,
-  .company-identity-switcher:focus-within .company-picker-trigger {{ opacity: 1; transform: translateX(0); }}
-  .company-picker-popover {{ position: absolute; inset-block-start: calc(100% + var(--sp-1)); inset-inline-start: 0; z-index: 220; inline-size: var(--grid-card-md); max-inline-size: calc(100vw - var(--sp-6)); box-shadow: var(--shadow-pop); }}
-  .company-picker-popover[hidden] {{ display: none !important; }}
-  .company-picker-popover input[type="search"] {{ inline-size: 100%; min-block-size: var(--touch-target-size); }}
-  .company-picker-list {{ max-block-size: var(--grid-card-sm); overflow-y: auto; }}
-  .company-picker-list [role="option"] {{ display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); }}
-  .company-picker-list [aria-selected="true"] {{ background: var(--paper); color: var(--accent); }}
-  .sidebar-home {{ min-block-size: var(--icon-button-size); }}
-  @media (hover: none) {{
-    .company-picker-trigger {{ min-block-size: var(--touch-target-size); opacity: 1; transform: none; }}
-  }}
-  .work-os-action-copy {{ display: flex; align-items: center; gap: var(--sp-3); flex: 1; }}
-  .research-screen {{ display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }}
-  .research-toolbar, .research-panel-head, .research-actions {{ display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }}
-  .research-decision-band {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); }}
-  .research-grid {{ display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; }}
-  .research-list {{ display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }}
-  .research-question-capture {{ display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }}
-  .research-question-capture input {{ flex: 1 1 auto; min-inline-size: var(--grid-card-sm); }}
-  .is-cited-location {{ background: color-mix(in srgb, var(--warn) 14%, transparent); }}
-  .research-row {{ display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3); }}
-  .research-library-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }}
-  #screen-workspace .research-grid.k-grid-split-rail-lg {{
-    grid-template-columns: minmax(0, 1fr) var(--rail-lg);
-  }}
-  @media (max-width: 47.5rem) {{
-    body {{ display: flex; min-width: 0; }}
-    .app-sidebar,
-    .app-sidebar.is-collapsed {{
-      position: sticky; inset-block-start: 0; z-index: 200;
-      width: var(--sidebar-collapsed-width); min-width: var(--sidebar-collapsed-width);
-      height: 100dvh; min-height: 0; padding: var(--sp-2);
-      overflow-x: hidden; overflow-y: auto;
-      border-right: var(--bw-thin) solid var(--border); border-bottom: 0;
-    }}
-    .app-sidebar > div:first-child {{
-      display: flex; flex-direction: column; align-items: stretch;
-      gap: var(--sp-1); width: 100%;
-    }}
-    .sidebar-brand {{ align-items: center; padding: var(--sp-2) 0; margin: 0; }}
-    .sidebar-collapse-toggle, .nav-layer-title, .sidebar-cmd-text, .nav-text {{ display: none !important; }}
-    .sidebar-home {{
-      width: 100%; min-block-size: var(--touch-target-size); min-inline-size: var(--touch-target-size);
-      justify-content: center; padding: var(--sp-2);
-    }}
-    .sidebar-logo {{ display: none; }}
-    .sidebar-cmd, .app-sidebar .nav-item, .app-sidebar.is-collapsed .nav-item {{
-      flex: 0 0 auto; justify-content: center;
-      min-block-size: var(--touch-target-size); min-inline-size: var(--touch-target-size);
-      width: 100%; margin: 0; padding: var(--sp-2);
-    }}
-    .app-sidebar .nav-item::after {{ display: none; }}
-    .app-main {{ width: 100%; min-width: 0; padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom)); }}
-    .app-header {{ padding-inline: var(--sp-3); }}
-    .main-content {{ width: 100%; min-width: 0; padding: var(--sp-3); }}
-    .screen-view, .k-card {{ min-width: 0; }}
-    .matrix-table {{ display: block; max-width: 100%; overflow-x: auto; }}
-    .k-action-row {{ flex-wrap: wrap; gap: var(--sp-2); }}
-    .screen-view [style*="grid-template-columns"] {{ grid-template-columns: 1fr !important; }}
-    .research-decision-band, .research-grid, .research-library-grid, .work-os-reader-decision {{ grid-template-columns: 1fr; }}
-    #screen-workspace .k-grid-split-rail-lg,
-    #screen-execution-queue .k-grid-split-rail {{ display: block; }}
-    #screen-brief-library .research-toolbar {{ align-items: stretch; }}
-    #screen-brief-library .research-actions {{ display: grid; grid-template-columns: auto minmax(0, 1fr); inline-size: 100%; }}
-    #screen-brief-library .research-actions .k-select {{ min-width: 0; inline-size: 100%; }}
-    .research-actions .k-chip, .research-actions .k-btn, .research-library-card .k-btn {{ min-block-size: var(--touch-target-size); }}
-    .work-os-reader {{ padding: var(--sp-3); }}
-    .work-os-reader-layout {{ display: block; overflow: auto; }}
-    .work-os-reader-sections {{ display: none; }}
-    .work-os-reader-body {{ overflow: visible; }}
-    .company-picker-trigger {{ min-block-size: var(--touch-target-size); opacity: 1; transform: none; }}
-    .drill-drawer {{ width: 100%; max-width: 100%; border-radius: 0; }}
-    input, select, textarea {{ font-size: var(--mobile-control-font-size) !important; }}
-  }}
-  .drill-drawer[hidden] {{ display: none !important; }}
-  @media (prefers-reduced-motion: reduce) {{
-    *, *::before, *::after {{ animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }}
-  }}
+  {WORK_OS_CSS}
 </style>
 <div class="work-os-live-status" id="workOsLiveStatus" aria-live="polite" data-generated-at="{stamp}"></div>
 <script id="work-os-action-runtime">{CC_ACTION_JS}</script>
@@ -656,7 +554,7 @@ def _production_runtime(generated_at: datetime) -> str:
       trigger.textContent = originalText;
       const statusEl = document.createElement('span');
       statusEl.className = 'stat-subtext';
-      statusEl.style.color = 'var(--bad)';
+      statusEl.dataset.tone = 'bad';
       statusEl.textContent = ' (' + (err.message || 'Generation failed') + ')';
       trigger.insertAdjacentElement('afterend', statusEl);
     }}
@@ -1145,7 +1043,10 @@ def _production_runtime(generated_at: datetime) -> str:
     const freshness = String(projection.freshness || 'unavailable');
     const relationshipNode = document.getElementById('workOsBriefDecisionRelationship');
     relationshipNode.textContent = relationship.replaceAll('_', ' ') + ' · ' + freshness;
-    relationshipNode.className = relationship === 'agree' ? 'k-pill k-pill-ok' : (relationship === 'conflict' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn');
+    relationshipNode.className = 'k-pill';
+    relationshipNode.classList.toggle('k-pill-ok', relationship === 'agree');
+    relationshipNode.classList.toggle('k-pill-bad', relationship === 'conflict');
+    relationshipNode.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
   }}
 
   function workOsReaderUnavailable(body, artifact, status) {{
@@ -1488,9 +1389,9 @@ def _make_allocation_language_honest(html: str) -> str:
         title.innerText = "Buy / Hold / Trim / Sell Thresholds";
         subtitle.innerText = "Existing-position decision bands and governed Next-Dollar Allocation";
         body.innerHTML = `
-          <div class="k-well">
-            <div style="font-weight: 600; font-size: var(--fs-title);">Decision discipline, not order routing</div>
-            <p style="font-size: var(--fs-body); color: var(--fg-soft);">Review the current buy, hold, trim, and sell conditions together with the next-dollar recommendation. This workspace records an allocation decision; it never submits a broker order.</p>
+          <div class="k-well work-os-threshold-note">
+            <div class="work-os-threshold-note-title">Decision discipline, not order routing</div>
+            <p class="work-os-threshold-note-body">Review the current buy, hold, trim, and sell conditions together with the next-dollar recommendation. This workspace records an allocation decision; it never submits a broker order.</p>
           </div>
           <button class="k-btn k-btn-primary k-btn-sm" onclick="openLiveDetail('screen-allocation')">Open live allocation guidance →</button>`;
       } else if (type === 'dcf-priors')""",
@@ -1543,8 +1444,8 @@ def _add_production_contract(
         1,
     )
     html = html.replace(
-        '<div style="display: flex; flex-direction: column; gap: var(--sp-2);">\n            <!-- Action Card 1 -->',
-        '<div id="workOsActionQueue" style="display: flex; flex-direction: column; gap: var(--sp-2);">\n            <!-- Action Card 1 -->',
+        '<div class="work-os-action-queue">\n            <!-- Action Card 1 -->',
+        '<div id="workOsActionQueue" class="work-os-action-queue">\n            <!-- Action Card 1 -->',
         1,
     )
     html = html.replace("<tbody>", '<tbody id="workOsPortfolioRows">', 1)

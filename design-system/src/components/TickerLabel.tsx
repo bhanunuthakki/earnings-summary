@@ -1,8 +1,8 @@
 /**
  * `.k-tick` / `.k-tick-sym` / `.k-tick-name` — ports `ticker_label()` from
  * `src/ui/controls.py`. "Mono ticker symbol, regular-weight muted company
- * name beside it, ellipsis-truncated at `--k-tick-max` (default 20ch,
- * override per call via `name_max`); the FULL name always rides in `title`.
+ * name beside it, ellipsis-truncated at the master-owned width token; the
+ * FULL name always rides in `title`.
  * `href` links the symbol only — the name stays plain text so long names
  * never become long links. Replaces every `f"{ticker} · {name}"` /
  * `f"{ticker} — {name}"` concatenation."
@@ -20,9 +20,8 @@ export interface TickerLabelProps {
   /** When set, only the ticker symbol becomes a link (`<a class="k-tick-sym">`);
    * the name never becomes part of the link, mirroring the Python function. */
   href?: string;
-  /** Overrides the `--k-tick-max` CSS var (default in controls.css: `20ch`)
-   * that bounds `.k-tick-name`'s ellipsis truncation width. */
-  nameMax?: number | string;
+  /** Selects the registered wide-name design-system variant. */
+  wide?: boolean;
   /** Additional class names appended alongside `k-tick`. */
   className?: string;
 }
@@ -33,17 +32,16 @@ export function TickerLabel({
   ticker,
   name,
   href,
-  nameMax,
+  wide,
   className,
 }: TickerLabelProps): React.JSX.Element {
-  const cls = className ? `k-tick ${className}` : "k-tick";
-  const style: React.CSSProperties | undefined = nameMax
-    ? ({ "--k-tick-max": typeof nameMax === "number" ? `${nameMax}ch` : nameMax } as React.CSSProperties)
-    : undefined;
+  const cls = ["k-tick", wide ? "k-tick-wide" : "", className ?? ""]
+    .filter(Boolean)
+    .join(" ");
   const symbol = ticker.toUpperCase();
 
   return (
-    <span className={cls} title={name || undefined} style={style}>
+    <span className={cls} title={name || undefined}>
       {href ? (
         <a className="k-tick-sym" href={href}>
           {symbol}

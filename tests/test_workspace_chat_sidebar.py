@@ -7,6 +7,7 @@ from io import StringIO
 from report.renderers import workspace_html as ws_r
 from report.renderers.workspace_chat import CSS as CHAT_CSS
 from report.renderers.workspace_chat import JS as CHAT_JS
+from report.renderers.workspace_comments import CSS as COMMENTS_CSS
 from report.renderers.workspace_comments import JS as COMMENTS_JS
 
 # ---------------------------------------------------------------------------
@@ -66,8 +67,9 @@ def test_chat_js_enforces_mutual_exclusivity_and_push() -> None:
     assert "group: 'report-sidebar'" in CHAT_JS
     assert "window.__closeCommentSidebar" not in CHAT_JS
     assert "window.__closeChatSidebar =" not in CHAT_JS
-    # Chat drives the same push variable the comments sidebar uses.
-    assert "--sidebar-open-width" in CHAT_JS
+    # JS owns state; the master stylesheet maps that state to the shared push width.
+    assert "classList.toggle('chat-sidebar-open', open)" in CHAT_JS
+    assert ":root.chat-sidebar-open { --sidebar-open-width:" in COMMENTS_CSS
     # No stale references to the removed floating panel element.
     assert "var panel" not in CHAT_JS
 

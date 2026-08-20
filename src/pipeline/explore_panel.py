@@ -36,73 +36,13 @@ from pathlib import Path
 
 from dcf.fact_drivers import driver_field_options
 from identity import DEFAULT_USER_ID
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from user_state.saved_views import SavedViewRow, list_views
 from viewspec.engine import metric_catalog
 from viewspec.spec import CADENCES, TRANSFORMS
 
-_PANEL_STYLE = """<style>
-.vx-builder { border-radius:var(--radius); background:var(--surface);
-  padding:12px 14px; margin:4px 0 12px; }
-.vx-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
-.vx-row label { color:var(--muted); font-size:var(--fs-caption); }
-/* Inputs/selects: skinned by the shared control kit (ui/controls.py) —
-   only layout lives here. */
-.vx-row input[name="tickers"] { width:260px; text-transform:uppercase; }
-.vx-row input[name="periods"], .vx-row input[name="cagr_years"] { width:54px; }
-.vx-row input[name="view_name"] { width:200px; }
-.vx-pickers { display:grid; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap:10px;
-  margin-bottom:10px; }
-.vx-picker { display:flex; flex-direction:column; }
-.vx-picker label { display:block; color:var(--muted); font-size:var(--fs-caption); margin-bottom:3px;
-  text-transform:uppercase; letter-spacing:.06em; }
-.vx-picker select { width:100%; }
-/* Type-ahead filter: a huge per-ticker fact list (capture-every-number long
-   tail) stays usable. Skinned by the control kit; only layout lives here. */
-.vx-pick-search { width:100%; margin-bottom:4px; }
-.vx-pick-count { color:var(--muted); font-size:var(--fs-caption); margin-top:3px; min-height:1.1em; }
-/* ---- Key-metrics preselect bubbles (key_metrics_picker.md) ---- */
-.vx-keymetrics { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
-.vx-keymetrics:empty { display:none; }
-.vx-km-label { color:var(--muted); font-size:var(--fs-caption); text-transform:uppercase;
-  letter-spacing:.06em; white-space:nowrap; }
-.vx-km-chips { display:flex; gap:6px; flex-wrap:wrap; }
-.vx-saved-strip { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-.vx-saved { display:inline-flex; align-items:center; gap:4px; }
-.vx-none { color:var(--muted); font-size:var(--fs-caption); }
-.vx-error { color:var(--bad); font-size:var(--fs-body); margin:6px 0; }
-/* Inject-one-fact → DCF driver (S6): a single picked fact, single ticker. */
-.vx-inject select { min-width:240px; }
-.vx-inject-ok { color:var(--fg); font-size:var(--fs-body); line-height:1.5;
-  border-left:3px solid var(--ok); padding:4px 0 4px 10px; margin:6px 0; }
-.vx-inject-ok strong { color:var(--ok); }
-.vx-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
-.vx-nl { border-bottom:1px solid var(--border); padding-bottom:10px; }
-.vx-nl input[name="nl_query"] { flex:1; min-width:280px; }
-.vx-nl-msg { color:var(--muted); font-size:var(--fs-caption); }
-
-/* ---- Copilot prompt handoff + deterministic builder ---- */
-.ask-thread { display:flex; flex-direction:column; gap:12px; margin:4px 0 14px; }
-.ask-hello { color:var(--muted); font-size:var(--fs-body); line-height:1.5; border:1px dashed var(--border);
-  border-radius:var(--radius); padding:14px 16px; }
-.ask-chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-.ask-inputrow { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
-/* No font-size here: the input inherits the kit baseline (--fs-body, 13px) so it
-   matches the .k-btn buttons beside it, and the mobile 16px floor (controls.py)
-   is no longer overridden. The Ask/DIY buttons are .k-btn (primary/quiet) — no
-   bespoke .ask-inputrow button rule. */
-.ask-inputrow input { flex:1; padding:9px 13px; }
-.ask-builder-pop { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface);
-  padding:0 14px 12px; margin-top:10px; box-shadow:var(--shadow-pop); }
-.ask-pop-head { display:flex; justify-content:space-between; align-items:center; padding:10px 0;
-  font-size:var(--fs-body); font-weight:600; color:var(--fg); }
-/* the close glyph (§3): a NAMED, styled control — not raw descendant-selector
-   chrome — matching the cc-peek-close / cc-drawer-close treatment. */
-.ask-pop-close { background:transparent; border:none; color:var(--muted); font-size:var(--fs-display);
-  cursor:pointer; padding:0 4px; }
-.ask-pop-close:hover { color:var(--fg); }
-.ask-advanced .vx-builder { border:none; padding-left:0; padding-right:0; margin-top:0; }
-</style>"""
+_PANEL_STYLE = RESEARCH_PANEL_STYLE
 
 # Plain string (not an f-string) so braces pass through untouched; the panel
 # assembler drops it into one <script> tag. All state lives in the DOM.

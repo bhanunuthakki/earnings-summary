@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from html import escape
 
+from pipeline.analysis_styles import REDTEAM_PNL_CSS
 from redteam.decision_pnl import DecisionPnlReport, DecisionPnlRow, ScorecardNumber, YearlyScorecard
 from ui.controls import panel_toolbar, ticker_label
 
@@ -25,19 +26,6 @@ from ui.controls import panel_toolbar, ticker_label
 # layout + tone only, every color/size/radius rides a token. Registered as
 # "pipeline/redteam_pnl_panel.py" in tests/test_ui_controls.py's REGISTERED set.
 # ---------------------------------------------------------------------------
-REDTEAM_PNL_CSS = """
-/* Decision P&L (Red Team, monthly_red_team.md Phase 3). */
-.rtp-rows { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-2) 0; }
-.rtp-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
-  font-size: var(--fs-body); padding: var(--sp-1) 0; border-bottom: 1px solid var(--border); }
-.rtp-note { color: var(--muted); font-size: var(--fs-caption); flex-basis: 100%; margin: 0; }
-.rtp-due { font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-1) 0; }
-.rtp-scorecard { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }
-.rtp-sc-row { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-body); }
-.rtp-sc-label { font-weight: 600; }
-.rtp-sc-detail { color: var(--muted); font-size: var(--fs-caption); flex-basis: 100%; margin: 0; }
-"""
-
 _DIRECTION_TONE: dict[str, str] = {"refuted": "ok", "accepted": "accent", "deferred": "warn"}
 
 

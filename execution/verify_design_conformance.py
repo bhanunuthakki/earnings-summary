@@ -2,11 +2,14 @@
 
 Static source scanning is authoritative.  The optional live canary is a
 supplementary, read-only check of the same scanner's structural title rule.
+The opt-in browser canary additionally checks a bounded rendered specimen's
+DOM and computed styles; it does not prove family-master conformance.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import queue
@@ -20,7 +23,7 @@ from collections.abc import Sequence
 from datetime import date
 from http.client import HTTPMessage
 from pathlib import Path
-from typing import IO, Literal
+from typing import IO, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -30,13 +33,19 @@ sys.path.insert(0, str(SRC))
 
 from ui.conformance_scan import (  # noqa: E402
     css_text,
-    discover_surfaces,
+    discover_emitters,
+    finding_debt_id,
+    geometry_debt_failures,
+    geometry_debt_fingerprints,
     scan_surface_evidence,
+    unverifiable_debt_id,
 )
 from ui.design_registry import (  # noqa: E402
+    GOVERNED,
     QUARANTINE_ENTRIES,
     REGISTERED,
     REGISTRY_VERSION,
+    VISUAL_EMITTER_MANIFEST,
 )
 
 
@@ -55,10 +64,123 @@ class _NoCanaryRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.2.0"
 _CANARY_READ_LIMIT = 1_000_000
 _CANARY_READ_CHUNK = 64 * 1024
 _CANARY_WALL_TIMEOUT_SECONDS = 3.0
+_BROWSER_CANARY_SETTLE_MILLISECONDS = 400
+
+# These are the root tokens consumed by the canonical primitives below.  Keep
+# this list deliberately small: a canary page need only prove that the design
+# contract it exercises has a real canonical root, not reproduce every token
+# used by every surface in the application.
+_BROWSER_CANARY_ROOT_PROPERTIES = (
+    "--fs-body",
+    "--fs-caption",
+    "--radius",
+    "--radius-full",
+    "--radius-card",
+    "--bw-thin",
+    "--touch-target-size",
+)
+
+
+class _RouteRequest(Protocol):
+    url: str
+
+
+class _CanaryRoute(Protocol):
+    request: _RouteRequest
+
+    def abort(self) -> None: ...
+
+    def continue_(self) -> None: ...
+
+
+class _CanaryPage(Protocol):
+    def evaluate(self, expression: str, arg: object) -> object: ...
+
+    def route(self, url: str, handler: object) -> None: ...
+
+    def goto(self, url: str, *, wait_until: str, timeout: int) -> None: ...
+
+    def wait_for_load_state(self, state: str, *, timeout: int) -> None: ...
+
+    def wait_for_timeout(self, timeout: int) -> None: ...
+
+    def content(self) -> str: ...
+
+
+class _CanaryContext(Protocol):
+    def new_page(self) -> _CanaryPage: ...
+
+    def close(self) -> None: ...
+
+
+class _CanaryBrowser(Protocol):
+    def new_context(self, *, service_workers: str) -> _CanaryContext: ...
+
+    def close(self) -> None: ...
+
+
+class _CanaryChromium(Protocol):
+    def launch(self, *, headless: bool) -> _CanaryBrowser: ...
+
+
+class _CanaryPlaywright(Protocol):
+    chromium: _CanaryChromium
+
+
+class _CanaryPlaywrightContext(Protocol):
+    def __enter__(self) -> _CanaryPlaywright: ...
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...
+
+
+class _CanaryPlaywrightModule(Protocol):
+    def sync_playwright(self) -> object: ...
+
+
+# The base primitives intentionally do not include the small-button variant.
+# Surface-specific min-height rules are allowed (and are not a property of the
+# base primitive), while font/radius/border values are stable kit contracts.
+_BROWSER_CANARY_PRIMITIVES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        ".k-btn:not(.k-btn-sm)",
+        (
+            ("font-size", "--fs-body"),
+            ("border-radius", "--radius"),
+            ("border-width", "--bw-thin"),
+            ("min-height", "--touch-target-size"),
+        ),
+    ),
+    (
+        ".k-chip",
+        (
+            ("font-size", "--fs-caption"),
+            ("border-radius", "--radius-full"),
+            ("border-width", "--bw-thin"),
+            ("min-height", "--touch-target-size"),
+        ),
+    ),
+    (
+        ".k-card",
+        (
+            ("border-radius", "--radius-card"),
+            ("border-width", "--bw-thin"),
+            ("min-height", "--touch-target-size"),
+        ),
+    ),
+    (".k-well", (("border-radius", "--radius"), ("min-height", "--touch-target-size"))),
+    (
+        ".k-overlay",
+        (
+            ("border-radius", "--radius"),
+            ("border-width", "--bw-thin"),
+            ("min-height", "--touch-target-size"),
+        ),
+    ),
+)
 
 
 class _ClosedModel(BaseModel):
@@ -69,7 +191,7 @@ class Finding(_ClosedModel):
     surface: str
     dimension: str
     values: tuple[str, ...]
-    disposition: Literal["live", "quarantined"]
+    disposition: Literal["live", "quarantined", "legacy-debt"]
 
 
 class StaleQuarantine(_ClosedModel):
@@ -81,6 +203,27 @@ class StaleQuarantine(_ClosedModel):
 class UnverifiableMarkup(_ClosedModel):
     surface: str
     values: tuple[str, ...]
+    disposition: Literal["live", "legacy-debt"] = "live"
+
+
+class DesignDebtBaseline(_ClosedModel):
+    schema_version: Literal["1.0.0"]
+    registry_version: str
+    findings: tuple[str, ...]
+    geometry: tuple[str, ...]
+    unverifiable: tuple[str, ...]
+
+
+class EmitterEvidenceReceipt(_ClosedModel):
+    path: str
+    adapter_kinds: tuple[str, ...]
+    evidence_modes: tuple[str, ...]
+    evidence: tuple[str, ...]
+
+
+class EmitterMismatch(_ClosedModel):
+    path: str
+    reason: str
 
 
 class CanaryResult(_ClosedModel):
@@ -96,17 +239,21 @@ class CanaryResult(_ClosedModel):
 
 
 class ConformanceReceipt(_ClosedModel):
-    schema_version: Literal["1.0.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.2.0"] = SCHEMA_VERSION
     registry_version: str
     checked_surfaces: tuple[str, ...]
+    emitter_evidence: tuple[EmitterEvidenceReceipt, ...]
+    emitter_mismatches: tuple[EmitterMismatch, ...]
     unregistered_surfaces: tuple[str, ...]
     stale_registrations: tuple[str, ...]
     findings: tuple[Finding, ...]
     unverifiable_markup: tuple[UnverifiableMarkup, ...]
     stale_quarantine: tuple[StaleQuarantine, ...]
-    static_status: Literal["clean", "known-quarantine", "failed"]
+    debt_mismatches: tuple[str, ...]
+    geometry_debt_count: int
+    static_status: Literal["clean", "known-debt", "known-quarantine", "failed"]
     canary: CanaryResult
-    verdict: Literal["pass", "fail"]
+    verdict: Literal["pass", "fail", "hold"]
 
 
 def _canonical_json(model: BaseModel) -> str:
@@ -126,48 +273,164 @@ def _emit_event(event: str, **fields: object) -> None:
     sys.stderr.write(json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n")
 
 
+def _load_debt_baseline(project_root: Path) -> DesignDebtBaseline:
+    path = project_root / "tests" / "design_conformance_debt.json"
+    if not path.exists():
+        return DesignDebtBaseline(
+            schema_version="1.0.0",
+            registry_version=REGISTRY_VERSION,
+            findings=(),
+            geometry=(),
+            unverifiable=(),
+        )
+    return DesignDebtBaseline.model_validate_json(path.read_text("utf-8"))
+
+
 def _scan_static(
     source_root: Path,
 ) -> tuple[
     tuple[str, ...],
+    tuple[EmitterEvidenceReceipt, ...],
     tuple[str, ...],
     tuple[str, ...],
     tuple[Finding, ...],
     tuple[UnverifiableMarkup, ...],
     tuple[StaleQuarantine, ...],
-    Literal["clean", "known-quarantine", "failed"],
+    tuple[str, ...],
+    int,
+    tuple[EmitterMismatch, ...],
+    Literal["clean", "known-debt", "known-quarantine", "failed"],
 ]:
-    discovered = tuple(sorted(discover_surfaces(source_root)))
-    discovered_set = frozenset(discovered)
-    unregistered = tuple(sorted(discovered_set - REGISTERED))
-    stale_registrations = tuple(sorted(REGISTERED - discovered_set))
+    project_root = source_root.parent if source_root.name == "src" else source_root
+    raw_emitters = discover_emitters(project_root)
+    merged_emitters: dict[str, EmitterEvidenceReceipt] = {}
+    for emitter in raw_emitters:
+        prior = merged_emitters.get(emitter.path)
+        merged_emitters[emitter.path] = EmitterEvidenceReceipt(
+            path=emitter.path,
+            adapter_kinds=tuple(
+                sorted(set(emitter.adapter_kinds) | set(prior.adapter_kinds if prior else ()))
+            ),
+            evidence_modes=tuple(
+                sorted(set(emitter.evidence_modes) | set(prior.evidence_modes if prior else ()))
+            ),
+            evidence=tuple(sorted(set(emitter.evidence) | set(prior.evidence if prior else ()))),
+        )
+    emitter_evidence = tuple(merged_emitters[path] for path in sorted(merged_emitters))
+    discovered_set = frozenset(item.path for item in emitter_evidence)
+    manifest_paths = frozenset(entry.path for entry in VISUAL_EMITTER_MANIFEST)
+    manifest_by_path = {entry.path: entry for entry in VISUAL_EMITTER_MANIFEST}
+    governed_paths = GOVERNED if (project_root / "design-system" / "src").exists() else REGISTERED
+    discovered = tuple(sorted(discovered_set & governed_paths))
+    unregistered = tuple(sorted(discovered_set - manifest_paths))
+    stale_registrations = tuple(sorted(governed_paths - discovered_set))
+    emitter_mismatches: list[EmitterMismatch] = []
+    for observed in emitter_evidence:
+        contract = manifest_by_path.get(observed.path)
+        if contract is None:
+            continue
+        declared_adapters = {str(item) for item in contract.adapter_kinds}
+        unexpected_adapters = set(observed.adapter_kinds) - declared_adapters
+        if unexpected_adapters:
+            emitter_mismatches.append(
+                EmitterMismatch(
+                    path=observed.path,
+                    reason=f"undeclared adapters: {','.join(sorted(unexpected_adapters))}",
+                )
+            )
+        unobserved_adapters = declared_adapters - set(observed.adapter_kinds)
+        if unobserved_adapters:
+            emitter_mismatches.append(
+                EmitterMismatch(
+                    path=observed.path,
+                    reason=f"unobserved adapters: {','.join(sorted(unobserved_adapters))}",
+                )
+            )
+        declared_modes = {str(item) for item in contract.evidence_modes}
+        unexpected_modes = set(observed.evidence_modes) - declared_modes
+        if unexpected_modes:
+            emitter_mismatches.append(
+                EmitterMismatch(
+                    path=observed.path,
+                    reason=f"undeclared evidence modes: {','.join(sorted(unexpected_modes))}",
+                )
+            )
+    ordered_emitter_mismatches = tuple(
+        sorted(emitter_mismatches, key=lambda item: (item.path, item.reason))
+    )
+    debt_baseline = _load_debt_baseline(project_root)
+    baseline_findings = frozenset(debt_baseline.findings)
+    baseline_unverifiable = frozenset(debt_baseline.unverifiable)
 
     today = date.today()
     quarantine = {(entry.surface, entry.dimension): entry for entry in QUARANTINE_ENTRIES}
     scanned: dict[str, dict[str, list[str]]] = {}
     findings: list[Finding] = []
     unverifiable_markup: list[UnverifiableMarkup] = []
+    observed_finding_debt: set[str] = set()
+    observed_unverifiable_debt: set[str] = set()
+    observed_geometry_debt: list[str] = []
     for surface in discovered:
-        evidence = scan_surface_evidence(surface, css_text(source_root / surface))
+        surface_path = source_root / surface
+        if not surface_path.exists():
+            surface_path = project_root / surface
+        text = (
+            css_text(surface_path)
+            if surface_path.suffix == ".py"
+            else surface_path.read_text("utf-8")
+        )
+        evidence = scan_surface_evidence(surface, text)
+        observed_geometry_debt.extend(geometry_debt_fingerprints(surface, text))
         violations = evidence.violations()
         scanned[surface] = violations
         if evidence.unverifiable_markup:
-            unverifiable_markup.append(
-                UnverifiableMarkup(surface=surface, values=evidence.unverifiable_markup)
-            )
+            legacy_values: list[str] = []
+            live_values: list[str] = []
+            for value in evidence.unverifiable_markup:
+                identity = unverifiable_debt_id(surface, value)
+                observed_unverifiable_debt.add(identity)
+                (legacy_values if identity in baseline_unverifiable else live_values).append(value)
+            if legacy_values:
+                unverifiable_markup.append(
+                    UnverifiableMarkup(
+                        surface=surface,
+                        values=tuple(legacy_values),
+                        disposition="legacy-debt",
+                    )
+                )
+            if live_values:
+                unverifiable_markup.append(
+                    UnverifiableMarkup(surface=surface, values=tuple(live_values))
+                )
         for dimension, raw_values in sorted(violations.items()):
             entry = quarantine.get((surface, dimension))
-            disposition: Literal["live", "quarantined"] = "live"
+            legacy_values = []
+            live_values = []
+            for value in sorted(set(raw_values)):
+                identity = finding_debt_id(surface, dimension, value)
+                observed_finding_debt.add(identity)
+                (legacy_values if identity in baseline_findings else live_values).append(value)
+            if legacy_values:
+                findings.append(
+                    Finding(
+                        surface=surface,
+                        dimension=dimension,
+                        values=tuple(legacy_values),
+                        disposition="legacy-debt",
+                    )
+                )
+            disposition: Literal["live", "quarantined", "legacy-debt"] = "live"
             if entry is not None and entry.expires_on >= today:
                 disposition = "quarantined"
-            findings.append(
-                Finding(
-                    surface=surface,
-                    dimension=dimension,
-                    values=tuple(sorted(set(raw_values))),
-                    disposition=disposition,
+            if live_values:
+                findings.append(
+                    Finding(
+                        surface=surface,
+                        dimension=dimension,
+                        values=tuple(live_values),
+                        disposition=disposition,
+                    )
                 )
-            )
 
     stale_quarantine: list[StaleQuarantine] = []
     for entry in sorted(
@@ -191,23 +454,61 @@ def _scan_static(
     ordered_findings = tuple(sorted(findings, key=lambda item: (item.surface, item.dimension)))
     ordered_unverifiable = tuple(sorted(unverifiable_markup, key=lambda item: item.surface))
     ordered_stale = tuple(stale_quarantine)
+    debt_mismatches = geometry_debt_failures(observed_geometry_debt, debt_baseline.geometry)
+    debt_mismatches.extend(
+        f"new finding debt: {item}" for item in sorted(observed_finding_debt - baseline_findings)
+    )
+    debt_mismatches.extend(
+        f"stale finding debt: {item}" for item in sorted(baseline_findings - observed_finding_debt)
+    )
+    debt_mismatches.extend(
+        f"new unverifiable debt: {item}"
+        for item in sorted(observed_unverifiable_debt - baseline_unverifiable)
+    )
+    debt_mismatches.extend(
+        f"stale unverifiable debt: {item}"
+        for item in sorted(baseline_unverifiable - observed_unverifiable_debt)
+    )
+    if debt_baseline.registry_version != REGISTRY_VERSION:
+        debt_mismatches.append(
+            "design debt registry version "
+            f"{debt_baseline.registry_version!r} != {REGISTRY_VERSION!r}"
+        )
+    ordered_debt_mismatches = tuple(sorted(debt_mismatches))
     has_live = any(item.disposition == "live" for item in ordered_findings)
+    has_live_unverifiable = any(item.disposition == "live" for item in ordered_unverifiable)
     static_failed = bool(
-        has_live or unregistered or stale_registrations or ordered_unverifiable or ordered_stale
+        has_live
+        or has_live_unverifiable
+        or unregistered
+        or stale_registrations
+        or ordered_stale
+        or ordered_debt_mismatches
+        or ordered_emitter_mismatches
     )
     if static_failed:
-        static_status: Literal["clean", "known-quarantine", "failed"] = "failed"
+        static_status: Literal["clean", "known-debt", "known-quarantine", "failed"] = "failed"
     elif any(item.disposition == "quarantined" for item in ordered_findings):
         static_status = "known-quarantine"
+    elif (
+        any(item.disposition == "legacy-debt" for item in ordered_findings)
+        or any(item.disposition == "legacy-debt" for item in ordered_unverifiable)
+        or observed_geometry_debt
+    ):
+        static_status = "known-debt"
     else:
         static_status = "clean"
     return (
         discovered,
+        emitter_evidence,
         unregistered,
         stale_registrations,
         ordered_findings,
         ordered_unverifiable,
         ordered_stale,
+        ordered_debt_mismatches,
+        len(observed_geometry_debt),
+        ordered_emitter_mismatches,
         static_status,
     )
 
@@ -218,6 +519,179 @@ def _validate_canary_url(canary_url: str) -> None:
         raise ValueError("canary URL must use http or https")
     if parsed_url.username is not None or parsed_url.password is not None:
         raise ValueError("canary URL must not contain credentials")
+    # Accessing ``port`` validates malformed bracketed/numbered authorities.
+    # Do this before either transport is started so both canaries share the
+    # same URL safety boundary.
+    _ = parsed_url.port
+
+
+def _canary_origin(url: str) -> tuple[str, str, int]:
+    parsed_url = urllib.parse.urlsplit(url)
+    scheme = parsed_url.scheme.lower()
+    hostname = (parsed_url.hostname or "").lower()
+    port = parsed_url.port
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, hostname, port
+
+
+def _browser_canary_findings(page: _CanaryPage) -> tuple[str, ...]:
+    """Return deterministic computed-style mismatches from a Playwright page."""
+
+    # Keep DOM inspection in the browser process.  In particular, reading
+    # page.content() alone cannot observe CSSOM rules or custom-property
+    # mutations made by JavaScript after the original response was received.
+    payload: object = page.evaluate(
+        """
+        ({rootProperties, primitiveContracts}) => {
+          const root = getComputedStyle(document.documentElement);
+          const rootValues = Object.fromEntries(
+            rootProperties.map((name) => [name, root.getPropertyValue(name).trim()])
+          );
+          const findings = [];
+          const inspectInline = (node, selector, index) => {
+            // Inline declarations are outside the canonical primitive CSS;
+            // inspect every declaration, including custom properties, rather
+            // than relying on a finite visual-property allowlist.
+            for (let offset = 0; offset < node.style.length; offset += 1) {
+              const property = node.style.item(offset);
+              const actual = node.style.getPropertyValue(property).trim();
+              if (actual) {
+                findings.push({kind: "inline", selector, index, property, actual});
+              }
+            }
+          };
+          inspectInline(document.documentElement, "document.documentElement", 0);
+          for (const contract of primitiveContracts) {
+            const [selector, checks] = contract;
+            const nodes = document.querySelectorAll(selector);
+            nodes.forEach((node, index) => {
+              inspectInline(node, selector, index);
+              const computed = getComputedStyle(node);
+              for (const [property, variable] of checks) {
+                const expected = rootValues[variable] || "";
+                const actual = computed.getPropertyValue(property).trim();
+                if (!expected) {
+                  continue;
+                }
+                // Base primitives have no min-height declaration; their
+                // browser initial value is not a component contract.  When a
+                // surface or runtime rule supplies a real minimum, it must
+                // use the canonical touch-target token.
+                if (property === "min-height" && (actual === "0px" || actual === "auto")) {
+                  continue;
+                }
+                if (actual !== expected) {
+                  findings.push({kind: "computed", selector, index, property, actual, variable, expected});
+                }
+              }
+            });
+          }
+          return {rootValues, findings};
+        }
+        """,
+        {
+            "rootProperties": list(_BROWSER_CANARY_ROOT_PROPERTIES),
+            "primitiveContracts": [
+                [selector, [list(check) for check in checks]]
+                for selector, checks in _BROWSER_CANARY_PRIMITIVES
+            ],
+        },
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("browser canary returned invalid inspection payload")
+    payload_dict = cast(dict[str, object], payload)
+    root_values = payload_dict.get("rootValues")
+    raw_findings = payload_dict.get("findings")
+    if not isinstance(root_values, dict) or not isinstance(raw_findings, list):
+        raise ValueError("browser canary returned invalid inspection payload")
+    root_values_dict = cast(dict[str, object], root_values)
+    raw_findings_list = cast(list[object], raw_findings)
+
+    findings = [
+        f"root custom property missing: {name}"
+        for name in _BROWSER_CANARY_ROOT_PROPERTIES
+        if not isinstance(root_values_dict.get(name), str)
+        or not cast(str, root_values_dict[name]).strip()
+    ]
+    for item in raw_findings_list:
+        if not isinstance(item, dict):
+            raise ValueError("browser canary returned invalid style finding")
+        item_dict = cast(dict[str, object], item)
+        selector = item_dict.get("selector")
+        index = item_dict.get("index")
+        property_name = item_dict.get("property")
+        actual = item_dict.get("actual")
+        variable = item_dict.get("variable")
+        expected = item_dict.get("expected")
+        if not isinstance(selector, str) or not isinstance(index, int):
+            raise ValueError("browser canary returned invalid style finding")
+        if not isinstance(property_name, str) or not isinstance(actual, str):
+            raise ValueError("browser canary returned invalid style finding")
+        kind = item_dict.get("kind")
+        if kind == "inline":
+            findings.append(f"{selector}[{index}] inline {property_name}: {actual!r}")
+            continue
+        if kind != "computed" or not isinstance(variable, str) or not isinstance(expected, str):
+            raise ValueError("browser canary returned invalid style finding")
+        findings.append(
+            f"{selector}[{index}] {property_name}: computed {actual!r} != {variable} ({expected!r})"
+        )
+    return tuple(findings)
+
+
+def _fetch_browser_canary(canary_url: str, deadline: float) -> tuple[str, tuple[str, ...]]:
+    """Navigate and inspect a same-origin page with the optional Playwright adapter."""
+
+    # Playwright is intentionally imported only for this opt-in path.  A
+    # missing package or browser executable is a normal unavailable canary,
+    # never a pass and never a static-scan failure.
+    playwright_api = cast(
+        _CanaryPlaywrightModule,
+        importlib.import_module("playwright.sync_api"),
+    )
+
+    initial_origin = _canary_origin(canary_url)
+    timeout_ms = max(1, int(max(0.001, deadline - time.monotonic()) * 1000))
+    with cast(_CanaryPlaywrightContext, playwright_api.sync_playwright()) as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(service_workers="block")
+            try:
+                page = context.new_page()
+
+                def route_same_origin(route: _CanaryRoute) -> None:
+                    request_origin = _canary_origin(route.request.url)
+                    if request_origin != initial_origin:
+                        route.abort()
+                    else:
+                        route.continue_()
+
+                page.route("**/*", route_same_origin)
+                page.goto(canary_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("canary deadline expired")
+                # Inline scripts and same-origin resources have run by load;
+                # this keeps the result post-JS without waiting unboundedly for
+                # long-polling/network-idle pages.
+                page.wait_for_load_state("load", timeout=timeout_ms)
+                remaining_ms = int(max(0.0, deadline - time.monotonic()) * 1000)
+                if remaining_ms <= 0:
+                    raise TimeoutError("canary deadline expired")
+                # Catch delayed script/CSSOM mutations (including the ~250 ms
+                # adversarial fixture) within the overall canary deadline.
+                page.wait_for_timeout(min(_BROWSER_CANARY_SETTLE_MILLISECONDS, remaining_ms))
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("canary deadline expired")
+                html = page.content()
+                if len(html.encode("utf-8")) > _CANARY_READ_LIMIT:
+                    raise ValueError("canary response exceeded read limit")
+                findings = _browser_canary_findings(page)
+                return html, findings
+            finally:
+                context.close()
+        finally:
+            browser.close()
 
 
 def _fetch_canary_html(canary_url: str, deadline: float) -> str:
@@ -249,18 +723,23 @@ def _fetch_canary_html(canary_url: str, deadline: float) -> str:
         return payload.decode(charset, errors="replace")
 
 
-def _scan_canary(canary_url: str | None) -> CanaryResult:
+def _scan_canary(canary_url: str | None, *, browser_canary: bool = False) -> CanaryResult:
     if canary_url is None:
         return CanaryResult(status="skipped:not-requested")
 
     try:
         _validate_canary_url(canary_url)
         deadline = time.monotonic() + _CANARY_WALL_TIMEOUT_SECONDS
-        result_queue: queue.Queue[str | Exception] = queue.Queue(maxsize=1)
+        result_queue: queue.Queue[tuple[str, tuple[str, ...]] | str | Exception] = queue.Queue(
+            maxsize=1
+        )
 
         def fetch() -> None:
             try:
-                result_queue.put(_fetch_canary_html(canary_url, deadline))
+                if browser_canary:
+                    result_queue.put(_fetch_browser_canary(canary_url, deadline))
+                else:
+                    result_queue.put(_fetch_canary_html(canary_url, deadline))
             except Exception as exc:
                 result_queue.put(exc)
 
@@ -275,7 +754,15 @@ def _scan_canary(canary_url: str | None) -> CanaryResult:
             raise TimeoutError("canary deadline expired") from exc
         if isinstance(result, Exception):
             raise result
-        html = result
+        browser_findings: tuple[str, ...] = ()
+        if browser_canary:
+            if not isinstance(result, tuple) or len(result) != 2:
+                raise ValueError("browser canary returned invalid result")
+            html, browser_findings = result
+        else:
+            if not isinstance(result, str):
+                raise ValueError("canary returned invalid result")
+            html = result
     except Exception as exc:
         return CanaryResult(
             status="skipped:unavailable",
@@ -284,38 +771,57 @@ def _scan_canary(canary_url: str | None) -> CanaryResult:
 
     evidence = scan_surface_evidence("<canary>", html)
     title_findings = tuple(evidence.violations().get("floating-card-title", []))
-    if title_findings or evidence.unverifiable_markup:
+    findings = tuple((*title_findings, *browser_findings))
+    if findings or evidence.unverifiable_markup:
         return CanaryResult(
             status="failed",
-            findings=title_findings,
+            findings=findings,
             unverifiable_markup=evidence.unverifiable_markup,
         )
     return CanaryResult(status="passed")
 
 
-def _build_receipt(source_root: Path, canary_url: str | None) -> ConformanceReceipt:
+def _build_receipt(
+    source_root: Path,
+    canary_url: str | None,
+    *,
+    require_canary: bool = False,
+    browser_canary: bool = False,
+) -> ConformanceReceipt:
     (
         checked,
+        emitter_evidence,
         unregistered,
         stale_registrations,
         findings,
         unverifiable_markup,
         stale_quarantine,
+        debt_mismatches,
+        geometry_debt_count,
+        emitter_mismatches,
         static_status,
     ) = _scan_static(source_root)
-    canary = _scan_canary(canary_url)
+    canary = _scan_canary(canary_url, browser_canary=browser_canary)
     failed = static_status == "failed" or canary.status == "failed"
+    held = require_canary and canary.status in {
+        "skipped:not-requested",
+        "skipped:unavailable",
+    }
     return ConformanceReceipt(
         registry_version=REGISTRY_VERSION,
         checked_surfaces=checked,
+        emitter_evidence=emitter_evidence,
+        emitter_mismatches=emitter_mismatches,
         unregistered_surfaces=unregistered,
         stale_registrations=stale_registrations,
         findings=findings,
         unverifiable_markup=unverifiable_markup,
         stale_quarantine=stale_quarantine,
+        debt_mismatches=debt_mismatches,
+        geometry_debt_count=geometry_debt_count,
         static_status=static_status,
         canary=canary,
-        verdict="fail" if failed else "pass",
+        verdict="fail" if failed else "hold" if held else "pass",
     )
 
 
@@ -367,6 +873,16 @@ def _parser() -> argparse.ArgumentParser:
         "--canary-url",
         help="optional read-only rendered HTML canary URL",
     )
+    parser.add_argument(
+        "--browser-canary",
+        action="store_true",
+        help="use Playwright Chromium for bounded supplementary DOM/computed-style evidence",
+    )
+    parser.add_argument(
+        "--require-canary",
+        action="store_true",
+        help="fail closed with HOLD when rendered canary evidence is unavailable",
+    )
     return parser
 
 
@@ -376,9 +892,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     source_root: Path = args.source_root.resolve()
     if not source_root.is_dir():
         parser.error(f"source root is not a directory: {source_root}")
+    if args.browser_canary and args.canary_url is None:
+        parser.error("--browser-canary requires --canary-url")
 
     try:
-        receipt = _build_receipt(source_root, args.canary_url)
+        receipt = _build_receipt(
+            source_root,
+            args.canary_url,
+            require_canary=args.require_canary,
+            browser_canary=args.browser_canary,
+        )
     except (OSError, UnicodeError, ValueError) as exc:
         _emit_event("design_conformance_input_error", error=type(exc).__name__)
         return 2
@@ -409,7 +932,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(json.dumps(summary, separators=(",", ":"), sort_keys=True) + "\n")
         _emit_event("design_conformance_receipt_written", path=str(destination))
 
-    return 1 if receipt.verdict == "fail" else 0
+    if receipt.verdict == "fail":
+        return 1
+    if receipt.verdict == "hold":
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
