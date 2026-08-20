@@ -71,7 +71,7 @@ def _seed_fact(db: Path, *, key: str = "home_city") -> int:
 def test_packet_absent_with_no_proposed_facts(ctx: tuple[FlaskClient, Path, Path]) -> None:
     _client, db, _root = ctx
     html = render_ledger_panel(db)
-    assert "ledger-packet" not in html
+    assert 'id="ledger-packet"' not in html
 
 
 def test_proposed_fact_appears_in_packet(ctx: tuple[FlaskClient, Path, Path]) -> None:
@@ -112,7 +112,7 @@ def test_affirm_route_promotes_and_bumps_activation(
 
     # Affirmed facts must not still be waiting on the owner.
     html = render_ledger_panel(db)
-    assert "ledger-packet" not in html
+    assert 'id="ledger-packet"' not in html
 
 
 def test_reject_route_retires_and_bumps_activation(
@@ -136,7 +136,7 @@ def test_reject_route_retires_and_bumps_activation(
         conn.close()
     assert int(row[0] or 0) == 1
     html = render_ledger_panel(db)
-    assert "ledger-packet" not in html
+    assert 'id="ledger-packet"' not in html
 
 
 def test_affirm_stale_id_is_404(ctx: tuple[FlaskClient, Path, Path]) -> None:
@@ -155,7 +155,7 @@ def test_packet_degrades_on_pre_0159_db(tmp_path: Path) -> None:
     db = tmp_path / "old.db"
     _build_db(db, target="0152_v_thesis_status_stub_substring")
     html = render_ledger_panel(db)
-    assert "ledger-packet" not in html
+    assert 'id="ledger-packet"' not in html
 
 
 def test_list_facts_excludes_affirmed_and_rejected(ctx: tuple[FlaskClient, Path, Path]) -> None:
@@ -247,7 +247,7 @@ def test_reaffirm_route_bumps_affirmed_at_and_clears_the_packet(
     assert affirmed_at != "2020-01-01T00:00:00"  # refreshed, no longer expired
 
     html = render_ledger_panel(db)
-    assert "ledger-packet" not in html
+    assert 'id="ledger-packet"' not in html
 
 
 def test_reaffirm_stale_id_is_404(ctx: tuple[FlaskClient, Path, Path]) -> None:
@@ -285,7 +285,7 @@ def test_retire_route_retires_and_bumps_activation(
     assert status == "rejected"
     assert int(row[0] or 0) == 1
     html = render_ledger_panel(db)
-    assert "ledger-packet" not in html
+    assert 'id="ledger-packet"' not in html
 
 
 def test_retire_route_cannot_retire_a_proposed_fact(
@@ -372,4 +372,4 @@ def test_expiring_fact_not_shown_before_horizon_elapses(
     finally:
         conn.close()
     html = render_ledger_panel(db)
-    assert "ledger-packet" not in html
+    assert 'id="ledger-packet"' not in html

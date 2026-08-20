@@ -11,7 +11,7 @@ from __future__ import annotations
 from io import StringIO
 
 from report.models import SectionStatus, ValuationBasisSection
-from report.renderers.workspace_charts import sparkline
+from report.renderers.workspace_charts import SparklineSize, sparkline
 from report.renderers.workspace_sections._shared import (
     _empty_panel,
     _esc,
@@ -105,7 +105,7 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     hist_values = [h.value for h in vb.history if h.value is not None]
     if hist_values:
         body.write(
-            f'<div class="valuation-spark">{sparkline(hist_values, width=560, height=60)}</div>'
+            f'<div class="valuation-spark">{sparkline(hist_values, size=SparklineSize.VALUATION)}</div>'
         )
         if vb.history:
             body.write(

@@ -24,22 +24,12 @@ from pathlib import Path
 from attribution import PositionAttribution, build_position_attribution
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import PositionAlphaRow, fetch_portfolio_analytics
-
-_ATTRIB_STYLE = """<style>
-.atr-card { margin-bottom:var(--sp-2); }
-.atr-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:4px; }
-.atr-ticker { font-family:var(--mono); font-weight:600; }
-.atr-alpha { font-family:var(--mono); font-variant-numeric:tabular-nums;
-  font-size:var(--fs-caption); }
-.atr-window { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
-.atr-narrative { font-size:var(--fs-body); line-height:1.55; color:var(--fg-soft); margin:0; }
-.atr-sub { color:var(--muted); font-size:var(--fs-caption); margin:2px 0 10px; }
-</style>"""
+from pipeline.analysis_styles import ANALYSIS_STYLE
 
 
 def _alpha_chip(a: PositionAttribution) -> str:
     if a.alpha_usd is None:
-        return '<span class="atr-alpha" style="color:var(--muted)">&alpha; &mdash;</span>'
+        return '<span class="atr-alpha">&alpha; &mdash;</span>'
     tone = "k-num-pos" if a.alpha_usd >= 0 else "k-num-neg"
     sign = "+" if a.alpha_usd >= 0 else "-"
     return f'<span class="atr-alpha {tone}">&alpha; {sign}${abs(a.alpha_usd):,.0f}</span>'
@@ -90,7 +80,7 @@ def render_attribution_section(
         user_id=user_id,
     )
     return (
-        f"{_ATTRIB_STYLE}"
+        f"{ANALYSIS_STYLE}"
         '<section class="panel"><h2>Attribution</h2>'
         '<p class="atr-sub">What drove this position\'s window performance — tracker '
         "dollar alpha vs SPY, the entry posture, and the thesis/alert/decision events "
@@ -107,7 +97,7 @@ def render_book_attribution_section(attributions: list[PositionAttribution]) -> 
         return ""
     cards = "".join(_card(a, show_ticker=True) for a in attributions)
     return (
-        f"{_ATTRIB_STYLE}"
+        f"{ANALYSIS_STYLE}"
         '<section class="panel"><h2>Attribution narratives</h2>'
         '<p class="atr-sub">Per research position (open lifecycle row): window dollar '
         "alpha vs the SPY counterfactual + the thesis events behind it, biggest moves "

@@ -30,6 +30,7 @@ from pipeline.operations_panel import (
     build_operations_panel_view,
     render_operations_panel,
 )
+from pipeline.operations_styles import OPERATIONS_STYLE
 from pipeline.provenance_panel import PROVENANCE_SECTIONS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -211,7 +212,8 @@ def test_operations_renderer_has_governance_tab_and_related_views(
     assert 'aria-selected="true"' in tablist
     assert 'tabindex="0"' in tablist
     assert 'tabindex="-1"' in tablist
-    assert "var(--touch-target-size)" in tablist
+    assert "k-chip-tab" in tablist
+    assert ".operations-tab{min-block-size:var(--touch-target-size)}" in OPERATIONS_STYLE
     assert 'data-operations-task-card="true"' in html
     assert 'id="operations-pane-governance"' in html
     assert "README stewardship" in html
@@ -612,7 +614,7 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert ":focus-visible" in html
     assert html.count('data-operations-task-card="true"') == 43
     assert "@media (max-width:" in html
-    assert "min-block-size: var(--touch-target-size)" in html
+    assert "min-block-size:var(--touch-target-size)" in html
     assert 'data-operations-table-scroll="true"' not in html
 
 

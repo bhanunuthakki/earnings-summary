@@ -124,7 +124,7 @@ JS = r"""
       .querySelectorAll('[data-quarter-card][data-quarter-group="' + groupId + '"]')
       .forEach(function (card) {
         var match = card.getAttribute('data-quarter') === q;
-        card.style.display = match ? '' : 'none';
+        card.hidden = !match;
       });
   }
   quarterGroups.forEach(function (group) {
@@ -150,8 +150,8 @@ JS = r"""
       if (!targetId) return;
       var target = document.getElementById(targetId);
       if (!target) return;
-      var isOpen = target.style.display !== 'none';
-      target.style.display = isOpen ? 'none' : '';
+      var isOpen = !target.hidden;
+      target.hidden = isOpen;
       var chev = row.querySelector('.fin-chev');
       if (chev) chev.textContent = isOpen ? '▶' : '▼';
     });
@@ -224,7 +224,7 @@ JS = r"""
     helpEl.setAttribute('role', 'dialog');
     helpEl.setAttribute('aria-label', 'Keyboard shortcuts');
     helpEl.innerHTML =
-      '<div class="ws-kbd-card"><div class="ws-kbd-title">Keyboard shortcuts</div>' +
+      '<div class="ws-kbd-surface"><div class="ws-kbd-title">Keyboard shortcuts</div>' +
       '<dl class="ws-kbd-list">' +
       '<dt>j / k</dt><dd>next / previous panel</dd>' +
       '<dt>/</dt><dd>focus the table filter</dd>' +

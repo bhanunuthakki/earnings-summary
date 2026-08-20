@@ -306,9 +306,9 @@ def test_recommendation_uses_interior_titles_and_registry_card_tracks(tmp_path: 
     assert '<h3 class="k-well-title">Preferred plan' in html
     assert '<h3 class="k-well-title">Why this plan</h3>' in html
     assert '<h3 class="k-well-title">Main uncertainty &amp; disconfirming evidence</h3>' in html
-    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));" in compact
-    assert "grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr));" in compact
-    assert "@media (max-width: 1100px)" in compact
+    assert ".alloc-alt-grid,.risk-cat-grid" in compact
+    assert "grid-template-columns:repeat(auto-fit,minmax(var(--grid-card-lg),1fr))" in compact
+    assert "width:var(--grid-card-sm)" in compact
 
 
 def test_stale_dirty_artifact_shows_stale_pill_and_refresh(tmp_path: Path) -> None:

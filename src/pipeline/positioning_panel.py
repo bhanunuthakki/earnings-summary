@@ -25,51 +25,13 @@ from pathlib import Path
 from typing import cast
 
 from candidate_fit_cache import read_materialized_fit_meta
+from pipeline.portfolio_styles import positioning_css
 from positioning.encode import ProposedProfile
 from positioning.profile import SLEEVE_KEYS, PositioningProfile, SectorTarget
 from positioning.store import PositioningIntentRow, latest_intent, list_intents
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-_PANEL_STYLE = """<style>
-.pos-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap:16px; align-items:start; }
-.pos-grid .pos-span { grid-column: 1 / -1; }
-@media (max-width: 1100px) { .pos-grid { grid-template-columns: 1fr; } }
-.pos-dim { display:flex; gap:10px; align-items:baseline; padding:4px 0;
-  border-bottom:1px dashed var(--border); font-size:var(--fs-body); }
-.pos-dim:last-child { border-bottom:none; }
-.pos-dim .lbl { min-width:170px; color:var(--muted); }
-.pos-dim .val { font-family:var(--mono); }
-.pos-hist { font-size:var(--fs-body); }
-.pos-hist td { padding:5px 10px 5px 0; vertical-align:top; }
-.pos-chat-log { max-height:420px; overflow-y:auto; display:flex; flex-direction:column;
-  gap:8px; padding:4px 0; }
-.pos-msg { padding:8px 11px; border-radius:var(--radius); font-size:var(--fs-body);
-  line-height:1.5; white-space:pre-wrap; }
-.pos-msg.user { background:var(--surface); border:1px solid var(--border); align-self:flex-end;
-  max-width:85%; }
-.pos-msg.coach { background:var(--paper); border:1px solid var(--border); max-width:95%; }
-.pos-chat-form { display:flex; gap:8px; margin-top:10px; }
-.pos-chat-form textarea { flex:1; min-height:56px; resize:vertical; background:var(--paper);
-  color:var(--fg); border:1px solid var(--border); border-radius:var(--radius);
-  padding:8px 10px; font-size:var(--fs-body); font-family:inherit; }
-.pos-form-grid { display:grid; grid-template-columns: 190px 1fr 1fr; gap:6px 10px;
-  align-items:center; font-size:var(--fs-body); }
-.pos-form-grid .hdr { color:var(--muted); font-size:var(--fs-caption); }
-.pos-form-grid input, .pos-form-grid select, .pos-narrative {
-  background:var(--paper); color:var(--fg); border:1px solid var(--border);
-  border-radius:var(--radius); padding:5px 8px; font-size:var(--fs-body);
-  font-family:var(--mono); width:100%; box-sizing:border-box; }
-.pos-narrative { font-family:inherit; min-height:64px; width:100%; margin-top:6px; }
-.pos-diff { font-size:var(--fs-caption); color:var(--muted); font-family:var(--mono); }
-/* D4 degraded-context strip: owner-language line + raw reasons behind details. */
-.pos-degraded { margin-top:8px; font-size:var(--fs-caption); color:var(--muted);
-  display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; }
-.pos-degraded details { flex-basis:100%; }
-.pos-degraded summary { cursor:pointer; }
-.pos-degraded ul { margin:4px 0 0 18px; font-family:var(--mono); }
-.pos-error { color:var(--bad); font-size:var(--fs-body); margin-top:8px; white-space:pre-wrap; }
-.pos-actions { display:flex; gap:8px; margin-top:12px; align-items:center; }
-</style>"""
+_PANEL_STYLE = positioning_css()
 
 
 # --------------------------------------------------------------------------- #
@@ -211,7 +173,7 @@ def render_active_target_card(db_path: Path, repo_root: Path) -> str:
             rows.append(_dim("Horizon", f"{p.horizon_years:g}y"))
         if p.life_circumstances:
             rows.append(_dim("Life circumstances", escape("; ".join(p.life_circumstances))))
-        rows.append(f'<p class="muted" style="margin-top:8px">“{escape(intent.narrative)}”</p>')
+        rows.append(f'<p class="muted pos-intent-quote">“{escape(intent.narrative)}”</p>')
     # D4 (surface_density_jit_redesign.md): a degraded book context announces
     # itself in the owner's vocabulary — a warn pill + what it means for THIS
     # card — with the raw engineering reasons one click away in a details
@@ -438,7 +400,9 @@ _COACH_JS = """<script>
   var sessionId = '';
   function msg(role, text) {
     var el = document.createElement('div');
-    el.className = 'pos-msg ' + role;
+    el.className = 'pos-msg';
+    el.classList.toggle('user', role === 'user');
+    el.classList.toggle('coach', role === 'coach');
     el.textContent = text;
     log.appendChild(el);
     log.scrollTop = log.scrollHeight;

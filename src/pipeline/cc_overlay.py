@@ -11,7 +11,7 @@ re-derived dismissal, and many lacked the full triad.
 This module is the single Overlay abstraction the directive's Law 3 calls for:
 
     var handle = window.CCOverlay.register(el, {
-      onClose, scrim, scrimOpacity, trapFocus, restoreFocus, modal, priority,
+      onClose, scrim, trapFocus, restoreFocus, modal, priority,
       group, motion, closeId, onOpen, autofocus, label,
     });
     handle.open(); handle.close(); handle.isOpen();
@@ -55,23 +55,13 @@ shell's ``hashchange``-closes-panels logic) — tracked, not built.
 
 from __future__ import annotations
 
+from pipeline.work_os_styles import CC_OVERLAY_CSS
+
 # Close motion only — S1's controls.py owns the .k-scrim/.k-overlay look +
 # OPEN motion (k-overlay-rise / k-overlay-fade). transform + opacity ONLY
 # (never layout props), one --transition step, reduced-motion-safe. The
 # .cc-m-* variant mirrors each surface's own open direction so dismissal reads
 # as the reverse of appearance.
-CC_OVERLAY_CSS = """
-.cc-anim-out { transition: opacity var(--transition), transform var(--transition);
-  opacity: 0; pointer-events: none; }
-.cc-anim-out.cc-m-rise        { transform: translateY(6px); }
-.cc-anim-out.cc-m-slide-right { transform: translateX(18px); }
-.cc-anim-out.cc-m-pop         { transform: translateX(-50%) scale(0.985); }
-.cc-scrim-out { transition: opacity var(--transition); opacity: 0; pointer-events: none; }
-@media (prefers-reduced-motion: reduce) {
-  .cc-anim-out, .cc-scrim-out { transition-duration: 0.01ms; }
-}
-"""
-
 # Raw string: the JS uses no Python-format substitution.
 CC_OVERLAY_JS = r"""
 (function () {
@@ -153,11 +143,6 @@ CC_OVERLAY_JS = r"""
       ensureScrim();
       scrim.classList.remove('cc-scrim-out');
       scrim.style.zIndex = String(zOf(s.el) - 1);
-      // Default scrim alpha rides the .k-scrim class (var(--scrim)); a custom
-      // scrimOpacity composes a neutral black veil at that alpha without a raw
-      // rgba literal (token discipline — see tests/test_ui_controls.py color dim).
-      scrim.style.background = (s.opts.scrimOpacity != null)
-        ? 'color-mix(in srgb, black ' + (s.opts.scrimOpacity * 100) + '%, transparent)' : '';
       scrim.hidden = false;
     } else {
       scrim.classList.remove('cc-scrim-out');

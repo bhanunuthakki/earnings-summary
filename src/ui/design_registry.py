@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
 from types import MappingProxyType
 
 from ui.tokens import (
@@ -37,7 +38,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.3.0"
+REGISTRY_VERSION = "1.7.0"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -54,15 +55,21 @@ __all__ = (
     "CCACTION_PINNED",
     "CCACTION_REGRESSION_FLOOR",
     "CHROME_TOKENS",
-    "DOCUMENTATION_PROJECTIONS",
+    "DYNAMIC_VISUAL_CONTRACTS",
     "EXEMPT",
+    "FAMILY_MASTER_SOURCES",
     "FONT_FAMILY_KEYWORDS",
     "FONT_SIZE_EXEMPT",
+    "GLOBAL_MASTER_SOURCES",
+    "GOVERNED",
     "GRIDS_BY_SELECTOR",
     "GRID_ARCHETYPES",
     "INDENT_TOKENS",
     "INDENT_TOKEN_NAMES",
     "INDENT_TOKEN_VALUES",
+    "LOCAL_PROPERTY_CONTRACTS",
+    "MASTER_GEOMETRY_CONTRACTS",
+    "MASTER_SOURCES",
     "MONO_TABLE_ALLOWLIST",
     "MONO_TABLE_APPROVALS",
     "PALETTE_DARK",
@@ -77,24 +84,35 @@ __all__ = (
     "RAIL_TOKEN_VALUES",
     "REGISTERED",
     "REGISTRY_VERSION",
+    "RUNTIME_VISUAL_CONTRACTS",
     "SHAPES_BY_SELECTOR",
     "SHAPE_ARCHETYPES",
     "SURFACE_SANCTIONS",
     "TITLES_BY_SELECTOR",
     "TITLE_PLACEMENTS",
     "TYPE_SCALE_PX",
+    "VISUAL_EMITTER_MANIFEST",
     "BespokeButtonApproval",
     "CCActionRegressionFloor",
+    "DynamicVisualContract",
+    "EmitterDisposition",
+    "EvidenceAdapter",
+    "EvidenceMode",
     "GridArchetype",
     "GridSignature",
+    "LocalPropertyContract",
+    "MasterGeometryContract",
     "MonoTableApproval",
     "PermanentExemption",
     "QuarantineEntry",
+    "RuntimeVisualContract",
     "ShapeArchetype",
     "ShapeSignature",
     "SurfaceSanction",
     "TitlePlacement",
+    "VisualEmitterEntry",
     "palette_css",
+    "validate_visual_emitter_manifest",
 )
 
 
@@ -177,6 +195,107 @@ class CCActionRegressionFloor:
     rationale: str
 
 
+class EmitterDisposition(StrEnum):
+    """Lifecycle status for a visual emitter in the locally owned product."""
+
+    PRODUCTION = "production"
+    GENERATED = "generated"
+    VENDOR = "vendor"
+    NONVISUAL = "nonvisual"
+
+
+class EvidenceAdapter(StrEnum):
+    """Static evidence acquisition adapters required for one visual emitter."""
+
+    PYTHON_CSS = "python-css"
+    HTML = "html"
+    SVG = "svg"
+    RUNTIME_JS = "runtime-js"
+    TOKEN = "token"
+
+
+class EvidenceMode(StrEnum):
+    """How the shared scanner may interpret evidence from an emitter."""
+
+    STATIC = "static"
+    SCOPED = "scoped"
+
+
+@dataclass(frozen=True)
+class VisualEmitterEntry:
+    """One shipped visual-emitter contract.
+
+    A path may have multiple adapters (for example, Python CSS plus inline SVG),
+    but it may appear only once.  This makes omission and conflicting ownership
+    deterministic errors instead of a scanner convention.
+    """
+
+    path: str
+    disposition: EmitterDisposition
+    adapter_kinds: frozenset[EvidenceAdapter]
+    evidence_modes: frozenset[EvidenceMode]
+    owner: str
+    rationale: str
+
+
+@dataclass(frozen=True)
+class LocalPropertyContract:
+    """A scoped component variable, never a duplicate canonical token value."""
+
+    name: str
+    surfaces: frozenset[str]
+    value_grammar: str
+    owner: str
+    rationale: str
+
+
+@dataclass(frozen=True)
+class MasterGeometryContract:
+    surface: str
+    digest: str
+    owner: str
+    rationale: str
+
+
+@dataclass(frozen=True)
+class DynamicVisualContract:
+    surface: str
+    digest: str
+    owner: str
+    rationale: str
+
+
+@dataclass(frozen=True)
+class RuntimeVisualContract:
+    """One dynamic geometry property owned by a closed interaction primitive."""
+
+    surface: str
+    property_name: str
+    value_pattern: str
+    owner: str
+    rationale: str
+
+
+def validate_visual_emitter_manifest(entries: tuple[VisualEmitterEntry, ...]) -> None:
+    """Reject ambiguous registry data before any derived projection is exposed."""
+
+    paths: set[str] = set()
+    for entry in entries:
+        if not entry.path or entry.path != entry.path.strip():
+            raise ValueError("visual emitter path must be nonblank and normalized")
+        if entry.path in paths:
+            raise ValueError(f"duplicate visual emitter path: {entry.path}")
+        paths.add(entry.path)
+        if not entry.adapter_kinds:
+            raise ValueError(f"visual emitter requires an adapter: {entry.path}")
+        if not entry.evidence_modes:
+            raise ValueError(f"visual emitter requires an evidence mode: {entry.path}")
+        if not entry.owner.strip():
+            raise ValueError(f"visual emitter requires an owner: {entry.path}")
+        if not entry.rationale.strip():
+            raise ValueError(f"visual emitter requires a rationale: {entry.path}")
+
+
 SHAPE_ARCHETYPES = (
     ShapeArchetype(
         "macro-container",
@@ -238,11 +357,6 @@ TITLE_PLACEMENTS = (
 PERMANENT_EXEMPTIONS = (
     PermanentExemption(
         "ui/tokens.py", "design-system", "Owns the canonical palette and scale literals."
-    ),
-    PermanentExemption(
-        "report/renderers/charts_v2.py",
-        "research-ui",
-        "Owns chart geometry-specific SVG labels and fills.",
     ),
     PermanentExemption(
         "ui/conformance_scan.py",
@@ -350,7 +464,7 @@ CCACTION_REGRESSION_FLOOR = (
     CCActionRegressionFloor("ui/controls.py", "design-system", "Current CCAction adopter."),
 )
 
-REGISTERED = frozenset(
+_BHA_92_SURFACES = frozenset(
     {
         "dashboard/_styles.py",
         "dashboard/inbox.py",
@@ -412,7 +526,6 @@ REGISTERED = frozenset(
         "report/renderers/workspace_sections/chrome.py",
         "report/renderers/workspace_sections/company.py",
         "report/renderers/workspace_sections/thesis_risk.py",
-        "report/renderers/workspace_reader_assets.py",
         "report/renderers/workspace_styles.py",
         "ui/cite_marks.py",
         "ui/conformance_scan.py",
@@ -422,6 +535,649 @@ REGISTERED = frozenset(
         "ui/tokens.py",
         "viewspec/render.py",
     }
+)
+
+_BHA_89_TO_92_ADDITIONAL_EMITTERS = (
+    "dashboard/_card.py",
+    "dashboard/evidence_drawer.py",
+    "dashboard/feed.py",
+    "pipeline/annual_letter_panel.py",
+    "pipeline/analysis_styles.py",
+    "pipeline/calibration_receipt.py",
+    "pipeline/console_scaffold.py",
+    "pipeline/ir_approval_panel.py",
+    "pipeline/key_metrics.py",
+    "pipeline/operations_styles.py",
+    "pipeline/provenance_panel.py",
+    "pipeline/portfolio_styles.py",
+    "pipeline/research_panel_styles.py",
+    "pipeline/since_last.py",
+    "pipeline/three_regime_renderer.py",
+    "pipeline/work_os_overview.py",
+    "pipeline/work_os_styles.py",
+    "pipeline/work_os_research.py",
+    "pipeline/you_said.py",
+    "report/renderers/markdown.py",
+    "report/renderers/workspace_decision_card.py",
+    "report/renderers/workspace_html.py",
+    "report/renderers/workspace_script.py",
+    "report/renderers/workspace_sections/_shared.py",
+    "report/renderers/workspace_sections/boot.py",
+    "report/renderers/workspace_sections/earnings.py",
+    "report/renderers/workspace_sections/eval_screen.py",
+    "report/renderers/workspace_sections/exec_comp.py",
+    "report/renderers/workspace_sections/financials.py",
+    "report/renderers/workspace_sections/position.py",
+    "report/renderers/workspace_sections/saydo.py",
+    "report/renderers/workspace_sections/sources.py",
+    "report/renderers/workspace_sections/synthesis.py",
+    "report/renderers/workspace_sections/valuation.py",
+    "ui/prose.py",
+    "ui/time.py",
+    "execution/build_earnings_calendar.py",
+    "execution/comments_server_alert_routes.py",
+)
+
+_GENERATED_FRONTEND_EMITTERS = (
+    "design-system/src/components/Button.tsx",
+    "design-system/src/components/Chip.tsx",
+    "design-system/src/components/DateField.tsx",
+    "design-system/src/components/Dot.tsx",
+    "design-system/src/components/Input.tsx",
+    "design-system/src/components/Label.tsx",
+    "design-system/src/components/Menu.tsx",
+    "design-system/src/components/MultiSelect.tsx",
+    "design-system/src/components/NumText.tsx",
+    "design-system/src/components/Pill.tsx",
+    "design-system/src/components/Select.tsx",
+    "design-system/src/components/TickerLabel.tsx",
+    "design-system/src/components/Textarea.tsx",
+    "design-system/src/components/Toolbar.tsx",
+    "design-system/src/components/Well.tsx",
+    "design-system/src/index.css",
+    "design-system/src/index.ts",
+    "design-system/src/lib/tone.ts",
+    "design-system/src/styles/controls.css",
+    "design-system/src/theme/ThemeProvider.tsx",
+    "design-system/src/tokens/tokens.css",
+)
+
+_NONVISUAL_CENSUS_CLASSIFICATIONS = (
+    "aggregator_sources.py",
+    "advisor/memos.py",
+    "compute/soft_rule_evaluator.py",
+    "decision_conditions.py",
+    "decision_extractor.py",
+    "etf_sources/nport.py",
+    "execution/land_session_notes.py",
+    "execution/verify_design_conformance.py",
+    "execution/sync_list_type_from_holdings.py",
+    "filing_text_fetcher.py",
+    "filings/fmp_sections.py",
+    "provenance/fulltext_backfill.py",
+    "ir_uploads.py",
+    "llm_client.py",
+    "pipeline/cc_state.py",
+    "redteam/telegram_cmd.py",
+    "report/sections/qa_roster.py",
+    "research/dcf_tweak.py",
+    "report/renderers/workspace_data.py",
+    "scheduler_manifest.py",
+    "transcript_qa.py",
+    "synthesis/tenet_accountability.py",
+)
+
+_PYTHON_CSS_SURFACES = frozenset(
+    {
+        "advisor/memos.py",
+        "compute/soft_rule_evaluator.py",
+        "dashboard/_styles.py",
+        "dashboard/feed.py",
+        "dashboard/inbox.py",
+        "etf_sources/nport.py",
+        "execution/build_earnings_calendar.py",
+        "execution/comments_server_alert_routes.py",
+        "execution/verify_design_conformance.py",
+        "pipeline/advisor_memos_panel.py",
+        "pipeline/allocation_decisions_panel.py",
+        "pipeline/allocation_recommendation_panel.py",
+        "pipeline/analysis_styles.py",
+        "pipeline/analytical_dashboard_html.py",
+        "pipeline/cc_action.py",
+        "pipeline/cc_overlay.py",
+        "pipeline/cc_state.py",
+        "pipeline/console_scaffold.py",
+        "pipeline/cron_health_panel.py",
+        "pipeline/dashboard_html.py",
+        "pipeline/dcf_globals_panel.py",
+        "pipeline/decision_journal_panel.py",
+        "pipeline/diet_panel.py",
+        "pipeline/discovery_panel.py",
+        "pipeline/evals_panel.py",
+        "pipeline/explore_panel.py",
+        "pipeline/ir_approval_panel.py",
+        "pipeline/journal_panel.py",
+        "pipeline/ledger_panel.py",
+        "pipeline/mobile_inbox_panel.py",
+        "pipeline/operations_panel.py",
+        "pipeline/operations_styles.py",
+        "pipeline/peeks.py",
+        "pipeline/portfolio_panel.py",
+        "pipeline/portfolio_styles.py",
+        "pipeline/position_lifecycle_panel.py",
+        "pipeline/positioning_panel.py",
+        "pipeline/provenance_panel.py",
+        "pipeline/research_panel_styles.py",
+        "pipeline/research_cockpit.py",
+        "pipeline/source_viewers.py",
+        "pipeline/ticker_command_center.py",
+        "pipeline/ticker_settings_panel.py",
+        "pipeline/triage_panel.py",
+        "pipeline/validation_issues_panel.py",
+        "pipeline/work_os_copilot.py",
+        "pipeline/work_os_shell.py",
+        "pipeline/work_os_styles.py",
+        "pipeline/worldview_panel.py",
+        "redteam/brief.py",
+        "report/renderers/charts_v2.py",
+        "report/renderers/workspace_chat.py",
+        "report/renderers/workspace_charts.py",
+        "report/renderers/workspace_comments.py",
+        "report/renderers/workspace_dcf.py",
+        "report/renderers/workspace_html.py",
+        "report/renderers/workspace_decision_card.py",
+        "report/renderers/workspace_script.py",
+        "report/renderers/workspace_sections/company.py",
+        "report/renderers/workspace_sections/thesis_risk.py",
+        "report/renderers/workspace_styles.py",
+        "ui/cite_marks.py",
+        "ui/controls.py",
+        "ui/living_grid.py",
+        "ui/source_chip.py",
+        "viewspec/render.py",
+    }
+)
+
+_NON_HTML_PYTHON_SURFACES = frozenset(
+    {
+        "advisor/memos.py",
+        "compute/soft_rule_evaluator.py",
+        "dashboard/_styles.py",
+        "execution/land_session_notes.py",
+        "execution/verify_design_conformance.py",
+        "pipeline/cc_overlay.py",
+        "pipeline/cc_state.py",
+        "redteam/telegram_cmd.py",
+        "report/renderers/workspace_chat.py",
+        "report/renderers/workspace_decision_card.py",
+        "scheduler_manifest.py",
+        "transcript_qa.py",
+        "ui/tokens.py",
+    }
+)
+
+_RUNTIME_JS_SURFACES = frozenset(
+    {
+        "dashboard/inbox.py",
+        "execution/verify_design_conformance.py",
+        "pipeline/advisor_memos_panel.py",
+        "pipeline/allocation_decisions_panel.py",
+        "pipeline/allocation_recommendation_panel.py",
+        "pipeline/cc_action.py",
+        "pipeline/cc_overlay.py",
+        "pipeline/cron_health_panel.py",
+        "pipeline/decision_journal_panel.py",
+        "pipeline/dashboard_html.py",
+        "pipeline/diet_panel.py",
+        "pipeline/discovery_panel.py",
+        "pipeline/evals_panel.py",
+        "pipeline/explore_panel.py",
+        "pipeline/ir_approval_panel.py",
+        "pipeline/journal_panel.py",
+        "pipeline/ledger_panel.py",
+        "pipeline/mobile_inbox_panel.py",
+        "pipeline/operations_panel.py",
+        "pipeline/portfolio_console_panel.py",
+        "pipeline/portfolio_panel.py",
+        "pipeline/position_lifecycle_panel.py",
+        "pipeline/positioning_panel.py",
+        "pipeline/provenance_panel.py",
+        "pipeline/source_calls_panel.py",
+        "pipeline/ticker_command_center.py",
+        "pipeline/ticker_settings_panel.py",
+        "pipeline/triage_panel.py",
+        "pipeline/work_os_copilot.py",
+        "pipeline/work_os_shell.py",
+        "pipeline/worldview_panel.py",
+        "redteam/brief.py",
+        "report/renderers/workspace_chat.py",
+        "report/renderers/workspace_comments.py",
+        "report/renderers/workspace_dcf.py",
+        "report/renderers/workspace_script.py",
+        "ui/conformance_scan.py",
+        "ui/living_grid.py",
+    }
+)
+
+_SVG_SURFACES = frozenset(
+    {
+        "execution/land_session_notes.py",
+        "pipeline/allocation_decisions_panel.py",
+        "pipeline/portfolio_panel.py",
+        "redteam/telegram_cmd.py",
+        "report/renderers/charts_v2.py",
+        "report/renderers/workspace_charts.py",
+        "scheduler_manifest.py",
+        "transcript_qa.py",
+        "ui/controls.py",
+        "ui/tokens.py",
+    }
+)
+
+_FRONTEND_ADAPTERS: Mapping[str, frozenset[EvidenceAdapter]] = MappingProxyType(
+    {
+        "design-system/src/components/DateField.tsx": frozenset(
+            {EvidenceAdapter.HTML, EvidenceAdapter.SVG}
+        ),
+        "design-system/src/components/Menu.tsx": frozenset(
+            {EvidenceAdapter.PYTHON_CSS, EvidenceAdapter.HTML}
+        ),
+        "design-system/src/components/MultiSelect.tsx": frozenset(
+            {EvidenceAdapter.PYTHON_CSS, EvidenceAdapter.HTML}
+        ),
+        "design-system/src/components/NumText.tsx": frozenset(
+            {EvidenceAdapter.PYTHON_CSS, EvidenceAdapter.HTML}
+        ),
+        "design-system/src/components/Select.tsx": frozenset(
+            {EvidenceAdapter.PYTHON_CSS, EvidenceAdapter.HTML}
+        ),
+        "design-system/src/components/TickerLabel.tsx": frozenset(
+            {EvidenceAdapter.PYTHON_CSS, EvidenceAdapter.HTML}
+        ),
+        "design-system/src/index.ts": frozenset({EvidenceAdapter.PYTHON_CSS}),
+        "design-system/src/lib/tone.ts": frozenset({EvidenceAdapter.PYTHON_CSS}),
+        "design-system/src/styles/controls.css": frozenset(
+            {EvidenceAdapter.PYTHON_CSS, EvidenceAdapter.HTML}
+        ),
+        "design-system/src/theme/ThemeProvider.tsx": frozenset(
+            {EvidenceAdapter.PYTHON_CSS, EvidenceAdapter.HTML}
+        ),
+    }
+)
+
+
+def _owner_for_surface(path: str) -> str:
+    if path.startswith("dashboard/") or "work_os" in path:
+        return "work-os"
+    if path.startswith("pipeline/portfolio") or path.startswith("pipeline/position"):
+        return "portfolio"
+    if path.startswith("ui/"):
+        return "design-system"
+    return "research-ui"
+
+
+def _adapters_for_surface(path: str) -> frozenset[EvidenceAdapter]:
+    if path in _FRONTEND_ADAPTERS:
+        return _FRONTEND_ADAPTERS[path]
+    if path == "ui/tokens.py":
+        return frozenset({EvidenceAdapter.SVG})
+    if path.endswith(".py"):
+        adapters: set[EvidenceAdapter] = set()
+        if path not in _NON_HTML_PYTHON_SURFACES:
+            adapters.add(EvidenceAdapter.HTML)
+        if path in _PYTHON_CSS_SURFACES:
+            adapters.add(EvidenceAdapter.PYTHON_CSS)
+        if path in _RUNTIME_JS_SURFACES:
+            adapters.add(EvidenceAdapter.RUNTIME_JS)
+        if path in _SVG_SURFACES:
+            adapters.add(EvidenceAdapter.SVG)
+        return frozenset(adapters)
+    if path.endswith(".css"):
+        return frozenset({EvidenceAdapter.PYTHON_CSS})
+    if path.endswith((".ts", ".tsx")):
+        return frozenset({EvidenceAdapter.HTML})
+    raise ValueError(f"unsupported visual emitter path: {path}")
+
+
+def _evidence_modes_for_surface(path: str) -> frozenset[EvidenceMode]:
+    if path == "report/renderers/charts_v2.py":
+        # Chart plot geometry is intentionally local, while its visual type,
+        # palette, and SVG attributes remain governed by scoped evidence.
+        return frozenset({EvidenceMode.STATIC, EvidenceMode.SCOPED})
+    return frozenset({EvidenceMode.STATIC})
+
+
+VISUAL_EMITTER_MANIFEST = (
+    tuple(
+        VisualEmitterEntry(
+            path,
+            EmitterDisposition.PRODUCTION,
+            _adapters_for_surface(path),
+            _evidence_modes_for_surface(path),
+            _owner_for_surface(path),
+            "Shipped visual output is governed by the design-language master.",
+        )
+        for path in (*sorted(_BHA_92_SURFACES), *_BHA_89_TO_92_ADDITIONAL_EMITTERS)
+    )
+    + tuple(
+        VisualEmitterEntry(
+            path,
+            EmitterDisposition.GENERATED,
+            _adapters_for_surface(path),
+            frozenset({EvidenceMode.STATIC}),
+            "design-system",
+            "React adapter is governed by deterministic Python generation and parity checks.",
+        )
+        for path in _GENERATED_FRONTEND_EMITTERS
+    )
+    + tuple(
+        VisualEmitterEntry(
+            path,
+            EmitterDisposition.NONVISUAL,
+            _adapters_for_surface(path),
+            frozenset({EvidenceMode.STATIC, EvidenceMode.SCOPED}),
+            "data-platform",
+            "Markup-like content is parsed data or diagnostics, not rendered product UI.",
+        )
+        for path in _NONVISUAL_CENSUS_CLASSIFICATIONS
+    )
+    + (
+        VisualEmitterEntry(
+            "ui/htmx_runtime.py",
+            EmitterDisposition.VENDOR,
+            frozenset({EvidenceAdapter.HTML}),
+            frozenset({EvidenceMode.STATIC, EvidenceMode.SCOPED}),
+            "design-system",
+            "Vendored HTMX runtime wrapper emits behavior but owns no product visual language.",
+        ),
+    )
+)
+validate_visual_emitter_manifest(VISUAL_EMITTER_MANIFEST)
+
+# This is a projection, not a separately maintained scanner allowlist.
+REGISTERED = frozenset(
+    entry.path
+    for entry in VISUAL_EMITTER_MANIFEST
+    if entry.disposition is EmitterDisposition.PRODUCTION
+)
+GOVERNED = frozenset(
+    entry.path
+    for entry in VISUAL_EMITTER_MANIFEST
+    if entry.disposition in {EmitterDisposition.PRODUCTION, EmitterDisposition.GENERATED}
+)
+
+# Literal visual definitions are legal only in these canonical master sources.
+# The generated projections are byte-for-byte checked against the Python
+# sources by check_design_sync.py; consumer surfaces remain fully scanned.
+GLOBAL_MASTER_SOURCES = frozenset(
+    {
+        "ui/controls.py",
+        "design-system/src/styles/controls.css",
+        "design-system/src/tokens/tokens.css",
+    }
+)
+FAMILY_MASTER_SOURCES = frozenset(
+    {
+        "ui/cite_marks.py",
+        "ui/source_chip.py",
+        "dashboard/_styles.py",
+        "execution/build_earnings_calendar.py",
+        "pipeline/analysis_styles.py",
+        "pipeline/portfolio_styles.py",
+        "pipeline/operations_styles.py",
+        "pipeline/research_panel_styles.py",
+        "report/renderers/workspace_styles.py",
+        "pipeline/work_os_styles.py",
+        "report/renderers/workspace_charts.py",
+        "ui/living_grid.py",
+        "viewspec/render.py",
+    }
+)
+MASTER_SOURCES = GLOBAL_MASTER_SOURCES | FAMILY_MASTER_SOURCES
+
+# Exact normalized geometry recipes make a master edit an explicit registry
+# mutation.  The compact digest avoids duplicating every selector/property
+# identity here while still rejecting any unregistered layout change.
+_MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
+    {
+        "dashboard/_styles.py": "06bef447e15928290d39104bbf46e7741a77547aa46a7e766a3aceb388ec5b4a",  # pragma: allowlist secret
+        "design-system/src/styles/controls.css": "0b95ae8eba781f16dba6f1fe90f72fdf8c9ec192301d529d5df7e17e27c8943c",  # pragma: allowlist secret
+        "design-system/src/tokens/tokens.css": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # pragma: allowlist secret
+        "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
+        "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
+        "pipeline/operations_styles.py": "74b499524634752191345da39ba30ec8eda4eac95f17030063eb1111dc46af68",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "0f48dcb63f566c7f9366a7b40a3d25beb52642f892b35f5bf2c6edebe79c9d64",  # pragma: allowlist secret
+        "pipeline/research_panel_styles.py": "bc6ab81e1e1f485adc04076ca1cb9b5f9dd957656dee36edbda3052c2e13c58b",  # pragma: allowlist secret
+        "pipeline/work_os_styles.py": "4ca37008fd83b862c4342fe9fb64d2f33798ebc9d529894659904e3824926454",  # pragma: allowlist secret
+        "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "336342e7b5aca1deb2a8bd6fba06d1ee38b309469b69ec367a143e52978c65e6",  # pragma: allowlist secret
+        "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
+        "ui/controls.py": "b9a28ce4ff2f768da335ef8040d3b70a0bc32524c3cb5e3371301135cbd849eb",  # pragma: allowlist secret
+        "ui/living_grid.py": "4ee064ab577f8a28166df930322f9b8ebee59fd675de2eef1fdb9c158b30b6b4",  # pragma: allowlist secret
+        "ui/source_chip.py": "374338d4d1132239c3de1c91fb84f1214e87b57472f6c5df2c0582708792f141",  # pragma: allowlist secret
+        "viewspec/render.py": "743c2211158fef8be8fc86530004b6dbed51c6f9c862743bf42c8b7d677fff11",  # pragma: allowlist secret
+    }
+)
+
+MASTER_GEOMETRY_CONTRACTS = tuple(
+    MasterGeometryContract(
+        surface,
+        digest,
+        _owner_for_surface(surface),
+        "Normalized master geometry is pinned; recipe changes require a registry update.",
+    )
+    for surface, digest in sorted(_MASTER_GEOMETRY_DIGESTS.items())
+)
+
+_DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
+    {
+        "dashboard/_styles.py": "64b87f3359d0f751bc9a7928b9a4828af2aa8c365895d584306b133846fb3f47",  # pragma: allowlist secret
+        "dashboard/feed.py": "11a36cf4d3d850906aa5bbec059ba7f7b9d132cb1398269ed4c0cf8f9fa5820a",  # pragma: allowlist secret
+        "execution/build_earnings_calendar.py": "6177205661002d8572d7b790e97f4e3bbf6b43d8d07589d37b774be632b9200b",  # pragma: allowlist secret
+        "execution/comments_server_alert_routes.py": "d8d2e88171b61d42b5b2fb3a8317869ac6c575409b3e151cbbe41f62d5267a33",  # pragma: allowlist secret
+        "pipeline/advisor_memos_panel.py": "febd8519250f55eb0f11a0797315ae6d02fcf13ba5c6edd91c28e6d3ba1b89a1",  # pragma: allowlist secret
+        "pipeline/allocation_decisions_panel.py": "d6d9f74f8d6282f475b9250a1949ead4bb7a5a9966ad1fd3bf3772f1f562fc4b",  # pragma: allowlist secret
+        "pipeline/analytical_dashboard_html.py": "75ba11f347cd89fcd99a541ef0d89bdc544313e17e0ae363a53235e2484635f8",  # pragma: allowlist secret
+        "pipeline/calibration_scorecard_panel.py": "1edfbfb1291c38be645133eaab45f78343920da72bf42b3e96c1a36e60a91eac",  # pragma: allowlist secret
+        "pipeline/cron_health_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
+        "pipeline/explore_panel.py": "fc1dd2e109d4f31a63e523c6f6ba3bc016b10b1faa443d32240e35fabed2fa8c",  # pragma: allowlist secret
+        "pipeline/mobile_inbox_panel.py": "a79bb9271eb683af81c99be486b8bcc3487f601002b74437d39fb50b5dd631a3",  # pragma: allowlist secret
+        "pipeline/model_eval_panel.py": "f4af1f25d2641ba46a64a043073730df7b11ef1e96f3b3ad4d71801e17c3e983",  # pragma: allowlist secret
+        "pipeline/peeks.py": "14c26a54b7381a925ecb47a4975282e17b68f6115dde3d3314f8bb25fa855bb9",  # pragma: allowlist secret
+        "pipeline/portfolio_panel.py": "71d2e9b39601d9e97dd395b70a405c15f6575c71d32f512fc7c04b4d128a6060",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret
+        "pipeline/research_cockpit.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret
+        "pipeline/source_viewers.py": "b23e8cbe7a9989b544ce86a6bf92a9ae15d978be2d1dc3a5873218c55dae50f0",  # pragma: allowlist secret
+        "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
+        "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "3021693766b377f955a2ca46d1235ddd587f0bfceb703bdffceb0af9b11683ae",  # pragma: allowlist secret
+        "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
+        "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
+        "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret
+        "report/renderers/workspace_sections/company.py": "a2a7e88bb845c9eafa39e7673ac009ee3220e068430e91dc0160c3ef62b53551",  # pragma: allowlist secret
+        "report/renderers/workspace_sections/thesis_risk.py": "ea6efda97e1eba69cdeb02e03744784f89ff7e606dcb86ccddceb1d4d12c0fea",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "eb18fdf7ecb4763bd9d13d9899a126c2a7ba46e1a69496c3ff6c870aab132311",  # pragma: allowlist secret
+        "ui/cite_marks.py": "3f76335ae581654995341743785185a7c317ac131a9c2e95182775ba1c4a6a7d",  # pragma: allowlist secret
+        "ui/controls.py": "e4480459ae842f18982fc17967c6c6673a87588887097786508ce94f17e2483d",  # pragma: allowlist secret
+        "viewspec/render.py": "7c533b52604f1cd0ad7564644dbeee92631041a047434299cc88fcc32fbf7e74",  # pragma: allowlist secret
+    }
+)
+
+DYNAMIC_VISUAL_CONTRACTS = tuple(
+    DynamicVisualContract(
+        surface,
+        digest,
+        _owner_for_surface(surface),
+        "Data-driven visual values are pinned as a closed source recipe.",
+    )
+    for surface, digest in sorted(_DYNAMIC_VISUAL_DIGESTS.items())
+)
+
+LOCAL_PROPERTY_CONTRACTS = (
+    LocalPropertyContract(
+        "--gap",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "work-os",
+        "Legacy shell spacing alias retained only while its callers are migrated.",
+    ),
+    LocalPropertyContract(
+        "--gap-lg",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "work-os",
+        "Legacy large shell spacing alias retained only while its callers are migrated.",
+    ),
+    LocalPropertyContract(
+        "--kpi-pad",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "research-ui",
+        "Legacy KPI interior spacing alias retained during migration.",
+    ),
+    LocalPropertyContract(
+        "--pad-x",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "work-os",
+        "Legacy horizontal shell padding alias retained during migration.",
+    ),
+    LocalPropertyContract(
+        "--panel-pad-x",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "research-ui",
+        "Legacy panel horizontal padding alias retained during migration.",
+    ),
+    LocalPropertyContract(
+        "--panel-pad-y",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "research-ui",
+        "Legacy panel vertical padding alias retained during migration.",
+    ),
+    LocalPropertyContract(
+        "--row-pad-y",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "research-ui",
+        "Legacy table-row vertical padding alias retained during migration.",
+    ),
+    LocalPropertyContract(
+        "--section-gap",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "research-ui",
+        "Legacy workspace-section spacing alias retained during migration.",
+    ),
+    LocalPropertyContract(
+        "--sidebar-open-width",
+        frozenset(
+            {
+                "report/renderers/workspace_chat.py",
+                "report/renderers/workspace_comments.py",
+                "report/renderers/workspace_sections/boot.py",
+                "report/renderers/workspace_styles.py",
+            }
+        ),
+        "CSS <length>",
+        "research-ui",
+        "Chat drawer's open-width runtime contract.",
+    ),
+    LocalPropertyContract(
+        "--table-pad-y",
+        frozenset({"report/renderers/workspace_styles.py"}),
+        "CSS <length>",
+        "research-ui",
+        "Legacy table vertical padding alias retained during migration.",
+    ),
+)
+
+RUNTIME_VISUAL_CONTRACTS = (
+    RuntimeVisualContract(
+        "pipeline/allocation_recommendation_panel.py",
+        "outerHTML",
+        r"html",
+        "portfolio",
+        "A governed server fragment replaces the allocation recommendation section.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/decision_journal_panel.py",
+        "outerHTML",
+        r"'[<]span class=\"k-chip\">process:'\+quality\+'[<]/span>'",
+        "research-ui",
+        "The journal replaces its process state with the canonical chip primitive.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/ir_approval_panel.py",
+        "outerHTML",
+        r"result\.payload\.panel_html",
+        "research-ui",
+        "A governed server fragment refreshes the IR approval panel.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/ledger_panel.py",
+        "outerHTML",
+        r"h",
+        "research-ui",
+        "Governed ledger endpoint fragments replace their matching panel roots.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/position_lifecycle_panel.py",
+        "outerHTML",
+        r"html",
+        "portfolio",
+        "A governed server fragment refreshes the position lifecycle section.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/positioning_panel.py",
+        "outerHTML",
+        r"res\.text",
+        "portfolio",
+        "A governed response fragment refreshes the active position card.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/worldview_panel.py",
+        "outerHTML",
+        r"h",
+        "research-ui",
+        "A governed server fragment refreshes the worldview panel.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/cc_action.py",
+        "height",
+        r"el\.offsetHeight\+['\"]px['\"]",
+        "work-os",
+        "Measured collapse height preserves the zero-layout-pop dismissal contract.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/cc_action.py",
+        "overflow",
+        r"['\"]hidden['\"]",
+        "work-os",
+        "Collapse overflow is hidden only for the measured dismissal transition.",
+    ),
+    RuntimeVisualContract(
+        "pipeline/cc_overlay.py",
+        "zIndex",
+        r"String\(zOf\(s\.el\)-1\)",
+        "design-system",
+        "The overlay master computes scrim order from the registered layer stack.",
+    ),
+    RuntimeVisualContract(
+        "report/renderers/workspace_comments.py",
+        "left",
+        r"Math\.round\(rect\.left\+window\.scrollX\+rect\.width\s*/\s*2-56\)\+['\"]px['\"]",
+        "research-ui",
+        "The selection comment affordance is positioned from the live text range.",
+    ),
+    RuntimeVisualContract(
+        "report/renderers/workspace_comments.py",
+        "top",
+        r"Math\.round\(rect\.bottom\+window\.scrollY\+6\)\+['\"]px['\"]",
+        "research-ui",
+        "The selection comment affordance is positioned from the live text range.",
+    ),
 )
 
 EXEMPT = frozenset(entry.surface for entry in PERMANENT_EXEMPTIONS)
@@ -462,20 +1218,5 @@ TITLES_BY_SELECTOR = MappingProxyType(
         placement.selector: placement
         for placement in TITLE_PLACEMENTS
         if placement.selector is not None
-    }
-)
-
-DOCUMENTATION_PROJECTIONS = MappingProxyType(
-    {
-        "shapes": tuple(archetype.name for archetype in SHAPE_ARCHETYPES),
-        "grids": tuple(archetype.name for archetype in GRID_ARCHETYPES),
-        "indents": ("indent-0", "indent-1", "indent-2", "indent-3", "indent-4"),
-        "titles": tuple(placement.key for placement in TITLE_PLACEMENTS),
-        "exemptions": tuple(entry.surface for entry in PERMANENT_EXEMPTIONS),
-        "quarantine": tuple(f"{entry.surface}:{entry.dimension}" for entry in QUARANTINE_ENTRIES),
-        "bespoke-buttons": tuple(entry.class_name for entry in BESPOKE_BUTTON_APPROVALS),
-        "mono-tables": tuple(entry.selector for entry in MONO_TABLE_APPROVALS),
-        "sanctions": tuple(f"{entry.surface}:{entry.dimension}" for entry in SURFACE_SANCTIONS),
-        "ccaction-floor": tuple(entry.surface for entry in CCACTION_REGRESSION_FLOOR),
     }
 )

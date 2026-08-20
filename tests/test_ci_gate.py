@@ -32,6 +32,13 @@ def test_documentation_only_change_skips_expensive_jobs(helper: ModuleType) -> N
     }
 
 
+@pytest.mark.parametrize("path", ["AGENTS.md", "directives/design_language.md"])
+def test_agent_and_design_contract_changes_run_executable_guards(
+    helper: ModuleType, path: str
+) -> None:
+    assert helper.classify_paths([path]) == {"code": True, "python": False}
+
+
 def test_unknown_non_documentation_path_fails_closed(helper: ModuleType) -> None:
     assert helper.classify_paths(["new-tool/config.toml"]) == {
         "code": True,

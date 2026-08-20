@@ -20,15 +20,10 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 
+from pipeline.operations_styles import VALIDATION_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import prov_row, prov_severity_tick
-
-_PANEL_STYLE = """<style>
-.vi-raw { font-family:var(--mono); font-size:var(--fs-caption); word-break:break-all; }
-.vi-note { margin-top:14px; line-height:1.55; }
-.vi-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
-</style>"""
 
 _DETAIL_LIMIT = 50
 

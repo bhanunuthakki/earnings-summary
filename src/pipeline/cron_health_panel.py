@@ -36,27 +36,10 @@ from pipeline.operational_health import (
     latest_eval,
     wal_size,
 )
+from pipeline.operations_styles import CRON_HEALTH_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
-
-_PANEL_STYLE = """<style>
-.ch-dir { font-weight:600; white-space:nowrap; }
-.ch-dots { white-space:nowrap; }
-.ch-dot { --k-dot-size:11px; margin:0 1px; }
-/* the unique faint "no run" shade — the ok/fail/prog tones ride the kit .k-dot */
-.ch-dot-miss { color:var(--border); }
-.ch-status-ok   { color:var(--ok);   font-weight:600; }
-.ch-status-fail { color:var(--bad);  font-weight:600; }
-.ch-status-miss { color:var(--muted); }
-.ch-note { margin-top:14px; padding:10px 13px; background:var(--paper);
-  border:1px solid var(--border); border-radius:var(--radius);
-  font-size:var(--fs-body); line-height:1.55; }
-.ch-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
-.ch-alarm { margin-bottom:var(--sp-3); line-height:1.55; }
-.ch-alarm strong { display:block; margin-bottom:var(--sp-1); }
-.ch-alarm code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
-</style>"""
 
 # Directives shown first, in criticality order, with friendly display names.
 _PRIORITY_JOBS: list[tuple[str, str]] = [

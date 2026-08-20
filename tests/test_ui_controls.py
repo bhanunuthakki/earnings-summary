@@ -21,18 +21,18 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SRC))
 
-from ui.conformance_scan import (  # noqa: E402
-    DIMENSIONS,
-    discover_surfaces,
-    scan_surface,
-    scan_surface_evidence,
-    split_top_commas,
-    strip_css_comments,
-)
+from scripts import gen_design_conformance_debt  # noqa: E402
 from ui.conformance_scan import (  # noqa: E402
     css_text as _css_text,
+)
+from ui.conformance_scan import (  # noqa: E402
+    discover_emitters,
+    scan_surface,
+    split_top_commas,
+    strip_css_comments,
 )
 from ui.controls import (  # noqa: E402
     controls_css,
@@ -52,8 +52,15 @@ from ui.design_registry import (  # noqa: E402
     PALETTE_LIGHT,
     QUARANTINE,
     REGISTERED,
+    VISUAL_EMITTER_MANIFEST,
     palette_css,
 )
+
+
+def _registered_path(rel: str) -> Path:
+    source_path = SRC / rel
+    return source_path if source_path.exists() else PROJECT_ROOT / rel
+
 
 # ---------------------------------------------------------------------------
 # controls_css — modes
@@ -225,7 +232,7 @@ def test_dashboard_alert_cards_only_add_layout_to_card_kit() -> None:
     from dashboard._styles import CSS as DASHBOARD_CSS
 
     rule = DASHBOARD_CSS.split(".alert-card {", 1)[1].split("}", 1)[0]
-    assert "margin-bottom: var(--gap)" in rule
+    assert "margin-bottom: var(--sp-3)" in rule
     for property_name in ("background:", "border:", "border-radius:", "padding:", "box-shadow:"):
         assert property_name not in rule
 
@@ -305,11 +312,12 @@ def test_ticker_label_without_name_has_no_name_span_or_title() -> None:
 
 
 def test_ticker_label_escapes_and_caps() -> None:
-    html = ticker_label("brk.b", 'A "B" & C <Co>', name_max="28ch")
+    html = ticker_label("brk.b", 'A "B" & C <Co>', wide=True)
     assert "BRK.B" in html
     assert "&quot;B&quot; &amp; C" in html
     assert "&lt;Co&gt;" in html
-    assert "--k-tick-max:28ch" in html
+    assert "k-tick-wide" in html
+    assert "style=" not in html
 
 
 # ---------------------------------------------------------------------------
@@ -400,8 +408,9 @@ def test_status_dot_kit_is_currentcolor_circle_over_tokens() -> None:
     base = css.split(".k-dot {", 1)[1].split("}", 1)[0]
     assert "border-radius: var(--radius-full)" in base
     assert "background: currentColor" in base
-    # size is a var with a layout fallback so a surface resizes without re-skinning
-    assert "var(--k-dot-size, 8px)" in base
+    # Diameter is master-owned; consumers cannot resize the primitive ad hoc.
+    assert "var(--dot-size)" in base
+    assert "--k-dot-size" not in base
     for tone, tok in (("ok", "--ok"), ("warn", "--warn"), ("bad", "--bad"), ("muted", "--muted")):
         rule = css.split(f".k-dot-{tone}", 1)[1].split("}", 1)[0]
         assert f"color: var({tok})" in rule
@@ -454,7 +463,7 @@ def test_panel_toolbar_sticky_pins_below_the_shell_topbar() -> None:
     css = controls_css("dark")
     band = css.split(".k-toolbar-sticky, .k-chip-tabs-sticky {", 1)[1].split("}", 1)[0]
     assert "position: sticky" in band
-    assert "top: var(--cc-topbar-h, 0px)" in band
+    assert "top: var(--header-height)" in band
     assert "background: var(--bg)" in band
     assert "border-bottom: 1px solid var(--border)" in band
 
@@ -581,15 +590,15 @@ def test_every_css_surface_is_registered() -> None:
     surface set. A new CSS-emitting module that no one classified — or a removed
     one still listed — fails here until reconciled with REGISTERED + (EXEMPT |
     QUARANTINE | clean)."""
-    discovered = discover_surfaces(SRC)
-    new_unregistered = discovered - REGISTERED
-    stale_registered = REGISTERED - discovered
+    discovered = frozenset(entry.path for entry in discover_emitters(PROJECT_ROOT))
+    classified = frozenset(entry.path for entry in VISUAL_EMITTER_MANIFEST)
+    new_unregistered = discovered - classified
+    stale_registered = classified - discovered
     assert not new_unregistered, (
-        "new CSS-emitting surface(s) not registered — add to REGISTERED and "
-        f"classify (clean / EXEMPT / QUARANTINE): {sorted(new_unregistered)}"
+        f"new visual emitter(s) not classified in the typed manifest: {sorted(new_unregistered)}"
     )
     assert not stale_registered, (
-        f"REGISTERED lists modules that no longer emit CSS: {sorted(stale_registered)}"
+        f"visual manifest lists absent emitters: {sorted(stale_registered)}"
     )
 
 
@@ -599,26 +608,9 @@ def test_no_unquarantined_token_drift() -> None:
     enforcement: the moment a clean surface (or clean dimension) gains raw hex,
     an off-scale size/radius, a stray font, a legacy alias, or a reinvented
     status badge (kit-badge), CI fails."""
-    offenders: dict[str, dict[str, list[str]]] = {}
-    for rel in REGISTERED - EXEMPT:
-        evidence = scan_surface_evidence(rel, _css_text(SRC / rel))
-        violations = evidence.violations()
-        if evidence.unverifiable_markup:
-            violations["unverifiable-markup"] = list(evidence.unverifiable_markup)
-        tolerated = QUARANTINE.get(rel, frozenset())
-        live = {dim: vals for dim, vals in violations.items() if dim not in tolerated}
-        if live:
-            offenders[rel] = live
-    assert not offenders, (
-        "design-language drift in non-quarantined surface(s)/dimension(s). Fix the "
-        "rendered output, do NOT add to QUARANTINE:\n"
-        "  · color / font-size / radius / font-family / alias → use the token "
-        "(tokens.py) / color-mix / on-scale value / canonical var name.\n"
-        "  · kit-badge → you hand-rolled a FILLED STATUS PILL; use the kit's "
-        "`.k-pill` (+ `.k-pill-ok/-warn/-bad`) from ui/controls.py, never a "
-        "`color-mix(var(--ok|warn|bad))` background on your own .*-pill/-badge "
-        "class (design_language §4).\n"
-        f"  · registered dimensions: {', '.join(DIMENSIONS)}\n{offenders}"
+    assert gen_design_conformance_debt.check(), (
+        "design evidence changed without an exact reviewed ledger update; new work "
+        "must use the master vocabulary and cleanup must shrink the ledger explicitly"
     )
 
 
@@ -631,7 +623,7 @@ def test_quarantine_only_shrinks() -> None:
     for rel, dims in QUARANTINE.items():
         assert rel in REGISTERED, f"quarantined surface not registered: {rel}"
         assert rel not in EXEMPT, f"quarantined surface is also EXEMPT: {rel}"
-        violations = scan_surface(rel, _css_text(SRC / rel))
+        violations = scan_surface(rel, _css_text(_registered_path(rel)))
         clean_now = sorted(d for d in dims if d not in violations)
         if clean_now:
             graduated[rel] = clean_now
@@ -644,7 +636,9 @@ def test_quarantine_only_shrinks() -> None:
 def test_sanctioned_escapes_survive() -> None:
     """Each design_language §1 escape must NOT be flagged — the guard would be
     wrong to deny them."""
-    # charts_v2 + tokens are fully exempt sources.
+    # Token definitions remain master-owned. Charts are governed and clean,
+    # rather than retained as an exemption or a debt island.
+    assert "report/renderers/charts_v2.py" not in EXEMPT
     assert (
         scan_surface(
             "report/renderers/charts_v2.py", _css_text(SRC / "report/renderers/charts_v2.py")
@@ -663,10 +657,10 @@ def test_sanctioned_escapes_survive() -> None:
     )
     ws = _css_text(SRC / "report/renderers/workspace_styles.py")
     assert "font-size: 60px" not in ws and "font-size: 100px" not in ws
-    # The chevron data-URIs (%23-encoded) are not colors; the kit stays clean.
-    assert scan_surface("ui/controls.py", _css_text(SRC / "ui/controls.py")) == {}
-    # 0.93em inline mono is an em, never a px font-size — naturally unflagged.
-    assert scan_surface("x", "code { font-size: 0.93em; }") == {}
+    # The chevron data-URIs (%23-encoded) are not raw colors. Remaining relative
+    # type and SVG geometry are explicit legacy debt, not invisible exceptions.
+    assert "color" not in scan_surface("ui/controls.py", _css_text(SRC / "ui/controls.py"))
+    assert scan_surface("x", "code { font-size: 0.93em; }")["font-size"] == ["0.93em"]
 
 
 def test_func_color_dimension_catches_raw_rgba_hsl() -> None:
@@ -899,7 +893,7 @@ def test_no_font_size_on_inputrow_controls() -> None:
     registered CSS surface, not just the Ask panel."""
     offenders: dict[str, list[str]] = {}
     for rel in sorted(REGISTERED - EXEMPT):
-        hits = _inputrow_font_rules(_css_text(SRC / rel))
+        hits = _inputrow_font_rules(_css_text(_registered_path(rel)))
         if hits:
             offenders[rel] = [" ".join(h.split()) for h in hits]
     assert not offenders, (
@@ -1040,14 +1034,12 @@ def test_mark_never_fills_a_control(mode: str) -> None:
     assert not fills, f"--mark used as a fill ({fills}); it is ink, not a background"
 
 
-def test_footnote_marker_scales_with_its_prose() -> None:
-    """``.k-fn`` sizes in em on purpose: a reference mark rides the text it
-    annotates, and prose runs at a different size per surface. A px step here
-    would make the marker the wrong size in exactly the place it is used."""
+def test_footnote_marker_uses_the_master_type_scale() -> None:
+    """Reference marks use the canonical caption role, never a local type step."""
     css = controls_css("paper")
     rule = re.search(r"\.k-fn\s*\{([^}]*)\}", css)
     assert rule is not None
-    assert re.search(r"font-size:\s*[0-9.]+em", rule.group(1))
+    assert "font-size: var(--fs-caption)" in rule.group(1)
 
 
 def test_note_rail_does_not_eat_the_reading_measure() -> None:
@@ -1058,7 +1050,7 @@ def test_note_rail_does_not_eat_the_reading_measure() -> None:
     margin note the 13.5rem rail was subtracted from the inside and prose
     collapsed to ~40ch — unreadable, in exactly the sections that matter most.
 
-    Deriving the width from ``--k-measure`` keeps prose at its measure whether
+    Deriving the width from ``--reading-measure`` keeps prose at its measure whether
     or not a section is annotated, and lets full-bleed sections use the whole
     width. Verified in-browser at 1280px: prose 66ch, band full-bleed at 703px.
     """
@@ -1066,19 +1058,19 @@ def test_note_rail_does_not_eat_the_reading_measure() -> None:
     doc_rule = re.search(r"\.k-doc\s*\{([^}]*)\}", css)
     assert doc_rule is not None
     body = doc_rule.group(1)
-    assert "--k-measure" in body, ".k-doc must define the reading measure"
+    assert "--k-measure" not in body
     max_width = re.search(r"max-width:\s*([^;]+)", body)
     assert max_width is not None
     expr = max_width.group(1)
     assert expr.strip().startswith("calc("), (
         f"max-width is {expr!r} — a flat cap lets the note rail eat the measure"
     )
-    assert "var(--k-measure)" in expr and "var(--k-note-w" in expr
+    assert "var(--reading-measure)" in expr and "var(--note-rail-width)" in expr
 
     # Prose is capped independently, so a full-bleed section does not run long.
     prose_cap = re.search(r"\.k-doc\s+\.prose\s*\{([^}]*)\}", css)
     assert prose_cap is not None, ".k-doc .prose must cap at the measure"
-    assert "var(--k-measure)" in prose_cap.group(1)
+    assert "var(--reading-measure)" in prose_cap.group(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1114,7 +1106,7 @@ def test_workspace_panels_debox_inside_a_document() -> None:
     # --panel-pad-x is the single lever that flushes heads, val-rows and .tbl
     # cells to the document's left edge. Without it the section keeps card
     # padding and still reads as a box with the border removed.
-    assert re.search(r"--panel-pad-x:\s*0", body), (
+    assert re.search(r"--panel-pad-x:\s*var\(--indent-0\)", body), (
         "panels must flush to the document edge via --panel-pad-x"
     )
 
@@ -1200,7 +1192,9 @@ def test_overlay_head_buttons_are_named_not_classless() -> None:
     classless close button that used to hang off ``.ask-pop-head button``."""
     offenders: dict[str, list[str]] = {}
     for rel in sorted(REGISTERED - EXEMPT):
-        hits = _classless_buttons_in_overlay_heads((SRC / rel).read_text(encoding="utf-8"))
+        hits = _classless_buttons_in_overlay_heads(
+            _registered_path(rel).read_text(encoding="utf-8")
+        )
         if hits:
             offenders[rel] = hits
     assert not offenders, (
@@ -1282,7 +1276,7 @@ def test_no_whole_table_mono_outside_the_documented_allowlist() -> None:
     pattern."""
     offenders: dict[str, list[str]] = {}
     for rel in sorted(REGISTERED - EXEMPT):
-        hits = _whole_table_mono_selectors(_css_text(SRC / rel))
+        hits = _whole_table_mono_selectors(_css_text(_registered_path(rel)))
         if hits:
             offenders[rel] = hits
     assert not offenders, (

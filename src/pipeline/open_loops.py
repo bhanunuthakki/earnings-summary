@@ -48,6 +48,7 @@ from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 
+from pipeline.analysis_styles import ANALYSIS_STYLE
 from user_state._db import open_read_conn
 
 # Doorways are PANEL hashes — the shell router treats unknown hashes as panel
@@ -65,24 +66,6 @@ _RED_TEAM_HASH = "/#red_team"
 # (execution/comments_server.py), the same doorway
 # senior_partner_brief_panel.render_brief_today_card already links to.
 _MOBILE_INBOX_HREF = "/mobile/inbox"
-
-STYLE = """<style>
-/* Promoted 2026-07-18 (UX audit): this is the page's one "what needs you
-   today" line — it was rendering at --fs-caption with no fill, the same
-   visual weight as table-header/timestamp metadata, so the intended entry
-   point read as a footnote. Now a .k-well block (kit) at --fs-body, with
-   each count a .k-pill-warn (kit) instead of plain mono text. */
-.cc-open-loops { display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: 6px 18px; margin: 0 0 10px; font-size: var(--fs-body); }
-.cc-ol-head { color: var(--fg); font-weight: 600; }
-.cc-ol-line { color: var(--fg); text-decoration: none; display: inline-flex;
-  align-items: baseline; gap: 6px; }
-.cc-ol-line:hover { color: var(--accent); }
-.cc-ol-line:hover .cc-ol-count { color: var(--accent); }
-.cc-ol-clear { color: var(--muted); }
-.cc-ol-escalation { margin: 0 0 8px; }
-.cc-ol-escalation a { color: inherit; text-decoration: underline; }
-</style>"""
 
 
 def _age_suffix(oldest_iso: object) -> str:
@@ -485,11 +468,11 @@ def render_open_loops_band(
 
     if not lines:
         return (
-            STYLE + banner + '<div class="cc-open-loops k-well">'
+            ANALYSIS_STYLE + banner + '<div class="cc-open-loops k-well">'
             '<span class="cc-ol-clear">Ritual clear - nothing waiting on you.</span></div>'
         )
     return (
-        STYLE
+        ANALYSIS_STYLE
         + banner
         + '<div class="cc-open-loops k-well"><span class="cc-ol-head">Open loops</span>'
         + "".join(lines)

@@ -12,18 +12,4 @@
 @import "./tokens/tokens.css";
 @import "./styles/controls.css";
 
-/* Base typography the Python kit leaves to each page's own CSS (every Flask
-   surface sets `body { font-family: var(--sans) }` locally — see e.g.
-   command_center_shell.py). A standalone package must carry it itself or
-   every consumer renders in the browser-default serif. :where() keeps
-   specificity at zero so any host rule wins. */
-:where(body) {
-  font-family: var(--sans);
-  font-size: var(--fs-body);
-  color: var(--fg);
-  background: var(--bg);
-}
-
-.ds-placeholder {
-  color: inherit;
-}
+/* Base typography is part of the generated global control master. */

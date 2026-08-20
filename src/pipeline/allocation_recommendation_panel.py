@@ -49,6 +49,7 @@ from allocation.concentration import classify_zone
 from allocation.recommendation_schema import IncrementalDollarRecommendation, RecommendationPlan
 from owner_profile.store import list_facts
 from pipeline.calibration_receipt import render_calibration_receipt_for
+from pipeline.portfolio_styles import allocation_css
 from portfolio_weights import read_materialized_weights, read_materialized_weights_as_of
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import ticker_label
@@ -57,36 +58,7 @@ from ui.time import stamp_html
 
 PURPOSE = "incremental_dollar_recommendation"
 
-_STYLE = """<style>
-.alloc-grid { display:flex; flex-direction:column; gap:14px; }
-.alloc-cash-form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
-.alloc-cash-form input[type="number"] { width:160px; }
-.alloc-cash-form input[type="text"] { width:200px; }
-.alloc-error { color:var(--bad); font-size:var(--fs-body); margin-top:6px; white-space:pre-wrap; }
-.alloc-plan-row { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px;
-  padding:5px 0; border-bottom:1px dashed var(--border); }
-.alloc-plan-row:last-child { border-bottom:none; }
-.alloc-alt-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr)); gap:12px; align-items:start; }
-@media (max-width: 1100px) { .alloc-alt-grid { grid-template-columns: 1fr; } }
-.alloc-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center; }
-/* Calibration receipt (pipeline/calibration_receipt.py) — "when you've been
-   here before," a muted read just ahead of the adopt/disposition buttons. */
-.cr-receipt { color:var(--muted); font-size:var(--fs-caption); margin:8px 0 0; }
-.alloc-compare-out { margin-top:10px; font-size:var(--fs-body); }
-.alloc-compare-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
-.alloc-compare-table th, .alloc-compare-table td { padding:5px 8px; text-align:left;
-  border-bottom:1px solid var(--border); }
-.alloc-fallback-banner { margin-bottom:10px; }
-.alloc-rationale { margin-top:10px; }
-.alloc-rationale > summary { cursor:pointer; color:var(--fg); font-weight:600; padding:8px 0; }
-.risk-cat-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-sm), 1fr)); gap:12px; }
-@media (max-width: 1100px) { .risk-cat-grid { grid-template-columns: 1fr; } }
-.risk-cat { padding:4px 0; }
-.risk-cat h4 { margin:0 0 6px; font-size:var(--fs-body); }
-.risk-row { display:flex; justify-content:space-between; gap:8px; padding:2px 0;
-  font-size:var(--fs-body); }
-.posture-actions { display:flex; gap:8px; margin-top:10px; }
-</style>"""
+_STYLE = allocation_css()
 
 
 # --------------------------------------------------------------------------- #
@@ -860,10 +832,7 @@ _POSTURE_JS = """<script>
 # Today compact card (§7.4 surface-parity exit gate)
 # --------------------------------------------------------------------------- #
 
-_TODAY_STYLE = """<style>
-.cc-alloc-today { display:flex; align-items:baseline; gap:8px; margin:0 0 10px;
-  font-size:var(--fs-body); }
-</style>"""
+_TODAY_STYLE = allocation_css()
 
 
 def render_allocation_today_card(

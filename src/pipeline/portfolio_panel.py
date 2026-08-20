@@ -72,6 +72,7 @@ from integrations.portfolio_tracker_client import (
     fetch_portfolio_analytics,
     probe_tracker,
 )
+from pipeline.portfolio_styles import portfolio_css
 from portfolio_correlation import (
     CLUSTER_CORR,
     CorrelationRead,
@@ -279,106 +280,18 @@ def compose_portfolio_page(
 # (when the tracker is down — navigation_ia.md §2.1: a landing page must
 # self-report its degradation, not silently fall back to equal-weight). Its own
 # <style> block so each fragment ships it independently of the big sheets.
-_TRACKER_BANNER_CSS = """<style>
-/* Tracker-offline banner: the page's data source is down, so this LEADS the
-   page (the start control is prominent), never a buried bottom card. */
-.pf-tracker-banner { border-left: 3px solid var(--warn); }
-.pf-tracker-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  margin: 12px 0 0; }
-</style>"""
+_TRACKER_BANNER_CSS = portfolio_css()
 
 # Styling only the Performance fragment needs; everything else reuses the
 # shell's panel/kpi/table vocabulary. Colors key off the shared token variables
 # so a palette change in ui/tokens.py propagates here untouched. (The Synthesis
 # fragment carries its own block — _INSIGHTS_CSS.)
-_ANALYTICS_CSS = (
-    """<style>
-.pf-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 10px; font-size: var(--fs-body); }
-.pf-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
-.pf-chip strong { color: var(--fg); font-variant-numeric: tabular-nums; }
-.pf-swatch { width: 10px; height: 10px; border-radius: var(--radius); display: inline-block; }
-.pf-chart { width: 100%; height: auto; display: block; }
-.pf-policy { font-size: var(--fs-caption); margin: 10px 0 0; }
-.pf-warn { color: var(--warn); }
-.pf-alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));
-  gap: 10px 32px; margin-top: 4px; }
-.pf-alloc-row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 2fr 52px 76px;
-  gap: 10px; align-items: center; font-size: var(--fs-body); padding: 3px 0; }
-.pf-alloc-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-bar { background: var(--hairline); border-radius: var(--radius); height: 10px; overflow: hidden; }
-.pf-bar-fill { background: var(--accent); opacity: 0.75; height: 100%; display: block; }
-.pf-alloc-pct { text-align: right; font-variant-numeric: tabular-nums; }
-.pf-alloc-val { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
-.pf-flag { color: var(--warn); margin-left: 4px; cursor: help; }
-.pf-total td { font-weight: 600; border-top: 2px solid var(--border); }
-.pf-degraded { font-size: var(--fs-caption); }
-.pf-alpha-details { margin-top: var(--sp-2); }
-.pf-alpha-details > summary { cursor: pointer; color: var(--fg);
-  font-weight: 600; padding: 8px 0; }
-/* Performance panel header: title (+ hover note) on the left, the window
-   controls on the right — ONE operating band, not a separate top bar
-   (design_language §6.1). The window cluster dropped its card chrome: in-panel
-   it reads as the panel's own control, not a competing surface above it. */
-.pf-perf-head { display: flex; align-items: flex-start; justify-content: space-between;
-  gap: 10px 18px; flex-wrap: wrap; margin-bottom: 14px; }
-.pf-perf-head h2 { margin: 0; }
-.pf-window { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  font-size: var(--fs-caption); }
-.pf-window-standalone { margin-bottom: 18px; }
-.pf-window-label { font-size: var(--fs-caption); text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--muted); margin-right: 2px; }
-.pf-window input[type="date"] { padding: 3px 6px; font-size: var(--fs-caption);
-  font-family: var(--mono); }
-.pf-backfill-label { color: var(--muted); display: inline-flex; align-items: center;
-  gap: 5px; margin-left: 4px; cursor: help; }
-/* Methodology note: a hover affordance on the title, not permanent prose — it
-   is reference detail, surfaced on demand (the heading carries it on hover). */
-.pf-info { position: relative; display: inline-flex; align-items: center;
-  justify-content: center; width: 15px; height: 15px; border-radius: var(--radius-full);
-  border: 1px solid var(--border); color: var(--muted); font-size: var(--fs-caption);
-  font-weight: 600; cursor: help; margin-left: 7px;
-  vertical-align: middle; transition: color var(--transition), border-color var(--transition); }
-.pf-info:hover, .pf-info:focus { color: var(--fg); border-color: var(--border-2); outline: none; }
-.pf-info-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 300px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: var(--shadow-pop); padding: 9px 11px; font-size: var(--fs-caption);
-  font-style: normal; font-weight: 400; line-height: 1.5; color: var(--muted);
-  white-space: normal; display: none; }
-.pf-info:hover .pf-info-pop, .pf-info:focus .pf-info-pop,
-.pf-info:focus-within .pf-info-pop { display: block; }
-</style>"""
-    + _TRACKER_BANNER_CSS
-)
+_ANALYTICS_CSS = portfolio_css()
 
 # Styling for the Synthesis fragment: the rollup/exposure insights grid and
 # the next-dollar distribution rows. Same token-variable discipline as
 # _ANALYTICS_CSS; a separate block so each tab ships only the rules it renders.
-_INSIGHTS_CSS = """<style>
-.pf-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-lg), 1fr));
-  gap: 0 18px; align-items: start; }
-.pf-th-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-.pf-exp-row { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 44px; gap: 10px;
-  align-items: center; font-size: var(--fs-body); padding: 3px 0; }
-.pf-exp-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-exp-bar { background: var(--paper); border-radius: var(--radius); height: 9px; overflow: hidden; }
-.pf-exp-bar span { display: block; height: 100%; background: var(--accent); border-radius: var(--radius); }
-.pf-exp-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
-.pf-nd-excerpt { font-size: var(--fs-body); line-height: 1.55; }
-.pf-nd-item { border-radius: var(--radius); }
-.pf-nd-item:hover, .pf-nd-item:focus-within { background: var(--surface); }
-.pf-nd-row { display: grid; grid-template-columns: 56px 1fr 56px 70px; gap: 10px;
-  align-items: center; font-size: var(--fs-body); padding: 3px 0; }
-.pf-nd-ticker { font-family: var(--mono); }
-.pf-nd-bar { background: var(--paper); border-radius: var(--radius); height: 9px; overflow: hidden; }
-.pf-nd-bar span { display: block; height: 100%; background: var(--accent); border-radius: var(--radius); }
-.pf-nd-alloc { text-align: right; font-variant-numeric: tabular-nums; }
-.pf-nd-now { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
-.pf-nd-wf { display: none; gap: 6px; flex-wrap: wrap; padding: 1px 0 6px; }
-.pf-nd-item:hover .pf-nd-wf, .pf-nd-item:focus-within .pf-nd-wf { display: flex; }
-.pf-nd-note { font-size: var(--fs-caption); }
-.pf-nd-hint { font-size: var(--fs-caption); }
-.pf-nd-memo-h { margin-top: 12px; }
-</style>"""
+_INSIGHTS_CSS = portfolio_css()
 
 _SECTION_LABELS: dict[str, str] = {
     "performance": "Performance vs benchmarks",
@@ -388,14 +301,14 @@ _SECTION_LABELS: dict[str, str] = {
     "policy": "Policy mix",
 }
 
-# Chart/legend series: label, stroke, stroke-width, value extractor. The book's
-# line is the bright foreground token; benchmarks use the shared categorical
-# chart palette (Okabe-Ito) so they read apart without semantic green/red.
-_CHART_SPECS: tuple[tuple[str, str, float, Callable[[PerformancePoint], float | None]], ...] = (
-    ("Portfolio", "var(--fg)", 2.4, lambda p: p.portfolio_return_pct),
-    ("SPY", CHART_SERIES[1], 1.3, lambda p: p.spy_return_pct),
-    ("QQQ", CHART_SERIES[3], 1.3, lambda p: p.qqq_return_pct),
-    ("Policy", CHART_SERIES[5], 1.3, lambda p: p.policy_return_pct),
+# Chart/legend series: label, legend color, closed CSS class, value extractor.
+# SVG presentation stays in portfolio_styles.py; the class is the only visual
+# choice that crosses this renderer boundary.
+_CHART_SPECS: tuple[tuple[str, str, str, Callable[[PerformancePoint], float | None]], ...] = (
+    ("Portfolio", "var(--fg)", "pf-series-portfolio", lambda p: p.portfolio_return_pct),
+    ("SPY", CHART_SERIES[1], "pf-series-spy", lambda p: p.spy_return_pct),
+    ("QQQ", CHART_SERIES[3], "pf-series-qqq", lambda p: p.qqq_return_pct),
+    ("Policy", CHART_SERIES[5], "pf-series-policy", lambda p: p.policy_return_pct),
 )
 
 
@@ -665,7 +578,7 @@ def _performance_section(
 
     finals: dict[str, float | None] = {
         label: next((v for p in reversed(perf.points) if (v := get(p)) is not None), None)
-        for label, _color, _sw, get in _CHART_SPECS
+        for label, _color, _class, get in _CHART_SPECS
     }
     cards: list[str] = []
     if position_alpha is not None:
@@ -764,12 +677,12 @@ def _backfill_warning(perf: PerformanceSeries) -> str:
 
 def _chart_legend(points: list[PerformancePoint]) -> str:
     chips: list[str] = []
-    for label, color, _sw, get in _CHART_SPECS:
+    for label, _color, css_class, get in _CHART_SPECS:
         final = next((v for p in reversed(points) if (v := get(p)) is not None), None)
         if final is None:
             continue
         chips.append(
-            f'<span class="pf-chip"><span class="pf-swatch" style="background:{color}"></span>'
+            f'<span class="pf-chip"><span class="pf-swatch {css_class.replace("pf-series", "pf-swatch")}"></span>'
             f"{escape(label)} <strong>{_pct(final, signed=True)}</strong></span>"
         )
     return f'<div class="pf-legend">{"".join(chips)}</div>' if chips else ""
@@ -785,15 +698,15 @@ def _benchmark_chart(points: list[PerformancePoint]) -> str:
         if sampled[-1] is not points[-1]:
             sampled.append(points[-1])
         points = sampled
-    series: list[tuple[str, str, float, list[tuple[int, float]]]] = []
-    for label, color, sw, get in _CHART_SPECS:
+    series: list[tuple[str, str, str, list[tuple[int, float]]]] = []
+    for label, _color, css_class, get in _CHART_SPECS:
         coords = [(i, v) for i, p in enumerate(points) if (v := get(p)) is not None]
         if len(coords) >= 2:
-            series.append((label, color, sw, coords))
+            series.append((label, _color, css_class, coords))
     if not series:
         return ""
 
-    all_vals = [v for _label, _color, _sw, coords in series for _i, v in coords]
+    all_vals = [v for _label, _color, _class, coords in series for _i, v in coords]
     lo = min(min(all_vals), 0.0)  # keep the 0% line in frame
     hi = max(max(all_vals), 0.0)
     pad = (hi - lo or 1.0) * 0.08
@@ -818,34 +731,31 @@ def _benchmark_chart(points: list[PerformancePoint]) -> str:
         ty = y_of(tick)
         parts.append(
             f'<line x1="{pad_l:.1f}" x2="{pad_l + plot_w:.1f}" y1="{ty:.1f}" y2="{ty:.1f}" '
-            'stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2 3" />'
+            'class="pf-grid" />'
         )
         parts.append(
-            f'<text x="{pad_l - 6:.1f}" y="{ty + 3:.1f}" text-anchor="end" font-size="9.5" '
-            f'fill="var(--muted)" font-family="var(--mono)">{tick:.0f}%</text>'
+            f'<text class="pf-axis-label pf-axis-end" x="{pad_l - 6:.1f}" y="{ty + 3:.1f}">{tick:.0f}%</text>'
         )
     if y0 < 0.0 < y1:
         zy = y_of(0.0)
         parts.append(
             f'<line x1="{pad_l:.1f}" x2="{pad_l + plot_w:.1f}" y1="{zy:.1f}" y2="{zy:.1f}" '
-            'stroke="var(--border-2)" stroke-width="0.8" />'
+            'class="pf-grid-zero" />'
         )
     anchors = {0: "start", n // 2: "middle", n - 1: "end"}
     for i, anchor in anchors.items():
+        anchor_class = f"pf-axis-{anchor}"
         parts.append(
-            f'<text x="{x_of(i):.1f}" y="{height - 6:.1f}" text-anchor="{anchor}" '
-            'font-size="9.5" fill="var(--muted)" font-family="var(--mono)">'
+            f'<text class="pf-axis-label {anchor_class}" x="{x_of(i):.1f}" y="{height - 6:.1f}">'
             f"{escape(points[i].date)}</text>"
         )
-    for label, color, sw, coords in series:
+    for label, _color, css_class, coords in series:
         d = " ".join(
             ("M" if j == 0 else "L") + f"{x_of(i):.1f},{y_of(v):.1f}"
             for j, (i, v) in enumerate(coords)
         )
         parts.append(
-            f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{sw}" '
-            f'stroke-linejoin="round" stroke-linecap="round"><title>{escape(label)}</title>'
-            "</path>"
+            f'<path class="pf-series {css_class}" d="{d}"><title>{escape(label)}</title></path>'
         )
     parts.append("</svg>")
     return "".join(parts)
@@ -1545,54 +1455,7 @@ def _next_dollar_memo(memo: tuple[str, str, str] | None, *, with_heading: bool) 
 # cached-snapshot path lands alongside, L5 PR2).
 # ---------------------------------------------------------------------------
 
-_RISK_CSS = """<style>
-/* Implicit bets (Wave 3, surface_density_jit_redesign.md #3): the ranked
-   prose statement of what the book is positioned for. */
-.pfr-bets ol { margin: 4px 0 0 20px; padding: 0; }
-.pfr-bets li { margin: 0 0 6px; font-size: var(--fs-body); line-height: 1.5; }
-.pfr-bets .pfr-bet-nums { color: var(--muted); font-size: var(--fs-caption); }
-.pfr-uw { width: 100%; height: auto; display: block; margin-top: 6px; }
-.pfr-top { font-size: var(--fs-caption); color: var(--muted); margin: 6px 0 0; }
-.pfr-tops { margin-top: 8px; }
-.pfr-run { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; }
-.pfr-run select { font-size: var(--fs-body); }
-.pfr-log { display: none; max-height: 160px; overflow: auto; margin: 0 0 12px; }
-/* Pairwise correlation heat table: warm tint scales with co-movement (the
-   crowding signal); negative correlation (a true diversifier) reads cool.
-   color-mix over the shared tone tokens — the analytical-dashboard idiom. */
-.pfc-scroll { overflow-x: auto; margin-top: 8px; }
-.pfc-table { border-collapse: collapse; font-family: var(--mono); font-size: var(--fs-caption); }
-.pfc-table th { font-weight: 600; color: var(--muted); padding: 2px 5px; text-align: center; }
-.pfc-table th.pfc-row-h { text-align: right; }
-.pfc-cell { padding: 2px 5px; text-align: center; font-variant-numeric: tabular-nums;
-  min-width: 34px; }
-.pfc-diag { color: var(--muted); }
-.pfc-c1 { background: color-mix(in srgb, var(--warn) 10%, transparent); }
-.pfc-c2 { background: color-mix(in srgb, var(--warn) 24%, transparent); }
-.pfc-c3 { background: color-mix(in srgb, var(--bad) 30%, transparent); }
-.pfc-neg { background: color-mix(in srgb, var(--ok) 14%, transparent); }
-.pfc-clusters { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; }
-.pts-table { margin-top: 4px; }
-.pts-excluded { color: var(--muted); }
-.pfm-table { margin-top: 4px; max-width: 360px; }
-/* Coverage-gate warning (Monthly Red Team Phase 1 guard 1): a leading pill
-   line the aggregate headline sits BELOW, never a quiet footnote — the
-   book-level scenario/reward rollups (tail stress, risk-vs-reward) share it. */
-.pfr-coverage-warn { font-size: var(--fs-body); margin: 8px 0; }
-.ptc-findings { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.ptc-finding { border-left: 2px solid var(--warn); padding-left: 10px; }
-.ptc-finding-bad { border-left-color: var(--bad); }
-.ptc-finding-head { font-size: var(--fs-body); }
-.ptc-finding-rationale { font-size: var(--fs-caption); color: var(--muted); margin: 2px 0 0; }
-.rrg-table { margin-top: 4px; }
-.rrg-mismatch { max-width: 460px; }
-.rrg-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
-.rrg-score { margin-right: 8px; }
-/* Naked-position gate violation chips (Monthly Red Team Phase 1 guard 7):
-   one dense standing chip per violation, wrapping — the .k-chip kit base
-   (controls.py), only the layout (flex-wrap + gaps) is local. */
-.pfr-naked-chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 8px 0 12px; }
-</style>"""
+_RISK_CSS = portfolio_css()
 
 # Fires the portfolio macro-stress lens (execution/run_scenario.py --portfolio)
 # over the standard /actions/stream SSE channel, then re-fetches the Risk panel
@@ -1628,7 +1491,7 @@ _RUN_SCENARIO_JS = """
     if (!scenario) { msg.textContent = 'pick a scenario'; return; }
     CCAction.busy(btn, 'Running…');
     msg.textContent = 'running… (LLM digest, ~10-40s)';
-    log.style.display = 'block';
+    log.hidden = false;
     fetch('/actions/run-scenario', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({scenario: scenario})
@@ -2489,24 +2352,20 @@ def _underwater_chart(points: list[DrawdownPoint]) -> str:
         ty = y_of(tick)
         parts.append(
             f'<line x1="{pad_l:.1f}" x2="{pad_l + plot_w:.1f}" y1="{ty:.1f}" y2="{ty:.1f}" '
-            'stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2 3" />'
+            'class="pfr-grid" />'
         )
         parts.append(
-            f'<text x="{pad_l - 6:.1f}" y="{ty + 3:.1f}" text-anchor="end" font-size="9.5" '
-            f'fill="var(--muted)" font-family="var(--mono)">{tick:.1f}%</text>'
+            f'<text class="pfr-axis-label pfr-axis-end" x="{pad_l - 6:.1f}" y="{ty + 3:.1f}">{tick:.1f}%</text>'
         )
     anchors = {0: "start", n // 2: "middle", n - 1: "end"}
     for i, anchor in anchors.items():
+        anchor_class = f"pfr-axis-{anchor}"
         parts.append(
-            f'<text x="{x_of(i):.1f}" y="{height - 6:.1f}" text-anchor="{anchor}" '
-            'font-size="9.5" fill="var(--muted)" font-family="var(--mono)">'
+            f'<text class="pfr-axis-label {anchor_class}" x="{x_of(i):.1f}" y="{height - 6:.1f}">'
             f"{escape(coords[i][0])}</text>"
         )
-    parts.append(f'<path d="{area}" fill="var(--bad)" fill-opacity="0.16" stroke="none" />')
-    parts.append(
-        f'<path d="{line}" fill="none" stroke="var(--bad)" stroke-width="1.6" '
-        'stroke-linejoin="round" stroke-linecap="round" />'
-    )
+    parts.append(f'<path class="pfr-area" d="{area}" />')
+    parts.append(f'<path class="pfr-line" d="{line}" />')
     parts.append("</svg>")
     return "".join(parts)
 
@@ -3332,7 +3191,7 @@ def _business_factor_section(factors: BookFactorVector | None) -> str:
         ex_chips = " ".join(
             f'<span class="k-chip k-chip-mono">{escape(t)}</span>' for t in factors.excluded_tickers
         )
-        excluded_note = f'<p class="muted" style="margin-top:var(--sp-2);">Unmapped / excluded holdings ({len(factors.excluded_tickers)}): {ex_chips}</p>'
+        excluded_note = f'<p class="muted pf-excluded-note">Unmapped / excluded holdings ({len(factors.excluded_tickers)}): {ex_chips}</p>'
 
     return f'{head}<div class="pf-exp">{"".join(rows)}</div>{excluded_note}</section>'
 
@@ -3495,8 +3354,7 @@ def _tracker_offline_banner(
         "Start tracker</button>"
         '<span class="pf-start-msg muted">starting automatically…</span>'
         "</div>"
-        '<pre class="pf-start-log cli-hint" '
-        'style="display:none; max-height:180px; overflow:auto"></pre>'
+        '<pre class="pf-start-log cli-hint" hidden></pre>'
         '<details class="offline-tech"><summary>Start it manually · technical detail</summary>'
         '<pre class="cli-hint">Configure PORTFOLIO_TRACKER_API_URL, then run '
         "uvicorn portfolio_tracker.api.main:app --host &lt;configured-host&gt; "
