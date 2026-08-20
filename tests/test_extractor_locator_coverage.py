@@ -339,10 +339,7 @@ def test_metrics_engine_persists_derived_locator_on_fixture() -> None:
     from decimal import Decimal
 
     from compute.metrics_engine.engine import ComputedValue
-    from compute.metrics_engine.io import (  # pyright: ignore[reportPrivateUsage]
-        LineageEntry,
-        _persist_attempt,
-    )
+    from compute.metrics_engine.io import LineageEntry, persist_attempt
     from compute.metrics_engine.registry import REGISTRY
 
     assert "compute.metrics_engine.io" in REGISTERED_DERIVED_LOCATOR_EMITTERS
@@ -377,7 +374,7 @@ def test_metrics_engine_persists_derived_locator_on_fixture() -> None:
     result = ComputedValue(value=Decimal("42.0"))
     lineage: list[LineageEntry] = [(next(iter(formula.required_inputs)), period_end, 1)]
 
-    _persist_attempt(
+    persist_attempt(
         conn,
         ticker="TST",
         period_end=period_end,
