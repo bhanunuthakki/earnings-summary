@@ -98,18 +98,17 @@ def test_pill_and_banner_are_injected_on_sidebar_init() -> None:
 
 def test_render_functions_drive_dom_from_state() -> None:
     pill_fn = COMMENTS_JS.split("function renderHealthPill")[1].split("\n  }")[0]
-    # The class encodes state so CSS can color the pill without JS poking
-    # individual style props. The exact assignment is
-    # "cmt-health-pill cmt-health-<state>" — assert the state-suffix
-    # piece so this doesn't trip on the base-class prefix changing.
-    assert "cmt-health-' + healthState" in pill_fn
+    # The control-kit tones encode state without JS poking visual properties.
+    assert "classList.toggle('k-pill-ok', healthState === 'online')" in pill_fn
+    assert "classList.toggle('k-pill-bad', healthState === 'offline')" in pill_fn
+    assert "dataset.health = healthState" in pill_fn
     # Three textContent variants for the three states.
     assert "'● Online'" in pill_fn
     assert "'● Offline'" in pill_fn
     assert "'○ …'" in pill_fn
 
     banner_fn = COMMENTS_JS.split("function renderOfflineBanner")[1].split("\n  }")[0]
-    assert "healthState === 'offline' ? 'block' : 'none'" in banner_fn
+    assert "banner.hidden = healthState !== 'offline'" in banner_fn
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +125,8 @@ def test_pill_css_has_distinct_state_colors() -> None:
     # not per-class CSS here.
     assert ".cmt-health-pill {" in COMMENTS_CSS  # layout rule survives
     pill_fn = COMMENTS_JS.split("function renderHealthPill")[1].split("\n  }")[0]
-    assert "healthState === 'online' ? ' k-pill-ok'" in pill_fn
-    assert "healthState === 'offline' ? ' k-pill-bad'" in pill_fn
+    assert "classList.toggle('k-pill-ok', healthState === 'online')" in pill_fn
+    assert "classList.toggle('k-pill-bad', healthState === 'offline')" in pill_fn
 
 
 def test_offline_banner_css_exists() -> None:

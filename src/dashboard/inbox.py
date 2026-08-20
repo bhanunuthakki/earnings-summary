@@ -45,6 +45,7 @@ from alerts import (
     list_pending_actions,
     list_queued_actions_for_alerts,
 )
+from dashboard._styles import INBOX_CSS
 from dashboard.inbox_rank import (
     ADVISOR_MEMO_TITLE,
     CATEGORY_LABELS,
@@ -1252,110 +1253,6 @@ def _alert_memo(it: InboxItem) -> str:
 def _esc(text: str) -> str:
     return html.escape(str(text), quote=True)
 
-
-INBOX_CSS = """
-.ix-stream { display: flex; flex-direction: column; gap: var(--sp-2); }
-.ix-card { border-radius: var(--radius);
-  background: var(--surface); padding: 9px 12px; }
-.ix-head { display: flex; align-items: baseline; gap: 8px; }
-.ix-ticker { font-family: var(--mono); font-weight: 600; font-size: var(--fs-caption);
-  color: var(--fg); text-decoration: none; }
-.ix-ticker:hover { color: var(--accent); }
-/* Kind label = the kit .k-chip (controls.py); .ix-kind carries no local
-   shape/color of its own now, only the "why ranked" help-cursor below. */
-/* Status badge = the kit .k-pill (controls.py §3); .ix-status is now only the
-   JS hook INBOX_JS swaps the tone on — no local skin. */
-.ix-when { margin-left: auto; color: var(--muted); font-size: var(--fs-caption);
-  font-family: var(--mono); white-space: nowrap; }
-.ix-body { margin-top: 5px; font-size: var(--fs-body); line-height: 1.45; color: var(--fg);
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.ix-compact .ix-body { -webkit-line-clamp: 2; }
-.ix-card:hover .ix-body { -webkit-line-clamp: unset; }
-/* The card's one action/doorway row (approve · dismiss · article · review) —
-   the SAME footer shape for every kind, replacing the old per-kind .ix-actions
-   block and bespoke .alert-card queued-action panel. */
-.ix-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px;
-  margin-top: 6px; }
-.ix-foot a { font-size: var(--fs-caption); text-decoration: none; }
-.ix-foot-act { color: var(--accent); }
-.ix-foot-act:hover { text-decoration: underline; }
-.ix-foot-dismiss { color: var(--muted); }
-.ix-foot-dismiss:hover { color: var(--bad); text-decoration: none; }
-.ix-foot-link { color: var(--muted); }
-.ix-foot-link:hover { color: var(--accent); }
-/* Advisor-memo affordances — the shared .k-chip kit (controls.py), so the
-   memo card carries dismiss + open-memo without a bespoke button system. */
-.ix-memo-acts { display: flex; gap: 6px; margin-top: 7px; }
-.ix-memo-open { text-decoration: none; }
-.ix-note-dismiss:hover { color: var(--bad); border-color: var(--bad); }
-.ix-empty { color: var(--muted); font-size: var(--fs-body); padding: 14px 4px; }
-/* Degraded, NOT empty. Deliberately toned so it cannot be mistaken for the
-   quiet-morning .ix-empty line it used to be indistinguishable from. */
-.ix-degraded {
-  color: var(--fg); font-size: var(--fs-body); padding: 12px 14px;
-  border: 1px solid var(--bad); border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bad) 8%, transparent);
-}
-.ix-degraded-why { color: var(--muted); font-size: var(--fs-caption);
-  border-bottom: 1px dotted var(--border-2); cursor: help; }
-/* Truncation receipt — the stream is capped, so it says so rather than
-   presenting the top N as the whole queue. */
-.ix-more { color: var(--muted); font-size: var(--fs-caption); padding: 10px 4px 2px;
-  border-top: 1px solid var(--border-2); margin-top: 8px; }
-/* Quick approve/dismiss (compact rail cards) — zero-height: the buttons sit
-   in the existing header row and flip visibility (layout stays reserved, so
-   nothing shifts) on card hover / keyboard focus. */
-.ix-quick { margin-left: auto; display: inline-flex; gap: 3px; visibility: hidden; }
-.ix-card:hover .ix-quick, .ix-quick:focus-within { visibility: visible; }
-.ix-quick ~ .ix-when, .ix-acted ~ .ix-when { margin-left: 0; }
-/* Quick approve/dismiss = .k-btn .k-btn-quiet .k-btn-sm (kit); only the
-   semantic hover/fail tones are local — a success/danger affordance the
-   quiet button has no intent for. */
-.ix-act-approve:hover { color: var(--ok); border-color: var(--ok); }
-.ix-act-dismiss:hover { color: var(--bad); border-color: var(--bad); }
-.ix-act[disabled] { opacity: 0.5; cursor: default; }
-.ix-act-fail { color: var(--bad); border-color: var(--bad); }
-.ix-acted { margin-left: auto; font-size: var(--fs-caption); font-weight: 600;
-  white-space: nowrap; color: var(--muted); }
-.ix-acted-applied { color: var(--ok); }
-.ix-dismissed { opacity: 0.55; transition: opacity var(--transition); }
-/* Unread ("since you last looked") — inset accent bar: no border-width
-   change, zero layout shift. Accent is sanctioned here: unread marks are
-   actionable state, the one non-link accent this surface carries. */
-.ix-new { box-shadow: inset 2px 0 0 var(--accent); }
-/* Tier-1 severity rail — a decisive alert (owner falsifier breach, registered
-   threshold crossing) reads apart from routine cards at a glance. Declared
-   AFTER .ix-new so on a card that is both new and decisive the status color
-   wins (the unread badge count still carries newness). */
-.ix-sev-bad { box-shadow: inset 2px 0 0 var(--bad); }
-.ix-badge { display: inline-block; min-width: 14px; text-align: center;
-  margin-left: 6px; padding: 1px 5px; border-radius: var(--radius-full);
-  background: var(--accent); color: var(--accent-contrast);
-  font-family: var(--mono); font-size: var(--fs-caption); font-weight: 600;
-  line-height: 1.4; vertical-align: 2px; }
-.ix-badge[hidden] { display: none; }
-/* Category filter chips (Inbox v2) — client-side, scoped per stream. */
-.ix-cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
-/* Category filter chip = .k-chip .k-chip-btn (kit base + clickable modifier);
-   .is-on is the kit's active state. Only the count span's de-emphasis is local. */
-.ix-cat span { opacity: 0.7; margin-left: 2px; }
-.ix-hide { display: none !important; }
-/* "Why ranked here" — the factor breakdown rides the kind chip's title. */
-.ix-kind[title] { cursor: help; }
-/* Consequence receipts (REQ-11): the muted, truncated outcome string a done
-   chip carries — approve_and_apply's ledger/sizing summary. Full text on
-   the native title= tooltip; no local color (inherits .ix-acted's muted). */
-.ix-acted-detail { font-weight: 400; opacity: 0.85; }
-/* Dismiss-with-reason (alerts lane, v1) — the "why?" toggle + one-word input
-   riding the dismissed chip. Quiet by default; only visible on hover/focus
-   like the rest of the quick-action row, so a settled card stays quiet. */
-.ix-dismiss-why { margin-left: 4px; }
-.ix-why-toggle { font-weight: 400; opacity: 0.7; }
-.ix-why-toggle:hover { opacity: 1; }
-.ix-why-input { margin-left: 4px; width: 7em; font-size: var(--fs-caption);
-  font-family: inherit; background: var(--surface); color: var(--fg);
-  border: 1px solid var(--border); border-radius: var(--radius); padding: 1px 5px; }
-""".strip()
 
 # Behavior for the stream's two client-side features, embedded once per page
 # that renders an inbox (shell Overview, /feed). Plain string — its braces

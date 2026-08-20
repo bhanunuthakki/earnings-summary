@@ -21,6 +21,7 @@ from pathlib import Path
 
 from identity import DEFAULT_USER_ID
 from pipeline.console_scaffold import ConsoleSection, render_console
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 
 
 def render_ledger_console(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
@@ -42,6 +43,7 @@ def render_ledger_console(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> s
     from pipeline.ledger_panel import render_ledger_jump_chips, render_ledger_panel
     from pipeline.triage_panel import render_triage_panel
 
+    _ = RESEARCH_PANEL_STYLE
     sections: list[ConsoleSection] = [
         ("feed", "Ledger", lambda: render_ledger_panel(db_path, user_id=user_id, embedded=True)),
         # Triage/Journal/Decisions render embedded too: their tab-level chrome

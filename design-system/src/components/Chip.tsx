@@ -27,7 +27,10 @@ interface ChipBaseProps {
 }
 
 export type ChipProps = ChipBaseProps &
-  Omit<React.HTMLAttributes<HTMLSpanElement | HTMLButtonElement>, keyof ChipBaseProps>;
+  Omit<
+    React.HTMLAttributes<HTMLSpanElement | HTMLButtonElement>,
+    keyof ChipBaseProps | "style"
+  >;
 
 export function Chip({
   tone,

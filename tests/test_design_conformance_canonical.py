@@ -17,14 +17,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+from execution import verify_design_conformance as design_verifier  # noqa: E402
 from ui import design_registry as registry  # noqa: E402
 from ui.conformance_scan import (  # noqa: E402
     DIMENSIONS,
     css_text,
+    discover_emitters,
     discover_surfaces,
+    dynamic_visual_digest,
+    geometry_debt_failures,
+    geometry_debt_fingerprints,
+    master_geometry_digest,
     scan_surface,
     scan_surface_evidence,
 )
+
+_scan_canary = design_verifier._scan_canary  # pyright: ignore[reportPrivateUsage]
 
 EXPECTED_OLD_DIMENSIONS = {
     "color",
@@ -37,6 +45,23 @@ EXPECTED_OLD_DIMENSIONS = {
     "transition",
 }
 EXPECTED_NEW_DIMENSIONS = {
+    "canonical-token-redefinition",
+    "consumer-visual-css",
+    "dynamic-visual-contract",
+    "floating-card-title",
+    "font-shorthand",
+    "inline-style-api",
+    "inline-style-attribute",
+    "local-property-value",
+    "runtime-visual-mutation",
+    "off-scale-indent",
+    "unsanctioned-shape-geometry",
+    "off-scale-grid-column",
+    "svg-presentation",
+    "unknown-custom-property",
+    "master-geometry-contract",
+}
+EXPECTED_STRUCTURAL_DIMENSIONS = {
     "floating-card-title",
     "off-scale-indent",
     "unsanctioned-shape-geometry",
@@ -49,8 +74,56 @@ def test_shared_scanner_topology_and_registry_classification() -> None:
     assert not (SRC / "ui" / "conformance.py").exists()
     assert "ui/conformance_scan.py" in registry.REGISTERED
     assert "ui/conformance_scan.py" in registry.EXEMPT
+
+
+def test_consumer_cannot_add_token_clean_visual_css_outside_a_master() -> None:
+    findings = scan_surface("pipeline/example.py", ".x { color: var(--fg); }")
+    assert findings["consumer-visual-css"] == [".x:color=var(--fg)"]
+    assert "consumer-visual-css" not in scan_surface(
+        "pipeline/work_os_styles.py", ".x { color: var(--fg); }"
+    )
+    assert scan_surface(
+        "design-system/src/components/Button.tsx",
+        "const css = `.x { color: var(--fg); }`;",
+    )["consumer-visual-css"]
+
+
+def test_master_digest_covers_token_geometry_and_keyframes() -> None:
+    surface = "report/renderers/workspace_charts.py"
+    source = css_text(SRC / surface)
+    contract = next(item for item in registry.MASTER_GEOMETRY_CONTRACTS if item.surface == surface)
+    assert master_geometry_digest(surface, source) == contract.digest
+
+    token_change = str(source).replace("gap: var(--sp-3)", "gap: var(--sp-5)", 1)
+    assert master_geometry_digest(surface, token_change) != contract.digest
+    assert "master-geometry-contract" in scan_surface(surface, token_change)
+
+    keyframe = str(source) + "\n@keyframes drift { from { transform: translateX(999px); } }"
+    assert master_geometry_digest(surface, keyframe) != contract.digest
+    assert "master-geometry-contract" in scan_surface(surface, keyframe)
+
+    root_geometry = str(source) + "\n:root { padding: 999px; }"
+    assert master_geometry_digest(surface, root_geometry) != contract.digest
+    assert "master-geometry-contract" in scan_surface(surface, root_geometry)
     assert "ui/conformance_scan.py" in discover_surfaces(SRC)
     assert "ui/design_registry.py" not in discover_surfaces(SRC)
+    for master_source in registry.GLOBAL_MASTER_SOURCES:
+        assert "master-geometry-contract" in scan_surface(
+            master_source, ".x { color: red; padding: 17px; }"
+        )
+        dynamic_evidence = scan_surface_evidence(
+            master_source, 'CSS = f".x {{ padding: {value}; }}"'
+        )
+        assert (
+            "dynamic-visual-contract" in dynamic_evidence.violations()
+            or "dynamic-visual-value" in dynamic_evidence.unverifiable_markup
+        )
+        assert geometry_debt_fingerprints(master_source, ".x { color: red; padding: 17px; }") == ()
+    for master_source in registry.FAMILY_MASTER_SOURCES:
+        findings = scan_surface(master_source, ".x { color: red; padding: 17px; }")
+        assert findings["color"] == ["red"]
+        assert "master-geometry-contract" in findings
+        assert geometry_debt_fingerprints(master_source, ".x { padding: 17px; }") == ()
 
     guard_tree = ast.parse((PROJECT_ROOT / "tests" / "test_ui_controls.py").read_text("utf-8"))
     imports = {
@@ -59,7 +132,7 @@ def test_shared_scanner_topology_and_registry_classification() -> None:
         if isinstance(node, ast.ImportFrom) and node.module == "ui.conformance_scan"
         for alias in node.names
     }
-    assert {"DIMENSIONS", "css_text", "discover_surfaces", "scan_surface"} <= imports
+    assert {"css_text", "discover_emitters", "scan_surface"} <= imports
     locally_defined = {
         node.name
         for node in guard_tree.body
@@ -102,6 +175,439 @@ def test_css_extraction_and_discovery_are_importable(tmp_path: Path) -> None:
     assert "var(--fg)" in css_text(path)
     assert "var(--doc-only)" not in css_text(path)
     assert discover_surfaces(src) == frozenset({"comment.py", "demo.py", "doc.py"})
+
+
+def test_authoritative_emitter_census_does_not_require_a_token_reference(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src"
+    execution = tmp_path / "execution"
+    (src / "ui").mkdir(parents=True)
+    execution.mkdir()
+    (src / "ui" / "plain_html.py").write_text(
+        'HTML = "<button class="ad-hoc">Run</button>"\n', encoding="utf-8"
+    )
+    (src / "ui" / "svg_only.py").write_text(
+        'ICON = "<svg><path fill="#fff" d="M0 0h1v1z"/></svg>"\n',
+        encoding="utf-8",
+    )
+    (src / "ui" / "runtime.py").write_text(
+        "JS = \"el.style.width = '17px'; el.classList.add('wide')\"\n",
+        encoding="utf-8",
+    )
+    (execution / "document.py").write_text(
+        'DOC = "<!doctype html><style>.x { margin: 7px }</style>"\n',
+        encoding="utf-8",
+    )
+    (src / "ui" / "not_visual.py").write_text(
+        'SQL = "SELECT class, style FROM facts"\n', encoding="utf-8"
+    )
+
+    discovered = {entry.path: entry for entry in discover_emitters(tmp_path)}
+    assert set(discovered) == {
+        "ui/plain_html.py",
+        "ui/runtime.py",
+        "ui/svg_only.py",
+        "execution/document.py",
+    }
+    assert "html" in discovered["ui/plain_html.py"].adapter_kinds
+    assert "svg" in discovered["ui/svg_only.py"].adapter_kinds
+    assert "runtime-js" in discovered["ui/runtime.py"].adapter_kinds
+
+
+def test_unknown_custom_properties_fail_closed() -> None:
+    findings = scan_surface(
+        "ui/example.py",
+        ".x { color: var(--definitely-not-canonical); --invented-gap: 17px; }",
+    )
+    assert findings["unknown-custom-property"] == [
+        "--definitely-not-canonical",
+        "--invented-gap",
+    ]
+    assert scan_surface("ui/example.py", ".x { padding: var(--invented-gap, 17px); }")[
+        "unknown-custom-property"
+    ] == ["--invented-gap"]
+
+
+def test_local_property_scope_and_values_are_enforced() -> None:
+    findings = scan_surface(
+        "report/renderers/workspace_chat.py",
+        ".x { --sidebar-open-width: 800px; width: var(--sidebar-open-width); }",
+    )
+    assert findings["local-property-value"] == ["--sidebar-open-width=800px"]
+    assert "unknown-custom-property" in scan_surface(
+        "ui/example.py", ".x { padding: var(--pad-x); }"
+    )
+    assert scan_surface("ui/example.py", ".x { --fg: var(--bad); color: var(--fg); }")[
+        "canonical-token-redefinition"
+    ] == ["--fg=var(--bad)"]
+
+
+def test_named_colors_and_computed_type_values_cannot_bypass_tokens() -> None:
+    assert scan_surface("ui/example.py", ".x { color: red; }")["color"] == ["red"]
+    assert scan_surface("ui/example.py", ".x { color: rebeccapurple; }")["color"] == [
+        "rebeccapurple"
+    ]
+    assert scan_surface("ui/example.py", ".x { font-size: calc(13px + 1px); }")["font-size"] == [
+        "calc(13px+1px)"
+    ]
+
+
+def test_font_shorthand_and_relative_size_cannot_bypass_type_scale() -> None:
+    findings = scan_surface(
+        "ui/example.py",
+        ".x { font: 1.37rem 'Roboto', sans-serif; font-size: 1.37rem; }",
+    )
+    assert findings["font-shorthand"] == ["1.37rem 'Roboto',sans-serif"]
+    assert findings["font-size"] == ["1.37rem"]
+    assert "font-shorthand" not in scan_surface("ui/example.py", ".x { font: inherit; }")
+
+
+def test_svg_presentation_attributes_use_the_design_vocabulary() -> None:
+    findings = scan_surface(
+        "ui/example.py",
+        '<svg><path fill="#fff" stroke="rgb(1, 2, 3)" stroke-width="3" /></svg>',
+    )
+    assert findings["svg-presentation"] == [
+        "fill=#fff",
+        "stroke-width=3",
+        "stroke=rgb(1,2,3)",
+    ]
+    assert "svg-presentation" not in scan_surface(
+        "ui/example.py",
+        '<svg><path fill="currentColor" stroke="none" /></svg>',
+    )
+
+
+def test_geometry_debt_is_exact_and_formatting_stable() -> None:
+    original = """
+    @media (min-width: 40rem) {
+      .panel, .card { padding: 17px; gap: 3%; }
+    }
+    """
+    reformatted = "@media (min-width:40rem){.panel,.card{padding : 17px;gap:3%;}}"
+    baseline = geometry_debt_fingerprints("ui/example.py", original)
+    assert baseline == geometry_debt_fingerprints("ui/example.py", reformatted)
+    assert geometry_debt_failures(baseline, baseline) == []
+
+    replacement = geometry_debt_fingerprints("ui/example.py", original.replace("17px", "19px"))
+    assert geometry_debt_failures(replacement, baseline)
+
+    shrink = geometry_debt_fingerprints("ui/example.py", original.replace("gap: 3%;", ""))
+    assert geometry_debt_failures(shrink, baseline)
+
+    calc_a = geometry_debt_fingerprints("ui/example.py", ".x > .y { width: calc(100% - 2px); }")
+    calc_b = geometry_debt_fingerprints("ui/example.py", ".x>.y{width:calc(100%-2px)}")
+    assert calc_a == calc_b
+
+    token_list = geometry_debt_fingerprints("ui/example.py", ".x { margin: var(--sp-1) 0; }")
+    assert token_list == ("ui/example.py|root|.x|margin|var(--sp-1) 0|#1",)
+
+
+@pytest.mark.parametrize("tag", ["video", "iframe", "picture"])
+def test_authoritative_census_covers_media_only_emitters(tmp_path: Path, tag: str) -> None:
+    path = tmp_path / "src" / "ui" / "media.py"
+    path.parent.mkdir(parents=True)
+    path.write_text(f'HTML = "<{tag} class=\\"hero\\"></{tag}>"\n', encoding="utf-8")
+    assert {entry.path for entry in discover_emitters(tmp_path)} == {"ui/media.py"}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def render(value):\n    el.innerHTML = value\n    return el\n",
+        (
+            'def render(value):\n    el = document.createElement("p")\n'
+            "    el.outerHTML = value\n    return el\n"
+        ),
+        "def render(tag):\n    return f\"<{tag} class='k-btn'>Run</{tag}>\"\n",
+        'def render(selector, prop, value):\n    return f"{selector} {{ {prop}: {value}; }}"\n',
+        'def render(prop):\n    return f".x {{ {prop}: var(--fg); }}"\n',
+        'def render(selector, prop, value):\n    return "{} {{ {}: {}; }}".format(selector, prop, value)\n',
+        'def render(selector, color):\n    return "." + selector + " { color:" + color + "; }"\n',
+        'def render(tag, body):\n    return "<" + tag + ">" + body + "</" + tag + ">"\n',
+        'JS = "document.createElement(tag)"\n',
+        'JS = "document.createElementNS(namespace, tag)"\n',
+        'JS = "document[\\"createElement\\"](\\"div\\")"\n',
+        "JS = \"el.className = 'k-card'\"\n",
+        'HTML = "".join(part for part in parts)\n',
+        "HTML = render_html(data)\n",
+        "CSS = build_styles(tokens)\n",
+    ],
+)
+def test_authoritative_census_covers_executable_runtime_emitters(
+    tmp_path: Path, source: str
+) -> None:
+    path = tmp_path / "src" / "ui" / "runtime_only.py"
+    path.parent.mkdir(parents=True)
+    path.write_text(source, encoding="utf-8")
+    assert {entry.path for entry in discover_emitters(tmp_path)} == {"ui/runtime_only.py"}
+
+
+def test_dynamic_create_element_is_static_scan_evidence_and_fails_closed() -> None:
+    source = 'JS = "document.createElement(tag)"\n'
+    assert scan_surface("ui/runtime_only.py", source)["runtime-visual-mutation"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'CSS = f".x {{ color: {color}; }}"',
+        "HTML = f'<div style=\"color:{color}\">x</div>'",
+        'CSS = f".x {{ color: var(--{property_name}); }}"',
+        'CSS = f"{selector} {{ {property_name}: {value}; }}"',
+        'CSS = f".x {{ {property_name}: var(--fg); }}"',
+        'CSS = f"{selector} {{ color: var(--fg); }}"',
+        'CSS = f".{kind}-card {{ color: var(--fg); }}"',
+        'CSS = f".x:{pseudo} {{ color: var(--fg); }}"',
+        'CSS = f"[data-kind={kind}] {{ color: var(--fg); }}"',
+        'CSS = f"@media (min-width: {width}) {{ .x {{ color: var(--fg); }} }}"',
+        'CSS = f"@supports ({condition}) {{ .x {{ color: var(--fg); }} }}"',
+        'CSS = f".x {{ &:{pseudo} {{ color: var(--fg); }} }}"',
+        'CSS = f".x {{ &.{kind} {{ color: var(--fg); }} }}"',
+        'CSS = f".x {{ .{kind}-child {{ color: var(--fg); }} }}"',
+        'HTML = f"<style>{css}</style>"',
+        'CSS = "{} {{ {}: {}; }}".format(selector, property_name, value)',
+        'CSS = "." + selector + " { color:" + color + "; }"',
+        'CSS = "".join([".", selector, " { color:", color, "; }"])',
+        'HTML = "<div style=\\"color:" + color + "\\">x</div>"',
+    ],
+)
+def test_dynamic_visual_values_are_explicitly_unverifiable(source: str) -> None:
+    assert (
+        "dynamic-visual-value" in scan_surface_evidence("ui/example.py", source).unverifiable_markup
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    [
+        ('HTML = "".join(part for part in parts)', "dynamic-html-markup"),
+        ("HTML = render_html(data)", "dynamic-html-markup"),
+        ("CSS = build_styles(tokens)", "dynamic-visual-value"),
+    ],
+)
+def test_opaque_visual_composition_is_unverifiable(source: str, kind: str) -> None:
+    assert kind in scan_surface_evidence("ui/example.py", source).unverifiable_markup
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'styles = {"card": {"width": "999px", "color": "var(--fg)"}}',
+        'sx = {"width": "999px", "color": "var(--fg)"}',
+        'layout = {"gridTemplateColumns": "340px 1fr"}',
+        'props = {"style": {"width": "999px"}}',
+        'const styles = { card: { width: "999px", color: "var(--fg)" } };',
+        'const styles = Object.freeze({ card: { width: "999px" } });',
+        'const sx = [{ width: "999px" }];',
+        'const css = css({ width: "999px" });',
+        'const styles = {}; styles["width"] = userWidth;',
+        "const styles = {}; styles.width = userWidth;",
+        'styles = {}\nstyles["width"] = user_width',
+    ],
+)
+def test_css_in_js_object_styles_are_consumer_drift(source: str) -> None:
+    assert scan_surface("design-system/src/components/X.tsx", source)["consumer-visual-css"]
+
+
+@pytest.mark.parametrize("source", ["HTML = fn(data)", "CSS = fn(data)"])
+def test_arbitrary_opaque_visual_calls_are_unverifiable(source: str) -> None:
+    evidence = scan_surface_evidence("ui/example.py", source)
+    assert evidence.unverifiable_markup
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'HTML = "<div>"\nHTML += fn(data)',
+        'CSS = ".x { color: var(--fg); }"\nCSS += fn(data)',
+        "const html = renderHtml(data);",
+        "const css = buildStyles(tokens);",
+        "const markup = factory(data);",
+        'const html = ["<div>", body, "</div>"].join("");',
+    ],
+)
+def test_augmented_and_typescript_opaque_visuals_are_unverifiable(source: str) -> None:
+    assert scan_surface_evidence("ui/example.tsx", source).unverifiable_markup
+
+
+def test_css_identifier_escapes_cannot_hide_named_colors() -> None:
+    assert scan_surface("pipeline/example_styles.py", r".x { color: r\65 d; }")["color"] == ["red"]
+
+
+def test_registered_dynamic_visual_recipe_fails_on_source_mutation() -> None:
+    contract = registry.DYNAMIC_VISUAL_CONTRACTS[0]
+    source = (SRC / contract.surface).read_text(encoding="utf-8")
+    assert dynamic_visual_digest(source) == contract.digest
+    assert "dynamic-visual-contract" not in scan_surface(contract.surface, source)
+
+    mutated = source + '\nDRIFT = f"<div style=\\"width:{value}px\\"></div>"\n'
+    assert dynamic_visual_digest(mutated) != contract.digest
+    assert scan_surface(contract.surface, mutated)["dynamic-visual-contract"]
+
+
+def test_inline_html_styles_receive_full_color_scanning() -> None:
+    assert scan_surface("ui/example.py", '<div style="color:red">x</div>')["color"] == ["red"]
+
+
+def test_react_pick_style_is_not_confused_with_safe_omit() -> None:
+    source = 'export type Props = Pick<React.HTMLAttributes<HTMLDivElement>, "style">;'
+    assert scan_surface("design-system/src/components/Button.tsx", source)["inline-style-api"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "type Props = React.HTMLProps<HTMLDivElement>;",
+        "type Props = React.SVGProps<SVGSVGElement>;",
+        "type Props = React.SVGAttributes<SVGSVGElement>;",
+        "type Props = React.PropsWithChildren<React.SVGProps<SVGSVGElement>>;",
+        "type Props = React.DetailedHTMLProps<React.SVGAttributes<SVGSVGElement>, SVGSVGElement>;",
+    ],
+)
+def test_react_native_props_always_omit_style(source: str) -> None:
+    assert scan_surface("design-system/src/components/X.tsx", source)["inline-style-api"]
+
+
+def test_runtime_visual_contracts_constrain_values_not_only_properties() -> None:
+    rel = "pipeline/cc_action.py"
+    assert "runtime-visual-mutation" in scan_surface(rel, 'el.style.height = "999px";')
+    assert "runtime-visual-mutation" not in scan_surface(
+        rel, "el.style.height = el.offsetHeight + 'px';"
+    )
+
+
+@pytest.mark.parametrize(
+    "javascript",
+    [
+        "el.style.width = '17px'",
+        "el.style.setProperty('width', userWidth)",
+        "Object.assign(el.style, { width: userWidth })",
+        "el.attributeStyleMap.set('width', value)",
+        "el['style'].setProperty('width', userWidth)",
+        "el['style'] = cssText",
+        "Reflect.set(el.style, 'width', userWidth)",
+        "Reflect.set(el['style'], 'width', userWidth)",
+        "Object.assign(el['style'], { width: userWidth })",
+        "Object.defineProperty(el.style, 'width', {value: userWidth})",
+        "Object.defineProperty(el['style'], 'width', {value: userWidth})",
+        "sheet.replaceSync(dynamicCss)",
+        "sheet['replace'](dynamicCss)",
+        "document.adoptedStyleSheets = [sheet]",
+        "sheet.replace(dynamicCss)",
+        "sheet.insertRule(dynamicCss)",
+        "document.adoptedStyleSheets.push(sheet)",
+        "document['adoptedStyleSheets'].push(sheet)",
+        "styleEl.textContent = dynamicCss",
+        "styleEl['textContent'] = dynamicCss",
+        "styleEl.innerHTML = dynamicCss",
+        "styleEl.append(dynamicCss)",
+        "styleEl['append'](dynamicCss)",
+        "CSSStyleSheet.prototype.replaceSync.call(sheet, css)",
+        "CSSStyleSheet.prototype['replace'].call(sheet, css)",
+        "sheet?.replace(css)",
+        "document['adoptedStyleSheets']['push'](sheet)",
+        "styleEl?.['append']?.(dynamicCss)",
+        "React.createElement(tag, props)",
+        "document.adoptedStyleSheets?.push(sheet)",
+        "document['adoptedStyleSheets']?.push(sheet)",
+        "document.adoptedStyleSheets?.['push'](sheet)",
+        "document['adoptedStyleSheets']?.['push'](sheet)",
+        "sheet?.['replace'](css)",
+        "sheet?.['insertRule'](rule)",
+        "CSSStyleSheet.prototype?.replace.call(sheet, css)",
+        "document?.adoptedStyleSheets?.push(sheet)",
+        "sheet?.replace?.(css)",
+        "sheet?.['replace']?.(css)",
+        "CSSStyleSheet.prototype['replace']?.call(sheet, css)",
+        "CSSStyleSheet.prototype?.['replace']?.call(sheet, css)",
+        "document?.['adoptedStyleSheets']?.['push']?.(sheet)",
+        "CSSStyleSheet?.prototype?.['replace']?.call(sheet, css)",
+        "Reflect.apply(sheet['replace'], sheet, [css])",
+        "Reflect.apply(document.adoptedStyleSheets.push, document.adoptedStyleSheets, [sheet])",
+        "const replacement = sheet['replace']; replacement(css)",
+        "const { push } = document.adoptedStyleSheets; push(sheet)",
+        "document.write(html)",
+        "document.writeln(html)",
+        "new DOMParser().parseFromString(html, 'text/html')",
+        "range.createContextualFragment(html)",
+        "frame.srcdoc = html",
+        "element.setHTMLUnsafe(html)",
+        "document.implementation.createHTMLDocument(title)",
+        "document.execCommand('insertHTML', false, html)",
+        "root.dangerouslySetInnerHTML = { __html: html }",
+        "styleEl.appendChild(document.createTextNode(css))",
+        "styleEl.replaceChildren(css)",
+        "styleEl.innerText = css",
+        "styleEl.insertBefore(node, first)",
+        "styleEl.prepend(css)",
+        "frame.setAttribute('srcdoc', html)",
+        "document.styleSheets[0].insertRule(rule)",
+        "document.styleSheets[0].deleteRule(0)",
+        "document.styleSheets.item(0).insertRule(rule)",
+        "document.styleSheets.item(0).replaceSync(css)",
+        "document.styleSheets?.[0]?.insertRule(rule)",
+        "document.styleSheets?.item?.(0)?.replaceSync(css)",
+        "Array.from(document.styleSheets).at(0).insertRule(rule)",
+        "[...document.styleSheets][0].insertRule(rule)",
+        "el.outerHTML += dynamicHtml",
+        "el['outerHTML'] = dynamicHtml",
+        "el['outerHTML'] += dynamicHtml",
+        "el.style = cssText",
+        "el.classList.add(userClass)",
+        "el.className = userClass",
+        "el.setAttribute('class', userClass)",
+        "el.setAttribute('stroke', color)",
+        "el.setAttributeNS(null, 'fill', color)",
+        "document.createElement('style')",
+    ],
+)
+def test_runtime_visual_mutations_are_never_silently_skipped(javascript: str) -> None:
+    assert scan_surface("ui/example.py", javascript)["runtime-visual-mutation"]
+
+
+def test_content_updates_and_closed_class_states_are_not_visual_debt() -> None:
+    javascript = """
+    el.innerHTML = markup;
+    el.insertAdjacentHTML('beforeend', markup);
+    el.classList.add('k-btn');
+    el.classList.toggle('is-open', shouldOpen);
+    el.classList.replace('is-open', 'is-closed');
+    el.setAttribute('class', 'k-btn k-btn-primary');
+    document.createElement('div');
+    document.createElement('button');
+    """
+    assert "runtime-visual-mutation" not in scan_surface("ui/example.py", javascript)
+
+
+def test_runtime_geometry_contracts_are_property_and_surface_scoped() -> None:
+    assert "runtime-visual-mutation" not in scan_surface(
+        "pipeline/cc_action.py", "el.style.height = el.offsetHeight + 'px'"
+    )
+    assert scan_surface("pipeline/cc_action.py", "el.style.width = '999px'")[
+        "runtime-visual-mutation"
+    ]
+    assert scan_surface("ui/example.py", "el.style.height = '999px'")["runtime-visual-mutation"]
+    assert "runtime-visual-mutation" in scan_surface(
+        "report/renderers/workspace_comments.py", "floater.style.left = x + 'px'"
+    )
+    assert "runtime-visual-mutation" not in scan_surface(
+        "report/renderers/workspace_comments.py",
+        "floater.style.left = Math.round(rect.left + window.scrollX + rect.width / 2 - 56) + 'px'",
+    )
+
+
+@pytest.mark.parametrize(
+    "typescript",
+    [
+        'export const X = () => <button style={{ color: "red", width: 99 }}>x</button>;',
+        "export interface Props { style?: React.CSSProperties }",
+        "export interface Props { style: CSSProperties }",
+    ],
+)
+def test_react_inline_style_apis_cannot_bypass_the_master(typescript: str) -> None:
+    assert scan_surface("design-system/src/components/Button.tsx", typescript)["inline-style-api"]
 
 
 def test_floating_title_flags_only_nested_uncomposed_headings() -> None:
@@ -174,6 +680,34 @@ def test_grid_scope_requires_complete_normalized_registry_signature() -> None:
         ".split-railroad { grid-template-columns: 340px 1fr; }",
     ):
         assert "off-scale-grid-column" not in scan_surface("x", good)
+
+
+@pytest.mark.parametrize(
+    "typescript",
+    [
+        "export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {}",
+        "export type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement>;",
+        ("export type ChipProps = Base & Omit<React.HTMLAttributes<HTMLSpanElement>, keyof Base>;"),
+        "export interface Props extends React.ComponentProps<'button'> {}",
+        "export type Props = React.ComponentPropsWithoutRef<'input'>;",
+        "export type Props = JSX.IntrinsicElements['textarea'];",
+    ],
+)
+def test_inherited_react_native_style_props_cannot_bypass_the_master(
+    typescript: str,
+) -> None:
+    findings = scan_surface("design-system/src/components/Button.tsx", typescript)
+    assert findings["inline-style-api"]
+
+
+def test_react_native_props_explicitly_omit_style() -> None:
+    typescript = (
+        "export interface ButtonProps extends "
+        'Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "style"> {}'
+    )
+    assert "inline-style-api" not in scan_surface(
+        "design-system/src/components/Button.tsx", typescript
+    )
 
 
 def test_grouped_and_duplicate_rules_cannot_hide_later_violations() -> None:
@@ -855,7 +1389,7 @@ def test_css_text_reconstructs_python_escapes_and_nested_fstrings(tmp_path: Path
     assert "dynamic-tag" in evidence.unverifiable_markup
 
 
-def test_semantic_extraction_does_not_change_legacy_dimensions(tmp_path: Path) -> None:
+def test_semantic_extraction_closes_split_literal_type_bypass(tmp_path: Path) -> None:
     module = tmp_path / "escaped_css.py"
     module.write_text(
         'CSS = ".x { color: \\x23fff; border-radius: \\x36\\x70\\x78; '
@@ -872,7 +1406,7 @@ def test_semantic_extraction_does_not_change_legacy_dimensions(tmp_path: Path) -
     )
     findings = scan_surface("escaped_css.py", css_text(module))
     assert "color" not in findings
-    assert "font-size" not in findings
+    assert findings["font-size"] == ["17px"]
 
 
 def test_static_composition_limit_precedes_allocation(tmp_path: Path) -> None:
@@ -990,7 +1524,7 @@ def test_nested_static_brace_specs_reconstruct_before_scanning(tmp_path: Path) -
 
 
 def test_registry_contract_is_versioned_for_importable_scanner() -> None:
-    assert registry.REGISTRY_VERSION == "1.3.0"
+    assert registry.REGISTRY_VERSION == "1.7.0"
     exemptions = {entry.surface: entry for entry in registry.PERMANENT_EXEMPTIONS}
     scanner = exemptions["ui/conformance_scan.py"]
     assert scanner.owner == "design-system"
@@ -999,11 +1533,13 @@ def test_registry_contract_is_versioned_for_importable_scanner() -> None:
 
 def _write_complete_fixture_tree(root: Path, *, include_live_drift: bool) -> Path:
     source_root = root / "src"
-    clean = ".fixture { color: var(--fg); }"
     for rel in registry.REGISTERED:
         path = source_root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"CSS = {clean!r}\n", encoding="utf-8")
+        canonical = PROJECT_ROOT / "src" / rel
+        if not canonical.exists():
+            canonical = PROJECT_ROOT / rel
+        path.write_text(canonical.read_text(encoding="utf-8"), encoding="utf-8")
 
     if include_live_drift:
         violations = """
@@ -1014,10 +1550,25 @@ def _write_complete_fixture_tree(root: Path, *, include_live_drift: bool) -> Pat
           .portfolio-card-grid { grid-template-columns: 340px 1fr; }
         </style>
         """
-        (source_root / "dashboard" / "_styles.py").write_text(
-            f"CSS = {violations!r}\n", encoding="utf-8"
+        (source_root / "dashboard" / "inbox.py").write_text(
+            f"CSS = {violations!r}\nnode.innerHTML = CSS\n", encoding="utf-8"
         )
     return source_root
+
+
+def test_cli_rejects_declared_but_unobserved_adapter(tmp_path: Path) -> None:
+    source_root = _write_complete_fixture_tree(tmp_path, include_live_drift=False)
+    target = source_root / "dashboard" / "_card.py"
+    target.write_text("PAYLOAD = '.fixture { color: var(--fg); }'\n", encoding="utf-8")
+
+    result = _run_cli("--check", "--source-root", str(source_root))
+
+    assert result.returncode == 1, result.stderr
+    receipt = json.loads(result.stdout)
+    assert {
+        "path": "dashboard/_card.py",
+        "reason": "unobserved adapters: html",
+    } in receipt["emitter_mismatches"]
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -1027,7 +1578,10 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         capture_output=True,
         check=False,
-        timeout=30,
+        # The complete 150-entry fixture exercises every adapter/evidence mode.
+        # Windows CI and local antivirus can push that deterministic scan beyond
+        # 30 seconds even though the production command remains bounded.
+        timeout=90,
     )
 
 
@@ -1041,7 +1595,9 @@ def test_cli_check_uses_shared_scanner_for_all_four_dimensions(tmp_path: Path) -
     result = _run_cli("--check", "--source-root", str(source_root))
     assert result.returncode == 1, result.stderr
     receipt = json.loads(result.stdout)
-    assert receipt["schema_version"] == "1.0.0"
+    assert receipt["schema_version"] == "1.2.0"
+    assert receipt["emitter_evidence"]
+    assert receipt["emitter_mismatches"] == []
     assert receipt["registry_version"] == registry.REGISTRY_VERSION
     assert receipt["canary"]["status"] == "skipped:not-requested"
     assert receipt["stale_quarantine"] == []
@@ -1050,9 +1606,9 @@ def test_cli_check_uses_shared_scanner_for_all_four_dimensions(tmp_path: Path) -
     live = {
         finding["dimension"]
         for finding in receipt["findings"]
-        if finding["surface"] == "dashboard/_styles.py" and finding["disposition"] == "live"
+        if finding["surface"] == "dashboard/inbox.py" and finding["disposition"] == "live"
     }
-    assert live >= EXPECTED_NEW_DIMENSIONS
+    assert live >= EXPECTED_STRUCTURAL_DIMENSIONS
     assert receipt["findings"] == sorted(
         receipt["findings"], key=lambda item: (item["surface"], item["dimension"])
     )
@@ -1099,6 +1655,17 @@ def test_cli_modes_exit_codes_and_unavailable_canary_are_explicit(tmp_path: Path
     canary = json.loads(unavailable.stdout)["canary"]
     assert canary["status"] == "skipped:unavailable"
     assert canary["reason"]
+
+    required = _run_cli(
+        "--check",
+        "--source-root",
+        str(source_root),
+        "--canary-url",
+        "http://127.0.0.1:1/design-conformance-canary",
+        "--require-canary",
+    )
+    assert required.returncode == 2
+    assert json.loads(required.stdout)["verdict"] == "hold"
 
     invalid_scheme = _run_cli(
         "--check",
@@ -1174,9 +1741,7 @@ def test_cli_canary_does_not_follow_redirects(tmp_path: Path) -> None:
     assert RedirectHandler.target_hits == 0
 
 
-def test_cli_canary_has_an_absolute_wall_deadline(tmp_path: Path) -> None:
-    source_root = _write_complete_fixture_tree(tmp_path, include_live_drift=False)
-
+def test_canary_fetch_has_an_absolute_wall_deadline() -> None:
     class TrickleHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             self.send_response(200)
@@ -1203,13 +1768,7 @@ def test_cli_canary_has_an_absolute_wall_deadline(tmp_path: Path) -> None:
     thread.start()
     started = time.monotonic()
     try:
-        trickled = _run_cli(
-            "--check",
-            "--source-root",
-            str(source_root),
-            "--canary-url",
-            f"http://{host}:{port}/trickle",
-        )
+        trickled = _scan_canary(f"http://{host}:{port}/trickle", browser_canary=False)
     finally:
         elapsed = time.monotonic() - started
         server.shutdown()
@@ -1217,10 +1776,8 @@ def test_cli_canary_has_an_absolute_wall_deadline(tmp_path: Path) -> None:
         thread.join(timeout=3.0)
 
     assert elapsed < 5.0
-    assert trickled.returncode == 0, trickled.stderr
-    trickled_canary = json.loads(trickled.stdout)["canary"]
-    assert trickled_canary["status"] == "skipped:unavailable"
-    assert trickled_canary["reason"] == "TimeoutError: canary unavailable"
+    assert trickled.status == "skipped:unavailable"
+    assert trickled.reason == "TimeoutError: canary unavailable"
 
 
 def test_cli_reports_structurally_unverifiable_markup_instead_of_passing(
@@ -1232,14 +1789,15 @@ def test_cli_reports_structurally_unverifiable_markup_instead_of_passing(
         '<section class="k-card"><h3 class="{title_class}">Risk</h3></section>'
         '<section class="{container_class}"><h3>Risk</h3></section>"""\n'
     )
-    (source_root / "dashboard" / "_styles.py").write_text(ambiguous_source, encoding="utf-8")
+    (source_root / "dashboard" / "inbox.py").write_text(ambiguous_source, encoding="utf-8")
     result = _run_cli("--check", "--source-root", str(source_root))
     assert result.returncode == 1, result.stderr
     receipt = json.loads(result.stdout)
     assert receipt["verdict"] == "fail"
     assert receipt["unverifiable_markup"] == [
         {
-            "surface": "dashboard/_styles.py",
+            "disposition": "live",
+            "surface": "dashboard/inbox.py",
             "values": ["dynamic-container-class:h3", "dynamic-heading-class:h3"],
         }
     ]

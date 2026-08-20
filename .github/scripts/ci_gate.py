@@ -28,11 +28,13 @@ CODE_PREFIXES = (
 CODE_ROOT_FILES = {
     ".bandit-baseline.json",
     ".pre-commit-config.yaml",
+    "AGENTS.md",
     "Makefile",
     "alembic.ini",
     "pyproject.toml",
     "requirements.lock",
     "requirements.txt",
+    "directives/design_language.md",
 }
 PYTHON_ROOT_FILES = {"pyproject.toml", "requirements.lock"}
 DOCUMENTATION_SUFFIXES = {".md", ".rst"}

@@ -37,16 +37,13 @@ from report.artifacts import (
 )
 from report.models import ReportFlavor, ReportSpec
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
-from report.renderers.workspace_chat import CSS as CHAT_CSS
 from report.renderers.workspace_chat import JS as CHAT_JS
-from report.renderers.workspace_comments import CSS as COMMENTS_CSS
 from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_data import (
     WorkspaceP3Panels,
     load_graded_sell_base_rate,
     load_workspace_p3_panels,
 )
-from report.renderers.workspace_dcf import CSS as DCF_CSS
 from report.renderers.workspace_dcf import JS as DCF_JS
 from report.renderers.workspace_decision_card import JS as DECISION_CARD_JS
 from report.renderers.workspace_script import JS
@@ -190,7 +187,7 @@ from report.renderers.workspace_sections.thesis_risk import (
     _valuation_summary_panel,
 )
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
-from report.renderers.workspace_styles import CSS
+from report.renderers.workspace_styles import CHAT_CSS, COMMENTS_CSS, CSS, DCF_CSS
 from report.sections.p3_data import PeerCompRow
 from ui.controls import icon_svg
 from ui.living_grid import head_assets as _living_grid_head_assets

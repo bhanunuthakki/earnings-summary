@@ -15,7 +15,7 @@ from pathlib import Path
 from llm.calibration import VersionSummary, daily_avg_scores, summarize_by_prompt_version
 from report.models import AppendixSection, ProvenanceSection
 from report.render_clock import render_now
-from report.renderers.workspace_charts import sparkline
+from report.renderers.workspace_charts import SparklineSize, sparkline
 from report.renderers.workspace_sections._shared import _esc, _panel_head
 from ui import living_grid as lg
 from ui.controls import prov_severity_tick
@@ -263,7 +263,7 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
     )
     for s in summaries:
         spark_vals = [v for _, v in daily.get((s.purpose, s.prompt_version), [])]
-        spark = sparkline(spark_vals, width=120, height=24) if spark_vals else "—"
+        spark = sparkline(spark_vals, size=SparklineSize.COMPACT) if spark_vals else "—"
         last = (s.last_scored_at or "—")[:19].replace("T", " ")
         data = (
             lg.data_text(f"{s.purpose} {s.prompt_version}")

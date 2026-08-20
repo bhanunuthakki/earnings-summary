@@ -10,7 +10,10 @@
  */
 import * as React from "react";
 
-export type DateFieldProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, "type">;
+export type DateFieldProps = Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "type" | "style"
+>;
 
 export const DateField = React.forwardRef<HTMLInputElement, DateFieldProps>(function DateField(
   { className, ...rest },

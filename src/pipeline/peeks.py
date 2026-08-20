@@ -61,6 +61,7 @@ from pipeline.research_cockpit import (
     next_earnings,
     profile_quote,
 )
+from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from pipeline.source_viewers import (
     _STATEMENT_JSON_DOC_TYPES,  # pyright: ignore[reportPrivateUsage]
     load_document,
@@ -257,18 +258,7 @@ def _doc_row_html(row: _DocRow) -> str:
     )
 
 
-_DOCS_CSS = """
-.cc-peek-docs { display: flex; flex-direction: column; }
-.cc-doc-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 2px;
-  border-bottom: 1px solid var(--hairline); text-decoration: none; color: var(--fg);
-  font-size: var(--fs-body); }
-.cc-doc-row:last-child { border-bottom: none; }
-.cc-doc-row:hover { background: var(--paper); }
-.cc-doc-kind { flex: 0 0 auto; font-weight: 600; }
-.cc-doc-name { flex: 1 1 auto; min-width: 0; color: var(--muted); font-family: var(--mono);
-  font-size: var(--fs-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cc-doc-when { flex: 0 0 auto; color: var(--muted); font-size: var(--fs-caption); }
-""".strip()
+_DOCS_CSS = RESEARCH_PANEL_STYLE.removeprefix("<style>").removesuffix("</style>").strip()
 
 
 # ----------------------------------------------------------------------------
@@ -553,51 +543,7 @@ def _score_factor_row(f: AttractivenessFactor) -> str:
     )
 
 
-_SCORE_CSS = """
-.cc-score-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.cc-score-cap { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
-  letter-spacing: 0.05em; }
-.cc-score-big { font-family: var(--mono); font-size: var(--fs-display); font-weight: 600; }
-.cc-score-big.score-hi { color: var(--ok); }
-.cc-score-big.score-lo { color: var(--muted); }
-.cc-score-big.score-warn { color: var(--warn); }
-.cc-score-rows { display: flex; flex-direction: column; margin: 10px 0 6px; }
-.cc-score-row { display: grid; grid-template-columns: 104px 1fr 84px 52px; gap: 10px;
-  align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--hairline);
-  font-size: var(--fs-body); }
-.cc-score-row:last-child { border-bottom: none; }
-.cc-score-label { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
-  letter-spacing: 0.05em; }
-.cc-score-detail { font-variant-numeric: tabular-nums; }
-.cc-score-detail.muted { color: var(--muted); }
-.cc-score-bar { display: block; height: 6px; background: var(--paper);
-  border-radius: var(--radius-full); overflow: hidden; }
-.cc-score-fill { display: block; height: 100%; border-radius: var(--radius-full); }
-.cc-score-fill.bar-pos { background: var(--ok); }
-.cc-score-fill.bar-neg { background: var(--bad); }
-.cc-score-fill.bar-mid { background: var(--muted); }
-.cc-score-mult { font-family: var(--mono); font-weight: 600; text-align: right; }
-.cc-score-mult.mult-pos { color: var(--ok); }
-.cc-score-mult.mult-neg { color: var(--bad); }
-.cc-score-mult.mult-mid { color: var(--muted); }
-.cc-score-formula { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
-  margin-top: 4px; }
-.cc-score-legend { color: var(--muted); font-size: var(--fs-caption); margin-top: 6px; }
-.cc-fit-degraded { color: var(--warn); font-size: var(--fs-caption); margin-top: 6px; }
-.cc-fit-group { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
-  letter-spacing: 0.05em; margin-top: 10px; }
-.cc-fit-strip { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
-  margin-top: 8px; }
-.cc-wi-weights { display: flex; gap: 4px; }
-.cc-wi-w-on { background: var(--accent-soft); }
-.cc-wi-row { display: grid; grid-template-columns: 104px 1fr 24px 1fr; gap: 10px;
-  align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--hairline);
-  font-size: var(--fs-body); }
-.cc-wi-row:last-child { border-bottom: none; }
-.cc-wi-val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.cc-wi-arrow { color: var(--muted); text-align: center; }
-.cc-wi-corrs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-""".strip()
+_SCORE_CSS = RESEARCH_PANEL_STYLE.removeprefix("<style>").removesuffix("</style>")
 
 
 # ----------------------------------------------------------------------------
@@ -1000,12 +946,7 @@ def _memo_attest_foot(kind: str, memo_id: int, context_raw: object) -> str:
     )
 
 
-_ATTEST_CSS = """
-.cc-peek-attest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
-  display: flex; align-items: center; gap: 10px; }
-.cc-peek-attest-done { color: var(--fg-soft); font-size: var(--fs-caption); }
-.cc-attest-msg { font-size: var(--fs-caption); color: var(--fg-soft); }
-""".strip()
+_ATTEST_CSS = RESEARCH_PANEL_STYLE.removeprefix("<style>").removesuffix("</style>")
 
 # POSTs {memo_id} to /api/coach/attest-change (the same Origin-guarded action
 # family /api/coach/unmute uses), then reflects the result in place. A confirmed
@@ -1078,15 +1019,7 @@ def render_review_peek(repo_root: Path, db_path: Path, ticker: str) -> str:
     return f'<div class="cc-review-peek">{body}{foot}</div><style>{_REVIEW_CSS}</style><script>{_REVIEW_JS}</script>'
 
 
-_REVIEW_CSS = """
-.cc-review-peek .synthesis-body { font-size: var(--fs-body); }
-.cc-review-foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
-  display: flex; flex-direction: column; gap: 8px; }
-.cc-review-log { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
-  background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 8px 10px; margin: 0; max-height: 200px; overflow-y: auto;
-  white-space: pre-wrap; word-break: break-word; }
-""".strip()
+_REVIEW_CSS = RESEARCH_PANEL_STYLE.removeprefix("<style>").removesuffix("</style>")
 
 # The escalation button POSTs /actions/position-review (single-flight per
 # ticker, same registry every /actions/* endpoint shares) then streams the job
@@ -1473,25 +1406,7 @@ def _prov_row_html(row: _ProvRow) -> str:
     )
 
 
-_PROV_CSS = """
-.cc-prov-rows { display: flex; flex-direction: column; }
-.cc-prov-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 2px;
-  border-bottom: 1px solid var(--hairline); font-size: var(--fs-body); }
-.cc-prov-row:last-child { border-bottom: none; }
-.cc-prov-src { flex: 0 0 128px; color: var(--muted); font-size: var(--fs-caption);
-  text-transform: uppercase; letter-spacing: 0.05em; }
-.cc-prov-when { flex: 1 1 auto; min-width: 0; }
-.cc-prov-age { font-weight: 600; }
-.cc-prov-note { color: var(--muted); font-size: var(--fs-caption); }
-/* cron marker + refresh button compose the kit (.k-chip / .k-btn-quiet.k-btn-sm);
-   only the flex-child layout stays local. */
-.cc-prov-cron { flex: none; }
-.cc-prov-btn { flex: none; }
-.cc-prov-log { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
-  background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 8px 10px; margin: 10px 0 0; max-height: 200px; overflow-y: auto;
-  white-space: pre-wrap; word-break: break-word; }
-""".strip()
+_PROV_CSS = RESEARCH_PANEL_STYLE.removeprefix("<style>").removesuffix("</style>")
 
 # In-peek refresh wiring: POST the row's /actions/* endpoint, then stream the
 # job's SSE frames ({event: start|log|done}) into the shared .cc-prov-log —
@@ -2442,19 +2357,7 @@ def _prep_valuation(conn: sqlite3.Connection, t: str) -> str:
     )
 
 
-_PREP_CSS = """
-.cc-prep { display: flex; flex-direction: column; gap: 8px; }
-.prep-head { display: flex; align-items: baseline; gap: 8px; }
-.prep-when { font-family: var(--mono, monospace); color: var(--fg); font-weight: 600; }
-.prep-sec h4 { margin: 0 0 3px; font-size: var(--fs-caption); color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.06em; }
-.prep-sec ul { list-style: none; margin: 0; padding: 0; }
-.prep-sec li { padding: 2px 0; font-size: var(--fs-body); }
-.prep-sec p { margin: 0; font-size: var(--fs-body); }
-.prep-ask { background: transparent; border: 0; padding: 0; cursor: pointer;
-  color: var(--fg); font: inherit; text-align: left; }
-.prep-ask:hover { color: var(--accent); }
-""".strip()
+_PREP_CSS = RESEARCH_PANEL_STYLE.removeprefix("<style>").removesuffix("</style>")
 
 
 # ----------------------------------------------------------------------------

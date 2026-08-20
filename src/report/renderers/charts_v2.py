@@ -16,15 +16,19 @@ import html
 import math
 from dataclasses import dataclass
 
+from report.renderers.workspace_charts import CHARTS_V2_CSS
 from ui.tokens import CHART_SERIES
 
 # 6-color colorblind-safe palette (Okabe-Ito ordering) — values owned by the
 # shared token source (src/ui/tokens.py) so the next palette decision happens
 # in one place.
 PALETTE = list(CHART_SERIES)
-POS_COLOR = "#029e73"  # green
-NEG_COLOR = "#cb4d4d"  # red
-NEUTRAL_COLOR = "#5a6b78"
+# Semantic status colors are resolved by the host palette. Categorical series
+# remain owned by ``CHART_SERIES`` above; SVG uses ``currentColor`` so dynamic
+# series selection does not bypass the governed presentation vocabulary.
+POS_COLOR = "var(--ok)"
+NEG_COLOR = "var(--bad)"
+NEUTRAL_COLOR = "var(--muted)"
 
 
 # ----- Number formatting -----
@@ -224,7 +228,7 @@ def bar_chart(spec: BarSpec) -> str:
             color = spec.bar_color or NEUTRAL_COLOR
         parts.append(
             f'<rect x="{x:.1f}" y="{y_top:.1f}" width="{bar_w:.1f}" height="{max(bar_h, 0.5):.1f}" '
-            f'fill="{color}" class="cv2-bar"/>'
+            f'fill="currentColor" class="cv2-bar" style="color:{color}"/>'
         )
         # Inline value label — above positive bars, below negative bars.
         v_text = fmt(v)
@@ -332,9 +336,15 @@ def multi_line_chart(
             pts.append((x, y, i))
         if len(pts) >= 2:
             path = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y, _ in pts)
-            parts.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="1.6"/>')
+            parts.append(
+                f'<path d="{path}" fill="none" stroke="currentColor" '
+                f'stroke-width="var(--bw-thin)" class="cv2-line" style="color:{color}"/>'
+            )
         for x, y, _ in pts:
-            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="{color}"/>')
+            parts.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="currentColor" '
+                f'class="cv2-point" style="color:{color}"/>'
+            )
         # End-of-line value label.
         if pts:
             x, y, i = pts[-1]
@@ -342,7 +352,7 @@ def multi_line_chart(
             assert last_v is not None
             parts.append(
                 f'<text x="{x + 4:.1f}" y="{y + 3:.1f}" class="cv2-line-end" '
-                f'fill="{color}">{fmt(last_v)}</text>'
+                f'style="color:{color}">{fmt(last_v)}</text>'
             )
 
     # Legend top-right inside plot area.
@@ -351,7 +361,8 @@ def multi_line_chart(
     for s_idx, s in enumerate(series):
         color = PALETTE[s_idx % len(PALETTE)]
         parts.append(
-            f'<rect x="{leg_x:.1f}" y="{leg_y:.1f}" width="10" height="10" fill="{color}"/>'
+            f'<rect x="{leg_x:.1f}" y="{leg_y:.1f}" width="10" height="10" '
+            f'fill="currentColor" class="cv2-legend-swatch" style="color:{color}"/>'
         )
         parts.append(
             f'<text x="{leg_x + 14:.1f}" y="{leg_y + 9:.1f}" class="cv2-legend">{html.escape(s.name)}</text>'
@@ -491,7 +502,9 @@ def stacked_area(
         path += " L" + " L".join(f"{x:.1f},{y:.1f}" for x, y in reversed(bot_pts))
         path += " Z"
         parts.append(
-            f'<path d="{path}" fill="{color}" fill-opacity="0.85" stroke="white" stroke-width="0.5"/>'
+            f'<path d="{path}" fill="currentColor" fill-opacity="0.85" '
+            f'stroke="var(--surface)" stroke-width="var(--bw-thin)" '
+            f'class="cv2-band" style="color:{color}"/>'
         )
 
         # Right-edge label.
@@ -501,7 +514,8 @@ def stacked_area(
         last_val: float = stack[s_i][-1]
         share: float = (last_val / totals[-1] * 100) if totals[-1] else 0
         parts.append(
-            f'<text x="{width - pad_right + 4}" y="{mid_y + 3:.1f}" class="cv2-band-label" fill="{color}">'
+            f'<text x="{width - pad_right + 4}" y="{mid_y + 3:.1f}" class="cv2-band-label" '
+            f'style="color:{color}">'
             f"{html.escape(s.name)} {share:.0f}%</text>"
         )
 
@@ -593,7 +607,9 @@ def stacked_area_100pct(
         path += " L" + " L".join(f"{x:.1f},{y:.1f}" for x, y in reversed(bot_pts))
         path += " Z"
         parts.append(
-            f'<path d="{path}" fill="{color}" fill-opacity="0.85" stroke="white" stroke-width="0.5"/>'
+            f'<path d="{path}" fill="currentColor" fill-opacity="0.85" '
+            f'stroke="var(--surface)" stroke-width="var(--bw-thin)" '
+            f'class="cv2-band" style="color:{color}"/>'
         )
 
         last_top_y: float = top_pts[-1][1]
@@ -601,7 +617,8 @@ def stacked_area_100pct(
         mid_y: float = (last_top_y + last_bot_y) / 2
         latest_share: float = shares[s_i][-1]
         parts.append(
-            f'<text x="{width - pad_right + 4}" y="{mid_y + 3:.1f}" class="cv2-band-label" fill="{color}">'
+            f'<text x="{width - pad_right + 4}" y="{mid_y + 3:.1f}" class="cv2-band-label" '
+            f'style="color:{color}">'
             f"{html.escape(s.name)} {latest_share:.0f}%</text>"
         )
 
@@ -683,8 +700,8 @@ def yoy_heatmap_table(
         mag = min(abs(pct), 30) / 30
         alpha = 0.08 + 0.28 * mag
         if pct >= 0:
-            return f"background:rgba(2,158,115,{alpha:.2f})"
-        return f"background:rgba(203,77,77,{alpha:.2f})"
+            return f"background:color-mix(in srgb, var(--ok) {alpha * 100:.0f}%, transparent)"
+        return f"background:color-mix(in srgb, var(--bad) {alpha * 100:.0f}%, transparent)"
 
     def is_noisy(pct: float | None, base: float | None, latest: float | None) -> bool:
         """A cell is 'low-base noisy' when the divisor is much smaller than the
@@ -822,37 +839,6 @@ def _empty_chart(title: str, width: int, height: int) -> str:
     )
 
 
-# ----- Shared CSS -----
-
-CSS = """
-.cv2-chart { display: block; max-width: 100%; height: auto; font-family: var(--sans, 'Inter', sans-serif); }
-.cv2-title { font-size: 12px; font-weight: 600; fill: #1a1f2e; }
-.cv2-axis { font-size: 10px; fill: #67737d; font-family: var(--mono, 'JetBrains Mono', monospace); }
-.cv2-grid { stroke: #e3e7eb; stroke-width: 1; }
-.cv2-grid-zero { stroke: #67737d; stroke-width: 1; stroke-dasharray: 2 2; }
-.cv2-bar-label { font-size: 9px; fill: #1a1f2e; font-family: var(--mono, 'JetBrains Mono', monospace); font-weight: 500; }
-.cv2-line-end { font-size: 10px; font-weight: 600; font-family: var(--mono, 'JetBrains Mono', monospace); }
-.cv2-legend { font-size: 10.5px; fill: #1a1f2e; font-family: var(--sans, 'Inter', sans-serif); }
-.cv2-band-label { font-size: 10px; font-family: var(--sans, 'Inter', sans-serif); font-weight: 500; }
-.cv2-empty-text { font-size: 12px; fill: #67737d; }
-.cv2-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
-@media (max-width: 900px) { .cv2-pair { grid-template-columns: 1fr; } }
-.cv2-matrix-wrap { margin: 14px 0; overflow-x: auto; }
-.cv2-matrix-title { font-size: 13px; font-weight: 600; color: #1a1f2e; margin-bottom: 6px; }
-.cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; max-width: 100%; }
-/* Canonical table rule: numbers mono, labels/headers sans. Every value cell
-   is a <td> (cv2-matrix-cell / -cagr-cell); the row label + column headers are
-   <th>, which inherit the page's sans. */
-.cv2-matrix td { font-family: var(--mono, 'JetBrains Mono', monospace); }
-.cv2-matrix th, .cv2-matrix td { padding: 4px 6px; border: 1px solid #e3e7eb; text-align: right; white-space: nowrap; }
-.cv2-matrix-label { text-align: left !important; font-weight: 600; color: #1a1f2e; background: #f7f9fb; position: sticky; left: 0; }
-.cv2-matrix-q, .cv2-matrix-cagr { font-weight: 600; color: #1a1f2e; background: #f7f9fb; }
-.cv2-matrix-cagr, .cv2-matrix-cagr-cell { border-left: 2px solid #1a1f2e !important; }
-.cv2-matrix-noisy { color: #98a4af !important; font-style: italic; background: #fafbfc !important; }
-.cv2-matrix-footnote { font-size: 11px; color: #67737d; margin-top: 6px; font-style: italic; }
-.cv2-matrix-def-mark { cursor: help; opacity: 0.6; }
-.cv2-matrix-def-mark:hover { opacity: 1; }
-.chart-empty { font-size: 12px; color: var(--muted); padding: 8px 12px; background: var(--subheader-bg); border-radius: 4px; margin: 8px 0; }
-.chart-grid-1col { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 12px 0; }
-.chart-cell { width: 100%; }
-"""
+# Compatibility export. The workspace chart family master owns presentation;
+# this renderer owns only data coordinates and semantic chart markup.
+CSS = CHARTS_V2_CSS

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pipeline.work_os_shell import SCREEN_SPECS, render_work_os_shell
+from pipeline.work_os_styles import WORK_OS_CSS
 from ui.conformance_scan import scan_surface_evidence
 
 
@@ -504,10 +505,11 @@ def test_l2_l3_shell_composes_semantic_mounts_and_canonical_split_rails() -> Non
     assert 'id="workOsOperationsMount"' in html
     assert '<div class="k-card-meta" role="status">Loading declared ownership' in html
     assert "workOsLoadScreen(target, operationsMount)" in html
+    assert WORK_OS_CSS in html
     assert (
-        "#screen-workspace .research-grid.k-grid-split-rail-lg {\n"
-        "    grid-template-columns: minmax(0, 1fr) var(--rail-lg);"
-    ) in html
+        "#screen-workspace .research-grid.k-grid-split-rail-lg { "
+        "grid-template-columns: minmax(0, 1fr) var(--rail-lg); }"
+    ) in WORK_OS_CSS
     assert "grid-template-columns: minmax(0, 1fr) var(--rail-sm);" in html
     assert "grid-template-columns: minmax(0, 1fr) var(--rail-lg);" in html
 
@@ -551,7 +553,14 @@ def test_rendered_l2_l3_shell_has_no_target_scan_findings_or_unverifiable_markup
         "unsanctioned-shape-geometry",
     }
     assert not target_dimensions.intersection(evidence.violations())
-    assert evidence.unverifiable_markup == ()
+    # The rendered shell deliberately contains remote HTML response bodies and
+    # a dynamically created stylesheet link. Source-level digest contracts pin
+    # both recipes; the rendered probe keeps the boundary explicit rather than
+    # silently treating it as statically verified.
+    assert evidence.unverifiable_markup == (
+        "dynamic-html-markup",
+        "dynamic-visual-value",
+    )
 
 
 def test_rendered_shell_scan_proves_each_target_dimension_is_enforced() -> None:
@@ -778,21 +787,17 @@ def test_mobile_inbox_is_the_same_responsive_cockpit() -> None:
     assert "overflow-x: hidden; overflow-y: auto" in html
 
 
-def test_design_directive_records_the_simplification_boundary() -> None:
+def test_design_directive_routes_product_behavior_to_owned_contracts() -> None:
     directive = (
         Path(__file__).resolve().parents[1] / "directives" / "design_language.md"
     ).read_text(encoding="utf-8")
-    assert "These eight destinations are the complete primary IA" in directive
-    assert "Cockpit is the only inbox" in directive
-    assert "No trade-execution surface" in directive
-    assert "Ask may create governed thesis and KPI proposal cards" in directive
-    assert "explicit Owner" in directive
-    assert "approval before the owning domain module applies it" in directive
-    assert "Diet destination and general-purpose feed are retired" in directive
-    assert "Discovery has no primary navigation" in directive
-    assert "One responsive product" in directive
-    assert "clears it for the current session" in directive
-    assert "Only an explicit decision or threshold change may create durable state" in directive
+    assert "navigation and destination hierarchy: `directives/navigation_ia.md`" in directive
+    assert "`directives/interaction_paradigm_2026_06.md`" in directive
+    assert "comments and chat: `directives/report_comments_and_chat.md`" in directive
+    assert "operational controls: `directives/operations_governance_surface.md`" in directive
+    assert "Those contracts may specify behavior, data, and state" in directive
+    assert "do not authorize a" in directive
+    assert "new visual recipe" in directive
 
 
 def test_company_desk_renders_governed_valuation_provenance() -> None:

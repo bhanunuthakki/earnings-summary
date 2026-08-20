@@ -22,6 +22,7 @@ from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
 
+from dashboard._styles import UPCOMING_CSS
 from expected_earnings import upcoming_by_ticker
 from identity import DEFAULT_USER_ID
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -340,43 +341,3 @@ def render_upcoming_strip(
 
 def _esc(text: str) -> str:
     return html.escape(str(text), quote=True)
-
-
-UPCOMING_CSS = """
-/* "Upcoming earnings" — canonical dense card, with local rail layout only. */
-.up-strip { margin-bottom: var(--sp-2); }
-.up-strip-head { display: flex; justify-content: space-between; align-items: baseline;
-  margin-bottom: var(--sp-1); }
-.up-strip-sub { font-weight: 400; }
-.up-strip-list { list-style: none; margin: 0; padding: 0; }
-.up-strip-list li { padding: 3px 0; font-size: var(--fs-caption); }
-/* Tier bands (Wave 2): Portfolio > Active valuation > Evaluation. */
-.up-tier { display: flex; align-items: baseline; gap: 6px; padding-top: 7px; }
-.up-tier-label { color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.06em; }
-.up-tier-n { color: var(--muted); font-family: var(--mono, monospace);
-  font-size: var(--fs-caption); }
-.up-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.up-ticker { font-family: var(--mono, monospace); font-weight: 600;
-  color: var(--fg); flex: none; }
-.up-est { color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.05em; flex: none; }
-.up-date { margin-left: auto; font-family: var(--mono, monospace);
-  color: var(--muted); white-space: nowrap; flex: none; }
-/* The row's chip lane (Wave 2, walkthrough #2): prep doorway + the owner's
-   open watch items, IN the horizontal space right of the ticker. Overflow
-   ellipsizes inside the lane; the date never wraps. */
-.up-chips { display: flex; align-items: baseline; gap: 6px; min-width: 0;
-  overflow: hidden; flex: 1 1 auto; }
-.up-prep { flex: none; }
-.up-watch-item { display: inline-flex; align-items: baseline; gap: 5px;
-  background: transparent; border: 0; padding: 0; cursor: pointer;
-  color: var(--muted); font: inherit; font-size: var(--fs-caption); min-width: 0;
-  overflow: hidden; }
-.up-watch-item:hover { color: var(--accent); }
-.up-watch-item:hover .up-watch-body { text-decoration: underline; }
-.up-watch-kind { flex: none; }
-.up-watch-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 200px; }
-.up-watch-more { font-size: var(--fs-caption); color: var(--muted); flex: none; }
-""".strip()

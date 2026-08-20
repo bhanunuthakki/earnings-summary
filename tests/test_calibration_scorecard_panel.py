@@ -94,7 +94,7 @@ def test_mounts_onto_decisions_page() -> None:
     scorecard_html = f"<style>{SCORECARD_CSS}</style>{section}"
     offline = LivePortfolio(available=False, api_url="http://x", error="down")
     page = compose_decisions_page([], [], offline, None, scorecard_html=scorecard_html)
-    assert "Coach" in page and "oversizes adds" in page
+    assert "<h2>Calibration coach</h2>" in page and "oversizes adds" in page
     # Absent scorecard → the page omits the section entirely (byte-shape preserved).
     bare = compose_decisions_page([], [], offline, None)
     assert "oversizes adds" not in bare

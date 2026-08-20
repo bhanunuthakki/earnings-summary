@@ -39,22 +39,12 @@ unconditionally.
 
 from __future__ import annotations
 
+from pipeline.work_os_styles import CC_ACTION_CSS
+
 # Beat 1 (.cc-act-leave) is transform+opacity over the standard token; beat 2
 # (.cc-act-collapse) transitions the JS-pinned inline height (auto→0 doesn't
 # animate, so leave() measures first) plus margin/padding/border to zero.
 # !important beats the pinned inline height, which is exactly the mechanism.
-CC_ACTION_CSS = """
-.cc-act-leave { transition: opacity var(--transition), transform var(--transition);
-  opacity: 0; transform: translateY(-4px); pointer-events: none; }
-.cc-act-collapse { transition: height var(--transition), margin var(--transition),
-  padding var(--transition), border-width var(--transition);
-  height: 0 !important; min-height: 0 !important; margin: 0 !important;
-  padding: 0 !important; border-width: 0 !important; overflow: hidden !important; }
-@media (prefers-reduced-motion: reduce) {
-  .cc-act-leave, .cc-act-collapse { transition-duration: 0.01ms; }
-}
-"""
-
 # Raw string: the JS uses no Python-format substitution.
 CC_ACTION_JS = r"""
 (function () {

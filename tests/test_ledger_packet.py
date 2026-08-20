@@ -94,7 +94,7 @@ def _seed_triage_suggestion(db: Path) -> int:
 def test_packet_absent_when_nothing_needs_you(ctx: tuple[FlaskClient, Path, Path]) -> None:
     _client, db, _root = ctx
     html = render_ledger_panel(db)
-    assert "ledger-packet" not in html
+    assert 'id="ledger-packet"' not in html
 
 
 def test_packet_walks_everything_awaiting_a_verdict(

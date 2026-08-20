@@ -164,10 +164,10 @@ def _company_tab(
         _quarter_selector(body, labels, group="ir")
         for c in ordered:
             qid = f"{c.quarter} {c.year}"
-            display = "" if qid == active else "display:none"
+            hidden = "" if qid == active else " hidden"
             body.write(
                 f'<div class="ir-card" data-quarter-card data-quarter-group="ir" '
-                f'data-quarter="{_esc(qid)}" style="{display}"><div class="ir-card-head">'
+                f'data-quarter="{_esc(qid)}"{hidden}><div class="ir-card-head">'
             )
             body.write(f'<span class="ir-type">{_esc(c.doc_type)}</span>')
             body.write(f'<span class="ir-quarter">{_esc(c.quarter)} {c.year}</span>')
@@ -198,7 +198,7 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
     explicit: High = k-chip-bad, Medium = k-chip-warn, Low = k-chip-mono (no tone).
     """
     fy_label = f"FY {section.fiscal_year}" if section.fiscal_year else "Latest filing"
-    body.write('<div class="row-split" style="margin-top: var(--sp-6);"><div>')
+    body.write('<div class="row-split company-filing-heading"><div>')
     body.write('<div class="eyebrow">10-K Narrative Intelligence</div>')
     body.write(f'<h2 class="section-title">{_esc(f"Filing review · {fy_label}")}</h2>')
     body.write("</div></div>")
@@ -242,7 +242,7 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
                 f"<p><strong>Targets:</strong> {_esc(comp.targets_and_thresholds or '—')}</p>"
             )
             body.write(
-                '<p style="margin-top: 10px;">'
+                '<p class="comp-alignment-verdict">'
                 f"<strong>Thesis alignment:</strong> {_esc(comp.alignment_verdict or '—')}</p>"
             )
             body.write("</div></div>")
