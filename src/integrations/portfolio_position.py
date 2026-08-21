@@ -251,7 +251,7 @@ class PortfolioPositionAdapter:
                 provenance=provenance,
             )
         history_state, history_error, transactions = self._history(normalized)
-        if position is None or position.quantity <= 0:
+        if position is None:
             if provenance.is_stale:
                 return _unavailable(
                     "stale_snapshot_no_position",
@@ -274,6 +274,7 @@ class PortfolioPositionAdapter:
                 "tracker position contains duplicate account evidence",
                 provenance=provenance,
             )
+
         if not _position_lots_reconcile(
             position.quantity,
             position.market_value,
@@ -286,6 +287,17 @@ class PortfolioPositionAdapter:
                 "aggregate position does not reconcile to attributable account lots",
                 provenance=provenance,
             )
+
+        if position.quantity <= 0:
+            return PortfolioPositionResult(
+                state="not_held",
+                position_as_of=provenance.snapshot_as_of,
+                provenance=provenance,
+                recent_transactions=transactions,
+                history_state=history_state,
+                history_error=history_error,
+            )
+
         accounts = [
             PortfolioPositionAccount(
                 account_name=account.account_name,
