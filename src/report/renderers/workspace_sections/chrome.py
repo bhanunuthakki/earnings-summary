@@ -8,9 +8,10 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from io import StringIO
 
+from clock import to_naive_utc
 from report.models import (
     BudgetSkip,
     FinancialsSection,
@@ -192,9 +193,7 @@ def _newest_quarter_ingested_at(financials: FinancialsSection) -> datetime | Non
             stamp = datetime.fromisoformat(src.fetched_at)
         except ValueError:
             continue
-        if stamp.tzinfo is not None:
-            # Naive-UTC convention (aware stamps crash comparisons downstream).
-            stamp = stamp.astimezone(UTC).replace(tzinfo=None)
+        stamp = to_naive_utc(stamp)
         if newest is None or stamp > newest:
             newest = stamp
     return newest
@@ -233,13 +232,9 @@ def _verdict_badge(
     label, dot = mapping.get(verdict, mapping["pending"])
     is_stale = False
     if verdict_as_of is not None:
-        comparable_verdict_as_of = verdict_as_of
-        if comparable_verdict_as_of.tzinfo is not None:
-            comparable_verdict_as_of = comparable_verdict_as_of.astimezone(UTC).replace(tzinfo=None)
+        comparable_verdict_as_of = to_naive_utc(verdict_as_of)
         if newest_ingested_at is not None:
-            comparable_ingested_at = newest_ingested_at
-            if comparable_ingested_at.tzinfo is not None:
-                comparable_ingested_at = comparable_ingested_at.astimezone(UTC).replace(tzinfo=None)
+            comparable_ingested_at = to_naive_utc(newest_ingested_at)
             is_stale = comparable_verdict_as_of < comparable_ingested_at
         elif newest_quarter_label is not None:
             newest_end = _quarter_label_end_date(newest_quarter_label)
