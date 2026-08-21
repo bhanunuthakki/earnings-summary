@@ -24,6 +24,10 @@ from integrations.portfolio_tracker_v1 import (
     V1Warning,
 )
 
+# Percent-of-portfolio is a percentage-point wire value; four decimal places
+# cover provider rounding while still rejecting a material formula mismatch.
+_POSITION_PERCENT_TOLERANCE = Decimal("0.0001")
+
 
 class PositionProvenance(BaseModel):
     """Identity and freshness facts attached to every canonical read."""
@@ -289,20 +293,40 @@ class PortfolioPositionAdapter:
             )
 
         percent_of_portfolio = position.percent_of_portfolio
-        if percent_of_portfolio is not None and not Decimal(0) <= percent_of_portfolio <= Decimal(
-            100
-        ):
-            return _unavailable(
-                "position_lot_reconciliation_failed",
-                "position percent of portfolio must be between zero and one hundred",
-                provenance=provenance,
-            )
-        if position.quantity <= 0 and percent_of_portfolio not in (None, Decimal(0)):
-            return _unavailable(
-                "position_lot_reconciliation_failed",
-                "zero-quantity position percent of portfolio must be zero or null",
-                provenance=provenance,
-            )
+        if percent_of_portfolio is None:
+            if (
+                position.quantity > 0
+                and position.market_value is not None
+                and positions.total_market_value > 0
+            ):
+                return _unavailable(
+                    "position_lot_reconciliation_failed",
+                    "positive position with market value requires percent of portfolio",
+                    provenance=provenance,
+                )
+        else:
+            if not Decimal(0) <= percent_of_portfolio <= Decimal(100):
+                return _unavailable(
+                    "position_lot_reconciliation_failed",
+                    "position percent of portfolio must be between zero and one hundred",
+                    provenance=provenance,
+                )
+            if position.quantity <= 0 and percent_of_portfolio != Decimal(0):
+                return _unavailable(
+                    "position_lot_reconciliation_failed",
+                    "zero-quantity position percent of portfolio must be zero or null",
+                    provenance=provenance,
+                )
+            if position.market_value is not None and positions.total_market_value > 0:
+                expected_percent = (
+                    position.market_value / positions.total_market_value * Decimal("100")
+                )
+                if abs(percent_of_portfolio - expected_percent) > _POSITION_PERCENT_TOLERANCE:
+                    return _unavailable(
+                        "position_lot_reconciliation_failed",
+                        "position percent of portfolio does not reconcile to market value",
+                        provenance=provenance,
+                    )
 
         if position.quantity <= 0:
             return PortfolioPositionResult(

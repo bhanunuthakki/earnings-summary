@@ -525,6 +525,7 @@ def _snapshot_with_four_lot_meli_and_partial_unrelated_cost(
         (Decimal("15.256834"), Decimal("20000"), Decimal("15000")),
         (Decimal("10"), Decimal("26871.698219"), Decimal("23911.161003")),
     )
+    total_market_value = Decimal("101931.698219")
     meli_lots = [
         source_position.accounts[0].model_copy(
             update={
@@ -537,7 +538,12 @@ def _snapshot_with_four_lot_meli_and_partial_unrelated_cost(
         )
         for account_id, (quantity, market_value, cost_basis) in enumerate(lot_values, start=1)
     ]
-    meli = source_position.model_copy(update={"accounts": meli_lots})
+    meli = source_position.model_copy(
+        update={
+            "accounts": meli_lots,
+            "percent_of_portfolio": Decimal("101871.698219") / total_market_value * Decimal("100"),
+        }
+    )
     unrelated = []
     for index in range(6):
         account_id = (index % 4) + 1
@@ -564,7 +570,6 @@ def _snapshot_with_four_lot_meli_and_partial_unrelated_cost(
                 }
             )
         )
-    total_market_value = Decimal("101931.698219")
     active_accounts = [
         base.accounts[0],
         base.accounts[2],
@@ -915,6 +920,122 @@ def test_matched_meli_rejects_percent_outside_zero_to_hundred() -> None:
     assert result.state == "source_unavailable"
     assert result.error_code == "position_lot_reconciliation_failed"
     assert result.error_detail is not None and "percent" in result.error_detail
+
+
+def test_positive_matched_meli_requires_percent() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(update={"percent_of_portfolio": None}),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _MissingPercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_MissingPercentClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+    assert result.error_detail is not None and "percent" in result.error_detail
+
+
+@pytest.mark.parametrize("percent_of_portfolio", (Decimal("0"), Decimal("50"), Decimal("100")))
+def test_in_range_mismatched_matched_percent_fails_closed(
+    percent_of_portfolio: Decimal,
+) -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(
+                    update={"percent_of_portfolio": percent_of_portfolio}
+                ),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _MismatchedPercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_MismatchedPercentClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+    assert result.error_detail is not None and "percent" in result.error_detail
+
+
+def test_live_style_rounded_matched_percent_is_within_wire_tolerance() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    market_value = snapshot.positions[0].market_value
+    assert market_value is not None
+    exact_percent = market_value / snapshot.total_market_value * Decimal("100")
+    live_style_percent = exact_percent + Decimal("0.0000473137")
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(
+                    update={"percent_of_portfolio": live_style_percent}
+                ),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _RoundedPercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_RoundedPercentClient()).resolve("MELI")
+    assert result.state == "held"
+
+
+def test_formula_consistent_zero_and_hundred_percent_boundaries_pass() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    base = _snapshot_from_positions(_positions())
+    health = _health()
+
+    class _BoundaryClient:
+        def __init__(self, snapshot: PortfolioSnapshotV1) -> None:
+            self._snapshot = snapshot
+
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=self._snapshot)
+
+    hundred = PortfolioPositionAdapter(_BoundaryClient(base)).resolve("MELI")
+    assert hundred.state == "held"
+
+    zero, zero_health = _zero_meli_snapshot()
+
+    class _ZeroBoundaryClient(_BoundaryClient):
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=zero_health)
+
+    not_held = PortfolioPositionAdapter(_ZeroBoundaryClient(zero)).resolve("MELI")
+    assert not_held.state == "not_held"
 
 
 def test_canonical_adapter_rejects_position_lot_outside_active_envelope_accounts() -> None:
