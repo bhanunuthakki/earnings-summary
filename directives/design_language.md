@@ -179,9 +179,9 @@ python -m pytest tests/test_design_registry.py tests/test_design_conformance_can
 ```
 
 The hosted route-canary matrix uses production-rendered Work OS seams at desktop
-and narrow widths. Missing evidence or a role/geometry/focus/motion/state failure
-blocks the job. Instrumentation may annotate real nodes, but cannot replace a
-route with parallel HTML/CSS or satisfy it from another hidden surface.
+and narrow widths. It enumerates every visible card and enforces one registered
+archetype, anatomy, type, padding, shape, depth, alignment, viewport fit, and
+reduced motion. Missing evidence blocks; no fixture, hidden node, or allowlist passes.
 
 Report-renderer changes require workspace golden regeneration and diff review;
 generated React changes require the design-system check/build.

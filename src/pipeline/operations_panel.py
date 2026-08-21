@@ -1000,7 +1000,7 @@ def render_operations_panel(view: OperationsPanelView) -> str:
         for item in OPERATIONS_RELATED_VIEWS
     )
     return f"""
-<section class="k-card k-card-stack operations-panel" aria-labelledby="operations-title">
+<section class="k-card k-card-section operations-panel" aria-labelledby="operations-title">
   {OPERATIONS_STYLE}
   <div class="k-toolbar">
     <div><h1 class="k-card-title" id="operations-title">Operations</h1>
@@ -1169,12 +1169,12 @@ def render_operations_shell() -> str:
         'aria-label="Operations">'
         '<div class="k-grid-split-rail" data-layout-signature="k-grid-split-rail">'
         '<div id="workOsOperationsMount">'
-        '<section class="k-card k-card-stack">'
+        '<section class="k-card k-card-section">'
         '<h1 class="k-card-title">Operations</h1>'
         '<div class="k-card-meta" role="status">Loading declared ownership and runtime '
         "evidence…</div>"
         "</section></div>"
-        '<aside class="k-card k-card-stack" role="complementary" '
+        '<aside class="k-card k-card-section" role="complementary" '
         'aria-labelledby="workOsOperationsRailHeading">'
         '<h2 class="k-card-title" id="workOsOperationsRailHeading">Governance context</h2>'
         '<div class="k-well" role="status">Live operation observations load from the governed '

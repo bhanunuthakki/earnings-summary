@@ -45,6 +45,7 @@ from report.renderers.workspace_styles import READER_OVERRIDE_CSS
 ROUTE_SCREEN_IDS: dict[str, str] = {
     "cockpit": "screen-cockpit",
     "company-desk": "screen-workspace",
+    "brief-library": "screen-brief-library",
     "fact-metric-playground": "screen-analytics-playground",
     "operations": "screen-execution-queue",
     # The reader is mounted by the production shell beside the library. The

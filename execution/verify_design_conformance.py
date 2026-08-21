@@ -46,6 +46,7 @@ from ui.conformance_scan import (  # noqa: E402
     unverifiable_debt_id,
 )
 from ui.design_registry import (  # noqa: E402
+    CARD_ARCHETYPES,
     GOVERNED,
     QUARANTINE_ENTRIES,
     REGISTERED,
@@ -69,7 +70,7 @@ class _NoCanaryRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-SCHEMA_VERSION = "1.2.0"
+SCHEMA_VERSION = "1.3.0"
 _CANARY_READ_LIMIT = 1_000_000
 _CANARY_READ_CHUNK = 64 * 1024
 _CANARY_WALL_TIMEOUT_SECONDS = 3.0
@@ -80,6 +81,25 @@ _BROWSER_CANARY_SETTLE_MILLISECONDS = 400
 # contract it exercises has a real canonical root, not reproduce every token
 # used by every surface in the application.
 _BROWSER_CANARY_ROOT_PROPERTIES = (
+    "--fs-display",
+    "--fs-title",
+    "--fs-body",
+    "--fs-caption",
+    "--radius",
+    "--radius-full",
+    "--radius-card",
+    "--bw-thin",
+    "--shadow-card",
+    "--surface",
+    "--fg",
+    "--muted",
+    "--sans",
+    "--sp-2",
+    "--sp-3",
+    "--indent-0",
+    "--touch-target-size",
+)
+_BROWSER_CANARY_BASE_ROOT_PROPERTIES = (
     "--fs-display",
     "--fs-title",
     "--fs-body",
@@ -209,6 +229,7 @@ _ROUTE_CANARY_MATRIX: tuple[tuple[str, str, tuple[int, int]], ...] = tuple(
     for route in (
         "cockpit",
         "company-desk",
+        "brief-library",
         "fact-metric-playground",
         "operations",
         "full-brief",
@@ -221,6 +242,8 @@ _REQUIRED_ROUTE_CANARY_KEYS = frozenset(
         ("cockpit", "narrow"),
         ("company-desk", "desktop"),
         ("company-desk", "narrow"),
+        ("brief-library", "desktop"),
+        ("brief-library", "narrow"),
         ("fact-metric-playground", "desktop"),
         ("fact-metric-playground", "narrow"),
         ("operations", "desktop"),
@@ -234,9 +257,10 @@ _ROUTE_CANARY_SETTLE_MILLISECONDS = 400
 _ROUTE_CANARY_ROLE_CONTRACTS: dict[str, tuple[tuple[str, ...], bool]] = {
     # The Work OS shell hydrates some controls/tables from API payloads. Keep
     # each contract scoped to the production route's static seam; the matrix
-    # still covers every required role across the five real destinations.
+    # still covers every required role across the six real destinations.
     "cockpit": (("container", "type", "table", "help-footnote"), False),
     "company-desk": (("container", "control", "type", "help-footnote", "overlay"), True),
+    "brief-library": (("container", "control", "type", "help-footnote"), True),
     "fact-metric-playground": (("container", "control", "type", "help-footnote"), True),
     "operations": (("container", "type", "help-footnote"), False),
     "full-brief": (("container", "control", "type", "help-footnote"), True),
@@ -308,7 +332,7 @@ class RouteCanaryResult(_ClosedModel):
 
 
 class ConformanceReceipt(_ClosedModel):
-    schema_version: Literal["1.2.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.3.0"] = SCHEMA_VERSION
     registry_version: str
     checked_surfaces: tuple[str, ...]
     emitter_evidence: tuple[EmitterEvidenceReceipt, ...]
@@ -619,7 +643,7 @@ def _browser_canary_findings(
     # mutations made by JavaScript after the original response was received.
     payload: object = page.evaluate(
         """
-          ({rootProperties, primitiveContracts, expectedRoute, requiredRoles, requireKeyboard}) => {
+          ({rootProperties, primitiveContracts, cardContracts, expectedRoute, requiredRoles, requireKeyboard}) => {
           const root = getComputedStyle(document.documentElement);
           const rootValues = Object.fromEntries(
             rootProperties.map((name) => [name, root.getPropertyValue(name).trim()])
@@ -644,11 +668,24 @@ def _browser_canary_findings(
             }
           };
           inspectInline(document.documentElement, "document.documentElement", 0);
+          const visible = (node) => {
+            const style = getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' &&
+              Number.parseFloat(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+          };
+          const scopedMatches = (selector) => {
+            if (!expectedRoute || !routeRoot) return [...document.querySelectorAll(selector)];
+            return [
+              ...(routeRoot.matches(selector) ? [routeRoot] : []),
+              ...routeRoot.querySelectorAll(selector),
+            ];
+          };
           for (const contract of primitiveContracts) {
             const [selector, checks] = contract;
-            const nodes = document.querySelectorAll(selector);
+            const nodes = scopedMatches(selector);
             nodes.forEach((node, index) => {
-              if (expectedRoute && !node.hasAttribute('data-conformance-role')) return;
+              if (expectedRoute && !visible(node)) return;
               inspectInline(node, selector, index);
               const computed = getComputedStyle(node);
               for (const [property, variable] of checks) {
@@ -670,12 +707,129 @@ def _browser_canary_findings(
               }
             });
           }
-          const visible = (node) => {
-            const style = getComputedStyle(node);
-            const rect = node.getBoundingClientRect();
-            return style.display !== 'none' && style.visibility !== 'hidden' &&
-              Number.parseFloat(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
-          };
+          const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          if (expectedRoute && routeRoot) {
+            const tokenCache = new Map();
+            const resolveToken = (variable, property) => {
+              const key = `${variable}:${property}`;
+              if (tokenCache.has(key)) return tokenCache.get(key);
+              const probe = document.createElement('span');
+              probe.style.position = 'fixed';
+              probe.style.visibility = 'hidden';
+              if (property === 'border-width') probe.style.borderStyle = 'solid';
+              if (property === 'gap') probe.style.display = 'grid';
+              probe.style.setProperty(property, `var(${variable})`);
+              document.body.appendChild(probe);
+              const resolved = getComputedStyle(probe).getPropertyValue(property).trim();
+              probe.remove();
+              tokenCache.set(key, resolved);
+              return resolved;
+            };
+            const normalized = (value) => value.replace(/[\"']/g, '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            const cards = scopedMatches('.k-card').filter(visible);
+            if (!cards.length) findings.push({kind: 'card', actual: 'route has no visible typed cards'});
+            cards.forEach((card, index) => {
+              const matches = cardContracts.filter((contract) => card.matches(contract.selector));
+              if (matches.length !== 1) {
+                findings.push({kind: 'card', actual: `card[${index}] must match exactly one archetype; matched ${matches.length}`});
+                return;
+              }
+              const contract = matches[0];
+              const style = getComputedStyle(card);
+              const rect = card.getBoundingClientRect();
+              const compare = (property, variable) => {
+                const actual = style.getPropertyValue(property).trim();
+                const expected = resolveToken(variable, property);
+                if (normalized(actual) !== normalized(expected)) {
+                  findings.push({kind: 'card', actual: `card[${index}] ${property} ${actual} != ${variable} ${expected}`});
+                }
+              };
+              compare('padding-top', contract.paddingBlockToken);
+              compare('padding-bottom', contract.paddingBlockToken);
+              compare('padding-left', contract.paddingInlineToken);
+              compare('padding-right', contract.paddingInlineToken);
+              compare('border-radius', '--radius-card');
+              compare('border-width', '--bw-thin');
+              compare('box-shadow', '--shadow-card');
+              compare('background-color', '--surface');
+              if (rect.left < -0.5 || rect.right > window.innerWidth + 0.5) {
+                findings.push({kind: 'card', actual: `card[${index}] overflows viewport`});
+              }
+              if (contract.titleSelector) {
+                const titles = [...card.querySelectorAll(contract.titleSelector)].filter(visible);
+                if (!titles.length) {
+                  findings.push({kind: 'card', actual: `card[${index}] missing visible title ${contract.titleSelector}`});
+                } else {
+                  titles.forEach((title, titleIndex) => {
+                    const titleStyle = getComputedStyle(title);
+                    const titleRect = title.getBoundingClientRect();
+                    const titleFloor = rect.top + Math.min(rect.height / 2, 80);
+                    if (contract.name !== 'stat' &&
+                        (titleRect.top < rect.top - 0.5 || titleRect.top > titleFloor)) {
+                      findings.push({kind: 'card', actual: `card[${index}] title[${titleIndex}] is not in the upper title zone`});
+                    }
+                    const checks = [
+                      ['font-size', contract.titleSizeToken],
+                      ['font-family', contract.titleFamilyToken],
+                      ['color', contract.titleColorToken],
+                    ];
+                    checks.forEach(([property, variable]) => {
+                      const actual = titleStyle.getPropertyValue(property).trim();
+                      const expected = resolveToken(variable, property);
+                      if (normalized(actual) !== normalized(expected)) {
+                        findings.push({kind: 'card', actual: `card[${index}] title[${titleIndex}] ${property} ${actual} != ${variable} ${expected}`});
+                      }
+                    });
+                    if (Number.parseInt(titleStyle.fontWeight, 10) !== contract.titleWeight) {
+                      findings.push({kind: 'card', actual: `card[${index}] title[${titleIndex}] font-weight ${titleStyle.fontWeight} != ${contract.titleWeight}`});
+                    }
+                  });
+                }
+              } else if (!card.getAttribute('aria-label') && !card.getAttribute('aria-labelledby')) {
+                findings.push({kind: 'card', actual: `card[${index}] navigation card has no accessible name`});
+              }
+              card.querySelectorAll('.k-card-head').forEach((head) => {
+                const headStyle = getComputedStyle(head);
+                const expectedGap = resolveToken('--sp-3', 'gap');
+                if (headStyle.display !== 'flex' ||
+                    (window.innerWidth > 760 && headStyle.alignItems !== 'flex-start') ||
+                    headStyle.justifyContent !== 'space-between' ||
+                    normalized(headStyle.gap) !== normalized(expectedGap)) {
+                  findings.push({kind: 'card', actual: `card[${index}] header alignment violates canonical anatomy`});
+                }
+              });
+              if (card.matches('.research-toolbar')) {
+                const expectedDirection = window.innerWidth > 760 ? 'row' : 'column';
+                const expectedAlign = window.innerWidth > 760 ? 'center' : 'stretch';
+                if (style.display !== 'flex' || style.flexDirection !== expectedDirection ||
+                    style.alignItems !== expectedAlign || style.justifyContent !== 'space-between') {
+                  findings.push({kind: 'card', actual: `card[${index}] toolbar title/action alignment violates the responsive contract`});
+                }
+              }
+              if (reduced) {
+                [card, ...card.querySelectorAll('*')].filter(visible).forEach((node) => {
+                  const nodeStyle = getComputedStyle(node);
+                  const durations = `${nodeStyle.transitionDuration},${nodeStyle.animationDuration}`
+                    .split(',').map((value) => value.trim()).filter(Boolean)
+                    .map((value) => value.endsWith('ms') ? Number.parseFloat(value) : Number.parseFloat(value) * 1000);
+                  if (durations.some((duration) => duration > 1)) {
+                    findings.push({kind: 'motion', actual: `card[${index}] descendant motion is not reduced`});
+                  }
+                });
+              }
+            });
+            const visualCandidates = scopedMatches('[class*="card" i],[class*="panel" i],[class*="tile" i],[class*="box" i]')
+              .filter(visible)
+              .filter((node) => !node.closest('.k-card,.k-well,.k-overlay,.k-table-shell'));
+            visualCandidates.forEach((node, index) => {
+              const style = getComputedStyle(node);
+              const boxed = style.boxShadow !== 'none' || Number.parseFloat(style.borderTopWidth) > 0 ||
+                (!['rgba(0, 0, 0, 0)', 'transparent'].includes(style.backgroundColor) && Number.parseFloat(style.borderRadius) > 0);
+              if (boxed && !node.closest('.k-doc')) {
+                findings.push({kind: 'card', actual: `unregistered boxed card candidate[${index}] ${node.className}`});
+              }
+            });
+          }
           const roles = document.querySelectorAll('[data-conformance-role]');
           if (expectedRoute && !roles.length) {
             findings.push({kind: "role", actual: "no registered conformance roles"});
@@ -750,7 +904,6 @@ def _browser_canary_findings(
               }
             });
           }
-          const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
           if (expectedRoute && !reduced) {
             findings.push({kind: "motion", actual: "reduced-motion media query is not active"});
           }
@@ -777,6 +930,26 @@ def _browser_canary_findings(
                 [selector, [list(check) for check in checks]]
                 for selector, checks in _BROWSER_CANARY_PRIMITIVES
             ],
+            "cardContracts": [
+                {
+                    "name": contract.name,
+                    "selector": contract.selector,
+                    "paddingBlockToken": f"--{contract.padding_block_token}",
+                    "paddingInlineToken": f"--{contract.padding_inline_token}",
+                    "titleSelector": contract.title_selector,
+                    "titleSizeToken": (
+                        f"--{contract.title_size_token}" if contract.title_size_token else None
+                    ),
+                    "titleFamilyToken": (
+                        f"--{contract.title_family_token}" if contract.title_family_token else None
+                    ),
+                    "titleColorToken": (
+                        f"--{contract.title_color_token}" if contract.title_color_token else None
+                    ),
+                    "titleWeight": contract.title_weight,
+                }
+                for contract in CARD_ARCHETYPES
+            ],
         },
     )
     if not isinstance(payload, dict):
@@ -789,9 +962,12 @@ def _browser_canary_findings(
     root_values_dict = cast(dict[str, object], root_values)
     raw_findings_list = cast(list[object], raw_findings)
 
+    required_root_properties = (
+        _BROWSER_CANARY_ROOT_PROPERTIES if expected_route else _BROWSER_CANARY_BASE_ROOT_PROPERTIES
+    )
     findings = [
         f"root custom property missing: {name}"
-        for name in _BROWSER_CANARY_ROOT_PROPERTIES
+        for name in required_root_properties
         if not isinstance(root_values_dict.get(name), str)
         or not cast(str, root_values_dict[name]).strip()
     ]
@@ -817,7 +993,7 @@ def _browser_canary_findings(
                 raise ValueError("browser canary returned invalid style finding")
             findings.append(f"{selector}[{index}] inline {property_name}: {actual!r}")
             continue
-        if kind in {"route", "role", "geometry", "keyboard", "motion", "dynamic"}:
+        if kind in {"route", "role", "geometry", "keyboard", "motion", "dynamic", "card"}:
             findings.append(f"{kind}: {actual!r}")
             continue
         if (

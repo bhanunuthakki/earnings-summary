@@ -38,7 +38,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.9.0"
+REGISTRY_VERSION = "1.10.0"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -52,6 +52,7 @@ PALETTE_LIGHT: Mapping[str, str] = MappingProxyType(_PALETTE_LIGHT)
 __all__ = (
     "BESPOKE_BUTTON_APPROVALS",
     "BESPOKE_BUTTON_OK",
+    "CARD_ARCHETYPES",
     "CCACTION_PINNED",
     "CCACTION_REGRESSION_FLOOR",
     "CHROME_TOKENS",
@@ -94,6 +95,7 @@ __all__ = (
     "VISUAL_EMITTER_MANIFEST",
     "BespokeButtonApproval",
     "CCActionRegressionFloor",
+    "CardArchetype",
     "DynamicVisualContract",
     "EmitterDisposition",
     "EvidenceAdapter",
@@ -128,6 +130,21 @@ class ShapeSignature:
 class ShapeArchetype:
     name: str
     signatures: tuple[ShapeSignature, ...]
+
+
+@dataclass(frozen=True)
+class CardArchetype:
+    """One closed card composition verified in production-rendered routes."""
+
+    name: str
+    selector: str
+    padding_block_token: str
+    padding_inline_token: str
+    title_selector: str | None
+    title_size_token: str | None
+    title_family_token: str | None
+    title_color_token: str | None
+    title_weight: int | None
 
 
 @dataclass(frozen=True)
@@ -321,6 +338,53 @@ SHAPE_ARCHETYPES = (
         ),
     ),
     ShapeArchetype("micro-mark", (ShapeSignature(".k-dot", "radius-full", None, None),)),
+)
+
+CARD_ARCHETYPES = (
+    CardArchetype(
+        "section",
+        ".k-card-section",
+        "sp-3",
+        "sp-3",
+        ".k-card-title",
+        "fs-title",
+        "sans",
+        "fg",
+        600,
+    ),
+    CardArchetype(
+        "stat",
+        ".k-card-stat",
+        "indent-0",
+        "indent-0",
+        ".stat-heading",
+        "fs-caption",
+        "sans",
+        "muted",
+        600,
+    ),
+    CardArchetype(
+        "action",
+        ".k-card-action",
+        "sp-2",
+        "sp-3",
+        ".k-card-row-title",
+        "fs-body",
+        "sans",
+        "fg",
+        600,
+    ),
+    CardArchetype(
+        "navigation",
+        ".k-card-nav",
+        "sp-3",
+        "sp-3",
+        None,
+        None,
+        None,
+        None,
+        None,
+    ),
 )
 
 GRID_ARCHETYPES = (
@@ -943,18 +1007,18 @@ MASTER_SOURCES = GLOBAL_MASTER_SOURCES | FAMILY_MASTER_SOURCES
 _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
     {
         "dashboard/_styles.py": "06bef447e15928290d39104bbf46e7741a77547aa46a7e766a3aceb388ec5b4a",  # pragma: allowlist secret
-        "design-system/src/styles/controls.css": "0b95ae8eba781f16dba6f1fe90f72fdf8c9ec192301d529d5df7e17e27c8943c",  # pragma: allowlist secret
+        "design-system/src/styles/controls.css": "07008e3f577d92d3de28e72b8852651a208fff1c612c9640210cb6e80f31cf2b",  # pragma: allowlist secret
         "design-system/src/tokens/tokens.css": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "74b499524634752191345da39ba30ec8eda4eac95f17030063eb1111dc46af68",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "0f48dcb63f566c7f9366a7b40a3d25beb52642f892b35f5bf2c6edebe79c9d64",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "1e3fa030fe6be002e37fa5c14fb7c92fe1f04b86b1548aa68671f60951c3a4db",  # pragma: allowlist secret
-        "pipeline/work_os_styles.py": "a5e55b85f5b340363e1c715520c1adba94f799b0ce4c80aa77073ae0ace64294",  # pragma: allowlist secret
+        "pipeline/work_os_styles.py": "0f897db5032f344b6fc122fd244f70acdc25dc1298e2f3f1ed2e3ef88bd71a98",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
         "report/renderers/workspace_styles.py": "493583b93b400f4d775bc54f7541165ce6fbc776f486d86ba3fe77f4fdcb9e71",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
-        "ui/controls.py": "b9a28ce4ff2f768da335ef8040d3b70a0bc32524c3cb5e3371301135cbd849eb",  # pragma: allowlist secret
+        "ui/controls.py": "4cb401b247f239728513074e7b8ae2e421cf37ab003a8bea2c2e8427c6082c54",  # pragma: allowlist secret
         "ui/living_grid.py": "4ee064ab577f8a28166df930322f9b8ebee59fd675de2eef1fdb9c158b30b6b4",  # pragma: allowlist secret
         "ui/source_chip.py": "374338d4d1132239c3de1c91fb84f1214e87b57472f6c5df2c0582708792f141",  # pragma: allowlist secret
         "viewspec/render.py": "743c2211158fef8be8fc86530004b6dbed51c6f9c862743bf42c8b7d677fff11",  # pragma: allowlist secret
@@ -992,7 +1056,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "2875c858f07fd65c10b79232ad359d8f9bad6c1f64cce5df9bd8a66cfb97af0e",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "4fb07f311aee2b2bbe875b890d8a6a381ae707ed77a7573abd643198389cb613",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret

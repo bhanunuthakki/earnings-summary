@@ -170,12 +170,13 @@ def test_route_canary_matrix_covers_all_required_routes_and_viewports() -> None:
 
     _require_playwright()
     results = _scan_route_canaries()
-    assert len(results) == 10
+    assert len(results) == 12
     assert {(item.route, item.viewport) for item in results} == {
         (route, viewport)
         for route in (
             "cockpit",
             "company-desk",
+            "brief-library",
             "fact-metric-playground",
             "operations",
             "full-brief",
@@ -326,6 +327,7 @@ def test_route_canary_population_is_an_exact_fail_closed_census() -> None:
         for route in (
             "cockpit",
             "company-desk",
+            "brief-library",
             "fact-metric-playground",
             "operations",
             "full-brief",
@@ -359,6 +361,7 @@ def test_receipt_fails_when_route_canary_population_shrinks(
         for route in (
             "cockpit",
             "company-desk",
+            "brief-library",
             "fact-metric-playground",
             "operations",
             "full-brief",
@@ -440,6 +443,86 @@ def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
     )
     assert result.status == "failed"
     assert any("border-radius" in finding for finding in result.findings)
+
+
+@pytest.mark.parametrize(
+    ("override", "needle"),
+    [
+        (".k-card-section { padding: var(--sp-5) !important; }", "padding-top"),
+        (".k-card-title { font-size: var(--fs-body) !important; }", "title[0] font-size"),
+        (".k-card-head { align-items: center !important; }", "header alignment"),
+        (".k-card { box-shadow: none !important; }", "box-shadow"),
+        (
+            ".research-toolbar .k-card-title { transform: translateY(120px) !important; }",
+            "upper title zone",
+        ),
+    ],
+)
+def test_route_canary_rejects_deep_card_contract_drift(
+    tmp_path: Path, override: str, needle: str
+) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace("</style>", override + "</style>"),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "company-desk" and item.viewport == "desktop"
+    )
+    assert result.status == "failed"
+    assert any(needle in finding for finding in result.findings), result.findings
+
+
+def test_route_canary_rejects_untyped_or_overflowing_card(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    desktop = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
+    desktop.write_text(
+        desktop.read_text(encoding="utf-8").replace(
+            'class="k-card k-card-section research-toolbar"',
+            'class="k-card research-toolbar"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    narrow = root / "tests" / "fixtures" / "design_canaries" / "cockpit.narrow.html"
+    narrow.write_text(
+        narrow.read_text(encoding="utf-8").replace(
+            "</style>", "#screen-cockpit .k-card { width: 900px !important; }</style>"
+        ),
+        encoding="utf-8",
+    )
+    results = _scan_route_canaries(fixture_root=root)
+    company = next(
+        item for item in results if item.route == "company-desk" and item.viewport == "desktop"
+    )
+    cockpit = next(
+        item for item in results if item.route == "cockpit" and item.viewport == "narrow"
+    )
+    assert any("exactly one archetype" in finding for finding in company.findings)
+    assert any("overflows viewport" in finding for finding in cockpit.findings)
+
+
+def test_route_canary_rejects_card_motion_under_reduced_motion(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "cockpit.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</style>", ".k-card { transition-duration: 1s !important; }</style>"
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "cockpit" and item.viewport == "desktop"
+    )
+    assert any("descendant motion is not reduced" in finding for finding in result.findings)
 
 
 def test_route_canary_rejects_clipped_or_occluded_overlay(tmp_path: Path) -> None:

@@ -398,6 +398,37 @@ def test_card_kit_owns_compact_geometry_and_explicit_type_roles() -> None:
     assert ".stat-number {" in css
 
 
+def test_card_kit_owns_semantic_archetypes_and_title_alignment() -> None:
+    """Cards choose one composition recipe instead of restyling their anatomy."""
+
+    css = controls_css("dark")
+    head = css.split(".k-card-head {", 1)[1].split("}", 1)[0]
+    assert "display: flex" in head
+    assert "align-items: flex-start" in head
+    assert "justify-content: space-between" in head
+    assert "gap: var(--sp-3)" in head
+
+    heading = css.split(".k-card-heading {", 1)[1].split("}", 1)[0]
+    assert "display: flex" in heading
+    assert "flex-direction: column" in heading
+    assert "gap: var(--sp-1)" in heading
+
+    stat = css.split(".k-card-stat {", 1)[1].split("}", 1)[0]
+    assert "padding: 0" in stat
+    stat_grid = css.split(".k-stat-grid {", 1)[1].split("}", 1)[0]
+    assert "display: grid" in stat_grid
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in stat_grid
+    stat_cell = css.split(".k-stat-cell {", 1)[1].split("}", 1)[0]
+    assert "padding: var(--sp-3)" in stat_cell
+
+    action = css.split(".k-card-action {", 1)[1].split("}", 1)[0]
+    assert "padding: var(--sp-2) var(--sp-3)" in action
+    section = css.split(".k-card-section {", 1)[1].split("}", 1)[0]
+    assert "display: flex" in section and "gap: var(--sp-3)" in section
+    navigation = css.split(".k-card-nav {", 1)[1].split("}", 1)[0]
+    assert "display: flex" in navigation
+
+
 def test_status_dot_kit_is_currentcolor_circle_over_tokens() -> None:
     """``.k-dot`` is the one filled circular status dot — a full-radius circle
     filled with ``currentColor`` so a tone modifier only sets ``color`` (the

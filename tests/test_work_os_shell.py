@@ -401,11 +401,11 @@ def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
 def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hydration() -> None:
     html = render_work_os_shell()
 
-    # The three static placeholders and the hydrated template share the same
-    # compact card geometry instead of visibly jumping after the API response.
-    assert html.count('class="k-card k-card-dense k-card-interactive"') >= 4
+    # Hydrated action rows use the one registered action-card recipe; loading
+    # state stays a semantic well instead of impersonating several cards.
+    assert 'class="k-card k-card-action k-card-interactive"' in html
     assert 'class="k-card k-card-interactive" style="padding:' not in html
-    assert html.count("k-card-row-title") >= 4
+    assert html.count("k-card-row-title") >= 1
     assert html.count('class="k-card-meta"') >= 4
 
     # Ordinary research headings use explicit title roles; metric cards retain
@@ -413,7 +413,7 @@ def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hyd
     assert '<h2 class="k-card-title" id="workOsBriefReaderTitle">' in html
     assert '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>' in html
     assert '<h3 class="k-card-title">' in html
-    assert 'class="k-card k-card-stack"><div class="stat-heading">Owner posture</div>' in html
+    assert 'class="k-stat-cell"><div class="stat-heading">Owner posture</div>' in html
     assert 'class="stat-number" id="deskOwnerState"' in html
 
 
@@ -424,13 +424,11 @@ def test_l1_card_titles_and_hydration_hooks_compose_the_registry_roles() -> None
         for screen_id in ("screen-cockpit", "screen-performance", "screen-allocation")
     )
 
-    assert '<div class="stat-heading">' not in target
-    assert target.count('<h3 class="k-card-title stat-heading">') == 12
+    cockpit = _screen_fragment(html, "screen-cockpit")
+    assert cockpit.count('<div class="stat-heading">') == 4
+    assert target.count('<h3 class="k-card-title stat-heading">') == 8
     assert '<div class="k-card-row-title">' not in _screen_fragment(html, "screen-cockpit")
-    assert (
-        _screen_fragment(html, "screen-cockpit").count('<h3 class="k-card-title k-card-row-title">')
-        == 3
-    )
+    assert '<h3 class="k-card-title k-card-row-title">' not in cockpit
     assert _screen_fragment(html, "screen-allocation").count('<h3 class="k-well-title">') >= 4
     performance = _screen_fragment(html, "screen-performance")
     assert (
@@ -466,10 +464,8 @@ def test_l1_card_grids_use_registry_archetypes_and_collapse_at_1100() -> None:
     assert "@media (max-width: 1100px)" in html
     assert "@media (max-width: 1024px) { .dashboard-2col { grid-template-columns: 1fr; } }" in html
     assert "max-inline-size: calc(var(--grid-card-sm) + var(--grid-card-sm) + var(--sp-4));" in html
-    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" not in html
-    assert (
-        '#screen-cockpit [style*="display: flex"][style*="justify-content: space-between"]' in html
-    )
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" not in target
+    assert '<header class="k-section-head">' in _screen_fragment(html, "screen-cockpit")
     assert (
         '#screen-performance [style*="display: flex"][style*="justify-content: space-between"]'
         in html
@@ -790,6 +786,22 @@ def test_cockpit_hydration_does_not_construct_company_desk() -> None:
     assert "workOsLaunchParams.get('ticker')" in html
     assert "workOsLaunchParams.get('screen')" in html
     assert "originalSwitchCompanyWorkspace" not in html
+
+
+def test_primary_work_os_cards_use_one_declared_composition_archetype() -> None:
+    html = render_work_os_shell()
+    cockpit = _screen_fragment(html, "screen-cockpit")
+    company = _screen_fragment(html, "screen-workspace")
+
+    assert 'class="k-card k-card-stat"' in cockpit
+    assert cockpit.count('class="k-stat-cell"') == 4
+    assert 'class="k-section-head"' in cockpit
+    assert 'class="k-section-title"' in cockpit
+    assert 'class="k-card k-card-action k-card-interactive"' in html
+    assert 'class="k-card k-card-section research-toolbar"' in company
+    assert 'class="k-card k-card-stat research-decision-band"' in company
+    assert company.count('class="k-card k-card-stack"><div class="stat-heading">') == 0
+    assert 'class="company-picker-popover k-overlay k-card-stack"' in company
 
 
 def test_mobile_inbox_is_the_same_responsive_cockpit() -> None:
