@@ -882,6 +882,16 @@ def validate_receipt_against_sqlite(
             raise ValueError(
                 "application manifest source SHA-256 must match the referenced document"
             )
+        if receipt.application_manifest_sha256 is None:
+            raise ValueError("application manifest JSON and SHA-256 must be supplied together")
+        application_manifest = _parse_application_manifest_evidence(
+            receipt.application_manifest_json, receipt.application_manifest_sha256
+        )
+        from pipeline.issuer_fact_manifest import (
+            validate_issuer_fact_manifest_against_sqlite,
+        )
+
+        validate_issuer_fact_manifest_against_sqlite(conn, application_manifest)
     for result in receipt.results:
         expected = result.expected
         if expected.ticker.upper() != receipt.ticker.upper():

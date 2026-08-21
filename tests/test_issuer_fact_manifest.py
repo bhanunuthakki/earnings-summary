@@ -257,6 +257,47 @@ def test_persistence_rejects_tampered_application_manifest_evidence(
         conn.close()
 
 
+def test_public_receipt_persistence_rejects_rehashed_value_and_locator_forgery(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = migrated_db(tmp_path / "manifest-receipt-semantic-forgery.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _document(conn)
+        conn.commit()
+        import pipeline.restatement_detector as restatement_detector
+
+        monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
+        baseline = _manifest()
+        result = apply_issuer_fact_manifest(conn, baseline, apply=True)
+        assert result.receipt is not None
+        forged_kpi = baseline.values[0].model_copy(
+            update={
+                "value": Decimal("9999"),
+                "locator": FactLocator(
+                    pdf_page=99,
+                    kind=LocatorKind.PDF_SLIDE,
+                    verbatim_snippet="TPV 1,000",
+                ),
+            }
+        )
+        forged_manifest = baseline.model_copy(update={"values": (forged_kpi, baseline.values[1])})
+        forged_receipt = result.receipt.model_copy(
+            update={
+                "application_manifest_json": forged_manifest.canonical_json,
+                "application_manifest_sha256": forged_manifest.manifest_sha256,
+            }
+        )
+
+        with pytest.raises(ValueError, match=r"same-document KPI.*value or provenance"):
+            persist_document_coverage_receipt(conn, forged_receipt)
+        assert conn.execute("SELECT value FROM kpi_facts").fetchone()[0] == 1000
+        assert conn.execute("SELECT COUNT(*) FROM issuer_fact_coverage_receipts").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
 def test_receipt_rejects_incomplete_or_incongruent_typed_manifest(
     migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

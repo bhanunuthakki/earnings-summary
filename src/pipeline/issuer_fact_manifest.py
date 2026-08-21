@@ -371,7 +371,19 @@ def _assert_segment_replays_compatible(
                 )
 
 
-def _validate_replays(conn: sqlite3.Connection, manifest: IssuerFactManifest) -> None:
+def validate_issuer_fact_manifest_against_sqlite(
+    conn: sqlite3.Connection, manifest: IssuerFactManifest
+) -> None:
+    """Validate one typed manifest against its document and persisted fact rows.
+
+    Before application, absent rows are allowed because this same seam guards
+    the pending write. Once rows exist, any same-document identity must match
+    its exact value, unit, currency, locator, and persisted excerpt provenance.
+    Receipt persistence reuses this public check so a rehashed evidence blob
+    cannot claim semantics different from the canonical SQLite rows.
+    """
+    manifest = IssuerFactManifest.model_validate(manifest.model_dump(mode="json"))
+    _source_document(conn, manifest)
     _assert_kpi_replays_compatible(conn, manifest)
     _assert_segment_replays_compatible(conn, manifest)
 
@@ -470,8 +482,7 @@ def apply_issuer_fact_manifest(
     # ``model_copy(update=...)``.  Re-parse at the public boundary so dry-run
     # and apply enforce the same closed schema.
     manifest = IssuerFactManifest.model_validate(manifest.model_dump(mode="json", warnings=False))
-    _source_document(conn, manifest)
-    _validate_replays(conn, manifest)
+    validate_issuer_fact_manifest_against_sqlite(conn, manifest)
     if not apply:
         return IssuerManifestApplyResult(applied=False, manifest_sha256=manifest.manifest_sha256)
 
