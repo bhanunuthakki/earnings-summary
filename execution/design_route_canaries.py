@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import sqlite3
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
@@ -55,6 +54,7 @@ from report.models import (
 from report.renderers.workspace_html import render_report_body
 from report.renderers.workspace_styles import CSS as WORKSPACE_REPORT_CSS
 from report.renderers.workspace_styles import READER_OVERRIDE_CSS
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 ROUTE_SCREEN_IDS: dict[str, str] = {
     "cockpit": "screen-cockpit",
@@ -276,7 +276,12 @@ def _canary_portfolio_fragment(route: str, db_path: Path | None) -> str:
         isolated_root = Path(directory)
         isolated_db = isolated_root / "data" / "portfolio.db"
         isolated_db.parent.mkdir(parents=True, exist_ok=True)
-        sqlite3.connect(isolated_db).close()
+        isolated_conn = connect_sqlite(
+            isolated_db,
+            role=SQLiteConnectionRole.SNAPSHOT_DESTINATION,
+            schema_preflight=False,
+        )
+        isolated_conn.close()
         if route == "performance":
             return render_portfolio_allocation_panel(
                 isolated_db,
