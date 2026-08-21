@@ -183,6 +183,16 @@ def test_guarded_persistent_routes_exactly_match_the_production_screen_registry(
     assert guarded == {screen.screen_id for screen in SCREEN_SPECS}
 
 
+def test_performance_canary_contains_deterministic_populated_driver_grid() -> None:
+    from execution.design_route_canaries import render_route_canary
+
+    html = render_route_canary(route="performance", viewport="narrow")
+    assert "Deterministic Responsive Grid Company" in html
+    assert "pf-alpha-details" in html
+    assert "lg-filter" in html
+    assert "alpha-table" in html
+
+
 @pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
 def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
     viewport: tuple[int, int],
@@ -587,6 +597,51 @@ def test_route_canary_rejects_card_motion_under_reduced_motion(tmp_path: Path) -
         if item.route == "cockpit" and item.viewport == "desktop"
     )
     assert any("descendant motion is not reduced" in finding for finding in result.findings)
+
+
+def test_route_canary_rejects_unresolved_visible_loading_shell(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            '<div class="research-grid k-grid-split-rail-lg">',
+            '<p class="cc-loading" hx-get="/api/panel/never">Loading forever…</p>'
+            '<div class="research-grid k-grid-split-rail-lg">',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "company-desk" and item.viewport == "desktop"
+    )
+    assert result.status == "failed"
+    assert any("unresolved visible loading shell" in finding for finding in result.findings)
+
+
+def test_performance_canary_opens_driver_grid_and_rejects_uncontained_table(
+    tmp_path: Path,
+) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "performance.narrow.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</style>",
+            ".pf-alpha-details .lg { max-width:none!important; overflow-x:visible!important; }</style>",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "performance" and item.viewport == "narrow"
+    )
+    assert result.status == "failed"
+    assert any("table" in finding and "clipped" in finding for finding in result.findings)
 
 
 def test_route_canary_rejects_clipped_or_occluded_overlay(tmp_path: Path) -> None:

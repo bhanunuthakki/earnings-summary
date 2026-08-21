@@ -30,6 +30,7 @@ from pipeline.work_os_research import (
 )
 from pipeline.work_os_styles import WORK_OS_CSS
 from ui.controls import controls_css
+from ui.living_grid import head_assets as living_grid_head_assets
 from ui.tokens import FAVICON_LINK, palette_css
 
 
@@ -1796,9 +1797,12 @@ def _add_production_contract(
     controls = (
         f'<style id="work-os-controls-css">{palette_css("dark")}{controls_css("dark")}</style>'
     )
+    grid_assets = living_grid_head_assets()
     return html.replace(
         "</body>",
         controls
+        + "\n"
+        + grid_assets
         + "\n"
         + reader
         + f'\n<script id="work-os-explore-runtime">{EXPLORE_PANEL_JS}</script>\n'

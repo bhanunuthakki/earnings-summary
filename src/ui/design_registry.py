@@ -1019,7 +1019,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "report/renderers/workspace_styles.py": "493583b93b400f4d775bc54f7541165ce6fbc776f486d86ba3fe77f4fdcb9e71",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
         "ui/controls.py": "4cb401b247f239728513074e7b8ae2e421cf37ab003a8bea2c2e8427c6082c54",  # pragma: allowlist secret
-        "ui/living_grid.py": "4ee064ab577f8a28166df930322f9b8ebee59fd675de2eef1fdb9c158b30b6b4",  # pragma: allowlist secret
+        "ui/living_grid.py": "e95fb454ffbc17e2d248d48f9b5e7563ecd7383a063ad94e0b3ef9088dab4374",  # pragma: allowlist secret
         "ui/source_chip.py": "374338d4d1132239c3de1c91fb84f1214e87b57472f6c5df2c0582708792f141",  # pragma: allowlist secret
         "viewspec/render.py": "743c2211158fef8be8fc86530004b6dbed51c6f9c862743bf42c8b7d677fff11",  # pragma: allowlist secret
     }

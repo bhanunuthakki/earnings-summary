@@ -1,10 +1,9 @@
 """Red-team wave B (B4/B5): composite-console latency + memo duplication.
 
-B4a — the Portfolio composites defer their heavy tail: Health's Risk +
-Red Team and Allocation's Performance render as on-reveal HTMX placeholders
-(the per-builder ``/api/panel/<id>`` routes were deliberately kept live), so
-the landing section paints first. The ``csec-*`` anchor wrappers must survive
-for the jump chips.
+B4a — Health's Risk + Red Team panes defer until first activation. Allocation
+is already an on-demand Work OS route, so its Performance subsection must be
+fully rendered in the same request rather than depending on an absent HTMX
+runtime. The ``csec-*`` anchor wrappers must survive for the jump chips.
 
 B4b — ONE cheap liveness probe gates the tracker data walk: when the probe
 says the host is down, the serial data GETs are skipped entirely and the
@@ -104,11 +103,14 @@ def test_health_console_cut_sections_became_ask_doorways(tmp_path: Path, probe_d
     assert "macro shock" in html
 
 
-def test_allocation_console_defers_performance(tmp_path: Path, probe_down: None) -> None:
+def test_allocation_console_resolves_performance_without_htmx(
+    tmp_path: Path, probe_down: None
+) -> None:
     html = render_portfolio_allocation_panel(tmp_path / "missing.db")
     assert 'id="csec-positioning"' in html and 'id="csec-performance"' in html
-    assert 'hx-get="/api/panel/portfolio" hx-trigger="revealed" hx-swap="outerHTML"' in html
-    assert html.count('class="cc-loading"') == 1
+    assert 'hx-get="/api/panel/portfolio"' not in html
+    assert 'class="cc-loading"' not in html
+    assert "pf-live-offline" in html
 
 
 # --------------------------------------------------------------------------- #

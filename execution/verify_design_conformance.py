@@ -683,6 +683,11 @@ def _browser_canary_findings(
             const rect = node.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return false;
             for (let current = node; current; current = composedParent(current)) {
+              if (current.matches && current.matches('details:not([open])')) {
+                const summary = [...current.children]
+                  .find((child) => child.tagName === 'SUMMARY');
+                if (!summary || !composedContains(summary, node)) return false;
+              }
               const style = getComputedStyle(current);
               if (style.display === 'none' || style.visibility === 'hidden' ||
                   Number.parseFloat(style.opacity || '1') <= 0) return false;
@@ -867,6 +872,17 @@ def _browser_canary_findings(
           const roles = expectedRoute && routeRoot
             ? scopedMatches('[data-conformance-role]')
             : [...document.querySelectorAll('[data-conformance-role]')];
+          const unresolvedLoading = scopedMatches('.cc-loading,[aria-busy="true"],[hx-get]')
+            .filter(visible)
+            .filter((node) => node.hasAttribute('hx-get') ||
+              node.getAttribute('aria-busy') === 'true' ||
+              /^\\s*Loading\\b/i.test(node.textContent || ''));
+          unresolvedLoading.forEach((node, index) => {
+            const marker = node.hasAttribute('hx-get') ? 'hx-get' :
+              (node.getAttribute('aria-busy') === 'true' ? 'aria-busy' : 'loading text');
+            findings.push({kind: 'dynamic',
+              actual: `unresolved visible loading shell[${index}] (${marker})`});
+          });
           if (expectedRoute && !roles.length) {
             findings.push({kind: "role", actual: "no registered conformance roles"});
           }
@@ -899,13 +915,20 @@ def _browser_canary_findings(
                 findings.push({kind: "role", actual: `type[${index}] uses off-scale font-size ${style.fontSize}`});
               }
             }
+            let horizontalScrollContained = false;
+            let verticalScrollContained = false;
             for (let parent = node.parentElement; parent && role !== 'container'; parent = parent.parentElement) {
               if (parent === document.body || parent === document.documentElement) continue;
               const parentStyle = getComputedStyle(parent);
+              horizontalScrollContained ||= /(auto|scroll)/.test(parentStyle.overflowX);
+              verticalScrollContained ||= /(auto|scroll)/.test(parentStyle.overflowY);
               if (!/(hidden|clip)/.test(parentStyle.overflow + ' ' + parentStyle.overflowX + ' ' + parentStyle.overflowY)) continue;
               const parentRect = parent.getBoundingClientRect();
-              if (rect.left < parentRect.left || rect.right > parentRect.right ||
-                  rect.top < parentRect.top || rect.bottom > parentRect.bottom) {
+              const clippedHorizontally = !horizontalScrollContained &&
+                (rect.left < parentRect.left || rect.right > parentRect.right);
+              const clippedVertically = !verticalScrollContained &&
+                (rect.top < parentRect.top || rect.bottom > parentRect.bottom);
+              if (clippedHorizontally || clippedVertically) {
                 findings.push({kind: "geometry", actual: `${role}[${index}] clipped by ${parent.tagName.toLowerCase()}`});
                 break;
               }
@@ -1260,6 +1283,12 @@ def _scan_route_canaries(
                             ({route, screenId}) => {
                               const target = document.getElementById(screenId);
                               if (!target) throw new Error(`missing settled production screen ${screenId}`);
+                              if (route === 'performance') {
+                                target.querySelectorAll('.pf-alpha-details').forEach((details) => {
+                                  details.open = true;
+                                  details.setAttribute('data-conformance-state', 'expanded');
+                                });
+                              }
                               document.querySelectorAll('[data-conformance-role]').forEach((node) => node.removeAttribute('data-conformance-role'));
                               const firstVisible = (selector) => Array.from(target.querySelectorAll(selector))
                                 .find((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }) || null;
@@ -1335,7 +1364,7 @@ def _scan_route_canaries(
 def _route_population_failures(
     results: tuple[RouteCanaryResult, ...],
 ) -> tuple[RouteCanaryResult, ...]:
-    """Fail closed unless results contain the immutable five-by-two census."""
+    """Fail closed unless results contain the complete immutable route census."""
 
     keys = tuple((result.route, result.viewport) for result in results)
     actual = frozenset(keys)
@@ -1577,7 +1606,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--route-canaries",
         action="store_true",
-        help="run the committed five-route desktop+narrow Playwright matrix",
+        help="run the complete production-route desktop+narrow Playwright matrix",
     )
     return parser
 

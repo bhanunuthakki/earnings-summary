@@ -30,6 +30,7 @@ governed artifacts and caches — no new LLM purpose, no render-path LLM call.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from html import escape
 from pathlib import Path
 
@@ -43,23 +44,6 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 # degrades to a single column without a media query; `csec-wide` spans the
 # brief and the landing section across every column.
 _CONSOLE_CSS = console_css()
-
-
-def _lazy_section_placeholder(endpoint: str, label: str) -> str:
-    """A deferred console section (wave B B4a): a placeholder that HTMX swaps
-    for the real builder fragment when it scrolls into view. The composite's
-    landing section paints immediately; the heavy tracker/LLM builders load on
-    reveal through the per-builder ``/api/panel/<id>`` routes (deliberately
-    kept live). ``hx-swap="outerHTML"`` replaces only this inner div — the
-    ``csec-*`` wrapper ``render_console`` adds stays, so the anchor-nav jump
-    chips still land. The shell inlines HTMX and its ``injectHtml`` calls
-    ``htmx.process`` on injected fragments, so ``revealed`` wires reliably."""
-    return (
-        f'<div hx-get="{escape(endpoint, quote=True)}" hx-trigger="revealed" '
-        'hx-swap="outerHTML">'
-        f'<p class="cc-loading">Loading {escape(label)}…</p>'
-        "</div>"
-    )
 
 
 # Health console (owner directive 2026-07-30): the read, then exactly TWO
@@ -427,13 +411,17 @@ def _record_brief(db_path: Path) -> str:
 
 
 def render_portfolio_allocation_panel(
-    db_path: Path, repo_root: Path | None = None, *, user_id: str = DEFAULT_USER_ID
+    db_path: Path,
+    repo_root: Path | None = None,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    performance_renderer: Callable[[], str] | None = None,
 ) -> str:
     """Portfolio → Allocation: where capital goes and how it's doing (P0.4b,
     PRD §7.4/§7.5), laid out per the D1 page model: the Band-1 read leads,
     then ONE dense tile grid — Next dollar (wide landing), Risk Budget /
-    Posture / Positioning as tiles, Performance still deferred to an on-reveal
-    HTMX fragment (B4a) so nothing waits on a tracker round-trip. The former
+    Posture / Positioning as tiles. Performance renders in this on-demand route
+    request so the Work OS never strands an HTMX placeholder. The former
     What-if/Compare signpost section is deleted: its actions live on the Next
     dollar tile and the brief's chip jumps there."""
     from pipeline.allocation_recommendation_panel import (
@@ -441,16 +429,18 @@ def render_portfolio_allocation_panel(
         render_portfolio_posture_section,
         render_risk_budget_section,
     )
+    from pipeline.portfolio_panel import render_portfolio_panel
     from pipeline.positioning_panel import render_positioning_panel
 
     root = repo_root or db_path.parent.parent
+    render_performance = performance_renderer or (lambda: render_portfolio_panel(db_path=db_path))
 
     sections: list[ConsoleSection] = [
         ("brief", "Read", lambda: _allocation_brief(db_path, root)),
         (
             "performance",
             "Performance",
-            lambda: _lazy_section_placeholder("/api/panel/portfolio", "Performance"),
+            render_performance,
         ),
         (
             "allocation_recommendation",

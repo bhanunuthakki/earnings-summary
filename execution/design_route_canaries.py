@@ -19,6 +19,12 @@ from tempfile import TemporaryDirectory
 
 from bs4 import BeautifulSoup
 
+from integrations.portfolio_tracker_client import (
+    LivePortfolio,
+    PortfolioAnalytics,
+    PositionAlpha,
+    PositionAlphaRow,
+)
 from pipeline.explore_panel import render_explore_panel
 from pipeline.operations_panel import OperationsPanelView, render_operations_panel
 from pipeline.portfolio_console_panel import (
@@ -26,6 +32,7 @@ from pipeline.portfolio_console_panel import (
     render_portfolio_health_panel,
     render_portfolio_record_panel,
 )
+from pipeline.portfolio_panel import compose_portfolio_page
 from pipeline.work_os_shell import SCREEN_SPECS, render_work_os_shell
 from report.legacy_body import extract_legacy_reader_body
 from report.models import (
@@ -254,7 +261,11 @@ def _canary_portfolio_fragment(route: str, db_path: Path | None) -> str:
 
     if db_path is not None:
         if route == "performance":
-            return render_portfolio_allocation_panel(db_path, db_path.parent.parent)
+            return render_portfolio_allocation_panel(
+                db_path,
+                db_path.parent.parent,
+                performance_renderer=_canary_performance_fragment,
+            )
         if route == "risk-allocations":
             return render_portfolio_health_panel(db_path)
         if route == "decision-audit":
@@ -267,12 +278,69 @@ def _canary_portfolio_fragment(route: str, db_path: Path | None) -> str:
         isolated_db.parent.mkdir(parents=True, exist_ok=True)
         sqlite3.connect(isolated_db).close()
         if route == "performance":
-            return render_portfolio_allocation_panel(isolated_db, isolated_root)
+            return render_portfolio_allocation_panel(
+                isolated_db,
+                isolated_root,
+                performance_renderer=_canary_performance_fragment,
+            )
         if route == "risk-allocations":
             return render_portfolio_health_panel(isolated_db)
         if route == "decision-audit":
             return render_portfolio_record_panel(isolated_db)
     raise ValueError(f"unknown portfolio design canary route: {route!r}")
+
+
+def _canary_performance_fragment() -> str:
+    """Render deterministic populated Performance content without a live tracker."""
+
+    rows = [
+        PositionAlphaRow(
+            ticker="NU",
+            name="Canary Financial Holdings",
+            value_at_start=10000.0,
+            bought_in_window=500.0,
+            sold_in_window=0.0,
+            value_at_end=11200.0,
+            actual_pl=700.0,
+            spy_counterfactual_pl=420.0,
+            alpha=280.0,
+            alpha_vs_qqq=190.0,
+            alpha_vs_policy=230.0,
+            incomplete=False,
+        ),
+        PositionAlphaRow(
+            ticker="CANARY",
+            name="Deterministic Responsive Grid Company",
+            value_at_start=8000.0,
+            bought_in_window=0.0,
+            sold_in_window=250.0,
+            value_at_end=7900.0,
+            actual_pl=150.0,
+            spy_counterfactual_pl=210.0,
+            alpha=-60.0,
+            alpha_vs_qqq=-80.0,
+            alpha_vs_policy=-45.0,
+            incomplete=False,
+        ),
+    ]
+    alpha = PositionAlpha(
+        start_date="2025-10-01",
+        end_date="2026-01-01",
+        has_policy=True,
+        total_actual_pl=850.0,
+        total_spy_pl=630.0,
+        total_alpha=220.0,
+        total_alpha_vs_qqq=110.0,
+        total_alpha_vs_policy=185.0,
+        rows=rows,
+    )
+    analytics = PortfolioAnalytics(
+        available=True,
+        api_url="http://design-canary.invalid",
+        position_alpha=alpha,
+    )
+    live = LivePortfolio(available=True, api_url="http://design-canary.invalid")
+    return compose_portfolio_page(analytics, live, include_live=False)
 
 
 def render_route_canary(*, route: str, viewport: str, db_path: Path | None = None) -> str:

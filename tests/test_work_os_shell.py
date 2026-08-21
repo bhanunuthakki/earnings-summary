@@ -236,6 +236,8 @@ def test_live_backend_mount_executes_local_fragment_scripts_without_optional_htm
     assert "script.replaceWith(replacement)" in html
     assert "workOsMountHtml(target, markup, endpoint)" in html
     assert "window.htmx" not in html
+    assert "window.livingGrid = window.livingGrid || function" in html
+    assert ".lg { min-width: 0; max-width: 100%; overflow-x: auto; }" in html
     assert "Live data loaded" not in html
     assert "Live data fetched" in html
     assert "const workOsRequests = new WeakMap()" in html
