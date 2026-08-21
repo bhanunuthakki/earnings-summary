@@ -302,6 +302,36 @@ def test_same_document_kpi_value_conflict_rolls_back(
         )
         with pytest.raises(ValueError, match="same-document KPI"):
             apply_issuer_fact_manifest(conn, conflict, apply=True)
+        changed_locator = (
+            _manifest()
+            .values[0]
+            .model_copy(
+                update={
+                    "locator": FactLocator(
+                        pdf_page=4,
+                        kind=LocatorKind.PDF_SLIDE,
+                        verbatim_snippet="TPV 1,000",
+                    )
+                }
+            )
+        )
+        with pytest.raises(ValueError, match="value or provenance"):
+            apply_issuer_fact_manifest(
+                conn,
+                _manifest().model_copy(update={"values": (changed_locator, _manifest().values[1])}),
+                apply=True,
+            )
+        changed_excerpt = (
+            _manifest()
+            .values[0]
+            .model_copy(update={"source_excerpt": "different supporting quote"})
+        )
+        with pytest.raises(ValueError, match="value or provenance"):
+            apply_issuer_fact_manifest(
+                conn,
+                _manifest().model_copy(update={"values": (changed_excerpt, _manifest().values[1])}),
+                apply=True,
+            )
         assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
         assert conn.execute("SELECT value FROM kpi_facts").fetchone()[0] == 1000
         assert conn.execute("SELECT COUNT(*) FROM issuer_fact_coverage_receipts").fetchone()[0] == 2
@@ -328,6 +358,25 @@ def test_same_document_segment_value_conflict_cannot_create_duplicate_capture(
         )
         with pytest.raises(ValueError, match="same-document segment"):
             apply_issuer_fact_manifest(conn, conflict, apply=True)
+        changed_locator = (
+            _manifest()
+            .values[1]
+            .model_copy(
+                update={
+                    "locator": FactLocator(
+                        pdf_page=6,
+                        kind=LocatorKind.PDF_SLIDE,
+                        verbatim_snippet="Commerce 500",
+                    )
+                }
+            )
+        )
+        with pytest.raises(ValueError, match="value or provenance"):
+            apply_issuer_fact_manifest(
+                conn,
+                _manifest().model_copy(update={"values": (_manifest().values[0], changed_locator)}),
+                apply=True,
+            )
         assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == 1
         assert conn.execute("SELECT value FROM segment_dimensions").fetchone()[0] == 500
         assert conn.execute("SELECT COUNT(*) FROM issuer_fact_coverage_receipts").fetchone()[0] == 2

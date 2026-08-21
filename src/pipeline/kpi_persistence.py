@@ -51,6 +51,14 @@ _SOURCE_EXCERPT_MAX = 1024
 _ACTUAL_PLAUSIBLE_MAX = Decimal("1e15")
 
 
+def normalize_source_excerpt(source_excerpt: str | None) -> str | None:
+    """Return the exact excerpt payload persisted on a KPI fact."""
+    if source_excerpt is None:
+        return None
+    normalized = source_excerpt.strip()[:_SOURCE_EXCERPT_MAX]
+    return normalized or None
+
+
 class KpiValue(BaseModel):
     """One LLM-extracted KPI value tied to a tracked metric."""
 
@@ -714,7 +722,7 @@ def persist_manifest(
                 issues += 1
                 continue
 
-        excerpt = kpi.source_excerpt.strip()[:_SOURCE_EXCERPT_MAX] if kpi.source_excerpt else None
+        excerpt = normalize_source_excerpt(kpi.source_excerpt)
         was_inserted = _insert_kpi_fact(
             conn,
             ticker=manifest.ticker,
@@ -741,7 +749,7 @@ def persist_manifest(
                 source_doc_id=manifest.source_doc_id,
                 ticker=manifest.ticker,
             ),
-            source_excerpt=excerpt or None,
+            source_excerpt=excerpt,
         )
         if was_inserted:
             inserted += 1

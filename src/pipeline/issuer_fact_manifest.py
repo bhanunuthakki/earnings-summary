@@ -38,7 +38,12 @@ from pipeline.issuer_document_coverage import (
     persist_document_coverage_receipt,
     reconcile_extractor_fact_population,
 )
-from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
+from pipeline.kpi_persistence import (
+    KpiExtractionManifest,
+    KpiValue,
+    normalize_source_excerpt,
+    persist_manifest,
+)
 from pipeline.segment_junction_writer import write_segment_facts_junction
 
 MAX_EXTRACTED_AT_FUTURE_SKEW = timedelta(minutes=5)
@@ -229,9 +234,27 @@ def _parse_datetime(raw: object, *, field: str) -> datetime:
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
+def _canonical_stored_locator(raw: object, *, fact_name: str) -> str:
+    if raw is None or not str(raw).strip():
+        raise ValueError(f"same-document fact {fact_name!r} has no persisted locator")
+    try:
+        locator = FactLocator.from_json(str(raw))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"same-document fact {fact_name!r} has invalid persisted locator provenance"
+        ) from exc
+    if locator is None or locator.effective_kind() is None:
+        raise ValueError(f"same-document fact {fact_name!r} has no canonical locator provenance")
+    canonical = locator.to_json()
+    if canonical is None:
+        raise ValueError(f"same-document fact {fact_name!r} has empty locator provenance")
+    return canonical
+
+
 def _assert_kpi_replays_compatible(conn: sqlite3.Connection, manifest: IssuerFactManifest) -> None:
     rows = conn.execute(
-        "SELECT kd.name, kf.value, kf.unit, kf.currency FROM kpi_facts kf "
+        "SELECT kd.name, kf.value, kf.unit, kf.currency, "
+        "kf.locator, kf.source_excerpt FROM kpi_facts kf "
         "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
         "WHERE kf.ticker = ? AND kf.source_doc_id = ? "
         "AND date(kf.period_end) = ? AND kf.fiscal_period_type = ?",
@@ -264,9 +287,22 @@ def _assert_kpi_replays_compatible(conn: sqlite3.Connection, manifest: IssuerFac
                 raise ValueError(
                     f"existing KPI {value.canonical_name!r} has a non-numeric stored value"
                 ) from exc
-            if value_conflict or str(row["unit"]) != value.unit.value or currency_conflict:
+            locator_conflict = (
+                _canonical_stored_locator(row["locator"], fact_name=value.canonical_name)
+                != value.locator.to_json()
+            )
+            excerpt_conflict = normalize_source_excerpt(
+                None if row["source_excerpt"] is None else str(row["source_excerpt"])
+            ) != normalize_source_excerpt(value.source_excerpt)
+            if (
+                value_conflict
+                or str(row["unit"]) != value.unit.value
+                or currency_conflict
+                or locator_conflict
+                or excerpt_conflict
+            ):
                 raise ValueError(
-                    f"same-document KPI {value.canonical_name!r} conflicts with existing value"
+                    f"same-document KPI {value.canonical_name!r} conflicts with existing value or provenance"
                 )
 
 
@@ -274,7 +310,7 @@ def _assert_segment_replays_compatible(
     conn: sqlite3.Connection, manifest: IssuerFactManifest
 ) -> None:
     rows = conn.execute(
-        "SELECT sd.dim_type, sd.dim_name, sd.metric, sd.value, "
+        "SELECT sd.dim_type, sd.dim_name, sd.metric, sd.value, sd.locator, "
         "COALESCE(sd.unit, sp.unit) AS effective_unit, sp.currency "
         "FROM segment_periods sp "
         "JOIN segment_dimensions sd ON sd.period_id = sp.id "
@@ -317,13 +353,18 @@ def _assert_segment_replays_compatible(
                 raise ValueError(
                     f"existing segment {value.canonical_name!r} has a non-numeric stored value"
                 ) from exc
+            locator_conflict = (
+                _canonical_stored_locator(row["locator"], fact_name=value.canonical_name)
+                != value.locator.to_json()
+            )
             if (
                 value_conflict
                 or str(row["effective_unit"]) != value.unit.value
                 or stored_currency != incoming_currency
+                or locator_conflict
             ):
                 raise ValueError(
-                    f"same-document segment {value.canonical_name!r} conflicts with existing value"
+                    f"same-document segment {value.canonical_name!r} conflicts with existing value or provenance"
                 )
 
 
