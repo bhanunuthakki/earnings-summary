@@ -16,7 +16,7 @@ import json
 import sqlite3
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -28,6 +28,9 @@ from provenance.source_coverage import (
     SourceCoverageLedger,
 )
 from timeseries.loaders import reader_source_order_sql
+
+if TYPE_CHECKING:
+    from pipeline.issuer_fact_manifest import IssuerFactManifest
 
 
 class IssuerFactKind(StrEnum):
@@ -198,26 +201,65 @@ class IssuerDocumentCoverageReceipt(_CoverageModel):
             raise ValueError("application manifest JSON and SHA-256 must be supplied together")
         if manifest_json is None or manifest_sha256 is None:
             return self
-        if hashlib.sha256(manifest_json.encode("utf-8")).hexdigest() != manifest_sha256:
-            raise ValueError("application manifest hash does not match manifest evidence")
-        try:
-            decoded: object = json.loads(manifest_json)
-        except json.JSONDecodeError as exc:
-            raise ValueError("application manifest evidence must be valid JSON") from exc
-        if not isinstance(decoded, dict):
-            raise ValueError("application manifest evidence must be a JSON object")
-        payload = cast("dict[str, object]", decoded)
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        if canonical != manifest_json:
-            raise ValueError("application manifest evidence must use canonical JSON")
-        if payload.get("schema_version") != "issuer_fact_manifest.v1":
-            raise ValueError("application manifest evidence has an unsupported schema version")
-        if payload.get("source_doc_id") != self.document_id:
+        manifest = _parse_application_manifest_evidence(manifest_json, manifest_sha256)
+        if manifest.source_doc_id != self.document_id:
             raise ValueError("application manifest document must match receipt document")
-        ticker = payload.get("ticker")
-        if not isinstance(ticker, str) or ticker.upper() != self.ticker.upper():
+        if manifest.ticker.upper() != self.ticker.upper():
             raise ValueError("application manifest ticker must match receipt ticker")
+        if manifest.extracted_at != _utc(self.extracted_at).astimezone(UTC):
+            raise ValueError("application manifest extracted_at must match receipt extracted_at")
+        if manifest.extracted_at < _utc(self.source_fetched_at).astimezone(UTC):
+            raise ValueError(
+                "application manifest extracted_at cannot predate receipt source fetch"
+            )
         return self
+
+    def validate_application_manifest_population(self) -> None:
+        """Bind a complete apply receipt to the manifest's full fact population.
+
+        Ledger rows intentionally store one result apiece, so this complete-set
+        check runs before the receipt is split into immutable fact-level rows.
+        The model validator above still validates the full typed manifest and
+        its header on every reconstructed ledger row.
+        """
+        if self.application_manifest_json is None:
+            return
+        if self.application_manifest_sha256 is None:
+            raise ValueError("application manifest JSON and SHA-256 must be supplied together")
+        manifest = _parse_application_manifest_evidence(
+            self.application_manifest_json, self.application_manifest_sha256
+        )
+        receipt_identities = tuple(result.expected.identity_key for result in self.results)
+        manifest_identities = tuple(expected.identity_key for expected in manifest.expected)
+        if receipt_identities != manifest_identities:
+            raise ValueError(
+                "application manifest expected identities must exactly match receipt results"
+            )
+        if any(
+            result.expected.period_end != manifest.period_end
+            or result.expected.fiscal_period_type != manifest.fiscal_period_type.value
+            for result in self.results
+        ):
+            raise ValueError("application manifest period must match every receipt result")
+        captured_identities = {
+            result.expected.identity_key
+            for result in self.results
+            if result.coverage_status == "captured"
+        }
+        value_identities = {value.expected().identity_key for value in manifest.values}
+        if value_identities != captured_identities:
+            raise ValueError(
+                "application manifest value identities must exactly match captured receipt results"
+            )
+        rejected_results = {
+            result.expected.identity_key: result.rejection_reason
+            for result in self.results
+            if result.coverage_status == "rejected"
+        }
+        if manifest.rejected != rejected_results:
+            raise ValueError(
+                "application manifest rejection map must exactly match rejected receipt results"
+            )
 
     @property
     def expected_count(self) -> int:
@@ -234,6 +276,35 @@ class IssuerDocumentCoverageReceipt(_CoverageModel):
     @property
     def missing_count(self) -> int:
         return sum(result.coverage_status == "missing" for result in self.results)
+
+
+def _parse_application_manifest_evidence(
+    manifest_json: str, manifest_sha256: str
+) -> IssuerFactManifest:
+    """Validate canonical issuer-apply evidence without a module-load cycle."""
+    if hashlib.sha256(manifest_json.encode("utf-8")).hexdigest() != manifest_sha256:
+        raise ValueError("application manifest hash does not match manifest evidence")
+    try:
+        decoded: object = json.loads(manifest_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("application manifest evidence must be valid JSON") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError("application manifest evidence must be a JSON object")
+    # issuer_fact_manifest owns the application model and imports this receipt
+    # type. The lazy runtime import keeps that dependency acyclic at load time.
+    from pipeline.issuer_fact_manifest import IssuerFactManifest
+
+    try:
+        manifest = IssuerFactManifest.model_validate(cast("dict[str, object]", decoded))
+    except ValueError as exc:
+        raise ValueError(
+            "application manifest evidence must satisfy the typed issuer manifest schema"
+        ) from exc
+    if manifest.canonical_json != manifest_json:
+        raise ValueError("application manifest evidence must use canonical JSON")
+    if manifest.manifest_sha256 != manifest_sha256:
+        raise ValueError("application manifest typed hash does not match manifest evidence")
+    return manifest
 
 
 class ExtractorFactPopulationFrame(_CoverageModel):
@@ -729,6 +800,7 @@ def persist_document_coverage_receipt(
 ) -> tuple[PersistResult, ...]:
     """Atomically persist one fact-level receipt through the coverage ledger."""
     validate_receipt_against_sqlite(conn, receipt)
+    receipt.validate_application_manifest_population()
     records: list[IssuerFactCoverageReceiptRecord] = []
     as_of = receipt.as_of.isoformat() if receipt.as_of is not None else "current"
     stale_before = receipt.stale_before.isoformat() if receipt.stale_before is not None else "none"
@@ -737,9 +809,16 @@ def persist_document_coverage_receipt(
             "__zero_expected_population__" if result is None else result.expected.identity_key
         )
         reconciliation_key = f"{receipt.document_id}|{fact_identity}|{as_of}|{stale_before}"
+        receipt_payload = receipt.model_dump(mode="json", exclude={"results"})
+        # Rejection-frame evidence belongs on rejected fact rows.  Keeping the
+        # full frame on a captured row would make that one-result ledger record
+        # claim rejection evidence without a rejected result.
+        if result is not None and result.coverage_status != "rejected":
+            receipt_payload["rejection_frame_json"] = None
+            receipt_payload["rejection_frame_sha256"] = None
         payload = json.dumps(
             {
-                "receipt": receipt.model_dump(mode="json", exclude={"results"}),
+                "receipt": receipt_payload,
                 "result": None if result is None else result.model_dump(mode="json"),
             },
             sort_keys=True,

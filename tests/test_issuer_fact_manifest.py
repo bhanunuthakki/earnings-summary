@@ -257,6 +257,116 @@ def test_persistence_rejects_tampered_application_manifest_evidence(
         conn.close()
 
 
+def test_receipt_rejects_incomplete_or_incongruent_typed_manifest(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = migrated_db(tmp_path / "manifest-receipt-population-tamper.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _document(conn)
+        conn.commit()
+        import pipeline.restatement_detector as restatement_detector
+
+        monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
+        baseline = _manifest()
+        result = apply_issuer_fact_manifest(conn, baseline, apply=True)
+        assert result.receipt is not None
+
+        incomplete_json = json.dumps(
+            {
+                "schema_version": "issuer_fact_manifest.v1",
+                "source_doc_id": baseline.source_doc_id,
+                "source_doc_sha256": baseline.source_doc_sha256,
+                "ticker": baseline.ticker,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        incomplete = result.receipt.model_copy(
+            update={
+                "application_manifest_json": incomplete_json,
+                "application_manifest_sha256": hashlib.sha256(
+                    incomplete_json.encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+        with pytest.raises(ValueError, match="typed issuer manifest schema"):
+            persist_document_coverage_receipt(conn, incomplete)
+
+        reduced_manifest = baseline.model_copy(
+            update={
+                "values": (baseline.values[0],),
+                "expected": (baseline.expected[0],),
+            }
+        )
+        reduced = result.receipt.model_copy(
+            update={
+                "application_manifest_json": reduced_manifest.canonical_json,
+                "application_manifest_sha256": reduced_manifest.manifest_sha256,
+            }
+        )
+        with pytest.raises(ValueError, match="expected identities must exactly match"):
+            persist_document_coverage_receipt(conn, reduced)
+
+        segment_identity = baseline.expected[1].identity_key
+        incongruent_manifest = baseline.model_copy(
+            update={
+                "values": (baseline.values[0],),
+                "rejected": {segment_identity: "not usable from this source"},
+            }
+        )
+        incongruent = result.receipt.model_copy(
+            update={
+                "application_manifest_json": incongruent_manifest.canonical_json,
+                "application_manifest_sha256": incongruent_manifest.manifest_sha256,
+            }
+        )
+        with pytest.raises(ValueError, match="value identities must exactly match"):
+            persist_document_coverage_receipt(conn, incongruent)
+        assert conn.execute("SELECT COUNT(*) FROM issuer_fact_coverage_receipts").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_receipt_rejection_reason_must_match_embedded_manifest(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = migrated_db(tmp_path / "manifest-receipt-rejection-tamper.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _document(conn)
+        conn.commit()
+        import pipeline.restatement_detector as restatement_detector
+
+        monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
+        baseline = _manifest()
+        segment_identity = baseline.expected[1].identity_key
+        rejected_manifest = baseline.model_copy(
+            update={
+                "values": (baseline.values[0],),
+                "rejected": {segment_identity: "not usable from this source"},
+            }
+        )
+        result = apply_issuer_fact_manifest(conn, rejected_manifest, apply=True)
+        assert result.receipt is not None
+        changed_reason_manifest = rejected_manifest.model_copy(
+            update={"rejected": {segment_identity: "different rejection reason"}}
+        )
+        tampered = result.receipt.model_copy(
+            update={
+                "application_manifest_json": changed_reason_manifest.canonical_json,
+                "application_manifest_sha256": changed_reason_manifest.manifest_sha256,
+            }
+        )
+        with pytest.raises(ValueError, match="rejection map must exactly match"):
+            persist_document_coverage_receipt(conn, tampered)
+        assert conn.execute("SELECT COUNT(*) FROM issuer_fact_coverage_receipts").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
 def test_apply_rolls_back_kpi_when_segment_population_is_missing(
     migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
