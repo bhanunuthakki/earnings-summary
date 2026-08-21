@@ -46,6 +46,7 @@ from ui.conformance_scan import (  # noqa: E402
     unverifiable_debt_id,
 )
 from ui.design_registry import (  # noqa: E402
+    CARD_ARCHETYPES,
     GOVERNED,
     QUARANTINE_ENTRIES,
     REGISTERED,
@@ -69,7 +70,7 @@ class _NoCanaryRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-SCHEMA_VERSION = "1.2.0"
+SCHEMA_VERSION = "1.3.0"
 _CANARY_READ_LIMIT = 1_000_000
 _CANARY_READ_CHUNK = 64 * 1024
 _CANARY_WALL_TIMEOUT_SECONDS = 3.0
@@ -80,6 +81,25 @@ _BROWSER_CANARY_SETTLE_MILLISECONDS = 400
 # contract it exercises has a real canonical root, not reproduce every token
 # used by every surface in the application.
 _BROWSER_CANARY_ROOT_PROPERTIES = (
+    "--fs-display",
+    "--fs-title",
+    "--fs-body",
+    "--fs-caption",
+    "--radius",
+    "--radius-full",
+    "--radius-card",
+    "--bw-thin",
+    "--shadow-card",
+    "--surface",
+    "--fg",
+    "--muted",
+    "--sans",
+    "--sp-2",
+    "--sp-3",
+    "--indent-0",
+    "--touch-target-size",
+)
+_BROWSER_CANARY_BASE_ROOT_PROPERTIES = (
     "--fs-display",
     "--fs-title",
     "--fs-body",
@@ -102,6 +122,8 @@ class _CanaryRoute(Protocol):
     def abort(self) -> None: ...
 
     def continue_(self) -> None: ...
+
+    def fulfill(self, *, status: int, content_type: str, body: str) -> None: ...
 
 
 class _CanaryPage(Protocol):
@@ -206,38 +228,25 @@ _BROWSER_CANARY_PRIMITIVES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] 
 # hand-written page registry.
 _ROUTE_CANARY_MATRIX: tuple[tuple[str, str, tuple[int, int]], ...] = tuple(
     (route, viewport, size)
-    for route in (
-        "cockpit",
-        "company-desk",
-        "fact-metric-playground",
-        "operations",
-        "full-brief",
-    )
+    for route in ROUTE_SCREEN_IDS
     for viewport, size in (("desktop", (1440, 900)), ("narrow", (390, 844)))
 )
 _REQUIRED_ROUTE_CANARY_KEYS = frozenset(
-    {
-        ("cockpit", "desktop"),
-        ("cockpit", "narrow"),
-        ("company-desk", "desktop"),
-        ("company-desk", "narrow"),
-        ("fact-metric-playground", "desktop"),
-        ("fact-metric-playground", "narrow"),
-        ("operations", "desktop"),
-        ("operations", "narrow"),
-        ("full-brief", "desktop"),
-        ("full-brief", "narrow"),
-    }
+    (route, viewport) for route in ROUTE_SCREEN_IDS for viewport in ("desktop", "narrow")
 )
 _ROUTE_CANARY_SETTLE_MILLISECONDS = 400
 
 _ROUTE_CANARY_ROLE_CONTRACTS: dict[str, tuple[tuple[str, ...], bool]] = {
     # The Work OS shell hydrates some controls/tables from API payloads. Keep
     # each contract scoped to the production route's static seam; the matrix
-    # still covers every required role across the five real destinations.
+    # still covers every required role across the complete production census.
     "cockpit": (("container", "type", "table", "help-footnote"), False),
+    "performance": (("container", "control", "type", "help-footnote"), True),
+    "risk-allocations": (("container", "control", "type", "help-footnote"), True),
     "company-desk": (("container", "control", "type", "help-footnote", "overlay"), True),
+    "brief-library": (("container", "control", "type", "help-footnote"), True),
     "fact-metric-playground": (("container", "control", "type", "help-footnote"), True),
+    "decision-audit": (("container", "control", "type", "help-footnote"), True),
     "operations": (("container", "type", "help-footnote"), False),
     "full-brief": (("container", "control", "type", "help-footnote"), True),
 }
@@ -308,7 +317,7 @@ class RouteCanaryResult(_ClosedModel):
 
 
 class ConformanceReceipt(_ClosedModel):
-    schema_version: Literal["1.2.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.3.0"] = SCHEMA_VERSION
     registry_version: str
     checked_surfaces: tuple[str, ...]
     emitter_evidence: tuple[EmitterEvidenceReceipt, ...]
@@ -619,7 +628,7 @@ def _browser_canary_findings(
     # mutations made by JavaScript after the original response was received.
     payload: object = page.evaluate(
         """
-          ({rootProperties, primitiveContracts, expectedRoute, requiredRoles, requireKeyboard}) => {
+          ({rootProperties, primitiveContracts, cardContracts, expectedRoute, requiredRoles, requireKeyboard}) => {
           const root = getComputedStyle(document.documentElement);
           const rootValues = Object.fromEntries(
             rootProperties.map((name) => [name, root.getPropertyValue(name).trim()])
@@ -644,11 +653,58 @@ def _browser_canary_findings(
             }
           };
           inspectInline(document.documentElement, "document.documentElement", 0);
+          const composedParent = (node) => node.parentElement ||
+            (node.getRootNode && node.getRootNode().host instanceof Element
+              ? node.getRootNode().host : null);
+          const composedElements = (rootNode) => {
+            const nodes = [];
+            const visit = (node) => {
+              if (!(node instanceof Element)) return;
+              nodes.push(node);
+              if (node.shadowRoot) [...node.shadowRoot.children].forEach(visit);
+              [...node.children].forEach(visit);
+            };
+            visit(rootNode);
+            return nodes;
+          };
+          const composedClosest = (node, selector) => {
+            for (let current = node; current; current = composedParent(current)) {
+              if (current.matches && current.matches(selector)) return current;
+            }
+            return null;
+          };
+          const composedContains = (container, node) => {
+            for (let current = node; current; current = composedParent(current)) {
+              if (current === container) return true;
+            }
+            return false;
+          };
+          const visible = (node) => {
+            const rect = node.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            for (let current = node; current; current = composedParent(current)) {
+              if (current.matches && current.matches('details:not([open])')) {
+                const summary = [...current.children]
+                  .find((child) => child.tagName === 'SUMMARY');
+                if (!summary || !composedContains(summary, node)) return false;
+              }
+              const style = getComputedStyle(current);
+              if (style.display === 'none' || style.visibility === 'hidden' ||
+                  Number.parseFloat(style.opacity || '1') <= 0) return false;
+            }
+            return true;
+          };
+          const scopedMatches = (selector) => {
+            if (!expectedRoute || !routeRoot) return [...document.querySelectorAll(selector)];
+            return composedElements(routeRoot).filter((node) => node.matches(selector));
+          };
+          const composedDescendants = (node, selector = '*') =>
+            composedElements(node).slice(1).filter((candidate) => candidate.matches(selector));
           for (const contract of primitiveContracts) {
             const [selector, checks] = contract;
-            const nodes = document.querySelectorAll(selector);
+            const nodes = scopedMatches(selector);
             nodes.forEach((node, index) => {
-              if (expectedRoute && !node.hasAttribute('data-conformance-role')) return;
+              if (expectedRoute && !visible(node)) return;
               inspectInline(node, selector, index);
               const computed = getComputedStyle(node);
               for (const [property, variable] of checks) {
@@ -670,24 +726,174 @@ def _browser_canary_findings(
               }
             });
           }
-          const visible = (node) => {
-            const style = getComputedStyle(node);
-            const rect = node.getBoundingClientRect();
-            return style.display !== 'none' && style.visibility !== 'hidden' &&
-              Number.parseFloat(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
-          };
-          const roles = document.querySelectorAll('[data-conformance-role]');
+          const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          if (expectedRoute && routeRoot) {
+            const tokenCache = new Map();
+            const resolveToken = (variable, property) => {
+              const key = `${variable}:${property}`;
+              if (tokenCache.has(key)) return tokenCache.get(key);
+              const probe = document.createElement('span');
+              probe.style.position = 'fixed';
+              probe.style.visibility = 'hidden';
+              if (property === 'border-width') probe.style.borderStyle = 'solid';
+              if (property === 'gap') probe.style.display = 'grid';
+              probe.style.setProperty(property, `var(${variable})`);
+              document.body.appendChild(probe);
+              const resolved = getComputedStyle(probe).getPropertyValue(property).trim();
+              probe.remove();
+              tokenCache.set(key, resolved);
+              return resolved;
+            };
+            const normalized = (value) => value.replace(/[\"']/g, '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            const cards = scopedMatches('.k-card').filter(visible);
+            if (!cards.length) findings.push({kind: 'card', actual: 'route has no visible typed cards'});
+            cards.forEach((card, index) => {
+              const matches = cardContracts.filter((contract) => card.matches(contract.selector));
+              if (matches.length !== 1) {
+                findings.push({kind: 'card', actual: `card[${index}] must match exactly one archetype; matched ${matches.length}`});
+                return;
+              }
+              const contract = matches[0];
+              const style = getComputedStyle(card);
+              const rect = card.getBoundingClientRect();
+              const compare = (property, variable) => {
+                const actual = style.getPropertyValue(property).trim();
+                const expected = resolveToken(variable, property);
+                if (normalized(actual) !== normalized(expected)) {
+                  findings.push({kind: 'card', actual: `card[${index}] ${property} ${actual} != ${variable} ${expected}`});
+                }
+              };
+              compare('padding-top', contract.paddingBlockToken);
+              compare('padding-bottom', contract.paddingBlockToken);
+              compare('padding-left', contract.paddingInlineToken);
+              compare('padding-right', contract.paddingInlineToken);
+              compare('border-radius', '--radius-card');
+              compare('border-width', '--bw-thin');
+              compare('box-shadow', '--shadow-card');
+              compare('background-color', '--surface');
+              if (rect.left < -0.5 || rect.right > window.innerWidth + 0.5) {
+                findings.push({kind: 'card', actual: `card[${index}] overflows viewport`});
+              }
+              if (rect.bottom > 0 && rect.top < window.innerHeight &&
+                  rect.right > 0 && rect.left < window.innerWidth) {
+                const centerX = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2));
+                const centerY = Math.min(window.innerHeight - 1, Math.max(0, rect.top + Math.min(rect.height / 2, window.innerHeight / 3)));
+                const hitRoot = card.getRootNode();
+                const hit = hitRoot && typeof hitRoot.elementFromPoint === 'function'
+                  ? hitRoot.elementFromPoint(centerX, centerY)
+                  : document.elementFromPoint(centerX, centerY);
+                if (!hit || !composedContains(card, hit)) {
+                  findings.push({kind: 'card', actual: `card[${index}] is occluded at its visible center`});
+                }
+              }
+              if (contract.titleSelector) {
+                const titles = composedDescendants(card, contract.titleSelector)
+                  .filter(visible)
+                  .filter((title) => composedClosest(title, '.k-card') === card);
+                if (!titles.length) {
+                  findings.push({kind: 'card', actual: `card[${index}] missing visible title ${contract.titleSelector}`});
+                } else {
+                  titles.forEach((title, titleIndex) => {
+                    const titleStyle = getComputedStyle(title);
+                    const titleRect = title.getBoundingClientRect();
+                    const titleFloor = rect.top + Math.min(rect.height / 2, 80);
+                    if (contract.name !== 'stat' &&
+                        (titleRect.top < rect.top - 0.5 || titleRect.top > titleFloor)) {
+                      findings.push({kind: 'card', actual: `card[${index}] title[${titleIndex}] is not in the upper title zone`});
+                    }
+                    const checks = [
+                      ['font-size', contract.titleSizeToken],
+                      ['font-family', contract.titleFamilyToken],
+                      ['color', contract.titleColorToken],
+                    ];
+                    checks.forEach(([property, variable]) => {
+                      const actual = titleStyle.getPropertyValue(property).trim();
+                      const expected = resolveToken(variable, property);
+                      if (normalized(actual) !== normalized(expected)) {
+                        findings.push({kind: 'card', actual: `card[${index}] title[${titleIndex}] ${property} ${actual} != ${variable} ${expected}`});
+                      }
+                    });
+                    if (Number.parseInt(titleStyle.fontWeight, 10) !== contract.titleWeight) {
+                      findings.push({kind: 'card', actual: `card[${index}] title[${titleIndex}] font-weight ${titleStyle.fontWeight} != ${contract.titleWeight}`});
+                    }
+                  });
+                }
+              } else if (!card.getAttribute('aria-label') && !card.getAttribute('aria-labelledby')) {
+                findings.push({kind: 'card', actual: `card[${index}] navigation card has no accessible name`});
+              }
+              composedDescendants(card, '.k-card-head')
+                .filter((head) => composedClosest(head, '.k-card') === card)
+                .forEach((head) => {
+                const headStyle = getComputedStyle(head);
+                const expectedGap = resolveToken('--sp-3', 'gap');
+                if (headStyle.display !== 'flex' ||
+                    (window.innerWidth > 760 && headStyle.alignItems !== 'flex-start') ||
+                    headStyle.justifyContent !== 'space-between' ||
+                    normalized(headStyle.gap) !== normalized(expectedGap)) {
+                  findings.push({kind: 'card', actual: `card[${index}] header alignment violates canonical anatomy`});
+                }
+              });
+              if (card.matches('.research-toolbar')) {
+                const expectedDirection = window.innerWidth > 760 ? 'row' : 'column';
+                const expectedAlign = window.innerWidth > 760 ? 'center' : 'stretch';
+                if (style.display !== 'flex' || style.flexDirection !== expectedDirection ||
+                    style.alignItems !== expectedAlign || style.justifyContent !== 'space-between') {
+                  findings.push({kind: 'card', actual: `card[${index}] toolbar title/action alignment violates the responsive contract`});
+                }
+              }
+              if (reduced) {
+                [card, ...composedDescendants(card)].filter(visible).forEach((node) => {
+                  const nodeStyle = getComputedStyle(node);
+                  const durations = `${nodeStyle.transitionDuration},${nodeStyle.animationDuration}`
+                    .split(',').map((value) => value.trim()).filter(Boolean)
+                    .map((value) => value.endsWith('ms') ? Number.parseFloat(value) : Number.parseFloat(value) * 1000);
+                  if (durations.some((duration) => duration > 1)) {
+                    findings.push({kind: 'motion', actual: `card[${index}] descendant motion is not reduced`});
+                  }
+                });
+              }
+            });
+            const visualCandidates = scopedMatches('article,section,aside,details,li,[role="group"],[role="region"],[class*="card" i],[class*="panel" i],[class*="tile" i],[class*="box" i]')
+              .filter(visible)
+              .filter((node) => !node.matches('.k-card,.k-well,.k-overlay,.k-table-shell'));
+            visualCandidates.forEach((node, index) => {
+              const style = getComputedStyle(node);
+              const boxed = style.boxShadow !== 'none' || Number.parseFloat(style.borderTopWidth) > 0 ||
+                (!['rgba(0, 0, 0, 0)', 'transparent'].includes(style.backgroundColor) && Number.parseFloat(style.borderRadius) > 0);
+              const reportDocument = composedClosest(node, '.k-doc');
+              if (boxed && reportDocument &&
+                  reportDocument.getAttribute('data-conformance-card-exemption') !== 'editorial-document') {
+                findings.push({kind: 'card', actual: `boxed report document subtree lacks explicit exemption receipt`});
+              } else if (boxed && !reportDocument) {
+                findings.push({kind: 'card', actual: `unregistered boxed card candidate[${index}] ${node.className}`});
+              }
+            });
+          }
+          const roles = expectedRoute && routeRoot
+            ? scopedMatches('[data-conformance-role]')
+            : [...document.querySelectorAll('[data-conformance-role]')];
+          const unresolvedLoading = scopedMatches('.cc-loading,[aria-busy="true"],[hx-get]')
+            .filter(visible)
+            .filter((node) => node.hasAttribute('hx-get') ||
+              node.getAttribute('aria-busy') === 'true' ||
+              /^\\s*Loading\\b/i.test(node.textContent || ''));
+          unresolvedLoading.forEach((node, index) => {
+            const marker = node.hasAttribute('hx-get') ? 'hx-get' :
+              (node.getAttribute('aria-busy') === 'true' ? 'aria-busy' : 'loading text');
+            findings.push({kind: 'dynamic',
+              actual: `unresolved visible loading shell[${index}] (${marker})`});
+          });
           if (expectedRoute && !roles.length) {
             findings.push({kind: "role", actual: "no registered conformance roles"});
           }
           requiredRoles.forEach((role) => {
             if (expectedRoute && !routeRoot?.matches(`[data-conformance-role="${role}"]`)
-                && !routeRoot?.querySelector(`[data-conformance-role="${role}"]`)) {
+                && !scopedMatches(`[data-conformance-role="${role}"]`).length) {
               findings.push({kind: "role", actual: `missing required role ${role}`});
             }
           });
           const scopedRoles = routeRoot
-            ? [routeRoot, ...routeRoot.querySelectorAll('[data-conformance-role]')]
+            ? [routeRoot, ...scopedMatches('[data-conformance-role]').filter((node) => node !== routeRoot)]
             : [...roles];
           scopedRoles.forEach((node, index) => {
             const role = node.getAttribute('data-conformance-role') || '';
@@ -709,13 +915,20 @@ def _browser_canary_findings(
                 findings.push({kind: "role", actual: `type[${index}] uses off-scale font-size ${style.fontSize}`});
               }
             }
+            let horizontalScrollContained = false;
+            let verticalScrollContained = false;
             for (let parent = node.parentElement; parent && role !== 'container'; parent = parent.parentElement) {
               if (parent === document.body || parent === document.documentElement) continue;
               const parentStyle = getComputedStyle(parent);
+              horizontalScrollContained ||= /(auto|scroll)/.test(parentStyle.overflowX);
+              verticalScrollContained ||= /(auto|scroll)/.test(parentStyle.overflowY);
               if (!/(hidden|clip)/.test(parentStyle.overflow + ' ' + parentStyle.overflowX + ' ' + parentStyle.overflowY)) continue;
               const parentRect = parent.getBoundingClientRect();
-              if (rect.left < parentRect.left || rect.right > parentRect.right ||
-                  rect.top < parentRect.top || rect.bottom > parentRect.bottom) {
+              const clippedHorizontally = !horizontalScrollContained &&
+                (rect.left < parentRect.left || rect.right > parentRect.right);
+              const clippedVertically = !verticalScrollContained &&
+                (rect.top < parentRect.top || rect.bottom > parentRect.bottom);
+              if (clippedHorizontally || clippedVertically) {
                 findings.push({kind: "geometry", actual: `${role}[${index}] clipped by ${parent.tagName.toLowerCase()}`});
                 break;
               }
@@ -736,8 +949,9 @@ def _browser_canary_findings(
               }
             }
           });
-          const focusScope = routeRoot || document;
-          const focusables = [...focusScope.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')]
+          const focusables = (routeRoot
+            ? scopedMatches('a[href],button,input,select,textarea,[tabindex]')
+            : [...document.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')])
             .filter((node) => visible(node) && !node.hasAttribute('disabled') && node.getAttribute('tabindex') !== '-1');
           if (expectedRoute && requireKeyboard && !focusables.length) {
             findings.push({kind: "keyboard", actual: "no visible keyboard target"});
@@ -745,12 +959,15 @@ def _browser_canary_findings(
           if (expectedRoute) {
             focusables.forEach((node, index) => {
               node.focus({preventScroll: true});
-              if (document.activeElement !== node) {
+              let active = document.activeElement;
+              while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+                active = active.shadowRoot.activeElement;
+              }
+              if (active !== node) {
                 findings.push({kind: "keyboard", actual: `focus target[${index}] is unreachable`});
               }
             });
           }
-          const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
           if (expectedRoute && !reduced) {
             findings.push({kind: "motion", actual: "reduced-motion media query is not active"});
           }
@@ -777,6 +994,26 @@ def _browser_canary_findings(
                 [selector, [list(check) for check in checks]]
                 for selector, checks in _BROWSER_CANARY_PRIMITIVES
             ],
+            "cardContracts": [
+                {
+                    "name": contract.name,
+                    "selector": contract.selector,
+                    "paddingBlockToken": f"--{contract.padding_block_token}",
+                    "paddingInlineToken": f"--{contract.padding_inline_token}",
+                    "titleSelector": contract.title_selector,
+                    "titleSizeToken": (
+                        f"--{contract.title_size_token}" if contract.title_size_token else None
+                    ),
+                    "titleFamilyToken": (
+                        f"--{contract.title_family_token}" if contract.title_family_token else None
+                    ),
+                    "titleColorToken": (
+                        f"--{contract.title_color_token}" if contract.title_color_token else None
+                    ),
+                    "titleWeight": contract.title_weight,
+                }
+                for contract in CARD_ARCHETYPES
+            ],
         },
     )
     if not isinstance(payload, dict):
@@ -789,9 +1026,12 @@ def _browser_canary_findings(
     root_values_dict = cast(dict[str, object], root_values)
     raw_findings_list = cast(list[object], raw_findings)
 
+    required_root_properties = (
+        _BROWSER_CANARY_ROOT_PROPERTIES if expected_route else _BROWSER_CANARY_BASE_ROOT_PROPERTIES
+    )
     findings = [
         f"root custom property missing: {name}"
-        for name in _BROWSER_CANARY_ROOT_PROPERTIES
+        for name in required_root_properties
         if not isinstance(root_values_dict.get(name), str)
         or not cast(str, root_values_dict[name]).strip()
     ]
@@ -817,7 +1057,7 @@ def _browser_canary_findings(
                 raise ValueError("browser canary returned invalid style finding")
             findings.append(f"{selector}[{index}] inline {property_name}: {actual!r}")
             continue
-        if kind in {"route", "role", "geometry", "keyboard", "motion", "dynamic"}:
+        if kind in {"route", "role", "geometry", "keyboard", "motion", "dynamic", "card"}:
             findings.append(f"{kind}: {actual!r}")
             continue
         if (
@@ -942,7 +1182,25 @@ def _scan_route_canaries(
                             viewport={"width": size[0], "height": size[1]},
                         )
                         page = context.new_page()
-                        page.set_content(html_by_fixture[path], wait_until="load", timeout=5000)
+                        canary_url = f"http://design-canary.local/{route}/{viewport}"
+
+                        def serve_route(
+                            request_route: _CanaryRoute,
+                            _request: object,
+                            expected_url: str = canary_url,
+                            response_body: str = html_by_fixture[path],
+                        ) -> None:
+                            if request_route.request.url == expected_url:
+                                request_route.fulfill(
+                                    status=200,
+                                    content_type="text/html; charset=utf-8",
+                                    body=response_body,
+                                )
+                            else:
+                                request_route.abort()
+
+                        page.route("**/*", serve_route)
+                        page.goto(canary_url, wait_until="load", timeout=5000)
                         if route == "full-brief":
                             page.wait_for_selector(
                                 "#workOsBriefReader .work-os-report-host",
@@ -953,6 +1211,16 @@ def _scan_route_canaries(
                                 "document.querySelectorAll('#workOsBriefReaderSections .work-os-reader-group-button').length === 6",
                                 timeout=5000,
                             )
+                        settled_selectors = {
+                            "cockpit": "#workOsActionQueue .k-card-action",
+                            "performance": "#workOsPerformanceMount .portfolio-allocation-console",
+                            "risk-allocations": "#workOsAllocationMount .portfolio-health-console",
+                            "company-desk": "#deskCompanyName",
+                            "brief-library": "#workOsBriefLibrary [data-artifact-id]",
+                            "fact-metric-playground": "#workOsFactPlayground #vx-root",
+                            "decision-audit": "#workOsAuditMount .portfolio-record-console",
+                            "operations": "#workOsOperationsMount .operations-panel",
+                        }
                         page.evaluate(
                             """
                             ({route, screenId}) => {
@@ -988,6 +1256,60 @@ def _scan_route_canaries(
                               window.setTimeout(() => dynamic.setAttribute('data-conformance-dynamic-state', 'ready'), 80);
                               const motion = firstVisible('.sidebar-collapse-toggle, .company-picker-trigger, .k-overlay, .drill-drawer, .report-sidebar-toggle');
                               if (motion) motion.setAttribute('data-conformance-motion', '1');
+                              const reportHost = target.querySelector('.work-os-report-host');
+                              const reportDocument = reportHost && reportHost.shadowRoot
+                                ? reportHost.shadowRoot.querySelector('.k-doc') : null;
+                              if (reportDocument) {
+                                reportDocument.setAttribute('data-conformance-card-exemption', 'editorial-document');
+                              }
+                            }
+                            """,
+                            {"route": route, "screenId": ROUTE_SCREEN_IDS[route]},
+                        )
+                        settled_selector = settled_selectors.get(route)
+                        if settled_selector:
+                            page.wait_for_selector(
+                                settled_selector,
+                                state="visible",
+                                timeout=5000,
+                            )
+                        if route == "company-desk":
+                            page.wait_for_function(
+                                "document.getElementById('deskCompanyName')?.textContent === 'Canary Company'",
+                                timeout=5000,
+                            )
+                        page.evaluate(
+                            """
+                            ({route, screenId}) => {
+                              const target = document.getElementById(screenId);
+                              if (!target) throw new Error(`missing settled production screen ${screenId}`);
+                              if (route === 'performance') {
+                                target.querySelectorAll('.pf-alpha-details').forEach((details) => {
+                                  details.open = true;
+                                  details.setAttribute('data-conformance-state', 'expanded');
+                                });
+                              }
+                              document.querySelectorAll('[data-conformance-role]').forEach((node) => node.removeAttribute('data-conformance-role'));
+                              const firstVisible = (selector) => Array.from(target.querySelectorAll(selector))
+                                .find((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }) || null;
+                              const mark = (node, role) => { if (node) node.setAttribute('data-conformance-role', role); };
+                              target.setAttribute('data-conformance-route', route);
+                              mark(target, 'container');
+                              mark(firstVisible('input, select, a[href], button.k-btn-primary:not(.k-btn-sm), button.k-btn-sm, button'), 'control');
+                              mark(firstVisible('.k-card-title, .stat-number, h1, h2, h3'), 'type');
+                              mark(firstVisible('table'), 'table');
+                              mark(firstVisible('.stat-subtext, .k-card-meta, small'), 'help-footnote');
+                              const overlay = target.querySelector('#drillDrawer, #tradeModal, .company-picker-popover');
+                              mark(overlay, 'overlay');
+                              const dynamic = target.querySelector('[aria-live], [role="status"], [aria-busy]') || target;
+                              dynamic.setAttribute('data-conformance-dynamic', '1');
+                              dynamic.setAttribute('data-conformance-dynamic-state', 'ready');
+                              const reportHost = target.querySelector('.work-os-report-host');
+                              const reportDocument = reportHost && reportHost.shadowRoot
+                                ? reportHost.shadowRoot.querySelector('.k-doc') : null;
+                              if (reportDocument) {
+                                reportDocument.setAttribute('data-conformance-card-exemption', 'editorial-document');
+                              }
                             }
                             """,
                             {"route": route, "screenId": ROUTE_SCREEN_IDS[route]},
@@ -1042,7 +1364,7 @@ def _scan_route_canaries(
 def _route_population_failures(
     results: tuple[RouteCanaryResult, ...],
 ) -> tuple[RouteCanaryResult, ...]:
-    """Fail closed unless results contain the immutable five-by-two census."""
+    """Fail closed unless results contain the complete immutable route census."""
 
     keys = tuple((result.route, result.viewport) for result in results)
     actual = frozenset(keys)
@@ -1284,7 +1606,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--route-canaries",
         action="store_true",
-        help="run the committed five-route desktop+narrow Playwright matrix",
+        help="run the complete production-route desktop+narrow Playwright matrix",
     )
     return parser
 

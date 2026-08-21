@@ -93,8 +93,9 @@ def _expected_grid_signature(item: registry.GridSignature) -> str:
 
 
 def test_registry_is_frozen_typed_and_complete() -> None:
-    assert registry.REGISTRY_VERSION == "1.9.0"
+    assert registry.REGISTRY_VERSION == "1.10.0"
     records = (
+        registry.CARD_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0].signatures[0],
         registry.GRID_ARCHETYPES[0],
@@ -295,6 +296,24 @@ def test_registry_shape_grid_and_title_signatures_match_the_kit() -> None:
     for placement in registry.TITLE_PLACEMENTS:
         if placement.selector is not None:
             assert _rule_bodies(css, placement.selector)
+
+
+def test_card_archetypes_are_closed_unique_and_backed_by_kit_css() -> None:
+    css = controls_css("dark")
+    assert [item.name for item in registry.CARD_ARCHETYPES] == [
+        "section",
+        "stat",
+        "action",
+        "navigation",
+    ]
+    assert len({item.selector for item in registry.CARD_ARCHETYPES}) == len(
+        registry.CARD_ARCHETYPES
+    )
+    for item in registry.CARD_ARCHETYPES:
+        body = _rule_body(css, item.selector)
+        assert body
+        if item.title_selector is not None:
+            assert _rule_bodies(css, item.title_selector)
 
 
 def test_signature_comparators_turn_red_for_one_changed_value() -> None:

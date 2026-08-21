@@ -31,6 +31,7 @@ _ALPINE_JS = (Path(__file__).resolve().parent / "vendor" / "alpinejs-3.14.1.min.
 # root: the table must render WITHOUT JS (progressive enhancement), so it is
 # never hidden pending Alpine.
 LIVING_GRID_CSS = """<style>
+.lg { min-width: 0; max-width: 100%; overflow-x: auto; }
 .lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }
 .lg-filter { padding: 5px 9px; font-size: var(--fs-caption); font-family: var(--sans);
   background: var(--paper); color: var(--fg); border: 1px solid var(--border);

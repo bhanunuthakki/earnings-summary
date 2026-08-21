@@ -153,7 +153,7 @@ def work_os_contract_failures(
             failures.append(f"Work OS renderer missing production design contract {required!r}")
     action_classes = (
         "k-card",
-        "k-card-dense",
+        "k-card-action",
         "k-card-interactive",
         "k-card-row-title",
         "k-card-meta",

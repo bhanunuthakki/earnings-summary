@@ -239,12 +239,18 @@
 .k-btn-quiet { border-color: var(--border); color: var(--muted); }
 .k-btn-quiet:hover { color: var(--fg); border-color: var(--border-2); }
 .k-btn[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
+.k-card-action { padding: var(--sp-2) var(--sp-3); }
 .k-card-dense { padding: var(--sp-2) var(--sp-3); }
 .k-card-dense.k-card-stack { gap: var(--sp-2); }
+.k-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); min-width: 0; }
+.k-card-heading { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
 .k-card-interactive:hover { transform: translateY(var(--lift-md)); box-shadow: var(--shadow-card-hover); border-color: var(--border-2); }
 .k-card-meta { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.k-card-nav { display: flex; flex-direction: column; gap: var(--sp-1); }
 .k-card-row-title { margin: 0; font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
+.k-card-section { display: flex; flex-direction: column; gap: var(--sp-3); }
 .k-card-stack { display: flex; flex-direction: column; gap: var(--sp-3); }
+.k-card-stat { padding: 0; }
 .k-card-title { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
 .k-chip-accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .k-chip-bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
@@ -301,6 +307,13 @@
 .k-qa-who { font-family: var(--sans); font-size: var(--fs-caption); font-weight: 600; color: var(--fg-soft); }
 .k-qa:first-child { border-top: 0; padding-top: 0; }
 .k-scrim[hidden], .k-overlay[hidden] { display: none; }
+.k-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); min-width: 0; }
+.k-section-meta { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.k-section-title { margin: 0; font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
+.k-stat-cell { min-width: 0; padding: var(--sp-3); border-inline-start: var(--bw-thin) solid var(--hairline); }
+.k-stat-cell:first-child { border-inline-start: 0; }
+.k-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.k-table-shell { min-width: 0; overflow: hidden; background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
 .k-tick-name { font-family: var(--sans); font-weight: 400; font-size: var(--fs-caption); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: var(--ticker-name-width); }
 .k-tick-sym { font-family: var(--mono); font-weight: 600; letter-spacing: 0.02em; color: var(--fg); text-decoration: none; }
 .k-tick-sym-display { font-size: var(--fs-display); }
@@ -363,6 +376,7 @@
 .legend-swatch { width: 10px; height: 10px; border-radius: var(--bw-thick); }
 .lens-five_min_reread .lens-body strong { color: var(--fg); }
 .lens-panel .lens-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+.lg { min-width: 0; max-width: 100%; overflow-x: auto; }
 .lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }
 .lg-count { font-size: var(--fs-caption); }
 .lg-filter { padding: 5px 9px; font-size: var(--fs-caption); font-family: var(--sans); background: var(--paper); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius); min-width: 210px; }
@@ -837,6 +851,7 @@
 @keyframes k-overlay-rise { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 1080px) { .grid-2col, .grid-fin, .grid-thesis-top, .grid-thesis-bottom { grid-template-columns: 1fr; } }
 @media (max-width: 47.5rem) { .chat-sidebar.open { width: 100%; } .chat-sidebar .k-btn { min-block-size: var(--touch-target-size); } }
+@media (max-width: 47.5rem) { .k-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .k-stat-cell:nth-child(odd) { border-inline-start: 0; } .k-stat-cell:nth-child(n + 3) { border-block-start: var(--bw-thin) solid var(--hairline); } .k-card-head, .k-section-head { align-items: stretch; flex-direction: column; } }
 @media (max-width: 720px) { .dcf-edit-cols { grid-template-columns: 1fr; } }
 @media (max-width: 900px) { .cv2-pair { display: block; } }
 @media (prefers-reduced-motion: reduce) { .cc-act-leave, .cc-act-collapse { transition-duration: 0.01ms; } }

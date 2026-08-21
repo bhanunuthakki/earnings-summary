@@ -203,6 +203,32 @@ def test_work_os_shell_uses_live_backend_mounts_without_removing_old_endpoints()
     assert 'aria-live="polite"' in html
 
 
+def test_persistent_portfolio_and_audit_screens_are_live_first_not_prototypes() -> None:
+    html = render_work_os_shell()
+    expected_mounts = {
+        "screen-performance": "workOsPerformanceMount",
+        "screen-allocation": "workOsAllocationMount",
+        "screen-audit-log": "workOsAuditMount",
+    }
+
+    for screen_id, mount_id in expected_mounts.items():
+        fragment = _screen_fragment(html, screen_id)
+        assert f'id="{mount_id}"' in fragment
+        assert f'data-work-os-screen-id="{screen_id}"' in fragment
+        assert 'data-work-os-refresh-screen="' + screen_id + '"' in fragment
+        assert "Loading live" in fragment
+
+    # These values belonged to the visual prototype and must never impersonate
+    # current portfolio or decision state in the production shell.
+    for stale_prototype_value in ("+32.4%", "$1,284,500", "BKNG", "Sharpe Ratio"):
+        assert stale_prototype_value not in "".join(
+            _screen_fragment(html, screen_id) for screen_id in expected_mounts
+        )
+
+    assert "const workOsPersistentMountIds" in html
+    assert "data-work-os-refresh-screen" in html
+
+
 def test_live_backend_mount_executes_local_fragment_scripts_without_optional_htmx() -> None:
     html = render_work_os_shell()
 
@@ -210,6 +236,8 @@ def test_live_backend_mount_executes_local_fragment_scripts_without_optional_htm
     assert "script.replaceWith(replacement)" in html
     assert "workOsMountHtml(target, markup, endpoint)" in html
     assert "window.htmx" not in html
+    assert "window.livingGrid = window.livingGrid || function" in html
+    assert ".lg { min-width: 0; max-width: 100%; overflow-x: auto; }" in html
     assert "Live data loaded" not in html
     assert "Live data fetched" in html
     assert "const workOsRequests = new WeakMap()" in html
@@ -401,11 +429,11 @@ def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
 def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hydration() -> None:
     html = render_work_os_shell()
 
-    # The three static placeholders and the hydrated template share the same
-    # compact card geometry instead of visibly jumping after the API response.
-    assert html.count('class="k-card k-card-dense k-card-interactive"') >= 4
+    # Hydrated action rows use the one registered action-card recipe; loading
+    # state stays a semantic well instead of impersonating several cards.
+    assert 'class="k-card k-card-action k-card-interactive"' in html
     assert 'class="k-card k-card-interactive" style="padding:' not in html
-    assert html.count("k-card-row-title") >= 4
+    assert html.count("k-card-row-title") >= 1
     assert html.count('class="k-card-meta"') >= 4
 
     # Ordinary research headings use explicit title roles; metric cards retain
@@ -413,7 +441,7 @@ def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hyd
     assert '<h2 class="k-card-title" id="workOsBriefReaderTitle">' in html
     assert '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>' in html
     assert '<h3 class="k-card-title">' in html
-    assert 'class="k-card k-card-stack"><div class="stat-heading">Owner posture</div>' in html
+    assert 'class="k-stat-cell"><div class="stat-heading">Owner posture</div>' in html
     assert 'class="stat-number" id="deskOwnerState"' in html
 
 
@@ -424,33 +452,22 @@ def test_l1_card_titles_and_hydration_hooks_compose_the_registry_roles() -> None
         for screen_id in ("screen-cockpit", "screen-performance", "screen-allocation")
     )
 
-    assert '<div class="stat-heading">' not in target
-    assert target.count('<h3 class="k-card-title stat-heading">') == 12
-    assert '<div class="k-card-row-title">' not in _screen_fragment(html, "screen-cockpit")
-    assert (
-        _screen_fragment(html, "screen-cockpit").count('<h3 class="k-card-title k-card-row-title">')
-        == 3
-    )
-    assert _screen_fragment(html, "screen-allocation").count('<h3 class="k-well-title">') >= 4
+    cockpit = _screen_fragment(html, "screen-cockpit")
+    assert cockpit.count('<div class="stat-heading">') == 4
+    assert target.count('class="k-card k-card-section research-toolbar"') == 2
     performance = _screen_fragment(html, "screen-performance")
-    assert (
-        '<h2 class="k-card-title">Custom Metric & Time Horizon Analysis Engine</h2>' in performance
-    )
-    assert (
-        '<h2 class="k-card-title" style="margin-bottom: var(--sp-3);">'
-        "1-Year Relative Return Comparison</h2>"
-    ) in performance
-    assert (
-        '<div style="font-weight: 600; font-size: var(--fs-title);">'
-        "Custom Metric & Time Horizon Analysis Engine</div>"
-    ) not in performance
+    allocation = _screen_fragment(html, "screen-allocation")
+    assert '<h1 class="k-card-title">Performance vs Index</h1>' in performance
+    assert '<h1 class="k-card-title">Risk &amp; Allocations</h1>' in allocation
+    assert 'id="workOsPerformanceMount"' in performance
+    assert 'id="workOsAllocationMount"' in allocation
     assert "card.querySelector('.stat-heading')" in html
     assert (
         '<h3 class="k-card-title k-card-row-title">\' + escapeWorkOsHtml(action.headline)'
     ) in html
 
 
-def test_l1_card_grids_use_registry_archetypes_and_collapse_at_1100() -> None:
+def test_l1_live_shells_do_not_ship_prototype_card_grids_or_inline_geometry() -> None:
     html = render_work_os_shell()
     target = "".join(
         _screen_fragment(html, screen_id)
@@ -458,23 +475,13 @@ def test_l1_card_grids_use_registry_archetypes_and_collapse_at_1100() -> None:
     )
 
     assert "card-grid-stat-4col" not in target
-    assert target.count('class="card-grid-stat"') >= 3
-    assert (
-        ".card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, "
-        "minmax(var(--grid-card-sm), 1fr));"
-    ) in html
-    assert "@media (max-width: 1100px)" in html
-    assert "@media (max-width: 1024px) { .dashboard-2col { grid-template-columns: 1fr; } }" in html
-    assert "max-inline-size: calc(var(--grid-card-sm) + var(--grid-card-sm) + var(--sp-4));" in html
-    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" not in html
-    assert (
-        '#screen-cockpit [style*="display: flex"][style*="justify-content: space-between"]' in html
-    )
-    assert (
-        '#screen-performance [style*="display: flex"][style*="justify-content: space-between"]'
-        in html
-    )
-    assert "flex-wrap: wrap;" in html
+    assert 'class="card-grid-stat"' not in target
+    assert 'class="k-stat-grid" id="workOsPortfolioStats"' in target
+    assert '<header class="k-section-head">' in _screen_fragment(html, "screen-cockpit")
+    for screen_id in ("screen-performance", "screen-allocation"):
+        fragment = _screen_fragment(html, screen_id)
+        assert "style=" not in fragment
+        assert fragment.count('class="k-card k-card-section research-toolbar"') == 1
 
 
 def test_rendered_l1_shell_has_no_hidden_grid_signature_drift() -> None:
@@ -790,6 +797,22 @@ def test_cockpit_hydration_does_not_construct_company_desk() -> None:
     assert "workOsLaunchParams.get('ticker')" in html
     assert "workOsLaunchParams.get('screen')" in html
     assert "originalSwitchCompanyWorkspace" not in html
+
+
+def test_primary_work_os_cards_use_one_declared_composition_archetype() -> None:
+    html = render_work_os_shell()
+    cockpit = _screen_fragment(html, "screen-cockpit")
+    company = _screen_fragment(html, "screen-workspace")
+
+    assert 'class="k-card k-card-stat"' in cockpit
+    assert cockpit.count('class="k-stat-cell"') == 4
+    assert 'class="k-section-head"' in cockpit
+    assert 'class="k-section-title"' in cockpit
+    assert 'class="k-card k-card-action k-card-interactive"' in html
+    assert 'class="k-card k-card-section research-toolbar"' in company
+    assert 'class="k-card k-card-stat research-decision-band"' in company
+    assert company.count('class="k-card k-card-stack"><div class="stat-heading">') == 0
+    assert 'class="company-picker-popover k-overlay k-card-stack"' in company
 
 
 def test_mobile_inbox_is_the_same_responsive_cockpit() -> None:

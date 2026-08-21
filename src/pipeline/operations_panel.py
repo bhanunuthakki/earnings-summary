@@ -875,10 +875,10 @@ def _overview(view: OperationsPanelView) -> str:
     service_owned = sum(task.declared_owner == "Managed service" for task in view.tasks)
     return (
         '<div class="ops-summary-grid">'
-        f'<article class="k-well"><div class="k-label">Declared tasks</div><div class="k-card-title">{len(view.tasks)}</div></article>'
-        f'<article class="k-well"><div class="k-label">Execution steps</div><div class="k-card-title">{sum(len(task.steps) for task in view.tasks)}</div></article>'
-        f'<article class="k-well"><div class="k-label">Without attention</div><div class="k-card-title">{current}</div></article>'
-        f'<article class="k-well"><div class="k-label">Service-owned</div><div class="k-card-title">{service_owned}</div></article>'
+        f'<article class="k-well"><div class="k-label">Declared tasks</div><div class="stat-number">{len(view.tasks)}</div></article>'
+        f'<article class="k-well"><div class="k-label">Execution steps</div><div class="stat-number">{sum(len(task.steps) for task in view.tasks)}</div></article>'
+        f'<article class="k-well"><div class="k-label">Without attention</div><div class="stat-number">{current}</div></article>'
+        f'<article class="k-well"><div class="k-label">Service-owned</div><div class="stat-number">{service_owned}</div></article>'
         "</div>"
         '<div class="k-well k-well-warn"><div class="k-card-row-title">Attention is evidence-based</div>'
         f"<p>{view.attention_count} operational or governance observation(s) need attention. Missing, stale, or invalid evidence never becomes a healthy claim.</p></div>"
@@ -1000,7 +1000,7 @@ def render_operations_panel(view: OperationsPanelView) -> str:
         for item in OPERATIONS_RELATED_VIEWS
     )
     return f"""
-<section class="k-card k-card-stack operations-panel" aria-labelledby="operations-title">
+<section class="k-card k-card-section operations-panel" aria-labelledby="operations-title">
   {OPERATIONS_STYLE}
   <div class="k-toolbar">
     <div><h1 class="k-card-title" id="operations-title">Operations</h1>
@@ -1169,12 +1169,12 @@ def render_operations_shell() -> str:
         'aria-label="Operations">'
         '<div class="k-grid-split-rail" data-layout-signature="k-grid-split-rail">'
         '<div id="workOsOperationsMount">'
-        '<section class="k-card k-card-stack">'
+        '<section class="k-card k-card-section">'
         '<h1 class="k-card-title">Operations</h1>'
         '<div class="k-card-meta" role="status">Loading declared ownership and runtime '
         "evidence…</div>"
         "</section></div>"
-        '<aside class="k-card k-card-stack" role="complementary" '
+        '<aside class="k-card k-card-section" role="complementary" '
         'aria-labelledby="workOsOperationsRailHeading">'
         '<h2 class="k-card-title" id="workOsOperationsRailHeading">Governance context</h2>'
         '<div class="k-well" role="status">Live operation observations load from the governed '

@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 from flask.testing import FlaskClient
 
 # `execution/` isn't on sys.path by default; only `src/` (via pyproject pythonpath).
@@ -279,7 +280,12 @@ def test_dashboard_page_returns_shell(client: FlaskClient) -> None:
     allocation = client.get("/api/panel/portfolio_allocation")
     assert allocation.status_code == 200
     allocation_body = allocation.get_data(as_text=True)
-    assert 'hx-get="/api/panel/portfolio"' in allocation_body
+    # Work OS does not load HTMX. Performance must therefore arrive fully
+    # rendered inside the on-demand allocation route rather than remaining a
+    # dead revealed-trigger placeholder.
+    assert 'id="csec-performance"' in allocation_body
+    assert 'hx-get="/api/panel/portfolio"' not in allocation_body
+    assert BeautifulSoup(allocation_body, "html.parser").select(".cc-loading") == []
 
     health = client.get("/api/panel/portfolio_health")
     assert health.status_code == 200

@@ -178,10 +178,10 @@ python execution/verify_design_conformance.py --check --route-canaries
 python -m pytest tests/test_design_registry.py tests/test_design_conformance_canonical.py tests/test_design_sync.py tests/test_ui_controls.py -q
 ```
 
-The hosted route-canary matrix uses production-rendered Work OS seams at desktop
-and narrow widths. Missing evidence or a role/geometry/focus/motion/state failure
-blocks the job. Instrumentation may annotate real nodes, but cannot replace a
-route with parallel HTML/CSS or satisfy it from another hidden surface.
+The route-canary matrix uses production Work OS renders at both widths. Persistent
+routes equal the screen registry plus named transient readers; it waits for hydration,
+walks light/open-shadow DOM and checks every boxed surface for exact archetype, anatomy, type, spacing, shape, depth, alignment,
+viewport fit, and reduced motion. Missing evidence or a loading shell blocks.
 
 Report-renderer changes require workspace golden regeneration and diff review;
 generated React changes require the design-system check/build.

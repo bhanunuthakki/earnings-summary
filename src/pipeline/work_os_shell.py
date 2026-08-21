@@ -30,6 +30,7 @@ from pipeline.work_os_research import (
 )
 from pipeline.work_os_styles import WORK_OS_CSS
 from ui.controls import controls_css
+from ui.living_grid import head_assets as living_grid_head_assets
 from ui.tokens import FAVICON_LINK, palette_css
 
 
@@ -135,6 +136,21 @@ _PIPELINE_SIMULATION_RE = re.compile(
     r"\n\s*\}\n\n\s*// AUDIT LOG FILTERING",
     re.DOTALL,
 )
+_COCKPIT_SECTION_RE = re.compile(
+    r'<section id="screen-cockpit".*?</section>\s*'
+    r"(?=<!-- =+\s*SURFACE: PORTFOLIO PERFORMANCE)",
+    re.DOTALL,
+)
+_PERFORMANCE_SECTION_RE = re.compile(
+    r'<section id="screen-performance".*?</section>\s*'
+    r"(?=<!-- =+\s*SURFACE: PORTFOLIO ALLOCATION)",
+    re.DOTALL,
+)
+_ALLOCATION_SECTION_RE = re.compile(
+    r'<section id="screen-allocation".*?</section>\s*'
+    r"(?=<!-- =+\s*SURFACE 2: COMPANY RESEARCH WORKSPACE)",
+    re.DOTALL,
+)
 _COMPANY_DESK_SECTION_RE = re.compile(
     r'<section id="screen-workspace".*?</section>\s*'
     r"(?=<!-- =+\s*BRIEF LIBRARY PERSISTENT DESTINATION)",
@@ -155,6 +171,11 @@ _FACT_PLAYGROUND_RUNTIME_RE = re.compile(
     r"\n\s*// EMBEDDED DCF SLIDERS INSIDE REPORT",
     re.DOTALL,
 )
+_AUDIT_SECTION_RE = re.compile(
+    r'<section id="screen-audit-log".*?</section>\s*'
+    r"(?=<!-- =+\s*SURFACE 4: EXECUTION QUEUE)",
+    re.DOTALL,
+)
 _OPERATIONS_SECTION_RE = re.compile(
     r'<section id="screen-execution-queue".*?</section>\s*'
     r"(?=</div>\s*</main>)",
@@ -164,6 +185,90 @@ _OPERATIONS_SECTION_RE = re.compile(
 
 def _endpoint_map() -> dict[str, str]:
     return {screen.screen_id: screen.endpoint for screen in SCREEN_SPECS}
+
+
+def _render_portfolio_cockpit_shell() -> str:
+    """Return the live-first portfolio landing surface with one card grammar."""
+
+    stats = "".join(
+        f"""<div class="k-stat-cell">
+          <div class="stat-heading">{label}</div>
+          <div class="stat-number">—</div>
+          <div class="stat-subtext">Loading governed portfolio state</div>
+        </div>"""
+        for label in ("Portfolio NAV", "Performance", "Risk & Factors", "Portfolio Companies")
+    )
+    return f"""
+<section id="screen-cockpit" class="screen-view is-active">
+  <section class="k-card k-card-stat" aria-labelledby="workOsPortfolioPulseHeading">
+    <header class="k-card-head work-os-stat-head">
+      <div class="k-card-heading">
+        <div class="k-card-meta">Portfolio Intelligence</div>
+        <h1 class="k-card-title" id="workOsPortfolioPulseHeading">Portfolio pulse</h1>
+        <p class="k-card-meta">Current governed book state and live research coverage</p>
+      </div>
+    </header>
+    <div class="k-stat-grid" id="workOsPortfolioStats">{stats}</div>
+  </section>
+
+  <section class="work-os-section" aria-labelledby="workOsActionHeading">
+    <header class="k-section-head">
+      <h2 class="k-section-title" id="workOsActionHeading">Action Queue &amp; Review Pack</h2>
+      <p class="k-section-meta">Completing an item clears it from this session</p>
+    </header>
+    <div id="workOsActionQueue" class="work-os-action-queue">
+      <div class="k-well" role="status">Loading material portfolio-company reviews…</div>
+    </div>
+  </section>
+
+  <section class="work-os-section" aria-labelledby="workOsHoldingsHeading">
+    <header class="k-section-head">
+      <h2 class="k-section-title" id="workOsHoldingsHeading">Portfolio holdings &amp; active coverage</h2>
+      <p class="k-section-meta">Open a company for its current decision workspace</p>
+    </header>
+    <div class="k-table-shell">
+      <table class="matrix-table">
+        <thead><tr>
+          <th>Ticker / Company</th><th>Position &amp; Weight</th><th class="num">Price / Target</th>
+          <th>Thesis / Falsifier Status</th><th>Earnings Brief &amp; Full Canvas</th>
+          <th class="num">Action / Threshold</th>
+        </tr></thead>
+        <tbody id="workOsPortfolioRows"><tr><td colspan="6"><div class="k-well" role="status">Loading governed portfolio companies…</div></td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</section>
+""".strip()
+
+
+def _render_live_screen_shell(
+    *,
+    screen_id: str,
+    mount_id: str,
+    layer: str,
+    title: str,
+    description: str,
+) -> str:
+    """Return a truthful on-demand shell for one persistent Work OS screen."""
+
+    return f"""
+<section id="{escape(screen_id)}" class="screen-view">
+  <div class="research-screen">
+    <header class="k-card k-card-section research-toolbar">
+      <div class="k-card-heading">
+        <div class="k-card-meta">{escape(layer)}</div>
+        <h1 class="k-card-title">{escape(title)}</h1>
+        <p class="k-card-meta">{escape(description)}</p>
+      </div>
+      <button type="button" class="k-btn k-btn-quiet k-btn-sm"
+        data-work-os-refresh-screen="{escape(screen_id)}">Refresh live view</button>
+    </header>
+    <div id="{escape(mount_id)}" data-work-os-screen-id="{escape(screen_id)}">
+      <div class="k-well" role="status">Loading live {escape(title)}…</div>
+    </div>
+  </div>
+</section>
+""".strip()
 
 
 def _nav_button(match: re.Match[str]) -> str:
@@ -204,6 +309,11 @@ def _production_runtime(generated_at: datetime) -> str:
   const workOsLaunchParams = new URLSearchParams(window.location.search);
   const workOsRequestedScreen = workOsLaunchParams.get('screen');
   const workOsRequestedTicker = String(workOsLaunchParams.get('ticker') || '').toUpperCase();
+  const workOsPersistentMountIds = {{
+    'screen-performance': 'workOsPerformanceMount',
+    'screen-allocation': 'workOsAllocationMount',
+    'screen-audit-log': 'workOsAuditMount'
+  }};
   const originalOpenDrillDrawer = window.openDrillDrawer;
   const originalCloseDrillDrawer = window.closeDrillDrawer;
   const originalOpenPeekDrawer = window.openPeekDrawer;
@@ -940,11 +1050,11 @@ def _production_runtime(generated_at: datetime) -> str:
       const showBriefs = !selectedKind || selectedKind === 'full_brief';
       const readoutCards = showReadouts ? readoutItems.map(function (readout) {{
         const generated = readout.generated_at ? String(readout.generated_at).slice(0, 10) : 'generation time unavailable';
-        return '<article class="k-card k-card-stack research-library-card" data-readout-id="' + escapeWorkOsHtml(readout.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(readout.ticker) + '</span><span class="k-pill k-pill-ok">available</span></div><div><div class="k-card-meta">earnings readout</div><h3 class="k-card-title">' + escapeWorkOsHtml(readout.ticker + ' ' + readout.period_label + ' earnings readout') + '</h3><div class="k-card-meta">quarter ended ' + escapeWorkOsHtml(readout.fiscal_period) + ' · ' + escapeWorkOsHtml(readout.coverage_role || 'tracked') + ' · generated ' + escapeWorkOsHtml(generated) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-readout data-peek-url="' + escapeWorkOsHtml(readout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(readout.ticker) + '">Read earnings readout &rarr;</button></article>';
+        return '<article class="k-card k-card-section research-library-card" data-readout-id="' + escapeWorkOsHtml(readout.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(readout.ticker) + '</span><span class="k-pill k-pill-ok">available</span></div><div><div class="k-card-meta">earnings readout</div><h3 class="k-card-title">' + escapeWorkOsHtml(readout.ticker + ' ' + readout.period_label + ' earnings readout') + '</h3><div class="k-card-meta">quarter ended ' + escapeWorkOsHtml(readout.fiscal_period) + ' · ' + escapeWorkOsHtml(readout.coverage_role || 'tracked') + ' · generated ' + escapeWorkOsHtml(generated) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-readout data-peek-url="' + escapeWorkOsHtml(readout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(readout.ticker) + '">Read earnings readout &rarr;</button></article>';
       }}).join('') : '';
       const briefCards = showBriefs && items.length ? items.map(function (item) {{
         const statusClass = item.status === 'available' ? 'k-pill k-pill-ok' : 'k-pill k-pill-warn';
-        return '<article class="k-card k-card-stack research-library-card" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(item.ticker) + '</span><span class="' + statusClass + '">' + escapeWorkOsHtml(item.status) + '</span></div><div><div class="k-card-meta">' + escapeWorkOsHtml(item.artifact_kind.replaceAll('_', ' ')) + '</div><h3 class="k-card-title">' + escapeWorkOsHtml(item.title) + '</h3><div class="k-card-meta">' + escapeWorkOsHtml(item.report_date) + ' · ' + escapeWorkOsHtml(item.coverage_role) + ' · ' + escapeWorkOsHtml(item.reader_mode) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-open-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">Read complete brief →</button></article>';
+        return '<article class="k-card k-card-section research-library-card" data-artifact-id="' + escapeWorkOsHtml(item.artifact_id) + '"><div class="research-row"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(item.ticker) + '</span><span class="' + statusClass + '">' + escapeWorkOsHtml(item.status) + '</span></div><div><div class="k-card-meta">' + escapeWorkOsHtml(item.artifact_kind.replaceAll('_', ' ')) + '</div><h3 class="k-card-title">' + escapeWorkOsHtml(item.title) + '</h3><div class="k-card-meta">' + escapeWorkOsHtml(item.report_date) + ' · ' + escapeWorkOsHtml(item.coverage_role) + ' · ' + escapeWorkOsHtml(item.reader_mode) + '</div></div><button class="k-btn k-btn-primary k-btn-sm" type="button" data-open-artifact="' + escapeWorkOsHtml(item.artifact_id) + '">Read complete brief →</button></article>';
       }}).join('') : '';
       target.innerHTML = readoutCards + briefCards || '<div class="k-well"><p>No persisted research artifacts match these filters.</p><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-clear-brief-filters aria-label="Clear Brief Library filters">Clear filters</button></div>';
       target.querySelectorAll('[data-open-artifact]').forEach(function (button) {{
@@ -988,7 +1098,7 @@ def _production_runtime(generated_at: datetime) -> str:
     const companies = payload.companies || [];
     const stats = document.getElementById('workOsPortfolioStats');
     if (stats) {{
-      const cards = stats.querySelectorAll('.k-card');
+      const cards = stats.querySelectorAll('.k-stat-cell');
       const labels = ['Portfolio NAV', 'Performance', 'Risk & Factors', 'Portfolio Companies'];
       const values = [workOsMoney(payload.total_market_value), 'Open live view', 'Open live view', String(companies.length)];
       const details = [payload.as_of ? 'As of ' + payload.as_of : 'Tracker offline - research data only', 'Performance vs Index', 'Risk & Allocations', 'Governed portfolio universe'];
@@ -1006,10 +1116,10 @@ def _production_runtime(generated_at: datetime) -> str:
     const actionQueue = document.getElementById('workOsActionQueue');
     if (actionQueue) {{
       actionQueue.innerHTML = payload.actions.length ? payload.actions.map(function (action) {{
-        return '<div class="k-card k-card-dense k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
+        return '<article class="k-card k-card-action k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
           '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-title k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
           '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div></div></div>' +
-          '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company &rarr;</button></div></div>';
+          '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company &rarr;</button></div></article>';
       }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
     }}
     const rows = document.getElementById('workOsPortfolioRows');
@@ -1230,6 +1340,11 @@ def _production_runtime(generated_at: datetime) -> str:
     if (target === 'screen-brief-library') workOsRenderBriefLibrary();
     if (target === 'screen-analytics-playground') workOsRenderFactPlayground();
     originalNavigateTo(target);
+    const persistentMountId = workOsPersistentMountIds[target];
+    const persistentMount = persistentMountId ? document.getElementById(persistentMountId) : null;
+    if (persistentMount && persistentMount.dataset.loadedEndpoint !== workOsEndpoint(target)) {{
+      workOsLoadScreen(target, persistentMount);
+    }}
     if (target === 'screen-execution-queue') {{
       const operationsMount = document.getElementById('workOsOperationsMount');
       if (operationsMount && operationsMount.dataset.loadedEndpoint !== workOsEndpoint(target)) {{
@@ -1415,6 +1530,16 @@ def _production_runtime(generated_at: datetime) -> str:
   window.workOsLoadScreen = workOsLoadScreen;
 
   document.addEventListener('click', function (event) {{
+    const refresh = event.target && event.target.closest
+      ? event.target.closest('[data-work-os-refresh-screen]')
+      : null;
+    if (refresh) {{
+      const screenId = refresh.dataset.workOsRefreshScreen;
+      const mountId = workOsPersistentMountIds[screenId];
+      const mount = mountId ? document.getElementById(mountId) : null;
+      if (mount) workOsLoadScreen(screenId, mount);
+      return;
+    }}
     const retry = event.target && event.target.closest
       ? event.target.closest('[data-work-os-retry]')
       : null;
@@ -1532,6 +1657,31 @@ def _add_production_contract(
         '<span class="nav-text">Operations</span>',
         1,
     )
+    html = _COCKPIT_SECTION_RE.sub(_render_portfolio_cockpit_shell() + "\n\n      ", html, count=1)
+    html = _PERFORMANCE_SECTION_RE.sub(
+        _render_live_screen_shell(
+            screen_id="screen-performance",
+            mount_id="workOsPerformanceMount",
+            layer="Portfolio Intelligence",
+            title="Performance vs Index",
+            description="Live portfolio performance, attribution, and capital-deployment context",
+        )
+        + "\n\n      ",
+        html,
+        count=1,
+    )
+    html = _ALLOCATION_SECTION_RE.sub(
+        _render_live_screen_shell(
+            screen_id="screen-allocation",
+            mount_id="workOsAllocationMount",
+            layer="Portfolio Intelligence",
+            title="Risk & Allocations",
+            description="Live thesis health, concentration, crowding, and downside evidence",
+        )
+        + "\n\n      ",
+        html,
+        count=1,
+    )
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
     html = _FACT_PLAYGROUND_SECTION_RE.sub(
@@ -1543,23 +1693,19 @@ def _add_production_contract(
         count=1,
     )
     html = html.replace("      updateFactPlaygroundTable();\n", "", 1)
+    html = _AUDIT_SECTION_RE.sub(
+        _render_live_screen_shell(
+            screen_id="screen-audit-log",
+            mount_id="workOsAuditMount",
+            layer="Operations & Governance",
+            title="Decision Audit Log",
+            description="Live decisions, memos, triggers, and the governed research record",
+        )
+        + "\n\n      ",
+        html,
+        count=1,
+    )
     html = _OPERATIONS_SECTION_RE.sub(render_operations_shell() + "\n      ", html, count=1)
-    html = html.replace(
-        '<div class="card-grid-stat">',
-        '<div class="card-grid-stat" id="workOsPortfolioStats">',
-        1,
-    )
-    html = html.replace(
-        "Action Queue & Review Pack (3 Items)",
-        '<span id="workOsActionHeading">Action Queue & Review Pack</span>',
-        1,
-    )
-    html = html.replace(
-        '<div class="work-os-action-queue">\n            <!-- Action Card 1 -->',
-        '<div id="workOsActionQueue" class="work-os-action-queue">\n            <!-- Action Card 1 -->',
-        1,
-    )
-    html = html.replace("<tbody>", '<tbody id="workOsPortfolioRows">', 1)
     html = html.replace(
         '<div class="sidebar-cmd" onclick="openWorkOsCopilot()">',
         '<button type="button" class="sidebar-cmd k-btn k-btn-quiet" aria-label="Search or ask" onclick="openWorkOsCopilot()">',
@@ -1651,9 +1797,12 @@ def _add_production_contract(
     controls = (
         f'<style id="work-os-controls-css">{palette_css("dark")}{controls_css("dark")}</style>'
     )
+    grid_assets = living_grid_head_assets()
     return html.replace(
         "</body>",
         controls
+        + "\n"
+        + grid_assets
         + "\n"
         + reader
         + f'\n<script id="work-os-explore-runtime">{EXPLORE_PANEL_JS}</script>\n'

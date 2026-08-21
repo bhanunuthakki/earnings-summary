@@ -1524,7 +1524,7 @@ def test_nested_static_brace_specs_reconstruct_before_scanning(tmp_path: Path) -
 
 
 def test_registry_contract_is_versioned_for_importable_scanner() -> None:
-    assert registry.REGISTRY_VERSION == "1.9.0"
+    assert registry.REGISTRY_VERSION == "1.10.0"
     exemptions = {entry.surface: entry for entry in registry.PERMANENT_EXEMPTIONS}
     scanner = exemptions["ui/conformance_scan.py"]
     assert scanner.owner == "design-system"
@@ -1595,7 +1595,7 @@ def test_cli_check_uses_shared_scanner_for_all_four_dimensions(tmp_path: Path) -
     result = _run_cli("--check", "--source-root", str(source_root))
     assert result.returncode == 1, result.stderr
     receipt = json.loads(result.stdout)
-    assert receipt["schema_version"] == "1.2.0"
+    assert receipt["schema_version"] == "1.3.0"
     assert receipt["emitter_evidence"]
     assert receipt["emitter_mismatches"] == []
     assert receipt["registry_version"] == registry.REGISTRY_VERSION
