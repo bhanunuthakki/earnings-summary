@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -18,6 +20,7 @@ from models.facts import (
     SegmentDimType,
     Unit,
 )
+from pipeline.issuer_document_coverage import persist_document_coverage_receipt
 from pipeline.issuer_fact_manifest import (
     MAX_EXTRACTED_AT_FUTURE_SKEW,
     IssuerFactManifest,
@@ -160,6 +163,95 @@ def test_apply_is_atomic_and_receipt_replays(
         assert second.coverage_receipts_created == 0
         assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM issuer_fact_coverage_receipts").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_receipt_hash_binds_canonical_application_manifest_across_clean_databases(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pipeline.restatement_detector as restatement_detector
+
+    monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
+    baseline = _manifest()
+    changed_kpi = baseline.values[0].model_copy(
+        update={
+            "value": Decimal("1001"),
+            "locator": FactLocator(
+                pdf_page=4,
+                kind=LocatorKind.PDF_SLIDE,
+                verbatim_snippet="TPV 1,001",
+            ),
+            "source_excerpt": "Total payment volume was 1,001 million",
+        }
+    )
+    changed = baseline.model_copy(update={"values": (changed_kpi, baseline.values[1])})
+    receipt_hashes: list[tuple[str, ...]] = []
+
+    for name, manifest in (("baseline", baseline), ("changed", changed)):
+        db_path = migrated_db(tmp_path / f"manifest-receipt-{name}.db")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            _document(conn)
+            conn.commit()
+            result = apply_issuer_fact_manifest(conn, manifest, apply=True)
+            assert result.receipt is not None
+            assert result.receipt.application_manifest_json == manifest.canonical_json
+            assert result.receipt.application_manifest_sha256 == manifest.manifest_sha256
+            receipt_hashes.append(
+                tuple(
+                    str(row[0])
+                    for row in conn.execute(
+                        "SELECT receipt_sha256 FROM issuer_fact_coverage_receipts "
+                        "ORDER BY fact_identity"
+                    ).fetchall()
+                )
+            )
+        finally:
+            conn.close()
+
+    assert receipt_hashes[0] != receipt_hashes[1]
+
+
+def test_persistence_rejects_tampered_application_manifest_evidence(
+    migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = migrated_db(tmp_path / "manifest-receipt-tamper.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _document(conn)
+        conn.commit()
+        import pipeline.restatement_detector as restatement_detector
+
+        monkeypatch.setattr(restatement_detector, "resolve_fact_row", _noop_resolve)
+        result = apply_issuer_fact_manifest(conn, _manifest(), apply=True)
+        assert result.receipt is not None
+        payload = json.loads(result.receipt.application_manifest_json or "{}")
+        payload["source_doc_sha256"] = "b" * 64
+        tampered_json = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        unpaired = result.receipt.model_copy(update={"application_manifest_sha256": None})
+        with pytest.raises(ValueError, match="must be supplied together"):
+            persist_document_coverage_receipt(conn, unpaired)
+        hash_mismatch = result.receipt.model_copy(
+            update={"application_manifest_json": tampered_json}
+        )
+        with pytest.raises(ValueError, match="manifest hash does not match"):
+            persist_document_coverage_receipt(conn, hash_mismatch)
+        tampered = result.receipt.model_copy(
+            update={
+                "application_manifest_json": tampered_json,
+                "application_manifest_sha256": hashlib.sha256(
+                    tampered_json.encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+        with pytest.raises(ValueError, match="source SHA-256 must match"):
+            persist_document_coverage_receipt(conn, tampered)
         assert conn.execute("SELECT COUNT(*) FROM issuer_fact_coverage_receipts").fetchone()[0] == 2
     finally:
         conn.close()

@@ -144,6 +144,8 @@ class IssuerDocumentCoverageReceipt(_CoverageModel):
     population_frame_sha256: str | None = None
     rejection_frame_json: str | None = None
     rejection_frame_sha256: str | None = None
+    application_manifest_json: str | None = None
+    application_manifest_sha256: str | None = None
     results: list[IssuerFactCoverageResult]
 
     @model_validator(mode="after")
@@ -186,6 +188,35 @@ class IssuerDocumentCoverageReceipt(_CoverageModel):
         for result in rejected:
             if frame.rejected.get(result.expected.identity_key) != result.rejection_reason:
                 raise ValueError("rejected result must match the authoritative extractor frame")
+        return self
+
+    @model_validator(mode="after")
+    def _application_manifest_evidence_is_bound(self) -> IssuerDocumentCoverageReceipt:
+        manifest_json = self.application_manifest_json
+        manifest_sha256 = self.application_manifest_sha256
+        if (manifest_json is None) != (manifest_sha256 is None):
+            raise ValueError("application manifest JSON and SHA-256 must be supplied together")
+        if manifest_json is None or manifest_sha256 is None:
+            return self
+        if hashlib.sha256(manifest_json.encode("utf-8")).hexdigest() != manifest_sha256:
+            raise ValueError("application manifest hash does not match manifest evidence")
+        try:
+            decoded: object = json.loads(manifest_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("application manifest evidence must be valid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("application manifest evidence must be a JSON object")
+        payload = cast("dict[str, object]", decoded)
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        if canonical != manifest_json:
+            raise ValueError("application manifest evidence must use canonical JSON")
+        if payload.get("schema_version") != "issuer_fact_manifest.v1":
+            raise ValueError("application manifest evidence has an unsupported schema version")
+        if payload.get("source_doc_id") != self.document_id:
+            raise ValueError("application manifest document must match receipt document")
+        ticker = payload.get("ticker")
+        if not isinstance(ticker, str) or ticker.upper() != self.ticker.upper():
+            raise ValueError("application manifest ticker must match receipt ticker")
         return self
 
     @property
@@ -593,6 +624,8 @@ def build_document_coverage_receipt(
     rejection_frame_sha256: str | None = None,
     population_frame_json: str | None = None,
     population_frame_sha256: str | None = None,
+    application_manifest_json: str | None = None,
+    application_manifest_sha256: str | None = None,
 ) -> IssuerDocumentCoverageReceipt:
     """Reconcile one issuer document's declared facts without mutating the DB.
 
@@ -654,6 +687,8 @@ def build_document_coverage_receipt(
         population_frame_sha256=population_frame_sha256,
         rejection_frame_json=rejection_frame_json,
         rejection_frame_sha256=rejection_frame_sha256,
+        application_manifest_json=application_manifest_json,
+        application_manifest_sha256=application_manifest_sha256,
         results=results,
     )
 
@@ -664,6 +699,8 @@ def reconcile_extractor_fact_population(
     *,
     as_of: datetime | None = None,
     stale_before: datetime | None = None,
+    application_manifest_json: str | None = None,
+    application_manifest_sha256: str | None = None,
 ) -> IssuerDocumentCoverageReceipt:
     """Read-only reconciliation entry point for a persisted extractor frame."""
     frame_json = json.dumps(
@@ -682,6 +719,8 @@ def reconcile_extractor_fact_population(
         rejection_frame_sha256=frame_sha256 if frame.rejected else None,
         population_frame_json=frame_json if not frame.expected else None,
         population_frame_sha256=frame_sha256 if not frame.expected else None,
+        application_manifest_json=application_manifest_json,
+        application_manifest_sha256=application_manifest_sha256,
     )
 
 
@@ -744,6 +783,26 @@ def validate_receipt_against_sqlite(
         or _utc(receipt.source_fetched_at) != _parse_datetime(document["fetched_at"])
     ):
         raise ValueError("receipt document header must exactly match the referenced document")
+    if receipt.application_manifest_json is not None:
+        manifest_payload = cast("dict[str, object]", json.loads(receipt.application_manifest_json))
+        try:
+            source_sha_row = conn.execute(
+                "SELECT sha256 FROM documents WHERE id = ?", (receipt.document_id,)
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            raise CoverageSchemaError(
+                "application manifest validation requires documents.sha256"
+            ) from exc
+        if source_sha_row is None or source_sha_row[0] is None:
+            raise ValueError("application manifest source document must have a persisted SHA-256")
+        manifest_source_sha = manifest_payload.get("source_doc_sha256")
+        if (
+            not isinstance(manifest_source_sha, str)
+            or manifest_source_sha.lower() != str(source_sha_row[0]).lower()
+        ):
+            raise ValueError(
+                "application manifest source SHA-256 must match the referenced document"
+            )
     for result in receipt.results:
         expected = result.expected
         if expected.ticker.upper() != receipt.ticker.upper():

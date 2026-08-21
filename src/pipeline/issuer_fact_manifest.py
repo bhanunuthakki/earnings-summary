@@ -174,10 +174,13 @@ class IssuerFactManifest(BaseModel):
         return self
 
     @property
-    def manifest_sha256(self) -> str:
+    def canonical_json(self) -> str:
         payload = self.model_dump(mode="json")
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    @property
+    def manifest_sha256(self) -> str:
+        return hashlib.sha256(self.canonical_json.encode("utf-8")).hexdigest()
 
 
 class IssuerManifestApplyResult(BaseModel):
@@ -484,7 +487,12 @@ def apply_issuer_fact_manifest(
     try:
         kpi_inserted, kpi_skipped = _apply_kpis(conn, manifest)
         period_inserted, segment_inserted = _apply_segments(conn, manifest)
-        receipt = reconcile_extractor_fact_population(conn, frame)
+        receipt = reconcile_extractor_fact_population(
+            conn,
+            frame,
+            application_manifest_json=manifest.canonical_json,
+            application_manifest_sha256=manifest.manifest_sha256,
+        )
         if receipt.missing_count:
             raise ValueError(
                 f"issuer manifest left {receipt.missing_count} expected fact(s) missing"
