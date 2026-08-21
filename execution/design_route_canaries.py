@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import sqlite3
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
@@ -19,7 +20,13 @@ from tempfile import TemporaryDirectory
 from bs4 import BeautifulSoup
 
 from pipeline.explore_panel import render_explore_panel
-from pipeline.work_os_shell import render_work_os_shell
+from pipeline.operations_panel import OperationsPanelView, render_operations_panel
+from pipeline.portfolio_console_panel import (
+    render_portfolio_allocation_panel,
+    render_portfolio_health_panel,
+    render_portfolio_record_panel,
+)
+from pipeline.work_os_shell import SCREEN_SPECS, render_work_os_shell
 from report.legacy_body import extract_legacy_reader_body
 from report.models import (
     AppendixSection,
@@ -44,15 +51,30 @@ from report.renderers.workspace_styles import READER_OVERRIDE_CSS
 
 ROUTE_SCREEN_IDS: dict[str, str] = {
     "cockpit": "screen-cockpit",
+    "performance": "screen-performance",
+    "risk-allocations": "screen-allocation",
     "company-desk": "screen-workspace",
     "brief-library": "screen-brief-library",
     "fact-metric-playground": "screen-analytics-playground",
+    "decision-audit": "screen-audit-log",
     "operations": "screen-execution-queue",
     # The reader is mounted by the production shell beside the library. The
     # canary targets that actual reader seam rather than relabelling the
     # inventory screen as a full brief.
     "full-brief": "workOsBriefReader",
 }
+
+_PERSISTENT_SCREEN_IDS = frozenset(
+    screen_id for route, screen_id in ROUTE_SCREEN_IDS.items() if route != "full-brief"
+)
+_DECLARED_SCREEN_IDS = frozenset(screen.screen_id for screen in SCREEN_SPECS)
+if _PERSISTENT_SCREEN_IDS != _DECLARED_SCREEN_IDS:
+    missing = sorted(_DECLARED_SCREEN_IDS - _PERSISTENT_SCREEN_IDS)
+    unexpected = sorted(_PERSISTENT_SCREEN_IDS - _DECLARED_SCREEN_IDS)
+    raise RuntimeError(
+        "design route census must exactly match SCREEN_SPECS; "
+        f"missing={missing!r}, unexpected={unexpected!r}"
+    )
 
 _CANARY_TIMESTAMP = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -127,6 +149,132 @@ def _canary_explore_fragment() -> str:
         )
 
 
+def _canary_operations_fragment() -> str:
+    """Render the production Operations fragment from a deterministic typed view."""
+
+    return render_operations_panel(
+        OperationsPanelView(
+            observed_label="Observed 2026-01-01 00:00 UTC",
+            attention_count=0,
+            runtime_summary_tone="ok",
+            tasks=(),
+            runtime_rows=(),
+        )
+    )
+
+
+def _canary_shell_payloads() -> dict[str, object]:
+    """Return production-schema payloads for dynamic shell card populations."""
+
+    company = {
+        "ticker": "NU",
+        "name": "Canary Company",
+        "coverage_role": "portfolio",
+        "current_weight_pct": 4.2,
+        "price": 12.0,
+        "fair_value": 15.0,
+        "thesis_status": "intact",
+        "report_url": "/reports/NU",
+        "earnings_route": "/api/peek/earnings-readout?ticker=NU",
+        "earnings_label": "Open earnings research",
+    }
+    brief = {
+        "artifact_id": "design-canary-brief",
+        "ticker": "NU",
+        "title": "NU Complete Research Brief",
+        "report_date": "2026-01-01",
+        "coverage_role": "portfolio",
+        "reader_mode": "shared_body",
+        "artifact_kind": "full_brief",
+        "status": "available",
+        "body_url": "/design-canary/body",
+        "standalone_url": "/reports/NU",
+    }
+    return {
+        "portfolio": {
+            "status": "ok",
+            "as_of": "2026-01-01",
+            "total_market_value": 100000.0,
+            "companies": [company],
+            "actions": [
+                {
+                    "ticker": "NU",
+                    "headline": "Review the canary thesis",
+                    "detail": "Deterministic dynamic action-card population",
+                }
+            ],
+            "earnings_readouts": [
+                {
+                    "artifact_id": "design-canary-readout",
+                    "ticker": "NU",
+                    "period_label": "Q4 2025",
+                    "fiscal_period": "2025-12-31",
+                    "coverage_role": "portfolio",
+                    "generated_at": "2026-01-01T00:00:00Z",
+                    "route": "/api/peek/earnings-readout?ticker=NU",
+                }
+            ],
+        },
+        "tickers": {
+            "tickers": [{"ticker": "NU", "name": "Canary Company", "list_type": "portfolio"}]
+        },
+        "briefs": {"items": [brief]},
+        "desk": {
+            "company": company,
+            "current_decision": {"relationship": "unavailable", "freshness": "current"},
+            "position": {"weight_pct": 4.2, "price": 12.0, "fair_value": 15.0, "currency": "USD"},
+            "latest_brief": brief,
+            "conditions": [],
+            "open_questions": [],
+            "warnings": [],
+        },
+        "operations": _canary_operations_fragment(),
+    }
+
+
+def _canary_shell_loader() -> str:
+    payload_json = json.dumps(_canary_shell_payloads()).replace("</", "<\\/")
+    return (
+        '<script id="design-canary-shell-loader">'
+        f"const designCanaryShellPayloads={payload_json};"
+        "const designCanaryShellFetch=window.fetch.bind(window);"
+        "window.fetch=(input,init)=>{const url=String(input);"
+        "if(url==='/api/work-os/portfolio')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.portfolio),{status:200,headers:{'Content-Type':'application/json'}}));"
+        "if(url==='/api/tickers')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.tickers),{status:200,headers:{'Content-Type':'application/json'}}));"
+        "if(url.startsWith('/api/work-os/briefs?'))return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.briefs),{status:200,headers:{'Content-Type':'application/json'}}));"
+        "if(url==='/api/work-os/companies/NU/desk')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.desk),{status:200,headers:{'Content-Type':'application/json'}}));"
+        "if(url==='/api/panel/operations')return Promise.resolve(new Response(designCanaryShellPayloads.operations,{status:200,headers:{'Content-Type':'text/html'}}));"
+        "return designCanaryShellFetch(input,init);};"
+        "</script>"
+    )
+
+
+def _canary_portfolio_fragment(route: str, db_path: Path | None) -> str:
+    """Render the real portfolio-console fragment for one persistent route."""
+
+    if db_path is not None:
+        if route == "performance":
+            return render_portfolio_allocation_panel(db_path, db_path.parent.parent)
+        if route == "risk-allocations":
+            return render_portfolio_health_panel(db_path)
+        if route == "decision-audit":
+            return render_portfolio_record_panel(db_path)
+        raise ValueError(f"unknown portfolio design canary route: {route!r}")
+
+    with TemporaryDirectory(prefix="design-canary-portfolio-") as directory:
+        isolated_root = Path(directory)
+        isolated_db = isolated_root / "data" / "portfolio.db"
+        isolated_db.parent.mkdir(parents=True, exist_ok=True)
+        sqlite3.connect(isolated_db).close()
+        if route == "performance":
+            return render_portfolio_allocation_panel(isolated_db, isolated_root)
+        if route == "risk-allocations":
+            return render_portfolio_health_panel(isolated_db)
+        if route == "decision-audit":
+            return render_portfolio_record_panel(isolated_db)
+    raise ValueError(f"unknown portfolio design canary route: {route!r}")
+
+
 def render_route_canary(*, route: str, viewport: str, db_path: Path | None = None) -> str:
     """Render one route specimen from the production shell.
 
@@ -143,6 +291,25 @@ def render_route_canary(*, route: str, viewport: str, db_path: Path | None = Non
         raise ValueError(f"unknown design canary viewport: {viewport!r}")
 
     html = render_work_os_shell(generated_at=_CANARY_TIMESTAMP, db_path=db_path)
+    html = html.replace(
+        '<script id="work-os-production-runtime">',
+        _canary_shell_loader() + '\n<script id="work-os-production-runtime">',
+        1,
+    )
+    if route in {"performance", "risk-allocations", "decision-audit"}:
+        fragment_json = json.dumps(_canary_portfolio_fragment(route, db_path)).replace("</", "<\\/")
+        endpoint = next(screen.endpoint for screen in SCREEN_SPECS if screen.screen_id == screen_id)
+        loader = (
+            '<script id="design-canary-portfolio-loader">'
+            f"const designCanaryPortfolioFragment={fragment_json};"
+            "const designCanaryPortfolioFetch=window.fetch.bind(window);"
+            f"window.fetch=(input,init)=>String(input)==={json.dumps(endpoint)}"
+            "?Promise.resolve(new Response(designCanaryPortfolioFragment,"
+            "{status:200,headers:{'Content-Type':'text/html'}}))"
+            ":designCanaryPortfolioFetch(input,init);"
+            "</script>"
+        )
+        html = html.replace("</body>", loader + "\n</body>", 1)
     if route == "fact-metric-playground":
         fragment_json = json.dumps(_canary_explore_fragment()).replace("</", "<\\/")
         loader = (

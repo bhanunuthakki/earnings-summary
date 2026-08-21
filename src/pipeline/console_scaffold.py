@@ -25,8 +25,9 @@ underline-active look.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
-from html import escape
+from html import escape, unescape
 
 from ui.controls import panel_toolbar
 
@@ -34,6 +35,31 @@ log = logging.getLogger(__name__)
 
 # (anchor id, nav label, builder thunk). Order = display order.
 ConsoleSection = tuple[str, str, Callable[[], str]]
+
+_HEADING_RE = re.compile(
+    r"<h(?P<level>[1-3])(?P<attrs>[^>]*)>(?P<body>.*?)</h(?P=level)>",
+    re.IGNORECASE | re.DOTALL,
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _hide_duplicate_heading(label: str, fragment: str) -> str:
+    """Hide a fragment heading when the canonical card header already owns it."""
+
+    normalized_label = " ".join(label.split()).casefold()
+    for match in _HEADING_RE.finditer(fragment):
+        text = unescape(_TAG_RE.sub("", match.group("body")))
+        if " ".join(text.split()).casefold() != normalized_label:
+            continue
+        attrs = match.group("attrs")
+        if re.search(r"(?:^|\s)hidden(?:\s|=|$)", attrs, re.IGNORECASE):
+            return fragment
+        replacement = (
+            f"<h{match.group('level')}{attrs} hidden>"
+            f"{match.group('body')}</h{match.group('level')}>"
+        )
+        return fragment[: match.start()] + replacement + fragment[match.end() :]
+    return fragment
 
 
 def _safe(name: str, fn: Callable[[], str]) -> str:
@@ -97,11 +123,17 @@ def render_console(
         if anchor not in nav_exclude
     )
     toolbar = panel_toolbar(title, filters=nav, suppress_title=True, sticky=True)
-    body = "".join(
-        f'<div class="console-sec{" csec-wide" if grid and anchor in wide else ""}" '
-        f'id="csec-{escape(anchor)}">{_safe(label, fn)}</div>'
-        for anchor, label, fn in sections
-    )
+    rendered_sections: list[str] = []
+    for anchor, label, fn in sections:
+        fragment = _hide_duplicate_heading(label, _safe(label, fn))
+        rendered_sections.append(
+            f'<article class="console-sec{" csec-wide" if grid and anchor in wide else ""} '
+            f'k-card k-card-section" id="csec-{escape(anchor)}">'
+            '<header class="k-card-head"><div class="k-card-heading">'
+            f'<h2 class="k-card-title">{escape(label)}</h2>'
+            f"</div></header>{fragment}</article>"
+        )
+    body = "".join(rendered_sections)
     if grid:
         body = f'<div class="console-grid">{body}</div>'
     return (
@@ -121,7 +153,8 @@ _CONSOLE_NAV_JS = """
     if (!b) return;
     ev.preventDefault();
     var el = document.getElementById(b.getAttribute('data-console-jump'));
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (el) el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
   });
 })();
 """.strip()

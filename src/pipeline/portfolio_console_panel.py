@@ -154,9 +154,10 @@ def _health_card(anchor: str, question: str, tabs: tuple[tuple[str, str], ...]) 
     # chip row that swaps panes scrolls away with it (owner directive
     # 2026-08-02).
     return (
-        f'<div class="console-sec hc-card" id="csec-{escape(anchor)}">'
-        f'<h2 class="hc-h">{escape(question)}</h2>'
-        f'<div class="hc-tabs k-chip-tabs-sticky">{chips}</div>{panes}</div>'
+        f'<article class="console-sec hc-card k-card k-card-section" id="csec-{escape(anchor)}">'
+        '<header class="k-card-head"><div class="k-card-heading">'
+        f'<h2 class="k-card-title hc-h">{escape(question)}</h2>'
+        f'</div></header><div class="hc-tabs k-chip-tabs-sticky">{chips}</div>{panes}</article>'
     )
 
 
@@ -180,7 +181,11 @@ def render_portfolio_health_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
         _CONSOLE_CSS
         + _HEALTH_CSS
         + '<div class="portfolio-health-console">'
+        + '<section class="k-card k-card-section console-health-brief">'
+        + '<header class="k-card-head"><div class="k-card-heading">'
+        + '<h2 class="k-card-title">The read</h2></div></header>'
         + _health_brief(db_path)
+        + "</section>"
         + f'<div class="console-grid">{cards}</div>'
         + "</div>"
         + f"<script>{_HEALTH_TABS_JS}</script>"
@@ -201,9 +206,9 @@ def _brief_shell(title: str, sub: str, lines: list[str], links: list[str]) -> st
     )
     links_html = f'<div class="cb-links">{"".join(links)}</div>' if links else ""
     return (
-        '<section class="panel console-brief"><h2>'
-        f"{escape(title)}</h2>"
-        f'<p class="cb-sub">{escape(sub)}</p>{body}{links_html}</section>'
+        '<div class="console-brief" data-brief-title="'
+        f'{escape(title)}"><p class="cb-sub">{escape(sub)}</p>'
+        f"{body}{links_html}</div>"
     )
 
 

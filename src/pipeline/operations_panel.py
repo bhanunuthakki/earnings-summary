@@ -875,10 +875,10 @@ def _overview(view: OperationsPanelView) -> str:
     service_owned = sum(task.declared_owner == "Managed service" for task in view.tasks)
     return (
         '<div class="ops-summary-grid">'
-        f'<article class="k-well"><div class="k-label">Declared tasks</div><div class="k-card-title">{len(view.tasks)}</div></article>'
-        f'<article class="k-well"><div class="k-label">Execution steps</div><div class="k-card-title">{sum(len(task.steps) for task in view.tasks)}</div></article>'
-        f'<article class="k-well"><div class="k-label">Without attention</div><div class="k-card-title">{current}</div></article>'
-        f'<article class="k-well"><div class="k-label">Service-owned</div><div class="k-card-title">{service_owned}</div></article>'
+        f'<article class="k-well"><div class="k-label">Declared tasks</div><div class="stat-number">{len(view.tasks)}</div></article>'
+        f'<article class="k-well"><div class="k-label">Execution steps</div><div class="stat-number">{sum(len(task.steps) for task in view.tasks)}</div></article>'
+        f'<article class="k-well"><div class="k-label">Without attention</div><div class="stat-number">{current}</div></article>'
+        f'<article class="k-well"><div class="k-label">Service-owned</div><div class="stat-number">{service_owned}</div></article>'
         "</div>"
         '<div class="k-well k-well-warn"><div class="k-card-row-title">Attention is evidence-based</div>'
         f"<p>{view.attention_count} operational or governance observation(s) need attention. Missing, stale, or invalid evidence never becomes a healthy claim.</p></div>"

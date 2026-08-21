@@ -63,3 +63,31 @@ def test_extra_nav_and_excluded_anchor_still_compose_inside_the_sticky_band() ->
     assert 'data-console-jump="csec-alpha"' not in html  # excluded from the nav…
     assert 'id="csec-alpha"' in html  # …but the section itself still renders
     assert 'data-console-jump="csec-beta"' in html
+
+
+def test_console_hides_exact_duplicate_fragment_heading() -> None:
+    html = render_console(
+        "Portfolio",
+        [
+            (
+                "risk",
+                "Risk Budget",
+                lambda: '<section><h2 id="risk-title">Risk Budget</h2><p>Body</p></section>',
+            )
+        ],
+        wrap_class="portfolio-console",
+    )
+
+    assert '<h2 class="k-card-title">Risk Budget</h2>' in html
+    assert '<h2 id="risk-title" hidden>Risk Budget</h2>' in html
+
+
+def test_console_preserves_more_specific_fragment_heading() -> None:
+    html = render_console(
+        "Portfolio",
+        [("posture", "Posture", lambda: "<section><h2>Portfolio Posture</h2></section>")],
+        wrap_class="portfolio-console",
+    )
+
+    assert "<h2>Portfolio Posture</h2>" in html
+    assert "<h2 hidden>Portfolio Posture</h2>" not in html

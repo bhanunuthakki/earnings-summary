@@ -49,9 +49,10 @@ def test_health_console_is_brief_plus_two_chip_cards(tmp_path: Path, probe_down:
     """Health redesign (owner directive 2026-07-30): the read, then exactly
     TWO chip-tab cards — no more vertical stack of a dozen sections."""
     html = render_portfolio_health_panel(tmp_path / "missing.db")
-    assert 'class="panel console-brief"' in html
+    assert 'class="k-card k-card-section console-health-brief"' in html
+    assert 'class="console-brief"' in html
     assert 'class="console-grid"' in html
-    assert html.count('class="console-sec hc-card"') == 2
+    assert html.count('class="console-sec hc-card k-card k-card-section"') == 2
     # Legacy deep-link anchors survive on the cards (#portfolio_synthesis /
     # #portfolio_risk still land on the right card via the shell ANCHORS map).
     assert 'id="csec-synthesis"' in html and 'id="csec-risk"' in html
@@ -237,10 +238,13 @@ def test_allocation_console_is_brief_plus_grid(tmp_path: Path, probe_down: None)
     assert html.index('id="csec-brief"') < html.index('id="csec-risk_budget"')
     # Wide spans: brief + landing recommendation; Risk Budget / Posture /
     # Positioning are tiles (no csec-wide on their wrappers).
-    assert 'class="console-sec csec-wide" id="csec-brief"' in html
-    assert 'class="console-sec csec-wide" id="csec-allocation_recommendation"' in html
-    assert 'class="console-sec" id="csec-risk_budget"' in html
-    assert 'class="console-sec" id="csec-positioning"' in html
+    assert 'class="console-sec csec-wide k-card k-card-section" id="csec-brief"' in html
+    assert (
+        'class="console-sec csec-wide k-card k-card-section" id="csec-allocation_recommendation"'
+        in html
+    )
+    assert 'class="console-sec k-card k-card-section" id="csec-risk_budget"' in html
+    assert 'class="console-sec k-card k-card-section" id="csec-positioning"' in html
     # The benchmark answer leads before the recommendation and target-setting
     # detail instead of sitting below the fold.
     assert html.index('id="csec-performance"') < html.index('id="csec-allocation_recommendation"')
@@ -261,11 +265,11 @@ def test_record_console_is_brief_plus_grid(tmp_path: Path, probe_down: None) -> 
 
     html = render_portfolio_record_panel(tmp_path / "missing.db")
     assert 'class="console-grid"' in html
-    assert 'class="console-sec csec-wide" id="csec-brief"' in html
-    assert 'class="console-sec csec-wide" id="csec-decisions"' in html
+    assert 'class="console-sec csec-wide k-card k-card-section" id="csec-brief"' in html
+    assert 'class="console-sec csec-wide k-card k-card-section" id="csec-decisions"' in html
     # Memos + Triggers sit side-by-side as tiles.
-    assert 'class="console-sec" id="csec-memos"' in html
-    assert 'class="console-sec" id="csec-triggers"' in html
+    assert 'class="console-sec k-card k-card-section" id="csec-memos"' in html
+    assert 'class="console-sec k-card k-card-section" id="csec-triggers"' in html
 
 
 def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: None) -> None:
@@ -277,12 +281,14 @@ def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: 
     # artifact exists — so its read states that (with the doorway chip)
     # rather than the generic quiet line.
     alloc = render_portfolio_allocation_panel(tmp_path / "missing.db")
-    assert 'class="panel console-brief"' in alloc
+    assert 'class="console-brief"' in alloc
+    assert 'class="panel console-brief"' not in alloc
     assert "No current next-dollar recommendation" in alloc
     assert "Traceback" not in alloc
     # Record has nothing to say → the one-line quiet state, never a blank.
     record = render_portfolio_record_panel(tmp_path / "missing.db")
-    assert 'class="panel console-brief"' in record
+    assert 'class="console-brief"' in record
+    assert 'class="panel console-brief"' not in record
     assert "Not enough live data for a read yet" in record
     assert "Traceback" not in record
 
@@ -295,7 +301,9 @@ def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: 
 
 def test_health_brief_leads_the_cards(tmp_path: Path, probe_down: None) -> None:
     html = render_portfolio_health_panel(tmp_path / "missing.db")
-    assert html.index('class="panel console-brief"') < html.index('id="csec-synthesis"')
+    assert html.index('class="k-card k-card-section console-health-brief"') < html.index(
+        'id="csec-synthesis"'
+    )
     assert html.index('id="csec-synthesis"') < html.index('id="csec-risk"')
 
 

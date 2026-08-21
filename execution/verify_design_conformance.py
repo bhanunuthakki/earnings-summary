@@ -123,6 +123,8 @@ class _CanaryRoute(Protocol):
 
     def continue_(self) -> None: ...
 
+    def fulfill(self, *, status: int, content_type: str, body: str) -> None: ...
+
 
 class _CanaryPage(Protocol):
     def evaluate(self, expression: str, arg: object) -> object: ...
@@ -226,42 +228,25 @@ _BROWSER_CANARY_PRIMITIVES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] 
 # hand-written page registry.
 _ROUTE_CANARY_MATRIX: tuple[tuple[str, str, tuple[int, int]], ...] = tuple(
     (route, viewport, size)
-    for route in (
-        "cockpit",
-        "company-desk",
-        "brief-library",
-        "fact-metric-playground",
-        "operations",
-        "full-brief",
-    )
+    for route in ROUTE_SCREEN_IDS
     for viewport, size in (("desktop", (1440, 900)), ("narrow", (390, 844)))
 )
 _REQUIRED_ROUTE_CANARY_KEYS = frozenset(
-    {
-        ("cockpit", "desktop"),
-        ("cockpit", "narrow"),
-        ("company-desk", "desktop"),
-        ("company-desk", "narrow"),
-        ("brief-library", "desktop"),
-        ("brief-library", "narrow"),
-        ("fact-metric-playground", "desktop"),
-        ("fact-metric-playground", "narrow"),
-        ("operations", "desktop"),
-        ("operations", "narrow"),
-        ("full-brief", "desktop"),
-        ("full-brief", "narrow"),
-    }
+    (route, viewport) for route in ROUTE_SCREEN_IDS for viewport in ("desktop", "narrow")
 )
 _ROUTE_CANARY_SETTLE_MILLISECONDS = 400
 
 _ROUTE_CANARY_ROLE_CONTRACTS: dict[str, tuple[tuple[str, ...], bool]] = {
     # The Work OS shell hydrates some controls/tables from API payloads. Keep
     # each contract scoped to the production route's static seam; the matrix
-    # still covers every required role across the six real destinations.
+    # still covers every required role across the complete production census.
     "cockpit": (("container", "type", "table", "help-footnote"), False),
+    "performance": (("container", "control", "type", "help-footnote"), True),
+    "risk-allocations": (("container", "control", "type", "help-footnote"), True),
     "company-desk": (("container", "control", "type", "help-footnote", "overlay"), True),
     "brief-library": (("container", "control", "type", "help-footnote"), True),
     "fact-metric-playground": (("container", "control", "type", "help-footnote"), True),
+    "decision-audit": (("container", "control", "type", "help-footnote"), True),
     "operations": (("container", "type", "help-footnote"), False),
     "full-brief": (("container", "control", "type", "help-footnote"), True),
 }
@@ -668,19 +653,48 @@ def _browser_canary_findings(
             }
           };
           inspectInline(document.documentElement, "document.documentElement", 0);
+          const composedParent = (node) => node.parentElement ||
+            (node.getRootNode && node.getRootNode().host instanceof Element
+              ? node.getRootNode().host : null);
+          const composedElements = (rootNode) => {
+            const nodes = [];
+            const visit = (node) => {
+              if (!(node instanceof Element)) return;
+              nodes.push(node);
+              if (node.shadowRoot) [...node.shadowRoot.children].forEach(visit);
+              [...node.children].forEach(visit);
+            };
+            visit(rootNode);
+            return nodes;
+          };
+          const composedClosest = (node, selector) => {
+            for (let current = node; current; current = composedParent(current)) {
+              if (current.matches && current.matches(selector)) return current;
+            }
+            return null;
+          };
+          const composedContains = (container, node) => {
+            for (let current = node; current; current = composedParent(current)) {
+              if (current === container) return true;
+            }
+            return false;
+          };
           const visible = (node) => {
-            const style = getComputedStyle(node);
             const rect = node.getBoundingClientRect();
-            return style.display !== 'none' && style.visibility !== 'hidden' &&
-              Number.parseFloat(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            for (let current = node; current; current = composedParent(current)) {
+              const style = getComputedStyle(current);
+              if (style.display === 'none' || style.visibility === 'hidden' ||
+                  Number.parseFloat(style.opacity || '1') <= 0) return false;
+            }
+            return true;
           };
           const scopedMatches = (selector) => {
             if (!expectedRoute || !routeRoot) return [...document.querySelectorAll(selector)];
-            return [
-              ...(routeRoot.matches(selector) ? [routeRoot] : []),
-              ...routeRoot.querySelectorAll(selector),
-            ];
+            return composedElements(routeRoot).filter((node) => node.matches(selector));
           };
+          const composedDescendants = (node, selector = '*') =>
+            composedElements(node).slice(1).filter((candidate) => candidate.matches(selector));
           for (const contract of primitiveContracts) {
             const [selector, checks] = contract;
             const nodes = scopedMatches(selector);
@@ -755,8 +769,22 @@ def _browser_canary_findings(
               if (rect.left < -0.5 || rect.right > window.innerWidth + 0.5) {
                 findings.push({kind: 'card', actual: `card[${index}] overflows viewport`});
               }
+              if (rect.bottom > 0 && rect.top < window.innerHeight &&
+                  rect.right > 0 && rect.left < window.innerWidth) {
+                const centerX = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2));
+                const centerY = Math.min(window.innerHeight - 1, Math.max(0, rect.top + Math.min(rect.height / 2, window.innerHeight / 3)));
+                const hitRoot = card.getRootNode();
+                const hit = hitRoot && typeof hitRoot.elementFromPoint === 'function'
+                  ? hitRoot.elementFromPoint(centerX, centerY)
+                  : document.elementFromPoint(centerX, centerY);
+                if (!hit || !composedContains(card, hit)) {
+                  findings.push({kind: 'card', actual: `card[${index}] is occluded at its visible center`});
+                }
+              }
               if (contract.titleSelector) {
-                const titles = [...card.querySelectorAll(contract.titleSelector)].filter(visible);
+                const titles = composedDescendants(card, contract.titleSelector)
+                  .filter(visible)
+                  .filter((title) => composedClosest(title, '.k-card') === card);
                 if (!titles.length) {
                   findings.push({kind: 'card', actual: `card[${index}] missing visible title ${contract.titleSelector}`});
                 } else {
@@ -788,7 +816,9 @@ def _browser_canary_findings(
               } else if (!card.getAttribute('aria-label') && !card.getAttribute('aria-labelledby')) {
                 findings.push({kind: 'card', actual: `card[${index}] navigation card has no accessible name`});
               }
-              card.querySelectorAll('.k-card-head').forEach((head) => {
+              composedDescendants(card, '.k-card-head')
+                .filter((head) => composedClosest(head, '.k-card') === card)
+                .forEach((head) => {
                 const headStyle = getComputedStyle(head);
                 const expectedGap = resolveToken('--sp-3', 'gap');
                 if (headStyle.display !== 'flex' ||
@@ -807,7 +837,7 @@ def _browser_canary_findings(
                 }
               }
               if (reduced) {
-                [card, ...card.querySelectorAll('*')].filter(visible).forEach((node) => {
+                [card, ...composedDescendants(card)].filter(visible).forEach((node) => {
                   const nodeStyle = getComputedStyle(node);
                   const durations = `${nodeStyle.transitionDuration},${nodeStyle.animationDuration}`
                     .split(',').map((value) => value.trim()).filter(Boolean)
@@ -818,30 +848,36 @@ def _browser_canary_findings(
                 });
               }
             });
-            const visualCandidates = scopedMatches('[class*="card" i],[class*="panel" i],[class*="tile" i],[class*="box" i]')
+            const visualCandidates = scopedMatches('article,section,aside,details,li,[role="group"],[role="region"],[class*="card" i],[class*="panel" i],[class*="tile" i],[class*="box" i]')
               .filter(visible)
               .filter((node) => !node.matches('.k-card,.k-well,.k-overlay,.k-table-shell'));
             visualCandidates.forEach((node, index) => {
               const style = getComputedStyle(node);
               const boxed = style.boxShadow !== 'none' || Number.parseFloat(style.borderTopWidth) > 0 ||
                 (!['rgba(0, 0, 0, 0)', 'transparent'].includes(style.backgroundColor) && Number.parseFloat(style.borderRadius) > 0);
-              if (boxed && !node.closest('.k-doc')) {
+              const reportDocument = composedClosest(node, '.k-doc');
+              if (boxed && reportDocument &&
+                  reportDocument.getAttribute('data-conformance-card-exemption') !== 'editorial-document') {
+                findings.push({kind: 'card', actual: `boxed report document subtree lacks explicit exemption receipt`});
+              } else if (boxed && !reportDocument) {
                 findings.push({kind: 'card', actual: `unregistered boxed card candidate[${index}] ${node.className}`});
               }
             });
           }
-          const roles = document.querySelectorAll('[data-conformance-role]');
+          const roles = expectedRoute && routeRoot
+            ? scopedMatches('[data-conformance-role]')
+            : [...document.querySelectorAll('[data-conformance-role]')];
           if (expectedRoute && !roles.length) {
             findings.push({kind: "role", actual: "no registered conformance roles"});
           }
           requiredRoles.forEach((role) => {
             if (expectedRoute && !routeRoot?.matches(`[data-conformance-role="${role}"]`)
-                && !routeRoot?.querySelector(`[data-conformance-role="${role}"]`)) {
+                && !scopedMatches(`[data-conformance-role="${role}"]`).length) {
               findings.push({kind: "role", actual: `missing required role ${role}`});
             }
           });
           const scopedRoles = routeRoot
-            ? [routeRoot, ...routeRoot.querySelectorAll('[data-conformance-role]')]
+            ? [routeRoot, ...scopedMatches('[data-conformance-role]').filter((node) => node !== routeRoot)]
             : [...roles];
           scopedRoles.forEach((node, index) => {
             const role = node.getAttribute('data-conformance-role') || '';
@@ -890,8 +926,9 @@ def _browser_canary_findings(
               }
             }
           });
-          const focusScope = routeRoot || document;
-          const focusables = [...focusScope.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')]
+          const focusables = (routeRoot
+            ? scopedMatches('a[href],button,input,select,textarea,[tabindex]')
+            : [...document.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')])
             .filter((node) => visible(node) && !node.hasAttribute('disabled') && node.getAttribute('tabindex') !== '-1');
           if (expectedRoute && requireKeyboard && !focusables.length) {
             findings.push({kind: "keyboard", actual: "no visible keyboard target"});
@@ -899,7 +936,11 @@ def _browser_canary_findings(
           if (expectedRoute) {
             focusables.forEach((node, index) => {
               node.focus({preventScroll: true});
-              if (document.activeElement !== node) {
+              let active = document.activeElement;
+              while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+                active = active.shadowRoot.activeElement;
+              }
+              if (active !== node) {
                 findings.push({kind: "keyboard", actual: `focus target[${index}] is unreachable`});
               }
             });
@@ -1118,7 +1159,25 @@ def _scan_route_canaries(
                             viewport={"width": size[0], "height": size[1]},
                         )
                         page = context.new_page()
-                        page.set_content(html_by_fixture[path], wait_until="load", timeout=5000)
+                        canary_url = f"http://design-canary.local/{route}/{viewport}"
+
+                        def serve_route(
+                            request_route: _CanaryRoute,
+                            _request: object,
+                            expected_url: str = canary_url,
+                            response_body: str = html_by_fixture[path],
+                        ) -> None:
+                            if request_route.request.url == expected_url:
+                                request_route.fulfill(
+                                    status=200,
+                                    content_type="text/html; charset=utf-8",
+                                    body=response_body,
+                                )
+                            else:
+                                request_route.abort()
+
+                        page.route("**/*", serve_route)
+                        page.goto(canary_url, wait_until="load", timeout=5000)
                         if route == "full-brief":
                             page.wait_for_selector(
                                 "#workOsBriefReader .work-os-report-host",
@@ -1129,6 +1188,16 @@ def _scan_route_canaries(
                                 "document.querySelectorAll('#workOsBriefReaderSections .work-os-reader-group-button').length === 6",
                                 timeout=5000,
                             )
+                        settled_selectors = {
+                            "cockpit": "#workOsActionQueue .k-card-action",
+                            "performance": "#workOsPerformanceMount .portfolio-allocation-console",
+                            "risk-allocations": "#workOsAllocationMount .portfolio-health-console",
+                            "company-desk": "#deskCompanyName",
+                            "brief-library": "#workOsBriefLibrary [data-artifact-id]",
+                            "fact-metric-playground": "#workOsFactPlayground #vx-root",
+                            "decision-audit": "#workOsAuditMount .portfolio-record-console",
+                            "operations": "#workOsOperationsMount .operations-panel",
+                        }
                         page.evaluate(
                             """
                             ({route, screenId}) => {
@@ -1164,6 +1233,54 @@ def _scan_route_canaries(
                               window.setTimeout(() => dynamic.setAttribute('data-conformance-dynamic-state', 'ready'), 80);
                               const motion = firstVisible('.sidebar-collapse-toggle, .company-picker-trigger, .k-overlay, .drill-drawer, .report-sidebar-toggle');
                               if (motion) motion.setAttribute('data-conformance-motion', '1');
+                              const reportHost = target.querySelector('.work-os-report-host');
+                              const reportDocument = reportHost && reportHost.shadowRoot
+                                ? reportHost.shadowRoot.querySelector('.k-doc') : null;
+                              if (reportDocument) {
+                                reportDocument.setAttribute('data-conformance-card-exemption', 'editorial-document');
+                              }
+                            }
+                            """,
+                            {"route": route, "screenId": ROUTE_SCREEN_IDS[route]},
+                        )
+                        settled_selector = settled_selectors.get(route)
+                        if settled_selector:
+                            page.wait_for_selector(
+                                settled_selector,
+                                state="visible",
+                                timeout=5000,
+                            )
+                        if route == "company-desk":
+                            page.wait_for_function(
+                                "document.getElementById('deskCompanyName')?.textContent === 'Canary Company'",
+                                timeout=5000,
+                            )
+                        page.evaluate(
+                            """
+                            ({route, screenId}) => {
+                              const target = document.getElementById(screenId);
+                              if (!target) throw new Error(`missing settled production screen ${screenId}`);
+                              document.querySelectorAll('[data-conformance-role]').forEach((node) => node.removeAttribute('data-conformance-role'));
+                              const firstVisible = (selector) => Array.from(target.querySelectorAll(selector))
+                                .find((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }) || null;
+                              const mark = (node, role) => { if (node) node.setAttribute('data-conformance-role', role); };
+                              target.setAttribute('data-conformance-route', route);
+                              mark(target, 'container');
+                              mark(firstVisible('input, select, a[href], button.k-btn-primary:not(.k-btn-sm), button.k-btn-sm, button'), 'control');
+                              mark(firstVisible('.k-card-title, .stat-number, h1, h2, h3'), 'type');
+                              mark(firstVisible('table'), 'table');
+                              mark(firstVisible('.stat-subtext, .k-card-meta, small'), 'help-footnote');
+                              const overlay = target.querySelector('#drillDrawer, #tradeModal, .company-picker-popover');
+                              mark(overlay, 'overlay');
+                              const dynamic = target.querySelector('[aria-live], [role="status"], [aria-busy]') || target;
+                              dynamic.setAttribute('data-conformance-dynamic', '1');
+                              dynamic.setAttribute('data-conformance-dynamic-state', 'ready');
+                              const reportHost = target.querySelector('.work-os-report-host');
+                              const reportDocument = reportHost && reportHost.shadowRoot
+                                ? reportHost.shadowRoot.querySelector('.k-doc') : null;
+                              if (reportDocument) {
+                                reportDocument.setAttribute('data-conformance-card-exemption', 'editorial-document');
+                              }
                             }
                             """,
                             {"route": route, "screenId": ROUTE_SCREEN_IDS[route]},

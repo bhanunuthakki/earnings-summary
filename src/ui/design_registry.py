@@ -1012,7 +1012,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "74b499524634752191345da39ba30ec8eda4eac95f17030063eb1111dc46af68",  # pragma: allowlist secret
-        "pipeline/portfolio_styles.py": "0f48dcb63f566c7f9366a7b40a3d25beb52642f892b35f5bf2c6edebe79c9d64",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "5c138828cd86b0152a0cd0409b84b88af11fda2dab33c614421078280f31ae3c",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "1e3fa030fe6be002e37fa5c14fb7c92fe1f04b86b1548aa68671f60951c3a4db",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "0f897db5032f344b6fc122fd244f70acdc25dc1298e2f3f1ed2e3ef88bd71a98",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
@@ -1056,7 +1056,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "4fb07f311aee2b2bbe875b890d8a6a381ae707ed77a7573abd643198389cb613",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "396decbac51816302b414799256be02e903c0c0aeff3bb2eb69724770a9371e2",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret

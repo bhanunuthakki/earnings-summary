@@ -203,6 +203,32 @@ def test_work_os_shell_uses_live_backend_mounts_without_removing_old_endpoints()
     assert 'aria-live="polite"' in html
 
 
+def test_persistent_portfolio_and_audit_screens_are_live_first_not_prototypes() -> None:
+    html = render_work_os_shell()
+    expected_mounts = {
+        "screen-performance": "workOsPerformanceMount",
+        "screen-allocation": "workOsAllocationMount",
+        "screen-audit-log": "workOsAuditMount",
+    }
+
+    for screen_id, mount_id in expected_mounts.items():
+        fragment = _screen_fragment(html, screen_id)
+        assert f'id="{mount_id}"' in fragment
+        assert f'data-work-os-screen-id="{screen_id}"' in fragment
+        assert 'data-work-os-refresh-screen="' + screen_id + '"' in fragment
+        assert "Loading live" in fragment
+
+    # These values belonged to the visual prototype and must never impersonate
+    # current portfolio or decision state in the production shell.
+    for stale_prototype_value in ("+32.4%", "$1,284,500", "BKNG", "Sharpe Ratio"):
+        assert stale_prototype_value not in "".join(
+            _screen_fragment(html, screen_id) for screen_id in expected_mounts
+        )
+
+    assert "const workOsPersistentMountIds" in html
+    assert "data-work-os-refresh-screen" in html
+
+
 def test_live_backend_mount_executes_local_fragment_scripts_without_optional_htmx() -> None:
     html = render_work_os_shell()
 
@@ -426,29 +452,20 @@ def test_l1_card_titles_and_hydration_hooks_compose_the_registry_roles() -> None
 
     cockpit = _screen_fragment(html, "screen-cockpit")
     assert cockpit.count('<div class="stat-heading">') == 4
-    assert target.count('<h3 class="k-card-title stat-heading">') == 8
-    assert '<div class="k-card-row-title">' not in _screen_fragment(html, "screen-cockpit")
-    assert '<h3 class="k-card-title k-card-row-title">' not in cockpit
-    assert _screen_fragment(html, "screen-allocation").count('<h3 class="k-well-title">') >= 4
+    assert target.count('class="k-card k-card-section research-toolbar"') == 2
     performance = _screen_fragment(html, "screen-performance")
-    assert (
-        '<h2 class="k-card-title">Custom Metric & Time Horizon Analysis Engine</h2>' in performance
-    )
-    assert (
-        '<h2 class="k-card-title" style="margin-bottom: var(--sp-3);">'
-        "1-Year Relative Return Comparison</h2>"
-    ) in performance
-    assert (
-        '<div style="font-weight: 600; font-size: var(--fs-title);">'
-        "Custom Metric & Time Horizon Analysis Engine</div>"
-    ) not in performance
+    allocation = _screen_fragment(html, "screen-allocation")
+    assert '<h1 class="k-card-title">Performance vs Index</h1>' in performance
+    assert '<h1 class="k-card-title">Risk &amp; Allocations</h1>' in allocation
+    assert 'id="workOsPerformanceMount"' in performance
+    assert 'id="workOsAllocationMount"' in allocation
     assert "card.querySelector('.stat-heading')" in html
     assert (
         '<h3 class="k-card-title k-card-row-title">\' + escapeWorkOsHtml(action.headline)'
     ) in html
 
 
-def test_l1_card_grids_use_registry_archetypes_and_collapse_at_1100() -> None:
+def test_l1_live_shells_do_not_ship_prototype_card_grids_or_inline_geometry() -> None:
     html = render_work_os_shell()
     target = "".join(
         _screen_fragment(html, screen_id)
@@ -456,21 +473,13 @@ def test_l1_card_grids_use_registry_archetypes_and_collapse_at_1100() -> None:
     )
 
     assert "card-grid-stat-4col" not in target
-    assert target.count('class="card-grid-stat"') >= 3
-    assert (
-        ".card-grid-stat { display: grid; grid-template-columns: repeat(auto-fit, "
-        "minmax(var(--grid-card-sm), 1fr));"
-    ) in html
-    assert "@media (max-width: 1100px)" in html
-    assert "@media (max-width: 1024px) { .dashboard-2col { grid-template-columns: 1fr; } }" in html
-    assert "max-inline-size: calc(var(--grid-card-sm) + var(--grid-card-sm) + var(--sp-4));" in html
-    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" not in target
+    assert 'class="card-grid-stat"' not in target
+    assert 'class="k-stat-grid" id="workOsPortfolioStats"' in target
     assert '<header class="k-section-head">' in _screen_fragment(html, "screen-cockpit")
-    assert (
-        '#screen-performance [style*="display: flex"][style*="justify-content: space-between"]'
-        in html
-    )
-    assert "flex-wrap: wrap;" in html
+    for screen_id in ("screen-performance", "screen-allocation"):
+        fragment = _screen_fragment(html, screen_id)
+        assert "style=" not in fragment
+        assert fragment.count('class="k-card k-card-section research-toolbar"') == 1
 
 
 def test_rendered_l1_shell_has_no_hidden_grid_signature_drift() -> None:

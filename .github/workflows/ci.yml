@@ -258,7 +258,7 @@ jobs:
           npm run check
       - name: Run mandatory rendered route canary matrix
         run: |
-          # The CLI owns the single full 5-route x 2-viewport matrix. Unit
+          # The CLI owns the single full 9-route x 2-viewport matrix. Unit
           # tests retain the positive and adversarial browser checks without
           # paying for that matrix a second time.
           python -m pytest -q tests/test_design_computed_canary.py -k "not route_canary_matrix_covers_all_required_routes_and_viewports"

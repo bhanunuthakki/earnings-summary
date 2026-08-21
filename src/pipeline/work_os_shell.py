@@ -140,6 +140,16 @@ _COCKPIT_SECTION_RE = re.compile(
     r"(?=<!-- =+\s*SURFACE: PORTFOLIO PERFORMANCE)",
     re.DOTALL,
 )
+_PERFORMANCE_SECTION_RE = re.compile(
+    r'<section id="screen-performance".*?</section>\s*'
+    r"(?=<!-- =+\s*SURFACE: PORTFOLIO ALLOCATION)",
+    re.DOTALL,
+)
+_ALLOCATION_SECTION_RE = re.compile(
+    r'<section id="screen-allocation".*?</section>\s*'
+    r"(?=<!-- =+\s*SURFACE 2: COMPANY RESEARCH WORKSPACE)",
+    re.DOTALL,
+)
 _COMPANY_DESK_SECTION_RE = re.compile(
     r'<section id="screen-workspace".*?</section>\s*'
     r"(?=<!-- =+\s*BRIEF LIBRARY PERSISTENT DESTINATION)",
@@ -158,6 +168,11 @@ _FACT_PLAYGROUND_SECTION_RE = re.compile(
 _FACT_PLAYGROUND_RUNTIME_RE = re.compile(
     r"\n\s*// EXTRACTED FACT & METRIC ANALYTICS PLAYGROUND DATABASE & LOGIC.*?"
     r"\n\s*// EMBEDDED DCF SLIDERS INSIDE REPORT",
+    re.DOTALL,
+)
+_AUDIT_SECTION_RE = re.compile(
+    r'<section id="screen-audit-log".*?</section>\s*'
+    r"(?=<!-- =+\s*SURFACE 4: EXECUTION QUEUE)",
     re.DOTALL,
 )
 _OPERATIONS_SECTION_RE = re.compile(
@@ -225,6 +240,36 @@ def _render_portfolio_cockpit_shell() -> str:
 """.strip()
 
 
+def _render_live_screen_shell(
+    *,
+    screen_id: str,
+    mount_id: str,
+    layer: str,
+    title: str,
+    description: str,
+) -> str:
+    """Return a truthful on-demand shell for one persistent Work OS screen."""
+
+    return f"""
+<section id="{escape(screen_id)}" class="screen-view">
+  <div class="research-screen">
+    <header class="k-card k-card-section research-toolbar">
+      <div class="k-card-heading">
+        <div class="k-card-meta">{escape(layer)}</div>
+        <h1 class="k-card-title">{escape(title)}</h1>
+        <p class="k-card-meta">{escape(description)}</p>
+      </div>
+      <button type="button" class="k-btn k-btn-quiet k-btn-sm"
+        data-work-os-refresh-screen="{escape(screen_id)}">Refresh live view</button>
+    </header>
+    <div id="{escape(mount_id)}" data-work-os-screen-id="{escape(screen_id)}">
+      <div class="k-well" role="status">Loading live {escape(title)}…</div>
+    </div>
+  </div>
+</section>
+""".strip()
+
+
 def _nav_button(match: re.Match[str]) -> str:
     attrs = match.group("attrs").replace('class="', 'class="k-btn k-btn-quiet ', 1)
     return f'<button type="button" {attrs}>{match.group("body")}</button>'
@@ -263,6 +308,11 @@ def _production_runtime(generated_at: datetime) -> str:
   const workOsLaunchParams = new URLSearchParams(window.location.search);
   const workOsRequestedScreen = workOsLaunchParams.get('screen');
   const workOsRequestedTicker = String(workOsLaunchParams.get('ticker') || '').toUpperCase();
+  const workOsPersistentMountIds = {{
+    'screen-performance': 'workOsPerformanceMount',
+    'screen-allocation': 'workOsAllocationMount',
+    'screen-audit-log': 'workOsAuditMount'
+  }};
   const originalOpenDrillDrawer = window.openDrillDrawer;
   const originalCloseDrillDrawer = window.closeDrillDrawer;
   const originalOpenPeekDrawer = window.openPeekDrawer;
@@ -1289,6 +1339,11 @@ def _production_runtime(generated_at: datetime) -> str:
     if (target === 'screen-brief-library') workOsRenderBriefLibrary();
     if (target === 'screen-analytics-playground') workOsRenderFactPlayground();
     originalNavigateTo(target);
+    const persistentMountId = workOsPersistentMountIds[target];
+    const persistentMount = persistentMountId ? document.getElementById(persistentMountId) : null;
+    if (persistentMount && persistentMount.dataset.loadedEndpoint !== workOsEndpoint(target)) {{
+      workOsLoadScreen(target, persistentMount);
+    }}
     if (target === 'screen-execution-queue') {{
       const operationsMount = document.getElementById('workOsOperationsMount');
       if (operationsMount && operationsMount.dataset.loadedEndpoint !== workOsEndpoint(target)) {{
@@ -1474,6 +1529,16 @@ def _production_runtime(generated_at: datetime) -> str:
   window.workOsLoadScreen = workOsLoadScreen;
 
   document.addEventListener('click', function (event) {{
+    const refresh = event.target && event.target.closest
+      ? event.target.closest('[data-work-os-refresh-screen]')
+      : null;
+    if (refresh) {{
+      const screenId = refresh.dataset.workOsRefreshScreen;
+      const mountId = workOsPersistentMountIds[screenId];
+      const mount = mountId ? document.getElementById(mountId) : null;
+      if (mount) workOsLoadScreen(screenId, mount);
+      return;
+    }}
     const retry = event.target && event.target.closest
       ? event.target.closest('[data-work-os-retry]')
       : null;
@@ -1592,6 +1657,30 @@ def _add_production_contract(
         1,
     )
     html = _COCKPIT_SECTION_RE.sub(_render_portfolio_cockpit_shell() + "\n\n      ", html, count=1)
+    html = _PERFORMANCE_SECTION_RE.sub(
+        _render_live_screen_shell(
+            screen_id="screen-performance",
+            mount_id="workOsPerformanceMount",
+            layer="Portfolio Intelligence",
+            title="Performance vs Index",
+            description="Live portfolio performance, attribution, and capital-deployment context",
+        )
+        + "\n\n      ",
+        html,
+        count=1,
+    )
+    html = _ALLOCATION_SECTION_RE.sub(
+        _render_live_screen_shell(
+            screen_id="screen-allocation",
+            mount_id="workOsAllocationMount",
+            layer="Portfolio Intelligence",
+            title="Risk & Allocations",
+            description="Live thesis health, concentration, crowding, and downside evidence",
+        )
+        + "\n\n      ",
+        html,
+        count=1,
+    )
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
     html = _FACT_PLAYGROUND_SECTION_RE.sub(
@@ -1603,6 +1692,18 @@ def _add_production_contract(
         count=1,
     )
     html = html.replace("      updateFactPlaygroundTable();\n", "", 1)
+    html = _AUDIT_SECTION_RE.sub(
+        _render_live_screen_shell(
+            screen_id="screen-audit-log",
+            mount_id="workOsAuditMount",
+            layer="Operations & Governance",
+            title="Decision Audit Log",
+            description="Live decisions, memos, triggers, and the governed research record",
+        )
+        + "\n\n      ",
+        html,
+        count=1,
+    )
     html = _OPERATIONS_SECTION_RE.sub(render_operations_shell() + "\n      ", html, count=1)
     html = html.replace(
         '<div class="sidebar-cmd" onclick="openWorkOsCopilot()">',

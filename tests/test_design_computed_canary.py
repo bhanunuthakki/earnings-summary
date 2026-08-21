@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 import execution.verify_design_conformance as design_conformance
-from execution.design_route_canaries import write_route_canary_fixtures
+from execution.design_route_canaries import ROUTE_SCREEN_IDS, write_route_canary_fixtures
 from execution.verify_design_conformance import (  # pyright: ignore[reportPrivateUsage]
     CanaryResult,
     RouteCanaryResult,
@@ -21,6 +21,7 @@ from execution.verify_design_conformance import (  # pyright: ignore[reportPriva
     _scan_canary,  # pyright: ignore[reportPrivateUsage]
     _scan_route_canaries,  # pyright: ignore[reportPrivateUsage]
 )
+from pipeline.work_os_shell import SCREEN_SPECS
 from ui.conformance_scan import scan_surface_evidence
 
 ROOT_TOKENS = """
@@ -170,20 +171,16 @@ def test_route_canary_matrix_covers_all_required_routes_and_viewports() -> None:
 
     _require_playwright()
     results = _scan_route_canaries()
-    assert len(results) == 12
+    assert len(results) == len(ROUTE_SCREEN_IDS) * 2
     assert {(item.route, item.viewport) for item in results} == {
-        (route, viewport)
-        for route in (
-            "cockpit",
-            "company-desk",
-            "brief-library",
-            "fact-metric-playground",
-            "operations",
-            "full-brief",
-        )
-        for viewport in ("desktop", "narrow")
+        (route, viewport) for route in ROUTE_SCREEN_IDS for viewport in ("desktop", "narrow")
     }
     assert all(item.status == "passed" for item in results), results
+
+
+def test_guarded_persistent_routes_exactly_match_the_production_screen_registry() -> None:
+    guarded = {screen_id for route, screen_id in ROUTE_SCREEN_IDS.items() if route != "full-brief"}
+    assert guarded == {screen.screen_id for screen in SCREEN_SPECS}
 
 
 @pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
@@ -324,14 +321,7 @@ def test_route_canary_population_is_an_exact_fail_closed_census() -> None:
             fixture=f"{route}.{viewport}.html",
             status="passed",
         )
-        for route in (
-            "cockpit",
-            "company-desk",
-            "brief-library",
-            "fact-metric-playground",
-            "operations",
-            "full-brief",
-        )
+        for route in ROUTE_SCREEN_IDS
         for viewport in ("desktop", "narrow")
     )
     assert _route_population_failures(results) == ()
@@ -358,14 +348,7 @@ def test_receipt_fails_when_route_canary_population_shrinks(
             fixture=f"{route}.{viewport}.html",
             status="passed",
         )
-        for route in (
-            "cockpit",
-            "company-desk",
-            "brief-library",
-            "fact-metric-playground",
-            "operations",
-            "full-brief",
-        )
+        for route in ROUTE_SCREEN_IDS
         for viewport in ("desktop", "narrow")
     )
 
@@ -483,8 +466,10 @@ def test_route_canary_rejects_untyped_or_overflowing_card(tmp_path: Path) -> Non
     desktop = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
     desktop.write_text(
         desktop.read_text(encoding="utf-8").replace(
-            'class="k-card k-card-section research-toolbar"',
-            'class="k-card research-toolbar"',
+            '<div class="research-screen" id="workOsCompanyDesk" aria-live="polite">\n'
+            '    <header class="k-card k-card-section research-toolbar">',
+            '<div class="research-screen" id="workOsCompanyDesk" aria-live="polite">\n'
+            '    <header class="k-card research-toolbar">',
             1,
         ),
         encoding="utf-8",
@@ -528,6 +513,62 @@ def test_route_canary_rejects_nested_unregistered_boxed_card(tmp_path: Path) -> 
         if item.route == "company-desk" and item.viewport == "desktop"
     )
     assert any("unregistered boxed card candidate" in finding for finding in result.findings)
+
+
+def test_route_canary_rejects_unnamed_semantic_box_and_shadow_card(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</body>",
+            """
+<style>.rogue { background:var(--surface);border:var(--bw-thin) solid var(--border);border-radius:var(--radius-card); }</style>
+<script>
+const route = document.getElementById('screen-workspace');
+const unnamed = document.createElement('article');
+unnamed.className = 'rogue'; unnamed.textContent = 'Unnamed boxed semantic surface';
+route.appendChild(unnamed);
+const host = document.createElement('div'); route.appendChild(host);
+const shadow = host.attachShadow({mode:'open'});
+shadow.innerHTML = '<style>.rogue{background:var(--surface);border:var(--bw-thin) solid var(--border);border-radius:var(--radius-card)}</style><article class="rogue">Shadow boxed surface</article>';
+</script></body>
+""",
+        ),
+        encoding="utf-8",
+    )
+
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "company-desk" and item.viewport == "desktop"
+    )
+    assert result.status == "failed"
+    assert sum("unregistered boxed card candidate" in item for item in result.findings) >= 2
+
+
+def test_outer_card_cannot_borrow_nested_card_title(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            '<div class="research-grid k-grid-split-rail-lg">',
+            '<section class="k-card k-card-section">'
+            '<section class="k-card k-card-section"><h2 class="k-card-title">Nested only</h2></section>'
+            '</section><div class="research-grid k-grid-split-rail-lg">',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "company-desk" and item.viewport == "desktop"
+    )
+    assert result.status == "failed"
+    assert any("missing visible title" in finding for finding in result.findings)
 
 
 def test_route_canary_rejects_card_motion_under_reduced_motion(tmp_path: Path) -> None:
