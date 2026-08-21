@@ -113,6 +113,10 @@ class _CanaryPage(Protocol):
 
     def wait_for_load_state(self, state: str, *, timeout: int) -> None: ...
 
+    def wait_for_selector(self, selector: str, *, state: str, timeout: int) -> object: ...
+
+    def wait_for_function(self, expression: str, *, timeout: int) -> object: ...
+
     def wait_for_timeout(self, timeout: int) -> None: ...
 
     def content(self) -> str: ...
@@ -914,38 +918,29 @@ def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanary
                         )
                         page = context.new_page()
                         page.set_content(html_by_fixture[path], wait_until="load", timeout=5000)
+                        if route == "full-brief":
+                            page.wait_for_selector(
+                                "#workOsBriefReader .work-os-report-host",
+                                state="visible",
+                                timeout=5000,
+                            )
+                            page.wait_for_function(
+                                "document.querySelectorAll('#workOsBriefReaderSections .work-os-reader-group-button').length === 6",
+                                timeout=5000,
+                            )
                         page.evaluate(
                             """
                             ({route, screenId}) => {
+                              if (screenId.startsWith('screen-') && typeof window.navigateTo === 'function') {
+                                window.navigateTo(screenId, {fromHistory: true});
+                              }
                               const target = document.getElementById(screenId);
                               if (!target) throw new Error(`missing production screen ${screenId}`);
                               document.querySelectorAll('[data-conformance-role]').forEach((node) => node.removeAttribute('data-conformance-role'));
-                              document.querySelectorAll('[id^="screen-"]').forEach((node) => {
-                                if (node !== target) {
-                                  node.hidden = true;
-                                  node.style.display = 'none';
-                                }
-                              });
-                              target.hidden = false;
-                              target.style.display = 'block';
-                              if (target.hasAttribute('aria-hidden')) target.setAttribute('aria-hidden', 'false');
                               target.setAttribute('data-conformance-route', route);
-                              const reveal = (node) => {
-                                if (!node) return null;
-                                node.hidden = false;
-                                for (let parent = node.parentElement; parent; parent = parent.parentElement) {
-                                  if (parent.id && parent.id.startsWith('screen-')) {
-                                    parent.hidden = false;
-                                    parent.style.display = 'block';
-                                    break;
-                                  }
-                                }
-                                return node;
-                              };
                               const mark = (node, role) => {
-                                const marked = reveal(node);
-                                if (marked) marked.setAttribute('data-conformance-role', role);
-                                return marked;
+                                if (node) node.setAttribute('data-conformance-role', role);
+                                return node;
                               };
                               const firstVisible = (selector) => Array.from(target.querySelectorAll(selector))
                                 .find((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }) || null;
@@ -954,12 +949,12 @@ def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanary
                               mark(firstVisible('.k-card-title, .stat-number, h1, h2, h3'), 'type');
                               mark(firstVisible('table'), 'table');
                               mark(firstVisible('.stat-subtext, .k-card-meta, small'), 'help-footnote');
+                              if (route === 'company-desk') {
+                                const trigger = target.querySelector('#companyPickerTrigger');
+                                if (trigger) trigger.click();
+                              }
                               const overlay = target.querySelector('#drillDrawer, #tradeModal, .company-picker-popover');
                               if (overlay) {
-                                overlay.classList.add('design-canary-overlay');
-                                overlay.classList.add('is-open');
-                                overlay.hidden = false;
-                                overlay.setAttribute('aria-hidden', 'false');
                                 overlay.setAttribute('data-conformance-role', 'overlay');
                               }
                               const dynamic = target.querySelector('[aria-live], [role="status"], [aria-busy]') || target;

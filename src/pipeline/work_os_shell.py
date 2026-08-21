@@ -389,9 +389,10 @@ def _production_runtime(generated_at: datetime) -> str:
         function activateReaderSection(groupPane, sectionId, shouldScroll) {{
           const sectionPanes = Array.from(groupPane.querySelectorAll('.subtab-pane[data-tab]'));
           sectionPanes.forEach(function (sectionPane) {{
-            const isActive = String(sectionPane.dataset.tab || '') === sectionId;
+            const candidateSectionId = String(sectionPane.dataset.tab || '');
+            const isActive = candidateSectionId === sectionId;
             sectionPane.dataset.readerSectionActive = isActive ? 'true' : 'false';
-            const sectionButton = sectionControls.get(sectionId);
+            const sectionButton = sectionControls.get(candidateSectionId);
             if (sectionButton) {{
               if (isActive) sectionButton.setAttribute('aria-current', 'location');
               else sectionButton.removeAttribute('aria-current');

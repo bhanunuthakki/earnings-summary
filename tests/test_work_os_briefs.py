@@ -272,6 +272,8 @@ def test_report_reader_css_is_lazy_current_shell_owned_asset(
     css = response.get_data(as_text=True)
     assert "Keep the lede in the document flow" in css
     assert ".reader-group-title" in css
+    assert '[data-reader-group-active="false"]' in css
+    assert '[data-reader-section-active="false"]' in css
 
 
 def test_report_body_route_preserves_six_groups_and_section_anchors(

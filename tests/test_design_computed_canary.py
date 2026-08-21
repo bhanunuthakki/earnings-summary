@@ -179,6 +179,76 @@ def test_route_canary_matrix_covers_all_required_routes_and_viewports() -> None:
     assert all(item.status == "passed" for item in results), results
 
 
+@pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
+def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
+    viewport: tuple[int, int],
+) -> None:
+    """A persisted artifact must be interactive across the real shadow boundary."""
+
+    _require_playwright()
+    playwright_api = importlib.import_module("playwright.sync_api")
+    from execution.design_route_canaries import render_route_canary
+
+    html = render_route_canary(route="full-brief", viewport="desktop")
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": viewport[0], "height": viewport[1]})
+            page.set_content(html, wait_until="load")
+            page.wait_for_selector("#workOsBriefReader .work-os-report-host", state="visible")
+            buttons = page.locator("#workOsBriefReaderSections .work-os-reader-group-button")
+            assert buttons.count() == 6
+            assert buttons.all_text_contents() == [
+                "Overview & Moat",
+                "Quarter & Guidance",
+                "Financials & DCF",
+                "Thesis & Risk",
+                "Valuation & Comps",
+                "Sources & Citations",
+            ]
+
+            def visible_reader_state() -> dict[str, list[str]]:
+                return page.locator(".work-os-report-host").evaluate(
+                    """
+                    host => {
+                      const groups = [...host.shadowRoot.querySelectorAll('.tab-group-pane[data-tab-group]')];
+                      const sections = [...host.shadowRoot.querySelectorAll('.subtab-pane[data-tab]')];
+                      return {
+                            groups: groups.filter(node => node.getClientRects().length > 0).map(node => node.dataset.tabGroup),
+                            sections: sections.filter(node => node.getClientRects().length > 0).map(node => node.dataset.tab),
+                      };
+                    }
+                    """
+                )
+
+            page.wait_for_function(
+                "getComputedStyle(document.querySelector('.work-os-report-host').shadowRoot.querySelector('[data-reader-group-active=\"false\"]')).display === 'none'"
+            )
+            initial = visible_reader_state()
+            assert initial["groups"] == ["overview"]
+            assert len(initial["sections"]) == 1
+
+            page.locator('button[data-group-id="quarter"]').click()
+            quarter = visible_reader_state()
+            assert quarter["groups"] == ["quarter"]
+            assert quarter["sections"] == ["earnings"]
+            assert (
+                page.locator('button[data-group-id="quarter"]').get_attribute("aria-current")
+                == "location"
+            )
+
+            page.locator('button[data-section-id="news"]').click()
+            news = visible_reader_state()
+            assert news["groups"] == ["quarter"]
+            assert news["sections"] == ["news"]
+            assert (
+                page.locator('button[data-section-id="news"]').get_attribute("aria-current")
+                == "location"
+            )
+        finally:
+            browser.close()
+
+
 def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
     _require_playwright()
     root = _copy_route_fixtures(tmp_path)

@@ -2177,6 +2177,10 @@ READER_OVERRIDE_CSS = """
 .subtab-pane {
   display: block !important;
 }
+.work-os-report-content [data-reader-group-active="false"],
+.work-os-report-content [data-reader-section-active="false"] {
+  display: none !important;
+}
 .tab-group-pane + .tab-group-pane {
   margin-top: var(--sp-6);
 }

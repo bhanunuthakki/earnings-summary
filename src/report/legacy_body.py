@@ -13,6 +13,15 @@ from pydantic import BaseModel, ConfigDict
 
 PARSER_VERSION = "legacy_workspace_reader.v1"
 
+CANONICAL_READER_GROUP_LABELS: dict[str, str] = {
+    "overview": "Overview & Moat",
+    "quarter": "Quarter & Guidance",
+    "financials": "Financials & DCF",
+    "thesis-risk": "Thesis & Risk",
+    "valuation-comps": "Valuation & Comps",
+    "sources": "Sources & Citations",
+}
+
 _DISALLOWED_TAGS = ("script", "style", "iframe", "object", "embed", "link", "meta")
 _TOKEN_REFERENCE_ATTRS = (
     "aria-controls",
@@ -356,10 +365,14 @@ def extract_legacy_reader_body(source_html: str, *, artifact_id: str) -> LegacyR
         raise ValueError("governed content metrics changed during sanitization")
 
     for group in root.select(".tab-group-pane[data-tab-group]"):
-        label = str(group.get("data-tab-group", "Research")).replace("_", " ").strip()
+        group_id = str(group.get("data-tab-group", "Research")).strip()
+        label = CANONICAL_READER_GROUP_LABELS.get(
+            group_id,
+            group_id.replace("_", " ").replace("-", " ").title() or "Research",
+        )
         heading = soup.new_tag("h2")
         heading["class"] = "reader-group-title"
-        heading.string = label.title() or "Research"
+        heading.string = label
         group.insert(0, heading)
 
     for pane in root.select(".tab-group-pane, .tab-pane, .subtab-pane"):

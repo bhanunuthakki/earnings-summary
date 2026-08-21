@@ -25,8 +25,6 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 .work-os-live-status { position: absolute; inline-size: var(--bw-thin); block-size: var(--bw-thin); overflow: hidden; clip: rect(0 0 0 0); }
 .work-os-report-frame { width: 100%; min-height: calc(100dvh - var(--header-height) - var(--sp-6)); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); }
 .work-os-report-host { display: block; min-height: 100%; border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); background: var(--surface); overflow: hidden; }
-.work-os-report-content [data-reader-group-active="false"],
-.work-os-report-content [data-reader-section-active="false"] { display: none !important; }
 .work-os-reader { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; padding: var(--sp-4); background: var(--bg); overflow: hidden; }
 .work-os-reader[hidden] { display: none !important; }
 .work-os-reader-header { position: sticky; inset-block-start: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-3); background: var(--bg); }
