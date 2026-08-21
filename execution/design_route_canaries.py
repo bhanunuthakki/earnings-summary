@@ -14,9 +14,11 @@ import json
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from bs4 import BeautifulSoup
 
+from pipeline.explore_panel import render_explore_panel
 from pipeline.work_os_shell import render_work_os_shell
 from report.legacy_body import extract_legacy_reader_body
 from report.models import (
@@ -113,6 +115,17 @@ def _canary_reader_payload() -> dict[str, object]:
     }
 
 
+def _canary_explore_fragment() -> str:
+    """Render the production Explore fragment against an isolated empty store."""
+
+    with TemporaryDirectory(prefix="design-canary-") as directory:
+        return render_explore_panel(
+            Path(directory) / "explore.db",
+            initial_tickers=[],
+            include_runtime=False,
+        )
+
+
 def render_route_canary(*, route: str, viewport: str, db_path: Path | None = None) -> str:
     """Render one route specimen from the production shell.
 
@@ -129,6 +142,22 @@ def render_route_canary(*, route: str, viewport: str, db_path: Path | None = Non
         raise ValueError(f"unknown design canary viewport: {viewport!r}")
 
     html = render_work_os_shell(generated_at=_CANARY_TIMESTAMP, db_path=db_path)
+    if route == "fact-metric-playground":
+        fragment_json = json.dumps(_canary_explore_fragment()).replace("</", "<\\/")
+        loader = (
+            '<script id="design-canary-explore-loader">'
+            f"const designCanaryExploreFragment={fragment_json};"
+            "const designCanaryExploreFetch=window.fetch.bind(window);"
+            "window.fetch=(input,init)=>String(input)==='/api/tickers'"
+            "?Promise.resolve(new Response(JSON.stringify({tickers:[{ticker:'CANARY',name:'Canary Company',list_type:'evaluation'}]}),"
+            "{status:200,headers:{'Content-Type':'application/json'}}))"
+            ":String(input).startsWith('/api/panel/explore?')"
+            "?Promise.resolve(new Response(designCanaryExploreFragment,"
+            "{status:200,headers:{'Content-Type':'text/html'}}))"
+            ":designCanaryExploreFetch(input,init);"
+            "</script>"
+        )
+        html = html.replace("</body>", loader + "\n</body>", 1)
     if route == "full-brief":
         payload_json = json.dumps(_canary_reader_payload()).replace("</", "<\\/")
         artifact_json = json.dumps(

@@ -1,21 +1,6 @@
 """Shared visual recipes for the research and ledger panel family.
 
-
-
-.cc-peek-attest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
-  display: flex; align-items: center; gap: 10px; }
-.cc-peek-attest-done { color: var(--fg-soft); font-size: var(--fs-caption); }
-.cc-attest-msg { font-size: var(--fs-caption); color: var(--fg-soft); }
-
-.cc-review-peek .synthesis-body { font-size: var(--fs-body); }
-.cc-review-foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
-  display: flex; flex-direction: column; gap: 8px; }
-.cc-review-log { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
-  background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 8px 10px; margin: 0; max-height: 200px; overflow-y: auto;
-  white-space: pre-wrap; word-break: break-word; }
-
-Panel renderers own data, markup, and interaction hooks.  This module owns the
+Panel renderers own data, markup, and interaction hooks. This module owns the
 family's visual vocabulary so a spacing, card, metadata, or state treatment is
 changed once and inherited by every research surface.
 """
@@ -47,6 +32,17 @@ DIET_PANEL_STYLE = """<style>
 
 RESEARCH_PANEL_STYLE = """<style>
 /* Research family foundation: controls are supplied by the shell's kit. */
+.cc-peek-attest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
+  display: flex; align-items: center; gap: 10px; }
+.cc-peek-attest-done { color: var(--fg-soft); font-size: var(--fs-caption); }
+.cc-attest-msg { font-size: var(--fs-caption); color: var(--fg-soft); }
+.cc-review-peek .synthesis-body { font-size: var(--fs-body); }
+.cc-review-foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
+  display: flex; flex-direction: column; gap: 8px; }
+.cc-review-log { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
+  background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 10px; margin: 0; max-height: 200px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-word; }
 .research-card, .jr-note, .dj-row, .vx-builder, .sc-note, .ledger-cap,
 .ledger-stance, .ledger-packet { border:1px solid var(--border); border-radius:var(--radius);
   background:var(--surface); }
@@ -186,7 +182,7 @@ RESEARCH_PANEL_STYLE = """<style>
 .prep-ask { background: transparent; border: 0; padding: 0; cursor: pointer;
   color: var(--fg); font: inherit; text-align: left; }
 .prep-ask:hover { color: var(--accent); }
-\n/* migrated src/pipeline/ledger_panel.py _PANEL_STYLE */\n<style>
+\n/* migrated src/pipeline/ledger_panel.py _PANEL_STYLE */
 /* ONE card shape (visual conformance pass, requirement E): every card-like
    block on the Ledger tab — capture box, musing, stance, coach card — shares
    the SAME background/radius/padding/margin-bottom. Before this pass
@@ -260,7 +256,7 @@ RESEARCH_PANEL_STYLE = """<style>
 .ledger-queues-hint { font-size: var(--fs-caption); font-weight: 400; color: var(--muted); }
 .ledger-queues-count { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); }
 .ledger-queues-body { padding-top: var(--sp-2); }
-</style>\n/* migrated src/pipeline/ledger_panel.py _ONMYMIND_STYLE */\n<style>
+/* migrated src/pipeline/ledger_panel.py _ONMYMIND_STYLE */
 /* Reuses the panel's own micro-tag / warn-tag treatment (.ledger-chan,
    .ledger-needs — see _PANEL_STYLE) rather than a second copy of the same
    rule under a card-local name; only the accent ladder badge is genuinely
@@ -308,7 +304,7 @@ RESEARCH_PANEL_STYLE = """<style>
 .om-reply-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
 .om-chat-receipt { color: var(--accent); font-weight: 600; }
 #onmymind-more { margin-top: var(--sp-2); }
-</style>\n/* migrated src/pipeline/ledger_panel.py _PACKET_STYLE */\n<style>
+/* migrated src/pipeline/ledger_panel.py _PACKET_STYLE */
 .ledger-packet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
 .pk-band { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
 .pk-count { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
@@ -328,34 +324,6 @@ RESEARCH_PANEL_STYLE = """<style>
    shape, with the individual narratives listed inside so nothing hides. */
 .ledger-group-list { margin: var(--sp-2) 0; padding-left: var(--sp-4); font-size: var(--fs-caption); color: var(--fg-soft); }
 .ledger-group-list li { margin: var(--sp-1) 0; }
-</style>
-ce viewers (P3.5): transcript reader + 10-K section reader.
-
-The provenance substrate (0075 locators, accession/filing identity, source
-chips) gives every number a position inside a source document; these pages
-are the destination that position points at:
-
-  * ``render_transcript_page`` — a registered transcript document rendered
-    as numbered lines, each carrying ``id="L<n>"`` so ``#L42`` deep-links
-    and highlights the cited line (the evidence drawer's transcript_line
-    citations and ``FactLocator.transcript_line`` use this anchor shape).
-  * ``render_form10k_page`` — a parsed FMP form-10-K/10-Q JSON document
-    (section-keyed text) with a section nav; ``?section=<key>`` deep-links
-    the section a ``FactLocator.section`` names.
-
-Both are full standalone pages served by ``GET /source/<doc_id>`` (the
-dispatcher route in comments_server routes by doc_type and falls back to
-the document's source_url). Renderers return None when the document isn't
-viewable in that shape — the route turns that into the fallback, never a
-crash.
-
-``?fragment=1`` (UX9) returns the same content chrome-less — a ``sv-frag``
-div instead of a full document — for the command-center shell's peek
-popover, which provides the styles via ``VIEWER_CONTENT_CSS``. Fragment
-mode never 302s to an external source_url (the peek fetch couldn't follow
-it cross-origin); external-only documents render their metadata card with
-the outbound link instead.
-\n
 /* migrated source_viewers standalone page and fragment rules */
 
 .sv-title { font-size: var(--fs-title); font-weight: 600; }
@@ -408,9 +376,9 @@ the outbound link instead.
 .sv-pdf-pager .sv-pdf-page-n { color: var(--muted); font-family: var(--mono); }
 .sv-pdf-snippet { margin-top: 10px; }
 
-body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
+.sv-page { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
   font-size: var(--fs-body); line-height: 1.55; }
-a { color: var(--accent); }
+.sv-page a { color: var(--accent); }
 .sv-head { padding: 14px 22px; border-bottom: 1px solid var(--border);
   display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
   position: sticky; top: 0; background: var(--bg); z-index: 5; }

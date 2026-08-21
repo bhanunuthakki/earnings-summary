@@ -162,6 +162,7 @@ def test_transcript_page_line_anchors_and_escaping(tmp_path: Path) -> None:
     db = _seed_repo(tmp_path)
     html = render_transcript_page(tmp_path, db, 1)
     assert html is not None
+    assert '<body class="sv-page">' in html
     assert '<li id="L2">' in html
     assert '<span class="ln-speaker">David Velez:</span>' in html
     # Raw HTML in the transcript is escaped, never executed.
