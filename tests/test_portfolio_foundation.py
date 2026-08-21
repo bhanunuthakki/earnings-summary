@@ -473,6 +473,164 @@ def test_snapshot_integrity_requires_total_equity_and_exact_account_coverage() -
     )
 
 
+def _snapshot_with_empty_account() -> PortfolioSnapshotV1:
+    """Build a complete book with MELI held in account 10 and account 19 empty."""
+    base = _snapshot_from_positions(_positions())
+    account_10 = base.accounts[3].model_copy(update={"account_id": 10, "name": "MELI brokerage"})
+    account_19 = base.accounts[1].model_copy(
+        update={
+            "account_id": 19,
+            "name": "Empty 401(k)",
+            "active": True,
+            "included_in_totals": True,
+            "exclusion_reason": None,
+            "value": None,
+            "holdings_as_of": None,
+            "last_successful_sync_at": None,
+            "warnings": [],
+        }
+    )
+    position = base.positions[0]
+    lot = position.accounts[0].model_copy(
+        update={"account_id": 10, "account_name": "MELI brokerage"}
+    )
+    included_account_ids = [2, 3, 10, 19]
+    return base.model_copy(
+        update={
+            "accounts": [base.accounts[0], base.accounts[2], account_10, account_19],
+            "meta": base.meta.model_copy(
+                update={
+                    "account_coverage": base.meta.account_coverage.model_copy(
+                        update={"included_account_ids": included_account_ids}
+                    )
+                }
+            ),
+            "equity_fraction": base.equity_fraction.model_copy(
+                update={"included_account_ids": included_account_ids}
+            ),
+            "positions": [position.model_copy(update={"accounts": [lot]})],
+        }
+    )
+
+
+def test_complete_current_snapshot_accepts_empty_included_account_without_hiding_meli() -> None:
+    from integrations.portfolio_position import (
+        PortfolioPositionAdapter,
+        validate_snapshot_account_coverage,
+    )
+
+    snapshot = _snapshot_with_empty_account()
+    health = _health().model_copy(update={"active_account_count": 4})
+    assert validate_snapshot_account_coverage(snapshot, health) is None
+
+    class _EmptyAccountClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_EmptyAccountClient()).resolve("MELI")
+    assert result.state == "held"
+    assert result.total_quantity == pytest.approx(55.256834)
+    assert result.accounts[0].account_name == "MELI brokerage"
+    assert result.provenance is not None
+    assert result.provenance.included_account_ids == [2, 3, 10, 19]
+
+
+@pytest.mark.parametrize(
+    ("snapshot_update", "expected_detail"),
+    (
+        (
+            {"meta": {"is_partial": True}},
+            "empty account 19 is not valid in a partial or stale envelope",
+        ),
+        (
+            {"meta": {"is_stale": True}},
+            "empty account 19 is not valid in a partial or stale envelope",
+        ),
+        (
+            {"equity_fraction": {"is_partial": True}},
+            "empty account 19 is not valid in a partial or stale envelope",
+        ),
+        (
+            {"equity_fraction": {"is_stale": True}},
+            "empty account 19 is not valid in a partial or stale envelope",
+        ),
+    ),
+)
+def test_empty_included_account_requires_complete_current_non_lagging_envelope(
+    snapshot_update: dict[str, dict[str, bool]], expected_detail: str
+) -> None:
+    from integrations.portfolio_position import validate_snapshot_account_coverage
+
+    base = _snapshot_with_empty_account()
+    if "meta" in snapshot_update:
+        snapshot = base.model_copy(
+            update={"meta": base.meta.model_copy(update=snapshot_update["meta"])}
+        )
+    else:
+        snapshot = base.model_copy(
+            update={
+                "equity_fraction": base.equity_fraction.model_copy(
+                    update=snapshot_update["equity_fraction"]
+                )
+            }
+        )
+    error = validate_snapshot_account_coverage(
+        snapshot, _health().model_copy(update={"active_account_count": 4})
+    )
+    assert error == ("account_coverage_invalid", expected_detail)
+
+
+def test_empty_included_account_rejects_one_sided_nulls_and_lagging_state() -> None:
+    from integrations.portfolio_position import validate_snapshot_account_coverage
+
+    base = _snapshot_with_empty_account()
+    health = _health().model_copy(update={"active_account_count": 4})
+    dated_empty = base.model_copy(
+        update={
+            "accounts": [
+                *base.accounts[:3],
+                base.accounts[3].model_copy(update={"holdings_as_of": date(2026, 8, 19)}),
+            ]
+        }
+    )
+    assert validate_snapshot_account_coverage(dated_empty, health) == (
+        "account_coverage_invalid",
+        "active account 19 holdings date is not covered by the portfolio snapshot envelope",
+    )
+
+    valued_without_date = base.model_copy(
+        update={
+            "accounts": [
+                *base.accounts[:3],
+                base.accounts[3].model_copy(update={"value": Decimal("1")}),
+            ]
+        }
+    )
+    assert validate_snapshot_account_coverage(valued_without_date, health) == (
+        "account_coverage_invalid",
+        "active account 19 has value without a holdings date",
+    )
+
+    lagging = base.model_copy(
+        update={
+            "meta": base.meta.model_copy(
+                update={
+                    "account_coverage": base.meta.account_coverage.model_copy(
+                        update={"lagging_account_ids": [19]}
+                    )
+                }
+            )
+        }
+    )
+    assert validate_snapshot_account_coverage(lagging, health) == (
+        "account_coverage_invalid",
+        "empty included account 19 cannot be marked lagging",
+    )
+
+
 def test_canonical_adapter_rejects_position_lot_outside_active_envelope_accounts() -> None:
     from integrations.portfolio_position import PortfolioPositionAdapter
 

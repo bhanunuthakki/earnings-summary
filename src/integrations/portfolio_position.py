@@ -638,6 +638,31 @@ def validate_snapshot_account_coverage(
                 continue
             if account.account_id not in included:
                 continue
+            if account.account_id in lagging:
+                if account.holdings_as_of is None and account.value is None:
+                    return (
+                        "account_coverage_invalid",
+                        f"empty included account {account.account_id} cannot be marked lagging",
+                    )
+                continue
+            if account.holdings_as_of is None and account.value is None:
+                if (
+                    health.is_stale
+                    or snapshot.meta.is_partial
+                    or snapshot.meta.is_stale
+                    or snapshot.equity_fraction.is_partial
+                    or snapshot.equity_fraction.is_stale
+                ):
+                    return (
+                        "account_coverage_invalid",
+                        f"empty account {account.account_id} is not valid in a partial or stale envelope",
+                    )
+                continue
+            if account.holdings_as_of is None:
+                return (
+                    "account_coverage_invalid",
+                    f"active account {account.account_id} has value without a holdings date",
+                )
             if account.holdings_as_of != snapshot.meta.as_of and account.account_id not in lagging:
                 return (
                     "account_coverage_invalid",
