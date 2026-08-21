@@ -663,6 +663,24 @@ def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> Non
     assert "const model = projection.model" in html
     assert "payload.sections" in html
     assert "section.dom_id" in html
+    assert "WORK_OS_BRIEF_GROUP_IDS" in html
+    for group_id in (
+        "overview",
+        "quarter",
+        "financials",
+        "thesis-risk",
+        "valuation-comps",
+        "sources",
+    ):
+        assert f"'{group_id}'" in html
+    assert ".tab-group-pane[data-tab-group]" in html
+    assert ".subtab-pane[data-tab]" in html
+    assert "work-os-reader-group-button" in html
+    assert "work-os-reader-section-button" in html
+    assert "readerGroupActive" in html
+    assert "readerSectionActive" in html
+    assert "button.setAttribute('aria-expanded'" in html
+    assert "sectionButton.setAttribute('aria-current', 'location')" in html
     assert "work-os-report-content k-doc" in html
     assert "editorial.v1" in html
     assert "startsWith('/source/')" in html
@@ -916,6 +934,20 @@ def test_company_switcher_is_attached_to_identity_and_accessible() -> None:
     assert ".company-identity-switcher:focus-within .company-picker-trigger" in html
     assert "@media (hover: none)" in html
     assert "min-block-size: var(--touch-target-size)" in html
+
+
+def test_company_switcher_overlay_is_not_clipped_or_hidden_by_the_toolbar() -> None:
+    html = render_work_os_shell()
+
+    assert ".research-toolbar.k-card { overflow: visible; }" in html
+    assert (
+        '.company-picker-popover input[type="search"] { inline-size: 100%; '
+        "min-inline-size: 0; box-sizing: border-box;"
+    ) in html
+    assert (
+        ".company-picker-trigger { opacity: 1; transform: none; "
+        "transition: opacity var(--transition), transform var(--transition); }"
+    ) in html
 
 
 def test_company_picker_supports_search_keyboard_dismissal_and_focus_restore() -> None:

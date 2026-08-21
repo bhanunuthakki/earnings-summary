@@ -1,0 +1,19 @@
+# Generated for the hosted rendered-route design gate.
+# Keep the browser adapter separate from the application lock so the runtime
+# dependency set stays unchanged. Both Linux CI and local Windows wheels are
+# pinned where the package publishes platform-specific artifacts.
+greenlet==3.2.4 \
+    --hash=sha256:d76383238584e9711e20ebe14db6c88ddcedc1829a9ad31a584389463b5aa504 \
+    --hash=sha256:554b03b6e73aaabec3745364d6239e9e012d64c68ccd0b8430c64ccc14939a8b
+    # via playwright
+playwright==1.60.0 \
+    --hash=sha256:1c2bfae7884fb3fb05b853290eab8f343d524e5016f2f1def702acbbdf14c93e \
+    --hash=sha256:9566821ce6030a1f9e7146a24e19355ab0d98805fd0f9be50bb3d8fef1750c02
+    # via the hosted design gate
+pyee==13.0.0 \
+    --hash=sha256:48195a3cddb3b1515ce0695ed76036b5ccc2ef3a9f963ff9f77aec0139845498
+    # via playwright
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
+    --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
+    # via pyee

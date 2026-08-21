@@ -209,6 +209,38 @@ body { font-family: var(--sans); font-size: var(--fs-body); line-height: 1.5; di
   color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase;
 }
 .report-sidebar .tab-count { margin-left: auto; }
+/* BHA-71: sidebar collapse toggle button */
+.report-sidebar-toggle {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: var(--icon-button-size); height: var(--icon-button-size); cursor: pointer;
+  margin-top: auto; align-self: flex-start;
+  color: var(--muted); transition: color var(--transition), background var(--transition);
+}
+.report-sidebar-toggle:hover { color: var(--fg); background: var(--surface); }
+.report-sidebar-toggle svg { transition: transform var(--transition-fluid); }
+/* Collapsed state: rail shrinks to icon-only width */
+.report-sidebar.sidebar-collapsed {
+  width: var(--sidebar-collapsed-width);
+  padding: var(--sp-2);
+  transition: width var(--transition-fluid), padding var(--transition-fluid);
+}
+.report-sidebar { transition: width var(--transition-fluid), padding var(--transition-fluid); }
+.report-sidebar.sidebar-collapsed .report-sidebar-product,
+.report-sidebar.sidebar-collapsed .report-nav-label,
+.report-sidebar.sidebar-collapsed .tab-label,
+.report-sidebar.sidebar-collapsed .tab-count { display: none; }
+.report-sidebar.sidebar-collapsed .report-sidebar-brand { align-items: center; padding-inline: 0; }
+.report-sidebar.sidebar-collapsed .k-nav-item { justify-content: center; padding-inline: 0; }
+.report-sidebar.sidebar-collapsed .report-sidebar-toggle svg { transform: rotate(180deg); }
+/* Keyboard focus ring on sidebar nav items */
+.report-sidebar .tab:focus-visible {
+  outline: var(--bw-thick) solid var(--accent); outline-offset: var(--bw-thin);
+}
+/* Touch-friendly hit targets on coarse-pointer devices */
+@media (pointer: coarse) {
+  .report-sidebar .k-nav-item { min-height: var(--touch-target-size); }
+}
+
 
 .l1-root {
   flex: 1;
@@ -1807,18 +1839,20 @@ ul.flag-list li.flag-positive {
   .identity-right { flex-wrap: wrap; }
 }
 
-/* Tablet portrait: collapse the persistent sidebar to the canonical icon rail. */
+/* Tablet portrait: JavaScript defaults the persistent sidebar to the canonical
+   icon rail while leaving the toggle operable for keyboard, touch, and pointer. */
 @media (max-width: 768px) {
   :root { --pad-x: var(--sp-3); }
-  .report-sidebar { width: var(--sidebar-collapsed-width); padding: var(--sp-2); }
-  .report-sidebar-product, .report-nav-label, .report-sidebar .tab-label,
-  .report-sidebar .tab-count { display: none; }
-  .report-sidebar-brand { align-items: center; padding-inline: 0; }
-  .report-sidebar .k-nav-item { justify-content: center; padding-inline: 0; }
   .kpi-strip { grid-template-columns: 1fr; }
   .kpi-tile { min-width: 0; }
   .kpi-spark svg { width: 100%; height: auto; }
   .subtabs { overflow-x: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .report-sidebar,
+  .report-sidebar-toggle,
+  .report-sidebar-toggle svg { transition: none; }
 }
 
 /* Keyboard-shortcut help overlay (JS-injected by workspace_script; ? toggles,
@@ -2142,6 +2176,10 @@ READER_OVERRIDE_CSS = """
 .tab-pane,
 .subtab-pane {
   display: block !important;
+}
+.work-os-report-content [data-reader-group-active="false"],
+.work-os-report-content [data-reader-section-active="false"] {
+  display: none !important;
 }
 .tab-group-pane + .tab-group-pane {
   margin-top: var(--sp-6);

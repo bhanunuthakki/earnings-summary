@@ -6,14 +6,27 @@ import importlib
 import threading
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
-from execution.verify_design_conformance import _scan_canary  # pyright: ignore[reportPrivateUsage]
+import execution.verify_design_conformance as design_conformance
+from execution.design_route_canaries import write_route_canary_fixtures
+from execution.verify_design_conformance import (  # pyright: ignore[reportPrivateUsage]
+    CanaryResult,
+    RouteCanaryResult,
+    _build_receipt,  # pyright: ignore[reportPrivateUsage]
+    _route_canary_source,  # pyright: ignore[reportPrivateUsage]
+    _route_population_failures,  # pyright: ignore[reportPrivateUsage]
+    _scan_canary,  # pyright: ignore[reportPrivateUsage]
+    _scan_route_canaries,  # pyright: ignore[reportPrivateUsage]
+)
 from ui.conformance_scan import scan_surface_evidence
 
 ROOT_TOKENS = """
 :root {
+  --fs-display: 20px;
+  --fs-title: 15px;
   --fs-body: 13px;
   --fs-caption: 11px;
   --radius: 8px;
@@ -104,7 +117,7 @@ def test_browser_canary_passes_canonical_rendered_specimen(
     _playwright_or_skip()
     _server, url, _payload = specimen_server
     result = _scan_canary(url, browser_canary=True)
-    assert result.status == "passed"
+    assert result.status == "passed", result
     assert result.findings == ()
 
 
@@ -150,6 +163,294 @@ def test_browser_canary_catches_evil_inline_style_and_custom_property(
     assert result.status == "failed"
     assert any("inline border-" in finding and "radius" in finding for finding in result.findings)
     assert any("inline --radius" in finding for finding in result.findings)
+
+
+def test_route_canary_matrix_covers_all_required_routes_and_viewports() -> None:
+    """The hosted gate must exercise every required fixture at both widths."""
+
+    _require_playwright()
+    results = _scan_route_canaries()
+    assert len(results) == 10
+    assert {(item.route, item.viewport) for item in results} == {
+        (route, viewport)
+        for route in (
+            "cockpit",
+            "company-desk",
+            "fact-metric-playground",
+            "operations",
+            "full-brief",
+        )
+        for viewport in ("desktop", "narrow")
+    }
+    assert all(item.status == "passed" for item in results), results
+
+
+@pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
+def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
+    viewport: tuple[int, int],
+) -> None:
+    """A persisted artifact must be interactive across the real shadow boundary."""
+
+    _require_playwright()
+    playwright_api = importlib.import_module("playwright.sync_api")
+    from execution.design_route_canaries import render_route_canary
+
+    html = render_route_canary(route="full-brief", viewport="desktop")
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(
+                viewport={"width": viewport[0], "height": viewport[1]},
+                reduced_motion="reduce",
+            )
+            page = context.new_page()
+            page.set_content(html, wait_until="load")
+            page.wait_for_selector("#workOsBriefReader .work-os-report-host", state="visible")
+            buttons = page.locator("#workOsBriefReaderSections .work-os-reader-group-button")
+            assert buttons.count() == 6
+            assert buttons.all_text_contents() == [
+                "Overview & Moat",
+                "Quarter & Guidance",
+                "Financials & DCF",
+                "Thesis & Risk",
+                "Valuation & Comps",
+                "Sources & Citations",
+            ]
+
+            def visible_reader_state() -> dict[str, list[str]]:
+                return page.locator(".work-os-report-host").evaluate(
+                    """
+                    host => {
+                      const groups = [...host.shadowRoot.querySelectorAll('.tab-group-pane[data-tab-group]')];
+                      const sections = [...host.shadowRoot.querySelectorAll('.subtab-pane[data-tab]')];
+                      return {
+                            groups: groups.filter(node => node.getClientRects().length > 0).map(node => node.dataset.tabGroup),
+                            sections: sections.filter(node => node.getClientRects().length > 0).map(node => node.dataset.tab),
+                      };
+                    }
+                    """
+                )
+
+            page.wait_for_function(
+                "getComputedStyle(document.querySelector('.work-os-report-host').shadowRoot.querySelector('[data-reader-group-active=\"false\"]')).display === 'none'"
+            )
+            initial = visible_reader_state()
+            assert initial["groups"] == ["overview"]
+            assert len(initial["sections"]) == 1
+
+            page.evaluate(
+                """
+                window.__readerScrollBehaviors = [];
+                Element.prototype.scrollIntoView = function(options) {
+                  window.__readerScrollBehaviors.push(options && options.behavior);
+                };
+                """
+            )
+
+            page.locator('button[data-group-id="quarter"]').click()
+            quarter = visible_reader_state()
+            assert quarter["groups"] == ["quarter"]
+            assert quarter["sections"] == ["earnings"]
+            assert (
+                page.locator('button[data-group-id="quarter"]').get_attribute("aria-current")
+                == "location"
+            )
+
+            page.locator('button[data-section-id="news"]').click()
+            news = visible_reader_state()
+            assert news["groups"] == ["quarter"]
+            assert news["sections"] == ["news"]
+            assert page.evaluate("window.__readerScrollBehaviors.filter(Boolean)") == [
+                "auto",
+                "auto",
+            ]
+            assert (
+                page.locator('button[data-section-id="news"]').get_attribute("aria-current")
+                == "location"
+            )
+        finally:
+            browser.close()
+
+
+def test_route_canary_population_is_an_exact_fail_closed_census() -> None:
+    results = tuple(
+        RouteCanaryResult(
+            route=route,
+            viewport=viewport,
+            fixture=f"{route}.{viewport}.html",
+            status="passed",
+        )
+        for route in (
+            "cockpit",
+            "company-desk",
+            "fact-metric-playground",
+            "operations",
+            "full-brief",
+        )
+        for viewport in ("desktop", "narrow")
+    )
+    assert _route_population_failures(results) == ()
+
+    missing = _route_population_failures(results[:-1])
+    assert len(missing) == 1
+    assert missing[0].route == "full-brief"
+    assert missing[0].viewport == "narrow"
+    assert missing[0].status == "unavailable"
+
+    duplicated = _route_population_failures((*results, results[0]))
+    assert len(duplicated) == 1
+    assert duplicated[0].status == "failed"
+    assert "duplicate" in str(duplicated[0].reason)
+
+
+def test_receipt_fails_when_route_canary_population_shrinks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    results = tuple(
+        RouteCanaryResult(
+            route=route,
+            viewport=viewport,
+            fixture=f"{route}.{viewport}.html",
+            status="passed",
+        )
+        for route in (
+            "cockpit",
+            "company-desk",
+            "fact-metric-playground",
+            "operations",
+            "full-brief",
+        )
+        for viewport in ("desktop", "narrow")
+    )
+
+    def fake_static(_source_root: Path) -> tuple[object, ...]:
+        return ((), (), (), (), (), (), (), (), 0, (), "clean")
+
+    def fake_canary(_url: str | None, *, browser_canary: bool = False) -> CanaryResult:
+        del browser_canary
+        return CanaryResult(status="skipped:not-requested")
+
+    def fake_routes(_project_root: Path) -> tuple[RouteCanaryResult, ...]:
+        return results[:-1]
+
+    monkeypatch.setattr(
+        design_conformance,
+        "_scan_static",
+        fake_static,
+    )
+    monkeypatch.setattr(
+        design_conformance,
+        "_scan_canary",
+        fake_canary,
+    )
+    monkeypatch.setattr(
+        design_conformance,
+        "_scan_route_canaries",
+        fake_routes,
+    )
+
+    receipt = _build_receipt(tmp_path / "src", None, route_canaries=True)
+
+    assert receipt.verdict == "fail"
+    assert any(
+        result.route == "full-brief"
+        and result.viewport == "narrow"
+        and result.status == "unavailable"
+        for result in receipt.route_canaries
+    )
+
+
+def test_normal_route_canary_source_ignores_stale_committed_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stale = tmp_path / "tests" / "fixtures" / "design_canaries" / "cockpit.desktop.html"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale fixture", encoding="utf-8")
+
+    def fake_render(*, route: str, viewport: str) -> str:
+        return f"production:{route}:{viewport}"
+
+    monkeypatch.setattr(
+        design_conformance,
+        "render_route_canary",
+        fake_render,
+    )
+
+    assert _route_canary_source("cockpit", "desktop", None) == "production:cockpit:desktop"
+    assert _route_canary_source("cockpit", "desktop", tmp_path) == "stale fixture"
+
+
+def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</style>", ".company-picker-trigger { border-radius: 41px !important; } </style>"
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "company-desk" and item.viewport == "desktop"
+    )
+    assert result.status == "failed"
+    assert any("border-radius" in finding for finding in result.findings)
+
+
+def test_route_canary_rejects_clipped_or_occluded_overlay(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.narrow.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</style>", "#companyPickerPopover { left: -500px !important; } </style>"
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "company-desk" and item.viewport == "narrow"
+    )
+    assert result.status == "failed"
+    assert any("occluded" in finding or "clipped" in finding for finding in result.findings)
+
+
+def test_route_canary_rejects_delayed_runtime_mutation(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "full-brief.desktop.html"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "</body>",
+            "<script>setTimeout(() => document.querySelector('#workOsBriefReader button.k-btn').style.setProperty('border-radius', '41px', 'important'), 250);</script></body>",
+        ),
+        encoding="utf-8",
+    )
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "full-brief" and item.viewport == "desktop"
+    )
+    assert result.status == "failed"
+    assert any("border-radius" in finding for finding in result.findings)
+
+
+def _copy_route_fixtures(tmp_path: Path) -> Path:
+    write_route_canary_fixtures(tmp_path)
+    return tmp_path
+
+
+def _require_playwright() -> None:
+    try:
+        playwright_api = importlib.import_module("playwright.sync_api")
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        pytest.fail(f"Playwright Chromium unavailable: {type(exc).__name__}")
 
 
 def _playwright_or_skip() -> None:

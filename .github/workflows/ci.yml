@@ -160,7 +160,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t all_files < <(find tests -type f -name 'test_*.py' | sort)
+          # Browser canaries have one authoritative owner below: Design Sync,
+          # which installs the hash-locked Playwright adapter and Chromium.
+          mapfile -t all_files < <(
+            find tests -type f -name 'test_*.py' \
+              | grep -v '^tests/test_design_computed_canary.py$' \
+              | sort
+          )
           mapfile -t selected < <(
             printf '%s\n' "${all_files[@]}" |
               python .github/scripts/ci_gate.py select-tests \
@@ -186,7 +192,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -195,14 +201,50 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements.lock
+          cache-dependency-path: |
+            requirements.lock
+            requirements-design.lock
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: design-system/package-lock.json
+      - name: Build verified SQLite writer runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
+          archive="$RUNNER_TEMP/sqlite-amalgamation-3530400.zip"
+          mkdir -p "$sqlite_dir"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+            https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip \
+            --output "$archive"
+          python - "$archive" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+
+          expected = "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
+          observed = hashlib.sha3_256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
+          if observed != expected:
+              raise SystemExit(f"SQLite archive SHA3-256 mismatch: {observed}")
+          PY
+          unzip -q "$archive" -d "$sqlite_dir"
+          gcc -O2 -fPIC -shared -pthread -DSQLITE_ENABLE_FTS5 \
+            "$sqlite_dir/sqlite-amalgamation-3530400/sqlite3.c" \
+            -o "$sqlite_dir/libsqlite3.so.0" -lm -ldl
+          echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
+          LD_PRELOAD="$sqlite_dir/libsqlite3.so.0" python - <<'PY'
+          import sqlite3
+
+          assert sqlite3.sqlite_version == "3.53.4", sqlite3.sqlite_version
+          PY
       - name: Install runtime dependencies
-        run: pip install --require-hashes -r requirements.lock
+        run: |
+          pip install --require-hashes -r requirements.lock
+          pip install --require-hashes -r requirements-design.lock
+          pip install -e .[dev]
+          python -m playwright install --with-deps --only-shell chromium
       - name: Verify canonical design tokens and production Work OS contract
         env:
           DESIGN_DEBT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -214,6 +256,13 @@ jobs:
         run: |
           npm ci
           npm run check
+      - name: Run mandatory rendered route canary matrix
+        run: |
+          # The CLI owns the single full 5-route x 2-viewport matrix. Unit
+          # tests retain the positive and adversarial browser checks without
+          # paying for that matrix a second time.
+          python -m pytest -q tests/test_design_computed_canary.py -k "not route_canary_matrix_covers_all_required_routes_and_viewports"
+          python execution/verify_design_conformance.py --check --route-canaries
 
   quality:
     needs: [changes]
@@ -395,7 +444,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements.lock
+          cache-dependency-path: |
+            requirements.lock
+            requirements-design.lock
       - name: Install scanners + runtime deps
         run: |
           python -m pip install --upgrade pip
@@ -404,7 +455,9 @@ jobs:
       - name: pip-audit — dependency CVEs
         id: pip_audit
         continue-on-error: true
-        run: pip-audit -r requirements.lock --progress-spinner off
+        run: |
+          pip-audit -r requirements.lock --progress-spinner off
+          pip-audit -r requirements-design.lock --progress-spinner off
       - name: bandit — no new medium+ SAST findings
         id: bandit
         continue-on-error: true
@@ -421,12 +474,14 @@ jobs:
       - name: Generate CycloneDX SBOM
         id: sbom
         continue-on-error: true
-        run: cyclonedx-py requirements requirements.lock --output-file sbom.cdx.json
+        run: |
+          cyclonedx-py requirements requirements.lock --output-file sbom-runtime.cdx.json
+          cyclonedx-py requirements requirements-design.lock --output-file sbom-design.cdx.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ always() && hashFiles('sbom.cdx.json') != '' }}
+        if: ${{ always() && hashFiles('sbom-*.cdx.json') != '' }}
         with:
           name: cyclonedx-sbom
-          path: sbom.cdx.json
+          path: sbom-*.cdx.json
       - name: Require every security scanner to pass
         if: ${{ always() }}
         env:

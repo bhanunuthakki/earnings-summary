@@ -155,8 +155,15 @@ def test_design_sync_gate_is_wired_into_hosted_ci() -> None:
     workflow = (check_design_sync.PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
+    test_job = workflow.split("\n  tests:\n", 1)[1].split("\n  design:\n", 1)[0]
     design_job = workflow.split("\n  design:\n", 1)[1].split("\n  quality:\n", 1)[0]
+    assert "grep -v '^tests/test_design_computed_canary.py$'" in test_job
     assert "pip install --require-hashes -r requirements.lock" in design_job
+    assert "pip install -e .[dev]" in design_job
+    assert "Build verified SQLite writer runtime" in design_job
+    assert 'echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"' in design_job
+    assert "python -m pytest -q tests/test_design_computed_canary.py -k" in design_job
+    assert "python execution/verify_design_conformance.py --check --route-canaries" in design_job
     assert "python scripts/check_design_sync.py" in design_job
     assert "python scripts/gen_design_conformance_debt.py --base-ref" in design_job
     assert "--allow-missing-base" in design_job

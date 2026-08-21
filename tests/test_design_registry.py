@@ -93,7 +93,7 @@ def _expected_grid_signature(item: registry.GridSignature) -> str:
 
 
 def test_registry_is_frozen_typed_and_complete() -> None:
-    assert registry.REGISTRY_VERSION == "1.7.0"
+    assert registry.REGISTRY_VERSION == "1.9.0"
     records = (
         registry.SHAPE_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0].signatures[0],
@@ -113,7 +113,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert isinstance(registry.REGISTERED, frozenset)
     assert isinstance(registry.GOVERNED, frozenset)
     assert len(registry.REGISTERED) == 106
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 150
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 151
     assert len(registry.GOVERNED) == 127
     assert (
         frozenset(

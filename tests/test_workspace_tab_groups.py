@@ -140,7 +140,7 @@ def test_portfolio_group_map_held() -> None:
     got = _group_map(_make_spec(held=True), WorkspaceP3Panels.empty())
     assert got == [
         ("overview", "Overview & Moat", ["company", "synthesis", "exec_comp"]),
-        ("quarter", "Quarter & Guidance", ["earnings", "saydo", "news"]),
+        ("quarter", "Quarter & Guidance", ["earnings", "news", "saydo"]),
         ("financials", "Financials & DCF", ["financials"]),
         ("thesis-risk", "Thesis & Risk", ["thesis", "bear", "position"]),
         ("valuation-comps", "Valuation & Comps", ["valuation", "comps"]),
@@ -153,7 +153,7 @@ def test_evaluation_group_map_uses_the_same_brief_canvas() -> None:
     got = _group_map(_make_spec(flavor=ReportFlavor.EVALUATION), WorkspaceP3Panels.empty())
     assert got == [
         ("overview", "Overview & Moat", ["company", "synthesis", "exec_comp"]),
-        ("quarter", "Quarter & Guidance", ["earnings", "saydo", "news"]),
+        ("quarter", "Quarter & Guidance", ["earnings", "news", "saydo"]),
         ("financials", "Financials & DCF", ["financials"]),
         ("thesis-risk", "Thesis & Risk", ["thesis", "bear"]),
         ("valuation-comps", "Valuation & Comps", ["valuation", "comps"]),
@@ -233,7 +233,10 @@ def test_render_grouped_markup_portfolio(tmp_path: Path) -> None:
     html = render(_make_spec(held=True, repo_root=str(tmp_path)))
     # Persistent sidebar: one native destination button per group, none for
     # the old section tabs. Primary navigation does not impersonate a tablist.
-    assert '<nav class="tabs k-sidebar report-sidebar" aria-label="Research workspace">' in html
+    assert (
+        '<nav class="tabs k-sidebar report-sidebar" id="report-sidebar-navigation" '
+        'aria-label="Research workspace">'
+    ) in html
     assert "Portfolio Intelligence" in html
     assert "Research Engine" in html
     assert "Operations &amp; Governance" in html
@@ -307,7 +310,7 @@ def test_workspace_js_carries_grouped_tab_contract() -> None:
 def test_workspace_css_styles_grouped_tabs() -> None:
     assert ".report-sidebar" in CSS
     assert "width: var(--sidebar-collapsed-width)" in CSS
-    assert ".report-sidebar .k-nav-item { justify-content: center" in CSS
+    assert ".report-sidebar.sidebar-collapsed .k-nav-item { justify-content: center" in CSS
     assert ".kpi-strip { grid-template-columns: 1fr; }" in CSS
     assert ".tab-group-pane.active { display: block; }" in CSS
     assert ".subtab.active" in CSS

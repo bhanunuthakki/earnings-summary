@@ -494,9 +494,16 @@
 .report-nav-layer { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-3); }
 .report-nav-scroll { min-height: 0; overflow-y: auto; }
 .report-sidebar .tab-count { margin-left: auto; }
+.report-sidebar { transition: width var(--transition-fluid), padding var(--transition-fluid); }
 .report-sidebar-brand { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-2); border-bottom: var(--bw-thin) solid var(--border); }
 .report-sidebar-product { font-size: var(--fs-caption); color: var(--muted); }
 .report-sidebar-ticker { font-family: var(--mono); font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
+.report-sidebar-toggle svg { transition: transform var(--transition-fluid); }
+.report-sidebar-toggle:hover { color: var(--fg); background: var(--surface); }
+.report-sidebar.sidebar-collapsed .k-nav-item { justify-content: center; padding-inline: 0; }
+.report-sidebar.sidebar-collapsed .report-sidebar-brand { align-items: center; padding-inline: 0; }
+.report-sidebar.sidebar-collapsed .report-sidebar-product, .report-sidebar.sidebar-collapsed .report-nav-label, .report-sidebar.sidebar-collapsed .tab-label, .report-sidebar.sidebar-collapsed .tab-count { display: none; }
+.report-sidebar.sidebar-collapsed .report-sidebar-toggle svg { transform: rotate(180deg); }
 .row-split { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-5); flex-wrap: wrap; }
 .saydo-actual { font-family: var(--mono); font-size: var(--fs-body); }
 .saydo-guide { font-family: var(--sans); font-style: italic; font-size: var(--fs-body); color: var(--muted); }
@@ -748,9 +755,11 @@
 /* A document's own prose keeps the reading measure even though the report itself is fluid — .k-doc-fluid drops the outer clamp, not this one. */ .k-doc .lede { max-width: var(--reading-measure); }
 /* A recorded exchange (management Q&A, an interview). The answer is indented under its question by a hairline, so a dodge reads as a dodge. */ .k-qa { border-top: 1px solid var(--hairline); padding: var(--sp-2) 0 var(--sp-1); }
 /* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm, added in the JS markup); this layout-only rule keeps the row spacing. */ .cmt-actions { margin-top: var(--sp-2); display: flex; gap: 6px; }
+/* BHA-71: sidebar collapse toggle button */ .report-sidebar-toggle { flex: none; display: flex; align-items: center; justify-content: center; width: var(--icon-button-size); height: var(--icon-button-size); cursor: pointer; margin-top: auto; align-self: flex-start; color: var(--muted); transition: color var(--transition), background var(--transition); }
 /* Break-rule status is STATUS color (design_language §2): green=good like every other surface — the old accent-blue "ok" predated the green unification and left the report disagreeing with the dashboard's pills. */ .break-status-ok { color: var(--ok); }
 /* Break-rules detail row — appears under each main rule row when narrative / detail / observations are present. Quieter background so the parent row reads first. */ .break-detail td { padding: var(--sp-1) var(--panel-pad-x) var(--sp-2) !important; border-top: 0 !important; background: var(--paper); color: var(--muted); }
 /* Canonical table rule: numbers mono, labels/headers sans. Every value cell is a <td> (cv2-matrix-cell / -cagr-cell); the row label + column headers are <th>, which inherit the page's sans. */ .cv2-matrix td { font-family: var(--mono); }
+/* Collapsed state: rail shrinks to icon-only width */ .report-sidebar.sidebar-collapsed { width: var(--sidebar-collapsed-width); padding: var(--sp-2); transition: width var(--transition-fluid), padding var(--transition-fluid); }
 /* Dark-mode override for the charts_v2 YoY matrix — the upstream CSS is light-themed (white/grey backgrounds, dark text). Override the colors to match the workspace dark palette so the matrix doesn't stand out. */ :root[data-theme="dark"] .cv2-matrix-wrap { color: var(--fg-soft); }
 /* Dim a stale row's data but keep the flag itself at full strength. */ .ledger-stale-row td { opacity: 0.55; }
 /* Doorway: a KPI name that opens the exact series in Ask (Law 2). Looks like the bold label it replaces; reveals a dashed accent underline on hover/keyboard focus so the affordance reads without crowding the table. */ .fact-doorway { font: inherit; font-weight: 600; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; border-bottom: var(--bw-thin) dashed transparent; }
@@ -763,6 +772,7 @@
 /* Free-text highlight (the underlined excerpt the user commented on). Open = warn-tinted, addressed = ok-tinted, both routed through the status tokens via color-mix (no raw rgba). */ mark.cmt-highlight { background: color-mix(in srgb, var(--warn) 18%, transparent); border-bottom: var(--bw-thick) solid var(--warn); color: inherit; cursor: pointer; padding: 0 var(--bw-thin); border-radius: var(--radius-sm); transition: background 0.12s; }
 /* Health pill — server reachability indicator in the sidebar header. Rides the kit's .k-pill (+ k-pill-ok online / k-pill-bad offline / neutral bare while the first poll is in flight, tone set in renderHealthPill); layout + mono-micro refine only here. */ .cmt-health-pill { margin: var(--bw-thick) 6px 0 6px; font-size: var(--fs-caption); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
 /* Hero quote (Earnings tab) */ .hero-quote { border: var(--bw-thin) solid var(--border-2); background: linear-gradient(180deg, var(--paper), var(--surface)); padding: var(--sp-5) var(--sp-6) var(--sp-5); border-radius: var(--radius); display: flex; gap: var(--sp-5); position: relative; }
+/* Keyboard focus ring on sidebar nav items */ .report-sidebar .tab:focus-visible { outline: var(--bw-thick) solid var(--accent); outline-offset: var(--bw-thin); }
 /* Keyboard-shortcut help overlay (JS-injected by workspace_script; ? toggles, Esc / click closes). Token-only so it tracks the active theme. */ .ws-kbd-help { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 72%, transparent); }
 /* Masthead: identity + stamps over one rule, with the mark as a short accent under its left edge (the document's one branded pixel). */ .k-doc-mast { position: relative; padding-bottom: var(--sp-3); margin-bottom: var(--sp-5); border-bottom: 1px solid var(--border); }
 /* Misc tiny helpers used by the higher-density panels. */ .xsmall { font-size: var(--fs-caption); line-height: 1.4; }
@@ -785,7 +795,7 @@
 /* S6 — Bear · Base · Bull scenario range on the valuation card */ .scenario-range { display: flex; border-bottom: var(--bw-thin) solid var(--hairline); }
 /* Say-Do */ .saydo-meta { display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-end; padding-top: var(--sp-1); }
 /* Scored confidence below LOW_CONFIDENCE_THRESHOLD: the subtle cell affordance — warn-tinted dashed border, overriding the tier color. */ .src-chip.src-lowconf { color: var(--warn); border-color: var(--warn); border-style: dashed; }
-/* Tablet portrait: collapse the persistent sidebar to the canonical icon rail. */ @media (max-width: 768px) { :root { --pad-x: var(--sp-3); } .report-sidebar { width: var(--sidebar-collapsed-width); padding: var(--sp-2); } .report-sidebar-product, .report-nav-label, .report-sidebar .tab-label, .report-sidebar .tab-count { display: none; } .report-sidebar-brand { align-items: center; padding-inline: 0; } .report-sidebar .k-nav-item { justify-content: center; padding-inline: 0; } .kpi-strip { grid-template-columns: 1fr; } .kpi-tile { min-width: 0; } .kpi-spark svg { width: 100%; height: auto; } .subtabs { overflow-x: auto; } }
+/* Tablet portrait: JavaScript defaults the persistent sidebar to the canonical icon rail while leaving the toggle operable for keyboard, touch, and pointer. */ @media (max-width: 768px) { :root { --pad-x: var(--sp-3); } .kpi-strip { grid-template-columns: 1fr; } .kpi-tile { min-width: 0; } .kpi-spark svg { width: 100%; height: auto; } .subtabs { overflow-x: auto; } }
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */ .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 /* The Post submit + Save-to-journal buttons are the kit's .k-btn primary/quiet (added in the boot.py markup) — no freehand button skin here. */ .cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
 /* The margin note. --mark-soft is a KEYLINE token (below the text floor by design) so it is legal here on the 1px rule and nowhere on the type. */ .k-note { font-size: var(--fs-caption); line-height: 1.55; color: var(--muted); padding-left: var(--sp-3); border-left: 1px solid var(--mark-soft); }
@@ -794,6 +804,7 @@
 /* The section label: the kit's caption shape in the editorial mark (§2). */ .k-doc .panel-title { font-size: var(--fs-caption); font-weight: 600; color: var(--mark); text-transform: uppercase; letter-spacing: 0.16em; }
 /* The stat band: a full-bleed strip of read-only figures between two rules. Compose .k-label for each cell's caption — no band-local caption class. */ .k-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 var(--sp-5); padding: var(--sp-3) 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 /* Thesis */ .val-stack { display: flex; flex-direction: column; }
+/* Touch-friendly hit targets on coarse-pointer devices */ @media (pointer: coarse) { .report-sidebar .k-nav-item { min-height: var(--touch-target-size); } }
 /* UX9 grouped tabs: the top bar swaps .tab-group-pane wrappers; inside a multi-section group a slim pill row swaps the section panes. Section panes stay .tab-pane (display + print + comment-anchor scoping reuse the rules above). */ .tab-group-pane { display: none; }
 /* Wave 5: a captured report value injected into a driver flashes; the report's "-> DCF" affordance is a quiet accent micro-button. */ .dcf-edit-field input.dcf-injected { outline: var(--bw-thick) solid var(--accent); outline-offset: var(--bw-thin); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 /* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--radius); padding: 0 3px; }
@@ -831,6 +842,7 @@
 @media (prefers-reduced-motion: reduce) { .cc-act-leave, .cc-act-collapse { transition-duration: 0.01ms; } }
 @media (prefers-reduced-motion: reduce) { .chat-sidebar, .chat-drawer { transition: none; animation: none; } }
 @media (prefers-reduced-motion: reduce) { .k-scrim, .k-overlay, details[open] > *:not(summary) { animation-duration: 0.01ms; } summary::before { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .report-sidebar, .report-sidebar-toggle, .report-sidebar-toggle svg { transition: none; } }
 [data-commentable="true"]:hover .cmt-pin { opacity: 1; }
 [data-show-news="0"] .news-strip { display: none; }
 a.k-tick-sym:hover { color: var(--accent); }

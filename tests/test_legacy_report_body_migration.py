@@ -99,6 +99,34 @@ def test_extractor_preserves_content_and_removes_executable_legacy_markup() -> N
     assert len(ids) == len(set(ids))
 
 
+def test_extractor_emits_the_six_canonical_reader_group_labels() -> None:
+    groups = (
+        ("overview", "Overview & Moat"),
+        ("quarter", "Quarter & Guidance"),
+        ("financials", "Financials & DCF"),
+        ("thesis-risk", "Thesis & Risk"),
+        ("valuation-comps", "Valuation & Comps"),
+        ("sources", "Sources & Citations"),
+    )
+    source = (
+        '<div class="l1-root">'
+        + "".join(
+            f'<div class="tab-group-pane" data-tab-group="{group_id}">'
+            f'<div class="subtab-pane" data-tab="{group_id}-section">{label} body</div>'
+            "</div>"
+            for group_id, label in groups
+        )
+        + "</div>"
+    )
+
+    extracted = extract_legacy_reader_body(source, artifact_id="canonical-groups")
+    soup = BeautifulSoup(extracted.body_html, "html.parser")
+
+    assert [heading.get_text(strip=True) for heading in soup.select(".reader-group-title")] == [
+        label for _group_id, label in groups
+    ]
+
+
 def test_migration_dry_run_is_read_only_then_apply_is_atomic_and_idempotent(
     tmp_path: Path,
 ) -> None:

@@ -254,8 +254,10 @@ def _verdict_badge(
                 stale_bit += f" (data ingested {newest_ingested_at.date().isoformat()})"
             title_bits.append(stale_bit)
         title_attr = f' title="{_esc(" — ".join(title_bits))}"'
+    tone_cls = "" if is_stale or verdict == "pending" else f" k-pill-{dot}"
     return (
-        f'<span class="badge"{title_attr}><span class="dot dot-{dot}" aria-hidden="true"></span>'
+        f'<span class="k-pill{tone_cls}"{title_attr}>'
+        f'<span class="k-dot k-dot-{dot}" aria-hidden="true"></span>'
         f"{_esc(label)}{as_of_html}</span>"
     )
 

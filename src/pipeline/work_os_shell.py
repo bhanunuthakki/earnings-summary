@@ -318,13 +318,20 @@ def _production_runtime(generated_at: datetime) -> str:
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }}
 
+  const WORK_OS_BRIEF_GROUP_IDS = [
+    'overview', 'quarter', 'financials', 'thesis-risk', 'valuation-comps', 'sources'
+  ];
+
   async function workOsLoadBriefArtifact(artifact) {{
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
     const meta = document.getElementById('workOsBriefReaderMeta');
     const sections = document.getElementById('workOsBriefReaderSections');
     workOsReaderContext = artifact;
-    if (title) title.textContent = artifact.ticker + ' · ' + artifact.title;
+    const displayTitle = artifact.title && String(artifact.title).toUpperCase().startsWith(String(artifact.ticker).toUpperCase())
+      ? artifact.title
+      : artifact.ticker + ' · ' + (artifact.title || 'Full Research Brief');
+    if (title) title.textContent = displayTitle;
     if (meta) meta.textContent = artifact.report_date + ' · ' + String(artifact.coverage_role || 'unknown') + ' coverage';
     if (sections) sections.replaceChildren();
     workOsRenderReaderDecision(null);
@@ -363,18 +370,108 @@ def _production_runtime(generated_at: datetime) -> str:
       root.append(stylesheet, content);
       body.replaceChildren(host);
       if (sections && Array.isArray(payload.sections)) {{
-        payload.sections.forEach(function (section) {{
-          if (!section || !section.dom_id || !root.getElementById(section.dom_id)) return;
+        const sectionLookup = new Map(payload.sections
+          .filter(function (section) {{ return section && section.section_id && section.dom_id; }})
+          .map(function (section) {{ return [String(section.section_id), section]; }}));
+        const discoveredGroups = Array.from(
+          root.querySelectorAll('.tab-group-pane[data-tab-group]')
+        );
+        const groupById = new Map(discoveredGroups.map(function (pane) {{
+          return [String(pane.dataset.tabGroup || ''), pane];
+        }}));
+        const canonicalGroups = WORK_OS_BRIEF_GROUP_IDS
+          .map(function (groupId) {{ return groupById.get(groupId); }})
+          .filter(Boolean);
+        const orderedGroups = canonicalGroups.length ? canonicalGroups : discoveredGroups;
+        const groupControls = new Map();
+        const sectionControls = new Map();
+
+        function activateReaderSection(groupPane, sectionId, shouldScroll) {{
+          const sectionPanes = Array.from(groupPane.querySelectorAll('.subtab-pane[data-tab]'));
+          sectionPanes.forEach(function (sectionPane) {{
+            const candidateSectionId = String(sectionPane.dataset.tab || '');
+            const isActive = candidateSectionId === sectionId;
+            sectionPane.dataset.readerSectionActive = isActive ? 'true' : 'false';
+            const sectionButton = sectionControls.get(candidateSectionId);
+            if (sectionButton) {{
+              if (isActive) sectionButton.setAttribute('aria-current', 'location');
+              else sectionButton.removeAttribute('aria-current');
+            }}
+            if (isActive && shouldScroll) {{
+              const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+              sectionPane.scrollIntoView({{
+                behavior: reducedMotion ? 'auto' : 'smooth', block: 'start'
+              }});
+              if (typeof sectionPane.focus === 'function') {{
+                sectionPane.setAttribute('tabindex', '-1');
+                sectionPane.focus({{ preventScroll: true }});
+              }}
+            }}
+          }});
+        }}
+
+        function activateReaderGroup(groupId, shouldScroll) {{
+          orderedGroups.forEach(function (groupPane) {{
+            const candidateId = String(groupPane.dataset.tabGroup || '');
+            const isActive = candidateId === groupId;
+            groupPane.dataset.readerGroupActive = isActive ? 'true' : 'false';
+            const controls = groupControls.get(candidateId);
+            if (controls) {{
+              controls.button.setAttribute('aria-expanded', isActive ? 'true' : 'false');
+              controls.nested.hidden = !isActive;
+              if (isActive) controls.button.setAttribute('aria-current', 'location');
+              else controls.button.removeAttribute('aria-current');
+            }}
+            if (!isActive) return;
+            const firstPane = groupPane.querySelector('.subtab-pane[data-tab]');
+            if (firstPane) activateReaderSection(
+              groupPane, String(firstPane.dataset.tab || ''), shouldScroll
+            );
+          }});
+        }}
+
+        orderedGroups.forEach(function (groupPane) {{
+          const groupId = String(groupPane.dataset.tabGroup || '');
+          if (!groupId) return;
+          const group = document.createElement('div');
+          group.className = 'work-os-reader-group';
           const button = document.createElement('button');
           button.type = 'button';
-          button.className = 'k-btn k-btn-quiet k-btn-sm';
-          button.textContent = section.label || workOsHumanizeSection(section.section_id);
-          button.dataset.sectionId = section.section_id;
-          button.addEventListener('click', function () {{
-            root.getElementById(section.dom_id)?.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+          button.className = 'work-os-reader-group-button k-btn k-btn-quiet k-btn-sm';
+          const heading = groupPane.querySelector('.reader-group-title');
+          button.textContent = heading && heading.textContent
+            ? heading.textContent.trim()
+            : workOsHumanizeSection(groupId);
+          button.dataset.groupId = groupId;
+          button.setAttribute('aria-expanded', 'false');
+          const nested = document.createElement('div');
+          nested.className = 'work-os-reader-group-sections';
+          nested.setAttribute('role', 'group');
+          nested.setAttribute('aria-label', button.textContent + ' sections');
+          nested.hidden = true;
+          groupControls.set(groupId, {{ button: button, nested: nested }});
+          button.addEventListener('click', function () {{ activateReaderGroup(groupId, true); }});
+          groupPane.querySelectorAll('.subtab-pane[data-tab]').forEach(function (sectionPane) {{
+            const sectionId = String(sectionPane.dataset.tab || '');
+            const section = sectionLookup.get(sectionId);
+            if (!section || !root.getElementById(section.dom_id)) return;
+            const sectionButton = document.createElement('button');
+            sectionButton.type = 'button';
+            sectionButton.className = 'work-os-reader-section-button k-btn k-btn-quiet k-btn-sm';
+            sectionButton.textContent = section.label || workOsHumanizeSection(sectionId);
+            sectionButton.dataset.sectionId = sectionId;
+            sectionControls.set(sectionId, sectionButton);
+            sectionButton.addEventListener('click', function () {{
+              activateReaderGroup(groupId, false);
+              activateReaderSection(groupPane, sectionId, true);
+            }});
+            nested.appendChild(sectionButton);
           }});
-          sections.appendChild(button);
+          group.append(button, nested);
+          sections.appendChild(group);
         }});
+        const initialGroup = orderedGroups[0];
+        if (initialGroup) activateReaderGroup(String(initialGroup.dataset.tabGroup || ''), false);
       }}
       root.addEventListener('click', function (event) {{
         const trigger = event.composedPath().find(function (node) {{ return node && node.dataset && node.dataset.peekUrl; }});
@@ -1025,28 +1122,42 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }});
 
+  function workOsFormatDecisionDate(rawDate) {{
+    if (!rawDate) return '';
+    const parsed = new Date(rawDate);
+    return Number.isNaN(parsed.getTime()) ? String(rawDate) : parsed.toISOString().slice(0, 10);
+  }}
+
   function workOsDecisionMeta(state, emptyLabel) {{
     if (!state) return emptyLabel;
     const source = state.source_lens ? String(state.source_lens).replaceAll('_', ' ') : state.decided_by;
-    return source + ' · revision ' + state.revision;
+    const revision = workOsFormatDecisionDate(state.revision);
+    const asOf = workOsFormatDecisionDate(state.as_of);
+    return source + (revision ? ' · revision ' + revision : '') + (asOf ? ' · as of ' + asOf : '');
   }}
 
   function workOsRenderReaderDecision(decision) {{
     const projection = decision || {{ relationship: 'unavailable' }};
     const owner = projection.owner || null;
     const model = projection.model || null;
-    document.getElementById('workOsBriefOwnerState').textContent = owner ? String(owner.value).toUpperCase() : '—';
-    document.getElementById('workOsBriefOwnerMeta').textContent = workOsDecisionMeta(owner, 'No owner decision recorded');
-    document.getElementById('workOsBriefModelState').textContent = model ? String(model.value).toUpperCase() : '—';
-    document.getElementById('workOsBriefModelMeta').textContent = workOsDecisionMeta(model, 'No model recommendation recorded');
+    const ownerStateEl = document.getElementById('workOsBriefOwnerState');
+    const ownerMetaEl = document.getElementById('workOsBriefOwnerMeta');
+    const modelStateEl = document.getElementById('workOsBriefModelState');
+    const modelMetaEl = document.getElementById('workOsBriefModelMeta');
+    if (ownerStateEl) ownerStateEl.textContent = owner ? String(owner.value).toUpperCase() : '—';
+    if (ownerMetaEl) ownerMetaEl.textContent = workOsDecisionMeta(owner, 'No owner decision recorded');
+    if (modelStateEl) modelStateEl.textContent = model ? String(model.value).toUpperCase() : '—';
+    if (modelMetaEl) modelMetaEl.textContent = workOsDecisionMeta(model, 'No model recommendation recorded');
     const relationship = String(projection.relationship || 'unavailable');
-    const freshness = String(projection.freshness || 'unavailable');
+    const freshness = projection.freshness ? String(projection.freshness).replaceAll('_', ' ') : '';
     const relationshipNode = document.getElementById('workOsBriefDecisionRelationship');
-    relationshipNode.textContent = relationship.replaceAll('_', ' ') + ' · ' + freshness;
-    relationshipNode.className = 'k-pill';
-    relationshipNode.classList.toggle('k-pill-ok', relationship === 'agree');
-    relationshipNode.classList.toggle('k-pill-bad', relationship === 'conflict');
-    relationshipNode.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
+    if (relationshipNode) {{
+      relationshipNode.textContent = relationship.replaceAll('_', ' ').toUpperCase() + (freshness ? ' · ' + freshness : '');
+      relationshipNode.className = 'k-pill';
+      relationshipNode.classList.toggle('k-pill-ok', relationship === 'agree');
+      relationshipNode.classList.toggle('k-pill-bad', relationship === 'conflict');
+      relationshipNode.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
+    }}
   }}
 
   function workOsReaderUnavailable(body, artifact, status) {{

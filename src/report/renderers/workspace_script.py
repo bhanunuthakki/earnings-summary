@@ -269,6 +269,56 @@ JS = r"""
   // ---- Initial highlight: ensure the first top tab is active if none set --
   var anyActive = document.querySelector('.tabs .tab.active');
   if (!anyActive && topTabs.length) topTabs[0].click();
+
+  // ---- Sidebar collapse (BHA-71: compact, collapsible navigation rail) -----
+  // Toggles .sidebar-collapsed on .report-sidebar; persists to sessionStorage
+  // so reopening the same report in the same session preserves the preference.
+  // Arrow-key navigation between nav items follows ARIA listbox pattern.
+  var sidebar = document.querySelector('.report-sidebar');
+  var toggleBtn = document.getElementById('report-sidebar-toggle');
+  var SS_KEY = 'report:sidebar:collapsed';
+  function applySidebarCollapsed(collapsed) {
+    if (!sidebar) return;
+    sidebar.classList.toggle('sidebar-collapsed', collapsed);
+    if (toggleBtn) {
+      var label = collapsed ? 'Expand navigation' : 'Collapse navigation';
+      toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      toggleBtn.setAttribute('aria-label', label);
+      toggleBtn.setAttribute('title', label);
+    }
+  }
+  // Restore from sessionStorage
+  try {
+    var saved = sessionStorage.getItem(SS_KEY);
+    if (saved === '1' || (saved === null && window.matchMedia('(max-width: 768px)').matches)) {
+      applySidebarCollapsed(true);
+    }
+  } catch (e) {}
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', function () {
+      var isCollapsed = sidebar ? sidebar.classList.contains('sidebar-collapsed') : false;
+      applySidebarCollapsed(!isCollapsed);
+      try { sessionStorage.setItem(SS_KEY, !isCollapsed ? '1' : '0'); } catch (e) {}
+    });
+  }
+  // Arrow-key navigation within sidebar nav items (accessibility)
+  if (sidebar) {
+    sidebar.addEventListener('keydown', function (ev) {
+      var items = Array.prototype.slice.call(sidebar.querySelectorAll('.k-nav-item'));
+      if (!items.length) return;
+      var focused = document.activeElement;
+      var idx = items.indexOf(focused);
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        var next = (idx + 1) % items.length;
+        items[next].focus();
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        var prev = (idx - 1 + items.length) % items.length;
+        items[prev].focus();
+      }
+    });
+  }
 })();
 """
 

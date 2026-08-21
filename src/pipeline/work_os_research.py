@@ -27,8 +27,8 @@ def render_brief_reader_shell() -> str:
     </div>
   </header>
   <div class="work-os-reader-decision k-card" id="workOsBriefReaderDecision" aria-live="polite">
-    <div><div class="stat-heading">Owner posture</div><div class="stat-number" id="workOsBriefOwnerState">â€”</div><div class="stat-subtext" id="workOsBriefOwnerMeta">No owner decision recorded</div></div>
-    <div><div class="stat-heading">Model recommendation</div><div class="stat-number" id="workOsBriefModelState">â€”</div><div class="stat-subtext" id="workOsBriefModelMeta">No model recommendation recorded</div></div>
+    <div><div class="stat-heading">Owner posture</div><div class="stat-number" id="workOsBriefOwnerState">—</div><div class="stat-subtext" id="workOsBriefOwnerMeta">No owner decision recorded</div></div>
+    <div><div class="stat-heading">Model recommendation</div><div class="stat-number" id="workOsBriefModelState">—</div><div class="stat-subtext" id="workOsBriefModelMeta">No model recommendation recorded</div></div>
     <div><div class="stat-heading">Relationship</div><div class="k-pill k-pill-warn" id="workOsBriefDecisionRelationship">Unavailable</div><div class="stat-subtext">Thesis verdict remains separately labeled in the brief</div></div>
   </div>
   <div class="work-os-reader-layout">
