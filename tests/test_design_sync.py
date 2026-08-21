@@ -162,6 +162,11 @@ def test_design_sync_gate_is_wired_into_hosted_ci() -> None:
     assert "pip install -e .[dev]" in design_job
     assert "Build verified SQLite writer runtime" in design_job
     assert 'echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"' in design_job
+    assert "python -m pytest -q tests/test_design_computed_canary.py -k" in design_job
+    assert (
+        "python execution/verify_design_conformance.py --check --route-canaries"
+        in design_job
+    )
     assert "python scripts/check_design_sync.py" in design_job
     assert "python scripts/gen_design_conformance_debt.py --base-ref" in design_job
     assert "--allow-missing-base" in design_job
