@@ -24,6 +24,10 @@ from integrations.portfolio_tracker_v1 import (
     V1Warning,
 )
 
+# Percent-of-portfolio is a percentage-point wire value; four decimal places
+# cover provider rounding while still rejecting a material formula mismatch.
+_POSITION_PERCENT_TOLERANCE = Decimal("0.0001")
+
 
 class PositionProvenance(BaseModel):
     """Identity and freshness facts attached to every canonical read."""
@@ -251,7 +255,7 @@ class PortfolioPositionAdapter:
                 provenance=provenance,
             )
         history_state, history_error, transactions = self._history(normalized)
-        if position is None or position.quantity <= 0:
+        if position is None:
             if provenance.is_stale:
                 return _unavailable(
                     "stale_snapshot_no_position",
@@ -274,6 +278,7 @@ class PortfolioPositionAdapter:
                 "tracker position contains duplicate account evidence",
                 provenance=provenance,
             )
+
         if not _position_lots_reconcile(
             position.quantity,
             position.market_value,
@@ -286,6 +291,53 @@ class PortfolioPositionAdapter:
                 "aggregate position does not reconcile to attributable account lots",
                 provenance=provenance,
             )
+
+        percent_of_portfolio = position.percent_of_portfolio
+        if percent_of_portfolio is None:
+            if (
+                position.quantity > 0
+                and position.market_value is not None
+                and positions.total_market_value > 0
+            ):
+                return _unavailable(
+                    "position_lot_reconciliation_failed",
+                    "positive position with market value requires percent of portfolio",
+                    provenance=provenance,
+                )
+        else:
+            if not Decimal(0) <= percent_of_portfolio <= Decimal(100):
+                return _unavailable(
+                    "position_lot_reconciliation_failed",
+                    "position percent of portfolio must be between zero and one hundred",
+                    provenance=provenance,
+                )
+            if position.quantity <= 0 and percent_of_portfolio != Decimal(0):
+                return _unavailable(
+                    "position_lot_reconciliation_failed",
+                    "zero-quantity position percent of portfolio must be zero or null",
+                    provenance=provenance,
+                )
+            if position.market_value is not None and positions.total_market_value > 0:
+                expected_percent = (
+                    position.market_value / positions.total_market_value * Decimal("100")
+                )
+                if abs(percent_of_portfolio - expected_percent) > _POSITION_PERCENT_TOLERANCE:
+                    return _unavailable(
+                        "position_lot_reconciliation_failed",
+                        "position percent of portfolio does not reconcile to market value",
+                        provenance=provenance,
+                    )
+
+        if position.quantity <= 0:
+            return PortfolioPositionResult(
+                state="not_held",
+                position_as_of=provenance.snapshot_as_of,
+                provenance=provenance,
+                recent_transactions=transactions,
+                history_state=history_state,
+                history_error=history_error,
+            )
+
         accounts = [
             PortfolioPositionAccount(
                 account_name=account.account_name,
@@ -465,31 +517,26 @@ def _position_lots_reconcile(
     unrealized_pnl: Decimal | None,
     accounts: list[PositionLotV1],
 ) -> bool:
-    """Reject a consolidated fact whose attributable lots disagree with it."""
+    """Reject a held position whose attributable lots disagree with it."""
 
     lots = accounts
-    if quantity < 0 or any(lot.quantity < 0 for lot in lots):
+    if not _position_structure_reconcile(quantity, market_value, lots):
         return False
-    if quantity == 0 and any(
-        value not in (None, Decimal(0))
-        for lot in lots
-        for value in (lot.market_value, lot.cost_basis)
-    ):
+    if quantity == 0 and any(lot.cost_basis not in (None, Decimal(0)) for lot in lots):
         return False
     if quantity == 0 and unrealized_pnl not in (None, Decimal(0)):
         return False
-    quantities = sum((lot.quantity for lot in lots), Decimal(0))
-    if quantities != quantity:
-        return False
-    for aggregate, field in ((market_value, "market_value"), (cost_basis, "cost_basis")):
-        values = [lot.market_value if field == "market_value" else lot.cost_basis for lot in lots]
-        if aggregate is None:
-            if any(value is not None for value in values):
-                return False
-        else:
-            numeric_values = [value for value in values if value is not None]
-            if len(numeric_values) != len(values) or sum(numeric_values, Decimal(0)) != aggregate:
-                return False
+    cost_values = [lot.cost_basis for lot in lots]
+    if cost_basis is None:
+        if any(value is not None for value in cost_values):
+            return False
+    else:
+        numeric_cost_values = [value for value in cost_values if value is not None]
+        if (
+            len(numeric_cost_values) != len(cost_values)
+            or sum(numeric_cost_values, Decimal(0)) != cost_basis
+        ):
+            return False
     if unrealized_pnl is None:
         if market_value is not None and cost_basis is not None:
             return False
@@ -506,13 +553,32 @@ def _position_lots_reconcile(
     )
 
 
+def _position_structure_reconcile(
+    quantity: Decimal, market_value: Decimal | None, accounts: list[PositionLotV1]
+) -> bool:
+    """Validate quantity and market-value structure without optional cost facts."""
+
+    if quantity < 0 or any(lot.quantity < 0 for lot in accounts):
+        return False
+    if quantity == 0 and any(lot.market_value not in (None, Decimal(0)) for lot in accounts):
+        return False
+    if sum((lot.quantity for lot in accounts), Decimal(0)) != quantity:
+        return False
+    market_values = [lot.market_value for lot in accounts]
+    if market_value is None:
+        return all(value is None for value in market_values)
+    numeric_market_values = [value for value in market_values if value is not None]
+    return (
+        len(numeric_market_values) == len(market_values)
+        and sum(numeric_market_values, Decimal(0)) == market_value
+    )
+
+
 def _portfolio_total_reconcile(positions: PositionsV1Result) -> bool:
     if any(
-        not _position_lots_reconcile(
+        not _position_structure_reconcile(
             item.quantity,
             item.market_value,
-            item.cost_basis,
-            item.unrealized_pnl,
             item.accounts,
         )
         for item in positions.positions
@@ -638,6 +704,31 @@ def validate_snapshot_account_coverage(
                 continue
             if account.account_id not in included:
                 continue
+            if account.account_id in lagging:
+                if account.holdings_as_of is None and account.value is None:
+                    return (
+                        "account_coverage_invalid",
+                        f"empty included account {account.account_id} cannot be marked lagging",
+                    )
+                continue
+            if account.holdings_as_of is None and account.value is None:
+                if (
+                    health.is_stale
+                    or snapshot.meta.is_partial
+                    or snapshot.meta.is_stale
+                    or snapshot.equity_fraction.is_partial
+                    or snapshot.equity_fraction.is_stale
+                ):
+                    return (
+                        "account_coverage_invalid",
+                        f"empty account {account.account_id} is not valid in a partial or stale envelope",
+                    )
+                continue
+            if account.holdings_as_of is None:
+                return (
+                    "account_coverage_invalid",
+                    f"active account {account.account_id} has value without a holdings date",
+                )
             if account.holdings_as_of != snapshot.meta.as_of and account.account_id not in lagging:
                 return (
                     "account_coverage_invalid",

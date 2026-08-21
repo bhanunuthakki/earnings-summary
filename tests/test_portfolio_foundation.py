@@ -473,6 +473,571 @@ def test_snapshot_integrity_requires_total_equity_and_exact_account_coverage() -
     )
 
 
+def _snapshot_with_empty_account() -> PortfolioSnapshotV1:
+    """Build a complete book with MELI held in account 10 and account 19 empty."""
+    base = _snapshot_from_positions(_positions())
+    account_10 = base.accounts[3].model_copy(update={"account_id": 10, "name": "MELI brokerage"})
+    account_19 = base.accounts[1].model_copy(
+        update={
+            "account_id": 19,
+            "name": "Empty 401(k)",
+            "active": True,
+            "included_in_totals": True,
+            "exclusion_reason": None,
+            "value": None,
+            "holdings_as_of": None,
+            "last_successful_sync_at": None,
+            "warnings": [],
+        }
+    )
+    position = base.positions[0]
+    lot = position.accounts[0].model_copy(
+        update={"account_id": 10, "account_name": "MELI brokerage"}
+    )
+    included_account_ids = [2, 3, 10, 19]
+    return base.model_copy(
+        update={
+            "accounts": [base.accounts[0], base.accounts[2], account_10, account_19],
+            "meta": base.meta.model_copy(
+                update={
+                    "account_coverage": base.meta.account_coverage.model_copy(
+                        update={"included_account_ids": included_account_ids}
+                    )
+                }
+            ),
+            "equity_fraction": base.equity_fraction.model_copy(
+                update={"included_account_ids": included_account_ids}
+            ),
+            "positions": [position.model_copy(update={"accounts": [lot]})],
+        }
+    )
+
+
+def _snapshot_with_four_lot_meli_and_partial_unrelated_cost(
+    *, meli_partial_cost: bool = False
+) -> tuple[PortfolioSnapshotV1, HealthV1]:
+    """Build a structurally valid book with partial cost only off the requested ticker."""
+    base = _snapshot_from_positions(_positions())
+    source_position = base.positions[0]
+    lot_values = (
+        (Decimal("10"), Decimal("25000"), Decimal("18000")),
+        (Decimal("20"), Decimal("30000"), Decimal("22000")),
+        (Decimal("15.256834"), Decimal("20000"), Decimal("15000")),
+        (Decimal("10"), Decimal("26871.698219"), Decimal("23911.161003")),
+    )
+    total_market_value = Decimal("101931.698219")
+    meli_lots = [
+        source_position.accounts[0].model_copy(
+            update={
+                "account_id": account_id,
+                "account_name": f"Account {account_id}",
+                "quantity": quantity,
+                "market_value": market_value,
+                "cost_basis": None if meli_partial_cost and account_id == 1 else cost_basis,
+            }
+        )
+        for account_id, (quantity, market_value, cost_basis) in enumerate(lot_values, start=1)
+    ]
+    meli = source_position.model_copy(
+        update={
+            "accounts": meli_lots,
+            "percent_of_portfolio": Decimal("101871.698219") / total_market_value * Decimal("100"),
+        }
+    )
+    unrelated = []
+    for index in range(6):
+        account_id = (index % 4) + 1
+        lot = source_position.accounts[0].model_copy(
+            update={
+                "account_id": account_id,
+                "account_name": f"Account {account_id}",
+                "quantity": Decimal("1"),
+                "market_value": Decimal("10"),
+                "cost_basis": None,
+            }
+        )
+        unrelated.append(
+            source_position.model_copy(
+                update={
+                    "security_id": 100 + index,
+                    "ticker": f"OTHER{index}",
+                    "quantity": Decimal("1"),
+                    "market_value": Decimal("10"),
+                    "cost_basis": Decimal("5"),
+                    "unrealized_pnl": Decimal("5"),
+                    "percent_of_portfolio": Decimal("0"),
+                    "accounts": [lot],
+                }
+            )
+        )
+    active_accounts = [
+        base.accounts[0],
+        base.accounts[2],
+        base.accounts[3],
+        base.accounts[1].model_copy(
+            update={
+                "account_id": 4,
+                "active": True,
+                "included_in_totals": True,
+                "exclusion_reason": None,
+                "warnings": [],
+            }
+        ),
+    ]
+    included_account_ids = [1, 2, 3, 4]
+    snapshot = base.model_copy(
+        update={
+            "accounts": active_accounts,
+            "meta": base.meta.model_copy(
+                update={
+                    "account_coverage": base.meta.account_coverage.model_copy(
+                        update={
+                            "included_account_ids": included_account_ids,
+                            "excluded_account_ids": [],
+                        }
+                    )
+                }
+            ),
+            "equity_fraction": base.equity_fraction.model_copy(
+                update={
+                    "included_account_ids": included_account_ids,
+                    "excluded_account_ids": [],
+                    "equity_value": total_market_value,
+                    "denominator_value": total_market_value,
+                    "equity_fraction": Decimal("1"),
+                }
+            ),
+            "total_market_value": total_market_value,
+            "positions": [meli, *unrelated],
+        }
+    )
+    return snapshot, _health().model_copy(update={"active_account_count": 4})
+
+
+def _zero_meli_snapshot(
+    *,
+    aggregate_cost: Decimal | None = None,
+    lot_cost: Decimal | None = None,
+    aggregate_pnl: Decimal | None = None,
+) -> tuple[PortfolioSnapshotV1, HealthV1]:
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    meli = snapshot.positions[0]
+    zero_lots = [
+        lot.model_copy(
+            update={
+                "quantity": Decimal("0"),
+                "market_value": Decimal("0"),
+                "cost_basis": lot_cost if index == 0 else None,
+            }
+        )
+        for index, lot in enumerate(meli.accounts)
+    ]
+    zero_meli = meli.model_copy(
+        update={
+            "quantity": Decimal("0"),
+            "market_value": Decimal("0"),
+            "cost_basis": aggregate_cost,
+            "unrealized_pnl": aggregate_pnl,
+            "percent_of_portfolio": Decimal("0"),
+            "accounts": zero_lots,
+        }
+    )
+    total_market_value = Decimal("60")
+    return (
+        snapshot.model_copy(
+            update={
+                "total_market_value": total_market_value,
+                "positions": [zero_meli, *snapshot.positions[1:]],
+                "equity_fraction": snapshot.equity_fraction.model_copy(
+                    update={
+                        "equity_value": total_market_value,
+                        "denominator_value": total_market_value,
+                    }
+                ),
+            }
+        ),
+        health,
+    )
+
+
+def test_complete_current_snapshot_accepts_empty_included_account_without_hiding_meli() -> None:
+    from integrations.portfolio_position import (
+        PortfolioPositionAdapter,
+        validate_snapshot_account_coverage,
+    )
+
+    snapshot = _snapshot_with_empty_account()
+    health = _health().model_copy(update={"active_account_count": 4})
+    assert validate_snapshot_account_coverage(snapshot, health) is None
+
+    class _EmptyAccountClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_EmptyAccountClient()).resolve("MELI")
+    assert result.state == "held"
+    assert result.total_quantity == pytest.approx(55.256834)
+    assert result.accounts[0].account_name == "MELI brokerage"
+    assert result.provenance is not None
+    assert result.provenance.included_account_ids == [2, 3, 10, 19]
+
+
+@pytest.mark.parametrize(
+    ("snapshot_update", "expected_detail"),
+    (
+        (
+            {"meta": {"is_partial": True}},
+            "empty account 19 is not valid in a partial or stale envelope",
+        ),
+        (
+            {"meta": {"is_stale": True}},
+            "empty account 19 is not valid in a partial or stale envelope",
+        ),
+        (
+            {"equity_fraction": {"is_partial": True}},
+            "empty account 19 is not valid in a partial or stale envelope",
+        ),
+        (
+            {"equity_fraction": {"is_stale": True}},
+            "empty account 19 is not valid in a partial or stale envelope",
+        ),
+    ),
+)
+def test_empty_included_account_requires_complete_current_non_lagging_envelope(
+    snapshot_update: dict[str, dict[str, bool]], expected_detail: str
+) -> None:
+    from integrations.portfolio_position import validate_snapshot_account_coverage
+
+    base = _snapshot_with_empty_account()
+    if "meta" in snapshot_update:
+        snapshot = base.model_copy(
+            update={"meta": base.meta.model_copy(update=snapshot_update["meta"])}
+        )
+    else:
+        snapshot = base.model_copy(
+            update={
+                "equity_fraction": base.equity_fraction.model_copy(
+                    update=snapshot_update["equity_fraction"]
+                )
+            }
+        )
+    error = validate_snapshot_account_coverage(
+        snapshot, _health().model_copy(update={"active_account_count": 4})
+    )
+    assert error == ("account_coverage_invalid", expected_detail)
+
+
+def test_empty_included_account_rejects_one_sided_nulls_and_lagging_state() -> None:
+    from integrations.portfolio_position import validate_snapshot_account_coverage
+
+    base = _snapshot_with_empty_account()
+    health = _health().model_copy(update={"active_account_count": 4})
+    dated_empty = base.model_copy(
+        update={
+            "accounts": [
+                *base.accounts[:3],
+                base.accounts[3].model_copy(update={"holdings_as_of": date(2026, 8, 19)}),
+            ]
+        }
+    )
+    assert validate_snapshot_account_coverage(dated_empty, health) == (
+        "account_coverage_invalid",
+        "active account 19 holdings date is not covered by the portfolio snapshot envelope",
+    )
+
+    valued_without_date = base.model_copy(
+        update={
+            "accounts": [
+                *base.accounts[:3],
+                base.accounts[3].model_copy(update={"value": Decimal("1")}),
+            ]
+        }
+    )
+    assert validate_snapshot_account_coverage(valued_without_date, health) == (
+        "account_coverage_invalid",
+        "active account 19 has value without a holdings date",
+    )
+
+    lagging = base.model_copy(
+        update={
+            "meta": base.meta.model_copy(
+                update={
+                    "account_coverage": base.meta.account_coverage.model_copy(
+                        update={"lagging_account_ids": [19]}
+                    )
+                }
+            )
+        }
+    )
+    assert validate_snapshot_account_coverage(lagging, health) == (
+        "account_coverage_invalid",
+        "empty included account 19 cannot be marked lagging",
+    )
+
+
+def test_unrelated_partial_cost_does_not_suppress_meli_or_not_held_evidence() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+
+    class _PartialUnrelatedCostClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    adapter = PortfolioPositionAdapter(_PartialUnrelatedCostClient())
+    held = adapter.resolve("MELI")
+    assert held.state == "held"
+    assert held.total_quantity == pytest.approx(55.256834)
+    assert held.total_cost_basis == pytest.approx(78911.161003)
+    assert len(held.accounts) == 4
+
+    not_held = adapter.resolve("NOT_HELD")
+    assert not_held.state == "not_held"
+
+
+def test_partial_cost_on_matching_meli_remains_unavailable() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost(
+        meli_partial_cost=True
+    )
+
+    class _PartialMeliCostClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_PartialMeliCostClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+
+
+@pytest.mark.parametrize(
+    ("aggregate_cost", "lot_cost", "aggregate_pnl"),
+    (
+        (Decimal("1"), None, None),
+        (None, Decimal("1"), None),
+        (Decimal("1"), Decimal("1"), Decimal("-1")),
+    ),
+)
+def test_zero_quantity_meli_with_residual_cost_or_pnl_is_unavailable(
+    aggregate_cost: Decimal | None, lot_cost: Decimal | None, aggregate_pnl: Decimal | None
+) -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _zero_meli_snapshot(
+        aggregate_cost=aggregate_cost, lot_cost=lot_cost, aggregate_pnl=aggregate_pnl
+    )
+
+    class _ResidualZeroClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_ResidualZeroClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+
+
+def test_clean_zero_quantity_meli_is_not_held() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _zero_meli_snapshot()
+
+    class _CleanZeroClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_CleanZeroClient()).resolve("MELI")
+    assert result.state == "not_held"
+
+
+@pytest.mark.parametrize("percent_of_portfolio", (Decimal("1"), Decimal("-1")))
+def test_zero_quantity_meli_rejects_contradictory_percent(
+    percent_of_portfolio: Decimal,
+) -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _zero_meli_snapshot()
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(
+                    update={"percent_of_portfolio": percent_of_portfolio}
+                ),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _ContradictoryPercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_ContradictoryPercentClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+    assert result.error_detail is not None and "percent" in result.error_detail
+
+
+def test_matched_meli_rejects_percent_outside_zero_to_hundred() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(update={"percent_of_portfolio": Decimal("101")}),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _OutOfRangePercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_OutOfRangePercentClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+    assert result.error_detail is not None and "percent" in result.error_detail
+
+
+def test_positive_matched_meli_requires_percent() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(update={"percent_of_portfolio": None}),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _MissingPercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_MissingPercentClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+    assert result.error_detail is not None and "percent" in result.error_detail
+
+
+@pytest.mark.parametrize("percent_of_portfolio", (Decimal("0"), Decimal("50"), Decimal("100")))
+def test_in_range_mismatched_matched_percent_fails_closed(
+    percent_of_portfolio: Decimal,
+) -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(
+                    update={"percent_of_portfolio": percent_of_portfolio}
+                ),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _MismatchedPercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_MismatchedPercentClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+    assert result.error_detail is not None and "percent" in result.error_detail
+
+
+def test_live_style_rounded_matched_percent_is_within_wire_tolerance() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    market_value = snapshot.positions[0].market_value
+    assert market_value is not None
+    exact_percent = market_value / snapshot.total_market_value * Decimal("100")
+    live_style_percent = exact_percent + Decimal("0.0000473137")
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(
+                    update={"percent_of_portfolio": live_style_percent}
+                ),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _RoundedPercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_RoundedPercentClient()).resolve("MELI")
+    assert result.state == "held"
+
+
+def test_formula_consistent_zero_and_hundred_percent_boundaries_pass() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    base = _snapshot_from_positions(_positions())
+    health = _health()
+
+    class _BoundaryClient:
+        def __init__(self, snapshot: PortfolioSnapshotV1) -> None:
+            self._snapshot = snapshot
+
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=self._snapshot)
+
+    hundred = PortfolioPositionAdapter(_BoundaryClient(base)).resolve("MELI")
+    assert hundred.state == "held"
+
+    zero, zero_health = _zero_meli_snapshot()
+
+    class _ZeroBoundaryClient(_BoundaryClient):
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=zero_health)
+
+    not_held = PortfolioPositionAdapter(_ZeroBoundaryClient(zero)).resolve("MELI")
+    assert not_held.state == "not_held"
+
+
 def test_canonical_adapter_rejects_position_lot_outside_active_envelope_accounts() -> None:
     from integrations.portfolio_position import PortfolioPositionAdapter
 
