@@ -215,6 +215,20 @@ _ROUTE_CANARY_MATRIX: tuple[tuple[str, str, tuple[int, int]], ...] = tuple(
     )
     for viewport, size in (("desktop", (1440, 900)), ("narrow", (390, 844)))
 )
+_REQUIRED_ROUTE_CANARY_KEYS = frozenset(
+    {
+        ("cockpit", "desktop"),
+        ("cockpit", "narrow"),
+        ("company-desk", "desktop"),
+        ("company-desk", "narrow"),
+        ("fact-metric-playground", "desktop"),
+        ("fact-metric-playground", "narrow"),
+        ("operations", "desktop"),
+        ("operations", "narrow"),
+        ("full-brief", "desktop"),
+        ("full-brief", "narrow"),
+    }
+)
 _ROUTE_CANARY_SETTLE_MILLISECONDS = 400
 
 _ROUTE_CANARY_ROLE_CONTRACTS: dict[str, tuple[tuple[str, ...], bool]] = {
@@ -877,12 +891,27 @@ def _route_fixture_path(project_root: Path, route: str, viewport: str) -> Path:
     return project_root / "tests" / "fixtures" / "design_canaries" / f"{route}.{viewport}.html"
 
 
-def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanaryResult, ...]:
+def _route_canary_source(route: str, viewport: str, fixture_root: Path | None) -> str:
+    """Render production output unless a test explicitly supplies an isolated fixture root."""
+
+    if fixture_root is None:
+        return render_route_canary(route=route, viewport=viewport)
+    override = _route_fixture_path(fixture_root, route, viewport)
+    if not override.is_file():
+        raise FileNotFoundError(override)
+    return override.read_text("utf-8")
+
+
+def _scan_route_canaries(
+    project_root: Path = PROJECT_ROOT,
+    *,
+    fixture_root: Path | None = None,
+) -> tuple[RouteCanaryResult, ...]:
     """Inspect production-rendered route output at desktop and narrow widths.
 
-    A fixture file is honored when present so tests can apply adversarial
-    mutations. The normal path renders directly through the production Work
-    OS seam, keeping the guard useful in a clean checkout.
+    The normal path always renders directly through the production Work OS
+    seam. Tests may opt into an isolated fixture root for adversarial mutation;
+    committed or stale fixture files can never replace the hosted CLI input.
     """
 
     fixtures: list[tuple[str, str, Path, tuple[int, int]]] = []
@@ -896,11 +925,7 @@ def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanary
             importlib.import_module("playwright.sync_api"),
         )
         html_by_fixture = {
-            path: (
-                path.read_text("utf-8")
-                if path.exists()
-                else render_route_canary(route=route, viewport=viewport)
-            )
+            path: _route_canary_source(route, viewport, fixture_root)
             for route, viewport, path, _size in fixtures
         }
         with cast(_CanaryPlaywrightContext, playwright_api.sync_playwright()) as playwright:
@@ -1014,6 +1039,47 @@ def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanary
         )
 
 
+def _route_population_failures(
+    results: tuple[RouteCanaryResult, ...],
+) -> tuple[RouteCanaryResult, ...]:
+    """Fail closed unless results contain the immutable five-by-two census."""
+
+    keys = tuple((result.route, result.viewport) for result in results)
+    actual = frozenset(keys)
+    failures: list[RouteCanaryResult] = []
+    for route, viewport in sorted(_REQUIRED_ROUTE_CANARY_KEYS - actual):
+        failures.append(
+            RouteCanaryResult(
+                route=route,
+                viewport=cast(Literal["desktop", "narrow"], viewport),
+                fixture="<required-route-matrix>",
+                status="unavailable",
+                reason="required route/viewport is missing from the canary result population",
+            )
+        )
+    for route, viewport in sorted(actual - _REQUIRED_ROUTE_CANARY_KEYS):
+        failures.append(
+            RouteCanaryResult(
+                route=route,
+                viewport=cast(Literal["desktop", "narrow"], viewport),
+                fixture="<required-route-matrix>",
+                status="failed",
+                reason="unexpected route/viewport is outside the mandatory canary population",
+            )
+        )
+    for route, viewport in sorted({key for key in keys if keys.count(key) > 1}):
+        failures.append(
+            RouteCanaryResult(
+                route=route,
+                viewport=cast(Literal["desktop", "narrow"], viewport),
+                fixture="<required-route-matrix>",
+                status="failed",
+                reason="duplicate route/viewport result violates the mandatory canary population",
+            )
+        )
+    return tuple(failures)
+
+
 def _fetch_canary_html(canary_url: str, deadline: float) -> str:
     request = urllib.request.Request(
         canary_url,
@@ -1123,7 +1189,12 @@ def _build_receipt(
         static_status,
     ) = _scan_static(source_root)
     canary = _scan_canary(canary_url, browser_canary=browser_canary)
-    route_results = _scan_route_canaries(source_root.parent) if route_canaries else ()
+    scanned_route_results = _scan_route_canaries(source_root.parent) if route_canaries else ()
+    route_results = (
+        (*scanned_route_results, *_route_population_failures(scanned_route_results))
+        if route_canaries
+        else ()
+    )
     failed = (
         static_status == "failed"
         or canary.status == "failed"

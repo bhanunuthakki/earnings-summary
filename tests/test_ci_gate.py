@@ -278,4 +278,6 @@ def test_security_job_runs_every_scanner_before_failing_closed() -> None:
     assert "BANDIT_OUTCOME" in workflow
     assert "DETECT_SECRETS_OUTCOME" in workflow
     assert "SBOM_OUTCOME" in workflow
-    assert "always() && hashFiles('sbom.cdx.json')" in workflow
+    assert "pip-audit -r requirements-design.lock" in workflow
+    assert "cyclonedx-py requirements requirements-design.lock" in workflow
+    assert "always() && hashFiles('sbom-*.cdx.json')" in workflow

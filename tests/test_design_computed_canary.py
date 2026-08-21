@@ -10,8 +10,14 @@ from pathlib import Path
 
 import pytest
 
+import execution.verify_design_conformance as design_conformance
 from execution.design_route_canaries import write_route_canary_fixtures
 from execution.verify_design_conformance import (  # pyright: ignore[reportPrivateUsage]
+    CanaryResult,
+    RouteCanaryResult,
+    _build_receipt,  # pyright: ignore[reportPrivateUsage]
+    _route_canary_source,  # pyright: ignore[reportPrivateUsage]
+    _route_population_failures,  # pyright: ignore[reportPrivateUsage]
     _scan_canary,  # pyright: ignore[reportPrivateUsage]
     _scan_route_canaries,  # pyright: ignore[reportPrivateUsage]
 )
@@ -193,7 +199,11 @@ def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
     with playwright_api.sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            page = browser.new_page(viewport={"width": viewport[0], "height": viewport[1]})
+            context = browser.new_context(
+                viewport={"width": viewport[0], "height": viewport[1]},
+                reduced_motion="reduce",
+            )
+            page = context.new_page()
             page.set_content(html, wait_until="load")
             page.wait_for_selector("#workOsBriefReader .work-os-report-host", state="visible")
             buttons = page.locator("#workOsBriefReaderSections .work-os-reader-group-button")
@@ -228,6 +238,15 @@ def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
             assert initial["groups"] == ["overview"]
             assert len(initial["sections"]) == 1
 
+            page.evaluate(
+                """
+                window.__readerScrollBehaviors = [];
+                Element.prototype.scrollIntoView = function(options) {
+                  window.__readerScrollBehaviors.push(options && options.behavior);
+                };
+                """
+            )
+
             page.locator('button[data-group-id="quarter"]').click()
             quarter = visible_reader_state()
             assert quarter["groups"] == ["quarter"]
@@ -241,12 +260,124 @@ def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
             news = visible_reader_state()
             assert news["groups"] == ["quarter"]
             assert news["sections"] == ["news"]
+            assert page.evaluate("window.__readerScrollBehaviors.filter(Boolean)") == [
+                "auto",
+                "auto",
+            ]
             assert (
                 page.locator('button[data-section-id="news"]').get_attribute("aria-current")
                 == "location"
             )
         finally:
             browser.close()
+
+
+def test_route_canary_population_is_an_exact_fail_closed_census() -> None:
+    results = tuple(
+        RouteCanaryResult(
+            route=route,
+            viewport=viewport,
+            fixture=f"{route}.{viewport}.html",
+            status="passed",
+        )
+        for route in (
+            "cockpit",
+            "company-desk",
+            "fact-metric-playground",
+            "operations",
+            "full-brief",
+        )
+        for viewport in ("desktop", "narrow")
+    )
+    assert _route_population_failures(results) == ()
+
+    missing = _route_population_failures(results[:-1])
+    assert len(missing) == 1
+    assert missing[0].route == "full-brief"
+    assert missing[0].viewport == "narrow"
+    assert missing[0].status == "unavailable"
+
+    duplicated = _route_population_failures((*results, results[0]))
+    assert len(duplicated) == 1
+    assert duplicated[0].status == "failed"
+    assert "duplicate" in str(duplicated[0].reason)
+
+
+def test_receipt_fails_when_route_canary_population_shrinks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    results = tuple(
+        RouteCanaryResult(
+            route=route,
+            viewport=viewport,
+            fixture=f"{route}.{viewport}.html",
+            status="passed",
+        )
+        for route in (
+            "cockpit",
+            "company-desk",
+            "fact-metric-playground",
+            "operations",
+            "full-brief",
+        )
+        for viewport in ("desktop", "narrow")
+    )
+
+    def fake_static(_source_root: Path) -> tuple[object, ...]:
+        return ((), (), (), (), (), (), (), (), 0, (), "clean")
+
+    def fake_canary(_url: str | None, *, browser_canary: bool = False) -> CanaryResult:
+        del browser_canary
+        return CanaryResult(status="skipped:not-requested")
+
+    def fake_routes(_project_root: Path) -> tuple[RouteCanaryResult, ...]:
+        return results[:-1]
+
+    monkeypatch.setattr(
+        design_conformance,
+        "_scan_static",
+        fake_static,
+    )
+    monkeypatch.setattr(
+        design_conformance,
+        "_scan_canary",
+        fake_canary,
+    )
+    monkeypatch.setattr(
+        design_conformance,
+        "_scan_route_canaries",
+        fake_routes,
+    )
+
+    receipt = _build_receipt(tmp_path / "src", None, route_canaries=True)
+
+    assert receipt.verdict == "fail"
+    assert any(
+        result.route == "full-brief"
+        and result.viewport == "narrow"
+        and result.status == "unavailable"
+        for result in receipt.route_canaries
+    )
+
+
+def test_normal_route_canary_source_ignores_stale_committed_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stale = tmp_path / "tests" / "fixtures" / "design_canaries" / "cockpit.desktop.html"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale fixture", encoding="utf-8")
+
+    def fake_render(*, route: str, viewport: str) -> str:
+        return f"production:{route}:{viewport}"
+
+    monkeypatch.setattr(
+        design_conformance,
+        "render_route_canary",
+        fake_render,
+    )
+
+    assert _route_canary_source("cockpit", "desktop", None) == "production:cockpit:desktop"
+    assert _route_canary_source("cockpit", "desktop", tmp_path) == "stale fixture"
 
 
 def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
@@ -261,7 +392,7 @@ def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
     )
     result = next(
         item
-        for item in _scan_route_canaries(root)
+        for item in _scan_route_canaries(fixture_root=root)
         if item.route == "company-desk" and item.viewport == "desktop"
     )
     assert result.status == "failed"
@@ -280,7 +411,7 @@ def test_route_canary_rejects_clipped_or_occluded_overlay(tmp_path: Path) -> Non
     )
     result = next(
         item
-        for item in _scan_route_canaries(root)
+        for item in _scan_route_canaries(fixture_root=root)
         if item.route == "company-desk" and item.viewport == "narrow"
     )
     assert result.status == "failed"
@@ -300,7 +431,7 @@ def test_route_canary_rejects_delayed_runtime_mutation(tmp_path: Path) -> None:
     )
     result = next(
         item
-        for item in _scan_route_canaries(root)
+        for item in _scan_route_canaries(fixture_root=root)
         if item.route == "full-brief" and item.viewport == "desktop"
     )
     assert result.status == "failed"

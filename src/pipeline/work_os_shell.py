@@ -398,7 +398,10 @@ def _production_runtime(generated_at: datetime) -> str:
               else sectionButton.removeAttribute('aria-current');
             }}
             if (isActive && shouldScroll) {{
-              sectionPane.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+              const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+              sectionPane.scrollIntoView({{
+                behavior: reducedMotion ? 'auto' : 'smooth', block: 'start'
+              }});
               if (typeof sectionPane.focus === 'function') {{
                 sectionPane.setAttribute('tabindex', '-1');
                 sectionPane.focus({{ preventScroll: true }});
