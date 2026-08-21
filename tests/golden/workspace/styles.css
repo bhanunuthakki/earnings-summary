@@ -2940,6 +2940,7 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 @media (prefers-reduced-motion: reduce) { .cc-act-leave, .cc-act-collapse { transition-duration: 0.01ms; } }
 
 
+.lg { min-width: 0; max-width: 100%; overflow-x: auto; }
 .lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }
 .lg-filter { padding: 5px 9px; font-size: var(--fs-caption); font-family: var(--sans);
   background: var(--paper); color: var(--fg); border: 1px solid var(--border);

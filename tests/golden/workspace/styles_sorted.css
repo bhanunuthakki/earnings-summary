@@ -376,6 +376,7 @@
 .legend-swatch { width: 10px; height: 10px; border-radius: var(--bw-thick); }
 .lens-five_min_reread .lens-body strong { color: var(--fg); }
 .lens-panel .lens-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+.lg { min-width: 0; max-width: 100%; overflow-x: auto; }
 .lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }
 .lg-count { font-size: var(--fs-caption); }
 .lg-filter { padding: 5px 9px; font-size: var(--fs-caption); font-family: var(--sans); background: var(--paper); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius); min-width: 210px; }
