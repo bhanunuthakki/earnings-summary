@@ -272,6 +272,29 @@ def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
             browser.close()
 
 
+def test_fact_playground_canary_renders_production_panel_without_stylesheet_leak() -> None:
+    """The real Explore fragment must not expose canonical CSS as page text."""
+
+    _require_playwright()
+    playwright_api = importlib.import_module("playwright.sync_api")
+    from execution.design_route_canaries import render_route_canary
+
+    html = render_route_canary(route="fact-metric-playground", viewport="desktop")
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.set_content(html, wait_until="load")
+            page.evaluate("window.navigateTo('screen-analytics-playground', {fromHistory: true})")
+            page.wait_for_selector("#workOsFactPlayground #vx-root", state="visible")
+            visible_text = page.locator("#screen-analytics-playground").inner_text()
+            assert "The provenance substrate" not in visible_text
+            assert "render_transcript_page" not in visible_text
+            assert ".cc-score-head {" not in visible_text
+        finally:
+            browser.close()
+
+
 def test_route_canary_population_is_an_exact_fail_closed_census() -> None:
     results = tuple(
         RouteCanaryResult(
