@@ -513,6 +513,102 @@ def _snapshot_with_empty_account() -> PortfolioSnapshotV1:
     )
 
 
+def _snapshot_with_four_lot_meli_and_partial_unrelated_cost(
+    *, meli_partial_cost: bool = False
+) -> tuple[PortfolioSnapshotV1, HealthV1]:
+    """Build a structurally valid book with partial cost only off the requested ticker."""
+    base = _snapshot_from_positions(_positions())
+    source_position = base.positions[0]
+    lot_values = (
+        (Decimal("10"), Decimal("25000"), Decimal("18000")),
+        (Decimal("20"), Decimal("30000"), Decimal("22000")),
+        (Decimal("15.256834"), Decimal("20000"), Decimal("15000")),
+        (Decimal("10"), Decimal("26871.698219"), Decimal("23911.161003")),
+    )
+    meli_lots = [
+        source_position.accounts[0].model_copy(
+            update={
+                "account_id": account_id,
+                "account_name": f"Account {account_id}",
+                "quantity": quantity,
+                "market_value": market_value,
+                "cost_basis": None if meli_partial_cost and account_id == 1 else cost_basis,
+            }
+        )
+        for account_id, (quantity, market_value, cost_basis) in enumerate(lot_values, start=1)
+    ]
+    meli = source_position.model_copy(update={"accounts": meli_lots})
+    unrelated = []
+    for index in range(6):
+        account_id = (index % 4) + 1
+        lot = source_position.accounts[0].model_copy(
+            update={
+                "account_id": account_id,
+                "account_name": f"Account {account_id}",
+                "quantity": Decimal("1"),
+                "market_value": Decimal("10"),
+                "cost_basis": None,
+            }
+        )
+        unrelated.append(
+            source_position.model_copy(
+                update={
+                    "security_id": 100 + index,
+                    "ticker": f"OTHER{index}",
+                    "quantity": Decimal("1"),
+                    "market_value": Decimal("10"),
+                    "cost_basis": Decimal("5"),
+                    "unrealized_pnl": Decimal("5"),
+                    "percent_of_portfolio": Decimal("0"),
+                    "accounts": [lot],
+                }
+            )
+        )
+    total_market_value = Decimal("101931.698219")
+    active_accounts = [
+        base.accounts[0],
+        base.accounts[2],
+        base.accounts[3],
+        base.accounts[1].model_copy(
+            update={
+                "account_id": 4,
+                "active": True,
+                "included_in_totals": True,
+                "exclusion_reason": None,
+                "warnings": [],
+            }
+        ),
+    ]
+    included_account_ids = [1, 2, 3, 4]
+    snapshot = base.model_copy(
+        update={
+            "accounts": active_accounts,
+            "meta": base.meta.model_copy(
+                update={
+                    "account_coverage": base.meta.account_coverage.model_copy(
+                        update={
+                            "included_account_ids": included_account_ids,
+                            "excluded_account_ids": [],
+                        }
+                    )
+                }
+            ),
+            "equity_fraction": base.equity_fraction.model_copy(
+                update={
+                    "included_account_ids": included_account_ids,
+                    "excluded_account_ids": [],
+                    "equity_value": total_market_value,
+                    "denominator_value": total_market_value,
+                    "equity_fraction": Decimal("1"),
+                }
+            ),
+            "total_market_value": total_market_value,
+            "positions": [meli, *unrelated],
+        }
+    )
+    return snapshot, _health().model_copy(update={"active_account_count": 4})
+
+
 def test_complete_current_snapshot_accepts_empty_included_account_without_hiding_meli() -> None:
     from integrations.portfolio_position import (
         PortfolioPositionAdapter,
@@ -629,6 +725,48 @@ def test_empty_included_account_rejects_one_sided_nulls_and_lagging_state() -> N
         "account_coverage_invalid",
         "empty included account 19 cannot be marked lagging",
     )
+
+
+def test_unrelated_partial_cost_does_not_suppress_meli_or_not_held_evidence() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+
+    class _PartialUnrelatedCostClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    adapter = PortfolioPositionAdapter(_PartialUnrelatedCostClient())
+    held = adapter.resolve("MELI")
+    assert held.state == "held"
+    assert held.total_quantity == pytest.approx(55.256834)
+    assert held.total_cost_basis == pytest.approx(78911.161003)
+    assert len(held.accounts) == 4
+
+    not_held = adapter.resolve("NOT_HELD")
+    assert not_held.state == "not_held"
+
+
+def test_partial_cost_on_matching_meli_remains_unavailable() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost(
+        meli_partial_cost=True
+    )
+
+    class _PartialMeliCostClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_PartialMeliCostClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
 
 
 def test_canonical_adapter_rejects_position_lot_outside_active_envelope_accounts() -> None:

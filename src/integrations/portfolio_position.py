@@ -465,31 +465,26 @@ def _position_lots_reconcile(
     unrealized_pnl: Decimal | None,
     accounts: list[PositionLotV1],
 ) -> bool:
-    """Reject a consolidated fact whose attributable lots disagree with it."""
+    """Reject a held position whose attributable lots disagree with it."""
 
     lots = accounts
-    if quantity < 0 or any(lot.quantity < 0 for lot in lots):
+    if not _position_structure_reconcile(quantity, market_value, lots):
         return False
-    if quantity == 0 and any(
-        value not in (None, Decimal(0))
-        for lot in lots
-        for value in (lot.market_value, lot.cost_basis)
-    ):
+    if quantity == 0 and any(lot.cost_basis not in (None, Decimal(0)) for lot in lots):
         return False
     if quantity == 0 and unrealized_pnl not in (None, Decimal(0)):
         return False
-    quantities = sum((lot.quantity for lot in lots), Decimal(0))
-    if quantities != quantity:
-        return False
-    for aggregate, field in ((market_value, "market_value"), (cost_basis, "cost_basis")):
-        values = [lot.market_value if field == "market_value" else lot.cost_basis for lot in lots]
-        if aggregate is None:
-            if any(value is not None for value in values):
-                return False
-        else:
-            numeric_values = [value for value in values if value is not None]
-            if len(numeric_values) != len(values) or sum(numeric_values, Decimal(0)) != aggregate:
-                return False
+    cost_values = [lot.cost_basis for lot in lots]
+    if cost_basis is None:
+        if any(value is not None for value in cost_values):
+            return False
+    else:
+        numeric_cost_values = [value for value in cost_values if value is not None]
+        if (
+            len(numeric_cost_values) != len(cost_values)
+            or sum(numeric_cost_values, Decimal(0)) != cost_basis
+        ):
+            return False
     if unrealized_pnl is None:
         if market_value is not None and cost_basis is not None:
             return False
@@ -506,13 +501,32 @@ def _position_lots_reconcile(
     )
 
 
+def _position_structure_reconcile(
+    quantity: Decimal, market_value: Decimal | None, accounts: list[PositionLotV1]
+) -> bool:
+    """Validate quantity and market-value structure without optional cost facts."""
+
+    if quantity < 0 or any(lot.quantity < 0 for lot in accounts):
+        return False
+    if quantity == 0 and any(lot.market_value not in (None, Decimal(0)) for lot in accounts):
+        return False
+    if sum((lot.quantity for lot in accounts), Decimal(0)) != quantity:
+        return False
+    market_values = [lot.market_value for lot in accounts]
+    if market_value is None:
+        return all(value is None for value in market_values)
+    numeric_market_values = [value for value in market_values if value is not None]
+    return (
+        len(numeric_market_values) == len(market_values)
+        and sum(numeric_market_values, Decimal(0)) == market_value
+    )
+
+
 def _portfolio_total_reconcile(positions: PositionsV1Result) -> bool:
     if any(
-        not _position_lots_reconcile(
+        not _position_structure_reconcile(
             item.quantity,
             item.market_value,
-            item.cost_basis,
-            item.unrealized_pnl,
             item.accounts,
         )
         for item in positions.positions
