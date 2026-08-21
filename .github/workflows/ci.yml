@@ -207,6 +207,7 @@ jobs:
         run: |
           pip install --require-hashes -r requirements.lock
           pip install --require-hashes -r requirements-design.lock
+          pip install -e .[dev]
           python -m playwright install --with-deps --only-shell chromium
       - name: Verify canonical design tokens and production Work OS contract
         env:
