@@ -233,11 +233,17 @@ def _verdict_badge(
     label, dot = mapping.get(verdict, mapping["pending"])
     is_stale = False
     if verdict_as_of is not None:
+        comparable_verdict_as_of = verdict_as_of
+        if comparable_verdict_as_of.tzinfo is not None:
+            comparable_verdict_as_of = comparable_verdict_as_of.astimezone(UTC).replace(tzinfo=None)
         if newest_ingested_at is not None:
-            is_stale = verdict_as_of < newest_ingested_at
+            comparable_ingested_at = newest_ingested_at
+            if comparable_ingested_at.tzinfo is not None:
+                comparable_ingested_at = comparable_ingested_at.astimezone(UTC).replace(tzinfo=None)
+            is_stale = comparable_verdict_as_of < comparable_ingested_at
         elif newest_quarter_label is not None:
             newest_end = _quarter_label_end_date(newest_quarter_label)
-            if newest_end is not None and verdict_as_of < newest_end:
+            if newest_end is not None and comparable_verdict_as_of < newest_end:
                 is_stale = True
     if is_stale:
         dot = mapping["pending"][1]

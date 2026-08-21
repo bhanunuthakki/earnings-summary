@@ -10,7 +10,7 @@ render as no-ops there by design (see ``tests/test_workspace_golden.py``).
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from io import StringIO
 from pathlib import Path
 
@@ -86,6 +86,24 @@ def test_verdict_badge_fresh_when_evaluation_postdates_ingestion() -> None:
     assert "dot-ok" in out
     assert "dot-muted" not in out
     assert "predates" not in out
+
+
+def test_verdict_badge_normalizes_mixed_timezone_awareness() -> None:
+    aware_verdict = _verdict_badge(
+        "intact",
+        datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC),
+        "Q1 2026",
+        datetime(2026, 5, 8, 14, 0, 0),
+    )
+    aware_ingestion = _verdict_badge(
+        "intact",
+        datetime(2026, 5, 20, 12, 0, 0),
+        "Q1 2026",
+        datetime(2026, 5, 8, 14, 0, 0, tzinfo=UTC),
+    )
+
+    assert "dot-muted" in aware_verdict
+    assert "dot-ok" in aware_ingestion
 
 
 # ---------------------------------------------------------------------------
