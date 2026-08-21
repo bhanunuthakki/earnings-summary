@@ -7,7 +7,6 @@ SQLite, and it writes facts plus the coverage receipt in one transaction.
 from __future__ import annotations
 
 import argparse
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from pipeline.issuer_fact_manifest import (  # noqa: E402
     IssuerFactManifest,
     apply_issuer_fact_manifest,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main() -> int:
@@ -33,8 +33,11 @@ def main() -> int:
     )
     args = parser.parse_args()
     manifest = IssuerFactManifest.model_validate_json(args.manifest.read_text(encoding="utf-8"))
-    conn = sqlite3.connect(args.db)
-    conn.row_factory = sqlite3.Row
+    conn = connect_sqlite(
+        args.db,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         result = apply_issuer_fact_manifest(conn, manifest, apply=args.apply)
     finally:

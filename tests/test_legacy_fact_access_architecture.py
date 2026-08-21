@@ -141,6 +141,18 @@ class _TransitionalReadExemption:
 # immutable observations can be captured atomically. Keep it outside the
 # frozen reader-debt count, but make both its scope and deletion gate executable.
 _TRANSITIONAL_READ_EXEMPTIONS = {
+    "src/pipeline/issuer_fact_manifest.py": (
+        _TransitionalReadExemption(
+            function_name="_assert_kpi_replays_compatible",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after issuer fact manifest KPI capture publishes exact value, unit, "
+                "currency, locator, and excerpt provenance to the canonical source-fact plane "
+                "and receipt validation reads that projection without kpi_facts fallback."
+            ),
+            sql_constant_name="_ISSUER_MANIFEST_KPI_REPLAY_SQL",
+        ),
+    ),
     "src/provenance/financial_fact_resolution.py": (
         _TransitionalReadExemption(
             function_name="rehydrate_document_fact_observations",

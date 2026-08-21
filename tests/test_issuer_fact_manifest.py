@@ -80,7 +80,12 @@ def _manifest(*, sha: str = "a" * 64) -> IssuerFactManifest:
         unit=Unit.MILLIONS,
         currency=Currency.USD,
         value=Decimal("1000"),
-        locator=FactLocator(pdf_page=3, kind=LocatorKind.PDF_SLIDE, verbatim_snippet="TPV 1,000"),
+        locator=FactLocator(
+            locator_version=2,
+            pdf_page=3,
+            kind=LocatorKind.PDF_SLIDE,
+            verbatim_snippet="TPV 1,000",
+        ),
     )
     segment = IssuerFactValue(
         ticker="MELI",
@@ -92,7 +97,10 @@ def _manifest(*, sha: str = "a" * 64) -> IssuerFactManifest:
         currency=Currency.USD,
         value=Decimal("500"),
         locator=FactLocator(
-            pdf_page=5, kind=LocatorKind.PDF_SLIDE, verbatim_snippet="Commerce 500"
+            locator_version=2,
+            pdf_page=5,
+            kind=LocatorKind.PDF_SLIDE,
+            verbatim_snippet="Commerce 500",
         ),
         segment_dim_type=SegmentDimType.BUSINESS_UNIT,
         segment_name="Commerce",
@@ -179,6 +187,7 @@ def test_receipt_hash_binds_canonical_application_manifest_across_clean_database
         update={
             "value": Decimal("1001"),
             "locator": FactLocator(
+                locator_version=2,
                 pdf_page=4,
                 kind=LocatorKind.PDF_SLIDE,
                 verbatim_snippet="TPV 1,001",
@@ -276,6 +285,7 @@ def test_public_receipt_persistence_rejects_rehashed_value_and_locator_forgery(
             update={
                 "value": Decimal("9999"),
                 "locator": FactLocator(
+                    locator_version=2,
                     pdf_page=99,
                     kind=LocatorKind.PDF_SLIDE,
                     verbatim_snippet="TPV 1,000",
@@ -551,6 +561,7 @@ def test_same_document_kpi_value_conflict_rolls_back(
             .model_copy(
                 update={
                     "locator": FactLocator(
+                        locator_version=2,
                         pdf_page=4,
                         kind=LocatorKind.PDF_SLIDE,
                         verbatim_snippet="TPV 1,000",
@@ -607,6 +618,7 @@ def test_same_document_segment_value_conflict_cannot_create_duplicate_capture(
             .model_copy(
                 update={
                     "locator": FactLocator(
+                        locator_version=2,
                         pdf_page=6,
                         kind=LocatorKind.PDF_SLIDE,
                         verbatim_snippet="Commerce 500",

@@ -23,6 +23,7 @@ REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "competitive.transcript_mentions": 1,
     "competitive.category_share": 1,
     "pipeline.sec_fpi_ingest": 1,
+    "pipeline.issuer_fact_manifest": 2,
 }
 
 # Writers that persist a kpi_facts/financial_facts row WITHOUT going through
@@ -139,19 +140,68 @@ def test_every_locator_writer_is_registered() -> None:
     assert not stale, sorted(stale)
 
 
+def test_issuer_fact_manifest_locator_is_v2_on_fixture() -> None:
+    from datetime import date
+    from decimal import Decimal
+
+    import pytest
+
+    from models.facts import Currency, FiscalPeriodType, Unit
+    from pipeline.issuer_fact_manifest import (
+        IssuerFactValue,
+        IssuerManifestFactKind,
+    )
+
+    locator = FactLocator(
+        locator_version=2,
+        pdf_page=7,
+        kind=LocatorKind.PDF_SLIDE,
+        verbatim_snippet="TPV was 1,000 million",
+    )
+    value = IssuerFactValue(
+        ticker="MELI",
+        kind=IssuerManifestFactKind.KPI,
+        canonical_name="Total Payment Volume",
+        period_end=date(2026, 6, 30),
+        fiscal_period_type=FiscalPeriodType.Q2,
+        unit=Unit.MILLIONS,
+        currency=Currency.USD,
+        value=Decimal("1000"),
+        locator=locator,
+        source_excerpt="TPV was 1,000 million",
+    )
+
+    assert REGISTERED_EXTRACTOR_LOCATOR_VERSIONS["pipeline.issuer_fact_manifest"] == 2
+    assert value.locator.locator_version == 2
+    assert value.locator.effective_kind() == LocatorKind.PDF_SLIDE
+    assert value.locator.pdf_page == 7
+    assert value.locator.verbatim_snippet == value.source_excerpt
+    with pytest.raises(ValueError, match="locator version 2 or newer"):
+        IssuerFactValue.model_validate(
+            value.model_dump(mode="json")
+            | {"locator": locator.model_copy(update={"locator_version": 1})}
+        )
+
+
 def test_generic_xbrl_capture_locator_is_v2_on_fixture() -> None:
     from collections import defaultdict
+    from collections.abc import Callable
     from datetime import datetime
+    from typing import cast
 
+    from pipeline.kpi_persistence import KpiValue
     from table_extractors import generic_xbrl_capture as g
 
     section: list[dict[str, object]] = [
         {"Debt - Long-Term Debt (Details) - USD ($) $ in Millions": ["Dec. 31, 2024"]},
         {"Term loan, net": [500]},
     ]
-    per_period: dict[datetime, list[object]] = defaultdict(list)
+    per_period: dict[datetime, list[KpiValue]] = defaultdict(list)
     audit = g.CaptureAudit()
-    g._walk_section("Debt - Long-Term", section, per_period, audit, fye_md=(12, 31))
+    candidate = getattr(g, "_walk_section", None)
+    assert callable(candidate)
+    walk_section = cast("Callable[..., None]", candidate)
+    walk_section("Debt - Long-Term", section, per_period, audit, fye_md=(12, 31))
     values = next(iter(per_period.values()))
     loc = values[0].locator
     assert isinstance(loc, FactLocator)

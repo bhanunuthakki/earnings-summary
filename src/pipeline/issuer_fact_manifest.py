@@ -78,6 +78,8 @@ class IssuerFactValue(BaseModel):
     def _validate_shape(self) -> IssuerFactValue:
         if self.locator.effective_kind() is None:
             raise ValueError("issuer manifest values require a renderable locator")
+        if self.locator.locator_version < 2:
+            raise ValueError("issuer manifest values require locator version 2 or newer")
         monetary = {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
         if self.unit in monetary and self.currency is None:
             raise ValueError("monetary issuer manifest values require currency")
@@ -254,13 +256,18 @@ def _canonical_stored_locator(raw: object, *, fact_name: str) -> str:
     return canonical
 
 
+_ISSUER_MANIFEST_KPI_REPLAY_SQL = (
+    "SELECT kd.name, kf.value, kf.unit, kf.currency, "
+    "kf.locator, kf.source_excerpt FROM kpi_facts kf "
+    "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+    "WHERE kf.ticker = ? AND kf.source_doc_id = ? "
+    "AND date(kf.period_end) = ? AND kf.fiscal_period_type = ?"
+)
+
+
 def _assert_kpi_replays_compatible(conn: sqlite3.Connection, manifest: IssuerFactManifest) -> None:
     rows = conn.execute(
-        "SELECT kd.name, kf.value, kf.unit, kf.currency, "
-        "kf.locator, kf.source_excerpt FROM kpi_facts kf "
-        "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-        "WHERE kf.ticker = ? AND kf.source_doc_id = ? "
-        "AND date(kf.period_end) = ? AND kf.fiscal_period_type = ?",
+        _ISSUER_MANIFEST_KPI_REPLAY_SQL,
         (
             manifest.ticker.upper(),
             manifest.source_doc_id,
