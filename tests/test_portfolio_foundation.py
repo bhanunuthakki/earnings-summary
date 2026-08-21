@@ -860,6 +860,63 @@ def test_clean_zero_quantity_meli_is_not_held() -> None:
     assert result.state == "not_held"
 
 
+@pytest.mark.parametrize("percent_of_portfolio", (Decimal("1"), Decimal("-1")))
+def test_zero_quantity_meli_rejects_contradictory_percent(
+    percent_of_portfolio: Decimal,
+) -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _zero_meli_snapshot()
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(
+                    update={"percent_of_portfolio": percent_of_portfolio}
+                ),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _ContradictoryPercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_ContradictoryPercentClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+    assert result.error_detail is not None and "percent" in result.error_detail
+
+
+def test_matched_meli_rejects_percent_outside_zero_to_hundred() -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+
+    snapshot, health = _snapshot_with_four_lot_meli_and_partial_unrelated_cost()
+    snapshot = snapshot.model_copy(
+        update={
+            "positions": [
+                snapshot.positions[0].model_copy(update={"percent_of_portfolio": Decimal("101")}),
+                *snapshot.positions[1:],
+            ]
+        }
+    )
+
+    class _OutOfRangePercentClient:
+        def probe_v1(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=health)
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(available=True, endpoint="/portfolio-snapshot", data=snapshot)
+
+    result = PortfolioPositionAdapter(_OutOfRangePercentClient()).resolve("MELI")
+    assert result.state == "source_unavailable"
+    assert result.error_code == "position_lot_reconciliation_failed"
+    assert result.error_detail is not None and "percent" in result.error_detail
+
+
 def test_canonical_adapter_rejects_position_lot_outside_active_envelope_accounts() -> None:
     from integrations.portfolio_position import PortfolioPositionAdapter
 
