@@ -352,7 +352,7 @@ def _captured_kpi_ids(
     rows = conn.execute(
         "SELECT kf.id, kd.name FROM kpi_facts kf "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-        "WHERE kf.ticker = ? AND kf.source_doc_id = ? AND kf.period_end = ? "
+        "WHERE kf.ticker = ? AND kf.source_doc_id = ? AND date(kf.period_end) = ? "
         f"AND kf.fiscal_period_type = ? AND kf.unit = ? AND {currency_sql} ORDER BY kf.id",
         (
             expected.ticker.upper(),
@@ -377,7 +377,7 @@ def _captured_segment_ids(
     rows = conn.execute(
         "SELECT sd.id FROM segment_periods sp "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "JOIN segment_dimensions sd ON sd.period_id = sp.id "
-        "WHERE sp.ticker = ? AND sp.source_doc_id = ? AND sp.period_end = ? "
+        "WHERE sp.ticker = ? AND sp.source_doc_id = ? AND date(sp.period_end) = ? "
         "AND sp.fiscal_period_type = ? AND sd.dim_type = ? AND sd.dim_name = ? "
         "AND sd.metric = ? AND COALESCE(sd.unit, sp.unit) = ? "
         f"AND {currency_sql} ORDER BY sd.id",
@@ -452,7 +452,7 @@ def _downstream_kpi(
         FROM kpi_facts kf
         JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
         JOIN documents d ON d.id = kf.source_doc_id
-        WHERE kf.ticker = ? AND kf.period_end = ? AND kf.fiscal_period_type = ?
+        WHERE kf.ticker = ? AND date(kf.period_end) = ? AND kf.fiscal_period_type = ?
           AND kf.unit = ? AND {currency_sql}{as_of_sql}
         ORDER BY {reader_source_order_sql(conn)} ,
                  julianday(d.fetched_at) DESC, kf.id DESC
@@ -474,7 +474,7 @@ def _downstream_kpi(
         return availability
     later = conn.execute(
         "SELECT kd.name FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id=kf.kpi_definition_id "  # nosec B608 -- trusted internal SQL shape; values remain bound
-        "JOIN documents d ON d.id=kf.source_doc_id WHERE kf.ticker=? AND kf.period_end=? "
+        "JOIN documents d ON d.id=kf.source_doc_id WHERE kf.ticker=? AND date(kf.period_end)=? "
         "AND kf.fiscal_period_type=? AND kf.unit=? AND "
         f"{currency_sql}",
         (
@@ -512,7 +512,7 @@ def _downstream_segment(
         FROM segment_periods sp
         JOIN segment_dimensions sd ON sd.period_id = sp.id
         JOIN documents d ON d.id = sp.source_doc_id
-        WHERE sp.ticker = ? AND sp.period_end = ? AND sp.fiscal_period_type = ?
+        WHERE sp.ticker = ? AND date(sp.period_end) = ? AND sp.fiscal_period_type = ?
           AND sd.dim_type = ? AND sd.dim_name = ? AND sd.metric = ?
           AND COALESCE(sd.unit, sp.unit) = ?
           AND {currency_sql}{as_of_sql}
@@ -539,7 +539,7 @@ def _downstream_segment(
         return availability
     later = conn.execute(
         "SELECT 1 FROM segment_periods sp JOIN segment_dimensions sd ON sd.period_id=sp.id "  # nosec B608 -- trusted internal SQL shape; values remain bound
-        "WHERE sp.ticker=? AND sp.period_end=? AND sp.fiscal_period_type=? "
+        "WHERE sp.ticker=? AND date(sp.period_end)=? AND sp.fiscal_period_type=? "
         "AND sd.dim_type=? AND sd.dim_name=? AND sd.metric=? "
         f"AND COALESCE(sd.unit,sp.unit)=? AND {currency_sql}",
         (

@@ -587,6 +587,7 @@ def persist_manifest(
     *,
     run_id: str,
     manifest: KpiExtractionManifest,
+    commit: bool = True,
 ) -> PersistResult:
     """Apply one KpiExtractionManifest. Validates each value, inserts kpi_facts,
     emits validation_issues for failures, and returns a per-manifest tally."""
@@ -747,5 +748,10 @@ def persist_manifest(
         else:
             skipped += 1
 
-    conn.commit()
+    # Most callers own a complete manifest transaction.  The issuer activation
+    # seam also batches KPI rows, segment cells, and the coverage receipt in one
+    # transaction, so it explicitly passes ``commit=False`` and commits only
+    # after the receipt proves that no expected fact is missing.
+    if commit:
+        conn.commit()
     return PersistResult(inserted=inserted, skipped_existing=skipped, validation_issues=issues)
