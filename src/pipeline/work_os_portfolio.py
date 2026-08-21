@@ -63,6 +63,8 @@ class WorkOsPortfolioHydration(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: Literal["ok", "degraded"]
+    tracker_state: Literal["current", "stale", "partial", "unavailable"]
+    tracker_detail: str
     generated_at: str
     as_of: str | None = None
     total_market_value: float | None = None
@@ -190,12 +192,29 @@ def build_work_os_portfolio(
         warnings.append("portfolio_tracker_stale")
     if live.is_partial:
         warnings.append("portfolio_tracker_partial")
+    tracker_state: Literal["current", "stale", "partial", "unavailable"]
+    if not live.available:
+        tracker_state = "unavailable"
+    elif live.is_stale:
+        tracker_state = "stale"
+    elif live.is_partial:
+        tracker_state = "partial"
+    else:
+        tracker_state = "current"
+    if tracker_state == "unavailable":
+        tracker_detail = "Tracker unavailable · research data only"
+    elif live.as_of:
+        tracker_detail = f"Tracker connected · {tracker_state} · As of {live.as_of}"
+    else:
+        tracker_detail = f"Live tracker connected · {tracker_state} · observation date unavailable"
     return WorkOsPortfolioHydration(
         status=(
             "ok"
             if live.available and not live.is_stale and not live.is_partial and not warnings
             else "degraded"
         ),
+        tracker_state=tracker_state,
+        tracker_detail=tracker_detail,
         generated_at=built_at.isoformat().replace("+00:00", "Z"),
         as_of=live.as_of,
         total_market_value=live.total_market_value if live.available else None,

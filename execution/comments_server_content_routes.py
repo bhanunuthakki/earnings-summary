@@ -16,6 +16,7 @@ from typing import Protocol
 
 from flask import Flask, Response, abort, redirect, request, send_file
 
+from integrations.portfolio_tracker_client import LivePortfolio
 from pipeline.work_os_briefs import (
     build_brief_library,
     load_report_reader_payload,
@@ -40,6 +41,7 @@ class ContentRouteContext:
     safe_ticker: Callable[[str], str]
     build_ticker_command_center: Callable[[Path, str], _TickerCommandCenter]
     linked_gsheet: Callable[[Path, str], tuple[str | None, str | None]]
+    fetch_live_portfolio: Callable[[], LivePortfolio]
     default_user_id: str
 
 
@@ -441,7 +443,12 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         except ValueError:
             abort(400)
         try:
-            payload = build_company_desk(repo_root, context.get_read_db(), validated)
+            payload = build_company_desk(
+                repo_root,
+                context.get_read_db(),
+                validated,
+                live=context.fetch_live_portfolio(),
+            )
         except LookupError:
             abort(404)
         response = Response(payload.model_dump_json(), mimetype="application/json")

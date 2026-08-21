@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
+from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.work_os_company import build_company_desk
 from tests.test_comments_server_dashboard import comments_server, create_dashboard_test_schema
 
@@ -35,7 +36,16 @@ def _work_os_app_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(name="work_os_client")
-def _work_os_client(work_os_app_repo: Path) -> FlaskClient:
+def _work_os_client(work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
+    monkeypatch.setattr(
+        comments_server,
+        "fetch_live_portfolio",
+        lambda: LivePortfolio(
+            available=False,
+            api_url="http://tracker.test",
+            error="test fixture unavailable",
+        ),
+    )
     return comments_server.create_app(work_os_app_repo).test_client()
 
 
@@ -177,6 +187,88 @@ def test_company_desk_is_a_narrow_governed_read_model(work_os_app_repo: Path) ->
     assert "position_snapshot_unavailable" in desk.warnings
 
 
+def test_company_desk_projects_live_tracker_position_without_losing_dcf(
+    work_os_app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            valuation_date TEXT,
+            npv_per_share REAL,
+            live_price REAL,
+            currency TEXT,
+            live_price_at TEXT
+        );
+        INSERT INTO dcf_runs VALUES (
+            1, 'NU', '2026-08-08T10:00:00Z', '2026-08-08',
+            18.50, 14.25, 'USD', '2026-08-08T09:30:00Z'
+        );
+        """
+    )
+    live = LivePortfolio(
+        available=True,
+        api_url="http://tracker.test",
+        total_market_value=100_000.0,
+        positions=[LivePosition("NU", "Nu Holdings", 10.0, 12_345.0, 10_000.0, 2_345.0, 12.345)],
+    )
+    try:
+        desk = build_company_desk(work_os_app_repo, conn, "nu", live=live)
+    finally:
+        conn.close()
+
+    assert desk.position.weight_pct == pytest.approx(12.345)
+    assert desk.position.market_value == pytest.approx(12_345.0)
+    assert desk.position.position_source == "portfolio_tracker_api"
+    assert desk.position.position_state == "held"
+    assert desk.position.price == pytest.approx(14.25)
+    assert desk.position.fair_value == pytest.approx(18.50)
+    assert desk.position.source == "latest_governed_dcf_run"
+
+
+def test_company_desk_distinguishes_not_held_from_tracker_unavailable(
+    work_os_app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        not_held = build_company_desk(
+            work_os_app_repo,
+            conn,
+            "NU",
+            live=LivePortfolio(
+                available=True,
+                api_url="http://tracker.test",
+                as_of="2026-08-08",
+            ),
+        )
+        unavailable = build_company_desk(
+            work_os_app_repo,
+            conn,
+            "NU",
+            live=LivePortfolio(
+                available=False,
+                api_url="http://tracker.test",
+                error="offline",
+            ),
+        )
+    finally:
+        conn.close()
+
+    assert not_held.position.position_state == "not_held"
+    assert not_held.position.position_source == "portfolio_tracker_api"
+    assert not_held.position.position_as_of == "2026-08-08"
+    assert not_held.position.weight_pct is None
+    assert "portfolio_tracker_unavailable" not in not_held.warnings
+    assert unavailable.position.position_state == "unavailable"
+    assert unavailable.position.position_source is None
+    assert "portfolio_tracker_unavailable" in unavailable.warnings
+
+
 def test_company_desk_api_is_read_only_and_no_store(
     work_os_client: FlaskClient, work_os_app_repo: Path
 ) -> None:
@@ -191,6 +283,44 @@ def test_company_desk_api_is_read_only_and_no_store(
     assert payload["current_decision"]["model"]["value"] == "trim"
     assert payload["current_decision"]["relationship"] == "conflict"
     assert payload["conditions"][0]["evidence_ref"] == "financial"
+
+
+def test_company_desk_api_fetches_one_canonical_tracker_snapshot(
+    work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    def fetch() -> LivePortfolio:
+        nonlocal calls
+        calls += 1
+        return LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            total_market_value=100_000.0,
+            positions=[
+                LivePosition(
+                    "NU",
+                    "Nu Holdings",
+                    10.0,
+                    12_345.0,
+                    10_000.0,
+                    2_345.0,
+                    12.345,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(comments_server, "fetch_live_portfolio", fetch)
+    client = comments_server.create_app(work_os_app_repo).test_client()
+
+    response = client.get("/api/work-os/companies/nu/desk")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert calls == 1
+    assert payload["position"]["weight_pct"] == pytest.approx(12.345)
+    assert payload["position"]["market_value"] == pytest.approx(12_345.0)
+    assert payload["position"]["position_source"] == "portfolio_tracker_api"
 
 
 def test_company_desk_degrades_when_optional_tables_are_absent(

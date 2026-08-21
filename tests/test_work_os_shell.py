@@ -851,6 +851,27 @@ def test_company_desk_renders_governed_valuation_provenance() -> None:
     assert "position.fair_value_as_of" in html
     assert "workOsMoney(position.price, position.currency)" in html
     assert "workOsMoney(position.fair_value, position.currency)" in html
+    assert "position.position_source" in html
+    assert "Portfolio Tracker snapshot" in html
+    assert "Portfolio Cockpit snapshot" not in html
+    assert "positionState === 'not_held' ? 'Not held' : 'Weight unavailable'" in html
+    assert "positionState === 'unavailable'" in html
+    assert "positionState === 'not_held' ? ' · not held' : ''" in html
+    company_desk_runtime = html.split("async function workOsRenderCompanyDesk", 1)[1].split(
+        "function workOsBriefFilterCompanies", 1
+    )[0]
+    assert "company.current_weight_pct" not in company_desk_runtime
+
+
+def test_cockpit_availability_does_not_use_missing_as_of_as_offline() -> None:
+    html = render_work_os_shell()
+
+    assert "payload.tracker_detail" in html
+    assert "Tracker unavailable · research data only" in html
+    assert (
+        "payload.as_of ? 'As of ' + payload.as_of : 'Tracker offline - research data only'"
+        not in html
+    )
 
 
 def test_company_desk_earnings_doorway_matches_full_brief_canvas_interaction() -> None:

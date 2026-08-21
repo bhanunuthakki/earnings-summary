@@ -910,10 +910,17 @@ def _production_runtime(generated_at: datetime) -> str:
       document.getElementById('deskOwnerRevision').textContent = workOsDecisionMeta(ownerDecision, 'No owner decision recorded') + (decision.freshness === 'stale' ? ' · stale' : '');
       document.getElementById('deskModelRevision').textContent = workOsDecisionMeta(modelDecision, 'No model recommendation recorded');
       const position = desk.position || {{}};
-      const hasCockpitPosition = Number.isFinite(company.current_weight_pct);
-      const weight = Number.isFinite(position.weight_pct) ? position.weight_pct : (hasCockpitPosition ? company.current_weight_pct : null);
-      document.getElementById('deskPositionWeight').textContent = Number.isFinite(weight) ? workOsPercent(weight) : 'Weight unavailable';
-      document.getElementById('deskPositionSource').textContent = Number.isFinite(weight) ? 'Portfolio Cockpit snapshot' : 'Tracker snapshot unavailable';
+      const weight = Number.isFinite(position.weight_pct) ? position.weight_pct : null;
+      const positionState = String(position.position_state || 'unavailable');
+      document.getElementById('deskPositionWeight').textContent = Number.isFinite(weight)
+        ? workOsPercent(weight)
+        : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
+      const trackerPositionSource = position.position_source === 'portfolio_tracker_api'
+        ? 'Portfolio Tracker snapshot'
+        : 'Portfolio Tracker';
+      document.getElementById('deskPositionSource').textContent = positionState === 'unavailable'
+        ? 'Tracker snapshot unavailable'
+        : trackerPositionSource + (position.position_as_of ? ' · as of ' + position.position_as_of : '') + (positionState === 'not_held' ? ' · not held' : '');
       const valuationSource = position.source ? String(position.source).replaceAll('_', ' ') : 'governed DCF snapshot';
       document.getElementById('deskInputPrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : '—';
       document.getElementById('deskInputPriceSource').textContent = Number.isFinite(position.price) ? valuationSource + ' · as of ' + (position.price_as_of || 'date unavailable') : 'No governed input price';
@@ -1101,7 +1108,8 @@ def _production_runtime(generated_at: datetime) -> str:
       const cards = stats.querySelectorAll('.k-stat-cell');
       const labels = ['Portfolio NAV', 'Performance', 'Risk & Factors', 'Portfolio Companies'];
       const values = [workOsMoney(payload.total_market_value), 'Open live view', 'Open live view', String(companies.length)];
-      const details = [payload.as_of ? 'As of ' + payload.as_of : 'Tracker offline - research data only', 'Performance vs Index', 'Risk & Allocations', 'Governed portfolio universe'];
+      const trackerDetail = String(payload.tracker_detail || 'Tracker unavailable · research data only');
+      const details = [trackerDetail, 'Performance vs Index', 'Risk & Allocations', 'Governed portfolio universe'];
       cards.forEach(function (card, index) {{
         const heading = card.querySelector('.stat-heading');
         const number = card.querySelector('.stat-number');

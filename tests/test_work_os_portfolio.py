@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.dashboard_status import DashboardRow, TranscriptStatus
 from pipeline.research_cockpit import CockpitRow
@@ -72,6 +74,8 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
     )
 
     assert payload.status == "ok"
+    assert payload.tracker_state == "current"
+    assert payload.tracker_detail == "Tracker connected · current · As of 2026-08-08"
     assert payload.total_market_value == 1_000_000.0
     assert payload.as_of == "2026-08-08"
     assert [company.ticker for company in payload.companies] == ["NU"]
@@ -94,7 +98,44 @@ def test_portfolio_hydration_surfaces_readout_projection_failure() -> None:
     )
 
     assert payload.status == "degraded"
+    assert payload.tracker_state == "current"
     assert "earnings_readout_projection_unavailable" in payload.warnings
+
+
+@pytest.mark.parametrize(
+    ("is_stale", "is_partial", "as_of", "expected_state", "expected_detail"),
+    (
+        (
+            False,
+            False,
+            None,
+            "current",
+            "Live tracker connected · current · observation date unavailable",
+        ),
+        (True, False, "2026-08-07", "stale", "Tracker connected · stale · As of 2026-08-07"),
+        (False, True, "2026-08-08", "partial", "Tracker connected · partial · As of 2026-08-08"),
+    ),
+)
+def test_portfolio_hydration_labels_tracker_state_independently_of_as_of(
+    is_stale: bool,
+    is_partial: bool,
+    as_of: str | None,
+    expected_state: str,
+    expected_detail: str,
+) -> None:
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            is_stale=is_stale,
+            is_partial=is_partial,
+            as_of=as_of,
+        ),
+    )
+
+    assert payload.tracker_state == expected_state
+    assert payload.tracker_detail == expected_detail
 
 
 def test_portfolio_hydration_keeps_generation_doorway_without_persisted_readout() -> None:
@@ -130,6 +171,8 @@ def test_portfolio_hydration_fails_closed_when_tracker_is_offline() -> None:
     )
 
     assert payload.status == "degraded"
+    assert payload.tracker_state == "unavailable"
+    assert payload.tracker_detail == "Tracker unavailable · research data only"
     assert payload.total_market_value is None
     assert payload.warnings == ["portfolio_tracker_unavailable"]
     assert payload.companies[0].ticker == "BKNG"

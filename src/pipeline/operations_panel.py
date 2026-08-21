@@ -13,6 +13,7 @@ from log_redact import sanitize_operational_text
 from operations.models import (
     JobReceiptObservation,
     ObservationEnvelope,
+    ObservationState,
     OperationsRegistry,
     OperationsSnapshot,
     PortfolioTrackerRuntimeObservation,
@@ -209,6 +210,11 @@ OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS = (
 
 OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS = (
     SurfaceDisposition(
+        field="evidence_gap_count",
+        destination="overview",
+        rationale="Counts stale or missing evidence separately from current actionable failures.",
+    ),
+    SurfaceDisposition(
         field="portfolio_tracker_runtime",
         destination="runtime_recovery",
         rationale="Portfolio Tracker runtime evidence is rendered as a linked runtime row without authorizing activation.",
@@ -222,6 +228,7 @@ OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS = (
 
 
 class EvidenceView(_ViewModel):
+    observation_state: ObservationState
     state: str
     tone: Tone
     label: str
@@ -263,6 +270,7 @@ class RuntimeRowView(_ViewModel):
 class OperationsPanelView(_ViewModel):
     observed_label: str
     attention_count: int
+    evidence_gap_count: int
     runtime_summary_tone: Tone
     tasks: tuple[TaskView, ...]
     runtime_rows: tuple[RuntimeRowView, ...]
@@ -332,6 +340,7 @@ def _detail(observation: ObservationEnvelope) -> str:
 
 def _evidence(observation: ObservationEnvelope) -> EvidenceView:
     return EvidenceView(
+        observation_state=observation.state,
         state=observation.state.title(),
         tone=_tone(observation.state),
         label=_source_label(observation.evidence_source),
@@ -363,6 +372,7 @@ def _job_evidence(observation: object) -> EvidenceView:
 
 def _unavailable(label: str, observed_at: datetime) -> EvidenceView:
     return EvidenceView(
+        observation_state="unavailable",
         state="Unavailable",
         tone="warn",
         label=label,
@@ -454,6 +464,7 @@ def _portfolio_tracker_evidence(
 def _scheduler_task_evidence(observation: SchedulerObservation) -> EvidenceView:
     if observation.state == "missing":
         return EvidenceView(
+            observation_state="missing",
             state="Unavailable",
             tone="warn",
             label=_source_label(observation.evidence_source),
@@ -502,6 +513,27 @@ def _service_tone(state: ServiceState) -> Tone:
     if state == "Stopped":
         return "bad"
     return "warn"
+
+
+def _actionable_evidence(evidence: EvidenceView) -> bool:
+    """Count only current failures as actionable; keep stale evidence visible."""
+
+    if evidence.observation_state not in {"current", "invalid"}:
+        return False
+    state = evidence.state.casefold()
+    return evidence.tone == "bad" or any(
+        marker in state
+        for marker in (
+            "invalid",
+            "failed",
+            "stopped",
+            "disabled",
+            "unknown",
+            "partial",
+            "degraded_corpus",
+            "skipped_locked",
+        )
+    )
 
 
 def _runtime_rows(
@@ -642,10 +674,12 @@ def build_operations_panel_view(
                 _service_tone(service_runtime_state) if service_runtime_state is not None else None
             )
             runtime_attention = (
-                not scheduler_evidence_current
-                or not service_observation_current
-                or (service_runtime_state != "Running")
-                or (scheduler_row is not None and scheduler_row.expectation_match is False)
+                scheduler_evidence_current
+                and scheduler_row is not None
+                and scheduler_row.expectation_match is False
+            ) or (
+                service_observation_current
+                and (service_runtime_state is None or service_runtime_state != "Running")
             )
             runtime = (
                 _service_evidence(snapshot.services, service_row)
@@ -674,7 +708,7 @@ def build_operations_panel_view(
                 )
             else:
                 scheduler_state = observed_scheduler_state
-            runtime_attention = snapshot.scheduler.state != "current" or scheduler_state not in {
+            runtime_attention = scheduler_evidence_current and scheduler_state not in {
                 "Ready",
                 "Running",
                 "Disabled (expected)",
@@ -692,11 +726,7 @@ def build_operations_panel_view(
             )
             for step in steps
         )
-        receipt_attention = any(step.receipt.tone != "ok" for step in step_views)
-        receipt_attention = receipt_attention or any(
-            observation.receipt is None or observation.receipt.status != "ok"
-            for observation in (receipts[step.job] for step in steps)
-        )
+        receipt_attention = any(_actionable_evidence(step.receipt) for step in step_views)
         observation_states = [
             runtime.state.casefold(),
             *(step.receipt.state.casefold() for step in step_views),
@@ -711,7 +741,10 @@ def build_operations_panel_view(
             for observation in (receipts[step.job] for step in steps)
         )
         stopped_service = service_runtime_state == "Stopped"
-        if bad_terminal or scheduler_state in {"Disabled", "Unknown"} or stopped_service:
+        task_attention = runtime_attention or receipt_attention
+        if not task_attention:
+            attention_rank = 4
+        elif bad_terminal or scheduler_state in {"Disabled", "Unknown"} or stopped_service:
             attention_rank = 0
         elif any("invalid" in state for state in observation_states):
             attention_rank = 1
@@ -739,7 +772,7 @@ def build_operations_panel_view(
                 service_runtime_tone=service_runtime_tone,
                 runtime=runtime,
                 steps=step_views,
-                attention=runtime_attention or receipt_attention,
+                attention=task_attention,
                 attention_rank=attention_rank,
             )
         )
@@ -776,8 +809,8 @@ def build_operations_panel_view(
                 service_runtime_tone=None,
                 runtime=scheduler_evidence.model_copy(update={"detail": unexpected_detail}),
                 steps=(),
-                attention=True,
-                attention_rank=0,
+                attention=snapshot.scheduler.state == "current",
+                attention_rank=0 if snapshot.scheduler.state == "current" else 4,
             )
         )
     unexpected_service_rows = tuple(
@@ -815,8 +848,8 @@ def build_operations_panel_view(
                 service_runtime_tone=service_tone,
                 runtime=service_evidence.model_copy(update={"detail": detail}),
                 steps=(),
-                attention=True,
-                attention_rank=0,
+                attention=snapshot.services.state == "current",
+                attention_rank=0 if snapshot.services.state == "current" else 4,
             )
         )
     runtime_rows = _runtime_rows(registry, snapshot)
@@ -833,15 +866,44 @@ def build_operations_panel_view(
             evidence=portfolio_tracker_runtime,
         ),
     )
+    managed_service_labels = {f"Managed service · {service.name}" for service in registry.services}
     attention = sum(task.attention for task in tasks) + sum(
-        row.evidence.tone != "ok" for row in runtime_rows
+        _actionable_evidence(row.evidence)
+        for row in runtime_rows
+        if row.label not in managed_service_labels or snapshot.services.state == "current"
     )
-    if readme_status is None or readme_status.tone != "ok":
+    attention += snapshot.scheduler.state == "invalid"
+    attention += snapshot.services.state == "invalid"
+    if readme_status is None or readme_status.state in {"rejected", "invalid"}:
         attention += 1
+    gap_states = {"missing", "stale", "unavailable"}
+    evidence_gap_keys: set[tuple[str, str]] = set()
+    for domain, observation in (
+        ("scheduler", snapshot.scheduler),
+        ("services", snapshot.services),
+        ("database_identity", snapshot.database_identity),
+        ("schema_revision", snapshot.schema_revision),
+        ("fmp_backlog", snapshot.fmp_backlog),
+        ("fmp_circuit", snapshot.fmp_circuit),
+    ):
+        if observation.state in gap_states:
+            evidence_gap_keys.add(("domain", domain))
+    for observation in snapshot.job_receipts:
+        if observation.state in gap_states:
+            evidence_gap_keys.add(("job", observation.job))
+    tracker_state = portfolio_tracker_runtime.state.casefold()
+    if snapshot.portfolio_tracker_runtime.state in gap_states or "stale" in tracker_state:
+        evidence_gap_keys.add(("runtime", "portfolio_tracker"))
+    # These two explicit, intentionally unavailable runtime rows are separately visible.
+    evidence_gap_keys.update({("runtime", "backups"), ("runtime", "write_locks")})
+    if readme_status is not None and readme_status.state in {"not_run", "stale"}:
+        evidence_gap_keys.add(("governance", "readme"))
+    evidence_gap_count = len(evidence_gap_keys)
     return OperationsPanelView(
         observed_label=_clock(snapshot.observed_at, prefix="Observed"),
         attention_count=attention,
-        runtime_summary_tone="ok" if attention == 0 else "warn",
+        evidence_gap_count=evidence_gap_count,
+        runtime_summary_tone="ok" if attention == 0 and evidence_gap_count == 0 else "warn",
         tasks=tuple(
             sorted(tasks, key=lambda task: (task.attention_rank, task.task_name.casefold()))
         ),
@@ -877,11 +939,11 @@ def _overview(view: OperationsPanelView) -> str:
         '<div class="ops-summary-grid">'
         f'<article class="k-well"><div class="k-label">Declared tasks</div><div class="stat-number">{len(view.tasks)}</div></article>'
         f'<article class="k-well"><div class="k-label">Execution steps</div><div class="stat-number">{sum(len(task.steps) for task in view.tasks)}</div></article>'
-        f'<article class="k-well"><div class="k-label">Without attention</div><div class="stat-number">{current}</div></article>'
+        f'<article class="k-well"><div class="k-label">No current action</div><div class="stat-number">{current}</div></article>'
         f'<article class="k-well"><div class="k-label">Service-owned</div><div class="stat-number">{service_owned}</div></article>'
         "</div>"
         '<div class="k-well k-well-warn"><div class="k-card-row-title">Attention is evidence-based</div>'
-        f"<p>{view.attention_count} operational or governance observation(s) need attention. Missing, stale, or invalid evidence never becomes a healthy claim.</p></div>"
+        f"<p>{view.attention_count} operational or governance observation(s) need attention. {view.evidence_gap_count} stale or missing evidence gap(s) remain visible as informational; current invalid or failed evidence requires action.</p></div>"
     )
 
 
@@ -906,14 +968,26 @@ def _jobs(view: OperationsPanelView) -> str:
                 '<div><span class="k-label">Service runtime</span><div>'
                 f"{_state_pill(task.service_runtime_state, task.service_runtime_tone)}</div></div>"
             )
+        evidence_gap = any(
+            evidence.observation_state in {"missing", "stale", "unavailable"}
+            for evidence in (task.runtime, *(step.receipt for step in task.steps))
+        )
+        if task.attention:
+            task_status = "Attention"
+            task_status_class = "k-pill-warn"
+        elif evidence_gap:
+            task_status = "Evidence gap"
+            task_status_class = "k-pill-warn"
+        else:
+            task_status = "Observed"
+            task_status_class = "k-pill-ok"
         cards.append(
             f'<article class="k-well ops-task-card" data-operations-task-card="true" '
             f'data-attention="{str(task.attention).lower()}" data-search="{_html(search)}">'
             '<div class="k-toolbar"><div>'
             f'<div class="k-card-row-title">{_html(task.task_name)}</div>'
             f'<div class="k-card-meta">{_html(task.wrapper)} · {_html(task.schedule_label)}</div></div>'
-            f'<span class="k-pill {"k-pill-warn" if task.attention else "k-pill-ok"}">'
-            f"{'Attention' if task.attention else 'Observed'}</span></div>"
+            f'<span class="k-pill {task_status_class}">{task_status}</span></div>'
             '<div class="ops-task-facts">'
             f'<div><span class="k-label">Declared owner</span><div>{_html(task.declared_owner)}</div></div>'
             f'<div><span class="k-label">Runtime owner</span><div>{_html(task.runtime_owner)}</div></div>'

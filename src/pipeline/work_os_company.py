@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from calendar_clock import calendar_today
 from dcf.latest import latest_dcf_row
+from integrations.portfolio_tracker_client import LivePortfolio
 from pipeline.earnings_doorway import (
     POST_EARNINGS_WINDOW_DAYS,
     PRE_EARNINGS_WINDOW_DAYS,
@@ -49,6 +50,9 @@ class DeskPositionSnapshot(BaseModel):
 
     weight_pct: float | None = None
     market_value: float | None = None
+    position_state: Literal["held", "not_held", "unavailable"] = "unavailable"
+    position_source: Literal["portfolio_tracker_api"] | None = None
+    position_as_of: str | None = None
     price: float | None = None
     fair_value: float | None = None
     currency: str | None = None
@@ -344,20 +348,40 @@ def _latest_brief(repo_root: Path, ticker: str) -> BriefLibraryItem | None:
     return build_brief_descriptor(repo_root, latest)
 
 
-def _position_snapshot(conn: sqlite3.Connection, ticker: str) -> DeskPositionSnapshot:
-    """Return the latest governed DCF basis without inventing a live position."""
+def _position_snapshot(
+    conn: sqlite3.Connection, ticker: str, live: LivePortfolio | None = None
+) -> DeskPositionSnapshot:
+    """Join canonical live position data to the governed DCF basis."""
 
     dcf = latest_dcf_row(conn, ticker)
-    if dcf is None:
-        return DeskPositionSnapshot()
+    position = next(
+        (
+            candidate
+            for candidate in (live.positions if live is not None and live.available else ())
+            if candidate.ticker and candidate.ticker.strip().upper() == ticker
+        ),
+        None,
+    )
+    position_state: Literal["held", "not_held", "unavailable"]
+    if live is None or not live.available:
+        position_state = "unavailable"
+    elif position is None:
+        position_state = "not_held"
+    else:
+        position_state = "held"
     return DeskPositionSnapshot(
-        price=dcf.live_price,
-        fair_value=dcf.npv_per_share,
-        currency=dcf.currency,
-        as_of=dcf.live_price_at or dcf.valuation_date,
-        source="latest_governed_dcf_run",
-        price_as_of=dcf.live_price_at,
-        fair_value_as_of=dcf.valuation_date,
+        weight_pct=position.percent_of_portfolio if position is not None else None,
+        market_value=position.market_value if position is not None else None,
+        position_source=("portfolio_tracker_api" if live is not None and live.available else None),
+        position_as_of=live.as_of if live is not None and live.available else None,
+        position_state=position_state,
+        price=dcf.live_price if dcf is not None else None,
+        fair_value=dcf.npv_per_share if dcf is not None else None,
+        currency=dcf.currency if dcf is not None else None,
+        as_of=(dcf.live_price_at or dcf.valuation_date) if dcf is not None else None,
+        source="latest_governed_dcf_run" if dcf is not None else None,
+        price_as_of=dcf.live_price_at if dcf is not None else None,
+        fair_value_as_of=dcf.valuation_date if dcf is not None else None,
     )
 
 
@@ -368,6 +392,7 @@ def build_company_desk(
     *,
     generated_at: datetime | None = None,
     today: date | None = None,
+    live: LivePortfolio | None = None,
 ) -> CompanyDeskResponse:
     """Build one cheap Desk snapshot from an existing request connection."""
 
@@ -387,8 +412,14 @@ def build_company_desk(
         normalized,
         today=today or calendar_today(generated_at),
     )
-    position = _position_snapshot(conn, normalized)
+    position = _position_snapshot(conn, normalized, live)
     warnings = [*decision_warnings, *question_warnings, *readout_projection.warnings]
+    if live is not None and not live.available:
+        warnings.append("portfolio_tracker_unavailable")
+    elif live is not None and live.is_stale:
+        warnings.append("portfolio_tracker_stale")
+    if live is not None and live.is_partial:
+        warnings.append("portfolio_tracker_partial")
     if position.price is None and position.fair_value is None:
         warnings.insert(0, "position_snapshot_unavailable")
     if latest_brief is None:
