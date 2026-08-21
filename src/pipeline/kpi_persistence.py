@@ -51,6 +51,14 @@ _SOURCE_EXCERPT_MAX = 1024
 _ACTUAL_PLAUSIBLE_MAX = Decimal("1e15")
 
 
+def normalize_source_excerpt(source_excerpt: str | None) -> str | None:
+    """Return the exact excerpt payload persisted on a KPI fact."""
+    if source_excerpt is None:
+        return None
+    normalized = source_excerpt.strip()[:_SOURCE_EXCERPT_MAX]
+    return normalized or None
+
+
 class KpiValue(BaseModel):
     """One LLM-extracted KPI value tied to a tracked metric."""
 
@@ -587,6 +595,7 @@ def persist_manifest(
     *,
     run_id: str,
     manifest: KpiExtractionManifest,
+    commit: bool = True,
 ) -> PersistResult:
     """Apply one KpiExtractionManifest. Validates each value, inserts kpi_facts,
     emits validation_issues for failures, and returns a per-manifest tally."""
@@ -713,7 +722,7 @@ def persist_manifest(
                 issues += 1
                 continue
 
-        excerpt = kpi.source_excerpt.strip()[:_SOURCE_EXCERPT_MAX] if kpi.source_excerpt else None
+        excerpt = normalize_source_excerpt(kpi.source_excerpt)
         was_inserted = _insert_kpi_fact(
             conn,
             ticker=manifest.ticker,
@@ -740,12 +749,17 @@ def persist_manifest(
                 source_doc_id=manifest.source_doc_id,
                 ticker=manifest.ticker,
             ),
-            source_excerpt=excerpt or None,
+            source_excerpt=excerpt,
         )
         if was_inserted:
             inserted += 1
         else:
             skipped += 1
 
-    conn.commit()
+    # Most callers own a complete manifest transaction.  The issuer activation
+    # seam also batches KPI rows, segment cells, and the coverage receipt in one
+    # transaction, so it explicitly passes ``commit=False`` and commits only
+    # after the receipt proves that no expected fact is missing.
+    if commit:
+        conn.commit()
     return PersistResult(inserted=inserted, skipped_existing=skipped, validation_issues=issues)
