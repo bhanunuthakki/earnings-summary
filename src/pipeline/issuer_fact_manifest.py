@@ -12,13 +12,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from compute.kpi_resolver import normalize_kpi_name
 from models.documents import SourceType
 from models.facts import (
     Currency,
@@ -39,6 +40,9 @@ from pipeline.issuer_document_coverage import (
 )
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
 from pipeline.segment_junction_writer import write_segment_facts_junction
+
+MAX_EXTRACTED_AT_FUTURE_SKEW = timedelta(minutes=5)
+_APPLY_SAVEPOINT = "apply_issuer_fact_manifest"
 
 
 class IssuerManifestFactKind(StrEnum):
@@ -61,7 +65,7 @@ class IssuerFactValue(BaseModel):
     value: Decimal
     locator: FactLocator
     source_excerpt: str | None = Field(default=None, max_length=2000)
-    segment_dim_type: str | None = None
+    segment_dim_type: SegmentDimType | None = None
     segment_name: str | None = None
     metric: str | None = None
 
@@ -95,7 +99,9 @@ class IssuerFactValue(BaseModel):
             fiscal_period_type=self.fiscal_period_type.value,
             unit=self.unit,
             currency=self.currency,
-            segment_dim_type=self.segment_dim_type,
+            segment_dim_type=(
+                self.segment_dim_type.value if self.segment_dim_type is not None else None
+            ),
             segment_name=self.segment_name,
             metric=self.metric,
         )
@@ -120,6 +126,8 @@ class IssuerFactManifest(BaseModel):
 
     @model_validator(mode="after")
     def _bind_population(self) -> IssuerFactManifest:
+        if self.extracted_at.tzinfo is None or self.extracted_at.utcoffset() != timedelta(0):
+            raise ValueError("manifest extracted_at must be timezone-aware UTC")
         header_ticker = self.ticker.upper()
         if any(value.ticker.upper() != header_ticker for value in self.values):
             raise ValueError("manifest value ticker must match manifest ticker")
@@ -184,7 +192,8 @@ class IssuerManifestApplyResult(BaseModel):
 
 def _source_document(conn: sqlite3.Connection, manifest: IssuerFactManifest) -> sqlite3.Row:
     row = conn.execute(
-        "SELECT id, ticker, source_type, sha256 FROM documents WHERE id = ?",
+        "SELECT id, ticker, source_type, period_end, sha256, fetched_at "
+        "FROM documents WHERE id = ?",
         (manifest.source_doc_id,),
     ).fetchone()
     if row is None:
@@ -193,9 +202,134 @@ def _source_document(conn: sqlite3.Connection, manifest: IssuerFactManifest) -> 
         raise ValueError("manifest ticker does not match source document")
     if str(row["source_type"]) != SourceType.IR_DOC.value:
         raise ValueError("issuer manifest source document must be an issuer IR document")
+    document_period = _parse_datetime(row["period_end"], field="period_end").date()
+    if document_period != manifest.period_end:
+        raise ValueError("manifest period does not match source document period")
     if str(row["sha256"]).lower() != manifest.source_doc_sha256:
         raise ValueError("manifest source document SHA-256 does not match SQLite")
+    fetched_at = _parse_datetime(row["fetched_at"], field="fetched_at")
+    if manifest.extracted_at.astimezone(UTC) < fetched_at:
+        raise ValueError("manifest extracted_at cannot predate source document fetched_at")
+    if manifest.extracted_at.astimezone(UTC) > datetime.now(UTC) + MAX_EXTRACTED_AT_FUTURE_SKEW:
+        raise ValueError("manifest extracted_at exceeds the allowed future clock skew")
     return row
+
+
+def _parse_datetime(raw: object, *, field: str) -> datetime:
+    if isinstance(raw, datetime):
+        parsed = raw
+    else:
+        text = str(raw).strip()
+        if not text:
+            raise ValueError(f"source document {field} is missing")
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"source document {field} is not ISO-like") from exc
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _assert_kpi_replays_compatible(conn: sqlite3.Connection, manifest: IssuerFactManifest) -> None:
+    rows = conn.execute(
+        "SELECT kd.name, kf.value, kf.unit, kf.currency FROM kpi_facts kf "
+        "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+        "WHERE kf.ticker = ? AND kf.source_doc_id = ? "
+        "AND date(kf.period_end) = ? AND kf.fiscal_period_type = ?",
+        (
+            manifest.ticker.upper(),
+            manifest.source_doc_id,
+            manifest.period_end.isoformat(),
+            manifest.fiscal_period_type.value,
+        ),
+    ).fetchall()
+    for value in manifest.values:
+        if value.kind is not IssuerManifestFactKind.KPI:
+            continue
+        matching = [
+            row
+            for row in rows
+            if normalize_kpi_name(str(row["name"])) == normalize_kpi_name(value.canonical_name)
+        ]
+        if len(matching) > 1:
+            raise ValueError(
+                f"same-document KPI {value.canonical_name!r} has duplicate existing captures"
+            )
+        for row in matching:
+            stored_currency = None if row["currency"] is None else str(row["currency"])
+            incoming_currency = value.currency.value if value.currency is not None else None
+            currency_conflict = stored_currency is not None and stored_currency != incoming_currency
+            try:
+                value_conflict = Decimal(str(row["value"])) != value.value
+            except Exception as exc:
+                raise ValueError(
+                    f"existing KPI {value.canonical_name!r} has a non-numeric stored value"
+                ) from exc
+            if value_conflict or str(row["unit"]) != value.unit.value or currency_conflict:
+                raise ValueError(
+                    f"same-document KPI {value.canonical_name!r} conflicts with existing value"
+                )
+
+
+def _assert_segment_replays_compatible(
+    conn: sqlite3.Connection, manifest: IssuerFactManifest
+) -> None:
+    rows = conn.execute(
+        "SELECT sd.dim_type, sd.dim_name, sd.metric, sd.value, "
+        "COALESCE(sd.unit, sp.unit) AS effective_unit, sp.currency "
+        "FROM segment_periods sp "
+        "JOIN segment_dimensions sd ON sd.period_id = sp.id "
+        "WHERE sp.ticker = ? AND sp.source_doc_id = ? "
+        "AND date(sp.period_end) = ? AND sp.fiscal_period_type = ?",
+        (
+            manifest.ticker.upper(),
+            manifest.source_doc_id,
+            manifest.period_end.isoformat(),
+            manifest.fiscal_period_type.value,
+        ),
+    ).fetchall()
+    for value in manifest.values:
+        if value.kind is not IssuerManifestFactKind.SEGMENT:
+            continue
+        matching = [
+            row
+            for row in rows
+            if (
+                str(row["dim_type"]),
+                str(row["dim_name"]),
+                str(row["metric"]),
+            )
+            == (
+                value.segment_dim_type.value if value.segment_dim_type is not None else "",
+                value.segment_name,
+                value.metric,
+            )
+        ]
+        if len(matching) > 1:
+            raise ValueError(
+                f"same-document segment {value.canonical_name!r} has duplicate existing captures"
+            )
+        for row in matching:
+            stored_currency = None if row["currency"] is None else str(row["currency"])
+            incoming_currency = value.currency.value if value.currency is not None else None
+            try:
+                value_conflict = Decimal(str(row["value"])) != value.value
+            except Exception as exc:
+                raise ValueError(
+                    f"existing segment {value.canonical_name!r} has a non-numeric stored value"
+                ) from exc
+            if (
+                value_conflict
+                or str(row["effective_unit"]) != value.unit.value
+                or stored_currency != incoming_currency
+            ):
+                raise ValueError(
+                    f"same-document segment {value.canonical_name!r} conflicts with existing value"
+                )
+
+
+def _validate_replays(conn: sqlite3.Connection, manifest: IssuerFactManifest) -> None:
+    _assert_kpi_replays_compatible(conn, manifest)
+    _assert_segment_replays_compatible(conn, manifest)
 
 
 def _period_datetime(period_end: date) -> datetime:
@@ -241,12 +375,9 @@ def _apply_segments(conn: sqlite3.Connection, manifest: IssuerFactManifest) -> t
     for value in manifest.values:
         if value.kind is not IssuerManifestFactKind.SEGMENT:
             continue
-        try:
-            dim_type = SegmentDimType(value.segment_dim_type or "")
-        except ValueError as exc:
-            raise ValueError(
-                f"unsupported segment dimension type {value.segment_dim_type!r}"
-            ) from exc
+        dim_type = value.segment_dim_type
+        if dim_type is None:
+            raise ValueError("segment value has no dimension type")
         if dim_type not in by_dim_type:
             by_dim_type[dim_type] = (value.currency, [])
         elif by_dim_type[dim_type][0] != value.currency:
@@ -291,7 +422,12 @@ def apply_issuer_fact_manifest(
     ``apply=False`` performs no writes.  ``apply=True`` rolls back all KPI,
     segment, and receipt writes when any expected fact remains missing.
     """
+    # Frozen Pydantic models can still be constructed with unvalidated
+    # ``model_copy(update=...)``.  Re-parse at the public boundary so dry-run
+    # and apply enforce the same closed schema.
+    manifest = IssuerFactManifest.model_validate(manifest.model_dump(mode="json", warnings=False))
     _source_document(conn, manifest)
+    _validate_replays(conn, manifest)
     if not apply:
         return IssuerManifestApplyResult(applied=False, manifest_sha256=manifest.manifest_sha256)
 
@@ -303,8 +439,8 @@ def apply_issuer_fact_manifest(
         extracted_at=manifest.extracted_at.astimezone(UTC),
         expected_population_status=manifest.expected_population_status,
     )
+    conn.execute(f"SAVEPOINT {_APPLY_SAVEPOINT}")
     try:
-        conn.execute("BEGIN")
         kpi_inserted, kpi_skipped = _apply_kpis(conn, manifest)
         period_inserted, segment_inserted = _apply_segments(conn, manifest)
         receipt = reconcile_extractor_fact_population(conn, frame)
@@ -313,9 +449,10 @@ def apply_issuer_fact_manifest(
                 f"issuer manifest left {receipt.missing_count} expected fact(s) missing"
             )
         receipt_results = persist_document_coverage_receipt(conn, receipt)
-        conn.commit()
+        conn.execute(f"RELEASE SAVEPOINT {_APPLY_SAVEPOINT}")
     except Exception:
-        conn.rollback()
+        conn.execute(f"ROLLBACK TO SAVEPOINT {_APPLY_SAVEPOINT}")
+        conn.execute(f"RELEASE SAVEPOINT {_APPLY_SAVEPOINT}")
         raise
     return IssuerManifestApplyResult(
         applied=True,
