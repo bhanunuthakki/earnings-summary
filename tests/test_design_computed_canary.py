@@ -507,6 +507,29 @@ def test_route_canary_rejects_untyped_or_overflowing_card(tmp_path: Path) -> Non
     assert any("overflows viewport" in finding for finding in cockpit.findings)
 
 
+def test_route_canary_rejects_nested_unregistered_boxed_card(tmp_path: Path) -> None:
+    _require_playwright()
+    root = _copy_route_fixtures(tmp_path)
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
+    markup = target.read_text(encoding="utf-8")
+    markup = markup.replace(
+        '<h2 class="k-card-title">Thesis contracts</h2>',
+        '<div class="legacy-card">Rogue nested card</div>'
+        '<h2 class="k-card-title">Thesis contracts</h2>',
+        1,
+    ).replace(
+        "</style>",
+        ".legacy-card { background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); }</style>",
+    )
+    target.write_text(markup, encoding="utf-8")
+    result = next(
+        item
+        for item in _scan_route_canaries(fixture_root=root)
+        if item.route == "company-desk" and item.viewport == "desktop"
+    )
+    assert any("unregistered boxed card candidate" in finding for finding in result.findings)
+
+
 def test_route_canary_rejects_card_motion_under_reduced_motion(tmp_path: Path) -> None:
     _require_playwright()
     root = _copy_route_fixtures(tmp_path)

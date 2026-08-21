@@ -820,7 +820,7 @@ def _browser_canary_findings(
             });
             const visualCandidates = scopedMatches('[class*="card" i],[class*="panel" i],[class*="tile" i],[class*="box" i]')
               .filter(visible)
-              .filter((node) => !node.closest('.k-card,.k-well,.k-overlay,.k-table-shell'));
+              .filter((node) => !node.matches('.k-card,.k-well,.k-overlay,.k-table-shell'));
             visualCandidates.forEach((node, index) => {
               const style = getComputedStyle(node);
               const boxed = style.boxShadow !== 'none' || Number.parseFloat(style.borderTopWidth) > 0 ||
