@@ -160,7 +160,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t all_files < <(find tests -type f -name 'test_*.py' | sort)
+          # Browser canaries have one authoritative owner below: Design Sync,
+          # which installs the hash-locked Playwright adapter and Chromium.
+          mapfile -t all_files < <(
+            find tests -type f -name 'test_*.py' \
+              | grep -v '^tests/test_design_computed_canary.py$' \
+              | sort
+          )
           mapfile -t selected < <(
             printf '%s\n' "${all_files[@]}" |
               python .github/scripts/ci_gate.py select-tests \
