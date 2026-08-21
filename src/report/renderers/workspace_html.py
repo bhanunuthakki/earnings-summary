@@ -682,7 +682,10 @@ def _tabs(body: StringIO, groups: list[TabGroup], *, ticker: str = "Research") -
     """Render report destinations in the canonical three-layer sidebar."""
     by_id = {gid: (label, sections) for gid, label, sections in groups}
     active_id = groups[0][0]
-    body.write('<nav class="tabs k-sidebar report-sidebar" aria-label="Research workspace">')
+    body.write(
+        '<nav class="tabs k-sidebar report-sidebar" id="report-sidebar-navigation" '
+        'aria-label="Research workspace">'
+    )
     body.write(
         '<div class="report-sidebar-brand">'
         f'<span class="report-sidebar-ticker">{_esc(ticker)}</span>'
@@ -727,7 +730,8 @@ def _tabs(body: StringIO, groups: list[TabGroup], *, ticker: str = "Research") -
     body.write(
         "</div>"
         '<button type="button" class="report-sidebar-toggle k-btn k-btn-quiet k-btn-sm" '
-        'id="report-sidebar-toggle" aria-label="Collapse navigation" title="Collapse navigation">'
+        'id="report-sidebar-toggle" aria-label="Collapse navigation" title="Collapse navigation" '
+        'aria-controls="report-sidebar-navigation" aria-expanded="true">'
         f"{icon_svg('collapse')}"
         "</button>"
         "</nav>"

@@ -663,6 +663,24 @@ def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> Non
     assert "const model = projection.model" in html
     assert "payload.sections" in html
     assert "section.dom_id" in html
+    assert "WORK_OS_BRIEF_GROUP_IDS" in html
+    for group_id in (
+        "overview",
+        "quarter",
+        "financials",
+        "thesis-risk",
+        "valuation-comps",
+        "sources",
+    ):
+        assert f"'{group_id}'" in html
+    assert ".tab-group-pane[data-tab-group]" in html
+    assert ".subtab-pane[data-tab]" in html
+    assert "work-os-reader-group-button" in html
+    assert "work-os-reader-section-button" in html
+    assert "readerGroupActive" in html
+    assert "readerSectionActive" in html
+    assert "button.setAttribute('aria-expanded'" in html
+    assert "sectionButton.setAttribute('aria-current', 'location')" in html
     assert "work-os-report-content k-doc" in html
     assert "editorial.v1" in html
     assert "startsWith('/source/')" in html

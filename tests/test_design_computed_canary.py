@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from execution.design_route_canaries import write_route_canary_fixtures
 from execution.verify_design_conformance import (  # pyright: ignore[reportPrivateUsage]
     _scan_canary,  # pyright: ignore[reportPrivateUsage]
     _scan_route_canaries,  # pyright: ignore[reportPrivateUsage]
@@ -18,6 +19,8 @@ from ui.conformance_scan import scan_surface_evidence
 
 ROOT_TOKENS = """
 :root {
+  --fs-display: 20px;
+  --fs-title: 15px;
   --fs-body: 13px;
   --fs-caption: 11px;
   --radius: 8px;
@@ -108,7 +111,7 @@ def test_browser_canary_passes_canonical_rendered_specimen(
     _playwright_or_skip()
     _server, url, _payload = specimen_server
     result = _scan_canary(url, browser_canary=True)
-    assert result.status == "passed"
+    assert result.status == "passed", result
     assert result.findings == ()
 
 
@@ -179,17 +182,17 @@ def test_route_canary_matrix_covers_all_required_routes_and_viewports() -> None:
 def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
     _require_playwright()
     root = _copy_route_fixtures(tmp_path)
-    target = root / "tests" / "fixtures" / "design_canaries" / "cockpit.desktop.html"
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
     target.write_text(
         target.read_text(encoding="utf-8").replace(
-            "</style>", ".k-btn { border-radius: 41px !important; } </style>"
+            "</style>", ".company-picker-trigger { border-radius: 41px !important; } </style>"
         ),
         encoding="utf-8",
     )
     result = next(
         item
         for item in _scan_route_canaries(root)
-        if item.route == "cockpit" and item.viewport == "desktop"
+        if item.route == "company-desk" and item.viewport == "desktop"
     )
     assert result.status == "failed"
     assert any("border-radius" in finding for finding in result.findings)
@@ -198,17 +201,17 @@ def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
 def test_route_canary_rejects_clipped_or_occluded_overlay(tmp_path: Path) -> None:
     _require_playwright()
     root = _copy_route_fixtures(tmp_path)
-    target = root / "tests" / "fixtures" / "design_canaries" / "operations.narrow.html"
+    target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.narrow.html"
     target.write_text(
         target.read_text(encoding="utf-8").replace(
-            "</style>", ".k-overlay { right: -500px !important; } </style>"
+            "</style>", "#companyPickerPopover { left: -500px !important; } </style>"
         ),
         encoding="utf-8",
     )
     result = next(
         item
         for item in _scan_route_canaries(root)
-        if item.route == "operations" and item.viewport == "narrow"
+        if item.route == "company-desk" and item.viewport == "narrow"
     )
     assert result.status == "failed"
     assert any("occluded" in finding or "clipped" in finding for finding in result.findings)
@@ -221,7 +224,7 @@ def test_route_canary_rejects_delayed_runtime_mutation(tmp_path: Path) -> None:
     target.write_text(
         target.read_text(encoding="utf-8").replace(
             "</body>",
-            "<script>setTimeout(() => document.querySelector('.k-btn').style.setProperty('border-radius', '41px', 'important'), 250);</script></body>",
+            "<script>setTimeout(() => document.querySelector('#workOsBriefReader button.k-btn').style.setProperty('border-radius', '41px', 'important'), 250);</script></body>",
         ),
         encoding="utf-8",
     )
@@ -235,13 +238,7 @@ def test_route_canary_rejects_delayed_runtime_mutation(tmp_path: Path) -> None:
 
 
 def _copy_route_fixtures(tmp_path: Path) -> Path:
-    fixture_root = tmp_path / "tests" / "fixtures" / "design_canaries"
-    fixture_root.mkdir(parents=True)
-    source_root = Path(__file__).parent / "fixtures" / "design_canaries"
-    for source in source_root.glob("*.html"):
-        (fixture_root / source.name).write_text(
-            source.read_text(encoding="utf-8"), encoding="utf-8"
-        )
+    write_route_canary_fixtures(tmp_path)
     return tmp_path
 
 

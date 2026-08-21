@@ -174,15 +174,17 @@ python scripts/check_design_sync.py
 For conformance work, inspect the deterministic receipt directly:
 
 ```powershell
-python execution/verify_design_conformance.py --check
+python execution/verify_design_conformance.py --check --route-canaries
 python -m pytest tests/test_design_registry.py tests/test_design_conformance_canonical.py tests/test_design_sync.py tests/test_ui_controls.py -q
 ```
 
-Report-renderer changes also require workspace golden regeneration and visual diff
-review. Generated React changes require the design-system check/build. A green
-targeted test is insufficient if the composed guard or receipt is red.
+The hosted route-canary matrix uses production-rendered Work OS seams at desktop
+and narrow widths. Missing evidence or a role/geometry/focus/motion/state failure
+blocks the job. Instrumentation may annotate real nodes, but cannot replace a
+route with parallel HTML/CSS or satisfy it from another hidden surface.
 
-The scanner owns mechanically provable structure. Dedicated UI tests own
-behavioral semantics such as focus, dismissal, doorway reachability, and rendered
-goldens. Review owns meaning that cannot be inferred reliably from syntax, such
-as whether accent or density matches the intended hierarchy.
+Report-renderer changes require workspace golden regeneration and diff review;
+generated React changes require the design-system check/build.
+
+The scanner owns mechanical structure; UI tests own focus, dismissal, doorway
+reachability, and goldens; review owns hierarchy. A targeted test cannot override a red composed guard or receipt.

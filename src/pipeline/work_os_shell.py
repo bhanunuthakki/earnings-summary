@@ -318,6 +318,10 @@ def _production_runtime(generated_at: datetime) -> str:
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }}
 
+  const WORK_OS_BRIEF_GROUP_IDS = [
+    'overview', 'quarter', 'financials', 'thesis-risk', 'valuation-comps', 'sources'
+  ];
+
   async function workOsLoadBriefArtifact(artifact) {{
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
@@ -366,18 +370,104 @@ def _production_runtime(generated_at: datetime) -> str:
       root.append(stylesheet, content);
       body.replaceChildren(host);
       if (sections && Array.isArray(payload.sections)) {{
-        payload.sections.forEach(function (section) {{
-          if (!section || !section.dom_id || !root.getElementById(section.dom_id)) return;
+        const sectionLookup = new Map(payload.sections
+          .filter(function (section) {{ return section && section.section_id && section.dom_id; }})
+          .map(function (section) {{ return [String(section.section_id), section]; }}));
+        const discoveredGroups = Array.from(
+          root.querySelectorAll('.tab-group-pane[data-tab-group]')
+        );
+        const groupById = new Map(discoveredGroups.map(function (pane) {{
+          return [String(pane.dataset.tabGroup || ''), pane];
+        }}));
+        const canonicalGroups = WORK_OS_BRIEF_GROUP_IDS
+          .map(function (groupId) {{ return groupById.get(groupId); }})
+          .filter(Boolean);
+        const orderedGroups = canonicalGroups.length ? canonicalGroups : discoveredGroups;
+        const groupControls = new Map();
+        const sectionControls = new Map();
+
+        function activateReaderSection(groupPane, sectionId, shouldScroll) {{
+          const sectionPanes = Array.from(groupPane.querySelectorAll('.subtab-pane[data-tab]'));
+          sectionPanes.forEach(function (sectionPane) {{
+            const isActive = String(sectionPane.dataset.tab || '') === sectionId;
+            sectionPane.dataset.readerSectionActive = isActive ? 'true' : 'false';
+            const sectionButton = sectionControls.get(sectionId);
+            if (sectionButton) {{
+              if (isActive) sectionButton.setAttribute('aria-current', 'location');
+              else sectionButton.removeAttribute('aria-current');
+            }}
+            if (isActive && shouldScroll) {{
+              sectionPane.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+              if (typeof sectionPane.focus === 'function') {{
+                sectionPane.setAttribute('tabindex', '-1');
+                sectionPane.focus({{ preventScroll: true }});
+              }}
+            }}
+          }});
+        }}
+
+        function activateReaderGroup(groupId, shouldScroll) {{
+          orderedGroups.forEach(function (groupPane) {{
+            const candidateId = String(groupPane.dataset.tabGroup || '');
+            const isActive = candidateId === groupId;
+            groupPane.dataset.readerGroupActive = isActive ? 'true' : 'false';
+            const controls = groupControls.get(candidateId);
+            if (controls) {{
+              controls.button.setAttribute('aria-expanded', isActive ? 'true' : 'false');
+              controls.nested.hidden = !isActive;
+              if (isActive) controls.button.setAttribute('aria-current', 'location');
+              else controls.button.removeAttribute('aria-current');
+            }}
+            if (!isActive) return;
+            const firstPane = groupPane.querySelector('.subtab-pane[data-tab]');
+            if (firstPane) activateReaderSection(
+              groupPane, String(firstPane.dataset.tab || ''), shouldScroll
+            );
+          }});
+        }}
+
+        orderedGroups.forEach(function (groupPane) {{
+          const groupId = String(groupPane.dataset.tabGroup || '');
+          if (!groupId) return;
+          const group = document.createElement('div');
+          group.className = 'work-os-reader-group';
           const button = document.createElement('button');
           button.type = 'button';
-          button.className = 'k-btn k-btn-quiet k-btn-sm';
-          button.textContent = section.label || workOsHumanizeSection(section.section_id);
-          button.dataset.sectionId = section.section_id;
-          button.addEventListener('click', function () {{
-            root.getElementById(section.dom_id)?.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+          button.className = 'work-os-reader-group-button k-btn k-btn-quiet k-btn-sm';
+          const heading = groupPane.querySelector('.reader-group-title');
+          button.textContent = heading && heading.textContent
+            ? heading.textContent.trim()
+            : workOsHumanizeSection(groupId);
+          button.dataset.groupId = groupId;
+          button.setAttribute('aria-expanded', 'false');
+          const nested = document.createElement('div');
+          nested.className = 'work-os-reader-group-sections';
+          nested.setAttribute('role', 'group');
+          nested.setAttribute('aria-label', button.textContent + ' sections');
+          nested.hidden = true;
+          groupControls.set(groupId, {{ button: button, nested: nested }});
+          button.addEventListener('click', function () {{ activateReaderGroup(groupId, true); }});
+          groupPane.querySelectorAll('.subtab-pane[data-tab]').forEach(function (sectionPane) {{
+            const sectionId = String(sectionPane.dataset.tab || '');
+            const section = sectionLookup.get(sectionId);
+            if (!section || !root.getElementById(section.dom_id)) return;
+            const sectionButton = document.createElement('button');
+            sectionButton.type = 'button';
+            sectionButton.className = 'work-os-reader-section-button k-btn k-btn-quiet k-btn-sm';
+            sectionButton.textContent = section.label || workOsHumanizeSection(sectionId);
+            sectionButton.dataset.sectionId = sectionId;
+            sectionControls.set(sectionId, sectionButton);
+            sectionButton.addEventListener('click', function () {{
+              activateReaderGroup(groupId, false);
+              activateReaderSection(groupPane, sectionId, true);
+            }});
+            nested.appendChild(sectionButton);
           }});
-          sections.appendChild(button);
+          group.append(button, nested);
+          sections.appendChild(group);
         }});
+        const initialGroup = orderedGroups[0];
+        if (initialGroup) activateReaderGroup(String(initialGroup.dataset.tabGroup || ''), false);
       }}
       root.addEventListener('click', function (event) {{
         const trigger = event.composedPath().find(function (node) {{ return node && node.dataset && node.dataset.peekUrl; }});

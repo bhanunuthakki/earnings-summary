@@ -795,7 +795,7 @@
 /* S6 — Bear · Base · Bull scenario range on the valuation card */ .scenario-range { display: flex; border-bottom: var(--bw-thin) solid var(--hairline); }
 /* Say-Do */ .saydo-meta { display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-end; padding-top: var(--sp-1); }
 /* Scored confidence below LOW_CONFIDENCE_THRESHOLD: the subtle cell affordance — warn-tinted dashed border, overriding the tier color. */ .src-chip.src-lowconf { color: var(--warn); border-color: var(--warn); border-style: dashed; }
-/* Tablet portrait: collapse the persistent sidebar to the canonical icon rail. The .sidebar-collapsed class is the authoritative collapsed state; this media query adds it automatically at narrow widths where manual toggle is unavailable. */ @media (max-width: 768px) { :root { --pad-x: var(--sp-3); } .report-sidebar { width: var(--sidebar-collapsed-width); padding: var(--sp-2); } .report-sidebar-product, .report-nav-label, .report-sidebar .tab-label, .report-sidebar .tab-count { display: none; } .report-sidebar-brand { align-items: center; padding-inline: 0; } .report-sidebar .k-nav-item { justify-content: center; padding-inline: 0; } /* Hide the collapse toggle at narrow widths — already collapsed by media query */ .report-sidebar-toggle { display: none; } .kpi-strip { grid-template-columns: 1fr; } .kpi-tile { min-width: 0; } .kpi-spark svg { width: 100%; height: auto; } .subtabs { overflow-x: auto; } }
+/* Tablet portrait: JavaScript defaults the persistent sidebar to the canonical icon rail while leaving the toggle operable for keyboard, touch, and pointer. */ @media (max-width: 768px) { :root { --pad-x: var(--sp-3); } .kpi-strip { grid-template-columns: 1fr; } .kpi-tile { min-width: 0; } .kpi-spark svg { width: 100%; height: auto; } .subtabs { overflow-x: auto; } }
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */ .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 /* The Post submit + Save-to-journal buttons are the kit's .k-btn primary/quiet (added in the boot.py markup) — no freehand button skin here. */ .cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
 /* The margin note. --mark-soft is a KEYLINE token (below the text floor by design) so it is legal here on the 1px rule and nowhere on the type. */ .k-note { font-size: var(--fs-caption); line-height: 1.55; color: var(--muted); padding-left: var(--sp-3); border-left: 1px solid var(--mark-soft); }
@@ -842,6 +842,7 @@
 @media (prefers-reduced-motion: reduce) { .cc-act-leave, .cc-act-collapse { transition-duration: 0.01ms; } }
 @media (prefers-reduced-motion: reduce) { .chat-sidebar, .chat-drawer { transition: none; animation: none; } }
 @media (prefers-reduced-motion: reduce) { .k-scrim, .k-overlay, details[open] > *:not(summary) { animation-duration: 0.01ms; } summary::before { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .report-sidebar, .report-sidebar-toggle, .report-sidebar-toggle svg { transition: none; } }
 [data-commentable="true"]:hover .cmt-pin { opacity: 1; }
 [data-show-news="0"] .news-strip { display: none; }
 a.k-tick-sym:hover { color: var(--accent); }

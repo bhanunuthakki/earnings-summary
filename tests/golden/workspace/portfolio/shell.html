@@ -26,7 +26,7 @@
 <body>
 <script id="workspace-boot" type="application/json">{"ticker": "TEST", "report_date": "2026-06-11", "server_url": "http://localhost:7421", "report_capability": "test-report-capability"}</script>
 <script id="workspace-comments" type="application/json">{"ticker": "TEST", "report_date": "2026-06-11", "comments": []}</script>
-<nav class="tabs k-sidebar report-sidebar" aria-label="Research workspace">
+<nav class="tabs k-sidebar report-sidebar" id="report-sidebar-navigation" aria-label="Research workspace">
 <div class="report-sidebar-brand">
 <span class="report-sidebar-ticker">TEST</span>
 <span class="report-sidebar-product">Research Workspace</span>
@@ -93,7 +93,7 @@
 </button>
 </div>
 </div>
-<button type="button" class="report-sidebar-toggle k-btn k-btn-quiet k-btn-sm" id="report-sidebar-toggle" aria-label="Collapse navigation" title="Collapse navigation">
+<button type="button" class="report-sidebar-toggle k-btn k-btn-quiet k-btn-sm" id="report-sidebar-toggle" aria-label="Collapse navigation" title="Collapse navigation" aria-controls="report-sidebar-navigation" aria-expanded="true">
 <svg class="k-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
 <path d="m9 6 6 6-6 6"/>
 </svg>

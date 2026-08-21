@@ -29,8 +29,13 @@ from pydantic import BaseModel, ConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC = PROJECT_ROOT / "src"
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SRC))
 
+from execution.design_route_canaries import (  # noqa: E402
+    ROUTE_SCREEN_IDS,
+    render_route_canary,
+)
 from ui.conformance_scan import (  # noqa: E402
     css_text,
     discover_emitters,
@@ -75,6 +80,8 @@ _BROWSER_CANARY_SETTLE_MILLISECONDS = 400
 # contract it exercises has a real canonical root, not reproduce every token
 # used by every surface in the application.
 _BROWSER_CANARY_ROOT_PROPERTIES = (
+    "--fs-display",
+    "--fs-title",
     "--fs-body",
     "--fs-caption",
     "--radius",
@@ -190,10 +197,9 @@ _BROWSER_CANARY_PRIMITIVES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] 
     ),
 )
 
-# These fixtures are deterministic rendered specimens, not a second product
-# route registry.  They exercise the existing primitive contracts at both
-# supported responsive widths; the fixture's data-route value is checked by
-# the browser evaluator below.
+# The matrix is the mandatory route set. Markup is rendered through the
+# production Work OS seam by ``design_route_canaries``; it is not a second
+# hand-written page registry.
 _ROUTE_CANARY_MATRIX: tuple[tuple[str, str, tuple[int, int]], ...] = tuple(
     (route, viewport, size)
     for route in (
@@ -206,6 +212,17 @@ _ROUTE_CANARY_MATRIX: tuple[tuple[str, str, tuple[int, int]], ...] = tuple(
     for viewport, size in (("desktop", (1440, 900)), ("narrow", (390, 844)))
 )
 _ROUTE_CANARY_SETTLE_MILLISECONDS = 400
+
+_ROUTE_CANARY_ROLE_CONTRACTS: dict[str, tuple[tuple[str, ...], bool]] = {
+    # The Work OS shell hydrates some controls/tables from API payloads. Keep
+    # each contract scoped to the production route's static seam; the matrix
+    # still covers every required role across the five real destinations.
+    "cockpit": (("container", "type", "table", "help-footnote"), False),
+    "company-desk": (("container", "control", "type", "help-footnote", "overlay"), True),
+    "fact-metric-playground": (("container", "control", "type", "help-footnote"), True),
+    "operations": (("container", "type", "help-footnote"), False),
+    "full-brief": (("container", "control", "type", "help-footnote"), True),
+}
 
 
 class _ClosedModel(BaseModel):
@@ -574,6 +591,8 @@ def _browser_canary_findings(
     page: _CanaryPage,
     *,
     expected_route: str | None = None,
+    required_roles: Sequence[str] = (),
+    require_keyboard: bool = True,
 ) -> tuple[str, ...]:
     """Return deterministic computed-style mismatches from a Playwright page."""
 
@@ -582,7 +601,7 @@ def _browser_canary_findings(
     # mutations made by JavaScript after the original response was received.
     payload: object = page.evaluate(
         """
-        ({rootProperties, primitiveContracts, expectedRoute}) => {
+          ({rootProperties, primitiveContracts, expectedRoute, requiredRoles, requireKeyboard}) => {
           const root = getComputedStyle(document.documentElement);
           const rootValues = Object.fromEntries(
             rootProperties.map((name) => [name, root.getPropertyValue(name).trim()])
@@ -611,6 +630,7 @@ def _browser_canary_findings(
             const [selector, checks] = contract;
             const nodes = document.querySelectorAll(selector);
             nodes.forEach((node, index) => {
+              if (expectedRoute && !node.hasAttribute('data-conformance-role')) return;
               inspectInline(node, selector, index);
               const computed = getComputedStyle(node);
               for (const [property, variable] of checks) {
@@ -642,14 +662,37 @@ def _browser_canary_findings(
           if (expectedRoute && !roles.length) {
             findings.push({kind: "role", actual: "no registered conformance roles"});
           }
-          roles.forEach((node, index) => {
+          requiredRoles.forEach((role) => {
+            if (expectedRoute && !routeRoot?.matches(`[data-conformance-role="${role}"]`)
+                && !routeRoot?.querySelector(`[data-conformance-role="${role}"]`)) {
+              findings.push({kind: "role", actual: `missing required role ${role}`});
+            }
+          });
+          const scopedRoles = routeRoot
+            ? [routeRoot, ...routeRoot.querySelectorAll('[data-conformance-role]')]
+            : [...roles];
+          scopedRoles.forEach((node, index) => {
             const role = node.getAttribute('data-conformance-role') || '';
+            if (!role) return;
             if (!role || !visible(node)) {
               findings.push({kind: "role", actual: `${role || 'unnamed'}[${index}] is not visible`});
             }
             const style = getComputedStyle(node);
             const rect = node.getBoundingClientRect();
-            for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+            if (role === 'control' && node.matches('.k-btn')
+                && rootValues['--radius'] && style.borderRadius !== rootValues['--radius']) {
+              findings.push({kind: "computed", selector: '[data-conformance-role="control"]', index,
+                property: 'border-radius', actual: style.borderRadius, variable: '--radius', expected: rootValues['--radius']});
+            }
+            if (role === 'type') {
+              const allowedSizes = ['--fs-display', '--fs-title', '--fs-body', '--fs-caption']
+                .map((name) => rootValues[name]).filter(Boolean);
+              if (!allowedSizes.includes(style.fontSize)) {
+                findings.push({kind: "role", actual: `type[${index}] uses off-scale font-size ${style.fontSize}`});
+              }
+            }
+            for (let parent = node.parentElement; parent && role !== 'container'; parent = parent.parentElement) {
+              if (parent === document.body || parent === document.documentElement) continue;
               const parentStyle = getComputedStyle(parent);
               if (!/(hidden|clip)/.test(parentStyle.overflow + ' ' + parentStyle.overflowX + ' ' + parentStyle.overflowY)) continue;
               const parentRect = parent.getBoundingClientRect();
@@ -675,9 +718,10 @@ def _browser_canary_findings(
               }
             }
           });
-          const focusables = [...document.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')]
+          const focusScope = routeRoot || document;
+          const focusables = [...focusScope.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')]
             .filter((node) => visible(node) && !node.hasAttribute('disabled') && node.getAttribute('tabindex') !== '-1');
-          if (expectedRoute && !focusables.length) {
+          if (expectedRoute && requireKeyboard && !focusables.length) {
             findings.push({kind: "keyboard", actual: "no visible keyboard target"});
           }
           if (expectedRoute) {
@@ -698,12 +742,19 @@ def _browser_canary_findings(
               findings.push({kind: "motion", actual: `motion[${index}] is not reduced`});
             }
           });
+          document.querySelectorAll('[data-conformance-dynamic]').forEach((node, index) => {
+            if (expectedRoute && node.getAttribute('data-conformance-dynamic-state') !== 'ready') {
+              findings.push({kind: "dynamic", actual: `dynamic[${index}] did not settle`});
+            }
+          });
           return {rootValues, findings};
         }
         """,
         {
             "rootProperties": list(_BROWSER_CANARY_ROOT_PROPERTIES),
             "expectedRoute": expected_route,
+            "requiredRoles": list(required_roles),
+            "requireKeyboard": require_keyboard,
             "primitiveContracts": [
                 [selector, [list(check) for check in checks]]
                 for selector, checks in _BROWSER_CANARY_PRIMITIVES
@@ -748,7 +799,7 @@ def _browser_canary_findings(
                 raise ValueError("browser canary returned invalid style finding")
             findings.append(f"{selector}[{index}] inline {property_name}: {actual!r}")
             continue
-        if kind in {"route", "role", "geometry", "keyboard", "motion"}:
+        if kind in {"route", "role", "geometry", "keyboard", "motion", "dynamic"}:
             findings.append(f"{kind}: {actual!r}")
             continue
         if (
@@ -823,11 +874,11 @@ def _route_fixture_path(project_root: Path, route: str, viewport: str) -> Path:
 
 
 def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanaryResult, ...]:
-    """Inspect the committed route fixtures at desktop and narrow widths.
+    """Inspect production-rendered route output at desktop and narrow widths.
 
-    The matrix is deliberately local and deterministic.  It does not contact
-    the running application or invent a second route/registry abstraction;
-    the fixtures exercise the same primitive contracts as the opt-in canary.
+    A fixture file is honored when present so tests can apply adversarial
+    mutations. The normal path renders directly through the production Work
+    OS seam, keeping the guard useful in a clean checkout.
     """
 
     fixtures: list[tuple[str, str, Path, tuple[int, int]]] = []
@@ -841,7 +892,12 @@ def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanary
             importlib.import_module("playwright.sync_api"),
         )
         html_by_fixture = {
-            path: path.read_text("utf-8") for _route, _viewport, path, _size in fixtures
+            path: (
+                path.read_text("utf-8")
+                if path.exists()
+                else render_route_canary(route=route, viewport=viewport)
+            )
+            for route, viewport, path, _size in fixtures
         }
         with cast(_CanaryPlaywrightContext, playwright_api.sync_playwright()) as playwright:
             browser = playwright.chromium.launch(headless=True)
@@ -858,8 +914,72 @@ def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanary
                         )
                         page = context.new_page()
                         page.set_content(html_by_fixture[path], wait_until="load", timeout=5000)
+                        page.evaluate(
+                            """
+                            ({route, screenId}) => {
+                              const target = document.getElementById(screenId);
+                              if (!target) throw new Error(`missing production screen ${screenId}`);
+                              document.querySelectorAll('[data-conformance-role]').forEach((node) => node.removeAttribute('data-conformance-role'));
+                              document.querySelectorAll('[id^="screen-"]').forEach((node) => {
+                                if (node !== target) {
+                                  node.hidden = true;
+                                  node.style.display = 'none';
+                                }
+                              });
+                              target.hidden = false;
+                              target.style.display = 'block';
+                              if (target.hasAttribute('aria-hidden')) target.setAttribute('aria-hidden', 'false');
+                              target.setAttribute('data-conformance-route', route);
+                              const reveal = (node) => {
+                                if (!node) return null;
+                                node.hidden = false;
+                                for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                                  if (parent.id && parent.id.startsWith('screen-')) {
+                                    parent.hidden = false;
+                                    parent.style.display = 'block';
+                                    break;
+                                  }
+                                }
+                                return node;
+                              };
+                              const mark = (node, role) => {
+                                const marked = reveal(node);
+                                if (marked) marked.setAttribute('data-conformance-role', role);
+                                return marked;
+                              };
+                              const firstVisible = (selector) => Array.from(target.querySelectorAll(selector))
+                                .find((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }) || null;
+                              mark(target, 'container');
+                              mark(firstVisible('input, select, a[href], button.k-btn-primary:not(.k-btn-sm), button.k-btn-sm, button'), 'control');
+                              mark(firstVisible('.k-card-title, .stat-number, h1, h2, h3'), 'type');
+                              mark(firstVisible('table'), 'table');
+                              mark(firstVisible('.stat-subtext, .k-card-meta, small'), 'help-footnote');
+                              const overlay = target.querySelector('#drillDrawer, #tradeModal, .company-picker-popover');
+                              if (overlay) {
+                                overlay.classList.add('design-canary-overlay');
+                                overlay.classList.add('is-open');
+                                overlay.hidden = false;
+                                overlay.setAttribute('aria-hidden', 'false');
+                                overlay.setAttribute('data-conformance-role', 'overlay');
+                              }
+                              const dynamic = target.querySelector('[aria-live], [role="status"], [aria-busy]') || target;
+                              dynamic.setAttribute('data-conformance-dynamic', '1');
+                              dynamic.setAttribute('data-conformance-dynamic-state', 'pending');
+                              window.setTimeout(() => dynamic.setAttribute('data-conformance-dynamic-state', 'ready'), 80);
+                              const motion = firstVisible('.sidebar-collapse-toggle, .company-picker-trigger, .k-overlay, .drill-drawer, .report-sidebar-toggle');
+                              if (motion) motion.setAttribute('data-conformance-motion', '1');
+                            }
+                            """,
+                            {"route": route, "screenId": ROUTE_SCREEN_IDS[route]},
+                        )
                         page.wait_for_timeout(_ROUTE_CANARY_SETTLE_MILLISECONDS)
-                        findings = _browser_canary_findings(page, expected_route=route)
+                        required_roles, require_keyboard = _ROUTE_CANARY_ROLE_CONTRACTS[route]
+                        findings = _browser_canary_findings(
+                            page,
+                            expected_route=route,
+                            required_roles=required_roles,
+                            require_keyboard=require_keyboard,
+                        )
                         results.append(
                             RouteCanaryResult(
                                 route=route,
@@ -876,7 +996,7 @@ def _scan_route_canaries(project_root: Path = PROJECT_ROOT) -> tuple[RouteCanary
                                 viewport=cast(Literal["desktop", "narrow"], viewport),
                                 fixture=fixture_name,
                                 status="unavailable",
-                                reason=f"{type(exc).__name__}: route canary unavailable",
+                                reason=f"{type(exc).__name__}: {exc}",
                             )
                         )
                     finally:

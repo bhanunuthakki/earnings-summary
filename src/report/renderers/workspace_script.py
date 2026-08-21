@@ -280,12 +280,19 @@ JS = r"""
   function applySidebarCollapsed(collapsed) {
     if (!sidebar) return;
     sidebar.classList.toggle('sidebar-collapsed', collapsed);
-    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    if (toggleBtn) {
+      var label = collapsed ? 'Expand navigation' : 'Collapse navigation';
+      toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      toggleBtn.setAttribute('aria-label', label);
+      toggleBtn.setAttribute('title', label);
+    }
   }
   // Restore from sessionStorage
   try {
     var saved = sessionStorage.getItem(SS_KEY);
-    if (saved === '1') applySidebarCollapsed(true);
+    if (saved === '1' || (saved === null && window.matchMedia('(max-width: 768px)').matches)) {
+      applySidebarCollapsed(true);
+    }
   } catch (e) {}
   if (toggleBtn) {
     toggleBtn.addEventListener('click', function () {

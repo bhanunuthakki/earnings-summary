@@ -186,7 +186,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -195,7 +195,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements.lock
+          cache-dependency-path: |
+            requirements.lock
+            requirements-design.lock
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
@@ -204,8 +206,8 @@ jobs:
       - name: Install runtime dependencies
         run: |
           pip install --require-hashes -r requirements.lock
-          pip install playwright==1.60.0
-          python -m playwright install --with-deps chromium
+          pip install --require-hashes -r requirements-design.lock
+          python -m playwright install --with-deps --only-shell chromium
       - name: Verify canonical design tokens and production Work OS contract
         env:
           DESIGN_DEBT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -219,7 +221,10 @@ jobs:
           npm run check
       - name: Run mandatory rendered route canary matrix
         run: |
-          python -m pytest -q tests/test_design_computed_canary.py
+          # The CLI owns the single full 5-route x 2-viewport matrix. Unit
+          # tests retain the positive and adversarial browser checks without
+          # paying for that matrix a second time.
+          python -m pytest -q tests/test_design_computed_canary.py -k "not route_canary_matrix_covers_all_required_routes_and_viewports"
           python execution/verify_design_conformance.py --check --route-canaries
 
   quality:

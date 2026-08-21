@@ -274,6 +274,61 @@ def test_report_reader_css_is_lazy_current_shell_owned_asset(
     assert ".reader-group-title" in css
 
 
+def test_report_body_route_preserves_six_groups_and_section_anchors(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    groups = (
+        ("overview", "company", "Company"),
+        ("quarter", "earnings", "Earnings"),
+        ("financials", "financials", "Financials"),
+        ("thesis-risk", "thesis", "Thesis"),
+        ("valuation-comps", "valuation", "Valuation"),
+        ("sources", "sources", "Sources"),
+    )
+    group_html = "".join(
+        '<div class="tab-group-pane" data-tab-group="'
+        + group_id
+        + '"><div class="tab-pane subtab-pane" data-tab="'
+        + section_id
+        + '">'
+        + label
+        + "</div></div>"
+        for group_id, section_id, label in groups
+    )
+    body = RenderedReportBody.from_html(
+        ticker="NU",
+        report_date=date(2026, 8, 10),
+        body_html=f'<main data-report-body="v1"><div class="l1-root">{group_html}</div></main>',
+        sections=tuple(
+            ReportSectionRef(section_id=section_id, label=label, group_id=group_id)
+            for group_id, section_id, label in groups
+        ),
+        interaction_manifest=ReportInteractionManifest(),
+    )
+    workspace = work_os_app_repo / "output" / "research" / "NU" / "2026-08-10_workspace.html"
+    workspace.parent.mkdir(parents=True, exist_ok=True)
+    workspace.write_text(f"<html>{body.body_html}</html>", encoding="utf-8")
+    persist_report_artifact(
+        repo_root=work_os_app_repo,
+        body=body,
+        standalone_path=workspace,
+        generated_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+        coverage_role="portfolio",
+        title="NU Full Research Brief",
+    )
+
+    payload = work_os_client.get(f"/api/work-os/briefs/{body.artifact_id}/body").get_json()
+
+    assert payload["schema_version"] == "report_reader_payload.v1"
+    assert payload["section_ids"] == [section_id for _, section_id, _ in groups]
+    assert [section["section_id"] for section in payload["sections"]] == [
+        section_id for _, section_id, _ in groups
+    ]
+    for group_id, section_id, _ in groups:
+        assert f'data-tab-group="{group_id}"' in payload["body_html"]
+        assert f'data-tab="{section_id}"' in payload["body_html"]
+
+
 def test_legacy_brief_returns_structured_standalone_fallback(
     work_os_client: FlaskClient, work_os_app_repo: Path
 ) -> None:

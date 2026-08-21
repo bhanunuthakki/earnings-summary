@@ -1839,22 +1839,20 @@ ul.flag-list li.flag-positive {
   .identity-right { flex-wrap: wrap; }
 }
 
-/* Tablet portrait: collapse the persistent sidebar to the canonical icon rail.
-   The .sidebar-collapsed class is the authoritative collapsed state; this media
-   query adds it automatically at narrow widths where manual toggle is unavailable. */
+/* Tablet portrait: JavaScript defaults the persistent sidebar to the canonical
+   icon rail while leaving the toggle operable for keyboard, touch, and pointer. */
 @media (max-width: 768px) {
   :root { --pad-x: var(--sp-3); }
-  .report-sidebar { width: var(--sidebar-collapsed-width); padding: var(--sp-2); }
-  .report-sidebar-product, .report-nav-label, .report-sidebar .tab-label,
-  .report-sidebar .tab-count { display: none; }
-  .report-sidebar-brand { align-items: center; padding-inline: 0; }
-  .report-sidebar .k-nav-item { justify-content: center; padding-inline: 0; }
-  /* Hide the collapse toggle at narrow widths — already collapsed by media query */
-  .report-sidebar-toggle { display: none; }
   .kpi-strip { grid-template-columns: 1fr; }
   .kpi-tile { min-width: 0; }
   .kpi-spark svg { width: 100%; height: auto; }
   .subtabs { overflow-x: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .report-sidebar,
+  .report-sidebar-toggle,
+  .report-sidebar-toggle svg { transition: none; }
 }
 
 /* Keyboard-shortcut help overlay (JS-injected by workspace_script; ? toggles,

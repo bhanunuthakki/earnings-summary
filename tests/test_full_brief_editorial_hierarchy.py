@@ -16,7 +16,9 @@ from io import StringIO
 from typing import ClassVar
 
 from report.renderers.workspace_html import _subtabs, _tabs
+from report.renderers.workspace_script import JS
 from report.renderers.workspace_sections._shared import TabDef, TabGroup
+from report.renderers.workspace_styles import CSS
 
 # ---------------------------------------------------------------------------
 # Fixtures: minimal tab groups matching the six-group approved hierarchy
@@ -182,11 +184,29 @@ class TestSidebarToggle:
     def test_toggle_button_aria_label(self) -> None:
         html = _render_tabs()
         assert 'aria-label="Collapse navigation"' in html
+        assert 'aria-expanded="true"' in html
+        assert 'aria-controls="report-sidebar-navigation"' in html
 
     def test_toggle_button_composes_the_control_kit(self) -> None:
         html = _render_tabs()
         assert "report-sidebar-toggle k-btn k-btn-quiet k-btn-sm" in html
         assert 'class="k-icon"' in html
+
+    def test_toggle_remains_operable_on_narrow_screens(self) -> None:
+        assert ".report-sidebar-toggle { display: none; }" not in CSS
+        assert "matchMedia('(max-width: 768px)')" in JS
+        assert "applySidebarCollapsed(true)" in JS
+
+    def test_toggle_name_tracks_expanded_state(self) -> None:
+        assert "Expand navigation" in JS
+        assert "Collapse navigation" in JS
+        assert "toggleBtn.setAttribute('aria-label', label)" in JS
+        assert "toggleBtn.setAttribute('title', label)" in JS
+
+    def test_sidebar_motion_respects_user_preference(self) -> None:
+        assert "@media (prefers-reduced-motion: reduce)" in CSS
+        assert ".report-sidebar," in CSS
+        assert ".report-sidebar-toggle svg" in CSS
 
 
 # ---------------------------------------------------------------------------
