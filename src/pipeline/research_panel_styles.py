@@ -376,9 +376,9 @@ RESEARCH_PANEL_STYLE = """<style>
 .sv-pdf-pager .sv-pdf-page-n { color: var(--muted); font-family: var(--mono); }
 .sv-pdf-snippet { margin-top: 10px; }
 
-body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
+.sv-page { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
   font-size: var(--fs-body); line-height: 1.55; }
-a { color: var(--accent); }
+.sv-page a { color: var(--accent); }
 .sv-head { padding: 14px 22px; border-bottom: 1px solid var(--border);
   display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
   position: sticky; top: 0; background: var(--bg); z-index: 5; }

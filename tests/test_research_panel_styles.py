@@ -29,6 +29,7 @@ def test_family_recipe_is_closed_and_token_only() -> None:
     assert RESEARCH_PANEL_STYLE.count("</style>") == 1
     assert "Panel renderers own data" not in RESEARCH_PANEL_STYLE
     assert "transcript reader + 10-K section reader" not in RESEARCH_PANEL_STYLE
+    assert not re.search(r"(?m)^(?:body|a)\s*\{", RESEARCH_PANEL_STYLE)
     assert "var(--" in RESEARCH_PANEL_STYLE
     assert not any(token in RESEARCH_PANEL_STYLE for token in ("#fff", "#000", "rgba("))
 
