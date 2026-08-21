@@ -163,6 +163,7 @@ def _canary_operations_fragment() -> str:
         OperationsPanelView(
             observed_label="Observed 2026-01-01 00:00 UTC",
             attention_count=0,
+            evidence_gap_count=0,
             runtime_summary_tone="ok",
             tasks=(),
             runtime_rows=(),

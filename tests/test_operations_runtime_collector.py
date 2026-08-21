@@ -515,6 +515,7 @@ def test_unavailable_scheduler_with_retained_unexpected_task_is_historical_only(
     assert snapshot.scheduler.state == "unavailable"
     assert unexpected.scheduler_state == "Running (historical)"
     assert unexpected.runtime_owner == "Historical Scheduler evidence"
+    assert unexpected.attention is False
     assert "Unexpected live Scheduler task" not in unexpected.runtime_owner
     assert "Scheduler command timed out" in unexpected.runtime.detail
     assert "retained successful evidence at" in unexpected.runtime.detail
@@ -558,6 +559,7 @@ def test_stale_scheduler_with_retained_unexpected_task_is_historical_only(
 
     assert unexpected.scheduler_state == "Running (historical)"
     assert unexpected.runtime_owner == "Historical Scheduler evidence"
+    assert unexpected.attention is False
     assert "retained successful evidence at" in unexpected.runtime.detail
 
 
