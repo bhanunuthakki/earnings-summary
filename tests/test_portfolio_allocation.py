@@ -180,6 +180,23 @@ def test_rejects_missing_security_join_and_provider_percent_mismatch() -> None:
     assert missing_join.reason_codes == ("security_join_missing",)
 
 
+@pytest.mark.parametrize("account_id", [4, 99])
+def test_rejects_position_lot_outside_envelope_account_coverage(account_id: int) -> None:
+    from integrations.portfolio_allocation import read_portfolio_allocation
+
+    base = _positions()
+    altered_lot = base.positions[0].accounts[0].model_copy(update={"account_id": account_id})
+    altered_position = base.positions[0].model_copy(
+        update={"accounts": [altered_lot, *base.positions[0].accounts[1:]]}
+    )
+    positions = base.model_copy(update={"positions": [altered_position, *base.positions[1:]]})
+
+    result = read_portfolio_allocation(_reader(positions=positions))
+
+    assert result.state == "unavailable"
+    assert result.reason_codes == ("account_coverage_invalid",)
+
+
 def test_fetch_failure_never_surfaces_transport_error_text() -> None:
     from integrations.portfolio_allocation import read_portfolio_allocation
 

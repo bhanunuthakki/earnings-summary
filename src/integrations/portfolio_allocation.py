@@ -125,7 +125,11 @@ def _finite_decimal(value: object) -> TypeGuard[Decimal]:
     return isinstance(value, Decimal) and value.is_finite()
 
 
-def _account_coverage_error(health: HealthV1, securities: SecuritiesV1Result) -> str | None:
+def _account_coverage_error(
+    health: HealthV1,
+    positions: PositionsV1Result,
+    securities: SecuritiesV1Result,
+) -> str | None:
     coverage = securities.meta.account_coverage
     included = coverage.included_account_ids
     excluded = coverage.excluded_account_ids
@@ -142,6 +146,13 @@ def _account_coverage_error(health: HealthV1, securities: SecuritiesV1Result) ->
         return "account_coverage_invalid"
     if lagging:
         return "portfolio_snapshot_account_coverage_lagging"
+    referenced_account_ids = {
+        lot.account_id for position in positions.positions for lot in position.accounts
+    }
+    if not referenced_account_ids.issubset(included) or bool(
+        referenced_account_ids.intersection(excluded)
+    ):
+        return "account_coverage_invalid"
     return None
 
 
@@ -179,7 +190,7 @@ def _structural_error(
         return "portfolio_snapshot_partial"
     if meta.is_stale:
         return "portfolio_snapshot_stale"
-    coverage_error = _account_coverage_error(health, securities)
+    coverage_error = _account_coverage_error(health, positions, securities)
     if coverage_error is not None:
         return coverage_error
     if not _finite_decimal(positions.total_market_value) or positions.total_market_value <= _ZERO:
