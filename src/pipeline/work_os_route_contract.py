@@ -11,20 +11,22 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SurfaceId: TypeAlias = Literal[
-    "cockpit",
-    "company_desk",
-    "brief_library",
-    "analytics_playground",
-    "execution_queue",
-    "performance_risk",
-    "risk_drawer",
-    "peek",
+DestinationSurfaceId: TypeAlias = Literal[
+    "screen-cockpit",
+    "screen-performance",
+    "screen-allocation",
+    "screen-workspace",
+    "screen-brief-library",
+    "screen-analytics-playground",
+    "screen-audit-log",
+    "screen-execution-queue",
 ]
+TransientSurfaceId: TypeAlias = Literal["risk_drawer", "peek"]
+SurfaceId: TypeAlias = DestinationSurfaceId | TransientSurfaceId
 
 _IDENTIFIER = r"^[a-z][a-z0-9_-]*$"
 _TICKER = r"^[A-Z][A-Z0-9.=-]{0,14}$"
@@ -47,7 +49,7 @@ class _ClosedModel(BaseModel):
 class OriginSnapshot(_ClosedModel):
     """The route beneath a transient surface, captured at open time."""
 
-    surface: str = Field(min_length=1, max_length=48, pattern=_IDENTIFIER)
+    surface: DestinationSurfaceId
     ticker: str | None = Field(default=None, max_length=15)
     section: str | None = Field(default=None, max_length=48, pattern=_IDENTIFIER)
 
@@ -65,10 +67,10 @@ class OriginSnapshot(_ClosedModel):
 class OverlayRoute(_ClosedModel):
     """Canonical identity for one destination or transient overlay route."""
 
-    surface: str = Field(min_length=1, max_length=48, pattern=_IDENTIFIER)
+    surface: DestinationSurfaceId
     ticker: str | None = Field(default=None, max_length=15)
     section: str | None = Field(default=None, max_length=48, pattern=_IDENTIFIER)
-    overlay: str | None = Field(default=None, max_length=48, pattern=_IDENTIFIER)
+    overlay: TransientSurfaceId | None = None
     origin: OriginSnapshot | None = None
 
     @field_validator("ticker")
@@ -81,16 +83,21 @@ class OverlayRoute(_ClosedModel):
             raise ValueError("ticker must be a canonical symbol")
         return normalized
 
-DEFAULT_ROUTE = OverlayRoute(surface="cockpit")
 
+DEFAULT_ROUTE = OverlayRoute(surface="screen-cockpit")
 
-_SURFACE_CLASSES: dict[str, SurfaceClass] = {
-    "cockpit": SurfaceClass.DESTINATION,
-    "company_desk": SurfaceClass.DESTINATION,
-    "brief_library": SurfaceClass.DESTINATION,
-    "analytics_playground": SurfaceClass.DESTINATION,
-    "execution_queue": SurfaceClass.DESTINATION,
-    "performance_risk": SurfaceClass.DESTINATION,
+DESTINATION_SURFACE_IDS: Final[tuple[DestinationSurfaceId, ...]] = (
+    "screen-cockpit",
+    "screen-performance",
+    "screen-allocation",
+    "screen-workspace",
+    "screen-brief-library",
+    "screen-analytics-playground",
+    "screen-audit-log",
+    "screen-execution-queue",
+)
+_SURFACE_CLASSES: Final[dict[str, SurfaceClass]] = {
+    **{surface: SurfaceClass.DESTINATION for surface in DESTINATION_SURFACE_IDS},
     "risk_drawer": SurfaceClass.DRAWER,
     "peek": SurfaceClass.OVERLAY,
 }
@@ -131,20 +138,24 @@ def decode_route(value: str) -> OverlayRoute | None:
     surface, ticker, section, overlay, origin_surface, origin_ticker, origin_section = fields
     try:
         origin = (
-            OriginSnapshot(
-                surface=origin_surface,
-                ticker=origin_ticker or None,
-                section=origin_section or None,
+            OriginSnapshot.model_validate(
+                {
+                    "surface": origin_surface,
+                    "ticker": origin_ticker or None,
+                    "section": origin_section or None,
+                }
             )
             if origin_surface
             else None
         )
-        return OverlayRoute(
-            surface=surface,
-            ticker=ticker or None,
-            section=section or None,
-            overlay=overlay or None,
-            origin=origin,
+        return OverlayRoute.model_validate(
+            {
+                "surface": surface,
+                "ticker": ticker or None,
+                "section": section or None,
+                "overlay": overlay or None,
+                "origin": origin,
+            }
         )
     except (TypeError, ValueError):
         return None
@@ -159,6 +170,8 @@ def fallback_route(value: str | None) -> OverlayRoute:
 
 __all__ = [
     "DEFAULT_ROUTE",
+    "DESTINATION_SURFACE_IDS",
+    "DestinationSurfaceId",
     "OriginSnapshot",
     "OverlayRoute",
     "SurfaceClass",
