@@ -259,6 +259,7 @@ def test_cockpit_stat_links_use_native_hash_navigation_without_layout_shift(
                 page_errors.append(str(error))
 
             page.on("pageerror", collect_page_error)
+
             def serve_canary(route: _FulfillableRoute) -> None:
                 route.fulfill(body=html, content_type="text/html")
 

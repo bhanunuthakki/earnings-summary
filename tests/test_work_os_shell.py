@@ -488,9 +488,7 @@ def test_cockpit_stats_use_typed_keys_and_native_screen_anchors() -> None:
     assert "payload.tracker_detail" in html
     assert "Tracker unavailable · research data only" in html
     render_index = html.index("workOsRenderPortfolio(payload);")
-    announce_index = html.index(
-        "status.textContent = String(payload.tracker_detail", render_index
-    )
+    announce_index = html.index("status.textContent = String(payload.tracker_detail", render_index)
     assert render_index < announce_index
     assert "status.textContent = trackerDetail" not in html
 
