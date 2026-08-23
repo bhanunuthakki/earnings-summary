@@ -180,6 +180,45 @@ def test_portfolio_hydration_fails_closed_when_tracker_is_offline() -> None:
     assert "internal detail" not in payload.model_dump_json()
 
 
+@pytest.mark.parametrize(
+    ("available", "is_stale", "is_partial", "expected_state"),
+    (
+        (False, True, True, "unavailable"),
+        (True, True, True, "stale"),
+        (True, False, True, "partial"),
+        (True, False, False, "current"),
+    ),
+)
+def test_portfolio_hydration_preserves_tracker_state_precedence_and_safe_warning_codes(
+    available: bool,
+    is_stale: bool,
+    is_partial: bool,
+    expected_state: str,
+) -> None:
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        LivePortfolio(
+            available=available,
+            api_url="http://tracker.test",
+            error="ConnectionError: account 1234",
+            is_stale=is_stale,
+            is_partial=is_partial,
+            envelope_warnings=["provider_stale", "provider_stale", "bad warning: account 1234"],
+        ),
+        readout_warnings=["earnings_readout_projection_unavailable", "provider_stale"],
+    )
+
+    assert payload.tracker_state == expected_state
+    assert payload.warnings == [
+        "earnings_readout_projection_unavailable",
+        "provider_stale",
+        *(["portfolio_tracker_unavailable"] if not available else []),
+        *(["portfolio_tracker_stale"] if available and is_stale else []),
+        *(["portfolio_tracker_partial"] if is_partial else []),
+    ]
+    assert "account 1234" not in payload.model_dump_json()
+
+
 def test_portfolio_action_queue_is_material_and_bounded_to_three() -> None:
     rows = [
         _row(

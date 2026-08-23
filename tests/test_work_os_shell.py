@@ -9,7 +9,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pipeline.work_os_shell import SCREEN_SPECS, render_work_os_shell
+from pipeline.work_os_shell import COCKPIT_STAT_SPECS, SCREEN_SPECS, render_work_os_shell
 from pipeline.work_os_styles import WORK_OS_CSS
 from ui.conformance_scan import scan_surface_evidence
 
@@ -465,6 +465,28 @@ def test_l1_card_titles_and_hydration_hooks_compose_the_registry_roles() -> None
     assert (
         '<h3 class="k-card-title k-card-row-title">\' + escapeWorkOsHtml(action.headline)'
     ) in html
+
+
+def test_cockpit_stats_use_typed_keys_and_native_screen_anchors() -> None:
+    html = render_work_os_shell()
+    cockpit = _screen_fragment(html, "screen-cockpit")
+
+    assert 'data-work-os-stat-key="nav"' in cockpit
+    assert 'data-work-os-stat-key="companies"' in cockpit
+    assert (
+        'data-work-os-stat-key="performance" href="#screen-performance" '
+        'aria-label="Open Performance vs Index"'
+    ) in cockpit
+    assert (
+        'data-work-os-stat-key="risk" href="#screen-allocation" '
+        'aria-label="Open Risk &amp; Allocations"'
+    ) in cockpit
+    assert "onclick=" not in cockpit
+    assert [spec.key for spec in COCKPIT_STAT_SPECS] == ["nav", "performance", "risk", "companies"]
+    assert "data-work-os-stat-key" in html
+    assert "querySelectorAll('[data-work-os-stat-key]')" in html
+    assert "payload.tracker_detail" in html
+    assert "Tracker unavailable · research data only" in html
 
 
 def test_l1_live_shells_do_not_ship_prototype_card_grids_or_inline_geometry() -> None:

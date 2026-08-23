@@ -193,6 +193,108 @@ def test_performance_canary_contains_deterministic_populated_driver_grid() -> No
     assert "alpha-table" in html
 
 
+def test_cockpit_canary_uses_the_current_portfolio_hydration_contract() -> None:
+    from execution.design_route_canaries import render_route_canary
+
+    html = render_route_canary(route="performance", viewport="desktop")
+
+    assert '"status": "ok"' in html
+    assert '"tracker_state": "current"' in html
+    assert '"tracker_detail": "Tracker connected \\u00b7 current \\u00b7 As of 2026-01-01"' in html
+    assert '"generated_at": "2026-01-01T00:00:00Z"' in html
+    assert '"warnings": []' in html
+
+
+@pytest.mark.parametrize(
+    ("route", "stat_key", "screen_id", "mount_id", "endpoint"),
+    (
+        (
+            "performance",
+            "performance",
+            "screen-performance",
+            "workOsPerformanceMount",
+            "/api/panel/portfolio_allocation",
+        ),
+        (
+            "risk-allocations",
+            "risk",
+            "screen-allocation",
+            "workOsAllocationMount",
+            "/api/panel/portfolio_health",
+        ),
+    ),
+)
+@pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
+def test_cockpit_stat_links_use_native_hash_navigation_without_layout_shift(
+    route: str,
+    stat_key: str,
+    screen_id: str,
+    mount_id: str,
+    endpoint: str,
+    viewport: tuple[int, int],
+) -> None:
+    """The keyed Cockpit controls remain truthful and keyboard-reachable at both layouts."""
+
+    _require_playwright()
+    playwright_api = importlib.import_module("playwright.sync_api")
+    from execution.design_route_canaries import render_route_canary
+
+    html = render_route_canary(route=route, viewport="desktop" if viewport[0] > 400 else "narrow")
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": viewport[0], "height": viewport[1]},
+            reduced_motion="reduce",
+        )
+        try:
+            page = context.new_page()
+            page_errors: list[str] = []
+
+            def collect_page_error(error: object) -> None:
+                page_errors.append(str(error))
+
+            page.on("pageerror", collect_page_error)
+            page.set_content(html, wait_until="load")
+            page.wait_for_function(
+                """() => document.getElementById('workOsLiveStatus')?.textContent ===
+                'Tracker connected · current · As of 2026-01-01'"""
+            )
+
+            stats = page.locator("#workOsPortfolioStats")
+            assert stats.locator(".k-stat-cell").count() == 4
+            assert stats.locator("a[data-work-os-stat-key]").count() == 2
+            assert stats.locator("div[data-work-os-stat-key]").count() == 2
+            assert (
+                stats.locator("[data-work-os-stat-key='nav'] .stat-subtext").text_content()
+                == "Tracker connected · current · As of 2026-01-01"
+            )
+
+            control = stats.locator(f"a[data-work-os-stat-key='{stat_key}']")
+            before_focus = control.bounding_box()
+            assert before_focus is not None
+            control.focus()
+            assert control.evaluate("element => document.activeElement === element")
+            assert control.bounding_box() == before_focus
+            control.press("Enter")
+
+            page.wait_for_function(
+                "screenId => window.location.hash === '#' + screenId",
+                screen_id,
+            )
+            page.wait_for_function(
+                "screenId => document.getElementById(screenId)?.classList.contains('is-active')",
+                screen_id,
+            )
+            page.wait_for_function(
+                "([id, expected]) => document.getElementById(id)?.dataset.loadedEndpoint === expected",
+                [mount_id, endpoint],
+            )
+            assert page_errors == []
+        finally:
+            context.close()
+            browser.close()
+
+
 @pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
 def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
     viewport: tuple[int, int],
