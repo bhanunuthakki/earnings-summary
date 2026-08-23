@@ -106,7 +106,8 @@ def _null_buckets() -> PortfolioAllocationBuckets:
     )
 
 
-def _unavailable(code: str) -> PortfolioAllocationProjection:
+def unavailable_portfolio_allocation(code: str) -> PortfolioAllocationProjection:
+    """Build a fail-closed projection containing only a stable reason code."""
     return PortfolioAllocationProjection(
         state="unavailable",
         source_identity="portfolio_tracker_api_v1",
@@ -251,7 +252,7 @@ def project_portfolio_allocation(
     """Project validated v1 source data into six raw-total-preserving buckets."""
     error = _structural_error(health, positions, securities)
     if error is not None:
-        return _unavailable(error)
+        return unavailable_portfolio_allocation(error)
 
     totals = {name: _ZERO for name in _BUCKET_NAMES}
     by_security_id = {security.security_id: security for security in securities.securities}
@@ -266,7 +267,7 @@ def project_portfolio_allocation(
     bucket_total = sum(totals.values(), _ZERO)
     difference = bucket_total - total
     if difference != _ZERO:
-        return _unavailable("portfolio_allocation_reconciliation_failed")
+        return unavailable_portfolio_allocation("portfolio_allocation_reconciliation_failed")
 
     def bucket(name: str) -> PortfolioAllocationBucket:
         value = totals[name]
@@ -302,21 +303,21 @@ def read_portfolio_allocation(reader: PortfolioAllocationReader) -> PortfolioAll
     try:
         health_fetch = reader.probe_v1()
     except Exception:
-        return _unavailable("health_unavailable")
+        return unavailable_portfolio_allocation("health_unavailable")
     if not health_fetch.available or health_fetch.data is None:
-        return _unavailable("health_unavailable")
+        return unavailable_portfolio_allocation("health_unavailable")
     try:
         positions_fetch = reader.get_positions()
     except Exception:
-        return _unavailable("positions_unavailable")
+        return unavailable_portfolio_allocation("positions_unavailable")
     if not positions_fetch.available or positions_fetch.data is None:
-        return _unavailable("positions_unavailable")
+        return unavailable_portfolio_allocation("positions_unavailable")
     try:
         securities_fetch = reader.get_securities()
     except Exception:
-        return _unavailable("securities_unavailable")
+        return unavailable_portfolio_allocation("securities_unavailable")
     if not securities_fetch.available or securities_fetch.data is None:
-        return _unavailable("securities_unavailable")
+        return unavailable_portfolio_allocation("securities_unavailable")
     return project_portfolio_allocation(
         health_fetch.data,
         positions_fetch.data,
@@ -338,4 +339,5 @@ __all__ = [
     "fetch_portfolio_allocation",
     "project_portfolio_allocation",
     "read_portfolio_allocation",
+    "unavailable_portfolio_allocation",
 ]

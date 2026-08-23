@@ -152,6 +152,7 @@ from dcf import redesign as dcf_redesign  # noqa: E402
 from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Job, Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from integrations.portfolio_allocation import fetch_portfolio_allocation  # noqa: E402
 from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
 from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
@@ -1806,6 +1807,7 @@ def create_app(
         payload = build_work_os_portfolio(
             rows,
             fetch_live_portfolio(),
+            fetch_portfolio_allocation(),
             latest_readouts=readout_projection.readouts,
             readout_warnings=readout_projection.warnings,
         )

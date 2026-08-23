@@ -2,15 +2,53 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import Literal
 
 import pytest
 
+from integrations.portfolio_allocation import (
+    PortfolioAllocationBucket,
+    PortfolioAllocationBuckets,
+    PortfolioAllocationProjection,
+    PortfolioAllocationReconciliation,
+    unavailable_portfolio_allocation,
+)
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.dashboard_status import DashboardRow, TranscriptStatus
 from pipeline.research_cockpit import CockpitRow
 from pipeline.work_os_earnings import EarningsReadoutSummary
 from pipeline.work_os_portfolio import build_work_os_portfolio
+
+
+def _available_allocation(
+    *,
+    state: Literal["available", "incomplete"] = "available",
+    as_of: date | None = None,
+) -> PortfolioAllocationProjection:
+    empty = PortfolioAllocationBucket(value=Decimal(0), weight_pct=Decimal(0))
+    return PortfolioAllocationProjection(
+        state=state,
+        source_identity="portfolio_tracker_api_v1",
+        as_of=as_of,
+        currency="USD",
+        buckets=PortfolioAllocationBuckets(
+            us_equity=empty,
+            international_equity=empty,
+            us_etf=empty,
+            international_etf=empty,
+            cash=empty,
+            unclassified=empty,
+        ),
+        reconciliation=PortfolioAllocationReconciliation(
+            position_total=Decimal(0),
+            bucket_total=Decimal(0),
+            difference=Decimal(0),
+            is_reconciled=True,
+        ),
+        reason_codes=("portfolio_allocation_incomplete",) if state == "incomplete" else (),
+    )
 
 
 def _row(
@@ -60,6 +98,7 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
     payload = build_work_os_portfolio(
         [_row("NU", name="Nu Holdings")],
         live,
+        _available_allocation(as_of=date(2026, 8, 8)),
         latest_readouts={
             "NU": EarningsReadoutSummary(
                 artifact_id=44,
@@ -94,6 +133,7 @@ def test_portfolio_hydration_surfaces_readout_projection_failure() -> None:
     payload = build_work_os_portfolio(
         [_row("NU", name="Nu Holdings")],
         LivePortfolio(available=True, api_url="http://tracker.test"),
+        _available_allocation(),
         readout_warnings=["earnings_readout_projection_unavailable"],
     )
 
@@ -132,6 +172,7 @@ def test_portfolio_hydration_labels_tracker_state_independently_of_as_of(
             is_partial=is_partial,
             as_of=as_of,
         ),
+        _available_allocation(as_of=date.fromisoformat(as_of) if as_of else None),
     )
 
     assert payload.tracker_state == expected_state
@@ -152,6 +193,7 @@ def test_portfolio_hydration_keeps_generation_doorway_without_persisted_readout(
             )
         ],
         LivePortfolio(available=True, api_url="http://tracker.test"),
+        _available_allocation(),
     )
 
     company = payload.companies[0]
@@ -168,6 +210,7 @@ def test_portfolio_hydration_fails_closed_when_tracker_is_offline() -> None:
             api_url="http://tracker.test",
             error="connection refused with internal detail",
         ),
+        _available_allocation(),
     )
 
     assert payload.status == "degraded"
@@ -212,6 +255,7 @@ def test_portfolio_hydration_preserves_tracker_state_precedence_and_safe_warning
                 "ConnectionError: account 1234",
             ],
         ),
+        _available_allocation(),
         readout_warnings=["earnings_readout_projection_unavailable", "provider_stale"],
     )
 
@@ -247,9 +291,52 @@ def test_portfolio_action_queue_is_material_and_bounded_to_three() -> None:
     payload = build_work_os_portfolio(
         rows,
         LivePortfolio(available=False, api_url="http://tracker.test"),
+        _available_allocation(),
     )
 
     assert len(payload.actions) == 3
     assert payload.actions[0].ticker == "T0"
     assert payload.actions[0].tone == "bad"
     assert payload.actions[0].headline == "Review thesis-decisive alert"
+
+
+@pytest.mark.parametrize(
+    ("allocation", "warning"),
+    (
+        (_available_allocation(state="incomplete"), "portfolio_allocation_incomplete"),
+        (
+            unavailable_portfolio_allocation("positions_unavailable"),
+            "portfolio_allocation_unavailable",
+        ),
+    ),
+)
+def test_portfolio_hydration_degrades_for_non_available_allocation(
+    allocation: PortfolioAllocationProjection,
+    warning: str,
+) -> None:
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        LivePortfolio(available=True, api_url="http://tracker.test"),
+        allocation,
+    )
+
+    assert payload.status == "degraded"
+    assert payload.allocation == allocation
+    assert warning in payload.warnings
+
+
+def test_portfolio_hydration_fails_closed_when_source_dates_disagree() -> None:
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            as_of="2026-08-08",
+        ),
+        _available_allocation(as_of=date(2026, 8, 7)),
+    )
+
+    assert payload.status == "degraded"
+    assert payload.allocation.state == "unavailable"
+    assert payload.allocation.reason_codes == ("snapshot_date_mismatch",)
+    assert "portfolio_allocation_unavailable" in payload.warnings
