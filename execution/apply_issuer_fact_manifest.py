@@ -33,9 +33,10 @@ def main() -> int:
     )
     args = parser.parse_args()
     manifest = IssuerFactManifest.model_validate_json(args.manifest.read_text(encoding="utf-8"))
+    role = SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY
     conn = connect_sqlite(
         args.db,
-        role=SQLiteConnectionRole.WRITER,
+        role=role,
         schema_preflight=True,
     )
     try:
