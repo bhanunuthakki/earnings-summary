@@ -61,6 +61,42 @@ def test_builds_complete_typed_q2_inventory_from_the_embedded_publisher_state() 
     ]
 
 
+def test_accepts_current_shaped_publisher_fields_that_are_outside_the_closed_inventory() -> None:
+    """Vendor display metadata must not expand the persisted inventory contract."""
+    items = _q2_items()
+    items[0]["publishedAt"] = "2026-08-04T20:00:00Z"
+    items[0]["links"][0]["target"] = "_blank"
+    payload = {
+        "page": {
+            "quarterlyResults": {
+                "items": items,
+                "component": "quarterly-results",
+                "displayOrder": "descending",
+            }
+        },
+        "site": {"locale": "en-US"},
+    }
+    rendered_html = (
+        f'<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={json.dumps(payload)};'
+        "_n.ctx.r.assets={};</script>"
+    )
+
+    inventory = discover_embedded_quarterly_inventory(
+        rendered_html,
+        source_page="https://investor.example.test/sec-filings",
+        fiscal_year=2026,
+        fiscal_quarter=2,
+    )
+
+    assert inventory.result_id == "q2-id"
+    assert [document.label for document in inventory.documents] == [
+        "Letter to Shareholders",
+        "Earnings Presentation",
+        "Webcast Transcript",
+        "SEC Filing",
+    ]
+
+
 def test_rejects_an_unmapped_publisher_document_label_instead_of_dropping_it() -> None:
     with pytest.raises(MeliEmbeddedDiscoveryError, match="unknown_document_label"):
         discover_embedded_quarterly_inventory(
