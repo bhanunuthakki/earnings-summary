@@ -7,6 +7,7 @@ import threading
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
@@ -46,6 +47,10 @@ CANONICAL_CSS = """
 .k-well { border-radius: var(--radius); }
 .k-overlay { border-radius: var(--radius); border: var(--bw-thin) solid currentColor; }
 """
+
+
+class _FulfillableRoute(Protocol):
+    def fulfill(self, *, body: str, content_type: str) -> object: ...
 
 
 def _specimen(
@@ -254,7 +259,11 @@ def test_cockpit_stat_links_use_native_hash_navigation_without_layout_shift(
                 page_errors.append(str(error))
 
             page.on("pageerror", collect_page_error)
-            page.set_content(html, wait_until="load")
+            def serve_canary(route: _FulfillableRoute) -> None:
+                route.fulfill(body=html, content_type="text/html")
+
+            page.route("http://design-canary.invalid/", serve_canary)
+            page.goto("http://design-canary.invalid/", wait_until="load")
             page.wait_for_function(
                 """() => document.getElementById('workOsLiveStatus')?.textContent ===
                 'Tracker connected · current · As of 2026-01-01'"""
