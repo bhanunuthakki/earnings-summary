@@ -751,7 +751,8 @@ def test_company_desk_and_library_use_production_read_models_not_demo_facts() ->
     assert "data-research-chat" in html
     assert "openWorkOsCopilot" in html
     assert "item.list_type === 'portfolio' || item.list_type === 'evaluation'" in html
-    assert "Company Desk (' + (identity.ticker || normalized) + ')'" in html
+    assert "function workOsRenderCompanyBreadcrumb()" in html
+    assert "Company Desk (' + context.ticker + ')'" in html
     assert "try { await workOsEnsureResearchCompanies(); }" in html
     assert 'id="deskQuestionCapture"' in html
     assert "kind: 'question'" in html
@@ -818,7 +819,7 @@ def test_cockpit_hydration_does_not_construct_company_desk() -> None:
         "Portfolio companies could not be loaded"
     )
     assert "workOsLaunchParams.get('ticker')" in html
-    assert "workOsLaunchParams.get('screen')" in html
+    assert "function workOsReadCompanyContext()" in html
     assert "originalSwitchCompanyWorkspace" not in html
 
 
@@ -975,7 +976,7 @@ def test_nvo_action_queue_open_company_uses_the_canonical_desk_handoff() -> None
     assert "data-work-os-ticker=\"' + escapeWorkOsHtml(action.ticker) + '\">Open Company" in html
     assert "switchCompanyWorkspace(node.dataset.workOsTicker)" in html
     assert (
-        "const requested = String(ticker || window.workOsActiveTicker || '').toUpperCase();" in html
+        "const requested = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();" in html
     )
     assert "fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk'" in html
 
@@ -1048,9 +1049,9 @@ def test_company_switch_commits_atomically_and_rejects_stale_requests() -> None:
     assert "signal: controller.signal" in render_desk
     assert "if (requestSequence !== workOsCompanyRequestSequence) return false;" in render_desk
     assert render_desk.index("const desk = await response.json();") < render_desk.index(
-        "window.workOsActiveTicker = normalized;"
+        "document.getElementById('deskTicker').textContent"
     )
-    assert "window.workOsActiveTicker = previousTicker;" in render_desk
+    assert "window.workOsActiveTicker =" not in render_desk
     assert "return false;" in render_desk
     assert "return true;" in render_desk
 
@@ -1061,17 +1062,20 @@ def test_company_switch_keeps_url_and_rendered_identity_in_sync() -> None:
         "function workOsRenderPortfolio", 1
     )[0]
 
-    assert "function workOsCompanyDeskUrl(ticker)" in html
-    assert "params.set('ticker', ticker);" in html
-    assert "params.set('screen', 'company-desk');" in html
-    assert "window.history.pushState({ screenId: 'screen-workspace', ticker: requested }" in html
+    assert "function workOsCompanyContextUrl(ticker, screen)" in html
+    assert "url.searchParams.set('ticker', normalized);" in html
+    assert "url.searchParams.set('screen', screen);" in html
+    assert (
+        "window.history.pushState({ screenId: WORK_OS_COMPANY_CONTEXT_SCREENS[screen], ticker: normalized }"
+        in html
+    )
     assert "await workOsRenderCompanyDesk(requested)" in html
     assert "if (!committed) return false;" in html
     assert "window.navigateTo('screen-workspace'" in switch_runtime
-    assert "breadcrumb.textContent = 'Company Desk (' + requested + ')'" in switch_runtime
-    assert switch_runtime.index("window.navigateTo('screen-workspace'") < switch_runtime.index(
-        "breadcrumb.textContent = 'Company Desk (' + requested + ')'"
-    )
+    assert "workOsWriteCompanyContext(requested, 'company-desk', options);" in switch_runtime
+    assert switch_runtime.index(
+        "workOsWriteCompanyContext(requested, 'company-desk', options);"
+    ) < switch_runtime.index("window.navigateTo('screen-workspace'")
 
 
 def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> None:
@@ -1081,7 +1085,10 @@ def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> N
     )[0]
 
     assert "window.workOsActiveTicker =" not in brief_reader
-    assert "const requestedTicker = String(tickerOrArtifact" in brief_reader
+    assert (
+        "const requestedTicker = workOsNormalizeTicker(tickerOrArtifact) || workOsCurrentCompanyTicker();"
+        in brief_reader
+    )
     assert "encodeURIComponent(requestedTicker)" in brief_reader
 
     threshold_handler = html.split("document.querySelectorAll('[data-work-os-thresholds]')", 1)[
@@ -1090,3 +1097,86 @@ def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> N
     assert "window.workOsActiveTicker =" not in threshold_handler
     assert "switchCompanyWorkspace(node.dataset.workOsThresholds).then" in threshold_handler
     assert "if (committed) openDrillDrawer('thresholds')" in threshold_handler
+
+
+def test_company_context_coordinator_owns_desk_playground_and_breadcrumb_state() -> None:
+    html = render_work_os_shell()
+
+    assert "function workOsReadCompanyContext()" in html
+    assert "function workOsWriteCompanyContext(ticker, screen, options)" in html
+    assert "function workOsRenderCompanyBreadcrumb()" in html
+    assert "Fact & Metric Playground (' + context.ticker + ')'" in html
+    assert "workOsWriteCompanyContext(requested, 'company-desk'" in html
+    assert "workOsWriteCompanyContext(requested, 'analytics-playground'" in html
+    assert "workOsRenderCompanyBreadcrumb();" in html
+    navigation = html.split("window.navigateTo = function", 1)[1].split(
+        "window.goCounterreadHome", 1
+    )[0]
+    assert navigation.index("originalNavigateTo(target);") < navigation.index(
+        "workOsRenderCompanyBreadcrumb();"
+    )
+
+
+def test_company_context_routes_desk_to_playground_and_global_copilot() -> None:
+    html = render_work_os_shell()
+    playground = html.split("async function workOsRenderFactPlayground", 1)[1].split(
+        "const workOsFactTicker", 1
+    )[0]
+
+    assert "const ticker = workOsCurrentCompanyTicker();" in playground
+    assert "'?fragment=work-os&tickers=' + encodeURIComponent(ticker)" in playground
+    assert "window.workOsOpenGlobalCopilot = function ()" in html
+    assert "company_ticker: workOsCurrentCompanyTicker()" in html
+    assert 'onclick="workOsOpenGlobalCopilot()"' in html
+
+
+def test_company_context_accessors_preserve_default_and_url_override_tickers() -> None:
+    html = render_work_os_shell()
+    context_accessor = html.split("function workOsReadCompanyContext()", 1)[1].split(
+        "function workOsRenderCompanyBreadcrumb", 1
+    )[0]
+    global_copilot = html.split("window.workOsOpenGlobalCopilot = function ()", 1)[1].split(
+        "const workOsPersistentMountIds", 1
+    )[0]
+    endpoint = html.split("function workOsEndpoint(screenId)", 1)[1].split(
+        "function workOsTrustedFragmentEndpoint", 1
+    )[0]
+
+    assert "ticker: workOsNormalizeTicker(params.get('ticker'))" in context_accessor
+    assert (
+        "workOsReadCompanyContext().ticker || workOsNormalizeTicker(window.workOsActiveTicker) || 'NU'"
+        in context_accessor
+    )
+    assert "company_ticker: workOsCurrentCompanyTicker()" in global_copilot
+    assert "const ticker = workOsCurrentCompanyTicker();" in endpoint
+    assert "'?ticker=' + encodeURIComponent(ticker)" in endpoint
+
+
+def test_playground_company_fetch_is_context_bound_and_rejects_stale_responses() -> None:
+    html = render_work_os_shell()
+    playground = html.split("async function workOsRenderFactPlayground", 1)[1].split(
+        "window.switchFactPlayground", 1
+    )[0]
+
+    assert "let workOsFactPlaygroundRequestSequence = 0;" in html
+    assert "let workOsFactPlaygroundRequestController = null;" in html
+    assert "workOsFactPlaygroundRequestController.abort();" in playground
+    assert "signal: controller.signal" in playground
+    assert "requestSequence !== workOsFactPlaygroundRequestSequence" in playground
+    assert "mount.dataset.loadedTicker = ticker;" in playground
+
+
+def test_company_context_playground_change_updates_url_and_history_restores_it() -> None:
+    html = render_work_os_shell()
+    change_handler = html.split("workOsFactTicker.addEventListener('change'", 1)[1].split(
+        "window.navigateTo", 1
+    )[0]
+    history = html.split("function workOsRestoreCompanyContextFromHistory()", 1)[1].split(
+        "window.addEventListener('hashchange'", 1
+    )[0]
+
+    assert "window.switchFactPlayground(workOsFactTicker.value);" in change_handler
+    assert "context.screen === 'company-desk'" in history
+    assert "context.screen === 'analytics-playground'" in history
+    assert "window.switchCompanyWorkspace(context.ticker, { fromHistory: true })" in history
+    assert "window.switchFactPlayground(context.ticker, { fromHistory: true })" in history

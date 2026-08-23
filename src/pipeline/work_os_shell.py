@@ -340,7 +340,13 @@ def _production_runtime(generated_at: datetime) -> str:
   let workOsRequestGeneration = 0;
   const WORK_OS_FETCH_TIMEOUT_MS = 15000;
   const originalNavigateTo = window.navigateTo;
+  // The URL is the durable company-context boundary.  workOsActiveTicker remains
+  // a compatibility mirror for embedded prototype callbacks only.
   window.workOsActiveTicker = 'NU';
+  const WORK_OS_COMPANY_CONTEXT_SCREENS = {{
+    'company-desk': 'screen-workspace',
+    'analytics-playground': 'screen-analytics-playground'
+  }};
   let workOsPortfolioHydration = null;
   let workOsPortfolioLoading = null;
   let workOsResearchCompanies = null;
@@ -350,11 +356,71 @@ def _production_runtime(generated_at: datetime) -> str:
   let workOsPeekRequestController = null;
   let workOsReaderContext = null;
   let workOsFactPlaygroundLoading = null;
+  let workOsFactPlaygroundRequestSequence = 0;
+  let workOsFactPlaygroundRequestController = null;
   let companyPickerMatches = [];
   let companyPickerActiveIndex = -1;
   const workOsLaunchParams = new URLSearchParams(window.location.search);
-  const workOsRequestedScreen = workOsLaunchParams.get('screen');
-  const workOsRequestedTicker = String(workOsLaunchParams.get('ticker') || '').toUpperCase();
+
+  function workOsNormalizeTicker(ticker) {{
+    return String(ticker || '').trim().toUpperCase();
+  }}
+
+  function workOsReadCompanyContext() {{
+    const params = new URLSearchParams(window.location.search);
+    return {{
+      ticker: workOsNormalizeTicker(params.get('ticker')),
+      screen: String(params.get('screen') || '')
+    }};
+  }}
+
+  function workOsCurrentCompanyTicker() {{
+    return workOsReadCompanyContext().ticker || workOsNormalizeTicker(window.workOsActiveTicker) || 'NU';
+  }}
+
+  function workOsRenderCompanyBreadcrumb() {{
+    const context = workOsReadCompanyContext();
+    const breadcrumb = document.getElementById('breadcrumb-title');
+    if (!breadcrumb || !context.ticker) return;
+    if (context.screen === 'company-desk') breadcrumb.textContent = 'Company Desk (' + context.ticker + ')';
+    if (context.screen === 'analytics-playground') breadcrumb.textContent = 'Fact & Metric Playground (' + context.ticker + ')';
+  }}
+
+  function workOsCompanyContextUrl(ticker, screen) {{
+    const url = new URL(window.location.href);
+    const normalized = workOsNormalizeTicker(ticker);
+    if (normalized) url.searchParams.set('ticker', normalized);
+    else url.searchParams.delete('ticker');
+    if (screen) url.searchParams.set('screen', screen);
+    else url.searchParams.delete('screen');
+    url.hash = WORK_OS_COMPANY_CONTEXT_SCREENS[screen] || workOsScreenFromHash();
+    return url.pathname + url.search + url.hash;
+  }}
+
+  function workOsWriteCompanyContext(ticker, screen, options) {{
+    const normalized = workOsNormalizeTicker(ticker);
+    if (!normalized || !WORK_OS_COMPANY_CONTEXT_SCREENS[screen]) return false;
+    const nextUrl = workOsCompanyContextUrl(normalized, screen);
+    window.workOsActiveTicker = normalized;
+    if (!(options && options.fromHistory)) {{
+      const currentUrl = window.location.pathname + window.location.search + window.location.hash;
+      if (currentUrl !== nextUrl) {{
+        window.history.pushState({{ screenId: WORK_OS_COMPANY_CONTEXT_SCREENS[screen], ticker: normalized }}, '', nextUrl);
+      }}
+    }}
+    workOsRenderCompanyBreadcrumb();
+    return true;
+  }}
+
+  window.workOsOpenGlobalCopilot = function () {{
+    window.openWorkOsCopilot({{
+      company_ticker: workOsCurrentCompanyTicker(),
+      category: 'research',
+      origin_key: 'work-os:global-launcher',
+      coverage_role_at_creation: 'unknown',
+      lifecycle_at_creation: 'unknown'
+    }});
+  }};
   const workOsPersistentMountIds = {{
     'screen-performance': 'workOsPerformanceMount',
     'screen-audit-log': 'workOsAuditMount'
@@ -440,7 +506,7 @@ def _production_runtime(generated_at: datetime) -> str:
     originalOpenDrillDrawer(type);
     const reportTabs = {{ financials: 'financials', saydo: 'saydo', peers: 'comps', falsifier: 'bear' }};
     if (reportTabs[type]) {{
-      const ticker = window.workOsActiveTicker || 'NU';
+      const ticker = workOsCurrentCompanyTicker();
       const title = document.getElementById('drawerTitle');
       const subtitle = document.getElementById('drawerSubtitle');
       const body = document.getElementById('drawerBody');
@@ -655,7 +721,7 @@ def _production_runtime(generated_at: datetime) -> str:
       await workOsLoadBriefArtifact(tickerOrArtifact);
       return;
     }}
-    const requestedTicker = String(tickerOrArtifact || window.workOsActiveTicker || 'NU').toUpperCase();
+    const requestedTicker = workOsNormalizeTicker(tickerOrArtifact) || workOsCurrentCompanyTicker();
     const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&limit=1', {{ headers: {{ Accept: 'application/json' }} }});
     const payload = response.ok ? await response.json() : null;
     if (!payload || !payload.items || !payload.items.length) {{
@@ -798,7 +864,7 @@ def _production_runtime(generated_at: datetime) -> str:
       workOsPortfolioHydration = null;
       await workOsEnsurePortfolioHydration();
       await workOsOpenPeekRoute('/api/peek/earnings-readout?ticker=' + encodeURIComponent(ticker) + '&artifact_id=' + encodeURIComponent(String(artifactId)), 'Post-earnings readout — ' + ticker);
-      if (window.workOsActiveTicker === ticker) {{
+      if (workOsCurrentCompanyTicker() === ticker) {{
         await workOsRenderCompanyDesk(ticker);
       }}
     }} catch (err) {{
@@ -918,8 +984,7 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   async function workOsRenderCompanyDesk(ticker) {{
-    const normalized = String(ticker || window.workOsActiveTicker || '').toUpperCase();
-    const previousTicker = window.workOsActiveTicker;
+    const normalized = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();
     const screen = document.getElementById('screen-workspace');
     if (!normalized || !screen) return false;
     const requestSequence = ++workOsCompanyRequestSequence;
@@ -940,9 +1005,6 @@ def _production_runtime(generated_at: datetime) -> str:
       const identity = desk.company || {{}};
       const identityTicker = String(identity.ticker || normalized).toUpperCase();
       if (identityTicker !== normalized) throw new Error('Company response mismatch');
-      window.workOsActiveTicker = normalized;
-      const breadcrumb = document.getElementById('breadcrumb-title');
-      if (breadcrumb) breadcrumb.textContent = 'Company Desk (' + (identity.ticker || normalized) + ')';
       document.getElementById('deskTicker').textContent = identity.ticker || normalized;
       document.getElementById('deskCompanyName').textContent = identity.name || company.name;
       document.getElementById('deskCoverageRole').textContent = String(identity.coverage_role || 'unknown') + ' coverage';
@@ -1001,10 +1063,9 @@ def _production_runtime(generated_at: datetime) -> str:
       return true;
     }} catch (error) {{
       if ((error && error.name === 'AbortError') || requestSequence !== workOsCompanyRequestSequence) return false;
-      window.workOsActiveTicker = previousTicker;
       const warningBox = document.getElementById('deskWarnings');
       if (warningBox) {{ warningBox.hidden = false; warningBox.textContent = 'Unable to switch company desks. The prior company remains open.'; }}
-      if (companyPickerStatus) companyPickerStatus.textContent = normalized + ' could not be loaded; ' + previousTicker + ' remains open';
+      if (companyPickerStatus) companyPickerStatus.textContent = normalized + ' could not be loaded; ' + workOsCurrentCompanyTicker() + ' remains open';
       return false;
     }} finally {{
       if (requestSequence === workOsCompanyRequestSequence) {{
@@ -1123,25 +1184,12 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
-  function workOsCompanyDeskUrl(ticker) {{
-    const url = new URL(window.location.href);
-    const params = url.searchParams;
-    params.set('ticker', ticker);
-    params.set('screen', 'company-desk');
-    url.hash = 'screen-workspace';
-    return url.pathname + url.search + url.hash;
-  }}
-
   window.switchCompanyWorkspace = async function (ticker, options) {{
-    const requested = String(ticker || window.workOsActiveTicker || '').toUpperCase();
+    const requested = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();
     const committed = await workOsRenderCompanyDesk(requested);
     if (!committed) return false;
+    workOsWriteCompanyContext(requested, 'company-desk', options);
     window.navigateTo('screen-workspace', {{ fromHistory: true, companyReady: true }});
-    const breadcrumb = document.getElementById('breadcrumb-title');
-    if (breadcrumb) breadcrumb.textContent = 'Company Desk (' + requested + ')';
-    if (!(options && options.fromHistory)) {{
-      window.history.pushState({{ screenId: 'screen-workspace', ticker: requested }}, '', workOsCompanyDeskUrl(requested));
-    }}
     return true;
   }};
 
@@ -1223,9 +1271,12 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   async function workOsApplyRequestedResearchState() {{
-    if (workOsRequestedScreen === 'company-desk') {{
-      await window.switchCompanyWorkspace(workOsRequestedTicker || window.workOsActiveTicker, {{ fromHistory: true }});
-    }} else if (workOsRequestedScreen === 'brief-library') {{
+    const context = workOsReadCompanyContext();
+    if (context.screen === 'company-desk' && context.ticker) {{
+      await window.switchCompanyWorkspace(context.ticker, {{ fromHistory: true }});
+    }} else if (context.screen === 'analytics-playground' && context.ticker) {{
+      await window.switchFactPlayground(context.ticker, {{ fromHistory: true }});
+    }} else if (context.screen === 'brief-library') {{
       window.navigateTo('screen-brief-library', {{ fromHistory: true }});
       workOsRenderBriefLibrary();
     }}
@@ -1294,12 +1345,12 @@ def _production_runtime(generated_at: datetime) -> str:
       const response = await fetch('/api/notes', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json', Accept: 'application/json' }},
-        body: JSON.stringify({{ ticker: window.workOsActiveTicker, kind: 'question', body: body }})
+        body: JSON.stringify({{ ticker: workOsCurrentCompanyTicker(), kind: 'question', body: body }})
       }});
       if (!response.ok) throw new Error('HTTP ' + response.status);
       if (input) input.value = '';
       if (status) status.textContent = 'Question saved';
-      await workOsRenderCompanyDesk(window.workOsActiveTicker);
+      await workOsRenderCompanyDesk(workOsCurrentCompanyTicker());
     }} catch (error) {{
       if (status) status.textContent = 'Question could not be saved';
     }}
@@ -1361,58 +1412,80 @@ def _production_runtime(generated_at: datetime) -> str:
     const mount = document.getElementById('workOsFactPlayground');
     const picker = document.getElementById('workOsFactTicker');
     const endpoint = WORK_OS_ENDPOINTS['screen-analytics-playground'];
-    if (!mount || !endpoint || mount.dataset.loadedEndpoint === endpoint) return;
-    if (workOsFactPlaygroundLoading) return workOsFactPlaygroundLoading;
+    const ticker = workOsCurrentCompanyTicker();
+    if (!mount || !endpoint || !ticker) return false;
+    if (mount.dataset.loadedEndpoint === endpoint && mount.dataset.loadedTicker === ticker) return true;
+    const requestSequence = ++workOsFactPlaygroundRequestSequence;
+    if (workOsFactPlaygroundRequestController) workOsFactPlaygroundRequestController.abort();
+    const controller = new AbortController();
+    workOsFactPlaygroundRequestController = controller;
     workOsFactPlaygroundLoading = (async function () {{
       mount.setAttribute('aria-busy', 'true');
       mount.innerHTML = '<div class="k-well" role="status">Loading governed facts and metrics…</div>';
       try {{
         const companies = await workOsEnsureResearchCompanies();
+        if (requestSequence !== workOsFactPlaygroundRequestSequence) return false;
         if (picker) {{
           picker.innerHTML = companies.map(function (company) {{
-            const selected = company.ticker === window.workOsActiveTicker ? ' selected' : '';
+            const selected = company.ticker === ticker ? ' selected' : '';
             return '<option value="' + escapeWorkOsHtml(company.ticker) + '"' + selected + '>' +
               escapeWorkOsHtml(company.ticker + ' · ' + company.name) + '</option>';
           }}).join('');
         }}
-        const ticker = String(window.workOsActiveTicker || (companies[0] || {{}}).ticker || '').toUpperCase();
         const response = await fetch(endpoint + '?fragment=work-os&tickers=' + encodeURIComponent(ticker), {{
-          headers: {{ Accept: 'text/html' }}
+          signal: controller.signal, headers: {{ Accept: 'text/html' }}
         }});
         if (!response.ok) throw new Error('HTTP ' + response.status);
-        mount.innerHTML = await response.text();
+        const markup = await response.text();
+        if (requestSequence !== workOsFactPlaygroundRequestSequence) return false;
+        mount.innerHTML = markup;
         if (typeof window.initExplorePanel !== 'function') throw new Error('Explore initializer unavailable');
         window.initExplorePanel();
         mount.dataset.loadedEndpoint = endpoint;
+        mount.dataset.loadedTicker = ticker;
+        return true;
       }} catch (error) {{
+        if ((error && error.name === 'AbortError') || requestSequence !== workOsFactPlaygroundRequestSequence) return false;
         mount.innerHTML = '<div class="k-well" role="alert">Facts &amp; Analytics is temporarily unavailable. No prototype values are being shown.</div>';
+        return false;
       }} finally {{
-        mount.removeAttribute('aria-busy');
-        workOsFactPlaygroundLoading = null;
+        if (requestSequence === workOsFactPlaygroundRequestSequence) {{
+          mount.removeAttribute('aria-busy');
+          if (workOsFactPlaygroundRequestController === controller) workOsFactPlaygroundRequestController = null;
+          workOsFactPlaygroundLoading = null;
+        }}
       }}
     }})();
     return workOsFactPlaygroundLoading;
   }}
 
+  window.switchFactPlayground = async function (ticker, options) {{
+    const requested = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();
+    if (!workOsWriteCompanyContext(requested, 'analytics-playground', options)) return false;
+    window.navigateTo('screen-analytics-playground', {{ fromHistory: true, companyContextReady: true }});
+    return workOsRenderFactPlayground();
+  }};
+
   const workOsFactTicker = document.getElementById('workOsFactTicker');
   if (workOsFactTicker) workOsFactTicker.addEventListener('change', function () {{
-    const root = document.getElementById('vx-root');
-    if (!root || !workOsFactTicker.value) return;
-    root.dispatchEvent(new CustomEvent('work-os-explore-tickers', {{
-      detail: {{ tickers: [workOsFactTicker.value] }}
-    }}));
+    if (!workOsFactTicker.value) return;
+    window.switchFactPlayground(workOsFactTicker.value);
   }});
 
   window.navigateTo = function (screenId, options) {{
     const target = WORK_OS_ENDPOINTS[screenId] ? screenId : 'screen-cockpit';
     if (target === 'screen-workspace' && workOsPortfolioHydration && !(options && options.companyReady)) {{
-      const locationParams = new URLSearchParams(window.location.search);
-      const locationTicker = locationParams.get('screen') === 'company-desk' ? String(locationParams.get('ticker') || '').toUpperCase() : '';
-      workOsRenderCompanyDesk(locationTicker || window.workOsActiveTicker);
+      const ticker = workOsCurrentCompanyTicker();
+      if (ticker) {{ window.switchCompanyWorkspace(ticker, {{ fromHistory: !!(options && options.fromHistory) }}); return; }}
     }}
     if (target === 'screen-brief-library') workOsRenderBriefLibrary();
+    if (target === 'screen-analytics-playground' && !(options && options.companyContextReady)) {{
+      const ticker = workOsCurrentCompanyTicker();
+      if (ticker) {{ window.switchFactPlayground(ticker, {{ fromHistory: !!(options && options.fromHistory) }}); return; }}
+    }}
     if (target === 'screen-analytics-playground') workOsRenderFactPlayground();
     originalNavigateTo(target);
+    workOsRenderCompanyBreadcrumb();
     const persistentMountId = workOsPersistentMountIds[target];
     const persistentMount = persistentMountId ? document.getElementById(persistentMountId) : null;
     if (persistentMount && persistentMount.dataset.loadedEndpoint !== workOsEndpoint(target)) {{
@@ -1437,12 +1510,24 @@ def _production_runtime(generated_at: datetime) -> str:
     window.navigateTo('screen-cockpit');
   }};
 
+  async function workOsRestoreCompanyContextFromHistory() {{
+    const context = workOsReadCompanyContext();
+    if (context.screen === 'company-desk' && context.ticker) {{
+      return window.switchCompanyWorkspace(context.ticker, {{ fromHistory: true }});
+    }}
+    if (context.screen === 'analytics-playground' && context.ticker) {{
+      return window.switchFactPlayground(context.ticker, {{ fromHistory: true }});
+    }}
+    window.navigateTo(workOsScreenFromHash(), {{ fromHistory: true }});
+    return true;
+  }}
+
   function workOsApplyHash(replaceLegacy) {{
     const screenId = workOsScreenFromHash();
-    window.navigateTo(screenId, {{ fromHistory: true }});
     if (replaceLegacy && window.location.hash !== '#' + screenId) {{
       window.history.replaceState({{ screenId }}, '', '#' + screenId);
     }}
+    workOsRestoreCompanyContextFromHistory();
   }}
 
   window.addEventListener('hashchange', function () {{ workOsApplyHash(false); }});
@@ -1453,7 +1538,7 @@ def _production_runtime(generated_at: datetime) -> str:
     const trigger = event.target instanceof Element ? event.target.closest('[data-research-chat]') : null;
     if (!trigger) return;
     const readerScoped = !!(briefReader && briefReader.contains(trigger) && workOsReaderContext);
-    const chatTicker = readerScoped ? workOsReaderContext.ticker : window.workOsActiveTicker;
+    const chatTicker = readerScoped ? workOsReaderContext.ticker : workOsCurrentCompanyTicker();
     const originSuffix = readerScoped ? ':artifact:' + workOsReaderContext.artifact_id : '';
     window.openWorkOsCopilot({{
       company_ticker: chatTicker || null,
@@ -1461,7 +1546,7 @@ def _production_runtime(generated_at: datetime) -> str:
       origin_key: 'work-os:' + String(trigger.getAttribute('data-research-chat') || 'company') + originSuffix,
       coverage_role_at_creation: readerScoped
         ? (workOsReaderContext.coverage_role || 'unknown')
-        : ((workOsCompanyByTicker(window.workOsActiveTicker) || {{}}).coverage_role || 'unknown'),
+        : ((workOsCompanyByTicker(workOsCurrentCompanyTicker()) || {{}}).coverage_role || 'unknown'),
       lifecycle_at_creation: 'active'
     }});
   }});
@@ -1481,8 +1566,9 @@ def _production_runtime(generated_at: datetime) -> str:
   function workOsEndpoint(screenId) {{
     const base = WORK_OS_ENDPOINTS[screenId];
     if (!base) return '';
-    if (screenId === 'screen-workspace' && window.workOsActiveTicker) {{
-      return base + '?ticker=' + encodeURIComponent(window.workOsActiveTicker);
+    const ticker = workOsCurrentCompanyTicker();
+    if (screenId === 'screen-workspace' && ticker) {{
+      return base + '?ticker=' + encodeURIComponent(ticker);
     }}
     return base;
   }}
@@ -1777,7 +1863,7 @@ def _add_production_contract(
     html = _OPERATIONS_SECTION_RE.sub(render_operations_shell() + "\n      ", html, count=1)
     html = html.replace(
         '<div class="sidebar-cmd" onclick="openWorkOsCopilot()">',
-        '<button type="button" class="sidebar-cmd k-btn k-btn-quiet" aria-label="Search or ask" onclick="openWorkOsCopilot()">',
+        '<button type="button" class="sidebar-cmd k-btn k-btn-quiet" aria-label="Search or ask" onclick="workOsOpenGlobalCopilot()">',
         1,
     )
     command_end = "</span>\n      </div>\n\n      <!-- LAYER 1: PORTFOLIO INTELLIGENCE -->"
