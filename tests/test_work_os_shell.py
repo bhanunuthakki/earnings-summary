@@ -487,6 +487,12 @@ def test_cockpit_stats_use_typed_keys_and_native_screen_anchors() -> None:
     assert "querySelectorAll('[data-work-os-stat-key]')" in html
     assert "payload.tracker_detail" in html
     assert "Tracker unavailable · research data only" in html
+    render_index = html.index("workOsRenderPortfolio(payload);")
+    announce_index = html.index(
+        "status.textContent = String(payload.tracker_detail", render_index
+    )
+    assert render_index < announce_index
+    assert "status.textContent = trackerDetail" not in html
 
 
 def test_l1_live_shells_do_not_ship_prototype_card_grids_or_inline_geometry() -> None:

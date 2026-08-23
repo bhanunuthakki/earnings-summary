@@ -1180,8 +1180,6 @@ def _production_runtime(generated_at: datetime) -> str:
         if (number) number.textContent = statValues[key] || '—';
         if (detail) detail.textContent = statDetails[key] || 'Live state unavailable';
       }});
-      const status = document.getElementById('workOsLiveStatus');
-      if (status) status.textContent = trackerDetail;
     }}
     const actionHeading = document.getElementById('workOsActionHeading');
     if (actionHeading) actionHeading.textContent = 'Action Queue & Review Pack (' + payload.actions.length + ' Items)';
