@@ -279,15 +279,15 @@ def test_cockpit_stat_links_use_native_hash_navigation_without_layout_shift(
 
             page.wait_for_function(
                 "screenId => window.location.hash === '#' + screenId",
-                screen_id,
+                arg=screen_id,
             )
             page.wait_for_function(
                 "screenId => document.getElementById(screenId)?.classList.contains('is-active')",
-                screen_id,
+                arg=screen_id,
             )
             page.wait_for_function(
                 "([id, expected]) => document.getElementById(id)?.dataset.loadedEndpoint === expected",
-                [mount_id, endpoint],
+                arg=[mount_id, endpoint],
             )
             assert page_errors == []
         finally:
