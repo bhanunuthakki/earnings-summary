@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -64,8 +65,10 @@ def test_builds_complete_typed_q2_inventory_from_the_embedded_publisher_state() 
 def test_accepts_current_shaped_publisher_fields_that_are_outside_the_closed_inventory() -> None:
     """Vendor display metadata must not expand the persisted inventory contract."""
     items = _q2_items()
-    items[0]["publishedAt"] = "2026-08-04T20:00:00Z"
-    items[0]["links"][0]["target"] = "_blank"
+    result = items[0]
+    result["publishedAt"] = "2026-08-04T20:00:00Z"
+    links = cast(list[dict[str, object]], result["links"])
+    links[0]["target"] = "_blank"
     payload = {
         "page": {
             "quarterlyResults": {
