@@ -6,7 +6,7 @@ from ir_pipeline.home_authority_registry import (
     IR_HOME_AUTHORITY_CANDIDATES,
     candidate_for_ticker,
 )
-from ir_pipeline.ir_url_overrides import IR_URL_OVERRIDES
+from ir_pipeline.ir_url_overrides import IR_URL_OVERRIDES, resolve_ir_url
 
 
 def test_typed_candidates_are_unique_and_preserve_legacy_url_coverage() -> None:
@@ -47,8 +47,22 @@ def test_reviewed_result_centers_use_current_publisher_routes() -> None:
     assert meli.requested_url == "https://investor.mercadolibre.com/sec-filings"
     assert rubrik is not None
     assert rubrik.requested_url == "https://ir.rubrik.com/financials/quarterly-results/default.aspx"
-    assert {
-        ticker: candidate_for_ticker(ticker).requested_url
-        for ticker in current_routes
-        if candidate_for_ticker(ticker) is not None
-    } == current_routes
+    for ticker, expected_url in current_routes.items():
+        candidate = candidate_for_ticker(ticker)
+        assert candidate is not None
+        assert candidate.requested_url == expected_url
+
+
+def test_effective_meli_route_matches_reviewed_candidate_and_wins_precedence() -> None:
+    meli = candidate_for_ticker("MELI")
+
+    assert meli is not None
+    assert IR_URL_OVERRIDES["MELI"] == meli.requested_url
+    assert (
+        resolve_ir_url(
+            "meli",
+            "https://database.example/investors",
+            "https://config.example/investors",
+        )
+        == meli.requested_url
+    )
