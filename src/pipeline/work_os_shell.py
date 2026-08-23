@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from html import escape
 from pathlib import Path
+from typing import Literal
 
 from pipeline.cc_action import CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_JS
@@ -42,6 +43,38 @@ class ScreenSpec:
     nav_id: str
     label: str
     endpoint: str
+
+
+CockpitStatKey = Literal["nav", "performance", "risk", "companies"]
+CockpitStatTarget = Literal["screen-performance", "screen-allocation"]
+
+
+@dataclass(frozen=True, slots=True)
+class CockpitStatSpec:
+    """One stable Cockpit statistic and, where appropriate, its native destination."""
+
+    key: CockpitStatKey
+    label: str
+    target: CockpitStatTarget | None = None
+    accessible_name: str | None = None
+
+
+COCKPIT_STAT_SPECS: tuple[CockpitStatSpec, ...] = (
+    CockpitStatSpec("nav", "Portfolio NAV"),
+    CockpitStatSpec(
+        "performance",
+        "Performance",
+        target="screen-performance",
+        accessible_name="Open Performance vs Index",
+    ),
+    CockpitStatSpec(
+        "risk",
+        "Risk & Factors",
+        target="screen-allocation",
+        accessible_name="Open Risk & Allocations",
+    ),
+    CockpitStatSpec("companies", "Portfolio Companies"),
+)
 
 
 SCREEN_SPECS: tuple[ScreenSpec, ...] = (
@@ -190,14 +223,28 @@ def _endpoint_map() -> dict[str, str]:
 def _render_portfolio_cockpit_shell() -> str:
     """Return the live-first portfolio landing surface with one card grammar."""
 
-    stats = "".join(
-        f"""<div class="k-stat-cell">
-          <div class="stat-heading">{label}</div>
-          <div class="stat-number">—</div>
-          <div class="stat-subtext">Loading governed portfolio state</div>
-        </div>"""
-        for label in ("Portfolio NAV", "Performance", "Risk & Factors", "Portfolio Companies")
-    )
+    stats = """
+      <div class="k-stat-cell" data-work-os-stat-key="nav">
+        <div class="stat-heading">Portfolio NAV</div>
+        <div class="stat-number">—</div>
+        <div class="stat-subtext">Loading governed portfolio state</div>
+      </div>
+      <a class="k-stat-cell" data-work-os-stat-key="performance" href="#screen-performance" aria-label="Open Performance vs Index">
+        <div class="stat-heading">Performance</div>
+        <div class="stat-number">—</div>
+        <div class="stat-subtext">Loading governed portfolio state</div>
+      </a>
+      <a class="k-stat-cell" data-work-os-stat-key="risk" href="#screen-allocation" aria-label="Open Risk &amp; Allocations">
+        <div class="stat-heading">Risk &amp; Factors</div>
+        <div class="stat-number">—</div>
+        <div class="stat-subtext">Loading governed portfolio state</div>
+      </a>
+      <div class="k-stat-cell" data-work-os-stat-key="companies">
+        <div class="stat-heading">Portfolio Companies</div>
+        <div class="stat-number">—</div>
+        <div class="stat-subtext">Loading governed portfolio state</div>
+      </div>
+    """
     return f"""
 <section id="screen-cockpit" class="screen-view is-active">
   <section class="k-card k-card-stat" aria-labelledby="workOsPortfolioPulseHeading">
@@ -1105,18 +1152,33 @@ def _production_runtime(generated_at: datetime) -> str:
     const companies = payload.companies || [];
     const stats = document.getElementById('workOsPortfolioStats');
     if (stats) {{
-      const cards = stats.querySelectorAll('.k-stat-cell');
-      const labels = ['Portfolio NAV', 'Performance', 'Risk & Factors', 'Portfolio Companies'];
-      const values = [workOsMoney(payload.total_market_value), 'Open live view', 'Open live view', String(companies.length)];
       const trackerDetail = String(payload.tracker_detail || 'Tracker unavailable · research data only');
-      const details = [trackerDetail, 'Performance vs Index', 'Risk & Allocations', 'Governed portfolio universe'];
-      cards.forEach(function (card, index) {{
+      const statValues = {{
+        nav: workOsMoney(payload.total_market_value),
+        performance: 'Open live view',
+        risk: 'Open live view',
+        companies: String(companies.length)
+      }};
+      const statLabels = {{
+        nav: 'Portfolio NAV',
+        performance: 'Performance',
+        risk: 'Risk & Factors',
+        companies: 'Portfolio Companies'
+      }};
+      const statDetails = {{
+        nav: trackerDetail,
+        performance: 'Performance vs Index',
+        risk: 'Risk & Allocations',
+        companies: 'Governed portfolio universe'
+      }};
+      stats.querySelectorAll('[data-work-os-stat-key]').forEach(function (card) {{
+        const key = String(card.dataset.workOsStatKey || '');
         const heading = card.querySelector('.stat-heading');
         const number = card.querySelector('.stat-number');
         const detail = card.querySelector('.stat-subtext');
-        if (heading) heading.textContent = labels[index];
-        if (number) number.textContent = values[index];
-        if (detail) detail.textContent = details[index];
+        if (heading) heading.textContent = statLabels[key] || 'Portfolio statistic';
+        if (number) number.textContent = statValues[key] || '—';
+        if (detail) detail.textContent = statDetails[key] || 'Live state unavailable';
       }});
     }}
     const actionHeading = document.getElementById('workOsActionHeading');
@@ -1182,15 +1244,20 @@ def _production_runtime(generated_at: datetime) -> str:
           const payload = await response.json();
           if (!payload || !Array.isArray(payload.companies)) throw new Error('Invalid portfolio response');
           workOsRenderPortfolio(payload);
-          if (status) status.textContent = payload.status === 'ok' ? 'Portfolio companies loaded' : 'Portfolio companies loaded with live weights unavailable';
+          if (status) status.textContent = String(payload.tracker_detail || 'Tracker unavailable · research data only');
         }} catch (error) {{
           const stats = document.getElementById('workOsPortfolioStats');
-          if (stats) stats.querySelectorAll('.stat-number').forEach(function (node) {{ node.textContent = '-'; }});
+          if (stats) stats.querySelectorAll('[data-work-os-stat-key]').forEach(function (card) {{
+            const number = card.querySelector('.stat-number');
+            const detail = card.querySelector('.stat-subtext');
+            if (number) number.textContent = '—';
+            if (detail) detail.textContent = 'Tracker unavailable · research data only';
+          }});
           const queue = document.getElementById('workOsActionQueue');
           if (queue) queue.innerHTML = '<div class="k-well" role="alert">Portfolio companies are temporarily unavailable. No prototype values are being shown.</div>';
           const rows = document.getElementById('workOsPortfolioRows');
           if (rows) rows.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
-          if (status) status.textContent = 'Portfolio companies could not be loaded';
+          if (status) status.textContent = 'Tracker unavailable · research data only';
         }}
       }})().finally(function () {{ workOsPortfolioLoading = null; }});
     }}

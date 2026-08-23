@@ -8,6 +8,7 @@ leaks transport errors into the page.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Literal
@@ -72,6 +73,23 @@ class WorkOsPortfolioHydration(BaseModel):
     earnings_readouts: list[EarningsReadoutSummary]
     actions: list[WorkOsPortfolioAction]
     warnings: list[str]
+
+
+_PUBLIC_WARNING_CODE = re.compile(r"^(?:[A-Z][A-Z0-9_]{0,119}|[a-z][a-z0-9_]{0,119})$")
+
+
+def _public_warning_codes(*warning_sets: Sequence[str]) -> list[str]:
+    """Keep stable provider/readout warning codes while excluding transport text."""
+
+    seen: set[str] = set()
+    warnings: list[str] = []
+    for warning_set in warning_sets:
+        for warning in warning_set:
+            if not _PUBLIC_WARNING_CODE.fullmatch(warning) or warning in seen:
+                continue
+            seen.add(warning)
+            warnings.append(warning)
+    return warnings
 
 
 def _live_by_ticker(live: LivePortfolio) -> dict[str, LivePosition]:
@@ -185,13 +203,14 @@ def build_work_os_portfolio(
         for row in rows
     ]
     actions = [action for row in rows if (action := _action(row)) is not None][:3]
-    warnings = list(readout_warnings)
+    tracker_warnings: list[str] = list(live.envelope_warnings)
     if not live.available:
-        warnings.append("portfolio_tracker_unavailable")
+        tracker_warnings.append("portfolio_tracker_unavailable")
     elif live.is_stale:
-        warnings.append("portfolio_tracker_stale")
+        tracker_warnings.append("portfolio_tracker_stale")
     if live.is_partial:
-        warnings.append("portfolio_tracker_partial")
+        tracker_warnings.append("portfolio_tracker_partial")
+    warnings = _public_warning_codes(readout_warnings, tracker_warnings)
     tracker_state: Literal["current", "stale", "partial", "unavailable"]
     if not live.available:
         tracker_state = "unavailable"

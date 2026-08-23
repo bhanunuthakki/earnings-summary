@@ -201,6 +201,9 @@ def _canary_shell_payloads() -> dict[str, object]:
     return {
         "portfolio": {
             "status": "ok",
+            "tracker_state": "current",
+            "tracker_detail": "Tracker connected · current · As of 2026-01-01",
+            "generated_at": "2026-01-01T00:00:00Z",
             "as_of": "2026-01-01",
             "total_market_value": 100000.0,
             "companies": [company],
@@ -222,6 +225,7 @@ def _canary_shell_payloads() -> dict[str, object]:
                     "route": "/api/peek/earnings-readout?ticker=NU",
                 }
             ],
+            "warnings": [],
         },
         "tickers": {
             "tickers": [{"ticker": "NU", "name": "Canary Company", "list_type": "portfolio"}]
