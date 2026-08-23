@@ -980,7 +980,7 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert "data-operations-results" in html
     assert 'aria-live="polite"' in html
     assert ":focus-visible" in html
-    assert html.count('data-operations-task-card="true"') == 43
+    assert html.count('data-operations-task-card="true"') == 44
     assert "@media (max-width:" in html
     assert "min-block-size:var(--touch-target-size)" in html
     assert 'data-operations-table-scroll="true"' not in html
