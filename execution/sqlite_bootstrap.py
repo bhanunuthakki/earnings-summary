@@ -60,6 +60,13 @@ def preload_sqlite() -> str:
     return _LOADED_VERSION
 
 
+def require_managed_sqlite_runtime() -> str:
+    """Return the verified runtime version or reject an unmanaged invocation."""
+    if _LOADED_VERSION != EXPECTED_SQLITE_VERSION:
+        raise RuntimeError("managed SQLite runtime bootstrap was not completed")
+    return _LOADED_VERSION
+
+
 def _run_target(arguments: list[str]) -> int:
     while arguments[:1] == ["-u"]:
         arguments.pop(0)

@@ -58,6 +58,23 @@ def test_application_failure_is_not_relabelled_as_bootstrap_failure(
         sqlite_bootstrap.main(["target.py"])
 
 
+def test_require_managed_sqlite_runtime_fails_closed_without_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sqlite_bootstrap, "_LOADED_VERSION", None)
+
+    with pytest.raises(RuntimeError, match="bootstrap was not completed"):
+        sqlite_bootstrap.require_managed_sqlite_runtime()
+
+
+def test_require_managed_sqlite_runtime_returns_verified_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sqlite_bootstrap, "_LOADED_VERSION", "3.53.4")
+
+    assert sqlite_bootstrap.require_managed_sqlite_runtime() == "3.53.4"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows DLL preload contract")
 def test_bootstrap_preloads_sqlite_3534_before_application_import() -> None:
     completed = subprocess.run(
