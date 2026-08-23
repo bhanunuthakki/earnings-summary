@@ -866,7 +866,12 @@ SCHEMA_DRIFT_EXIT_CODE = 78
 #: proven restore path, and a scheduler audit. None of them writes application
 #: rows through a guarded store, so none can persist a half-migrated shape.
 SCHEMA_DRIFT_TOLERANT_JOBS: frozenset[str] = frozenset(
-    {"backup_db", "restore-drill", "verify-cron"}
+    {
+        "backup_db",
+        "collect-operations-runtime-observations",
+        "restore-drill",
+        "verify-cron",
+    }
 )
 
 

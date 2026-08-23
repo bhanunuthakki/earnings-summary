@@ -1682,7 +1682,39 @@ def test_receipt_lock_failure_is_typed_unavailable_and_loud(
     ]
 
 
+def test_receipt_emission_borrows_only_a_cryptographically_valid_wrapper_lock(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from execution import collect_operations_runtime_observations as collector
+
+    class UnexpectedLock:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("valid inherited lock must not be re-acquired")
+
+    def valid_inherited_lock(*_args: object) -> bool:
+        return True
+
+    monkeypatch.setattr(collector, "inherited_lock_is_valid", valid_inherited_lock)
+    monkeypatch.setattr(collector, "JobLock", UnexpectedLock)
+    registry = build_operations_registry(PROJECT_ROOT)
+
+    _scheduler, _services, lock_ok = collector.emit_runtime_receipts(
+        registry,
+        tmp_path,
+        OBSERVED_AT,
+        scheduler_probe=SchedulerProbe(
+            states={task.task_name: "Ready" for task in registry.scheduled_tasks}
+        ),
+        service_probe=ServiceProbe(
+            states={service.name.casefold(): "Running" for service in registry.services}
+        ),
+    )
+
+    assert lock_ok is True
+
+
 def test_cli_summary_schema_counts_every_declared_runtime_state() -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
     summary = build_runtime_summary(
         SchedulerRuntimeReceipt.success(
             observed_at=OBSERVED_AT,
@@ -1693,11 +1725,12 @@ def test_cli_summary_schema_counts_every_declared_runtime_state() -> None:
             ),
         ),
         collect_service_receipt(
-            build_operations_registry(PROJECT_ROOT),
+            registry,
             OBSERVED_AT,
             probe=ServiceProbe.unavailable("Service manager probe unavailable"),
         ),
         OBSERVED_AT,
+        registry,
     )
 
     assert isinstance(summary, RuntimeCollectionSummary)
@@ -1705,6 +1738,94 @@ def test_cli_summary_schema_counts_every_declared_runtime_state() -> None:
     assert summary.scheduler.counts["Missing"] == 1
     assert summary.services.counts == {}
     assert summary.recurring_collection.state == "activation_required"
+
+
+def test_runtime_summary_activates_only_for_current_ready_or_running_collector_task() -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    task_name = r"\earnings-summary\collect_operations_runtime_observations"
+    summary = build_runtime_summary(
+        SchedulerRuntimeReceipt.success(
+            observed_at=OBSERVED_AT,
+            tasks=(SchedulerTaskReceipt(task_name=task_name, state="Running"),),
+        ),
+        ServiceRuntimeReceipt.success(observed_at=OBSERVED_AT, services=()),
+        OBSERVED_AT,
+        registry,
+    )
+
+    assert summary.recurring_collection.task_name == task_name
+    assert summary.recurring_collection.configuration_state == "declared_enabled"
+    assert summary.recurring_collection.scheduler_observation == "current"
+    assert summary.recurring_collection.scheduler_state == "Running"
+    assert summary.recurring_collection.state == "activated"
+
+
+@pytest.mark.parametrize("scheduler_state", ["Disabled", "Unknown", "Missing"])
+def test_runtime_summary_requires_activation_for_nonrunning_collector_state(
+    scheduler_state: SchedulerTaskState,
+) -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    summary = build_runtime_summary(
+        SchedulerRuntimeReceipt.success(
+            observed_at=OBSERVED_AT,
+            tasks=(
+                SchedulerTaskReceipt(
+                    task_name=r"\earnings-summary\collect_operations_runtime_observations",
+                    state=scheduler_state,
+                ),
+            ),
+        ),
+        ServiceRuntimeReceipt.success(observed_at=OBSERVED_AT, services=()),
+        OBSERVED_AT,
+        registry,
+    )
+
+    assert summary.recurring_collection.state == "activation_required"
+    payload = summary.model_dump()
+    payload["recurring_collection"]["state"] = "activated"
+    with pytest.raises(ValueError, match="activated recurring collection"):
+        RuntimeCollectionSummary.model_validate(payload)
+
+
+def test_runtime_summary_never_activates_from_retained_or_mismatched_scheduler_evidence() -> None:
+    registry = build_operations_registry(PROJECT_ROOT)
+    summary = build_runtime_summary(
+        SchedulerRuntimeReceipt(
+            probe_attempt=RuntimeProbeAttempt(
+                attempted_at=OBSERVED_AT,
+                availability="unavailable",
+                detail="probe unavailable",
+            ),
+            last_successful=SchedulerReceipt(
+                observed_at=OBSERVED_AT - timedelta(minutes=1),
+                tasks=(
+                    SchedulerTaskReceipt(
+                        task_name=r"\earnings-summary\collect_operations_runtime_observations",
+                        state="Ready",
+                    ),
+                ),
+            ),
+        ),
+        ServiceRuntimeReceipt.success(observed_at=OBSERVED_AT, services=()),
+        OBSERVED_AT,
+        registry,
+    )
+
+    assert summary.recurring_collection.scheduler_observation == "unavailable"
+    assert summary.recurring_collection.state == "activation_required"
+
+    mismatched = build_runtime_summary(
+        SchedulerRuntimeReceipt.success(
+            observed_at=OBSERVED_AT,
+            tasks=(SchedulerTaskReceipt(task_name=r"\earnings-summary\other", state="Ready"),),
+        ),
+        ServiceRuntimeReceipt.success(observed_at=OBSERVED_AT, services=()),
+        OBSERVED_AT,
+        registry,
+    )
+    assert mismatched.recurring_collection.scheduler_observation == "current"
+    assert mismatched.recurring_collection.scheduler_state is None
+    assert mismatched.recurring_collection.state == "activation_required"
 
 
 def test_runtime_summary_rejects_cross_domain_count_keys() -> None:
@@ -1715,6 +1836,7 @@ def test_runtime_summary_rejects_cross_domain_count_keys() -> None:
             registry, OBSERVED_AT, probe=ServiceProbe.unavailable("service unavailable")
         ),
         OBSERVED_AT,
+        registry,
     )
 
     scheduler_payload = summary.model_dump()
@@ -1736,6 +1858,7 @@ def test_runtime_summary_rejects_negative_counts() -> None:
             registry, OBSERVED_AT, probe=ServiceProbe.unavailable("service unavailable")
         ),
         OBSERVED_AT,
+        registry,
     )
     payload = summary.model_dump()
     payload["scheduler"]["counts"] = {"Ready": -1}

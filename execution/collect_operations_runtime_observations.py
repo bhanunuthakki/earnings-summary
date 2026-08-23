@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,7 +51,11 @@ from operations.models import (  # noqa: E402
 )
 from operations.paths import scheduler_receipt_path, service_receipt_path  # noqa: E402
 from operations.registry import build_operations_registry  # noqa: E402
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
+from runtime.job_runtime import (  # noqa: E402
+    JobAlreadyRunningError,
+    JobLock,
+    inherited_lock_is_valid,
+)
 
 SchedulerState = SchedulerTaskState
 ServiceRuntimeState = ServiceState
@@ -61,6 +66,7 @@ CANONICAL_TASK_NAMESPACE = "\\earnings-summary\\"
 RUNTIME_RECEIPT_WRITE_SET = "operations-runtime-receipts"
 RUNTIME_RECEIPT_LOCK_WAIT_S = 30.0
 PAIR_COMMITTED_MARKER_FILENAME = ".operations-runtime-receipts.pair.committed.json"
+RECURRING_COLLECTOR_TASK_NAME = r"\earnings-summary\collect_operations_runtime_observations"
 
 
 RetentionStatus = Literal["available", "absent", "rejected"]
@@ -955,12 +961,17 @@ def emit_runtime_receipts(
     """Probe and publish both receipts as one cross-process single-writer transaction."""
 
     try:
-        with JobLock(
-            repo_root,
-            "operations-runtime-receipts",
-            [RUNTIME_RECEIPT_WRITE_SET],
-            wait_s=lock_wait_s,
-        ):
+        lock = (
+            nullcontext()
+            if inherited_lock_is_valid(repo_root, RUNTIME_RECEIPT_WRITE_SET)
+            else JobLock(
+                repo_root,
+                "operations-runtime-receipts",
+                [RUNTIME_RECEIPT_WRITE_SET],
+                wait_s=lock_wait_s,
+            )
+        )
+        with lock:
             scheduler = collect_scheduler_receipt(registry, observed_at, probe=scheduler_probe)
             services = collect_service_receipt(registry, observed_at, probe=service_probe)
             scheduler_path = scheduler_receipt_path(repo_root)
@@ -1016,9 +1027,49 @@ def build_runtime_summary(
     scheduler: SchedulerRuntimeReceipt,
     services: ServiceRuntimeReceipt,
     observed_at: datetime,
+    registry: OperationsRegistry,
 ) -> RuntimeCollectionSummary:
     scheduler_evidence = scheduler.last_successful
     service_evidence = services.last_successful
+    configured_task = next(
+        (
+            task
+            for task in registry.scheduled_tasks
+            if task.task_name == RECURRING_COLLECTOR_TASK_NAME
+        ),
+        None,
+    )
+    declared_enabled = (
+        configured_task is not None and configured_task.scheduler_expectation == "required_enabled"
+    )
+    current_scheduler = scheduler.probe_attempt.availability == "available"
+    current_receipt = scheduler.last_successful if current_scheduler else None
+    observed_task = (
+        next(
+            (
+                task
+                for task in current_receipt.tasks
+                if configured_task is not None and task.task_name == configured_task.task_name
+            ),
+            None,
+        )
+        if current_receipt is not None
+        else None
+    )
+    scheduler_state = observed_task.state if observed_task is not None else None
+    activated = declared_enabled and current_scheduler and scheduler_state in {"Ready", "Running"}
+    if configured_task is None:
+        recurring_detail = "Recurring collector task is not declared in the canonical registry."
+    elif not declared_enabled:
+        recurring_detail = "Recurring collector task is not declared enabled."
+    elif not current_scheduler:
+        recurring_detail = "Current Scheduler probe is unavailable."
+    elif scheduler_state is None:
+        recurring_detail = "Current Scheduler evidence has no matching collector task."
+    elif activated:
+        recurring_detail = "Current Scheduler evidence reports the declared collector task active."
+    else:
+        recurring_detail = f"Current Scheduler evidence reports collector state {scheduler_state}."
     return RuntimeCollectionSummary.model_validate(
         {
             "status": "observed",
@@ -1056,8 +1107,18 @@ def build_runtime_summary(
                 ),
             },
             "recurring_collection": {
-                "state": "activation_required",
-                "detail": "No recurring collector owner is configured by this code-only change.",
+                "task_name": (
+                    configured_task.task_name
+                    if configured_task is not None
+                    else RECURRING_COLLECTOR_TASK_NAME
+                ),
+                "state": "activated" if activated else "activation_required",
+                "configuration_state": (
+                    "declared_enabled" if declared_enabled else "not_declared_enabled"
+                ),
+                "scheduler_observation": "current" if current_scheduler else "unavailable",
+                "scheduler_state": scheduler_state,
+                "detail": recurring_detail,
             },
         }
     )
@@ -1084,7 +1145,7 @@ def main(argv: list[str] | None = None) -> int:
         scheduler = collect_scheduler_receipt(registry, observed_at)
         services = collect_service_receipt(registry, observed_at)
 
-    summary = build_runtime_summary(scheduler, services, observed_at)
+    summary = build_runtime_summary(scheduler, services, observed_at, registry)
     if arguments.json_out or not arguments.emit_receipts:
         sys.stdout.write(summary.model_dump_json() + "\n")
     return 0 if lock_ok else 1

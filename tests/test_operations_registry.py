@@ -57,6 +57,17 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
         "--repo-root",
         "%PROJECT_ROOT%",
     )
+    collector = next(
+        task
+        for task in registry.scheduled_tasks
+        if task.task_name == r"\earnings-summary\collect_operations_runtime_observations"
+    )
+    assert collector.schedule.repetition_interval == "PT10M"
+    collector_step = next(
+        step for step in registry.job_steps if step.job == "collect-operations-runtime-observations"
+    )
+    assert collector_step.raw_lane == "operations-runtime-receipts"
+    assert collector_step.effective_lane == ("operations-runtime-receipts",)
 
 
 def test_registry_projects_canonical_services_llm_sources_and_schema() -> None:
