@@ -134,18 +134,22 @@ class _NordicContextParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
         self._inside_context = False
-        self.parts: list[str] = []
+        self._current_parts: list[str] = []
+        self.contexts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._inside_context = tag == "script" and dict(attrs).get("id") == _CONTEXT_SCRIPT_ID
+        if self._inside_context:
+            self._current_parts = []
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "script":
+        if tag == "script" and self._inside_context:
+            self.contexts.append("".join(self._current_parts))
             self._inside_context = False
 
     def handle_data(self, data: str) -> None:
         if self._inside_context:
-            self.parts.append(data)
+            self._current_parts.append(data)
 
 
 def discover_embedded_quarterly_inventory(
@@ -195,7 +199,11 @@ def discover_embedded_quarterly_inventory(
 def _quarterly_results_from_html(rendered_html: str) -> _PublisherQuarterlyResults:
     parser = _NordicContextParser()
     parser.feed(rendered_html)
-    context = "".join(parser.parts)
+    if not parser.contexts:
+        raise MeliEmbeddedDiscoveryError("nordic_context_missing")
+    if len(parser.contexts) != 1:
+        raise MeliEmbeddedDiscoveryError("nordic_context_ambiguous")
+    context = parser.contexts[0]
     if not context.startswith("_n.ctx.r="):
         raise MeliEmbeddedDiscoveryError("nordic_context_missing")
     try:

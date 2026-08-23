@@ -100,6 +100,20 @@ def test_accepts_current_shaped_publisher_fields_that_are_outside_the_closed_inv
     ]
 
 
+def test_rejects_multiple_publisher_contexts_instead_of_using_the_first() -> None:
+    first_context = _page(_q2_items())
+    second_items = _q2_items()
+    second_items[0]["id"] = "contradictory-q2-id"
+
+    with pytest.raises(MeliEmbeddedDiscoveryError, match="nordic_context_ambiguous"):
+        discover_embedded_quarterly_inventory(
+            first_context + _page(second_items),
+            source_page="https://investor.example.test/sec-filings",
+            fiscal_year=2026,
+            fiscal_quarter=2,
+        )
+
+
 def test_rejects_an_unmapped_publisher_document_label_instead_of_dropping_it() -> None:
     with pytest.raises(MeliEmbeddedDiscoveryError, match="unknown_document_label"):
         discover_embedded_quarterly_inventory(
