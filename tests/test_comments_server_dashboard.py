@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -20,7 +22,38 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 import comments_server  # noqa: E402
 
+from integrations.portfolio_allocation import (  # noqa: E402
+    PortfolioAllocationBucket,
+    PortfolioAllocationBuckets,
+    PortfolioAllocationProjection,
+    PortfolioAllocationReconciliation,
+    unavailable_portfolio_allocation,
+)
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition  # noqa: E402
+
+
+def _available_allocation() -> PortfolioAllocationProjection:
+    empty = PortfolioAllocationBucket(value=Decimal(0), weight_pct=Decimal(0))
+    return PortfolioAllocationProjection(
+        state="available",
+        source_identity="portfolio_tracker_api_v1",
+        as_of=date(2026, 8, 8),
+        currency="USD",
+        buckets=PortfolioAllocationBuckets(
+            us_equity=empty,
+            international_equity=empty,
+            us_etf=empty,
+            international_etf=empty,
+            cash=empty,
+            unclassified=empty,
+        ),
+        reconciliation=PortfolioAllocationReconciliation(
+            position_total=Decimal(0),
+            bucket_total=Decimal(0),
+            difference=Decimal(0),
+            is_reconciled=True,
+        ),
+    )
 
 
 def create_dashboard_test_schema(conn: sqlite3.Connection) -> None:
@@ -337,6 +370,11 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
             ],
         ),
     )
+    monkeypatch.setattr(
+        comments_server,
+        "fetch_portfolio_allocation",
+        _available_allocation,
+    )
     local_client = comments_server.create_app(app_repo).test_client()
 
     response = local_client.get("/api/work-os/portfolio")
@@ -346,6 +384,7 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
     payload = response.get_json()
     assert payload["status"] == "ok"
     assert payload["total_market_value"] == 250_000.0
+    assert payload["allocation"]["state"] == "available"
     assert [row["ticker"] for row in payload["companies"]] == ["NU"]
     assert payload["companies"][0]["current_weight_pct"] == 50.0
     assert "MELI" not in response.get_data(as_text=True)
@@ -353,7 +392,13 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
 
 def test_work_os_portfolio_api_includes_latest_persisted_earnings_readout(
     app_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        comments_server,
+        "fetch_portfolio_allocation",
+        lambda: unavailable_portfolio_allocation("positions_unavailable"),
+    )
     conn = sqlite3.connect(app_repo / "data" / "portfolio.db")
     conn.execute(
         "UPDATE transcripts SET fiscal_period_type='Q2', period_end='2026-06-30' WHERE ticker='NU'"
@@ -388,6 +433,32 @@ def test_work_os_portfolio_api_includes_latest_persisted_earnings_readout(
     assert readout["period_label"] == "Q2 · Jun 2026"
     assert readout["route"] == "/api/peek/earnings-readout?ticker=NU&artifact_id=44"
     assert payload["earnings_readouts"] == [readout]
+
+
+def test_work_os_portfolio_api_keeps_research_rows_when_allocation_is_unavailable(
+    app_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        comments_server,
+        "fetch_live_portfolio",
+        lambda: LivePortfolio(available=True, api_url="http://tracker.test"),
+    )
+    monkeypatch.setattr(
+        comments_server,
+        "fetch_portfolio_allocation",
+        lambda: unavailable_portfolio_allocation("securities_unavailable"),
+    )
+
+    response = comments_server.create_app(app_repo).test_client().get("/api/work-os/portfolio")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["status"] == "degraded"
+    assert payload["allocation"]["state"] == "unavailable"
+    assert payload["allocation"]["reason_codes"] == ["securities_unavailable"]
+    assert "portfolio_allocation_unavailable" in payload["warnings"]
+    assert [row["ticker"] for row in payload["companies"]] == ["NU"]
 
 
 def test_dashboard_overview_excludes_action_blocks(client):

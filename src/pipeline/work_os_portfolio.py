@@ -15,6 +15,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from integrations.portfolio_allocation import (
+    PortfolioAllocationProjection,
+    unavailable_portfolio_allocation,
+)
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.research_cockpit import CockpitRow
 from pipeline.work_os_earnings import EarningsReadoutSummary
@@ -69,6 +73,7 @@ class WorkOsPortfolioHydration(BaseModel):
     generated_at: str
     as_of: str | None = None
     total_market_value: float | None = None
+    allocation: PortfolioAllocationProjection
     companies: list[WorkOsPortfolioCompany]
     earnings_readouts: list[EarningsReadoutSummary]
     actions: list[WorkOsPortfolioAction]
@@ -184,6 +189,7 @@ def _action(row: CockpitRow) -> WorkOsPortfolioAction | None:
 def build_work_os_portfolio(
     rows: Sequence[CockpitRow],
     live: LivePortfolio,
+    allocation: PortfolioAllocationProjection,
     *,
     latest_readouts: Mapping[str, EarningsReadoutSummary] | None = None,
     readout_warnings: Sequence[str] = (),
@@ -210,7 +216,18 @@ def build_work_os_portfolio(
         tracker_warnings.append("portfolio_tracker_stale")
     if live.is_partial:
         tracker_warnings.append("portfolio_tracker_partial")
-    warnings = _public_warning_codes(readout_warnings, tracker_warnings)
+    if live.as_of and allocation.as_of and live.as_of != allocation.as_of.isoformat():
+        allocation = unavailable_portfolio_allocation("snapshot_date_mismatch")
+    allocation_warnings: list[str] = []
+    if allocation.state == "incomplete":
+        allocation_warnings.append("portfolio_allocation_incomplete")
+    elif allocation.state == "unavailable":
+        allocation_warnings.append("portfolio_allocation_unavailable")
+    warnings = _public_warning_codes(
+        readout_warnings,
+        tracker_warnings,
+        allocation_warnings,
+    )
     tracker_state: Literal["current", "stale", "partial", "unavailable"]
     if not live.available:
         tracker_state = "unavailable"
@@ -229,7 +246,13 @@ def build_work_os_portfolio(
     return WorkOsPortfolioHydration(
         status=(
             "ok"
-            if live.available and not live.is_stale and not live.is_partial and not warnings
+            if (
+                live.available
+                and not live.is_stale
+                and not live.is_partial
+                and allocation.state == "available"
+                and not warnings
+            )
             else "degraded"
         ),
         tracker_state=tracker_state,
@@ -237,6 +260,7 @@ def build_work_os_portfolio(
         generated_at=built_at.isoformat().replace("+00:00", "Z"),
         as_of=live.as_of,
         total_market_value=live.total_market_value if live.available else None,
+        allocation=allocation,
         companies=companies,
         earnings_readouts=sorted(
             readouts.values(),
