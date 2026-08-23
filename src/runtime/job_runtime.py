@@ -837,6 +837,24 @@ def inherited_lock_is_valid(repo_root: Path, write_set: str) -> bool:
     return owner is not None and owner.pid == pid and owner.token == token and _owner_is_live(owner)
 
 
+def current_lock_claim(repo_root: Path, write_set: str) -> tuple[int, str, str | None] | None:
+    """Return this process's exact live claim without exposing lock-file parsing.
+
+    Library mutation seams use this to bind an in-process capability to the
+    already-held JobLock.  A caller cannot mint it from an arbitrary on-disk
+    token: the ContextVar claim must match the live owner record too.
+    """
+    path = _write_set_lock_path(repo_root.resolve(), write_set)
+    context = (_CONTEXT_LOCK_CLAIMS.get() or {}).get(str(path.resolve()).casefold())
+    owner = _read_lock_owner(path)
+    if context is None or owner is None:
+        return None
+    token, _depth = context
+    if owner.pid != os.getpid() or owner.token != token or not _owner_is_live(owner):
+        return None
+    return owner.pid, owner.token, owner.process_start
+
+
 #: Exit code for "this checkout must not write to this database" (EX_CONFIG).
 #: Distinct from 1 (the job's own failure) and 75 (retryable lock contention)
 #: so Task Scheduler's Last Result names the cause without opening a log.

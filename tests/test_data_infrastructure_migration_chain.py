@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
@@ -12,7 +13,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0020_kpi_fact_currency"
+HEAD = "0021_managed_ir_publications"
 RETAINED_TABLES = {
     "archive_generations",
     "ask_exchange_artifacts",
@@ -28,6 +29,8 @@ RETAINED_TABLES = {
     "ir_approval_decisions",
     "research_snapshot_headers",
     "search_corpus_manifests",
+    "managed_ir_publications",
+    "managed_ir_inventory_evidence",
 }
 
 
@@ -69,3 +72,125 @@ def test_squashed_chain_has_one_head_and_preserves_active_schema(tmp_path: Path)
     assert identity is not None and str(identity[0]).startswith("database-instance:")
     assert integrity == ("ok",)
     assert foreign_keys == []
+
+
+def test_managed_ir_publication_migration_is_reversible(tmp_path: Path) -> None:
+    path = tmp_path / "managed-ir-publications.db"
+    config = _config(path)
+    command.upgrade(config, "0020_kpi_fact_currency")
+    with sqlite3.connect(path) as conn:
+        assert (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_ir_publications'"
+            ).fetchone()
+            is None
+        )
+
+    command.upgrade(config, HEAD)
+    with sqlite3.connect(path) as conn:
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(managed_ir_publications)")
+        }
+        assert {
+            "attempt_id",
+            "created_paths_json",
+            "staging_receipt_path",
+            "inventory_receipt_path",
+            "publication_result_path",
+            "intent_sha256",
+            "payload_sha256",
+        } <= columns
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (HEAD,)
+        conn.execute(
+            "INSERT INTO managed_ir_publications VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "attempt-0001",
+                "a" * 64,
+                "b" * 64,
+                "[]",
+                "[]",
+                "[]",
+                "[]",
+                "data/managed_ir_publications/attempt-0001/staging_receipt.json",
+                "data/managed_ir_publications/attempt-0001/inventory_receipt.json",
+                "data/managed_ir_publications/attempt-0001/publication_result.json",
+                "c" * 64,
+                "d" * 64,
+                "now",
+                "committed",
+                "e" * 64,
+            ),
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM managed_ir_publications")
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("UPDATE managed_ir_publications SET state='committed'")
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(
+                "INSERT OR REPLACE INTO managed_ir_publications VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "attempt-0001",
+                    "a" * 64,
+                    "b" * 64,
+                    "[]",
+                    "[]",
+                    "[]",
+                    "[]",
+                    "data/managed_ir_publications/attempt-0001/staging_receipt.json",
+                    "data/managed_ir_publications/attempt-0001/inventory_receipt.json",
+                    "data/managed_ir_publications/attempt-0001/publication_result.json",
+                    "c" * 64,
+                    "d" * 64,
+                    "now",
+                    "committed",
+                    "e" * 64,
+                ),
+            )
+        conn.execute(
+            "INSERT INTO managed_ir_inventory_evidence VALUES (?,?,?,?,?,?)",
+            (
+                "attempt-0001",
+                "e" * 64,
+                "data/managed_ir_publications/attempt-0001/inventory_receipt.json",
+                "f" * 64,
+                "d" * 64,
+                "a" * 64,
+            ),
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(
+                "INSERT OR REPLACE INTO managed_ir_inventory_evidence VALUES (?,?,?,?,?,?)",
+                (
+                    "attempt-0001",
+                    "e" * 64,
+                    "data/managed_ir_publications/attempt-0001/inventory_receipt.json",
+                    "f" * 64,
+                    "d" * 64,
+                    "a" * 64,
+                ),
+            )
+
+    command.downgrade(config, "0020_kpi_fact_currency")
+    with sqlite3.connect(path) as conn:
+        assert (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_ir_publications'"
+            ).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_ir_inventory_evidence'"
+            ).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'managed_ir_publications_%'"
+            ).fetchone()
+            is None
+        )
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0020_kpi_fact_currency",
+        )

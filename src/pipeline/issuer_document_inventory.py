@@ -238,13 +238,18 @@ def build_issuer_document_inventory(
     database_path: Path,
     repo_root: Path,
     request: IssuerDocumentInventoryRequest,
+    transaction_open: bool = False,
 ) -> IssuerDocumentInventoryReceipt:
     """Bind exactly one valid registry row and local byte stream to every URL."""
     db_path = database_path.resolve(strict=True)
     root = repo_root.resolve(strict=True)
     before = _database_bundle(db_path)
     try:
-        conn.execute("BEGIN")
+        if transaction_open:
+            if not conn.in_transaction:
+                raise IssuerDocumentInventoryError("snapshot_not_open")
+        else:
+            conn.execute("BEGIN")
         # Establish exactly one SQLite reader snapshot before any registry
         # query.  In WAL mode this pins the reader to one committed WAL frame.
         conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
@@ -257,7 +262,7 @@ def build_issuer_document_inventory(
     except sqlite3.Error as exc:
         raise IssuerDocumentInventoryError("schema_drift") from exc
     finally:
-        if conn.in_transaction:
+        if not transaction_open and conn.in_transaction:
             conn.rollback()
     after = _database_bundle(db_path)
     if before != after:

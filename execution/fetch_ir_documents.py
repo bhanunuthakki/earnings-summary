@@ -36,11 +36,13 @@ import logging
 import os
 import re
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -49,6 +51,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
+from db_paths import configured_db_path  # noqa: E402
 from ir_pipeline._net import (  # noqa: E402
     UnsafeURLError,
     build_public_opener,
@@ -56,20 +59,60 @@ from ir_pipeline._net import (  # noqa: E402
     ensure_safe_public_url,
     safe_redirect_url,
 )
+from ir_uploads import CategorizationFailure, classify_ir_file, sha256_of  # noqa: E402
 from log_redact import redact  # noqa: E402
+from pipeline.managed_ir_sources import (  # noqa: E402
+    IssuerDocumentStagingReceipt,
+    IssuerDocumentStagingRequest,
+    PreparedIssuerDocumentPublisherError,
+    StagedIssuerDocument,
+    classification_evidence,
+    classifier_code_identity,
+    validate_prepared_staging,
+    verifier_code_identity,
+)
 from pipeline.source_policy import (  # noqa: E402
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
     StoredCollectionAuthorization,
     authorize_stored_collection_target,
+    reported_quarter_is_in_window,
 )
+from provenance.immutable_artifact import (  # noqa: E402
+    ImmutableArtifactConflictError,
+    require_no_reparse_points,
+)
+from provenance.secure_file_install import (  # noqa: E402
+    SecureFileInstallError,
+    install_bytes_no_clobber,
+)
+from runtime.job_runtime import JobLock  # noqa: E402
 from runtime.python_process import managed_python_prefix  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
 log = logging.getLogger(__name__)
+
+
+class IssuerDocumentPreparationError(RuntimeError):
+    """Stable, non-sensitive failure result for managed issuer staging."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        attempt_id: str | None = None,
+        phase: str | None = None,
+        residue_paths: tuple[str, ...] = (),
+    ) -> None:
+        self.code = code
+        self.attempt_id = attempt_id
+        self.phase = phase
+        self.residue_paths = residue_paths
+        super().__init__(code)
+
 
 # A real browser User-Agent. Many issuer file CDNs (e.g. Brookfield's bam.brookfield.com)
 # return 403 to a self-identifying bot UA on the DOCUMENT fetch even when robots.txt allows
@@ -375,10 +418,10 @@ def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
     data, cd, ct = fetched
     ext = _ext_from_headers(url, cd, ct)
     dest = dest_dir / f"{base_name}{ext}"
-    if dest.exists():
-        log.info({"event": "already_staged", "path": str(dest)})
-        return dest
-
+    try:
+        require_no_reparse_points(dest)
+    except (OSError, ImmutableArtifactConflictError) as exc:
+        raise IssuerDocumentPreparationError("staging_destination_unsafe") from exc
     # Some IR doc links serve an HTML error/redirect page (with a .pdf
     # Content-Disposition). Don't stage HTML as a .pdf — it just fails pypdf
     # downstream and clutters the quarantine.
@@ -388,10 +431,83 @@ def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
         log.warning({"event": "html_not_document", "url": redact(url)})
         return None
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+    try:
+        _secure_staging_directory(dest_dir)
+        installed = install_bytes_no_clobber(
+            dest_dir,
+            dest.name,
+            data,
+            expected_sha256=hashlib.sha256(data).hexdigest(),
+            expected_size=len(data),
+        )
+    except SecureFileInstallError as exc:
+        raise IssuerDocumentPreparationError(
+            "staging_destination_unsafe",
+            phase="download",
+            residue_paths=tuple(path.name for path in exc.residue_paths),
+        ) from exc
+    if installed.residue_paths:
+        raise IssuerDocumentPreparationError(
+            "staging_residue_retained",
+            phase="download",
+            residue_paths=tuple(path.name for path in installed.residue_paths),
+        )
+    dest = installed.path
+    try:
+        require_no_reparse_points(dest)
+    except (OSError, ImmutableArtifactConflictError) as exc:
+        raise IssuerDocumentPreparationError("staged_object_unsafe") from exc
     log.info({"event": "downloaded", "dest": str(dest), "size_kb": len(data) // 1024})
     return dest
+
+
+def _secure_staging_directory(directory: Path) -> None:
+    """Create one attempt-private directory without accepting reparse parents."""
+    try:
+        require_no_reparse_points(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        require_no_reparse_points(directory)
+        metadata = directory.lstat()
+    except (OSError, ImmutableArtifactConflictError) as exc:
+        raise IssuerDocumentPreparationError("staging_directory_unsafe") from exc
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise IssuerDocumentPreparationError("staging_directory_unsafe")
+
+
+def _retained_staging_names(directory: Path, direct: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Report retained attempt-local names without following an unsafe directory."""
+    names = {Path(name).name for name in direct}
+    try:
+        require_no_reparse_points(directory)
+        names.update(entry.name for entry in directory.iterdir())
+    except (OSError, ImmutableArtifactConflictError):
+        pass
+    return tuple(sorted(names))
+
+
+def _preparation_failure(
+    code: str,
+    *,
+    request: IssuerDocumentStagingRequest,
+    phase: str,
+    objects: Path,
+    direct_residues: tuple[str, ...] = (),
+) -> IssuerDocumentPreparationError:
+    return IssuerDocumentPreparationError(
+        code,
+        attempt_id=request.attempt_id,
+        phase=phase,
+        residue_paths=_retained_staging_names(objects, direct_residues),
+    )
+
+
+def _publisher_residue_names(exc: PreparedIssuerDocumentPublisherError) -> tuple[str, ...]:
+    """Keep direct publisher/installer residues in the attempt-local report."""
+    return tuple(
+        dict.fromkeys(
+            (*exc.remaining_paths, *exc.owned_artifacts, *exc.created, *exc.removed_paths)
+        )
+    )
 
 
 def _write_incoming_sidecar(root: Path, mapping: dict[str, str]) -> None:
@@ -410,6 +526,34 @@ def _write_incoming_sidecar(root: Path, mapping: dict[str, str]) -> None:
             existing = {}
     existing.update(mapping)
     path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+
+def _publish_attempt_text(path: Path, text: str) -> None:
+    """Seal attempt-private JSON through the shared no-replace transaction."""
+    payload = (text + "\n").encode("utf-8")
+    try:
+        result = install_bytes_no_clobber(
+            path.parent,
+            path.name,
+            payload,
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+            expected_size=len(payload),
+        )
+    except SecureFileInstallError as exc:
+        retained = (*exc.residue_paths, *((exc.ownership.path,) if exc.ownership else ()))
+        raise IssuerDocumentPreparationError(
+            "staging_receipt_publish_failed",
+            attempt_id=path.parent.name,
+            phase="publish",
+            residue_paths=tuple(dict.fromkeys(item.name for item in retained)),
+        ) from exc
+    if result.residue_paths:
+        raise IssuerDocumentPreparationError(
+            "staging_receipt_residue_retained",
+            attempt_id=path.parent.name,
+            phase="publish",
+            residue_paths=tuple(item.name for item in result.residue_paths),
+        )
 
 
 def _run_categorize(ticker: str, root: Path, db_path: Path, calendar: str | None) -> int:
@@ -431,6 +575,189 @@ def _run_categorize(ticker: str, root: Path, db_path: Path, calendar: str | None
     env = dict(os.environ, IR_PROJECT_ROOT=str(root))
     proc = subprocess.run(argv, env=env, check=False)
     return proc.returncode
+
+
+def prepare_issuer_document_sources(
+    request: IssuerDocumentStagingRequest, *, state_root: Path, db_path: Path
+) -> IssuerDocumentStagingReceipt:
+    """Prepare exact issuer bytes below attempt-private staging only."""
+    root = state_root.resolve(strict=True)
+    if db_path.resolve() != configured_db_path(root):
+        raise IssuerDocumentPreparationError("configured_database_mismatch")
+    inventory = request.inventory_request
+    # Preparation owns only ir-discovery. Authorization/window reads are
+    # read-only snapshots, so long downloads never reserve the DB writer lane.
+    authorization = authorize_stored_collection_target(
+        db_path,
+        inventory.ticker,
+        requested=True,
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    in_window = authorization.fiscal_year_end_month is not None and reported_quarter_is_in_window(
+        fiscal_year=inventory.fiscal_year,
+        fiscal_quarter=inventory.fiscal_quarter,
+        fiscal_year_end_month=authorization.fiscal_year_end_month,
+        as_of=date.today(),
+    )
+    if not authorization.allowed:
+        raise IssuerDocumentPreparationError("source_policy_denied")
+    if not in_window:
+        raise IssuerDocumentPreparationError("reported_quarter_window_denied")
+    staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
+    receipt_path = staging / "staging_receipt.json"
+    try:
+        require_no_reparse_points(staging)
+    except (OSError, ImmutableArtifactConflictError) as exc:
+        raise IssuerDocumentPreparationError("staging_directory_unsafe") from exc
+    if receipt_path.exists():
+        with JobLock(root, "managed-ir-stage-replay", ["ir-discovery"], wait_s=0):
+            try:
+                return validate_prepared_staging(request, state_root=root, db_path=db_path)
+            except PreparedIssuerDocumentPublisherError as exc:
+                raise _preparation_failure(
+                    "staging_replay_invalid",
+                    request=request,
+                    phase="replay",
+                    objects=staging / "objects",
+                    direct_residues=_publisher_residue_names(exc),
+                ) from exc
+    with JobLock(root, "managed-ir-stage", ["ir-discovery"], wait_s=0):
+        objects = staging / "objects"
+        _secure_staging_directory(objects)
+        documents: list[StagedIssuerDocument] = []
+        for expected in inventory.expected_documents:
+            try:
+                destination = _download(
+                    expected.source_url,
+                    objects,
+                    hashlib.sha256(expected.source_url.encode("utf-8")).hexdigest()[:16],
+                )
+            except IssuerDocumentPreparationError as exc:
+                raise _preparation_failure(
+                    exc.code,
+                    request=request,
+                    phase=exc.phase or "download",
+                    objects=objects,
+                    direct_residues=exc.residue_paths,
+                ) from exc
+            if destination is None:
+                raise _preparation_failure(
+                    "staging_download_failed",
+                    request=request,
+                    phase="download",
+                    objects=objects,
+                )
+            try:
+                outcome = classify_ir_file(destination, ticker_hint=inventory.ticker)
+            except (OSError, ValueError) as exc:
+                raise _preparation_failure(
+                    "staging_classification_failed",
+                    request=request,
+                    phase="classify",
+                    objects=objects,
+                ) from exc
+            if isinstance(outcome, CategorizationFailure) or (
+                outcome.ticker != inventory.ticker
+                or outcome.doc_type.value != expected.document_type
+                or outcome.period_end != inventory.period_end
+                or outcome.confidence.value == "low"
+            ):
+                raise _preparation_failure(
+                    "staging_classification_mismatch",
+                    request=request,
+                    phase="classify",
+                    objects=objects,
+                )
+            media_type = (
+                "application/pdf"
+                if destination.suffix.lower() == ".pdf"
+                else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            try:
+                size_bytes = destination.stat().st_size
+                digest = sha256_of(destination)
+            except OSError as exc:
+                raise _preparation_failure(
+                    "staging_object_invalid",
+                    request=request,
+                    phase="classify",
+                    objects=objects,
+                ) from exc
+            try:
+                documents.append(
+                    StagedIssuerDocument(
+                        source_url=expected.source_url,
+                        document_type=expected.document_type,
+                        object_path=f"objects/{destination.name}",
+                        sha256=digest,
+                        byte_size=size_bytes,
+                        fetched_at=datetime.now(UTC),
+                        media_type=media_type,
+                        ticker=outcome.ticker,
+                        period_end=outcome.period_end.isoformat(),
+                        classification_confidence=outcome.confidence.value,
+                        classification_evidence_sha256=classification_evidence(outcome),
+                    )
+                )
+            except ValueError as exc:
+                raise _preparation_failure(
+                    "staging_document_invalid",
+                    request=request,
+                    phase="classify",
+                    objects=objects,
+                ) from exc
+        try:
+            documents.sort(key=lambda item: (item.source_url, item.document_type))
+            unsigned = {
+                "schema_version": "issuer_document_staging_receipt.v1",
+                "request": request.model_dump(mode="json"),
+                "documents": [item.model_dump(mode="json") for item in documents],
+                "classifier_code_sha256": classifier_code_identity(),
+                "verifier_code_sha256": verifier_code_identity(),
+                "canonical_mutations": False,
+            }
+            receipt = IssuerDocumentStagingReceipt.model_validate(
+                {
+                    **unsigned,
+                    "receipt_sha256": hashlib.sha256(
+                        json.dumps(unsigned, separators=(",", ":"), sort_keys=True).encode()
+                    ).hexdigest(),
+                }
+            )
+        except ValueError as exc:
+            raise _preparation_failure(
+                "staging_receipt_invalid",
+                request=request,
+                phase="publish",
+                objects=objects,
+            ) from exc
+        try:
+            _publish_attempt_text(receipt_path, receipt.canonical_json)
+            return validate_prepared_staging(request, state_root=root, db_path=db_path)
+        except IssuerDocumentPreparationError as exc:
+            raise _preparation_failure(
+                exc.code,
+                request=request,
+                phase=exc.phase or "publish",
+                objects=objects,
+                direct_residues=exc.residue_paths,
+            ) from exc
+        except (OSError, ImmutableArtifactConflictError) as exc:
+            raise _preparation_failure(
+                "staging_receipt_publish_failed",
+                request=request,
+                phase="publish",
+                objects=objects,
+            ) from exc
+        except PreparedIssuerDocumentPublisherError as exc:
+            raise _preparation_failure(
+                "staging_validation_failed",
+                request=request,
+                phase="publish",
+                objects=objects,
+                direct_residues=_publisher_residue_names(exc),
+            ) from exc
 
 
 def process_ticker(
