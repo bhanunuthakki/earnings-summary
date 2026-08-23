@@ -1213,7 +1213,7 @@ def _scan_route_canaries(
                             )
                         settled_selectors = {
                             "cockpit": "#workOsActionQueue .k-card-action",
-                            "performance": "#workOsPerformanceMount .portfolio-allocation-console",
+                            "performance": "#workOsPerformanceMount .performance-risk-panel",
                             "risk-allocations": "#workOsAllocationMount .portfolio-health-console",
                             "company-desk": "#deskCompanyName",
                             "brief-library": "#workOsBriefLibrary [data-artifact-id]",
