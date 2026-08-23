@@ -10,6 +10,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\capture_poller` | LogonTrigger | `capture_poller.task.xml` | `run_capture_poller.bat` | Windows service |
 | `\earnings-summary\check_comp_set_drift` | weekly Sunday at 12:15:00 | `check_comp_set_drift.task.xml` | `run_check_comp_set_drift.bat` | Task Scheduler |
 | `\earnings-summary\coach_pings` | daily at 07:15:00 | `coach_pings.task.xml` | `run_coach_pings.bat` | Task Scheduler |
+| `\earnings-summary\collect_operations_runtime_observations` | daily from 00:00:00, repeats PT10M | `collect_operations_runtime_observations.task.xml` | `run_collect_operations_runtime_observations.bat` | Task Scheduler |
 | `\earnings-summary\daily_fetch_and_brief` | daily at 06:30:00 | `daily_fetch_and_brief.task.xml` | `run_daily_fetch_and_brief.bat` | Task Scheduler |
 | `\earnings-summary\db_gc` | weekly Sunday at 06:00:00 | `db_gc.task.xml` | `run_db_gc.bat` | Task Scheduler |
 | `\earnings-summary\decision_nudge` | daily at 17:00:00 | `decision_nudge.task.xml` | `run_decision_nudge.bat` | Task Scheduler |

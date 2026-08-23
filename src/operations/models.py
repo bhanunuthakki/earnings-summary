@@ -308,8 +308,26 @@ class ServiceRuntimeDomainSummary(FrozenModel):
 
 
 class RecurringCollectionDisposition(FrozenModel):
-    state: Literal["activation_required"]
-    detail: str
+    task_name: str = Field(min_length=1, max_length=200)
+    state: Literal["activated", "activation_required"]
+    configuration_state: Literal["declared_enabled", "not_declared_enabled"]
+    scheduler_observation: Literal["current", "unavailable"]
+    scheduler_state: SchedulerTaskState | None = None
+    detail: str = Field(min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def _activation_requires_current_enabled_scheduler_evidence(
+        self,
+    ) -> RecurringCollectionDisposition:
+        if self.state == "activated" and not (
+            self.configuration_state == "declared_enabled"
+            and self.scheduler_observation == "current"
+            and self.scheduler_state in {"Ready", "Running"}
+        ):
+            raise ValueError(
+                "activated recurring collection requires declared enabled current Ready/Running evidence"
+            )
+        return self
 
 
 class RuntimeCollectionSummary(FrozenModel):

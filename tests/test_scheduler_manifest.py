@@ -32,7 +32,19 @@ EXPECTED_DISABLED_TASKS = {
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 43
+    assert len(manifest.tasks) == 44
+    collector = next(
+        task
+        for task in manifest.tasks
+        if task.task_name == r"\earnings-summary\collect_operations_runtime_observations"
+    )
+    assert collector.xml == "collect_operations_runtime_observations.task.xml"
+    assert collector.wrapper == "run_collect_operations_runtime_observations.bat"
+    assert collector.schedule.repetition_interval == "PT10M"
+    collector_xml = (CRON_DIR / collector.xml).read_text(encoding="utf-8")
+    assert "<StartWhenAvailable>true</StartWhenAvailable>" in collector_xml
+    assert "<ExecutionTimeLimit>PT5M</ExecutionTimeLimit>" in collector_xml
+    assert "<RestartOnFailure>" not in collector_xml
     assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {

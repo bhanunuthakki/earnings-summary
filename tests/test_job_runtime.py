@@ -18,6 +18,7 @@ import pytest
 
 import runtime.job_runtime as job_runtime
 from runtime.job_runtime import (
+    SCHEMA_DRIFT_TOLERANT_JOBS,
     JobAlreadyRunningError,
     JobLock,
     _run_managed_child,
@@ -348,6 +349,13 @@ def test_scheduler_applies_reviewed_portfolio_db_policy(job_name: str, lane: str
 def test_scheduler_preserves_unknown_and_explicit_write_sets() -> None:
     assert _scheduler_write_sets("new-unreviewed-job", ["portfolio-db"]) == ["portfolio-db"]
     assert _scheduler_write_sets("refresh_cache", ["operator-explicit"]) == ["operator-explicit"]
+
+
+def test_operations_runtime_collector_scheduler_lane_is_preserved() -> None:
+    assert _scheduler_write_sets(
+        "collect-operations-runtime-observations", ["operations-runtime-receipts"]
+    ) == ["operations-runtime-receipts"]
+    assert "collect-operations-runtime-observations" in SCHEMA_DRIFT_TOLERANT_JOBS
 
 
 def test_every_cron_portfolio_db_job_has_an_explicit_reviewed_classification() -> None:

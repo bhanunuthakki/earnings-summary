@@ -95,6 +95,21 @@
    }
   },
   {
+   "task_name": "\\earnings-summary\\collect_operations_runtime_observations",
+   "xml": "collect_operations_runtime_observations.task.xml",
+   "wrapper": "run_collect_operations_runtime_observations.bat",
+   "schedule": {
+    "trigger": "CalendarTrigger",
+    "start_boundary": "2026-08-23T00:00:00",
+    "repetition_interval": "PT10M",
+    "days_interval": 1,
+    "weeks_interval": null,
+    "days_of_week": [],
+    "days_of_month": [],
+    "months": []
+   }
+  },
+  {
    "task_name": "\\earnings-summary\\daily_fetch_and_brief",
    "xml": "daily_fetch_and_brief.task.xml",
    "wrapper": "run_daily_fetch_and_brief.bat",
