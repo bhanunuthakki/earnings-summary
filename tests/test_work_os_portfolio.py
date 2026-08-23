@@ -203,7 +203,14 @@ def test_portfolio_hydration_preserves_tracker_state_precedence_and_safe_warning
             error="ConnectionError: account 1234",
             is_stale=is_stale,
             is_partial=is_partial,
-            envelope_warnings=["provider_stale", "provider_stale", "bad warning: account 1234"],
+            envelope_warnings=[
+                "PARTIAL_COVERAGE",
+                "STALE_HOLDINGS",
+                "NO_CANONICAL_LINK",
+                "PARTIAL_COVERAGE",
+                "provider_stale",
+                "ConnectionError: account 1234",
+            ],
         ),
         readout_warnings=["earnings_readout_projection_unavailable", "provider_stale"],
     )
@@ -212,11 +219,16 @@ def test_portfolio_hydration_preserves_tracker_state_precedence_and_safe_warning
     assert payload.warnings == [
         "earnings_readout_projection_unavailable",
         "provider_stale",
+        "PARTIAL_COVERAGE",
+        "STALE_HOLDINGS",
+        "NO_CANONICAL_LINK",
         *(["portfolio_tracker_unavailable"] if not available else []),
         *(["portfolio_tracker_stale"] if available and is_stale else []),
         *(["portfolio_tracker_partial"] if is_partial else []),
     ]
-    assert "account 1234" not in payload.model_dump_json()
+    payload_json = payload.model_dump_json()
+    assert "account 1234" not in payload_json
+    assert "ConnectionError" not in payload_json
 
 
 def test_portfolio_action_queue_is_material_and_bounded_to_three() -> None:

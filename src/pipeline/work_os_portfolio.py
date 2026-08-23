@@ -75,7 +75,7 @@ class WorkOsPortfolioHydration(BaseModel):
     warnings: list[str]
 
 
-_PUBLIC_WARNING_CODE = re.compile(r"^[a-z][a-z0-9_]{0,119}$")
+_PUBLIC_WARNING_CODE = re.compile(r"^(?:[A-Z][A-Z0-9_]{0,119}|[a-z][a-z0-9_]{0,119})$")
 
 
 def _public_warning_codes(*warning_sets: Sequence[str]) -> list[str]:
