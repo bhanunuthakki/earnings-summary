@@ -15,12 +15,16 @@ from models.facts import Currency, Unit
 from pipeline.issuer_document_coverage import (
     OPERATIONS_GOVERNANCE_DISPOSITION,
     ExpectedIssuerFact,
+    ExtractorCoverageReconciliationOutput,
     ExtractorFactPopulationFrame,
     IssuerFactKind,
+    PortfolioCoverageInputError,
     build_document_coverage_receipt,
+    build_portfolio_coverage_report,
     persist_document_coverage_receipt,
     portfolio_coverage_report,
     reconcile_extractor_fact_population,
+    reconciliation_output,
 )
 from provenance.source_coverage import IssuerFactCoverageReceiptRecord, SourceCoverageLedger
 from report.rules import TickerRules
@@ -210,6 +214,171 @@ def test_receipt_accounts_for_captured_rejected_and_missing_facts() -> None:
         assert report.rows[0].downstream_available_count == 2
         assert report.rows[0].downstream_missing_count == 2
         assert report.rows[0].downstream_unverifiable_count == 0
+    finally:
+        conn.close()
+
+
+def test_reconciliation_output_rejects_a_tampered_idempotency_key() -> None:
+    conn = _conn()
+    try:
+        _document(conn, doc_id=1, ticker="MELI", source_type="ir_doc", fetched_at="2026-08-05")
+        receipt = build_document_coverage_receipt(
+            conn,
+            document_id=1,
+            expected=(_expected("MELI", "Total Payment Volume"),),
+            extracted_at=datetime(2026, 8, 5, tzinfo=UTC),
+        )
+        output = reconciliation_output(receipt)
+        assert (
+            output.idempotency_key
+            == hashlib.sha256(
+                receipt.model_dump_json(exclude_none=False).encode("utf-8")
+            ).hexdigest()
+        )
+
+        with pytest.raises(ValueError, match="idempotency key"):
+            ExtractorCoverageReconciliationOutput.model_validate(
+                output.model_dump(mode="json") | {"idempotency_key": "0" * 64}
+            )
+    finally:
+        conn.close()
+
+
+def test_portfolio_builder_preserves_same_fact_obligations_across_documents() -> None:
+    conn = _conn()
+    try:
+        expected = _expected("MELI", "Total Payment Volume")
+        _document(conn, doc_id=1, ticker="MELI", source_type="ir_doc", fetched_at="2026-08-05")
+        _document(conn, doc_id=2, ticker="MELI", source_type="ir_doc", fetched_at="2026-08-05")
+        _kpi(
+            conn,
+            definition_id=1,
+            fact_id=1,
+            ticker="MELI",
+            name="Total Payment Volume",
+            value="100",
+            doc_id=1,
+        )
+        captured = reconcile_extractor_fact_population(
+            conn,
+            ExtractorFactPopulationFrame(
+                document_id=1,
+                ticker="MELI",
+                expected=(expected,),
+                extracted_at=datetime(2026, 8, 5, tzinfo=UTC),
+            ),
+        )
+        rejected = reconcile_extractor_fact_population(
+            conn,
+            ExtractorFactPopulationFrame(
+                document_id=2,
+                ticker="MELI",
+                expected=(expected,),
+                rejected={expected.identity_key: "source_column_is_guidance"},
+                extracted_at=datetime(2026, 8, 5, tzinfo=UTC),
+            ),
+        )
+
+        report = build_portfolio_coverage_report(
+            (reconciliation_output(rejected), reconciliation_output(captured))
+        )
+
+        assert report.source_receipt_keys == tuple(sorted(report.source_receipt_keys))
+        assert report.as_of is None
+        assert report.stale_before is None
+        assert len(report.rows) == 1
+        row = report.rows[0]
+        assert row.document_count == 2
+        assert row.expected_count == 2
+        assert row.captured_count == 1
+        assert row.rejected_count == 1
+    finally:
+        conn.close()
+
+
+def test_portfolio_builder_accepts_equivalent_utc_instants_and_rejects_mixed_basis() -> None:
+    conn = _conn()
+    try:
+        first_expected = _expected("NU", "Monthly active customers")
+        second_expected = _expected("NVO", "Obesity care sales")
+        _document(conn, doc_id=1, ticker="NU", source_type="ir_doc", fetched_at="2026-08-05")
+        _document(conn, doc_id=2, ticker="NVO", source_type="ir_doc", fetched_at="2026-08-05")
+        first = build_document_coverage_receipt(
+            conn,
+            document_id=1,
+            expected=(first_expected,),
+            as_of=datetime(2026, 8, 5, tzinfo=UTC),
+            stale_before=datetime(2026, 8, 1, tzinfo=UTC),
+            extracted_at=datetime(2026, 8, 5, tzinfo=UTC),
+        )
+        equivalent = build_document_coverage_receipt(
+            conn,
+            document_id=2,
+            expected=(second_expected,),
+            as_of=datetime.fromisoformat("2026-08-04T17:00:00-07:00"),
+            stale_before=datetime.fromisoformat("2026-07-31T17:00:00-07:00"),
+            extracted_at=datetime(2026, 8, 5, tzinfo=UTC),
+        )
+        report = build_portfolio_coverage_report(
+            (reconciliation_output(first), reconciliation_output(equivalent))
+        )
+        assert report.as_of == datetime(2026, 8, 5, tzinfo=UTC)
+        assert report.stale_before == datetime(2026, 8, 1, tzinfo=UTC)
+
+        mixed = equivalent.model_copy(update={"as_of": datetime(2026, 8, 6, tzinfo=UTC)})
+        with pytest.raises(PortfolioCoverageInputError, match="incompatible_coverage_basis"):
+            build_portfolio_coverage_report(
+                (reconciliation_output(first), reconciliation_output(mixed))
+            )
+    finally:
+        conn.close()
+
+
+def test_portfolio_builder_rejects_duplicate_and_periodless_inputs() -> None:
+    conn = _conn()
+    try:
+        _document(conn, doc_id=1, ticker="NU", source_type="ir_doc", fetched_at="2026-08-05")
+        receipt = build_document_coverage_receipt(
+            conn,
+            document_id=1,
+            expected=(_expected("NU", "Monthly active customers"),),
+            extracted_at=datetime(2026, 8, 5, tzinfo=UTC),
+        )
+        output = reconciliation_output(receipt)
+        with pytest.raises(PortfolioCoverageInputError, match="duplicate_receipt"):
+            build_portfolio_coverage_report((output, output))
+
+        conflicting = reconciliation_output(
+            receipt.model_copy(update={"source_url": "https://example.test/NU/revised"})
+        )
+        with pytest.raises(PortfolioCoverageInputError, match="conflicting_document_receipt"):
+            build_portfolio_coverage_report((output, conflicting))
+
+        duplicate_fact = reconciliation_output(
+            receipt.model_copy(update={"results": [receipt.results[0], receipt.results[0]]})
+        )
+        with pytest.raises(PortfolioCoverageInputError, match="duplicate_document_fact"):
+            build_portfolio_coverage_report((duplicate_fact,))
+
+        lowercase_result = receipt.results[0].model_copy(
+            update={"expected": receipt.results[0].expected.model_copy(update={"ticker": "nu"})}
+        )
+        lowercase = reconciliation_output(
+            receipt.model_copy(update={"ticker": "nu", "results": [lowercase_result]})
+        )
+        with pytest.raises(PortfolioCoverageInputError, match="noncanonical_ticker"):
+            build_portfolio_coverage_report((lowercase,))
+
+        zero_frame = ExtractorFactPopulationFrame(
+            document_id=1,
+            ticker="NU",
+            expected=(),
+            extracted_at=datetime(2026, 8, 5, tzinfo=UTC),
+            expected_population_status="zero_expected",
+        )
+        periodless = reconciliation_output(reconcile_extractor_fact_population(conn, zero_frame))
+        with pytest.raises(PortfolioCoverageInputError, match="period_axis_unavailable"):
+            build_portfolio_coverage_report((periodless,))
     finally:
         conn.close()
 

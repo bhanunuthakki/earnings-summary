@@ -14,7 +14,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, date, datetime
+from collections.abc import Sequence
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -340,11 +341,23 @@ class ExtractorFactPopulationFrame(_CoverageModel):
         return self
 
 
+def reconciliation_idempotency_key(receipt: IssuerDocumentCoverageReceipt) -> str:
+    """Legacy-compatible semantic digest for one reconciliation receipt."""
+    canonical = receipt.model_dump_json(exclude_none=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 class ExtractorCoverageReconciliationOutput(_CoverageModel):
     """Stable CLI artifact for a reconciled extractor fact population."""
 
-    idempotency_key: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(pattern=r"^[0-9a-f]{64}$")
     receipt: IssuerDocumentCoverageReceipt
+
+    @model_validator(mode="after")
+    def _idempotency_key_matches_receipt(self) -> ExtractorCoverageReconciliationOutput:
+        if self.idempotency_key != reconciliation_idempotency_key(self.receipt):
+            raise ValueError("reconciliation idempotency key does not match receipt")
+        return self
 
 
 class PortfolioCoverageRow(_CoverageModel):
@@ -365,7 +378,44 @@ class PortfolioCoverageRow(_CoverageModel):
 
 class PortfolioCoverageReport(_CoverageModel):
     schema_version: Literal["issuer_portfolio_coverage.v1"] = "issuer_portfolio_coverage.v1"
+    as_of: datetime | None = None
+    stale_before: datetime | None = None
+    source_receipt_keys: tuple[str, ...] = ()
     rows: list[PortfolioCoverageRow]
+
+    @model_validator(mode="after")
+    def _canonical_report_shape(self) -> PortfolioCoverageReport:
+        for value in (self.as_of, self.stale_before):
+            if value is not None and (value.tzinfo is None or value.utcoffset() != timedelta(0)):
+                raise ValueError("portfolio coverage basis timestamps must be canonical UTC")
+        if self.source_receipt_keys != tuple(sorted(set(self.source_receipt_keys))):
+            raise ValueError("portfolio coverage source receipt keys must be unique and sorted")
+        if any(
+            len(key) != 64 or any(char not in "0123456789abcdef" for char in key)
+            for key in self.source_receipt_keys
+        ):
+            raise ValueError("portfolio coverage source receipt keys must be lowercase SHA-256")
+        row_keys = [(row.ticker, row.period_end) for row in self.rows]
+        if row_keys != sorted(set(row_keys)):
+            raise ValueError("portfolio coverage rows must be unique and sorted")
+        return self
+
+    @property
+    def canonical_json(self) -> str:
+        return json.dumps(
+            self.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+
+class PortfolioCoverageInputError(ValueError):
+    """Stable fail-closed reason for incompatible reconciliation artifacts."""
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
 
 
 class CoverageSchemaError(RuntimeError):
@@ -935,9 +985,8 @@ def validate_receipt_against_sqlite(
 def reconciliation_output(
     receipt: IssuerDocumentCoverageReceipt,
 ) -> ExtractorCoverageReconciliationOutput:
-    canonical = receipt.model_dump_json(exclude_none=False)
     return ExtractorCoverageReconciliationOutput(
-        idempotency_key=hashlib.sha256(canonical.encode("utf-8")).hexdigest(), receipt=receipt
+        idempotency_key=reconciliation_idempotency_key(receipt), receipt=receipt
     )
 
 
@@ -994,3 +1043,53 @@ def portfolio_coverage_report(
             )
         )
     return PortfolioCoverageReport(rows=rows)
+
+
+def build_portfolio_coverage_report(
+    reconciliations: Sequence[ExtractorCoverageReconciliationOutput],
+) -> PortfolioCoverageReport:
+    """Validate reconciled document artifacts and build one coherent report."""
+    inputs = tuple(reconciliations)
+    if not inputs:
+        raise PortfolioCoverageInputError("receipt_required")
+
+    seen_receipts: set[str] = set()
+    seen_documents: set[int] = set()
+    basis: tuple[datetime | None, datetime | None] | None = None
+    receipts: list[IssuerDocumentCoverageReceipt] = []
+    for item in inputs:
+        if item.idempotency_key in seen_receipts:
+            raise PortfolioCoverageInputError("duplicate_receipt")
+        seen_receipts.add(item.idempotency_key)
+
+        receipt = item.receipt
+        if receipt.document_id in seen_documents:
+            raise PortfolioCoverageInputError("conflicting_document_receipt")
+        seen_documents.add(receipt.document_id)
+        if receipt.ticker != receipt.ticker.strip().upper():
+            raise PortfolioCoverageInputError("noncanonical_ticker")
+        if not receipt.results:
+            raise PortfolioCoverageInputError("period_axis_unavailable")
+        identities = [result.expected.identity_key for result in receipt.results]
+        if len(identities) != len(set(identities)):
+            raise PortfolioCoverageInputError("duplicate_document_fact")
+
+        current_basis = (
+            None if receipt.as_of is None else _utc(receipt.as_of).astimezone(UTC),
+            None if receipt.stale_before is None else _utc(receipt.stale_before).astimezone(UTC),
+        )
+        if basis is None:
+            basis = current_basis
+        elif current_basis != basis:
+            raise PortfolioCoverageInputError("incompatible_coverage_basis")
+        receipts.append(receipt)
+
+    if basis is None:
+        raise AssertionError("non-empty reconciliation inputs did not establish a basis")
+    aggregated = portfolio_coverage_report(receipts)
+    return PortfolioCoverageReport(
+        as_of=basis[0],
+        stale_before=basis[1],
+        source_receipt_keys=tuple(sorted(seen_receipts)),
+        rows=aggregated.rows,
+    )
