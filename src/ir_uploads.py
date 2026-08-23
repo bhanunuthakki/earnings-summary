@@ -362,6 +362,17 @@ _DOC_TYPE_SQUASHED_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
 ]
 
 
+# This issuer-hosted letter opens with a press-release dateline, so the normal
+# earliest-text rule classifies it as a release before it reaches the letter
+# body. The identity is deliberately exact and remains gated on the classified
+# MELI Q2 2026 content below.
+_MELI_Q2_2026_LETTER_TO_SHAREHOLDERS_URL = (
+    "https://http2.mlstatic.com/storage/ml-cms-backend/cms-documents-prod/"
+    "5dbba919-721c-4916-bb91-c76a8713f7f0/"
+    "21c9837a-c212-4d6d-aa14-3041c26b1143/Letter_to_Shareholders.pdf"
+)
+
+
 # ---------------------------------------------------------------------------
 # Period extraction
 # ---------------------------------------------------------------------------
@@ -1171,6 +1182,7 @@ def classify_ir_file(
     *,
     ticker_hint: str | None = None,
     calendar_override: str | None = None,
+    source_url: str | None = None,
 ) -> CategorizationResult | CategorizationFailure:
     """Classify a single IR-uploads file. Pure function — only reads the file.
 
@@ -1189,6 +1201,10 @@ def classify_ir_file(
     is skipped, and this fiscal-calendar id attributes the period when the ticker
     has no `ISSUER_REGISTRY` calendar (a registered ticker still uses its registry
     calendar). The manual-upload path leaves it None and keeps strict behavior.
+
+    `source_url` carries the immutable publisher URL for managed staging. It
+    supports exact, content-gated issuer exceptions and is never inferred from
+    a local filename.
     """
     ext = path.suffix.lower()
     if ext not in {".pdf", ".xlsx"}:
@@ -1304,6 +1320,15 @@ def classify_ir_file(
     year, q = yq
     period_end = _period_end_for(cal, year, q)
     period_label = _period_label(cal, year, q)
+
+    if (
+        source_url == _MELI_Q2_2026_LETTER_TO_SHAREHOLDERS_URL
+        and ticker == "MELI"
+        and period_end == date(2026, 6, 30)
+        and doc_type is DocType.IR_PRESS_RELEASE
+    ):
+        doc_type = DocType.IR_INVESTOR_UPDATE
+        doc_ev = [*doc_ev, "trusted_meli_q2_2026_letter"]
 
     confidence = (
         Confidence.HIGH

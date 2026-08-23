@@ -477,8 +477,9 @@ def _classify_supplement_prepared_object(
     *,
     ticker_hint: str | None = None,
     calendar_override: str | None = None,
+    source_url: str | None = None,
 ) -> CategorizationResult:
-    del ticker_hint, calendar_override
+    del ticker_hint, calendar_override, source_url
     return _supplement_preparation_outcome()
 
 
@@ -586,8 +587,9 @@ def _classify_prepared_object(
     *,
     ticker_hint: str | None = None,
     calendar_override: str | None = None,
+    source_url: str | None = None,
 ) -> CategorizationResult:
-    del ticker_hint, calendar_override
+    del ticker_hint, calendar_override, source_url
     return _preparation_outcome()
 
 

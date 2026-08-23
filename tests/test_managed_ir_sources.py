@@ -157,8 +157,9 @@ def _classify(
     *,
     ticker_hint: str | None = None,
     calendar_override: str | None = None,
+    source_url: str | None = None,
 ) -> CategorizationResult:
-    del ticker_hint, calendar_override
+    del ticker_hint, calendar_override, source_url
     return _outcome()
 
 

@@ -19,12 +19,23 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import ir_uploads  # noqa: E402
 from ir_uploads import (  # noqa: E402
     CategorizationResult,
     calendar_id_from_fye,
     classify_ir_file,
 )
 from models.documents import DocType  # noqa: E402
+
+_MELI_Q2_2026_LETTER_URL = (
+    "https://http2.mlstatic.com/storage/ml-cms-backend/cms-documents-prod/"
+    "5dbba919-721c-4916-bb91-c76a8713f7f0/"
+    "21c9837a-c212-4d6d-aa14-3041c26b1143/Letter_to_Shareholders.pdf"
+)
+_MELI_Q2_2026_LETTER_TEXT = (
+    "MONTEVIDEO, Uruguay; August 5, 2026 -- MercadoLibre, Inc. (Nasdaq: MELI) "
+    "today reported financial results for the quarter ended June 30, 2026."
+)
 
 
 def _write_xlsx(path: Path, *cells: str) -> None:
@@ -47,6 +58,33 @@ def test_calendar_id_from_fye_known_and_default() -> None:
     assert calendar_id_from_fye("05-31") == "oracle"
     assert calendar_id_from_fye(None) == "calendar"
     assert calendar_id_from_fye("99-99") == "calendar"
+
+
+def test_official_meli_shareholder_letter_identity_beats_dateline_only_for_exact_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The official Q2 letter has a release-like dateline before its letter body."""
+    staged = tmp_path / "staged.pdf"
+    staged.write_bytes(b"%PDF-1.4\n")
+
+    def fingerprint_stub(_path: Path) -> str:
+        return _MELI_Q2_2026_LETTER_TEXT
+
+    monkeypatch.setattr(ir_uploads, "fingerprint", fingerprint_stub)
+
+    official = classify_ir_file(staged, source_url=_MELI_Q2_2026_LETTER_URL)
+    generic = classify_ir_file(
+        staged,
+        source_url="https://issuer.example.test/Letter_to_Shareholders.pdf",
+    )
+
+    assert isinstance(official, CategorizationResult)
+    assert official.ticker == "MELI"
+    assert official.doc_type is DocType.IR_INVESTOR_UPDATE
+    assert official.period_end == date(2026, 6, 30)
+    assert any("trusted_meli_q2_2026_letter" in item for item in official.doc_type_evidence)
+    assert isinstance(generic, CategorizationResult)
+    assert generic.doc_type is DocType.IR_PRESS_RELEASE
 
 
 @pytest.mark.parametrize(
