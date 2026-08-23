@@ -56,7 +56,7 @@ from provenance.financial_fact_resolution import (
 )
 
 REVISION = "0008_add_fmp_recovery"
-ACTIVE_REVISION = "0020_kpi_fact_currency"
+ACTIVE_REVISION = "0021_managed_ir_publications"
 NOW = datetime(2026, 8, 12, 9, 0, 0)
 CONTENT = "c" * 64
 
