@@ -17,7 +17,7 @@ from integrations.portfolio_allocation import (
 )
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.dashboard_status import DashboardRow, TranscriptStatus
-from pipeline.research_cockpit import CockpitRow
+from pipeline.research_cockpit import CockpitRow, PendingAlertRef
 from pipeline.work_os_earnings import EarningsReadoutSummary
 from pipeline.work_os_portfolio import build_work_os_portfolio
 
@@ -58,6 +58,7 @@ def _row(
     breach_status: str = "intact",
     pending_alerts: int = 0,
     pending_tier1_alerts: int = 0,
+    pending_alert_refs: tuple[PendingAlertRef, ...] = (),
     new_docs: int = 0,
     last_transcript: TranscriptStatus | None = None,
 ) -> CockpitRow:
@@ -79,6 +80,7 @@ def _row(
         next_earnings="2026-08-20",
         pending_alerts=pending_alerts,
         pending_tier1_alerts=pending_tier1_alerts,
+        pending_alert_refs=pending_alert_refs,
         new_docs=new_docs,
     )
 
@@ -340,3 +342,60 @@ def test_portfolio_hydration_fails_closed_when_source_dates_disagree() -> None:
     assert payload.allocation.state == "unavailable"
     assert payload.allocation.reason_codes == ("snapshot_date_mismatch",)
     assert "portfolio_allocation_unavailable" in payload.warnings
+
+
+def test_single_pending_alert_action_exposes_existing_identity_and_provenance() -> None:
+    payload = build_work_os_portfolio(
+        [
+            _row(
+                "NU",
+                name="Nu Holdings",
+                pending_alerts=1,
+                pending_tier1_alerts=1,
+                pending_alert_refs=(
+                    PendingAlertRef(
+                        alert_id=17,
+                        trigger_kind="thesis_drift",
+                        signature_sha="sig-thesis-17",
+                        is_decisive=True,
+                    ),
+                ),
+            )
+        ],
+        LivePortfolio(available=False, api_url="http://tracker.test"),
+        _available_allocation(),
+    )
+
+    action = payload.actions[0]
+    assert action.action_id == "alert:17"
+    assert action.action_type == "thesis_drift"
+    assert action.lifecycle_state == "pending"
+    assert action.source_ref == "alert:17"
+    assert action.evidence_ref == "sig-thesis-17"
+    serialized = payload.model_dump(mode="json")["actions"][0]
+    assert serialized["action_id"] == "alert:17"
+    assert serialized["evidence_ref"] == "sig-thesis-17"
+
+
+def test_aggregate_alert_card_does_not_invent_identity() -> None:
+    payload = build_work_os_portfolio(
+        [
+            _row(
+                "NU",
+                name="Nu Holdings",
+                pending_alerts=2,
+                pending_alert_refs=(
+                    PendingAlertRef(1, "earnings_tone", "sig-1"),
+                    PendingAlertRef(2, "material_news", "sig-2"),
+                ),
+            )
+        ],
+        LivePortfolio(available=False, api_url="http://tracker.test"),
+        _available_allocation(),
+    )
+
+    action = payload.actions[0]
+    assert action.headline == "Review 2 pending alerts"
+    assert action.action_id is None
+    assert action.source_ref is None
+    assert action.evidence_ref is None

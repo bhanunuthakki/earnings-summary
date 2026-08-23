@@ -390,6 +390,37 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
     assert "MELI" not in response.get_data(as_text=True)
 
 
+def test_work_os_portfolio_api_serializes_single_alert_identity(
+    app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(app_repo / "data" / "portfolio.db")
+    conn.execute(
+        "CREATE TABLE alerts ("
+        "id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, trigger_kind TEXT NOT NULL, "
+        "fired_at TEXT NOT NULL, status TEXT NOT NULL, evidence_json TEXT NOT NULL, "
+        "signature_sha TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO alerts "
+        "(id,ticker,trigger_kind,fired_at,status,evidence_json,signature_sha) "
+        "VALUES (17,'NU','earnings_tone','2026-08-08T10:00:00+00:00','pending','{}',"
+        "'sig-dashboard-17')"
+    )
+    conn.commit()
+    conn.close()
+
+    payload = (
+        comments_server.create_app(app_repo).test_client().get("/api/work-os/portfolio").get_json()
+    )
+
+    action = payload["actions"][0]
+    assert action["action_id"] == "alert:17"
+    assert action["action_type"] == "earnings_tone"
+    assert action["lifecycle_state"] == "pending"
+    assert action["source_ref"] == "alert:17"
+    assert action["evidence_ref"] == "sig-dashboard-17"
+
+
 def test_work_os_portfolio_api_includes_latest_persisted_earnings_readout(
     app_repo: Path,
     monkeypatch: pytest.MonkeyPatch,

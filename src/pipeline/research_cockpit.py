@@ -140,6 +140,22 @@ class KpiDelta:
 
 
 @dataclass(frozen=True)
+class PendingAlertRef:
+    """Stable, read-only identity for one pending alert carrier.
+
+    The Work OS action queue currently aggregates several pending alerts into
+    one bounded card. This ref keeps the persisted alert identity available to
+    consumers without inventing an identity for an aggregate or copying the
+    alert's evidence payload into the cockpit model.
+    """
+
+    alert_id: int
+    trigger_kind: str
+    signature_sha: str
+    is_decisive: bool = False
+
+
+@dataclass(frozen=True)
 class CockpitRow:
     """Everything one holding's cockpit row renders."""
 
@@ -159,6 +175,7 @@ class CockpitRow:
     next_earnings: str | None = None  # ISO date
     pending_alerts: int = 0
     pending_tier1_alerts: int = 0  # decisive subset (falsifier / threshold breach)
+    pending_alert_refs: tuple[PendingAlertRef, ...] = ()
     new_docs: int = 0
     # Eval-screen fundamentals (PR7): the thin/evaluation table swaps the
     # mostly-empty portfolio columns for screen-relevant ones.
@@ -480,6 +497,7 @@ def build_cockpit_rows(
     names = _company_names(conn, tickers)
     alerts = _pending_alert_counts(conn)
     tier1_alerts = _pending_tier1_counts(conn)
+    alert_refs = _pending_alert_refs(conn)
     dcf = latest_dcf_runs(conn)
     dcf_flagged = dcf_sanity_flags(conn)
     docs = _new_doc_counts(conn)
@@ -576,6 +594,7 @@ def build_cockpit_rows(
                     next_earnings=next_er.get(t) or next_earnings(repo_root, t, ref),
                     pending_alerts=alerts.get(t, 0),
                     pending_tier1_alerts=tier1_alerts.get(t, 0),
+                    pending_alert_refs=alert_refs.get(t, ()),
                     new_docs=docs.get(t, 0),
                     kpi_deltas=deltas,
                     rule_summary=rule_summary,
@@ -683,6 +702,50 @@ def _pending_tier1_counts(conn: sqlite3.Connection) -> dict[str, int]:
             t = str(r["ticker"])
             out[t] = out.get(t, 0) + 1
     return out
+
+
+def _pending_alert_refs(conn: sqlite3.Connection) -> dict[str, tuple[PendingAlertRef, ...]]:
+    """Return stable refs for pending alerts, grouped by ticker.
+
+    This is deliberately narrower than the full alert row: the identity is
+    the persisted alert id plus its trigger/signature, while evidence text
+    remains behind the existing alert/feed read path. A missing or partial
+    alerts schema degrades to no refs, matching the cockpit's existing count
+    behavior and preventing a synthetic identity from being emitted.
+    """
+    from dashboard.inbox_rank import decisive_alert_reason
+
+    rows = _safe_rows(
+        conn,
+        "SELECT id,ticker,trigger_kind,signature_sha,evidence_json "
+        "FROM alerts WHERE status='pending' ORDER BY id ASC",
+    )
+    grouped: dict[str, list[PendingAlertRef]] = {}
+    for row in rows:
+        try:
+            alert_id = int(row["id"])
+        except (TypeError, ValueError):
+            continue
+        ticker = str(row["ticker"] or "").strip().upper()
+        trigger_kind = str(row["trigger_kind"] or "").strip()
+        signature_sha = str(row["signature_sha"] or "").strip()
+        if not ticker or not trigger_kind or not signature_sha:
+            continue
+        grouped.setdefault(ticker, []).append(
+            PendingAlertRef(
+                alert_id=alert_id,
+                trigger_kind=trigger_kind,
+                signature_sha=signature_sha,
+                is_decisive=(
+                    decisive_alert_reason(
+                        trigger_kind,
+                        str(row["evidence_json"] or ""),
+                    )
+                    is not None
+                ),
+            )
+        )
+    return {ticker: tuple(refs) for ticker, refs in grouped.items()}
 
 
 def latest_dcf_runs(

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -20,7 +21,7 @@ from integrations.portfolio_allocation import (
     unavailable_portfolio_allocation,
 )
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
-from pipeline.research_cockpit import CockpitRow
+from pipeline.research_cockpit import CockpitRow, PendingAlertRef
 from pipeline.work_os_earnings import EarningsReadoutSummary
 
 
@@ -52,7 +53,13 @@ class WorkOsPortfolioCompany(BaseModel):
 
 
 class WorkOsPortfolioAction(BaseModel):
-    """One material, portfolio-company action eligible for the Cockpit queue."""
+    """One material, portfolio-company action eligible for the Cockpit queue.
+
+    Identity/provenance fields are populated only when this bounded aggregate
+    maps to exactly one persisted pending alert. Aggregate thesis/document
+    rows remain explicitly unbound until their source identity contracts exist;
+    no synthetic ID is emitted.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -60,6 +67,22 @@ class WorkOsPortfolioAction(BaseModel):
     headline: str
     detail: str
     tone: Literal["bad", "warn", "ok"]
+    action_id: str | None = None
+    action_type: str | None = None
+    lifecycle_state: Literal["pending"] | None = None
+    source_ref: str | None = None
+    evidence_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class _AlertActionIdentity:
+    """Internal conversion of an existing alert identity for the API model."""
+
+    action_id: str
+    action_type: str
+    lifecycle_state: Literal["pending"]
+    source_ref: str
+    evidence_ref: str
 
 
 class WorkOsPortfolioHydration(BaseModel):
@@ -151,14 +174,46 @@ def _company(
     )
 
 
+def _exact_alert_identity(
+    row: CockpitRow,
+    *,
+    decisive: bool,
+) -> _AlertActionIdentity | None:
+    """Return identity only when one queue card has one matching alert.
+
+    The queue remains an aggregate bounded to three cards. Attaching one
+    alert ID to a card that summarizes multiple alerts would be false
+    provenance, so ambiguous cards intentionally remain unbound.
+    """
+    refs = tuple(ref for ref in row.pending_alert_refs if ref.is_decisive is decisive)
+    expected_count = row.pending_tier1_alerts if decisive else row.pending_alerts
+    if expected_count != 1 or len(refs) != 1:
+        return None
+    ref: PendingAlertRef = refs[0]
+    source_ref = f"alert:{ref.alert_id}"
+    return _AlertActionIdentity(
+        action_id=source_ref,
+        action_type=ref.trigger_kind,
+        lifecycle_state="pending",
+        source_ref=source_ref,
+        evidence_ref=ref.signature_sha,
+    )
+
+
 def _action(row: CockpitRow) -> WorkOsPortfolioAction | None:
     ticker = row.base.ticker.strip().upper()
     if row.pending_tier1_alerts:
+        identity = _exact_alert_identity(row, decisive=True)
         return WorkOsPortfolioAction(
             ticker=ticker,
             headline="Review thesis-decisive alert",
             detail=f"{row.pending_tier1_alerts} falsifier or registered threshold breach",
             tone="bad",
+            action_id=identity.action_id if identity is not None else None,
+            action_type=identity.action_type if identity is not None else None,
+            lifecycle_state=identity.lifecycle_state if identity is not None else None,
+            source_ref=identity.source_ref if identity is not None else None,
+            evidence_ref=identity.evidence_ref if identity is not None else None,
         )
     status = (row.base.breach_status or "").strip().lower()
     if status and status not in {"intact", "pass", "passing", "ok"}:
@@ -169,12 +224,18 @@ def _action(row: CockpitRow) -> WorkOsPortfolioAction | None:
             tone="warn",
         )
     if row.pending_alerts:
+        identity = _exact_alert_identity(row, decisive=False)
         return WorkOsPortfolioAction(
             ticker=ticker,
             headline=f"Review {row.pending_alerts} pending alert"
             + ("s" if row.pending_alerts != 1 else ""),
             detail="Material company evidence is waiting for review",
             tone="warn",
+            action_id=identity.action_id if identity is not None else None,
+            action_type=identity.action_type if identity is not None else None,
+            lifecycle_state=identity.lifecycle_state if identity is not None else None,
+            source_ref=identity.source_ref if identity is not None else None,
+            evidence_ref=identity.evidence_ref if identity is not None else None,
         )
     if row.new_docs:
         return WorkOsPortfolioAction(
