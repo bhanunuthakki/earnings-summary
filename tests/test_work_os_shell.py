@@ -981,6 +981,64 @@ def test_nvo_action_queue_open_company_uses_the_canonical_desk_handoff() -> None
     assert "fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk'" in html
 
 
+def test_action_queue_renders_only_exact_alert_evidence_doorways() -> None:
+    """The Work OS action queue never invents a persisted alert identity."""
+    node = shutil.which("node")
+    if node is None:
+        return
+    html = render_work_os_shell()
+    action_runtime = html.split("function workOsActionEvidence", 1)[1].split(
+        "function workOsRenderPortfolio", 1
+    )[0]
+    harness = f"""
+function escapeWorkOsHtml(value) {{
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
+}}
+function workOsActionEvidence{action_runtime}
+
+const exact = workOsActionEvidence({{
+  ticker: 'NU', action_id: 'alert:17', action_type: 'earnings_tone',
+  lifecycle_state: 'pending', source_ref: 'alert:17', evidence_ref: 'sig-17'
+}});
+if (!exact.includes('data-work-os-action-evidence="exact"')) throw new Error('exact metadata missing');
+if (!exact.includes('alert:17') || !exact.includes('sig-17')) throw new Error('exact provenance missing');
+if (!exact.includes('data-peek-url="/api/peek/alert/17"')) throw new Error('exact peek route missing');
+if (!exact.includes('Open alert evidence')) throw new Error('read-only doorway missing');
+
+const aggregate = workOsActionEvidence({{
+  ticker: 'NU', action_id: null, action_type: null,
+  lifecycle_state: null, source_ref: null, evidence_ref: null
+}});
+if (!aggregate.includes('data-work-os-action-evidence="unbound"')) throw new Error('aggregate is not visibly unbound');
+if (aggregate.includes('/api/peek/alert/')) throw new Error('aggregate fabricated peek route');
+if (aggregate.includes('alert:')) throw new Error('aggregate fabricated alert identity');
+
+const malformed = workOsActionEvidence({{
+  ticker: 'NU', action_id: 'alert:0', action_type: 'earnings_tone',
+  lifecycle_state: 'pending', source_ref: 'alert:0', evidence_ref: 'sig-0'
+}});
+if (!malformed.includes('data-work-os-action-evidence="unbound"')) throw new Error('malformed identity is actionable');
+if (malformed.includes('/api/peek/alert/')) throw new Error('malformed identity invented URL');
+
+const partial = workOsActionEvidence({{
+  ticker: 'NU', action_id: 'alert:19', action_type: 'earnings_tone',
+  lifecycle_state: 'pending', source_ref: 'alert:19', evidence_ref: null
+}});
+if (!partial.includes('data-work-os-action-evidence="partial"')) throw new Error('partial identity is not visible');
+if (partial.includes('/api/peek/alert/')) throw new Error('partial identity exposed a peek route');
+"""
+    result = subprocess.run(
+        [node, "-"], input=harness, text=True, capture_output=True, check=False, timeout=10
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "/approve" not in action_runtime
+    assert "/api/actions/" not in action_runtime
+    assert "queued_actions" not in action_runtime
+
+
 def test_company_switcher_is_attached_to_identity_and_accessible() -> None:
     html = render_work_os_shell()
 

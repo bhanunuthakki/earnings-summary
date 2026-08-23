@@ -1193,6 +1193,24 @@ def _production_runtime(generated_at: datetime) -> str:
     return true;
   }};
 
+  function workOsActionEvidence(action) {{
+    const actionId = action && typeof action.action_id === 'string' ? action.action_id : '';
+    const alertMatch = /^alert:([1-9][0-9]*)$/.exec(actionId);
+    if (!alertMatch) {{
+      return '<div class="k-card-meta" data-work-os-action-evidence="unbound">Unbound source/evidence · exact pending-alert identity unavailable</div>';
+    }}
+    const actionType = typeof action.action_type === 'string' ? action.action_type.trim() : '';
+    const lifecycleState = action.lifecycle_state === 'pending' ? action.lifecycle_state : '';
+    const sourceRef = typeof action.source_ref === 'string' ? action.source_ref.trim() : '';
+    const evidenceRef = typeof action.evidence_ref === 'string' ? action.evidence_ref.trim() : '';
+    const hasFullIdentity = Boolean(actionType && lifecycleState && sourceRef === actionId && evidenceRef);
+    if (!hasFullIdentity) {{
+      return '<div class="k-card-meta" data-work-os-action-evidence="partial">Alert evidence doorway · full identity metadata unavailable</div>';
+    }}
+    const alertId = alertMatch[1];
+    return '<div class="k-card-meta" data-work-os-action-evidence="exact">Pending alert · source ' + escapeWorkOsHtml(actionId) + ' · ' + escapeWorkOsHtml(actionType) + ' · ' + escapeWorkOsHtml(lifecycleState) + ' · evidence ' + escapeWorkOsHtml(evidenceRef) + '</div>' + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-peek-url="/api/peek/alert/' + escapeWorkOsHtml(alertId) + '" data-peek-title="Pending alert evidence — ' + escapeWorkOsHtml(action.ticker) + '">Open alert evidence &rarr;</button>';
+  }}
+
   function workOsRenderPortfolio(payload) {{
     workOsPortfolioHydration = payload;
     const companies = payload.companies || [];
@@ -1234,7 +1252,7 @@ def _production_runtime(generated_at: datetime) -> str:
       actionQueue.innerHTML = payload.actions.length ? payload.actions.map(function (action) {{
         return '<article class="k-card k-card-action k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
           '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-title k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
-          '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div></div></div>' +
+          '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div>' + workOsActionEvidence(action) + '</div></div>' +
           '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company &rarr;</button></div></article>';
       }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
     }}
