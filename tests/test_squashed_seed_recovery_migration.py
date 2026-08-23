@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0021_managed_ir_publications"
+_ACTIVE_HEAD = "0022_add_governed_alert_action_receipts"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
