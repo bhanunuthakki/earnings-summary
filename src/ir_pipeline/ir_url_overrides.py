@@ -25,7 +25,7 @@ IR_URL_OVERRIDES: dict[str, str] = {
     "GOOG": "https://abc.xyz/investor/",
     "GOOGL": "https://abc.xyz/investor/",
     "META": "https://investor.atmeta.com/investor-news/",
-    "MELI": "https://investor.mercadolibre.com/financial-information/quarterly-results",
+    "MELI": "https://investor.mercadolibre.com/sec-filings",
     "NU": "https://www.investidores.nu/en/financials/results-center/",
     "NVO": "https://www.novonordisk.com/investors.html",
     "NOW": "https://www.servicenow.com/company/investor-relations.html",
