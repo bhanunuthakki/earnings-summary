@@ -1942,6 +1942,28 @@ def create_app(
                 mimetype="text/html",
             )
 
+        if name == "performance_risk":
+            # Unified Performance & Risk is a read-only composition over the
+            # established performance, posture, typed allocation, and lazy
+            # risk fragments.  It intentionally does not call the legacy Risk
+            # page renderer, whose successful reads refresh a snapshot.
+            from pipeline.performance_risk_panel import render_performance_risk_panel
+            from pipeline.portfolio_panel import render_health_fragment
+
+            fragment = request.args.get("fragment")
+            if fragment:
+                return Response(render_health_fragment(db_path, fragment), mimetype="text/html")
+            return Response(
+                render_performance_risk_panel(
+                    db_path,
+                    repo_root,
+                    start_date=request.args.get("start_date"),
+                    end_date=request.args.get("end_date"),
+                    include_backfill=request.args.get("include_backfill") in ("1", "true", "True"),
+                ),
+                mimetype="text/html",
+            )
+
         if name == "portfolio_synthesis":
             # Portfolio → Synthesis (UX round 4): the reading layer that used
             # to ride the bottom of the Performance tab — thesis rollup +

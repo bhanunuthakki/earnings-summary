@@ -196,6 +196,10 @@ def render_portfolio_panel(
     end_date: str | None = None,
     include_backfill: bool = False,
     db_path: Path | None = None,
+    performance_title: str = "Performance vs benchmarks",
+    include_position_drivers: bool = True,
+    refresh_endpoint: str = "/api/panel/portfolio",
+    refresh_target_selector: str | None = None,
 ) -> str:
     """The Portfolio → Performance fragment: the benchmark scorecard plus
     expandable position drivers.
@@ -226,7 +230,16 @@ def render_portfolio_panel(
             available=False, api_url=base, errors={"performance": _PROBE_DOWN_ERROR}
         )
         live = LivePortfolio(available=False, api_url=base, error=_PROBE_DOWN_ERROR)
-    return compose_portfolio_page(analytics, live, window=window, include_live=False)
+    return compose_portfolio_page(
+        analytics,
+        live,
+        window=window,
+        include_live=False,
+        performance_title=performance_title,
+        include_position_drivers=include_position_drivers,
+        refresh_endpoint=refresh_endpoint,
+        refresh_target_selector=refresh_target_selector,
+    )
 
 
 def compose_portfolio_page(
@@ -236,6 +249,10 @@ def compose_portfolio_page(
     snapshot: RiskSnapshot | None = None,
     *,
     include_live: bool = True,
+    performance_title: str = "Performance vs benchmarks",
+    include_position_drivers: bool = True,
+    refresh_endpoint: str = "/api/panel/portfolio",
+    refresh_target_selector: str | None = None,
 ) -> str:
     """Pure page assembly (testable without network or DB).
 
@@ -251,9 +268,24 @@ def compose_portfolio_page(
     parts: list[str] = [_ANALYTICS_CSS]
     # Tracker offline → lead with the start banner (it is the page's gate).
     if not live.available:
-        parts.append(_tracker_offline_banner(live))
+        parts.append(
+            _tracker_offline_banner(
+                live,
+                refresh_endpoint=refresh_endpoint,
+                refresh_target_selector=refresh_target_selector,
+            )
+        )
     if analytics.available:
-        parts.append(render_portfolio_analytics_sections(analytics, w))
+        parts.append(
+            render_portfolio_analytics_sections(
+                analytics,
+                w,
+                performance_title=performance_title,
+                include_position_drivers=include_position_drivers,
+                refresh_endpoint=refresh_endpoint,
+                refresh_target_selector=refresh_target_selector,
+            )
+        )
     else:
         if snapshot is not None:
             parts.append(_cached_risk_section(snapshot))
@@ -327,13 +359,16 @@ _WINDOW_JS = r"""
     return !!(cb && cb.checked);
   }
   function refetch(start, end, backfill) {
-    var target = bar.closest('.cc-panel-body') || bar.parentElement || document.body;
+    var targetSelector = bar.getAttribute('data-refresh-target');
+    var target = (targetSelector && document.querySelector(targetSelector)) ||
+      bar.closest('.cc-panel-body') || bar.parentElement || document.body;
+    var endpoint = bar.getAttribute('data-refresh-endpoint') || '/api/panel/portfolio';
     var qs = [];
     if (start) qs.push('start_date=' + encodeURIComponent(start));
     if (end) qs.push('end_date=' + encodeURIComponent(end));
     if (backfill) qs.push('include_backfill=1');
     target.innerHTML = '<div class="cc-loading">Loading…</div>';
-    fetch('/api/panel/portfolio' + (qs.length ? '?' + qs.join('&') : ''))
+    fetch(endpoint + (qs.length ? '?' + qs.join('&') : ''))
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
       .then(function (html) {
         target.innerHTML = html;
@@ -413,7 +448,9 @@ _START_TRACKER_JS = """
         // A tracker gate can live inside one section of a composite console.
         // Refresh only that section; replacing .cc-panel-body destroys the
         // entire Health/Allocation page around it.
-        var target = banner.closest('.console-sec') || banner.closest('.cc-panel-body');
+        var targetSelector = banner.getAttribute('data-refresh-target');
+        var target = (targetSelector && document.querySelector(targetSelector)) ||
+          banner.closest('.console-sec') || banner.closest('.cc-panel-body');
         if (target) { reinject(target, html); } else { location.reload(); }
       } else {
         setTimeout(function () { pollPanel(tries - 1); }, 3000);
@@ -482,7 +519,12 @@ _WINDOW_PRESETS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _window_bar(w: WindowSelection) -> str:
+def _window_bar(
+    w: WindowSelection,
+    *,
+    refresh_endpoint: str = "/api/panel/portfolio",
+    refresh_target_selector: str | None = None,
+) -> str:
     """The window selector: preset buttons, custom date inputs (echoing the
     applied window), the modeled-backfill toggle, and the refetch script.
     Always rendered — when the tracker is down it doubles as a retry control."""
@@ -496,8 +538,14 @@ def _window_bar(w: WindowSelection) -> str:
         "(up to ~24 months). Backfilled values are MODELED, not observed — they can "
         "drift on incomplete transactions or unrecorded transfers."
     )
+    target_attr = (
+        f' data-refresh-target="{escape(refresh_target_selector, quote=True)}"'
+        if refresh_target_selector
+        else ""
+    )
     return (
-        '<div class="pf-window" id="pf-window-bar">'
+        '<div class="pf-window" id="pf-window-bar" '
+        f'data-refresh-endpoint="{escape(refresh_endpoint, quote=True)}"{target_attr}>'
         '<span class="pf-window-label">Window</span>'
         f"{buttons}"
         f'<input type="date" id="pf-start" value="{escape(w.start_date or "")}" '
@@ -514,7 +562,13 @@ def _window_bar(w: WindowSelection) -> str:
 
 
 def render_portfolio_analytics_sections(
-    a: PortfolioAnalytics, window: WindowSelection | None = None
+    a: PortfolioAnalytics,
+    window: WindowSelection | None = None,
+    *,
+    performance_title: str = "Performance vs benchmarks",
+    include_position_drivers: bool = True,
+    refresh_endpoint: str = "/api/panel/portfolio",
+    refresh_target_selector: str | None = None,
 ) -> str:
     """Every analytics section that loaded, in page order, plus one footnote
     naming the sections that didn't (instead of five dead panels). The shared
@@ -525,10 +579,28 @@ def render_portfolio_analytics_sections(
     w = window or _DEFAULT_WINDOW
     out: list[str] = []
     if a.performance is not None:
-        out.append(_performance_section(a.performance, a.policy, w, a.position_alpha))
+        out.append(
+            _performance_section(
+                a.performance,
+                a.policy,
+                w,
+                a.position_alpha,
+                title=performance_title,
+                refresh_endpoint=refresh_endpoint,
+                refresh_target_selector=refresh_target_selector,
+            )
+        )
     elif any(x is not None for x in (a.beta, a.positioning, a.position_alpha)):
-        out.append(f'<div class="pf-window-standalone">{_window_bar(w)}</div>')
-    if a.position_alpha is not None:
+        out.append(
+            '<div class="pf-window-standalone">'
+            + _window_bar(
+                w,
+                refresh_endpoint=refresh_endpoint,
+                refresh_target_selector=refresh_target_selector,
+            )
+            + "</div>"
+        )
+    if include_position_drivers and a.position_alpha is not None:
         out.append(
             '<details class="pf-alpha-details"><summary>'
             f"Position drivers ({len(a.position_alpha.rows)})"
@@ -553,6 +625,10 @@ def _performance_section(
     policy: PolicyMix | None,
     window: WindowSelection,
     position_alpha: PositionAlpha | None = None,
+    *,
+    title: str = "Performance vs benchmarks",
+    refresh_endpoint: str = "/api/panel/portfolio",
+    refresh_target_selector: str | None = None,
 ) -> str:
     window_label = f"{perf.start_date or '?'} → {perf.end_date or '?'}"
     # The methodology note rides a hover affordance on the title, not permanent
@@ -564,10 +640,10 @@ def _performance_section(
     )
     head = (
         '<section class="panel"><div class="pf-perf-head">'
-        "<h2>Performance vs benchmarks"
+        f"<h2>{escape(title)}"
         f'<span class="pf-info" tabindex="0" role="note" aria-label="{escape(note)}">i'
         f'<span class="pf-info-pop">{escape(note)}</span></span></h2>'
-        f"{_window_bar(window)}</div>"
+        f"{_window_bar(window, refresh_endpoint=refresh_endpoint, refresh_target_selector=refresh_target_selector)}</div>"
     )
     if not perf.points:
         return (
@@ -1958,7 +2034,7 @@ def render_health_fragment(db_path: Path, fragment: str) -> str:
         if snap is not None:
             return _RISK_CSS + _cached_risk_section(snap)
         return _RISK_CSS + _risk_offline_note(analytics)
-    if fragment == "crowding":
+    if fragment in {"correlation", "crowding"}:
         return _RISK_CSS + _correlation_section(_build_correlation_read(None, db_path))
     if fragment == "tail":
         return _RISK_CSS + (
@@ -3330,20 +3406,28 @@ def _macro_stress_section(scenarios: list[tuple[str, str]], digest: str) -> str:
 
 
 def _tracker_offline_banner(
-    live: LivePortfolio, *, refresh_endpoint: str = "/api/panel/portfolio"
+    live: LivePortfolio,
+    *,
+    refresh_endpoint: str = "/api/panel/portfolio",
+    refresh_target_selector: str | None = None,
 ) -> str:
     """The page's gate: the whole Portfolio page reads from the companion
     tracker, so when it is down this LEADS the page (prominent, not buried) and
     auto-starts on open. One-click start runs the ownership-checked
     ``/actions/start-tracker`` action and the panel re-fetches itself until the
     configured API answers; the raw requests repr stays in the collapsed details."""
+    target_attr = (
+        f' data-refresh-target="{escape(refresh_target_selector, quote=True)}"'
+        if refresh_target_selector
+        else ""
+    )
     return (
         # Class hooks, not ids (Phase-5 verifier): this banner renders in BOTH
         # the Health console (Synthesis) and the Allocation console
         # (Performance); duplicate ids left the second instance's Start button
         # dead. _START_TRACKER_JS wires every unwired .pf-live-offline subtree.
         '<section class="panel pf-tracker-banner pf-live-offline" '
-        f'data-refresh-endpoint="{escape(refresh_endpoint, quote=True)}">'
+        f'data-refresh-endpoint="{escape(refresh_endpoint, quote=True)}"{target_attr}>'
         "<h2>Portfolio tracker</h2>"
         '<p class="sub">This whole page reads from the companion portfolio-tracker — '
         "live positions, performance vs benchmarks, risk, and allocation. It isn't "

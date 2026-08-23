@@ -1,4 +1,4 @@
-"""Production renderer for the eight-screen Equity Work OS.
+"""Production renderer for the seven-screen Equity Work OS.
 
 The high-fidelity prototype is intentionally the single markup source of truth.
 This module applies the small production-only contract around it: live endpoint
@@ -46,7 +46,7 @@ class ScreenSpec:
 
 
 CockpitStatKey = Literal["nav", "performance", "risk", "companies"]
-CockpitStatTarget = Literal["screen-performance", "screen-allocation"]
+CockpitStatTarget = Literal["screen-performance"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,13 +65,13 @@ COCKPIT_STAT_SPECS: tuple[CockpitStatSpec, ...] = (
         "performance",
         "Performance",
         target="screen-performance",
-        accessible_name="Open Performance vs Index",
+        accessible_name="Open Performance & Risk",
     ),
     CockpitStatSpec(
         "risk",
         "Risk & Factors",
-        target="screen-allocation",
-        accessible_name="Open Risk & Allocations",
+        target="screen-performance",
+        accessible_name="Open Performance & Risk",
     ),
     CockpitStatSpec("companies", "Portfolio Companies"),
 )
@@ -82,14 +82,8 @@ SCREEN_SPECS: tuple[ScreenSpec, ...] = (
     ScreenSpec(
         "screen-performance",
         "nav-performance",
-        "Performance vs Index",
-        "/api/panel/portfolio_allocation",
-    ),
-    ScreenSpec(
-        "screen-allocation",
-        "nav-allocation",
-        "Risk & Allocations",
-        "/api/panel/portfolio_health",
+        "Performance",
+        "/api/panel/performance_risk",
     ),
     ScreenSpec("screen-workspace", "nav-workspace", "Company Desk", "/api/panel/holding"),
     ScreenSpec(
@@ -128,8 +122,9 @@ _LEGACY_HASHES: dict[str, str] = {
     "discovery": "screen-workspace",
     "portfolio": "screen-performance",
     "portfolio_allocation": "screen-performance",
-    "portfolio_health": "screen-allocation",
-    "portfolio_risk": "screen-allocation",
+    "portfolio_health": "screen-performance",
+    "portfolio_risk": "screen-performance",
+    "screen-allocation": "screen-performance",
     "ask": "screen-analytics-playground",
     "explore": "screen-analytics-playground",
     "red_team": "screen-analytics-playground",
@@ -162,6 +157,10 @@ _REBALANCE_DRAWER_RE = re.compile(
 _NAV_ITEM_RE = re.compile(
     r'<a (?P<attrs>onclick="[^"]+" class="nav-item[^"]*" id="nav-[^"]+"[^>]*)>'
     r"(?P<body>.*?)</a>",
+    re.DOTALL,
+)
+_ALLOCATION_NAV_RE = re.compile(
+    r'\s*<a onclick="navigateTo\(\'screen-allocation\'\)".*?id="nav-allocation".*?</a>',
     re.DOTALL,
 )
 _PIPELINE_SIMULATION_RE = re.compile(
@@ -229,12 +228,12 @@ def _render_portfolio_cockpit_shell() -> str:
         <div class="stat-number">—</div>
         <div class="stat-subtext">Loading governed portfolio state</div>
       </div>
-      <a class="k-stat-cell" data-work-os-stat-key="performance" href="#screen-performance" aria-label="Open Performance vs Index">
+      <a class="k-stat-cell" data-work-os-stat-key="performance" href="#screen-performance" aria-label="Open Performance &amp; Risk">
         <div class="stat-heading">Performance</div>
         <div class="stat-number">—</div>
         <div class="stat-subtext">Loading governed portfolio state</div>
       </a>
-      <a class="k-stat-cell" data-work-os-stat-key="risk" href="#screen-allocation" aria-label="Open Risk &amp; Allocations">
+      <a class="k-stat-cell" data-work-os-stat-key="risk" href="#screen-performance" aria-label="Open Performance &amp; Risk">
         <div class="stat-heading">Risk &amp; Factors</div>
         <div class="stat-number">—</div>
         <div class="stat-subtext">Loading governed portfolio state</div>
@@ -358,7 +357,6 @@ def _production_runtime(generated_at: datetime) -> str:
   const workOsRequestedTicker = String(workOsLaunchParams.get('ticker') || '').toUpperCase();
   const workOsPersistentMountIds = {{
     'screen-performance': 'workOsPerformanceMount',
-    'screen-allocation': 'workOsAllocationMount',
     'screen-audit-log': 'workOsAuditMount'
   }};
   const originalOpenDrillDrawer = window.openDrillDrawer;
@@ -1167,8 +1165,8 @@ def _production_runtime(generated_at: datetime) -> str:
       }};
       const statDetails = {{
         nav: trackerDetail,
-        performance: 'Performance vs Index',
-        risk: 'Risk & Allocations',
+        performance: 'Performance & Risk',
+        risk: 'Performance & Risk',
         companies: 'Governed portfolio universe'
       }};
       stats.querySelectorAll('[data-work-os-stat-key]').forEach(function (card) {{
@@ -1704,7 +1702,7 @@ def _make_allocation_language_honest(html: str) -> str:
             <div class="work-os-threshold-note-title">Decision discipline, not order routing</div>
             <p class="work-os-threshold-note-body">Review the current buy, hold, trim, and sell conditions together with the next-dollar recommendation. This workspace records an allocation decision; it never submits a broker order.</p>
           </div>
-          <button class="k-btn k-btn-primary k-btn-sm" onclick="openLiveDetail('screen-allocation')">Open live allocation guidance →</button>`;
+          <button class="k-btn k-btn-primary k-btn-sm" onclick="openLiveDetail('screen-performance')">Open Performance &amp; Risk →</button>`;
       } else if (type === 'dcf-priors')""",
         html,
     )
@@ -1727,9 +1725,15 @@ def _add_production_contract(
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
     html = html.replace("Execution Queue & Operations Hub", "Operations")
     html = html.replace("Operations & Execution Governance Hub", "Operations")
+    html = html.replace("Portfolio Performance vs Index Benchmark", "Performance")
     html = html.replace(
         '<span class="nav-text">Execution Queue & Operations</span>',
         '<span class="nav-text">Operations</span>',
+        1,
+    )
+    html = html.replace(
+        '<span class="nav-text">Performance vs Index</span>',
+        '<span class="nav-text">Performance</span>',
         1,
     )
     html = _COCKPIT_SECTION_RE.sub(_render_portfolio_cockpit_shell() + "\n\n      ", html, count=1)
@@ -1738,25 +1742,15 @@ def _add_production_contract(
             screen_id="screen-performance",
             mount_id="workOsPerformanceMount",
             layer="Portfolio Intelligence",
-            title="Performance vs Index",
-            description="Live portfolio performance, attribution, and capital-deployment context",
+            title="Performance & Risk",
+            description="Live benchmarking, allocation, posture, and risk evidence",
         )
         + "\n\n      ",
         html,
         count=1,
     )
-    html = _ALLOCATION_SECTION_RE.sub(
-        _render_live_screen_shell(
-            screen_id="screen-allocation",
-            mount_id="workOsAllocationMount",
-            layer="Portfolio Intelligence",
-            title="Risk & Allocations",
-            description="Live thesis health, concentration, crowding, and downside evidence",
-        )
-        + "\n\n      ",
-        html,
-        count=1,
-    )
+    html = _ALLOCATION_SECTION_RE.sub("\n\n      ", html, count=1)
+    html = _ALLOCATION_NAV_RE.sub("", html, count=1)
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
     html = _FACT_PLAYGROUND_SECTION_RE.sub(

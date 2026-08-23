@@ -21,11 +21,10 @@ def _screen_fragment(html: str, screen_id: str) -> str:
     return html[start:] if next_screen == -1 else html[start:next_screen]
 
 
-def test_work_os_has_only_the_eight_persistent_destinations() -> None:
+def test_work_os_has_the_unified_performance_risk_destination() -> None:
     assert [screen.screen_id for screen in SCREEN_SPECS] == [
         "screen-cockpit",
         "screen-performance",
-        "screen-allocation",
         "screen-workspace",
         "screen-brief-library",
         "screen-analytics-playground",
@@ -52,11 +51,16 @@ def test_work_os_shell_preserves_the_prototype_navigation_and_layers() -> None:
     assert "L1 · Portfolio Intelligence" in html
     assert "L2 · Research Engine" in html
     assert "L3 · Operations & Governance" in html
-    assert (
-        len(re.findall(r'<button type="button"[^>]+class="k-btn k-btn-quiet nav-item', html)) == 8
-    )
+    assert len(
+        re.findall(r'<button type="button"[^>]+class="k-btn k-btn-quiet nav-item', html)
+    ) == len(SCREEN_SPECS)
     operations_nav = html.split('id="nav-execution-queue"', 1)[1].split("</button>", 1)[0]
     assert '<span class="nav-text">Operations</span>' in operations_nav
+    performance_nav = html.split('id="nav-performance"', 1)[1].split("</button>", 1)[0]
+    assert '<span class="nav-text">Performance</span>' in performance_nav
+    assert "Performance vs Index" not in performance_nav
+    assert "Portfolio Performance vs Index Benchmark" not in html
+    assert "breadcrumb.innerText = 'Performance'" in html
     assert "Execution Queue & Operations Hub" not in html
     assert "Operations & Execution Governance Hub" not in html
 
@@ -188,8 +192,7 @@ def test_work_os_shell_uses_live_backend_mounts_without_removing_old_endpoints()
     html = render_work_os_shell()
     expected = {
         "screen-cockpit": "/api/panel/overview",
-        "screen-performance": "/api/panel/portfolio_allocation",
-        "screen-allocation": "/api/panel/portfolio_health",
+        "screen-performance": "/api/panel/performance_risk",
         "screen-workspace": "/api/panel/holding",
         "screen-brief-library": "/api/work-os/briefs",
         "screen-analytics-playground": "/api/panel/explore",
@@ -207,7 +210,6 @@ def test_persistent_portfolio_and_audit_screens_are_live_first_not_prototypes() 
     html = render_work_os_shell()
     expected_mounts = {
         "screen-performance": "workOsPerformanceMount",
-        "screen-allocation": "workOsAllocationMount",
         "screen-audit-log": "workOsAuditMount",
     }
 
@@ -356,14 +358,14 @@ def test_fact_playground_is_a_live_governed_mount_not_static_verified_demo_data(
     assert "No prototype values are being shown" in html
 
 
-def test_work_os_deep_links_old_surfaces_into_the_eight_screen_ia() -> None:
+def test_work_os_deep_links_old_surfaces_into_the_unified_screen_ia() -> None:
     html = render_work_os_shell()
     for old_hash, screen_id in {
         "overview": "screen-cockpit",
         "holding": "screen-workspace",
         "screen-full-brief": "screen-brief-library",
         "diet": "screen-workspace",
-        "portfolio_risk": "screen-allocation",
+        "portfolio_risk": "screen-performance",
         "musings": "screen-audit-log",
         "journal": "screen-audit-log",
         "provenance": "screen-execution-queue",
@@ -448,19 +450,15 @@ def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hyd
 def test_l1_card_titles_and_hydration_hooks_compose_the_registry_roles() -> None:
     html = render_work_os_shell()
     target = "".join(
-        _screen_fragment(html, screen_id)
-        for screen_id in ("screen-cockpit", "screen-performance", "screen-allocation")
+        _screen_fragment(html, screen_id) for screen_id in ("screen-cockpit", "screen-performance")
     )
 
     cockpit = _screen_fragment(html, "screen-cockpit")
     assert cockpit.count('<div class="stat-heading">') == 4
-    assert target.count('class="k-card k-card-section research-toolbar"') == 2
+    assert target.count('class="k-card k-card-section research-toolbar"') == 1
     performance = _screen_fragment(html, "screen-performance")
-    allocation = _screen_fragment(html, "screen-allocation")
-    assert '<h1 class="k-card-title">Performance vs Index</h1>' in performance
-    assert '<h1 class="k-card-title">Risk &amp; Allocations</h1>' in allocation
+    assert '<h1 class="k-card-title">Performance &amp; Risk</h1>' in performance
     assert 'id="workOsPerformanceMount"' in performance
-    assert 'id="workOsAllocationMount"' in allocation
     assert "card.querySelector('.stat-heading')" in html
     assert (
         '<h3 class="k-card-title k-card-row-title">\' + escapeWorkOsHtml(action.headline)'
@@ -475,11 +473,11 @@ def test_cockpit_stats_use_typed_keys_and_native_screen_anchors() -> None:
     assert 'data-work-os-stat-key="companies"' in cockpit
     assert (
         'data-work-os-stat-key="performance" href="#screen-performance" '
-        'aria-label="Open Performance vs Index"'
+        'aria-label="Open Performance &amp; Risk"'
     ) in cockpit
     assert (
-        'data-work-os-stat-key="risk" href="#screen-allocation" '
-        'aria-label="Open Risk &amp; Allocations"'
+        'data-work-os-stat-key="risk" href="#screen-performance" '
+        'aria-label="Open Performance &amp; Risk"'
     ) in cockpit
     assert "onclick=" not in cockpit
     assert [spec.key for spec in COCKPIT_STAT_SPECS] == ["nav", "performance", "risk", "companies"]
@@ -496,15 +494,14 @@ def test_cockpit_stats_use_typed_keys_and_native_screen_anchors() -> None:
 def test_l1_live_shells_do_not_ship_prototype_card_grids_or_inline_geometry() -> None:
     html = render_work_os_shell()
     target = "".join(
-        _screen_fragment(html, screen_id)
-        for screen_id in ("screen-cockpit", "screen-performance", "screen-allocation")
+        _screen_fragment(html, screen_id) for screen_id in ("screen-cockpit", "screen-performance")
     )
 
     assert "card-grid-stat-4col" not in target
     assert 'class="card-grid-stat"' not in target
     assert 'class="k-stat-grid" id="workOsPortfolioStats"' in target
     assert '<header class="k-section-head">' in _screen_fragment(html, "screen-cockpit")
-    for screen_id in ("screen-performance", "screen-allocation"):
+    for screen_id in ("screen-performance",):
         fragment = _screen_fragment(html, screen_id)
         assert "style=" not in fragment
         assert fragment.count('class="k-card k-card-section research-toolbar"') == 1

@@ -278,7 +278,7 @@ def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:
 
 
 def test_dashboard_page_returns_shell(client: FlaskClient) -> None:
-    """GET / serves the eight-screen Work OS while panel APIs stay live."""
+    """GET / serves the unified Work OS while legacy panel APIs stay live."""
     resp = client.get("/")
     assert resp.status_code == 200
     assert resp.mimetype == "text/html"
@@ -289,7 +289,6 @@ def test_dashboard_page_returns_shell(client: FlaskClient) -> None:
     for screen_id in (
         "screen-cockpit",
         "screen-performance",
-        "screen-allocation",
         "screen-workspace",
         "screen-brief-library",
         "screen-analytics-playground",
@@ -309,6 +308,14 @@ def test_dashboard_page_returns_shell(client: FlaskClient) -> None:
     assert "MELI" in overview_body
     # The seeded thesis verdict renders as a kit status pill (.k-pill).
     assert "k-pill" in overview_body
+
+    performance_risk = client.get("/api/panel/performance_risk")
+    assert performance_risk.status_code == 200
+    assert "Risk Explorer" in performance_risk.get_data(as_text=True)
+
+    correlation = client.get("/api/panel/performance_risk?fragment=correlation")
+    assert correlation.status_code == 200
+    assert correlation.mimetype == "text/html"
 
     allocation = client.get("/api/panel/portfolio_allocation")
     assert allocation.status_code == 200
