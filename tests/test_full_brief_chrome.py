@@ -80,7 +80,7 @@ def test_full_brief_has_a_live_research_items_band_outside_the_persisted_body() 
     shell = render_work_os_shell()
     assert "function workOsLoadBriefResearchItems(ticker)" in shell
     assert "items=1&band=brief&ticker=" in shell
-    assert "void workOsLoadBriefResearchItems(artifact.ticker)" in shell
+    assert shell.count("void workOsLoadBriefResearchItems(artifact.ticker)") == 1
 
 
 def test_full_brief_research_items_band_has_reachable_archive_restore_and_retry_chrome() -> None:

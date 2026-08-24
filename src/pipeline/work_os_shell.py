@@ -741,7 +741,6 @@ def _production_runtime(generated_at: datetime) -> str:
     const sections = document.getElementById('workOsBriefReaderSections');
     workOsReaderContext = artifact;
     void workOsLoadBriefResearchItems(artifact.ticker);
-    void workOsLoadBriefResearchItems(artifact.ticker);
     const displayTitle = artifact.title && String(artifact.title).toUpperCase().startsWith(String(artifact.ticker).toUpperCase())
       ? artifact.title
       : artifact.ticker + ' · ' + (artifact.title || 'Full Research Brief');
