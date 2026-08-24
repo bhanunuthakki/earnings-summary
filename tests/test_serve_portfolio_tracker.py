@@ -48,6 +48,39 @@ def test_scheduled_refresh_context_requires_running_canonical_windows_task(tmp_p
     )
 
 
+def test_scheduled_refresh_context_uses_one_bounded_validated_process_snapshot(
+    tmp_path: Path,
+) -> None:
+    """The scheduler proof must remain fast and fail closed on bad process rows."""
+
+    calls: list[list[str]] = []
+
+    def running_task(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    assert refresh.canonical_scheduler_task_is_running(tmp_path, windows=True, run=running_task)
+    script = calls[0][-1]
+
+    assert script.count("Get-CimInstance -ClassName Win32_Process") == 1
+    assert "-Filter ('ProcessId=' + $next)" not in script
+    assert "Where-Object { [int]$_.ProcessId -gt 0 }" in script
+    assert "$maxProcessRows=4096;" in script
+    assert "$maxAncestryHops=32;" in script
+    assert (
+        "if ($processRows.Count -eq 0 -or $processRows.Count -gt $maxProcessRows) { exit 1 }"
+        in script
+    )
+    assert "if ($fields.Count -ne 2) { exit 1 }" in script
+    assert (
+        "if ($processId -le 0 -or $parent -lt 0 -or $parents.ContainsKey($processId)) { exit 1 }"
+        in script
+    )
+    assert "$pid=" not in script
+    assert "$hops -lt $maxAncestryHops" in script
+    assert "$ancestry.Add([int]$next)" in script
+
+
 def test_tracker_server_argv_requires_explicit_existing_root_and_safe_loopback_url(
     tmp_path: Path,
 ) -> None:
