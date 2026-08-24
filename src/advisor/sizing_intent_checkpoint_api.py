@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from advisor.price_action_bands import PriceActionBandProjection
 from advisor.sizing_intent_review import (
     SizingIntentReviewEntry,
     load_sizing_intent_review,
@@ -119,6 +120,7 @@ class SizingIntentReadProjection(BaseModel):
     checkpoint_payload_sha256: str | None
     checkpoint_evidence_available: bool
     target_band: TargetBand | None
+    price_action_bands: PriceActionBandProjection
 
 
 class SizingIntentCheckpointResult(BaseModel):
@@ -273,4 +275,5 @@ def _projection(entry: SizingIntentReviewEntry) -> SizingIntentReadProjection:
         checkpoint_payload_sha256=entry.checkpoint_payload_sha256,
         checkpoint_evidence_available=entry.checkpoint_evidence_available,
         target_band=entry.target_band,
+        price_action_bands=entry.price_action_bands,
     )

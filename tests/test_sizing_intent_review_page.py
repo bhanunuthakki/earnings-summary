@@ -13,6 +13,7 @@ from advisor.sizing_intent_checkpoint_api import (
     confirm_sizing_intent_checkpoint,
 )
 from advisor.sizing_intent_review_page import render_sizing_intent_review_page
+from user_state.sizing import append_intent
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -77,6 +78,28 @@ def test_page_truthfully_labels_unencoded_when_no_ticker_intent(
     assert "/api/sizing-intents/${encodeURIComponent(config.ticker)}/checkpoint" in html
 
 
+def test_page_marks_nu_add_rung_as_draft_without_inventing_a_percent_unit(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    database = migrated_db(tmp_path / "review-page-nu-draft.db")
+    draft = append_intent(
+        ticker="NU",
+        intent_kind="add_rung",
+        intent_value=9.5,
+        narrative="Draft owner add rung pending review.",
+        db_path=database,
+    )
+
+    html = render_sizing_intent_review_page(database, "NU")
+
+    assert '<span class="k-pill k-pill-warn">draft</span>' in html
+    assert "Persisted evidence · add_rung" in html
+    assert f"<dt>Revision</dt><dd>{draft.id}</dd>" in html
+    assert "<dt>Intent value</dt><dd>9.5</dd>" in html
+    assert "9.5%" not in html
+    assert "Not actionable; no sensor may arm this ladder." in html
+
+
 def test_page_renders_ratified_revision_provenance_and_form_contract(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
@@ -84,10 +107,14 @@ def test_page_renders_ratified_revision_provenance_and_form_contract(
     created = confirm_sizing_intent_checkpoint(
         SizingIntentCheckpointRequest.model_validate(_body()), ticker="WIX", db_path=database
     )
+
     html = render_sizing_intent_review_page(database, "WIX")
+
     assert "ratified" in html and f">{created.projection.sizing_intent_id}<" in html
     assert "materialized_holdings_snapshot" in html
     assert "Provenance digest" in html
+    assert "Structured price-action bands" in html
+    assert "Not actionable; no sensor may arm this ladder." in html
     assert "Expected current revision" in html
     assert '"currentRevisions":{"target_weight_pct":' in html
     assert (
@@ -95,6 +122,51 @@ def test_page_renders_ratified_revision_provenance_and_form_contract(
         and 'option value="revise"' in html
         and 'option value="ratify"' in html
     )
+
+
+def test_page_renders_only_typed_checkpoint_price_action_bands(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    database = migrated_db(tmp_path / "review-page-price-action-bands.db")
+    body = _body()
+    sizing_intent = body["sizing_intent"]
+    assert isinstance(sizing_intent, dict)
+    sizing_intent["price_action_bands"] = {
+        "add_below": 80.0,
+        "hold_low": 80.0,
+        "hold_high": 100.0,
+        "trim_above": 100.0,
+        "sell_above": 120.0,
+        "approach_bands": {
+            "add_buy_below": 82.0,
+            "trim_above": 98.0,
+            "sell_above": 118.0,
+        },
+        "currency": "USD",
+        "owner": "owner@example.test",
+        "revision": "wix-price-action-v1",
+        "as_of": "2026-08-23T12:00:00+00:00",
+        "source_ref": "owner-input:wix-price-action-v1",
+        "source_content_sha256": "c" * 64,
+    }
+    created = confirm_sizing_intent_checkpoint(
+        SizingIntentCheckpointRequest.model_validate(body), ticker="WIX", db_path=database
+    )
+
+    html = render_sizing_intent_review_page(database, "WIX")
+
+    assert "Structured price-action bands" in html
+    assert "Add / Buy below" in html and "80.0 USD" in html
+    assert "Hold low" in html and "Hold high" in html
+    assert "Trim above" in html and "Sell above" in html
+    assert "Approach add / buy below" in html and "82.0 USD" in html
+    assert "Band owner" in html and "wix-price-action-v1" in html
+    assert "Actionability" in html
+    assert "Actionable for a future deterministic sensor only" in html
+    assert f"owner-decision-checkpoint:{created.receipt.checkpoint_id}" in html
+    assert created.receipt.payload_sha256 in html
+    assert "owner-input:wix-price-action-v1" in html
+    assert "Owner narrative and thesis conditions are not sizing thresholds." in html
 
 
 def test_page_renders_all_current_intent_kinds_and_derives_the_matching_revision(
