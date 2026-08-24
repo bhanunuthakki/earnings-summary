@@ -18,9 +18,12 @@ from integrations.portfolio_allocation import (
     PortfolioAllocationProjection,
     fetch_portfolio_allocation,
 )
+from integrations.portfolio_tracker_client import PolicyMix, PortfolioAnalytics
 from pipeline.allocation_recommendation_panel import render_portfolio_posture_section
 from pipeline.portfolio_panel import render_portfolio_panel
 from pipeline.portfolio_styles import portfolio_css
+
+_POLICY_TICKERS: tuple[str, ...] = ("QQQ", "SGOV", "VTI", "VWO")
 
 _TABS: tuple[tuple[str, str, str], ...] = (
     ("exposure", "Exposure", "exposure"),
@@ -91,6 +94,108 @@ _TABS_JS = """
 </script>
 """.strip()
 
+_POLICY_EDITOR_JS = """
+<script>
+(function () {
+  function wire(root) {
+    if (!root || root.dataset.wired === '1') return;
+    root.dataset.wired = '1';
+    var form = root.querySelector('[data-policy-form]');
+    var status = root.querySelector('[data-policy-status]');
+    if (!form || !status) return;
+    function say(message, tone) {
+      status.textContent = message;
+      status.dataset.tone = tone || 'neutral';
+    }
+    function refreshPanel() {
+      var target = root.closest('#workOsPerformanceMount') || root.parentElement;
+      if (!target) { say('Fresh policy read is ready; refresh this panel to display it.', 'error'); return; }
+      fetch('/api/panel/performance_risk').then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.text();
+      }).then(function (html) {
+        target.innerHTML = html;
+      var scripts = target.querySelectorAll('script');
+      for (var i = 0; i < scripts.length; i++) {
+        var old = scripts[i]; var script = document.createElement('script');
+        if (old.src) script.src = old.src; else script.textContent = old.textContent;
+        old.parentNode.replaceChild(script, old);
+      }
+      }).catch(function () {
+        say('Could not complete the fresh policy read. The confirmed chart and mix are unchanged.', 'error');
+      });
+    }
+    function checkReceipt() {
+      var raw = window.sessionStorage.getItem('bha79-policy-receipt');
+      if (!raw) return;
+      var receipt;
+      try { receipt = JSON.parse(raw); } catch (_) { window.sessionStorage.removeItem('bha79-policy-receipt'); return; }
+      var revision = Number(root.dataset.policyRevision);
+      if (root.dataset.recomputationStatus === 'current' && Number.isFinite(revision) && revision >= receipt.revision) {
+        window.sessionStorage.removeItem('bha79-policy-receipt');
+        say('Policy mix is current at revision ' + revision + '.', 'success');
+        return;
+      }
+      if (receipt.attempts >= 8) {
+        say('Receipt accepted; benchmark recomputation is still pending. Refresh the panel to check again.', 'pending');
+        return;
+      }
+      receipt.attempts += 1;
+      window.sessionStorage.setItem('bha79-policy-receipt', JSON.stringify(receipt));
+      say('Receipt accepted; benchmark recomputation pending. Checking the fresh panel…', 'pending');
+      window.setTimeout(refreshPanel, 1250);
+    }
+    checkReceipt();
+    if (form.dataset.writeReady !== '1') return;
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var inputs = form.querySelectorAll('input[data-policy-ticker]');
+      var weights = []; var total = 0; var firstInvalid = null;
+      for (var i = 0; i < inputs.length; i++) {
+        var input = inputs[i]; var value = Number(input.value);
+        input.removeAttribute('aria-invalid');
+        if (!Number.isFinite(value) || value < 0 || value > 100) {
+          input.setAttribute('aria-invalid', 'true'); if (!firstInvalid) firstInvalid = input; continue;
+        }
+        weights.push({ticker: input.dataset.policyTicker, weight_pct: value, notes: null}); total += value;
+      }
+      if (firstInvalid) { say('Enter a finite weight from 0 to 100 for each fund.', 'error'); firstInvalid.focus(); return; }
+      if (Math.abs(total - 100) > 0.01) {
+        say('Policy weights must total 100.00%.', 'error'); inputs[0].focus(); return;
+      }
+      var apply = form.querySelector('button[type=submit]');
+      apply.disabled = true; say('Applying policy mix…', 'pending');
+      var key = 'policy:' + Date.now() + ':' + Math.random().toString(36).slice(2);
+      fetch('/api/portfolio/policy', {
+        method: 'PUT', headers: {'Content-Type': 'application/json', 'X-Portfolio-Write-Intent': 'replace-policy'},
+        body: JSON.stringify({weights: weights, expected_revision: Number(form.dataset.revision), idempotency_key: key, source: 'earnings_summary', as_of: new Date().toISOString()})
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (body) {
+          if (response.status === 200 || response.status === 202) {
+            var confirmedRevision = Number(body && body.policy && body.policy.revision);
+            if (!Number.isInteger(confirmedRevision) || confirmedRevision <= Number(form.dataset.revision)) {
+              say('Tracker returned no newer confirmed revision. The displayed mix is unchanged.', 'error');
+              apply.disabled = false; return;
+            }
+            window.sessionStorage.setItem('bha79-policy-receipt', JSON.stringify({revision: confirmedRevision, attempts: 0}));
+            refreshPanel(); return;
+          }
+          if (response.status === 409) say('Policy revision changed elsewhere. Refresh the panel before applying again.', 'error');
+          else if (response.status === 403) say('Policy write is unauthorized. The confirmed mix is unchanged.', 'error');
+          else if (response.status === 503) say(body.error === 'recomputation_failure' ? 'Policy recomputation failed. The confirmed mix is unchanged.' : 'Tracker is offline. The confirmed mix is unchanged.', 'error');
+          else if (response.status === 422 || response.status === 400) say('Tracker rejected this mix. Check the values and try again.', 'error');
+          else say('Policy update failed. The confirmed mix is unchanged.', 'error');
+          apply.disabled = false;
+        });
+      }).catch(function () { say('Tracker is offline. The confirmed mix is unchanged.', 'error'); apply.disabled = false; });
+    });
+  }
+  var editors = document.querySelectorAll('[data-policy-editor]');
+  for (var i = 0; i < editors.length; i++) wire(editors[i]);
+})();
+</script>
+""".strip()
+
 
 def _percent(bucket: PortfolioAllocationBucket) -> str:
     if bucket.weight_pct is None:
@@ -141,6 +246,57 @@ def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
     )
 
 
+def _policy_editor(policy: PolicyMix | None) -> str:
+    """Render only provider-confirmed policy weights; never invent a mix."""
+    if policy is None:
+        return (
+            '<section class="panel pr-policy-editor" data-policy-editor><h2>Policy mix</h2>'
+            '<p class="muted">Policy mix unavailable from the tracker.</p></section>'
+        )
+    confirmed = {weight.ticker.upper(): weight for weight in policy.weights}
+    supported = all(
+        ticker in confirmed and confirmed[ticker].weight_pct is not None
+        for ticker in _POLICY_TICKERS
+    ) and set(confirmed) == set(_POLICY_TICKERS)
+    ready = policy.write_ready and policy.is_balanced and supported
+    reason = (
+        "Policy metadata is not current; Apply mix stays disabled."
+        if not policy.write_ready
+        else "This tracker policy cannot be safely edited from the approved four-fund mix."
+        if not supported
+        else "Policy weights are not balanced; Apply mix stays disabled."
+        if not policy.is_balanced
+        else ""
+    )
+    rows = "".join(
+        '<label class="pr-policy-row"><span>{ticker}</span>'
+        '<input type="number" inputmode="decimal" min="0" max="100" step="0.01" '
+        'data-policy-ticker="{ticker}" aria-label="{ticker} target weight" value="{weight}"></label>'.format(
+            ticker=ticker,
+            weight=escape(f"{confirmed[ticker].weight_pct:.2f}")
+            if ticker in confirmed and confirmed[ticker].weight_pct is not None
+            else "",
+        )
+        for ticker in _POLICY_TICKERS
+    )
+    revision = "" if policy.revision is None else str(policy.revision)
+    recomputation = policy.recomputation_status or "unavailable"
+    disabled = "" if ready else " disabled"
+    status = "Policy mix is current." if ready else reason
+    return (
+        '<section class="panel pr-policy-editor" data-policy-editor '
+        f'data-policy-revision="{escape(revision, quote=True)}" '
+        f'data-recomputation-status="{escape(recomputation, quote=True)}"><h2>Policy mix</h2>'
+        '<p class="sub">Provider-confirmed targets only · revision '
+        f"{escape(revision or 'unavailable')} · recomputation {escape(recomputation)}.</p>"
+        f'<form data-policy-form data-write-ready="{str(ready).lower()}" data-revision="{escape(revision, quote=True)}">'
+        f'<div class="pr-policy-grid">{rows}</div>'
+        f'<div class="pr-policy-actions"><button type="submit" class="k-btn k-btn-primary"{disabled}>Apply mix</button>'
+        f'<p class="pr-policy-status" data-policy-status role="status">{escape(status)}</p></div></form></section>'
+        + _POLICY_EDITOR_JS
+    )
+
+
 def _risk_explorer() -> str:
     tabs = "".join(
         f'<button type="button" class="k-chip k-chip-btn k-chip-tab" role="tab" '
@@ -170,36 +326,38 @@ def render_performance_risk_panel(
     include_backfill: bool = False,
     allocation: PortfolioAllocationProjection | None = None,
     performance_renderer: Callable[[], str] | None = None,
+    policy: PolicyMix | None = None,
 ) -> str:
-    """Compose the approved read-only destination over canonical renderers."""
-    performance = (
-        performance_renderer
-        or (
-            lambda: render_portfolio_panel(
-                start_date=start_date,
-                end_date=end_date,
-                include_backfill=include_backfill,
-                db_path=db_path,
-                performance_title="Index Benchmarking",
-                include_position_drivers=False,
-                refresh_endpoint="/api/panel/performance_risk",
-                refresh_target_selector="#workOsPerformanceMount",
-            )
+    """Compose Performance & Risk with one shared tracker policy read."""
+    captured: dict[str, PolicyMix | None] = {"policy": None}
+    if performance_renderer is not None:
+        performance = performance_renderer()
+    else:
+
+        def capture(analytics: PortfolioAnalytics) -> None:
+            captured["policy"] = analytics.policy
+
+        performance = render_portfolio_panel(
+            start_date=start_date,
+            end_date=end_date,
+            include_backfill=include_backfill,
+            db_path=db_path,
+            performance_title="Index Benchmarking",
+            include_position_drivers=False,
+            refresh_endpoint="/api/panel/performance_risk",
+            refresh_target_selector="#workOsPerformanceMount",
+            analytics_observer=capture,
         )
-    )()
     allocation_card = render_allocation_card(
         allocation if allocation is not None else fetch_portfolio_allocation()
     )
     posture = render_portfolio_posture_section(db_path, repo_root, include_actions=False)
-    policy_note = (
-        '<p class="muted pr-policy-note">Policy mix remains read-only until the tracker exposes '
-        "an authorized revisioned write and fresh benchmark receipt.</p>"
-    )
+    policy_editor = _policy_editor(policy if policy is not None else captured["policy"])
     return (
         portfolio_css()
         + '<div class="performance-risk-panel">'
         + performance
-        + policy_note
+        + policy_editor
         + '<div class="pr-secondary-grid">'
         + posture
         + allocation_card
