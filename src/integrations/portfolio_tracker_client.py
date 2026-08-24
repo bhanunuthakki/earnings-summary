@@ -55,12 +55,13 @@ import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TypeVar, cast
+from typing import Literal, TypeVar, cast
 from urllib.parse import urlencode
 
 import requests
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from integrations.portfolio_tracker_v1 import (
     PerformanceV1Result,
@@ -632,6 +633,170 @@ class PolicyMix:
     total_pct: float | None
     is_balanced: bool
     weights: list[PolicyWeight] = field(default_factory=list[PolicyWeight])
+    revision: int | None = None
+    source: str | None = None
+    as_of: str | None = None
+    recomputation_status: Literal["current", "required"] | None = None
+    recomputation_policy_revision: int | None = None
+    recomputation_reason: str | None = None
+
+    @property
+    def write_ready(self) -> bool:
+        """Whether a revisioned edit can safely start from this confirmed read."""
+
+        return (
+            self.revision is not None
+            and self.source is not None
+            and self.as_of is not None
+            and self.recomputation_status == "current"
+            and self.recomputation_policy_revision == self.revision
+        )
+
+
+class PolicyReplacementWeight(BaseModel):
+    """One complete-policy replacement row, expressed in percentage points."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ticker: str = Field(min_length=1, max_length=16)
+    weight_pct: float = Field(ge=0, le=100)
+    notes: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_ticker(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("ticker must be non-empty")
+        return normalized
+
+    @field_validator("notes")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+
+class PolicyReplacementRequest(BaseModel):
+    """The tracker-owned, revisioned full-replacement contract.
+
+    This deliberately contains no credential material. The local tracker
+    authorizes the request from its loopback peer, configured Origin, and the
+    explicit intent header supplied by :func:`replace_portfolio_policy`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    weights: tuple[PolicyReplacementWeight, ...] = Field(max_length=500)
+    expected_revision: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    source: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_-]*$")
+    as_of: datetime
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("source")
+    @classmethod
+    def normalize_source(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("as_of")
+    @classmethod
+    def require_aware_as_of(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("as_of must include a UTC offset")
+        return value.astimezone(UTC)
+
+
+class PolicyRecomputation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["current", "required"]
+    policy_revision: int = Field(ge=0)
+    reason: Literal["policy_weights_changed"] | None = None
+
+
+class PolicyWriteReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    receipt_id: str
+    idempotency_key: str
+    outcome: Literal["applied", "unchanged"]
+    recorded_at: datetime
+
+
+class GovernedPolicyWeight(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ticker: str
+    weight_pct: float
+    notes: str | None = None
+    updated_at: datetime
+
+
+class GovernedPolicyMix(BaseModel):
+    """Provider-confirmed policy state returned only after a successful PUT."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    weights: tuple[GovernedPolicyWeight, ...]
+    total_pct: float
+    is_balanced: bool
+    revision: int = Field(ge=0)
+    source: str
+    as_of: datetime
+    recomputation: PolicyRecomputation
+    receipt: PolicyWriteReceipt | None = None
+
+    @model_validator(mode="after")
+    def require_coherent_write_receipt(self) -> GovernedPolicyMix:
+        """A write is not confirmed until its durable audit receipt agrees."""
+        if self.receipt is None:
+            raise ValueError("policy write response missing receipt")
+        if not self.is_balanced:
+            raise ValueError("policy write response is not balanced")
+        if self.recomputation.policy_revision != self.revision:
+            raise ValueError("policy recomputation revision does not match policy revision")
+        return self
+
+
+PolicyWriteStatus = Literal[
+    "applied",
+    "accepted_pending_recomputation",
+    "validation_error",
+    "revision_conflict",
+    "idempotency_conflict",
+    "unauthorized",
+    "offline",
+    "recomputation_failure",
+    "provider_error",
+    "malformed_response",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyWriteResult:
+    """A non-throwing outcome for the owner-initiated policy proxy.
+
+    ``policy`` is populated only from a provider-confirmed success response.
+    On every failure it stays ``None`` so an eventual UI can retain its last
+    confirmed read instead of rendering the submitted draft as current state.
+    """
+
+    status: PolicyWriteStatus
+    policy: GovernedPolicyMix | None = None
+    current_revision: int | None = None
+
+    @property
+    def accepted(self) -> bool:
+        return self.status == "applied" and self.policy is not None
+
+    @property
+    def pending_recomputation(self) -> bool:
+        """True after a durable receipt but before benchmark-derived reads refresh."""
+        return self.status == "accepted_pending_recomputation" and self.policy is not None
 
 
 @dataclass(slots=True)
@@ -1087,10 +1252,26 @@ def _parse_policy(data: dict[str, object]) -> PolicyMix:
         )
         for w in _dicts(data.get("weights"))
     ]
+    recomputation = data.get("recomputation")
+    recomputation_data = (
+        cast("dict[str, object]", recomputation) if isinstance(recomputation, dict) else {}
+    )
+    status_value = _s(recomputation_data.get("status"))
+    recomputation_status: Literal["current", "required"] | None = (
+        cast("Literal['current', 'required']", status_value)
+        if status_value in {"current", "required"}
+        else None
+    )
     return PolicyMix(
         total_pct=_f(data.get("total_pct")),
         is_balanced=bool(data.get("is_balanced")),
         weights=weights,
+        revision=_i(data.get("revision")),
+        source=_s(data.get("source")),
+        as_of=_s(data.get("as_of")),
+        recomputation_status=recomputation_status,
+        recomputation_policy_revision=_i(recomputation_data.get("policy_revision")),
+        recomputation_reason=_s(recomputation_data.get("reason")),
     )
 
 
@@ -1215,6 +1396,88 @@ _DEFAULT_SECTIONS: frozenset[str] = frozenset(
 def _resolve_base(api_url: str | None) -> str:
     """Resolve the tracker base URL: explicit arg → env → loopback default."""
     return (api_url or os.environ.get("PORTFOLIO_TRACKER_API_URL") or _DEFAULT_API_URL).rstrip("/")
+
+
+def replace_portfolio_policy(
+    request: PolicyReplacementRequest,
+    *,
+    api_url: str | None = None,
+    timeout: float = _ANALYTICS_TIMEOUT_SECONDS,
+) -> PolicyWriteResult:
+    """Send one explicit, complete policy replacement to the local tracker.
+
+    This is intentionally a narrow provider boundary: it neither retries a
+    mutation nor synthesizes current state from the submitted request. The
+    caller receives a typed, stable failure category and can retain its last
+    confirmed read on every non-success outcome.
+    """
+    try:
+        response = requests.put(
+            f"{_resolve_base(api_url)}/api/policy",
+            json=request.model_dump(mode="json"),
+            headers={"X-Portfolio-Write-Intent": "replace-policy"},
+            timeout=(_CONNECT_TIMEOUT_SECONDS, timeout),
+        )
+    except requests.ConnectionError:
+        return PolicyWriteResult(status="offline")
+    except requests.Timeout:
+        return PolicyWriteResult(status="offline")
+    except requests.RequestException:
+        return PolicyWriteResult(status="provider_error")
+
+    if response.status_code in (401, 403):
+        return PolicyWriteResult(status="unauthorized")
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return PolicyWriteResult(status="malformed_response")
+    if not isinstance(payload, dict):
+        return PolicyWriteResult(status="malformed_response")
+    body = cast("dict[str, object]", payload)
+
+    if response.status_code == 422:
+        return PolicyWriteResult(status="validation_error")
+    if response.status_code == 409:
+        detail = body.get("detail")
+        detail_dict = cast("dict[str, object]", detail) if isinstance(detail, dict) else {}
+        code = detail_dict.get("code")
+        if code == "POLICY_IDEMPOTENCY_CONFLICT":
+            return PolicyWriteResult(status="idempotency_conflict")
+        if code == "POLICY_REVISION_CONFLICT":
+            current = detail_dict.get("current_revision")
+            return PolicyWriteResult(
+                status="revision_conflict",
+                current_revision=current if isinstance(current, int) else None,
+            )
+        return PolicyWriteResult(status="provider_error")
+    if response.status_code == 503:
+        detail = body.get("detail")
+        detail_dict = cast("dict[str, object]", detail) if isinstance(detail, dict) else {}
+        if detail_dict.get("code") == "POLICY_RECOMPUTATION_INVALIDATION_FAILED":
+            return PolicyWriteResult(status="recomputation_failure")
+        return PolicyWriteResult(status="provider_error")
+    if not 200 <= response.status_code < 300:
+        return PolicyWriteResult(status="provider_error")
+    try:
+        confirmed = GovernedPolicyMix.model_validate(body)
+    except ValidationError:
+        return PolicyWriteResult(status="malformed_response")
+    receipt = confirmed.receipt
+    assert receipt is not None  # enforced by GovernedPolicyMix
+    expected_revision = (
+        request.expected_revision + 1 if receipt.outcome == "applied" else request.expected_revision
+    )
+    if (
+        receipt.idempotency_key != request.idempotency_key
+        or confirmed.revision != expected_revision
+        or confirmed.source != request.source
+        or confirmed.as_of != request.as_of
+    ):
+        return PolicyWriteResult(status="malformed_response")
+    if confirmed.recomputation.status == "required":
+        return PolicyWriteResult(status="accepted_pending_recomputation", policy=confirmed)
+    return PolicyWriteResult(status="applied", policy=confirmed)
 
 
 # One-shot liveness probe budget (wave B B4b). Deliberately tighter than the
