@@ -1004,7 +1004,7 @@ const exact = workOsActionEvidence({{
 }});
 if (!exact.includes('data-work-os-action-evidence="exact"')) throw new Error('exact metadata missing');
 if (!exact.includes('alert:17') || !exact.includes('sig-17')) throw new Error('exact provenance missing');
-if (!exact.includes('data-peek-url="/api/peek/alert/17"')) throw new Error('exact peek route missing');
+if (!exact.includes('data-peek-url="/api/governed-alerts/17/evidence"')) throw new Error('exact evidence route missing');
 if (!exact.includes('Open alert evidence')) throw new Error('read-only doorway missing');
 
 const aggregate = workOsActionEvidence({{
@@ -1012,7 +1012,7 @@ const aggregate = workOsActionEvidence({{
   lifecycle_state: null, source_ref: null, evidence_ref: null
 }});
 if (!aggregate.includes('data-work-os-action-evidence="unbound"')) throw new Error('aggregate is not visibly unbound');
-if (aggregate.includes('/api/peek/alert/')) throw new Error('aggregate fabricated peek route');
+if (aggregate.includes('/api/governed-alerts/')) throw new Error('aggregate fabricated evidence route');
 if (aggregate.includes('alert:')) throw new Error('aggregate fabricated alert identity');
 
 const malformed = workOsActionEvidence({{
@@ -1020,14 +1020,14 @@ const malformed = workOsActionEvidence({{
   lifecycle_state: 'pending', source_ref: 'alert:0', evidence_ref: 'sig-0'
 }});
 if (!malformed.includes('data-work-os-action-evidence="unbound"')) throw new Error('malformed identity is actionable');
-if (malformed.includes('/api/peek/alert/')) throw new Error('malformed identity invented URL');
+if (malformed.includes('/api/governed-alerts/')) throw new Error('malformed identity invented URL');
 
 const partial = workOsActionEvidence({{
   ticker: 'NU', action_id: 'alert:19', action_type: 'earnings_tone',
   lifecycle_state: 'pending', source_ref: 'alert:19', evidence_ref: null
 }});
 if (!partial.includes('data-work-os-action-evidence="partial"')) throw new Error('partial identity is not visible');
-if (partial.includes('/api/peek/alert/')) throw new Error('partial identity exposed a peek route');
+if (partial.includes('/api/governed-alerts/')) throw new Error('partial identity exposed an evidence route');
 """
     result = subprocess.run(
         [node, "-"], input=harness, text=True, capture_output=True, check=False, timeout=10
@@ -1037,6 +1037,53 @@ if (partial.includes('/api/peek/alert/')) throw new Error('partial identity expo
     assert "/approve" not in action_runtime
     assert "/api/actions/" not in action_runtime
     assert "queued_actions" not in action_runtime
+
+
+def test_action_queue_governed_controls_are_closed_and_evidence_bound() -> None:
+    """Only complete persisted identities get the core's registered action recipes."""
+    node = shutil.which("node")
+    if node is None:
+        return
+    html = render_work_os_shell()
+    action_runtime = html.split("const WORK_OS_GOVERNED_ALERT_ACTION_RECIPES", 1)[1].split(
+        "function workOsRenderPortfolio", 1
+    )[0]
+    harness = f"""
+function escapeWorkOsHtml(value) {{ return String(value == null ? '' : value); }}
+const window = {{ crypto: {{ randomUUID: () => 'stable-key' }} }};
+const WORK_OS_GOVERNED_ALERT_ACTION_RECIPES{action_runtime}
+const signature = 'a'.repeat(64);
+const ordinary = workOsGovernedActionControls({{
+  action_id: 'alert:4', action_type: 'material_news', lifecycle_state: 'pending',
+  source_ref: 'alert:4', evidence_ref: signature
+}});
+if (!ordinary.includes('data-governed-alert-action="review"')) throw new Error('review missing');
+if (!ordinary.includes('data-governed-alert-action="dismiss"')) throw new Error('dismiss missing');
+if (ordinary.includes('acknowledge') || ordinary.includes('supersede')) throw new Error('ordinary recipe widened');
+const thesis = workOsGovernedActionControls({{
+  action_id: 'alert:5', action_type: 'thesis_drift', lifecycle_state: 'pending',
+  source_ref: 'alert:5', evidence_ref: signature
+}});
+if (!thesis.includes('data-governed-alert-action="acknowledge"')) throw new Error('thesis acknowledge missing');
+if (!thesis.includes('data-governed-alert-action="complete"')) throw new Error('thesis complete missing');
+if (thesis.includes('data-governed-alert-action="dismiss"')) throw new Error('thesis recipe widened');
+const partial = workOsGovernedActionControls({{
+  action_id: 'alert:6', action_type: 'material_news', lifecycle_state: 'pending',
+  source_ref: 'alert:6', evidence_ref: 'not-a-digest'
+}});
+if (partial) throw new Error('partial identity became actionable');
+const first = workOsGovernedActionKey({{ alertId: '4' }}, 'review');
+const replay = workOsGovernedActionKey({{ alertId: '4' }}, 'review');
+if (first !== replay) throw new Error('double-submit key is not stable');
+"""
+    result = subprocess.run(
+        [node, "-"], input=harness, text=True, capture_output=True, check=False, timeout=10
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "/api/governed-alerts/' + alertId + '/actions" in action_runtime
+    assert "store unavailable; no action was recorded" in action_runtime
+    assert "conflicts with an existing action" in action_runtime
 
 
 def test_company_switcher_is_attached_to_identity_and_accessible() -> None:

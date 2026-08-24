@@ -832,7 +832,7 @@ def _production_runtime(generated_at: datetime) -> str:
       ? event.target.closest('[data-peek-url]') : null;
     if (!trigger) return;
     const route = trigger.getAttribute('data-peek-url') || '';
-    if (!route.startsWith('/api/peek/')) return;
+    if (!route.startsWith('/api/peek/') && !/^\\/api\\/governed-alerts\\/[1-9][0-9]*\\/evidence$/.test(route)) return;
     event.preventDefault();
     event.stopPropagation();
     workOsOpenPeekRoute(route, trigger.getAttribute('data-peek-title') || 'Research detail');
@@ -1208,7 +1208,114 @@ def _production_runtime(generated_at: datetime) -> str:
       return '<div class="k-card-meta" data-work-os-action-evidence="partial">Alert evidence doorway · full identity metadata unavailable</div>';
     }}
     const alertId = alertMatch[1];
-    return '<div class="k-card-meta" data-work-os-action-evidence="exact">Pending alert · source ' + escapeWorkOsHtml(actionId) + ' · ' + escapeWorkOsHtml(actionType) + ' · ' + escapeWorkOsHtml(lifecycleState) + ' · evidence ' + escapeWorkOsHtml(evidenceRef) + '</div>' + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-peek-url="/api/peek/alert/' + escapeWorkOsHtml(alertId) + '" data-peek-title="Pending alert evidence — ' + escapeWorkOsHtml(action.ticker) + '">Open alert evidence &rarr;</button>';
+    return '<div class="k-card-meta" data-work-os-action-evidence="exact">Pending alert · source ' + escapeWorkOsHtml(actionId) + ' · ' + escapeWorkOsHtml(actionType) + ' · ' + escapeWorkOsHtml(lifecycleState) + ' · evidence ' + escapeWorkOsHtml(evidenceRef) + '</div>' + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-peek-url="/api/governed-alerts/' + escapeWorkOsHtml(alertId) + '/evidence" data-peek-title="Pending alert evidence — ' + escapeWorkOsHtml(action.ticker) + '">Open alert evidence &rarr;</button>';
+  }}
+
+  // The core owns the transition rules.  This small, closed browser map only
+  // exposes controls whose action types the core accepts for each alert class.
+  const WORK_OS_GOVERNED_ALERT_ACTION_RECIPES = Object.freeze({{
+    thesis_drift: Object.freeze(['acknowledge', 'defer', 'complete', 'supersede']),
+    default: Object.freeze(['review', 'dismiss'])
+  }});
+  const workOsGovernedAlertActionKeys = new Map();
+
+  function workOsExactGovernedAlert(action) {{
+    const actionId = action && typeof action.action_id === 'string' ? action.action_id : '';
+    const alertMatch = /^alert:([1-9][0-9]*)$/.exec(actionId);
+    const triggerKind = action && typeof action.action_type === 'string' ? action.action_type.trim() : '';
+    const sourceRef = action && typeof action.source_ref === 'string' ? action.source_ref.trim() : '';
+    const evidenceRef = action && typeof action.evidence_ref === 'string' ? action.evidence_ref.trim().toLowerCase() : '';
+    if (!alertMatch || action.lifecycle_state !== 'pending' || !triggerKind || sourceRef !== actionId || !/^[0-9a-f]{{64}}$/.test(evidenceRef)) return null;
+    return {{ alertId: alertMatch[1], actionId: actionId, triggerKind: triggerKind, evidenceRef: evidenceRef }};
+  }}
+
+  function workOsGovernedActionControls(action) {{
+    const identity = workOsExactGovernedAlert(action);
+    if (!identity) return '';
+    const recipes = WORK_OS_GOVERNED_ALERT_ACTION_RECIPES[identity.triggerKind] || WORK_OS_GOVERNED_ALERT_ACTION_RECIPES.default;
+    const labels = {{ review: 'Mark reviewed', dismiss: 'Dismiss', acknowledge: 'Acknowledge', defer: 'Defer', complete: 'Complete', supersede: 'Supersede' }};
+    const buttons = recipes.map(function (actionType) {{
+      const tone = actionType === 'dismiss' ? 'k-btn-danger' : 'k-btn-quiet';
+      return '<button class="k-btn ' + tone + ' k-btn-sm" type="button" data-governed-alert-action="' + actionType + '" data-governed-alert-id="' + identity.alertId + '" data-governed-alert-evidence="' + escapeWorkOsHtml(identity.evidenceRef) + '" data-governed-alert-trigger="' + escapeWorkOsHtml(identity.triggerKind) + '">' + labels[actionType] + '</button>';
+    }}).join('');
+    return '<div class="research-actions" data-governed-alert-controls="' + identity.alertId + '">' + buttons + '</div><div class="k-card-meta" role="status" aria-live="polite" data-governed-alert-status="' + identity.alertId + '">Actions are evidence-bound and recorded locally.</div>';
+  }}
+
+  function workOsGovernedActionKey(identity, actionType) {{
+    const key = identity.alertId + ':' + actionType;
+    let value = workOsGovernedAlertActionKeys.get(key);
+    if (!value) {{
+      value = 'work-os-alert:' + identity.alertId + ':' + actionType + ':' + (window.crypto && typeof window.crypto.randomUUID === 'function' ? window.crypto.randomUUID() : Date.now().toString(36));
+      workOsGovernedAlertActionKeys.set(key, value);
+    }}
+    return value;
+  }}
+
+  function workOsGovernedActionFields(actionType) {{
+    if (actionType === 'dismiss') {{
+      const dismissReason = window.prompt('Reason for dismissal (required):', '');
+      return dismissReason && dismissReason.trim() ? {{ dismiss_reason: dismissReason.trim() }} : null;
+    }}
+    if (actionType === 'acknowledge') {{
+      const note = window.prompt('Acknowledgement note (optional):', '');
+      return {{ note: note && note.trim() ? note.trim() : null }};
+    }}
+    if (actionType === 'defer') {{
+      const note = window.prompt('Reason for deferral (required):', '');
+      if (!note || !note.trim()) return null;
+      const until = window.prompt('Defer until (ISO date or date/time, required):', '');
+      const parsed = until ? new Date(until) : new Date('');
+      if (Number.isNaN(parsed.getTime())) return null;
+      return {{ note: note.trim(), defer_until: parsed.toISOString() }};
+    }}
+    if (actionType === 'complete') {{
+      const decisionId = window.prompt('Owner decision ID (positive integer, required):', '');
+      if (!/^[1-9][0-9]*$/.test(String(decisionId || ''))) return null;
+      return {{ decision_id: Number(decisionId) }};
+    }}
+    if (actionType === 'supersede') {{
+      const replacementEpisodeId = window.prompt('Replacement thesis episode ID (required):', '');
+      return replacementEpisodeId && replacementEpisodeId.trim() ? {{ replacement_episode_id: replacementEpisodeId.trim() }} : null;
+    }}
+    return {{}};
+  }}
+
+  async function workOsSubmitGovernedAlertAction(button) {{
+    const alertId = String(button.getAttribute('data-governed-alert-id') || '');
+    const actionType = String(button.getAttribute('data-governed-alert-action') || '');
+    const evidenceRef = String(button.getAttribute('data-governed-alert-evidence') || '').toLowerCase();
+    const triggerKind = String(button.getAttribute('data-governed-alert-trigger') || '');
+    const recipes = WORK_OS_GOVERNED_ALERT_ACTION_RECIPES[triggerKind] || WORK_OS_GOVERNED_ALERT_ACTION_RECIPES.default;
+    if (!/^[1-9][0-9]*$/.test(alertId) || !/^[0-9a-f]{{64}}$/.test(evidenceRef) || !recipes.includes(actionType)) return;
+    const fields = workOsGovernedActionFields(actionType);
+    if (fields === null) return;
+    const controls = button.closest('[data-governed-alert-controls]');
+    const status = controls && controls.parentElement ? controls.parentElement.querySelector('[data-governed-alert-status="' + alertId + '"]') : null;
+    if (controls) controls.querySelectorAll('button').forEach(function (control) {{ control.disabled = true; }});
+    if (status) status.textContent = 'Saving evidence-bound action…';
+    const identity = {{ alertId: alertId }};
+    const body = Object.assign({{
+      idempotency_key: workOsGovernedActionKey(identity, actionType),
+      evidence_ref: evidenceRef,
+      action_type: actionType,
+      occurred_at: new Date().toISOString()
+    }}, fields);
+    try {{
+      const response = await fetch('/api/governed-alerts/' + alertId + '/actions', {{
+        method: 'POST', headers: {{ 'Content-Type': 'application/json', Accept: 'application/json' }}, body: JSON.stringify(body)
+      }});
+      const payload = await response.json().catch(function () {{ return null; }});
+      if (!response.ok) {{
+        if (status) status.textContent = response.status === 409 ? 'Alert changed or conflicts with an existing action. Refresh evidence before retrying.' : response.status === 503 ? 'Alert action store unavailable; no action was recorded.' : 'Alert action could not be saved.';
+        if (controls) controls.querySelectorAll('button').forEach(function (control) {{ control.disabled = false; }});
+        return;
+      }}
+      const result = payload && payload.receipt && payload.receipt.result_state ? String(payload.receipt.result_state) : 'recorded';
+      if (status) status.textContent = 'Saved · ' + result + '. Evidence remains available; Open Company returns to the Company Desk.';
+    }} catch (error) {{
+      if (status) status.textContent = 'Offline or unavailable; no action was recorded.';
+      if (controls) controls.querySelectorAll('button').forEach(function (control) {{ control.disabled = false; }});
+    }}
   }}
 
   function workOsRenderPortfolio(payload) {{
@@ -1252,7 +1359,7 @@ def _production_runtime(generated_at: datetime) -> str:
       actionQueue.innerHTML = payload.actions.length ? payload.actions.map(function (action) {{
         return '<article class="k-card k-card-action k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
           '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-title k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
-          '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div>' + workOsActionEvidence(action) + '</div></div>' +
+          '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div>' + workOsActionEvidence(action) + workOsGovernedActionControls(action) + '</div></div>' +
           '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company &rarr;</button></div></article>';
       }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
     }}
@@ -1278,6 +1385,9 @@ def _production_runtime(generated_at: datetime) -> str:
     document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
       if (node.tagName === 'TR' && event.target instanceof Element && event.target.closest('button')) return;
       switchCompanyWorkspace(node.dataset.workOsTicker);
+    }}); }});
+    document.querySelectorAll('[data-governed-alert-action]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
+      event.preventDefault(); event.stopPropagation(); workOsSubmitGovernedAlertAction(node);
     }}); }});
     document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
     document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
