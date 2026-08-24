@@ -758,12 +758,16 @@ def test_route_canary_rejects_untyped_or_overflowing_card(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     narrow = root / "tests" / "fixtures" / "design_canaries" / "cockpit.narrow.html"
+    overflow_rule = (
+        "#screen-cockpit .k-card { min-width: 900px !important; max-width: none !important; }"
+    )
+    narrow_markup = narrow.read_text(encoding="utf-8")
+    assert "</style>" in narrow_markup
     narrow.write_text(
-        narrow.read_text(encoding="utf-8").replace(
-            "</style>", "#screen-cockpit .k-card { width: 900px !important; }</style>"
-        ),
+        narrow_markup.replace("</style>", overflow_rule + "</style>"),
         encoding="utf-8",
     )
+    assert overflow_rule in narrow.read_text(encoding="utf-8")
     results = _scan_route_canaries(fixture_root=root)
     company = next(
         item for item in results if item.route == "company-desk" and item.viewport == "desktop"
@@ -771,6 +775,8 @@ def test_route_canary_rejects_untyped_or_overflowing_card(tmp_path: Path) -> Non
     cockpit = next(
         item for item in results if item.route == "cockpit" and item.viewport == "narrow"
     )
+    assert company.status == "failed", company
+    assert cockpit.status == "failed", cockpit
     assert any("exactly one archetype" in finding for finding in company.findings)
     assert any("overflows viewport" in finding for finding in cockpit.findings)
 
@@ -860,17 +866,22 @@ def test_route_canary_rejects_card_motion_under_reduced_motion(tmp_path: Path) -
     _require_playwright()
     root = _copy_route_fixtures(tmp_path)
     target = root / "tests" / "fixtures" / "design_canaries" / "cockpit.desktop.html"
+    motion_rule = (
+        "#screen-cockpit .k-card .stat-heading { transition-duration: 1s !important; }"
+    )
+    markup = target.read_text(encoding="utf-8")
+    assert "</style>" in markup
     target.write_text(
-        target.read_text(encoding="utf-8").replace(
-            "</style>", ".k-card { transition-duration: 1s !important; }</style>"
-        ),
+        markup.replace("</style>", motion_rule + "</style>"),
         encoding="utf-8",
     )
+    assert motion_rule in target.read_text(encoding="utf-8")
     result = next(
         item
         for item in _scan_route_canaries(fixture_root=root)
         if item.route == "cockpit" and item.viewport == "desktop"
     )
+    assert result.status == "failed", result
     assert any("descendant motion is not reduced" in finding for finding in result.findings)
 
 
