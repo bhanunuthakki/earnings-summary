@@ -333,9 +333,7 @@ def test_company_desk_projects_partial_kpi_states_and_rejects_future_facts(
                 status="warn",
                 detail="Approaching the threshold.",
                 narrative="Asset quality needs monitoring.",
-                observations=[
-                    BreakRuleObservation(period_end="2026-06-30", value=3.7, unit="%")
-                ],
+                observations=[BreakRuleObservation(period_end="2026-06-30", value=3.7, unit="%")],
             ),
             BreakRuleEvaluation(
                 rule_id="future_rule",
@@ -480,7 +478,10 @@ def test_company_desk_thesis_projection_is_ticker_scoped_for_portfolio_and_spars
         conn.close()
 
     assert desk.thesis_risk.status == "available"
-    assert desk.thesis_risk.break_rules[0].provenance_ref == f"thesis_evaluation:{ticker}:canonical_floor"
+    assert (
+        desk.thesis_risk.break_rules[0].provenance_ref
+        == f"thesis_evaluation:{ticker}:canonical_floor"
+    )
     assert desk.kpi_summary.items[0].evidence_ref == f"kpi:{ticker}:1"
 
 
