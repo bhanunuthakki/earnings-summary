@@ -1218,7 +1218,7 @@ def _scan_route_canaries(
                                 timeout=5000,
                             )
                         settled_selectors = {
-                            "cockpit": "#workOsActionQueue .k-card-action",
+                            "cockpit": "#workOsActionQueue .work-os-action-card",
                             "performance": "#workOsPerformanceMount .performance-risk-panel",
                             "risk-allocations": "#workOsAllocationMount .portfolio-health-console",
                             "company-desk": "#deskCompanyName",

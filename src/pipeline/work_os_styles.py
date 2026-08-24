@@ -16,7 +16,22 @@ html, body { min-height: 100dvh; }
 body { padding-bottom: env(safe-area-inset-bottom); }
 .work-os-threshold-note-title { font-weight:600; font-size:var(--fs-title); }
 .work-os-threshold-note-body { font-size:var(--fs-body); color:var(--fg-soft); }
-.work-os-action-queue { display:flex; flex-direction:column; gap:var(--sp-2); }
+.work-os-portfolio-topline { display:grid; grid-template-columns:minmax(0, 0.75fr) minmax(0, 2.25fr); gap:var(--sp-3); align-items:stretch; }
+.work-os-nav-card { min-inline-size:0; }
+.work-os-nav-card-body { padding:var(--sp-3); display:grid; align-content:center; }
+.work-os-allocation-list { display:grid; gap:var(--sp-half); margin-block-start:var(--sp-2); padding-block-start:var(--sp-2); border-block-start:var(--bw-thin) solid var(--hairline); }
+.work-os-allocation-row { margin:0; }
+.work-os-actions-rail { min-inline-size:0; }
+.work-os-action-queue { display:grid; gap:var(--sp-1); }
+.work-os-action-card { padding:var(--sp-1) var(--sp-2); overflow:hidden; }
+.work-os-action-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:var(--sp-2); }
+.work-os-action-copy { min-inline-size:0; }
+.work-os-action-copy .research-actions { margin-block-start:var(--sp-1); }
+.work-os-sort-button { inline-size:100%; justify-content:space-between; white-space:nowrap; }
+.work-os-portfolio-table th[aria-sort="ascending"] .work-os-sort-button, .work-os-portfolio-table th[aria-sort="descending"] .work-os-sort-button { color:var(--accent); }
+.work-os-threshold-link { display:inline-block; margin-block-start:var(--sp-1); color:var(--fg-soft); }
+.work-os-evaluation-list { display:grid; gap:var(--sp-2); }
+.work-os-evaluation-thread { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:var(--sp-3); }
 .work-os-section { display: flex; flex-direction: column; gap: var(--sp-2); }
 .work-os-stat-head { padding: var(--sp-3); border-bottom: var(--bw-thin) solid var(--hairline); }
 .k-stat-cell[data-work-os-stat-key] { position: relative; display: block; min-block-size: calc(var(--touch-target-size) + var(--sp-4)); color: inherit; text-decoration: none; }
@@ -97,6 +112,8 @@ a.k-stat-cell[data-work-os-stat-key]:hover { color: var(--fg); background: var(-
   .main-content { width: 100%; min-width: 0; padding: var(--sp-3); }
   .screen-view, .k-card { min-width: 0; }
   .matrix-table { display: block; max-width: 100%; overflow-x: auto; }
+  .work-os-portfolio-topline { grid-template-columns:minmax(0, 1fr); }
+  .work-os-action-row, .work-os-evaluation-thread { grid-template-columns:minmax(0, 1fr); align-items:stretch; }
   .k-action-row { flex-wrap: wrap; gap: var(--sp-2); }
   .screen-view [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
   .research-decision-band, .research-grid, .research-library-grid, .work-os-reader-decision { grid-template-columns: 1fr; }
