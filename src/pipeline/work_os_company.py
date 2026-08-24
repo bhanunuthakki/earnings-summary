@@ -33,6 +33,8 @@ from pipeline.work_os_decisions import (
 from pipeline.work_os_earnings import EarningsReadoutSummary, load_latest_earnings_readouts
 from provenance.selection import selected_transcripts_relation
 from report.artifacts import load_report_artifact_index
+from report.models import SectionStatus, ThesisSection
+from report.sections import thesis as thesis_section
 
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
 
@@ -74,6 +76,43 @@ class DeskQuestion(BaseModel):
     evidence_ref: str | None
 
 
+class DeskKpiEvidence(BaseModel):
+    """One Tier-1 KPI only when its canonical series is safe to surface."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    tier: Literal["tier_1"]
+    unit: str | None = None
+    latest_period: str
+    latest_value: float
+    current_status: Literal["green", "yellow", "red"]
+    evidence_ref: str
+
+
+class ThesisRiskProjection(BaseModel):
+    """Read-only thesis state, withheld unless its evaluated facts are current."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["available", "unavailable"]
+    thesis: str | None = None
+    overall_breach_status: Literal["ok", "warn", "breach", "unresolved"] | None = None
+    evaluated_at: str | None = None
+    break_conditions: list[str] = []
+    unavailable_reason: Literal["missing", "stale", "incomplete"] | None = None
+
+
+class KpiSummaryProjection(BaseModel):
+    """Exact-evidence Tier-1 KPI summary for the Company Desk."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["available", "unavailable"]
+    items: list[DeskKpiEvidence] = []
+    unavailable_reason: Literal["missing", "stale", "incomplete"] | None = None
+
+
 class CompanyDeskResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -89,12 +128,15 @@ class CompanyDeskResponse(BaseModel):
     latest_brief: BriefLibraryItem | None
     latest_earnings_readout: EarningsReadoutSummary | None
     earnings_doorway: EarningsDoorway
+    thesis_risk: ThesisRiskProjection
+    kpi_summary: KpiSummaryProjection
     warnings: list[str]
     say_do: dict[str, object] | None = None
 
 
 _PRE_EARNINGS_PURPOSE = "pre_earnings_brief"
 _POST_EARNINGS_PURPOSE = "post_earnings_readout"
+_THESIS_FACT_FRESHNESS_DAYS = 180
 
 
 def _parse_date(value: object) -> date | None:
@@ -386,6 +428,126 @@ def _position_snapshot(
     )
 
 
+def _is_fresh_thesis_timestamp(value: datetime | None, *, as_of: datetime) -> bool:
+    """Require a recent evaluated state rather than implying current thesis health."""
+
+    if value is None:
+        return False
+    normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return (as_of - normalized.astimezone(UTC)).days <= _THESIS_FACT_FRESHNESS_DAYS
+
+
+def _tier_one_evidence(
+    thesis: ThesisSection,
+    ticker: str,
+    *,
+    as_of: datetime,
+) -> tuple[list[DeskKpiEvidence], Literal["missing", "stale", "incomplete"] | None]:
+    """Return every Tier-1 metric only when each has fresh, exact evidence.
+
+    The report's ledger owns KPI resolution and status.  This adapter deliberately
+    does not fall back to free-text holdings values: the Desk either has the
+    canonical definition-backed series for every Tier-1 metric or exposes no KPI
+    summary at all.
+    """
+
+    tier_one = [row for row in thesis.kpi_ledger if row.tier == "tier_1"]
+    if not tier_one:
+        return [], "missing"
+    evidence: list[DeskKpiEvidence] = []
+    for row in tier_one:
+        if row.kpi_definition_id is None or row.current_status == "unknown" or not row.history:
+            return [], "incomplete"
+        latest_period, latest_value = row.history[-1]
+        try:
+            period_end = date.fromisoformat(latest_period)
+        except ValueError:
+            return [], "incomplete"
+        if (as_of.date() - period_end).days > _THESIS_FACT_FRESHNESS_DAYS:
+            return [], "stale"
+        if latest_value is None:
+            return [], "incomplete"
+        status = row.current_status
+        if status not in {"green", "yellow", "red"}:
+            return [], "incomplete"
+        evidence.append(
+            DeskKpiEvidence(
+                name=row.name,
+                tier="tier_1",
+                unit=row.unit,
+                latest_period=latest_period,
+                latest_value=latest_value,
+                current_status=status,
+                evidence_ref=f"kpi:{ticker}:{row.kpi_definition_id}",
+            )
+        )
+    return evidence, None
+
+
+def _thesis_projections(
+    repo_root: Path,
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    as_of: datetime,
+) -> tuple[ThesisRiskProjection, KpiSummaryProjection, list[str]]:
+    """Project the canonical thesis section without inventing live facts."""
+
+    thesis = thesis_section.build(ticker, repo_root, conn=conn)
+    evidence, evidence_reason = _tier_one_evidence(thesis, ticker, as_of=as_of)
+    kpi_summary = KpiSummaryProjection(
+        status="available" if evidence_reason is None else "unavailable",
+        items=evidence,
+        unavailable_reason=evidence_reason,
+    )
+    evaluation_is_fresh = _is_fresh_thesis_timestamp(thesis.last_evaluated_at, as_of=as_of)
+    if (
+        thesis.status != SectionStatus.OK
+        or thesis.stub_warning is not None
+        or not thesis.thesis_full
+        or evidence_reason is not None
+        or not evaluation_is_fresh
+        or thesis.overall_breach_status in {"unknown", "unresolved"}
+    ):
+        if thesis.status == SectionStatus.MISSING_DATA or not thesis.thesis_full:
+            reason: Literal["missing", "stale", "incomplete"] = "missing"
+        elif evidence_reason == "stale" or not evaluation_is_fresh:
+            reason = "stale"
+        else:
+            reason = "incomplete"
+        thesis_risk = ThesisRiskProjection(status="unavailable", unavailable_reason=reason)
+    else:
+        # The guard above has established both values; assertions retain that
+        # narrowing for static analysis as well as documenting the fail-closed
+        # boundary.
+        assert thesis.last_evaluated_at is not None
+        if thesis.overall_breach_status == "ok":
+            overall_breach_status: Literal["ok", "warn", "breach", "unresolved"] = "ok"
+        elif thesis.overall_breach_status == "warn":
+            overall_breach_status = "warn"
+        elif thesis.overall_breach_status == "breach":
+            overall_breach_status = "breach"
+        elif thesis.overall_breach_status == "unresolved":
+            overall_breach_status = "unresolved"
+        else:
+            raise AssertionError("unavailable thesis status passed availability guard")
+        thesis_risk = ThesisRiskProjection(
+            status="available",
+            thesis=thesis.thesis_full,
+            overall_breach_status=overall_breach_status,
+            evaluated_at=thesis.last_evaluated_at.astimezone(UTC)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            break_conditions=thesis.break_conditions,
+        )
+    warnings: list[str] = []
+    if thesis_risk.status == "unavailable":
+        warnings.append(f"thesis_risk_{thesis_risk.unavailable_reason}")
+    if kpi_summary.status == "unavailable":
+        warnings.append(f"kpi_summary_{kpi_summary.unavailable_reason}")
+    return thesis_risk, kpi_summary, warnings
+
+
 def build_company_desk(
     repo_root: Path,
     conn: sqlite3.Connection,
@@ -401,6 +563,7 @@ def build_company_desk(
     company = _company(conn, normalized)
     if company is None:
         raise LookupError(normalized)
+    built_at = (generated_at or datetime.now(UTC)).astimezone(UTC)
     decision, conditions, decision_warnings = build_decision_projection(
         conn, normalized, as_of=generated_at
     )
@@ -414,7 +577,15 @@ def build_company_desk(
         today=today or calendar_today(generated_at),
     )
     position = _position_snapshot(conn, normalized, live)
-    warnings = [*decision_warnings, *question_warnings, *readout_projection.warnings]
+    thesis_risk, kpi_summary, thesis_warnings = _thesis_projections(
+        repo_root, conn, normalized, as_of=built_at
+    )
+    warnings = [
+        *decision_warnings,
+        *question_warnings,
+        *readout_projection.warnings,
+        *thesis_warnings,
+    ]
     if live is not None and not live.available:
         warnings.append("portfolio_tracker_unavailable")
     elif live is not None and live.is_stale:
@@ -425,7 +596,6 @@ def build_company_desk(
         warnings.insert(0, "position_snapshot_unavailable")
     if latest_brief is None:
         warnings.append("research_brief_unavailable")
-    built_at = (generated_at or datetime.now(UTC)).astimezone(UTC)
     return CompanyDeskResponse(
         status="degraded" if warnings else "ok",
         generated_at=built_at.isoformat().replace("+00:00", "Z"),
@@ -438,6 +608,8 @@ def build_company_desk(
         latest_brief=latest_brief,
         latest_earnings_readout=latest_earnings_readout,
         earnings_doorway=earnings_doorway,
+        thesis_risk=thesis_risk,
+        kpi_summary=kpi_summary,
         warnings=warnings,
     )
 

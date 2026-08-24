@@ -9,6 +9,7 @@ from flask.testing import FlaskClient
 
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.work_os_company import build_company_desk
+from report.models import KpiLedgerRow, SectionStatus, ThesisSection
 from tests.test_comments_server_dashboard import comments_server, create_dashboard_test_schema
 
 
@@ -185,6 +186,105 @@ def test_company_desk_is_a_narrow_governed_read_model(work_os_app_repo: Path) ->
     assert desk.question_store_status == "ok"
     assert desk.latest_brief is None
     assert "position_snapshot_unavailable" in desk.warnings
+
+
+def test_company_desk_projects_only_fresh_canonical_thesis_evidence(
+    work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Desk must retain the report builder's PK-backed KPI evidence handle."""
+
+    from pipeline import work_os_company
+
+    canonical_thesis = ThesisSection(
+        status=SectionStatus.OK,
+        thesis_full="The thesis is grounded in the reported KPI series.",
+        break_conditions=["Revenue declines for two quarters."],
+        overall_breach_status="ok",
+        last_evaluated_at=datetime(2026, 8, 20, tzinfo=UTC),
+        kpi_ledger=[
+            KpiLedgerRow(
+                name="Revenue",
+                tier="tier_1",
+                unit="USD M",
+                kpi_definition_id=42,
+                history=[("2026-06-30", 123.4)],
+                current_status="green",
+            )
+        ],
+    )
+
+    def build_canonical_thesis(
+        _ticker: str, _repo_root: Path, *, conn: sqlite3.Connection | None = None
+    ) -> ThesisSection:
+        del conn
+        return canonical_thesis
+
+    monkeypatch.setattr(work_os_company.thesis_section, "build", build_canonical_thesis)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(
+            work_os_app_repo,
+            conn,
+            "NU",
+            generated_at=datetime(2026, 8, 23, tzinfo=UTC),
+        )
+    finally:
+        conn.close()
+
+    assert desk.thesis_risk.status == "available"
+    assert desk.thesis_risk.overall_breach_status == "ok"
+    assert desk.kpi_summary.status == "available"
+    assert desk.kpi_summary.items[0].evidence_ref == "kpi:NU:42"
+    assert desk.kpi_summary.items[0].latest_value == pytest.approx(123.4)
+
+
+def test_company_desk_withholds_stale_or_noncanonical_thesis_facts(
+    work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline import work_os_company
+
+    stale_thesis = ThesisSection(
+        status=SectionStatus.OK,
+        thesis_full="Do not surface this stale thesis as current.",
+        overall_breach_status="ok",
+        last_evaluated_at=datetime(2025, 1, 1, tzinfo=UTC),
+        kpi_ledger=[
+            KpiLedgerRow(
+                name="Revenue",
+                tier="tier_1",
+                kpi_definition_id=42,
+                history=[("2025-01-01", 123.4)],
+                current_status="green",
+            )
+        ],
+    )
+
+    def build_stale_thesis(
+        _ticker: str, _repo_root: Path, *, conn: sqlite3.Connection | None = None
+    ) -> ThesisSection:
+        del conn
+        return stale_thesis
+
+    monkeypatch.setattr(work_os_company.thesis_section, "build", build_stale_thesis)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(
+            work_os_app_repo,
+            conn,
+            "NU",
+            generated_at=datetime(2026, 8, 23, tzinfo=UTC),
+        )
+    finally:
+        conn.close()
+
+    assert desk.thesis_risk.status == "unavailable"
+    assert desk.thesis_risk.unavailable_reason == "stale"
+    assert desk.thesis_risk.thesis is None
+    assert desk.kpi_summary.status == "unavailable"
+    assert desk.kpi_summary.items == []
+    assert desk.kpi_summary.unavailable_reason == "stale"
 
 
 def test_company_desk_projects_live_tracker_position_without_losing_dcf(
