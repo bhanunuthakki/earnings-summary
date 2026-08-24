@@ -31,6 +31,7 @@ def render_brief_reader_shell() -> str:
     <div class="k-stat-cell"><div class="stat-heading">Model recommendation</div><div class="stat-number" id="workOsBriefModelState">—</div><div class="stat-subtext" id="workOsBriefModelMeta">No model recommendation recorded</div></div>
     <div class="k-stat-cell"><div class="stat-heading">Relationship</div><div class="k-pill k-pill-warn" id="workOsBriefDecisionRelationship">Unavailable</div><div class="stat-subtext">Thesis verdict remains separately labeled in the brief</div></div>
   </div>
+  <div id="workOsBriefResearchItemsMount" aria-live="polite"></div>
   <div class="work-os-reader-layout">
     <nav class="work-os-reader-sections k-card k-card-nav" id="workOsBriefReaderSections"
          aria-label="Brief sections"></nav>
@@ -101,7 +102,6 @@ def render_company_desk_shell() -> str:
       <div class="k-stat-cell"><div class="stat-heading">DCF fair value</div><div class="stat-number" id="deskFairValue">—</div><div class="stat-subtext" id="deskFairValueSource">No governed fair value</div></div>
       <div class="k-stat-cell"><div class="stat-heading">Latest brief</div><div class="stat-number" id="deskBriefDate">—</div><div class="stat-subtext" id="deskBriefStatus">No indexed artifact</div></div>
     </div>
-
     <!-- Tab 1: Thesis & Say-Do -->
     <div class="desk-tab-content" id="deskTabThesis" role="tabpanel" aria-labelledby="deskTabButtonThesis">
       <section class="k-card k-card-section" aria-labelledby="deskThesisRiskHeading">
@@ -146,7 +146,7 @@ def render_company_desk_shell() -> str:
     <div class="desk-tab-content" id="deskTabNotes" role="tabpanel" aria-labelledby="deskTabButtonNotes" hidden>
       <div class="research-grid">
         <article class="k-card k-card-section">
-          <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Open Questions &amp; Triage</h2><p class="k-card-meta">Owner and model items remain distinct</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="questions">Ask Engine</button></header>
+          <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Open Questions &amp; Triage</h2><p class="k-card-meta">Owner and model items remain distinct</p></div><div class="research-actions"><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsManageResearchItems">Manage items</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="questions">Ask Engine</button></div></header>
           <form class="research-question-capture" id="deskQuestionCapture">
             <label class="k-card-meta" for="deskQuestionInput">Add an owner question</label>
             <div class="research-actions"><input id="deskQuestionInput" maxlength="2000" required placeholder="What should we track?" autocomplete="off"><button class="k-btn k-btn-primary k-btn-sm" type="submit">Track question</button></div>

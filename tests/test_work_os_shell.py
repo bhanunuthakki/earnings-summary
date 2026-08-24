@@ -231,6 +231,13 @@ def test_persistent_portfolio_and_audit_screens_are_live_first_not_prototypes() 
     assert "data-work-os-refresh-screen" in html
 
 
+def test_company_desk_research_items_doorway_stays_inside_decision_audit_log() -> None:
+    html = render_work_os_shell()
+    assert 'id="workOsManageResearchItems"' in html
+    assert "window.navigateTo('screen-audit-log')" in html
+    assert "csec-research-items" in html
+
+
 def test_live_backend_mount_executes_local_fragment_scripts_without_optional_htmx() -> None:
     html = render_work_os_shell()
 

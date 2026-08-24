@@ -721,12 +721,26 @@ def _production_runtime(generated_at: datetime) -> str:
     'overview', 'quarter', 'financials', 'thesis-risk', 'valuation-comps', 'sources'
   ];
 
+  async function workOsLoadBriefResearchItems(ticker) {{
+    const mount = document.getElementById('workOsBriefResearchItemsMount');
+    if (!mount || !ticker) return;
+    mount.innerHTML = '<div class="k-well" role="status">Loading live research items…</div>';
+    try {{
+      const response = await fetch('/api/panel/journal?items=1&band=brief&ticker=' + encodeURIComponent(ticker), {{ headers: {{ Accept: 'text/html' }} }});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      window.workOsMountHtml(mount, await response.text(), '/api/panel/journal');
+    }} catch (error) {{
+      mount.innerHTML = '<div class="k-well" role="alert">Research Items are unavailable; the persisted brief remains readable.</div>';
+    }}
+  }}
+
   async function workOsLoadBriefArtifact(artifact, options) {{
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
     const meta = document.getElementById('workOsBriefReaderMeta');
     const sections = document.getElementById('workOsBriefReaderSections');
     workOsReaderContext = artifact;
+    void workOsLoadBriefResearchItems(artifact.ticker);
     const displayTitle = artifact.title && String(artifact.title).toUpperCase().startsWith(String(artifact.ticker).toUpperCase())
       ? artifact.title
       : artifact.ticker + ' · ' + (artifact.title || 'Full Research Brief');
@@ -1958,6 +1972,14 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   const deskQuestionCapture = document.getElementById('deskQuestionCapture');
+  const workOsManageResearchItems = document.getElementById('workOsManageResearchItems');
+  if (workOsManageResearchItems) workOsManageResearchItems.addEventListener('click', function () {{
+    window.navigateTo('screen-audit-log');
+    window.setTimeout(function () {{
+      const researchItems = document.getElementById('csec-research-items');
+      if (researchItems) researchItems.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+    }}, 250);
+  }});
   if (deskQuestionCapture) deskQuestionCapture.addEventListener('submit', async function (event) {{
     event.preventDefault();
     const input = document.getElementById('deskQuestionInput');

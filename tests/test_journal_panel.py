@@ -297,3 +297,123 @@ def test_journal_js_has_no_window_prompt_and_uses_in_card_editor() -> None:
     assert "jr-edit-ta" in src
     # POST contracts unchanged: resolve / supersede still hit /api/notes/<id>/<act>.
     assert "'/api/notes/' + id + '/' + act" in src
+
+
+def test_research_items_is_a_filtered_journal_lens_with_cas_edit_and_restore(
+    db_path: Path,
+) -> None:
+    item = create_note(ticker="NU", kind="question", body="What changed in NIM?", db_path=db_path)
+    create_note(
+        ticker="NU",
+        kind="observation",
+        body="What is the funding mix?",
+        context={"ledger_answer": {"text": "Funding mix moved toward deposits."}},
+        db_path=db_path,
+    )
+    create_note(ticker="NU", kind="decision", body="Hold through the print.", db_path=db_path)
+    create_note(
+        ticker="MELI", kind="musing", body="Check MELI take rate after the call.", db_path=db_path
+    )
+    archived = create_note(ticker="NU", kind="watch", body="Old watch item.", db_path=db_path)
+    assert archived.id > item.id
+
+    live = render_journal_panel(db_path, research_items_only=True, embedded=True)
+    assert "Research Items" in live
+    assert "What changed in NIM?" in live
+    assert "Hold through the print." not in live
+    assert 'data-act="edit"' in live
+    assert 'data-act="promote"' in live
+    assert "expected_revision" in live
+    assert "Stored answer — suggestion only:" in live
+
+    meli = render_journal_list(db_path, ticker="MELI", research_items_only=True)
+    assert "Check MELI take rate after the call." in meli
+
+    archived_html = render_journal_list(db_path, status="archived", research_items_only=True)
+    assert "Old watch item." not in archived_html
+    from user_state.notes import archive_note
+
+    archive_note(archived.id, db_path=db_path)
+    archived_html = render_journal_list(db_path, status="archived", research_items_only=True)
+    assert "Old watch item." in archived_html
+    assert 'data-act="unarchive"' in archived_html
+
+
+def test_research_items_panel_route_keeps_the_canonical_journal_filter(
+    client: FlaskClient, db_path: Path
+) -> None:
+    create_note(ticker="NU", kind="watch", body="Watch NIM.", db_path=db_path)
+    create_note(ticker="NU", kind="decision", body="Hold NIM steady.", db_path=db_path)
+
+    response = client.get("/api/panel/journal?items=1&fragment=list")
+
+    assert response.status_code == 200
+    assert b"Watch NIM." in response.data
+    assert b"Hold NIM steady." not in response.data
+
+
+def test_full_brief_research_items_band_requires_a_ticker_and_uses_same_lens(
+    client: FlaskClient, db_path: Path
+) -> None:
+    create_note(ticker="MELI", kind="musing", body="MELI note 54.", db_path=db_path)
+    assert client.get("/api/panel/journal?items=1&band=brief").status_code == 400
+
+    response = client.get("/api/panel/journal?items=1&band=brief&ticker=MELI")
+    assert response.status_code == 200
+    assert b"Research Items" in response.data
+    assert b"MELI note 54." in response.data
+    assert b"outside the persisted brief" in response.data
+
+
+def test_full_brief_research_items_actions_cover_lifecycle_and_restore(
+    client: FlaskClient, db_path: Path
+) -> None:
+    resolved = create_note(ticker="NU", kind="question", body="Resolve me.", db_path=db_path)
+    archived = create_note(ticker="NU", kind="watch", body="Archive me.", db_path=db_path)
+    edited = create_note(ticker="NU", kind="observation", body="Edit me.", db_path=db_path)
+    promoted = create_note(ticker="NU", kind="assumption", body="Promote me.", db_path=db_path)
+
+    assert client.post(f"/api/notes/{resolved.id}/resolve", json={}).status_code == 200
+    assert client.post(f"/api/notes/{archived.id}/archive", json={}).status_code == 200
+    assert (
+        client.post(
+            f"/api/notes/{edited.id}/supersede",
+            json={
+                "body": "Edited replacement.",
+                "expected_revision": edited.updated_at.isoformat(),
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/notes/{promoted.id}/supersede",
+            json={
+                "body": "Decision replacement.",
+                "kind": "decision",
+                "expected_revision": promoted.updated_at.isoformat(),
+            },
+        ).status_code
+        == 200
+    )
+    assert client.post(f"/api/notes/{archived.id}/unarchive", json={}).status_code == 200
+
+    archived_view = client.get("/api/panel/journal?items=1&fragment=list&status=archived&ticker=NU")
+    assert archived_view.status_code == 200
+    assert b"Archive me." not in archived_view.data
+
+
+def test_full_brief_research_items_band_exposes_archived_filter_and_retry_states(
+    db_path: Path,
+) -> None:
+    from pipeline.journal_panel import render_research_items_band
+
+    html = render_research_items_band(db_path, ticker="NU")
+
+    assert 'data-rib-status="archived"' in html
+    assert 'data-act="unarchive"' not in html
+    assert "status=' + encodeURIComponent(activeStatus)" in html
+    assert "data-rib-feedback" in html and "data-rib-retry" in html
+    assert "response.status === 409" in html
+    assert "changed elsewhere" in html
+    assert "runAction('/api/notes/" in html

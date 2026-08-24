@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime
 
 from bs4 import BeautifulSoup
@@ -69,6 +70,32 @@ def test_brief_reader_shell_and_decision_band_markup() -> None:
     assert "workOsBriefDecisionRelationship" in html
     assert "â€”" not in html
     assert "—" in html
+
+
+def test_full_brief_has_a_live_research_items_band_outside_the_persisted_body() -> None:
+    html = render_brief_reader_shell()
+    assert 'id="workOsBriefResearchItemsMount"' in html
+    assert html.index("workOsBriefResearchItemsMount") < html.index("workOsBriefReaderBody")
+
+    shell = render_work_os_shell()
+    assert "function workOsLoadBriefResearchItems(ticker)" in shell
+    assert "items=1&band=brief&ticker=" in shell
+    assert shell.count("void workOsLoadBriefResearchItems(artifact.ticker)") == 1
+
+
+def test_full_brief_research_items_band_has_reachable_archive_restore_and_retry_chrome() -> None:
+    shell = render_work_os_shell()
+
+    assert "workOsBriefResearchItemsMount" in shell
+    assert "items=1&band=brief&ticker=" in shell
+    # The mounted Full Brief band owns the live controls; its renderer owns
+    # the archived filter, restore action, and non-OK retry handling.
+    from pipeline import journal_panel
+
+    source = inspect.getsource(journal_panel.render_research_items_band)
+    assert 'data-rib-status="archived"' in source
+    assert "data-rib-retry" in source
+    assert "response.status === 409" in source
 
 
 def test_work_os_shell_css_decision_band_rules() -> None:

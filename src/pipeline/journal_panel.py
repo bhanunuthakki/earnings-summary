@@ -33,6 +33,7 @@ from __future__ import annotations
 import sqlite3
 from html import escape
 from pathlib import Path
+from typing import cast
 
 from dashboard.inbox_rank import SEMANTIC_ADVISOR_MEMO, note_semantic_kind
 from identity import DEFAULT_USER_ID
@@ -52,6 +53,10 @@ from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
 _PANEL_STYLE = RESEARCH_PANEL_STYLE
 
 _STATUS_FILTERS = ("open", "resolved", "superseded", "archived", "all")
+# Research Items is deliberately a lens over the canonical analyst-note journal,
+# not a second work queue. Decisions and free-form musings retain their homes in
+# the audit record / Ledger respectively.
+_RESEARCH_ITEM_KINDS = frozenset(("question", "watch", "assumption", "observation", "musing"))
 
 
 def _link_chip(n: AnalystNoteRow, targets: dict[tuple[str, int], LinkTarget]) -> str:
@@ -94,11 +99,27 @@ def _link_options(options: list[LinkTarget]) -> str:
     return out
 
 
+def _stored_answer_suggestion(n: AnalystNoteRow) -> str:
+    """Render a persisted answer as context, never as a lifecycle mutation."""
+
+    answer = (n.context or {}).get("ledger_answer")
+    if not isinstance(answer, dict):
+        return ""
+    text = str(cast("dict[str, object]", answer).get("text") or "").strip()
+    if not text:
+        return ""
+    return (
+        '<div class="jr-resolution"><strong>Stored answer — suggestion only:</strong> '
+        f"{escape(text)}</div>"
+    )
+
+
 def _note_card(
     n: AnalystNoteRow,
     *,
     targets: dict[tuple[str, int], LinkTarget],
     link_options: list[LinkTarget],
+    research_items_only: bool = False,
 ) -> str:
     ticker_html = (
         f'<span class="k-tick-sym">{escape(n.ticker)}</span>'
@@ -114,6 +135,8 @@ def _note_card(
         resolution = f'<div class="jr-resolution">↳ {escape(n.resolution_note)}</div>'
     elif n.supersedes_id:
         resolution = f'<div class="jr-resolution">supersedes note #{n.supersedes_id}</div>'
+    elif research_items_only:
+        resolution = _stored_answer_suggestion(n)
     actions = ""
     if n.status == "open":
         kind_opts = "".join(
@@ -137,13 +160,31 @@ def _note_card(
             )
         else:
             link_controls = ""
-        actions = (
+        lifecycle_actions = (
             f'<div class="jr-actions" data-note-id="{n.id}">'
             '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="resolve">Resolve</button>'
             '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="supersede">Supersede</button>'
             '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="archive">Archive</button>'
             f'<select data-act="reclassify" title="Reclassify kind">{kind_opts}</select>'
             f"{link_controls}"
+            "</div>"
+        )
+        if research_items_only:
+            lifecycle_actions = (
+                f'<div class="jr-actions" data-note-id="{n.id}" '
+                f'data-note-body="{escape(n.body, quote=True)}" '
+                f'data-revision="{escape(n.updated_at.isoformat(), quote=True)}">'
+                '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="resolve">Resolve</button>'
+                '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="edit">Edit</button>'
+                '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="promote">Promote to decision</button>'
+                '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="archive">Archive</button>'
+                "</div>"
+            )
+        actions = lifecycle_actions
+    elif n.status == "archived" and research_items_only:
+        actions = (
+            f'<div class="jr-actions" data-note-id="{n.id}">'
+            '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="unarchive">Restore</button>'
             "</div>"
         )
     return (
@@ -221,6 +262,7 @@ def render_journal_list(
     ticker: str | None = None,
     kind: str | None = None,
     status: str = "open",
+    research_items_only: bool = False,
 ) -> str:
     """Just the filtered note list (the fragment the panel JS refreshes).
 
@@ -241,6 +283,8 @@ def render_journal_list(
         )
     except sqlite3.Error:  # missing DB / pre-0074 schema degrades to empty
         notes = []
+    if research_items_only:
+        notes = [note for note in notes if note.kind in _RESEARCH_ITEM_KINDS]
     if not notes:
         return (
             '<div class="jr-empty">No notes match this filter. Notes arrive from '
@@ -268,7 +312,12 @@ def render_journal_list(
     )
     owner_html = (
         "".join(
-            _note_card(n, targets=targets, link_options=options_by_ticker.get(n.ticker or "", []))
+            _note_card(
+                n,
+                targets=targets,
+                link_options=options_by_ticker.get(n.ticker or "", []),
+                research_items_only=research_items_only,
+            )
             for n in owner
         )
         or '<div class="jr-empty">No notes of your own match this filter.</div>'
@@ -341,6 +390,7 @@ def render_journal_panel(
     kind: str | None = None,
     status: str = "open",
     embedded: bool = False,
+    research_items_only: bool = False,
 ) -> str:
     """The Research → Journal tab fragment: capture form + reconciliation
     strip + filters + list.
@@ -350,21 +400,40 @@ def render_journal_panel(
     and jumps to this section (chrome merge)."""
     if status not in _STATUS_FILTERS:
         status = "open"
+    allowed_kinds = tuple(
+        k for k in NOTE_KINDS if not research_items_only or k in _RESEARCH_ITEM_KINDS
+    )
     kind_opts = '<option value="">any kind</option>' + "".join(
         f'<option value="{escape(k)}"{" selected" if k == kind else ""}>{escape(k)}</option>'
-        for k in NOTE_KINDS
+        for k in allowed_kinds
     )
     status_opts = "".join(
         f'<option value="{escape(s)}"{" selected" if s == status else ""}>{escape(s)}</option>'
         for s in _STATUS_FILTERS
     )
-    new_kind_opts = "".join(f'<option value="{escape(k)}">{escape(k)}</option>' for k in NOTE_KINDS)
+    new_kind_opts = "".join(
+        f'<option value="{escape(k)}">{escape(k)}</option>' for k in allowed_kinds
+    )
     note_list = render_journal_list(
-        db_path, user_id=user_id, ticker=ticker, kind=kind, status=status
+        db_path,
+        user_id=user_id,
+        ticker=ticker,
+        kind=kind,
+        status=status,
+        research_items_only=research_items_only,
     )
     reconcile = render_reconciliation_list(db_path, user_id=user_id, ticker=ticker)
     ticker_val = escape(ticker or "")
-    heading = '<h3 class="jr-h">Journal</h3>' if embedded else "<h2>Journal</h2>"
+    panel_title = "Research Items" if research_items_only else "Journal"
+    heading = f'<h3 class="jr-h">{panel_title}</h3>' if embedded else f"<h2>{panel_title}</h2>"
+    item_query = ", items: '1'" if research_items_only else ""
+    hint = (
+        "Research Items are a filtered view of this audit log. Edit and promote create a "
+        "superseding revision; they never rewrite the original. A stored answer is a suggestion "
+        "until you explicitly resolve the item."
+        if research_items_only
+        else "Resolve closes an item (optionally with what answered it); supersede records a correction as a new chained note; archive drops it from live recall."
+    )
     return f"""{_PANEL_STYLE}
 {heading}
 <div id="jr-root">
@@ -385,12 +454,7 @@ def render_journal_panel(
   <span class="jr-count" id="jr-count"></span>
 </form>
 <div id="jr-list">{note_list}</div>
-<p class="jr-hint">Resolve closes an item (optionally with what answered it);
-supersede records a correction as a new chained note; archive drops it from
-live recall. Link attaches a note to the decision or position stint it is
-about — when that object concludes, the note auto-resolves (if you opted in)
-or surfaces above for reconciliation. Superseded and archived notes are kept
-forever — memory is the point.</p>
+<p class="jr-hint">{hint}</p>
 </div>
 <script>
 (function () {{
@@ -401,12 +465,12 @@ forever — memory is the point.</p>
     var f = document.getElementById('jr-filters');
     var qs = new URLSearchParams({{
       ticker: f.ticker.value.trim().toUpperCase(),
-      kind: f.kind.value, status: f.status.value, fragment: 'list'
+      kind: f.kind.value, status: f.status.value, fragment: 'list'{item_query}
     }});
     fetch('/api/panel/journal?' + qs).then(function (r) {{ return r.text(); }})
       .then(function (html) {{ document.getElementById('jr-list').innerHTML = html; }});
     var rq = new URLSearchParams({{
-      ticker: f.ticker.value.trim().toUpperCase(), fragment: 'reconcile'
+      ticker: f.ticker.value.trim().toUpperCase(), fragment: 'reconcile'{item_query}
     }});
     fetch('/api/panel/journal?' + rq).then(function (r) {{ return r.text(); }})
       .then(function (html) {{ document.getElementById('jr-reconcile').innerHTML = html; }});
@@ -441,7 +505,7 @@ forever — memory is the point.</p>
     var row = document.createElement('div'); row.className = 'jr-actions';
     var save = document.createElement('button');
     save.type = 'button'; save.className = 'k-btn k-btn-primary k-btn-sm';
-    save.textContent = act === 'supersede' ? 'Supersede' : 'Resolve';
+    save.textContent = act === 'promote' ? 'Promote' : (act === 'edit' || act === 'supersede' ? 'Save revision' : 'Resolve');
     var cancel = document.createElement('button');
     cancel.type = 'button'; cancel.className = 'k-btn k-btn-quiet k-btn-sm';
     cancel.textContent = 'Cancel';
@@ -457,9 +521,14 @@ forever — memory is the point.</p>
       if (required && !txt) {{ ta.focus(); return; }}
       CCAction.busy(save, 'Saving\\u2026');
       var payload = {{}};
-      if (act === 'supersede') payload.body = txt;
+      if (act === 'supersede' || act === 'edit' || act === 'promote') {{
+        payload.body = txt;
+        payload.expected_revision = holder.getAttribute('data-revision') || null;
+        if (act === 'promote') payload.kind = 'decision';
+      }}
       else if (txt) payload.resolution_note = txt;
-      fetch('/api/notes/' + id + '/' + act, {{
+      var endpointAction = (act === 'edit' || act === 'promote') ? 'supersede' : act;
+      fetch('/api/notes/' + id + '/' + endpointAction, {{
         method: 'POST', headers: {{'Content-Type': 'application/json'}},
         body: JSON.stringify(payload)
       }}).then(function (r) {{ if (r.ok) refresh(); else CCAction.release(save); }})
@@ -484,6 +553,11 @@ forever — memory is the point.</p>
     }}
     if (act === 'supersede') {{
       beginEdit(holder, id, 'supersede', '', 'Replacement note text', true);
+      return;
+    }}
+    if (act === 'edit' || act === 'promote') {{
+      beginEdit(holder, id, act, holder.getAttribute('data-note-body') || '',
+                act === 'promote' ? 'Decision text to promote' : 'Replacement research item text', true);
       return;
     }}
     var payload = {{}};
@@ -514,6 +588,98 @@ forever — memory is the point.</p>
       body: JSON.stringify({{kind: sel.value}})
     }}).then(function (r) {{ if (r.ok) refresh(); else CCAction.release(sel); }})
       .catch(function () {{ CCAction.release(sel); }});
+  }});
+}})();
+</script>"""
+
+
+def render_research_items_band(
+    db_path: Path, *, user_id: str = DEFAULT_USER_ID, ticker: str
+) -> str:
+    """Live, ticker-scoped lifecycle controls mounted beside—not in—a Full Brief.
+
+    The report reader's shadow body is immutable persisted evidence. This band
+    intentionally lives in normal Work OS chrome and delegates every write to
+    the canonical analyst-notes routes.
+    """
+
+    safe_ticker = escape(ticker.upper())
+    item_list = render_journal_list(
+        db_path, user_id=user_id, ticker=ticker, status="open", research_items_only=True
+    )
+    return f"""
+<section class="k-card k-card-section work-os-brief-research-items" id="workOsBriefResearchItems" data-ticker="{safe_ticker}" aria-labelledby="workOsBriefResearchItemsHeading">
+  <header class="k-card-head"><div class="k-card-heading"><div class="k-card-meta">Live research management</div><h2 class="k-card-title" id="workOsBriefResearchItemsHeading">Research Items · {safe_ticker}</h2><p class="k-card-meta">Canonical audit-log items; this band is outside the persisted brief.</p></div><div class="research-actions"><button type="button" class="k-chip k-chip-btn is-on" data-rib-status="open" aria-pressed="true">Open</button><button type="button" class="k-chip k-chip-btn" data-rib-status="archived" aria-pressed="false">Archived</button><button type="button" class="k-btn k-btn-quiet k-btn-sm" data-rib-refresh>Refresh</button></div></header>
+  <div class="k-well" data-rib-feedback role="status" aria-live="polite" hidden></div>
+  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-rib-retry hidden>Retry</button>
+  <div data-rib-list>{item_list}</div>
+</section>
+<script>
+(function () {{
+  var root = document.getElementById('workOsBriefResearchItems');
+  if (!root || root.dataset.wired) return;
+  root.dataset.wired = '1';
+  var activeStatus = 'open';
+  var retry = null;
+  function feedback(message, retryAction) {{
+    var node = root.querySelector('[data-rib-feedback]');
+    var retryButton = root.querySelector('[data-rib-retry]');
+    if (node) {{ node.textContent = message || ''; node.hidden = !message; }}
+    retry = retryAction || null;
+    if (retryButton) retryButton.hidden = !retry;
+  }}
+  function refresh(status) {{
+    activeStatus = status || activeStatus;
+    root.querySelectorAll('[data-rib-status]').forEach(function (button) {{
+      var selected = button.getAttribute('data-rib-status') === activeStatus;
+      button.classList.toggle('is-on', selected); button.setAttribute('aria-pressed', String(selected));
+    }});
+    var ticker = root.getAttribute('data-ticker') || '';
+    fetch('/api/panel/journal?items=1&fragment=list&status=' + encodeURIComponent(activeStatus) + '&ticker=' + encodeURIComponent(ticker))
+      .then(function (r) {{ if (!r.ok) throw new Error('refresh:' + r.status); return r.text(); }})
+      .then(function (html) {{ var list = root.querySelector('[data-rib-list]'); if (list) list.innerHTML = html; feedback('', null); }})
+      .catch(function () {{ feedback('Research items could not refresh. Retry when the local store is available.', function () {{ refresh(activeStatus); }}); }});
+  }}
+  function runAction(url, payload) {{
+    function attempt() {{
+      fetch(url, {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload) }})
+        .then(function (response) {{
+          if (response.ok) {{ feedback('', null); refresh(activeStatus); return; }}
+          if (response.status === 409) {{
+            feedback('This item changed elsewhere. Refresh to load the latest revision before retrying.', function () {{ refresh(activeStatus); }});
+            return;
+          }}
+          feedback('Research item action failed (' + response.status + '). Retry when ready.', attempt);
+        }})
+        .catch(function () {{ feedback('Research item action could not reach the local store. Retry when ready.', attempt); }});
+    }}
+    attempt();
+  }}
+  function revise(holder, promote) {{
+    if (holder.getAttribute('data-editing') === '1') return;
+    holder.setAttribute('data-editing', '1');
+    var editor = document.createElement('div');
+    var input = document.createElement('textarea'); input.className = 'jr-edit-ta'; input.rows = 2;
+    input.value = holder.getAttribute('data-note-body') || '';
+    var save = document.createElement('button'); save.type = 'button'; save.className = 'k-btn k-btn-primary k-btn-sm'; save.textContent = promote ? 'Promote' : 'Save revision';
+    var cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'k-btn k-btn-quiet k-btn-sm'; cancel.textContent = 'Cancel';
+    editor.append(input, save, cancel); holder.appendChild(editor); input.focus();
+    cancel.addEventListener('click', function () {{ editor.remove(); holder.removeAttribute('data-editing'); }});
+    save.addEventListener('click', function () {{
+      var body = input.value.trim(); if (!body) {{ input.focus(); return; }}
+      runAction('/api/notes/' + holder.getAttribute('data-note-id') + '/supersede', {{ body: body, kind: promote ? 'decision' : undefined, expected_revision: holder.getAttribute('data-revision') || null }});
+    }});
+  }}
+  root.addEventListener('click', function (event) {{
+    var button = event.target.closest('button'); if (!button) return;
+    if (button.hasAttribute('data-rib-refresh')) {{ refresh(); return; }}
+    if (button.hasAttribute('data-rib-retry')) {{ if (retry) retry(); return; }}
+    var requestedStatus = button.getAttribute('data-rib-status');
+    if (requestedStatus) {{ refresh(requestedStatus); return; }}
+    var action = button.getAttribute('data-act'); var holder = button.closest('[data-note-id]');
+    if (!action || !holder) return;
+    if (action === 'edit' || action === 'promote') {{ revise(holder, action === 'promote'); return; }}
+    runAction('/api/notes/' + holder.getAttribute('data-note-id') + '/' + action, {{}});
   }});
 }})();
 </script>"""
