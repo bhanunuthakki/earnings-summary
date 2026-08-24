@@ -1709,7 +1709,7 @@ def _production_runtime(generated_at: datetime) -> str:
       event.preventDefault(); event.stopPropagation(); workOsSubmitGovernedAlertAction(node);
     }}); }});
     document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
-    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); }}); }});
+    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.preventDefault(); event.stopPropagation(); workOsOpenThresholdReview(node.dataset.workOsThresholds); }}); }});
   }}
 
   async function workOsApplyRequestedResearchState() {{

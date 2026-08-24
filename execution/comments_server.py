@@ -4186,7 +4186,9 @@ def create_app(
         from advisor.sizing_intent_review_page import render_sizing_intent_review_page
 
         return Response(
-            render_sizing_intent_review_page(resolved_db_path, ticker),
+            render_sizing_intent_review_page(
+                resolved_db_path, ticker, work_os_origin=request.args.get("work_os_origin")
+            ),
             mimetype="text/html",
         )
 

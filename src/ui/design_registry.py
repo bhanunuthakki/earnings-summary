@@ -1043,7 +1043,7 @@ MASTER_GEOMETRY_CONTRACTS = tuple(
 
 _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
     {
-        "advisor/sizing_intent_review_page.py": "e08bb53b2ab789f17bb0bf13175569a26c52a374bd3aa67cb564d04f2d8d4c9d",  # pragma: allowlist secret
+        "advisor/sizing_intent_review_page.py": "441b8fb18ddaba95b98c58a4977006718b24ace5d19d11d9be742f14d32883f1",  # pragma: allowlist secret
         "dashboard/_styles.py": "64b87f3359d0f751bc9a7928b9a4828af2aa8c365895d584306b133846fb3f47",  # pragma: allowlist secret
         "dashboard/feed.py": "11a36cf4d3d850906aa5bbec059ba7f7b9d132cb1398269ed4c0cf8f9fa5820a",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "6177205661002d8572d7b790e97f4e3bbf6b43d8d07589d37b774be632b9200b",  # pragma: allowlist secret
@@ -1064,7 +1064,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "693b302632f9a741399d9e86b5a0c597cc8128390f9f112eb6d6bb8251896d01",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "c3f1486ac82c31556db45ab72cfa8d5b7ee9e47d1414996b056a4596a8626c5a",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret

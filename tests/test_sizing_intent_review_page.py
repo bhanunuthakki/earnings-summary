@@ -100,6 +100,23 @@ def test_page_marks_nu_add_rung_as_draft_without_inventing_a_percent_unit(
     assert "Not actionable; no sensor may arm this ladder." in html
 
 
+def test_page_accepts_only_the_compact_work_os_return_contract(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    database = migrated_db(tmp_path / "review-page-origin.db")
+
+    valid = render_sizing_intent_review_page(
+        database, "NU", work_os_origin="screen-workspace|NU|company-desk"
+    )
+    invalid = render_sizing_intent_review_page(
+        database, "NU", work_os_origin="https://example.invalid|NU|company-desk"
+    )
+
+    assert 'href="/?ticker=NU&amp;screen=company-desk#screen-workspace"' in valid
+    assert 'href="/"' in invalid
+    assert "example.invalid" not in invalid
+
+
 def test_page_renders_ratified_revision_provenance_and_form_contract(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
