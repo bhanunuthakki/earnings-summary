@@ -58,6 +58,7 @@ CoverageRoleAtCreation = Literal[
 ]
 LifecycleAtCreation = Literal["active", "archived", "unknown"]
 ContextCategory = Literal["general", "research", "governed_fact", "thesis", "kpi"]
+EvaluationInstrumentType = Literal["stock", "etf"]
 ExchangeStatus = Literal["pending", "completed", "failed"]
 BeginDisposition = Literal["started", "pending", "replayed"]
 
@@ -78,6 +79,11 @@ class SessionContextV1(BaseModel):
     thesis_version: str | None = Field(default=None, min_length=1, max_length=64)
     report_date: date | None = None
     origin_key: str | None = Field(default=None, min_length=1, max_length=256)
+    # These coordinates are optional for compatibility with historical Ask
+    # sessions.  When supplied, they are immutable with the rest of this
+    # snapshot and let an evaluation surface prove which candidate it opens.
+    evaluation_candidate_id: int | None = Field(default=None, ge=1)
+    evaluation_instrument_type: EvaluationInstrumentType | None = None
 
     @field_validator("company_ticker", mode="before")
     @classmethod
@@ -322,9 +328,18 @@ def get_session_context(session_id: str, *, db_path: Path) -> SessionContextReco
 
     connection = _open(db_path)
     try:
-        row = _select_context(connection, session_id)
+        return get_session_context_from_connection(connection, session_id)
     finally:
         connection.close()
+
+
+def get_session_context_from_connection(
+    connection: sqlite3.Connection, session_id: str
+) -> SessionContextRecord | None:
+    """Validate a stored context using a caller-owned read or write connection."""
+
+    _validate_identifier("session_id", session_id)
+    row = _select_context(connection, session_id)
     return None if row is None else _context_from_row(row)
 
 
@@ -1198,6 +1213,7 @@ __all__ = [
     "fail_exchange",
     "get_exchange",
     "get_session_context",
+    "get_session_context_from_connection",
     "hash_request_payload",
     "orchestrate_exchange_events",
     "put_session_context",
