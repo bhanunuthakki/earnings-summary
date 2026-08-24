@@ -154,6 +154,7 @@ WORK_OS_COPILOT_CSS = """
   box-shadow: var(--shadow-pop);
   transition: opacity var(--transition);
 }
+.work-os-copilot-launcher .k-chip[hidden] { display: none; }
 .work-os-copilot-launcher[aria-expanded="true"] { opacity: 0; pointer-events: none; }
 .work-os-copilot {
   position: fixed; inset: 0 0 0 var(--sidebar-width); z-index: 240;

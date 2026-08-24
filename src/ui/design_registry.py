@@ -1070,7 +1070,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "b5610ff1f2beaf23aa037b059046f547db150c332c6af2c00f48307d52d25389",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "66eff74e610a540a248b0748e86bd738121df9b576c495627fc917ecdd3cb100",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret

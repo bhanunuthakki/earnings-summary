@@ -744,7 +744,7 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
 .src-chip:hover { color: var(--accent); border-color: var(--accent); }
 
 /* ---- Generation 3 Work OS Primitives ---- */
-.k-desk-hero { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.k-desk-hero { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
 .k-say-do-timeline { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); }
 .k-say-do-item { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--bw-thin) solid var(--hairline); }
 .k-say-do-item:last-child { border-bottom: none; }

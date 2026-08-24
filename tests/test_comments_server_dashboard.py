@@ -175,7 +175,13 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +2 governed alert lifecycle routes (action and evidence).
     # +1 governed portfolio policy write proxy.
     # +1 governed sizing-intent checkpoint route.
-    assert len(rules) == 168
+    # +4 Generation 3 projections: company Say/Do, portfolio risk matrix,
+    # aggregated open loops, and pre-trade positioning simulation.
+    assert len(rules) == 172
+    assert rules["company_say_do_api"] == "/api/company/<ticker>/say-do"
+    assert rules["portfolio_risk_matrix_api"] == "/api/portfolio/risk-matrix"
+    assert rules["work_os_open_loops_api"] == "/api/work-os/open-loops"
+    assert rules["positioning_simulate_api"] == "/api/positioning/simulate"
     assert rules["readme_governance_status"] == "/api/readme-governance/status"
     assert rules["start_readme_update"] == "/actions/readme-update"
     assert rules["ir_approval_action"] == ("/api/ir-approval/candidates/<candidate_id>/<action>")
