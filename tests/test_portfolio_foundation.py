@@ -2044,8 +2044,12 @@ def test_windows_exclusive_endpoint_probe_rejects_ambiguous_listener_ownership(
             self.stdout = value
             self.returncode = 0
 
-    def netstat(*_args: object, **_kwargs: object) -> _Result:
-        return _Result(stdout)
+    def netstat(command: list[str], **_kwargs: object) -> _Result:
+        if command[0] == "netstat":
+            return _Result(stdout)
+        # The sole unambiguous-listener case must also prove the listener is
+        # below the supervised process in one bounded snapshot.
+        return _Result("8888|1\n")
 
     monkeypatch.setattr(runtime.os, "name", "nt")
     monkeypatch.setattr(runtime.subprocess, "run", netstat)
