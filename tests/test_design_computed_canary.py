@@ -6,6 +6,7 @@ import importlib
 import threading
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import StringIO
 from pathlib import Path
 from typing import Protocol
 
@@ -23,6 +24,9 @@ from execution.verify_design_conformance import (  # pyright: ignore[reportPriva
     _scan_route_canaries,  # pyright: ignore[reportPrivateUsage]
 )
 from pipeline.work_os_shell import SCREEN_SPECS
+from report.models import SectionStatus, SignalRow, SignalsSection
+from report.renderers import workspace_html
+from report.renderers.workspace_styles import CSS as WORKSPACE_CSS
 from ui.conformance_scan import scan_surface_evidence
 
 ROOT_TOKENS = """
@@ -47,6 +51,74 @@ CANONICAL_CSS = """
 .k-well { border-radius: var(--radius); }
 .k-overlay { border-radius: var(--radius); border: var(--bw-thin) solid currentColor; }
 """
+
+
+def test_workspace_signal_disclosure_is_keyboard_reachable_at_both_widths() -> None:
+    """The compact ranked scan expands its full evidence table with the keyboard."""
+    _require_playwright()
+    playwright_api = importlib.import_module("playwright.sync_api")
+    rows = [
+        SignalRow(
+            metric_name="free_cash_flow",
+            metric_kind="financial",
+            signal_type="anomaly",
+            severity="red",
+            narrative="FCF: anomaly z=3.1",
+            value_summary="z=+3.10",
+            severity_magnitude=3.1,
+        ),
+        SignalRow(
+            metric_name="GCP revenue growth (YoY)",
+            metric_kind="kpi",
+            signal_type="yoy_acceleration",
+            severity="yellow",
+            narrative="GCP revenue growth decelerated",
+            value_summary="YoY=+18.0%",
+            severity_magnitude=0.04,
+        ),
+        SignalRow(
+            metric_name="revenue",
+            metric_kind="financial",
+            signal_type="trend",
+            severity="green",
+            narrative="Revenue accelerated",
+            value_summary="slope=+5.0%",
+            severity_magnitude=0.05,
+        ),
+    ]
+    section = SignalsSection(
+        status=SectionStatus.OK,
+        red_signals=[rows[0]],
+        yellow_signals=[rows[1]],
+        green_signals=[rows[2]],
+        summary_signals=rows[:2],
+        all_signals=rows,
+    )
+    body = StringIO()
+    workspace_html._signals_panel(body, section)
+    html = f"<!doctype html><style>{WORKSPACE_CSS}</style><main>{body.getvalue()}</main>"
+
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            for width, height in ((1440, 900), (390, 844)):
+                context = browser.new_context(viewport={"width": width, "height": height})
+                try:
+                    page = context.new_page()
+                    page.set_content(html, wait_until="load")
+                    disclosure = page.locator("details.signals-all")
+                    summary = disclosure.locator("summary")
+                    assert disclosure.get_attribute("open") is None
+                    assert summary.bounding_box() is not None
+                    summary.focus()
+                    assert summary.evaluate("node => document.activeElement === node")
+                    summary.press("Enter")
+                    assert disclosure.get_attribute("open") == ""
+                    assert disclosure.locator("tbody tr").count() == 3
+                finally:
+                    context.close()
+        finally:
+            browser.close()
 
 
 class _FulfillableRoute(Protocol):
