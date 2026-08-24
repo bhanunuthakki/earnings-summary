@@ -387,6 +387,115 @@ def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
             browser.close()
 
 
+@pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
+def test_copilot_minimized_dock_preserves_the_active_route_and_reports_completion(
+    viewport: tuple[int, int],
+) -> None:
+    """The production shell keeps an in-flight Copilot turn visible after minimize."""
+
+    _require_playwright()
+    playwright_api = importlib.import_module("playwright.sync_api")
+    from execution.design_route_canaries import render_route_canary
+
+    html = render_route_canary(
+        route="company-desk", viewport="desktop" if viewport[0] > 400 else "narrow"
+    )
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": viewport[0], "height": viewport[1]},
+            reduced_motion="reduce",
+        )
+        try:
+            page = context.new_page()
+            page_errors: list[str] = []
+
+            def collect_page_error(error: object) -> None:
+                page_errors.append(str(error))
+
+            page.on("pageerror", collect_page_error)
+
+            def serve_canary(route: _FulfillableRoute) -> None:
+                route.fulfill(body=html, content_type="text/html")
+
+            page.route("http://design-canary.invalid/", serve_canary)
+            page.goto("http://design-canary.invalid/", wait_until="load")
+            page.wait_for_function(
+                "() => document.getElementById('workOsCopilotLauncher') !== null"
+            )
+            page.evaluate(
+                """
+                () => {
+                  let completeStream;
+                  window.fetch = (input) => {
+                    const url = String(input);
+                    if (url.startsWith('/api/ask/sessions')) {
+                      return Promise.resolve(new Response(JSON.stringify({sessions: []}), {
+                        status: 200, headers: {'Content-Type': 'application/json'}
+                      }));
+                    }
+                    if (url === '/api/ask/stream') {
+                      return new Promise((resolve) => { completeStream = resolve; });
+                    }
+                    return Promise.reject(new Error('unexpected Copilot request: ' + url));
+                  };
+                  window.finishCanaryCopilotStream = () => {
+                    const encoder = new TextEncoder();
+                    const body = new ReadableStream({
+                      start(controller) {
+                        controller.enqueue(encoder.encode(
+                          'data: {"type":"final","text":"Grounded answer"}\\n\\n'
+                        ));
+                        controller.close();
+                      }
+                    });
+                    completeStream(new Response(body, {
+                      status: 200, headers: {'Content-Type': 'text/event-stream'}
+                    }));
+                  };
+                }
+                """
+            )
+
+            page.locator("#workOsCopilotLauncher").click()
+            page.wait_for_selector("#workOsCopilot", state="visible")
+            route_before_turn = page.evaluate("() => window.location.hash")
+            page.locator("#workOsCopilotInput").fill("What changed?")
+            page.locator("#workOsCopilotComposer").evaluate("form => form.requestSubmit()")
+            page.wait_for_function(
+                """() => document.getElementById('workOsCopilotLauncher')?.dataset.copilotDockState ===
+                'streaming'"""
+            )
+            assert page.locator("#workOsCopilotLauncher").get_attribute("aria-expanded") == "true"
+
+            page.locator("#workOsCopilotClose").click()
+            page.wait_for_selector("#workOsCopilot", state="hidden")
+            launcher = page.locator("#workOsCopilotLauncher")
+            assert launcher.get_attribute("data-copilot-dock-state") == "streaming"
+            assert launcher.get_attribute("aria-expanded") == "false"
+            assert launcher.get_attribute("aria-label") == "Open Copilot - researching"
+            assert page.locator("#workOsCopilotLauncherPillStreaming").is_visible()
+            assert page.evaluate("() => window.location.hash") == route_before_turn
+
+            page.evaluate("() => window.finishCanaryCopilotStream()")
+            page.wait_for_function(
+                """() => document.getElementById('workOsCopilotLauncher')?.dataset.copilotDockState ===
+                'complete'"""
+            )
+            assert launcher.get_attribute("aria-label") == "Open Copilot - response ready"
+            assert page.locator("#workOsCopilotLauncherPillComplete").is_visible()
+
+            launcher.click()
+            page.wait_for_selector("#workOsCopilot", state="visible")
+            assert launcher.get_attribute("data-copilot-dock-state") == "idle"
+            assert launcher.get_attribute("aria-label") == "Open Copilot"
+            assert page.evaluate("() => window.location.hash") == route_before_turn
+            assert page_errors == []
+        finally:
+            context.close()
+            browser.close()
+
+
 def test_fact_playground_canary_renders_production_panel_without_stylesheet_leak() -> None:
     """The real Explore fragment must not expose canonical CSS as page text."""
 

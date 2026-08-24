@@ -1020,7 +1020,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/operations_styles.py": "74b499524634752191345da39ba30ec8eda4eac95f17030063eb1111dc46af68",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "8241af8be09f54d58d430febf0199fdbbdd0790c2289ea2153cd43128cf63bdc",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "0d2f83758209c93e1f3fc4e8571f53740cf78f10adda361e6f61076687c342a9",  # pragma: allowlist secret
-        "pipeline/work_os_styles.py": "f1e89b106114b1fc2bb3370f5dea58767e7c8dd2ae7e2a4533ef350a20b6c06a",  # pragma: allowlist secret
+        "pipeline/work_os_styles.py": "d191da9e8b1e716097da19e014c2518404aff878601ba1c16df4073a5b4fa950",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
         "report/renderers/workspace_styles.py": "493583b93b400f4d775bc54f7541165ce6fbc776f486d86ba3fe77f4fdcb9e71",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
