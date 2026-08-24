@@ -102,7 +102,9 @@ def test_corrupt_session_context_is_skipped_without_hiding_evaluation_rows(
         raise StoredExchangeDataError("stored session context is corrupt")
 
     monkeypatch.setattr(evaluation_dialogues, "list_notes", no_notes)
-    monkeypatch.setattr(evaluation_dialogues, "get_session_context_from_connection", corrupt_context)
+    monkeypatch.setattr(
+        evaluation_dialogues, "get_session_context_from_connection", corrupt_context
+    )
 
     result = evaluation_dialogues.load_evaluation_dialogues(path)
 
@@ -111,7 +113,9 @@ def test_corrupt_session_context_is_skipped_without_hiding_evaluation_rows(
     assert all(item.ask_session_link_state == "unlinked" for item in result.items)
 
 
-def test_dialogues_never_open_writer_accessors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dialogues_never_open_writer_accessors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = _db(tmp_path)
     roles: list[evaluation_dialogues.SQLiteConnectionRole] = []
     actual_connect = evaluation_dialogues.connect_sqlite
