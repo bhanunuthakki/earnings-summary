@@ -328,9 +328,18 @@ def get_session_context(session_id: str, *, db_path: Path) -> SessionContextReco
 
     connection = _open(db_path)
     try:
-        row = _select_context(connection, session_id)
+        return get_session_context_from_connection(connection, session_id)
     finally:
         connection.close()
+
+
+def get_session_context_from_connection(
+    connection: sqlite3.Connection, session_id: str
+) -> SessionContextRecord | None:
+    """Validate a stored context using a caller-owned read or write connection."""
+
+    _validate_identifier("session_id", session_id)
+    row = _select_context(connection, session_id)
     return None if row is None else _context_from_row(row)
 
 
@@ -1204,6 +1213,7 @@ __all__ = [
     "fail_exchange",
     "get_exchange",
     "get_session_context",
+    "get_session_context_from_connection",
     "hash_request_payload",
     "orchestrate_exchange_events",
     "put_session_context",

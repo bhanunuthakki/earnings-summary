@@ -13,8 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from ask.exchange_store import StoredExchangeDataError, get_session_context
-from ask.store import list_sessions
+from ask.exchange_store import StoredExchangeDataError, get_session_context_from_connection
 from identity import DEFAULT_USER_ID
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from user_state.notes import AnalystNoteRow, list_notes
@@ -74,25 +73,29 @@ def _instrument(raw: object) -> _Instrument:
     return "unknown"
 
 
-def _linked_sessions(db_path: Path) -> dict[tuple[str, int | None], tuple[str, str]]:
+def _linked_sessions(conn: sqlite3.Connection) -> dict[tuple[str, int | None], tuple[str, str]]:
     """Newest explicitly matching session per ticker/candidate, never heuristic."""
 
     linked: dict[tuple[str, int | None], tuple[str, str]] = {}
     try:
-        sessions = list_sessions(scope="portfolio", limit=_MAX_SESSIONS, db_path=db_path)
-    except (OSError, sqlite3.Error):
+        sessions = conn.execute(
+            "SELECT id, updated_at FROM ask_sessions WHERE scope = ? "
+            "ORDER BY updated_at DESC LIMIT ?",
+            ("portfolio", _MAX_SESSIONS),
+        ).fetchall()
+    except sqlite3.Error:
         return linked
     for session in sessions:
         try:
-            record = get_session_context(session.id, db_path=db_path)
-        except (OSError, sqlite3.Error, StoredExchangeDataError, ValueError):
+            record = get_session_context_from_connection(conn, str(session["id"]))
+        except (sqlite3.Error, StoredExchangeDataError, ValueError):
             continue
         if record is None or record.context.company_ticker is None:
             continue
         context = record.context
         ticker = str(context.company_ticker)
         key = (ticker, context.evaluation_candidate_id)
-        linked.setdefault(key, (session.id, session.updated_at))
+        linked.setdefault(key, (str(session["id"]), str(session["updated_at"])))
     return linked
 
 
@@ -147,7 +150,7 @@ def load_evaluation_dialogues(
                     candidates[str(row["ticker"]).upper()] = (int(row["id"]), str(row["status"]))
             except sqlite3.Error:
                 candidate_available = False
-        sessions = _linked_sessions(path)
+        sessions = _linked_sessions(conn)
         notes: dict[str, list[AnalystNoteRow]] = defaultdict(list)
         try:
             for note in list_notes(user_id=user_id, db_path=path, limit=200):
