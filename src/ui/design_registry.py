@@ -602,6 +602,7 @@ _BHA_92_SURFACES = frozenset(
 )
 
 _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
+    "advisor/sizing_intent_review_page.py",
     "dashboard/_card.py",
     "dashboard/evidence_drawer.py",
     "dashboard/feed.py",
@@ -697,6 +698,7 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
 _PYTHON_CSS_SURFACES = frozenset(
     {
         "advisor/memos.py",
+        "advisor/sizing_intent_review_page.py",
         "compute/soft_rule_evaluator.py",
         "dashboard/_styles.py",
         "dashboard/feed.py",
@@ -1016,7 +1018,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "74b499524634752191345da39ba30ec8eda4eac95f17030063eb1111dc46af68",  # pragma: allowlist secret
-        "pipeline/portfolio_styles.py": "cab670b7b1a03b3081203916221a57f62e54a42cafd1cdca5dc4dc22ad815b3d",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "8241af8be09f54d58d430febf0199fdbbdd0790c2289ea2153cd43128cf63bdc",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "1e3fa030fe6be002e37fa5c14fb7c92fe1f04b86b1548aa68671f60951c3a4db",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "6d570bbb1f156426dc9c1c338f10805c1110f325079fcfc0c3970b16f327bcca",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
@@ -1041,6 +1043,7 @@ MASTER_GEOMETRY_CONTRACTS = tuple(
 
 _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
     {
+        "advisor/sizing_intent_review_page.py": "e08bb53b2ab789f17bb0bf13175569a26c52a374bd3aa67cb564d04f2d8d4c9d",  # pragma: allowlist secret
         "dashboard/_styles.py": "64b87f3359d0f751bc9a7928b9a4828af2aa8c365895d584306b133846fb3f47",  # pragma: allowlist secret
         "dashboard/feed.py": "11a36cf4d3d850906aa5bbec059ba7f7b9d132cb1398269ed4c0cf8f9fa5820a",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "6177205661002d8572d7b790e97f4e3bbf6b43d8d07589d37b774be632b9200b",  # pragma: allowlist secret
