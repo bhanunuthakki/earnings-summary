@@ -12,6 +12,7 @@ import pytest
 
 import execution.refresh_portfolio_tracker as refresh
 import execution.serve_portfolio_tracker as server
+import runtime.portfolio_tracker as runtime
 from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch
 from runtime.portfolio_tracker import RuntimeReceipt
 
@@ -84,6 +85,120 @@ def test_tracker_server_argv_uses_tracker_managed_python_and_exact_loopback_bind
         "127.0.0.1",
         "--port",
         "8000",
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent_pids", "supervisor_pid", "expected"),
+    (
+        # Live Windows activation: listener -> redirectors -> launched cmd.exe.
+        ((17688, 24524, 2724, 17256, 10216), 10216, True),
+        ((17688, 24524, 9999, 0), 10216, False),
+        ((24524, 14648), 4321, False),
+    ),
+)
+def test_windows_exclusive_endpoint_proof_accepts_only_supervised_descendants(
+    monkeypatch: pytest.MonkeyPatch,
+    parent_pids: tuple[int, ...],
+    supervisor_pid: int,
+    expected: bool,
+) -> None:
+    """A venv redirector may own the listener below the launched Python PID."""
+
+    class _Result:
+        def __init__(self, stdout: str, returncode: int = 0) -> None:
+            self.stdout = stdout
+            self.returncode = returncode
+
+    parent_values = iter(parent_pids)
+
+    def run(command: list[str], **_kwargs: object) -> _Result:
+        if command[0] == "netstat":
+            return _Result("  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    14648\n")
+        assert command[:3] == ["powershell.exe", "-NoProfile", "-NonInteractive"]
+        return _Result(f"{next(parent_values)}\n")
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    assert (
+        runtime.endpoint_owner_matches_pid(
+            "127.0.0.1", 8000, supervisor_pid, require_exclusive=True
+        )
+        is expected
+    )
+
+
+def test_windows_exclusive_endpoint_proof_rejects_wildcard_with_descendant_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Result:
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+            self.returncode = 0
+
+    def run(command: list[str], **_kwargs: object) -> _Result:
+        assert command[0] == "netstat"
+        return _Result(
+            "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    14648\n"
+            "  TCP    0.0.0.0:8000      0.0.0.0:0    LISTENING    14648\n"
+        )
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    assert (
+        runtime.endpoint_owner_matches_pid("127.0.0.1", 8000, 4321, require_exclusive=True) is False
+    )
+
+
+def test_windows_exclusive_endpoint_proof_rejects_nonzero_netstat_with_partial_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Result:
+        stdout = "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    4321\n"
+        returncode = 1
+
+    def run(command: list[str], **_kwargs: object) -> _Result:
+        assert command[0] == "netstat"
+        return _Result()
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    assert (
+        runtime.endpoint_owner_matches_pid("127.0.0.1", 8000, 4321, require_exclusive=True) is None
+    )
+
+
+@pytest.mark.parametrize(
+    "malformed_listener",
+    (
+        "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING\n",
+        "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    NOT_A_PID\n",
+        "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    0\n",
+        "  TCP    [::1]:not-a-port    [::]:0    LISTENING    7777\n",
+    ),
+)
+def test_windows_exclusive_endpoint_proof_rejects_malformed_same_port_listener(
+    monkeypatch: pytest.MonkeyPatch, malformed_listener: str
+) -> None:
+    class _Result:
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+            self.returncode = 0
+
+    def run(command: list[str], **_kwargs: object) -> _Result:
+        assert command[0] == "netstat"
+        return _Result(
+            "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    4321\n" + malformed_listener
+        )
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    assert (
+        runtime.endpoint_owner_matches_pid("127.0.0.1", 8000, 4321, require_exclusive=True) is False
     )
 
 

@@ -45,6 +45,9 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert "<StartWhenAvailable>true</StartWhenAvailable>" in collector_xml
     assert "<ExecutionTimeLimit>PT5M</ExecutionTimeLimit>" in collector_xml
     assert "<RestartOnFailure>" not in collector_xml
+    # schtasks.exe accepts this CalendarTrigger only when the repetition block
+    # precedes its start boundary (Windows' schema parser is order-sensitive).
+    assert collector_xml.index("<Repetition>") < collector_xml.index("<StartBoundary>")
     assert all(task.task_name != r"\earnings-summary\session_distill" for task in manifest.tasks)
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
@@ -73,7 +76,9 @@ def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence
     api_xml = (CRON_DIR / api.xml).read_text(encoding="utf-8")
     assert "<BootTrigger>" in api_xml
     assert "<UserId>S-1-5-18</UserId>" in api_xml
-    assert "<LogonType>ServiceAccount</LogonType>" in api_xml
+    # UserId identifies LOCAL SYSTEM. Explicit ServiceAccount is rejected by
+    # schtasks.exe on the target Windows host.
+    assert "<LogonType>" not in api_xml
     assert "<RunLevel>HighestAvailable</RunLevel>" in api_xml
     refresh_xml = (CRON_DIR / refresh.xml).read_text(encoding="utf-8")
     assert "<LogonType>S4U</LogonType>" in refresh_xml

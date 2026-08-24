@@ -1979,6 +1979,7 @@ def test_windows_endpoint_probe_rejects_foreign_healthy_responder(
 
     class _Result:
         stdout = "  TCP    127.0.0.1:8123    0.0.0.0:0    LISTENING    7777\n"
+        returncode = 0
 
     def netstat(*_args: object, **_kwargs: object) -> _Result:
         return _Result()
@@ -1999,6 +2000,7 @@ def test_windows_endpoint_probe_matches_structured_exact_ipv4_and_ipv6_hosts(
             "  TCP    127.0.0.10:8123    0.0.0.0:0    LISTENING    8888\n"
             "  TCP    [0:0:0:0:0:0:0:1]:8123    [::]:0    LISTENING    8888\n"
         )
+        returncode = 0
 
     monkeypatch.setattr(runtime.os, "name", "nt")
 
@@ -2040,6 +2042,7 @@ def test_windows_exclusive_endpoint_probe_rejects_ambiguous_listener_ownership(
     class _Result:
         def __init__(self, value: str) -> None:
             self.stdout = value
+            self.returncode = 0
 
     def netstat(*_args: object, **_kwargs: object) -> _Result:
         return _Result(stdout)
