@@ -1193,7 +1193,10 @@ WORK_OS_COPILOT_JS = r"""
   window.workOsOpenCopilot = openWorkOsCopilot;
   window.openCopilotEvidence = openCopilotEvidence;
 
-  launcher.addEventListener('click', function () { openWorkOsCopilot(); });
+  launcher.addEventListener('click', function () {
+    if (typeof window.workOsOpenGlobalCopilot === 'function') window.workOsOpenGlobalCopilot();
+    else openWorkOsCopilot();
+  });
   document.getElementById('workOsCopilotNewChat').addEventListener('click', startNewCopilotSession);
   fullscreen.addEventListener('click', function () {
     root.dataset.mode = root.dataset.mode === 'fullscreen' ? 'canvas' : 'fullscreen';
