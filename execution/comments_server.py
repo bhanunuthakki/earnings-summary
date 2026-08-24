@@ -3420,6 +3420,18 @@ def create_app(
             rows = []
         return {"sessions": [_session_to_json(s) for s in rows]}
 
+    @app.route("/api/work-os/evaluation-dialogues", methods=["GET"])
+    def evaluation_dialogues_api():
+        """Bounded, read-only Evaluation Dialogues hydration for Portfolio Copilot."""
+        from pipeline.evaluation_dialogues import load_evaluation_dialogues
+
+        try:
+            limit = int(request.args.get("limit", 40))
+        except (TypeError, ValueError):
+            limit = 40
+        projection = load_evaluation_dialogues(db_path, limit=limit)
+        return app.json.response(projection.model_dump(mode="json"))
+
     @app.route("/api/ask/sessions/<session_id>", methods=["GET", "PATCH", "DELETE"])
     def ask_session_detail(session_id: str):
         """Single-session CRUD.

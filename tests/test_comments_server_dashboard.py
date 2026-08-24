@@ -177,11 +177,13 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +1 governed sizing-intent checkpoint route.
     # +4 Generation 3 projections: company Say/Do, portfolio risk matrix,
     # aggregated open loops, and pre-trade positioning simulation.
-    assert len(rules) == 172
+    # +1 bounded Evaluation Dialogues hydration route.
+    assert len(rules) == 173
     assert rules["company_say_do_api"] == "/api/company/<ticker>/say-do"
     assert rules["portfolio_risk_matrix_api"] == "/api/portfolio/risk-matrix"
     assert rules["work_os_open_loops_api"] == "/api/work-os/open-loops"
     assert rules["positioning_simulate_api"] == "/api/positioning/simulate"
+    assert rules["evaluation_dialogues_api"] == "/api/work-os/evaluation-dialogues"
     assert rules["readme_governance_status"] == "/api/readme-governance/status"
     assert rules["start_readme_update"] == "/actions/readme-update"
     assert rules["ir_approval_action"] == ("/api/ir-approval/candidates/<candidate_id>/<action>")
@@ -405,6 +407,16 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
     assert [row["ticker"] for row in payload["companies"]] == ["NU"]
     assert payload["companies"][0]["current_weight_pct"] == 50.0
     assert "MELI" not in response.get_data(as_text=True)
+
+
+def test_evaluation_dialogues_api_returns_read_only_bounded_projection(client: FlaskClient) -> None:
+    response = client.get("/api/work-os/evaluation-dialogues?limit=1")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["state"] in {"available", "partial", "unavailable"}
+    assert isinstance(payload["items"], list)
+    assert len(payload["items"]) <= 1
 
 
 def test_work_os_portfolio_api_uses_governed_snapshot_only_after_tracker_failure(

@@ -93,6 +93,23 @@ def test_session_context_is_one_typed_historical_snapshot_per_session(
         put_session_context("session-1", changed, db_path=db_path)
 
 
+def test_session_context_round_trips_immutable_evaluation_coordinates(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = _database(tmp_path, migrated_db)
+    context = _context().model_copy(
+        update={"evaluation_candidate_id": 17, "evaluation_instrument_type": "stock"}
+    )
+
+    put_session_context("session-1", context, db_path=db_path)
+
+    restored = get_session_context("session-1", db_path=db_path)
+    assert restored is not None
+    assert restored.context.evaluation_candidate_id == 17
+    assert restored.context.evaluation_instrument_type == "stock"
+
+
 def test_stored_context_json_is_schema_and_hash_validated(
     tmp_path: Path,
     migrated_db: Callable[..., Path],

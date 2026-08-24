@@ -58,6 +58,7 @@ CoverageRoleAtCreation = Literal[
 ]
 LifecycleAtCreation = Literal["active", "archived", "unknown"]
 ContextCategory = Literal["general", "research", "governed_fact", "thesis", "kpi"]
+EvaluationInstrumentType = Literal["stock", "etf"]
 ExchangeStatus = Literal["pending", "completed", "failed"]
 BeginDisposition = Literal["started", "pending", "replayed"]
 
@@ -78,6 +79,11 @@ class SessionContextV1(BaseModel):
     thesis_version: str | None = Field(default=None, min_length=1, max_length=64)
     report_date: date | None = None
     origin_key: str | None = Field(default=None, min_length=1, max_length=256)
+    # These coordinates are optional for compatibility with historical Ask
+    # sessions.  When supplied, they are immutable with the rest of this
+    # snapshot and let an evaluation surface prove which candidate it opens.
+    evaluation_candidate_id: int | None = Field(default=None, ge=1)
+    evaluation_instrument_type: EvaluationInstrumentType | None = None
 
     @field_validator("company_ticker", mode="before")
     @classmethod
