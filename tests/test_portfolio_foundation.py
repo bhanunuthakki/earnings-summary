@@ -5,7 +5,7 @@ from __future__ import annotations
 import ctypes
 import json
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
@@ -2011,6 +2011,48 @@ def test_windows_endpoint_probe_matches_structured_exact_ipv4_and_ipv6_hosts(
     assert runtime.endpoint_owner_matches_pid("::1", 8123, 8888) is True
 
 
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    (
+        ("  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    8888\n", True),
+        (
+            "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    8888\n"
+            "  TCP    0.0.0.0:8000      0.0.0.0:0    LISTENING    8888\n",
+            False,
+        ),
+        (
+            "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    8888\n"
+            "  TCP    [::1]:8000         [::]:0      LISTENING    9999\n",
+            False,
+        ),
+        (
+            "  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    8888\n"
+            "  TCP    127.0.0.1:8123    0.0.0.0:0    LISTENING    9999\n",
+            True,
+        ),
+    ),
+)
+def test_windows_exclusive_endpoint_probe_rejects_ambiguous_listener_ownership(
+    monkeypatch: pytest.MonkeyPatch, stdout: str, expected: bool
+) -> None:
+    import runtime.portfolio_tracker as runtime
+
+    class _Result:
+        def __init__(self, value: str) -> None:
+            self.stdout = value
+
+    def netstat(*_args: object, **_kwargs: object) -> _Result:
+        return _Result(stdout)
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setattr(runtime.subprocess, "run", netstat)
+
+    assert (
+        runtime.endpoint_owner_matches_pid("127.0.0.1", 8000, 8888, require_exclusive=True)
+        is expected
+    )
+
+
 def test_runtime_lease_release_defers_while_takeover_guard_is_held(tmp_path: Path) -> None:
     import runtime.portfolio_tracker as runtime
 
@@ -2142,6 +2184,109 @@ def test_daily_refresh_producer_derives_key_and_never_activates(
     assert receipt.scheduler is not None
     assert receipt.scheduler.terminal_result == "activation_required"
     assert receipt.lifecycle_state == "already_running"
+
+
+def test_daily_refresh_scheduler_context_is_attributable_without_owning_listener(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from integrations.portfolio_tracker_v1 import V1Fetch
+    from runtime.portfolio_tracker import produce_daily_refresh_receipt
+
+    class _ReadOnlyClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def get_health(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=True, endpoint="/health", data=_health())
+
+        def get_portfolio_snapshot(self) -> V1Fetch[PortfolioSnapshotV1]:
+            return V1Fetch(
+                available=True,
+                endpoint="/portfolio-snapshot",
+                data=_snapshot_from_positions(_positions()),
+            )
+
+    import integrations.portfolio_tracker_v1 as v1
+
+    monkeypatch.setattr(v1, "TrackerV1Client", _ReadOnlyClient)
+    recorded = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    receipt = produce_daily_refresh_receipt(
+        api_url="http://tracker.test",
+        receipt_path=tmp_path / "receipt.json",
+        now=recorded,
+        daily_refresh_owner="portfolio-tracker-refresh",
+        scheduler_task_name=r"\earnings-summary\refresh_portfolio_tracker",
+    )
+
+    assert receipt.listener.owner is None
+    assert receipt.refresh is not None
+    assert receipt.refresh.owner == "portfolio-tracker-refresh"
+    assert receipt.refresh.completed_at == recorded
+    assert receipt.refresh.terminal_result == "success"
+    assert receipt.scheduler is not None
+    assert receipt.scheduler.task_name == r"\earnings-summary\refresh_portfolio_tracker"
+    assert receipt.scheduler.terminal_result == "success"
+
+
+def test_daily_refresh_scheduled_failure_replaces_prior_success_with_typed_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from integrations.portfolio_tracker_v1 import V1Fetch
+    from runtime.portfolio_tracker import (
+        ListenerObservation,
+        RefreshEvidence,
+        RuntimeReceipt,
+        SchedulerEvidence,
+        produce_daily_refresh_receipt,
+    )
+
+    class _UnavailableClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def get_health(self) -> V1Fetch[HealthV1]:
+            return V1Fetch(available=False, endpoint="/health", error="connection failed")
+
+    import integrations.portfolio_tracker_v1 as v1
+
+    monkeypatch.setattr(v1, "TrackerV1Client", _UnavailableClient)
+    recorded = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(
+        RuntimeReceipt(
+            idempotency_key="portfolio-tracker-refresh:2026-08-19",
+            lifecycle_state="already_running",
+            recorded_at=recorded - timedelta(days=1),
+            listener=ListenerObservation(healthy=True),
+            scheduler=SchedulerEvidence(
+                task_name=r"\earnings-summary\refresh_portfolio_tracker",
+                terminal_result="success",
+                observed_at=recorded - timedelta(days=1),
+            ),
+            refresh=RefreshEvidence(
+                owner="portfolio-tracker-refresh",
+                completed_at=recorded - timedelta(days=1),
+                terminal_result="success",
+            ),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    receipt = produce_daily_refresh_receipt(
+        api_url="http://tracker.test",
+        receipt_path=receipt_path,
+        now=recorded,
+        daily_refresh_owner="portfolio-tracker-refresh",
+        scheduler_task_name=r"\earnings-summary\refresh_portfolio_tracker",
+    )
+
+    assert receipt.lifecycle_state == "failed"
+    assert receipt.refresh is not None
+    assert receipt.refresh.owner == "portfolio-tracker-refresh"
+    assert receipt.refresh.completed_at is None
+    assert receipt.refresh.terminal_result == "failed"
+    assert receipt.scheduler is not None
+    assert receipt.scheduler.terminal_result == "failed"
 
 
 def test_daily_refresh_rejects_snapshot_with_no_observation_date(
@@ -2478,7 +2623,9 @@ def test_operations_panel_does_not_greenwash_stale_runtime_planes(stale_plane: s
     )
 
     observed = datetime(2026, 8, 20, 12, 20, tzinfo=UTC)
-    old = datetime(2026, 8, 20, 11, tzinfo=UTC)
+    old = observed - (
+        timedelta(hours=27) if stale_plane in {"scheduler", "refresh"} else timedelta(hours=1)
+    )
     receipt = RuntimeReceipt(
         idempotency_key="portfolio-tracker-refresh:2026-08-20",
         lifecycle_state="started",
@@ -2586,3 +2733,59 @@ def test_operations_snapshot_marks_stale_runtime_plane_even_with_fresh_envelope(
     assert snapshot.portfolio_tracker_runtime.state == "stale"
     assert snapshot.portfolio_tracker_runtime.detail is not None
     assert "listener" in snapshot.portfolio_tracker_runtime.detail
+
+
+@pytest.mark.parametrize(
+    ("daily_age", "expected_state"),
+    ((timedelta(hours=25), "current"), (timedelta(hours=27), "stale")),
+)
+def test_operations_snapshot_uses_daily_refresh_cadence_for_scheduler_and_refresh_planes(
+    tmp_path: Path, daily_age: timedelta, expected_state: str
+) -> None:
+    import sqlite3
+
+    from operations.paths import portfolio_tracker_receipt_path
+    from operations.registry import build_operations_registry
+    from operations.snapshot import collect_operations_snapshot
+    from runtime.portfolio_tracker import (
+        ListenerObservation,
+        RefreshEvidence,
+        RuntimeReceipt,
+        SchedulerEvidence,
+    )
+
+    observed = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    daily_observed_at = observed - daily_age
+    receipt = RuntimeReceipt(
+        idempotency_key="portfolio-tracker-refresh:2026-08-20",
+        lifecycle_state="already_running",
+        recorded_at=observed,
+        listener=ListenerObservation(
+            healthy=True,
+            owner="portfolio-tracker-service",
+            health_checked_at=observed,
+            health=_health(),
+        ),
+        scheduler=SchedulerEvidence(
+            task_name=r"\earnings-summary\refresh_portfolio_tracker",
+            terminal_result="success",
+            observed_at=daily_observed_at,
+        ),
+        refresh=RefreshEvidence(
+            owner="portfolio-tracker-refresh",
+            completed_at=daily_observed_at,
+            terminal_result="success",
+        ),
+    )
+    path = portfolio_tracker_receipt_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(receipt.model_dump_json(), encoding="utf-8")
+
+    snapshot = collect_operations_snapshot(
+        build_operations_registry(Path(__file__).resolve().parents[1]),
+        repo_root=tmp_path,
+        conn=sqlite3.connect(":memory:"),
+        observed_at=observed,
+    )
+
+    assert snapshot.portfolio_tracker_runtime.state == expected_state

@@ -395,12 +395,12 @@ def _portfolio_tracker_evidence(
     problems: list[str] = []
     stale_planes: list[str] = []
 
-    def plane_state(timestamp: datetime | None) -> str:
+    def plane_state(timestamp: datetime | None, *, ttl: timedelta = timedelta(minutes=15)) -> str:
         if timestamp is None or timestamp.tzinfo is None:
             return "missing"
         if timestamp > observation.observed_at:
             return "invalid"
-        return "stale" if observation.observed_at - timestamp > timedelta(minutes=15) else "current"
+        return "stale" if observation.observed_at - timestamp > ttl else "current"
 
     listener_time = receipt.listener.health_checked_at or receipt.recorded_at
     listener_plane = plane_state(listener_time)
@@ -419,7 +419,7 @@ def _portfolio_tracker_evidence(
     if receipt.scheduler is None:
         problems.append("scheduler evidence missing")
     else:
-        scheduler_plane = plane_state(receipt.scheduler.observed_at)
+        scheduler_plane = plane_state(receipt.scheduler.observed_at, ttl=timedelta(hours=26))
         if scheduler_plane == "stale":
             stale_planes.append("scheduler")
         elif scheduler_plane in {"missing", "invalid"}:
@@ -429,7 +429,7 @@ def _portfolio_tracker_evidence(
     if receipt.refresh is None:
         problems.append("daily refresh evidence missing")
     else:
-        refresh_plane = plane_state(receipt.refresh.completed_at)
+        refresh_plane = plane_state(receipt.refresh.completed_at, ttl=timedelta(hours=26))
         if refresh_plane == "stale":
             stale_planes.append("daily refresh")
         elif refresh_plane in {"missing", "invalid"}:

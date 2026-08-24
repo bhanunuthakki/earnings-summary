@@ -50,6 +50,7 @@ from runtime.portfolio_tracker import RuntimeReceipt
 _MAX_ROWS = 100
 _MAX_RECEIPT_BYTES = 64 * 1024
 _RUNTIME_RECEIPT_TTL = timedelta(minutes=15)
+_DAILY_REFRESH_RECEIPT_TTL = timedelta(hours=26)
 _OBSERVED_TABLES = (
     "alembic_version",
     "provider_circuit_state",
@@ -510,12 +511,17 @@ def _portfolio_tracker_runtime_state(
         "scheduler": receipt.scheduler.observed_at if receipt.scheduler else None,
         "daily refresh": receipt.refresh.completed_at if receipt.refresh else None,
     }
+    plane_ttls = {
+        "listener": _RUNTIME_RECEIPT_TTL,
+        "scheduler": _DAILY_REFRESH_RECEIPT_TTL,
+        "daily refresh": _DAILY_REFRESH_RECEIPT_TTL,
+    }
     for name, timestamp in plane_times.items():
         if timestamp is None:
             continue
         if timestamp.tzinfo is None or timestamp > observed_at:
             invalid_planes.append(name)
-        elif observed_at - timestamp > _RUNTIME_RECEIPT_TTL:
+        elif observed_at - timestamp > plane_ttls[name]:
             stale_planes.append(name)
     state = "invalid" if invalid_planes else "stale" if age_stale or stale_planes else "current"
     detail_parts: list[str] = []

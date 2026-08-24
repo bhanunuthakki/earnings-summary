@@ -410,6 +410,21 @@
    }
   },
   {
+   "task_name": "\\earnings-summary\\portfolio_tracker_api",
+   "xml": "portfolio_tracker_api.task.xml",
+   "wrapper": "run_portfolio_tracker_api.bat",
+   "schedule": {
+    "trigger": "BootTrigger",
+    "start_boundary": null,
+    "repetition_interval": null,
+    "days_interval": null,
+    "weeks_interval": null,
+    "days_of_week": [],
+    "days_of_month": [],
+    "months": []
+   }
+  },
+  {
    "task_name": "\\earnings-summary\\red_team",
    "xml": "red_team.task.xml",
    "wrapper": "run_red_team.bat",
@@ -486,6 +501,21 @@
     "days_of_week": [
      "Sunday"
     ],
+    "days_of_month": [],
+    "months": []
+   }
+  },
+  {
+   "task_name": "\\earnings-summary\\refresh_portfolio_tracker",
+   "xml": "refresh_portfolio_tracker.task.xml",
+   "wrapper": "run_refresh_portfolio_tracker.bat",
+   "schedule": {
+    "trigger": "CalendarTrigger",
+    "start_boundary": "2026-08-24T07:30:00",
+    "repetition_interval": null,
+    "days_interval": 1,
+    "weeks_interval": null,
+    "days_of_week": [],
     "days_of_month": [],
     "months": []
    }

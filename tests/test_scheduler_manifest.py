@@ -32,7 +32,7 @@ EXPECTED_DISABLED_TASKS = {
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 44
+    assert len(manifest.tasks) == 46
     collector = next(
         task
         for task in manifest.tasks
@@ -50,6 +50,43 @@ def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")
     }
+
+
+def test_portfolio_tracker_runtime_tasks_keep_api_ownership_and_refresh_evidence_separate() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    api = next(
+        task
+        for task in manifest.tasks
+        if task.task_name == r"\earnings-summary\portfolio_tracker_api"
+    )
+    refresh = next(
+        task
+        for task in manifest.tasks
+        if task.task_name == r"\earnings-summary\refresh_portfolio_tracker"
+    )
+
+    assert api.schedule.trigger == "BootTrigger"
+    assert api.schedule.start_boundary is None
+    assert refresh.schedule.trigger == "CalendarTrigger"
+    assert refresh.schedule.days_interval == 1
+
+    api_xml = (CRON_DIR / api.xml).read_text(encoding="utf-8")
+    assert "<BootTrigger>" in api_xml
+    assert "<UserId>S-1-5-18</UserId>" in api_xml
+    assert "<LogonType>ServiceAccount</LogonType>" in api_xml
+    assert "<RunLevel>HighestAvailable</RunLevel>" in api_xml
+    refresh_xml = (CRON_DIR / refresh.xml).read_text(encoding="utf-8")
+    assert "<LogonType>S4U</LogonType>" in refresh_xml
+    assert "<RunLevel>LeastPrivilege</RunLevel>" in refresh_xml
+
+    api_wrapper = (CRON_DIR / api.wrapper).read_text(encoding="utf-8")
+    assert "if not defined portfolio_tracker_root" in api_wrapper.casefold()
+    assert "if not defined portfolio_tracker_api_url" in api_wrapper.casefold()
+    assert "execution\\serve_portfolio_tracker.py" in api_wrapper
+    refresh_wrapper = (CRON_DIR / refresh.wrapper).read_text(encoding="utf-8")
+    assert "if not defined portfolio_tracker_api_url" in refresh_wrapper.casefold()
+    assert "execution\\refresh_portfolio_tracker.py" in refresh_wrapper
+    assert "serve_portfolio_tracker.py" not in refresh_wrapper
     assert {task.wrapper for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("run_*.bat") if path.name != "run_python.bat"
     }
