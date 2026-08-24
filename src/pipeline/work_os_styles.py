@@ -11,6 +11,7 @@ from ui.controls import controls_css
 from ui.tokens import palette_css
 
 WORK_OS_CSS = """
+html { scrollbar-gutter: stable; }
 html, body { min-height: 100dvh; }
 body { padding-bottom: env(safe-area-inset-bottom); }
 .work-os-threshold-note-title { font-weight:600; font-size:var(--fs-title); }
