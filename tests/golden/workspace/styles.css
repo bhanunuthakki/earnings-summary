@@ -90,7 +90,16 @@
   --lift-sm: -1px;
   --lift-md: -2px;
   --toast-hide-y: 100px;
+  --z-sidebar: 10;
+  --z-header: 20;
+  --z-scrim: 80;
+  --z-drawer: 90;
+  --z-toast: 100;
   --z-modal: 300;
+  --main-max-width-wide: 1440px;
+  --dismiss-scale: 0.97;
+  --dismiss-y: -2px;
+  --toast-y: 20px;
   --blur-sm: 6px;
   --blur-md: 16px;
   --blur-lg: 24px;
@@ -733,6 +742,16 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
 .drill-handle:hover { color: var(--accent); border-bottom-style: solid; background-color: var(--accent-soft); }
 .src-chip { font-family: var(--mono); font-size: var(--fs-nano); padding: var(--sp-1) var(--sp-1); border-radius: var(--radius-md); background-color: var(--paper); color: var(--muted); border: var(--bw-thin) solid var(--border); text-decoration: none; cursor: pointer; transition: color var(--transition), border-color var(--transition); }
 .src-chip:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---- Generation 3 Work OS Primitives ---- */
+.k-desk-hero { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.k-say-do-timeline { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); }
+.k-say-do-item { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: var(--bw-thin) solid var(--hairline); }
+.k-say-do-item:last-child { border-bottom: none; }
+.k-matrix-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--grid-card-md), 1fr)); gap: var(--sp-3); }
+.k-action-card { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3); background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.desk-stats-strip { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+.desk-tabs-bar { display: flex; gap: var(--sp-2); border-bottom: var(--bw-thin) solid var(--border); padding-bottom: var(--sp-1); margin: var(--sp-2) 0; }
 
 /* ============================================================
    Report spacing rhythm — ONE system, three tiers (owner audit,

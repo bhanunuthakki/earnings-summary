@@ -42,21 +42,24 @@ def render_brief_reader_shell() -> str:
 
 
 def render_company_desk_shell() -> str:
-    """Return the approved decision-workbench structure without demo facts."""
+    """Return the native Generation 3 4-tab company desk decision workbench."""
 
     return """
 <section id="screen-workspace" class="screen-view" data-layout="decision-workbench">
   <div class="research-screen" id="workOsCompanyDesk" aria-live="polite">
-    <header class="k-card k-card-section research-toolbar">
+    <!-- Sticky Valuation & Identity Hero Bar -->
+    <header class="k-card k-card-section k-desk-hero research-toolbar" id="companyDeskHero">
       <div class="company-identity-switcher" id="companyPickerRoot">
-        <div class="k-card-meta" id="companyPickerLabel">Company Desk</div>
         <div class="company-identity-row">
-          <div class="k-tick"><span class="k-tick-sym k-tick-sym-display" id="deskTicker">—</span><span class="k-tick-name" id="deskCompanyName">Choose a portfolio company</span></div>
+          <h1 class="k-card-title" id="workOsCompanyDeskHeading"><span id="companyPickerLabel">Company Desk</span></h1>
+          <div class="k-tick">
+            <span class="k-tick-sym k-tick-sym-display" id="deskTicker">—</span>
+            <span class="k-tick-name" id="deskCompanyName">Choose a portfolio company</span>
+          </div>
           <button class="company-picker-trigger k-btn k-btn-quiet k-btn-sm" id="companyPickerTrigger"
                   type="button" aria-haspopup="listbox" aria-controls="companyPickerPopover"
-                  aria-expanded="false" aria-label="Switch company desk">Switch</button>
+                  aria-expanded="false" aria-label="Switch company desk">Switch ▾</button>
         </div>
-        <div class="k-card-meta" id="deskCoverageRole">Governed company research</div>
         <div class="company-picker-popover k-overlay k-card-stack" id="companyPickerPopover" hidden>
           <label class="k-card-meta" for="companyPickerSearch">Find a company</label>
           <input id="companyPickerSearch" type="search" role="combobox"
@@ -64,38 +67,81 @@ def render_company_desk_shell() -> str:
                  aria-controls="companyPickerList" autocomplete="off"
                  placeholder="Search ticker or company" spellcheck="false">
           <ul class="k-menu company-picker-list" id="companyPickerList" role="listbox"></ul>
+          <span class="work-os-live-status" id="companyPickerStatus" role="status" aria-live="polite"></span>
         </div>
-        <span class="work-os-live-status" id="companyPickerStatus" aria-live="polite"></span>
+      </div>
+      <div class="desk-stats-strip">
+        <div class="k-stat-cell"><div class="stat-heading">Price</div><div class="stat-number" id="deskLivePrice">—</div></div>
+        <div class="k-stat-cell"><div class="stat-heading">DCF Fair Value</div><div class="stat-number" id="deskFairValue">—</div></div>
+        <div class="k-stat-cell"><div class="stat-heading">Valuation Gap</div><div class="stat-number" id="deskValuationGap"><span class="k-pill">—</span></div></div>
+        <div class="k-stat-cell"><div class="stat-heading">Position Weight</div><div class="stat-number" id="deskPositionWeight">—</div></div>
       </div>
       <div class="research-actions">
-        <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="company">Ask Copilot</button>
+        <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="company">Ask Engine</button>
         <span id="workOsEarningsDoorway"><span class="k-card-meta">Earnings artifact unavailable</span></span>
         <button class="k-btn k-btn-primary k-btn-sm" id="workOsFullBriefButton" type="button" disabled>Read full brief →</button>
       </div>
     </header>
-    <div class="k-card k-card-stat research-decision-band" id="deskDecisionBand" aria-label="Company decision state">
-      <div class="k-stat-cell"><div class="stat-heading">Owner posture</div><div class="stat-number" id="deskOwnerState">—</div><div class="stat-subtext" id="deskOwnerRevision">No owner decision recorded</div></div>
-      <div class="k-stat-cell"><div class="stat-heading">Model recommendation</div><div class="stat-number" id="deskModelState">—</div><div class="stat-subtext" id="deskModelRevision">No model recommendation recorded</div></div>
-      <div class="k-stat-cell"><div class="stat-heading">Position weight</div><div class="stat-number" id="deskPositionWeight">Weight unavailable</div><div class="stat-subtext" id="deskPositionSource">Tracker snapshot unavailable</div></div>
-      <div class="k-stat-cell"><div class="stat-heading">DCF input price</div><div class="stat-number" id="deskInputPrice">—</div><div class="stat-subtext" id="deskInputPriceSource">No governed input price</div></div>
-      <div class="k-stat-cell"><div class="stat-heading">DCF fair value</div><div class="stat-number" id="deskFairValue">—</div><div class="stat-subtext" id="deskFairValueSource">No governed fair value</div></div>
-      <div class="k-stat-cell"><div class="stat-heading">Latest brief</div><div class="stat-number" id="deskBriefDate">—</div><div class="stat-subtext" id="deskBriefStatus">No indexed artifact</div></div>
+
+    <!-- 4-Tab Navigation Bar -->
+    <nav class="desk-tabs-bar" aria-label="Company desk sections" role="tablist">
+      <button class="k-btn k-btn-quiet k-btn-sm is-active" id="deskTabButtonThesis" type="button" role="tab" aria-selected="true" aria-controls="deskTabThesis" data-desk-tab="thesis">1. Thesis &amp; Say-Do</button>
+      <button class="k-btn k-btn-quiet k-btn-sm" id="deskTabButtonFinancials" type="button" role="tab" aria-selected="false" aria-controls="deskTabFinancials" data-desk-tab="financials">2. Financials &amp; DCF</button>
+      <button class="k-btn k-btn-quiet k-btn-sm" id="deskTabButtonTranscripts" type="button" role="tab" aria-selected="false" aria-controls="deskTabTranscripts" data-desk-tab="transcripts">3. Transcripts &amp; Q&amp;A</button>
+      <button class="k-btn k-btn-quiet k-btn-sm" id="deskTabButtonNotes" type="button" role="tab" aria-selected="false" aria-controls="deskTabNotes" data-desk-tab="notes">4. Notes &amp; Provenance</button>
+    </nav>
+
+    <!-- Tab 1: Thesis & Say-Do -->
+    <div class="desk-tab-content" id="deskTabThesis" role="tabpanel" aria-labelledby="deskTabButtonThesis">
+      <div class="research-grid">
+        <article class="k-card k-card-section">
+          <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Thesis Contracts &amp; Falsifiers</h2><p class="k-card-meta">Falsifiable conditions attached to the current decision</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="conditions">Ask Copilot</button></header>
+          <div class="research-list" id="deskConditions"><div class="k-well">No governed conditions loaded.</div></div>
+        </article>
+        <aside class="k-card k-card-section">
+          <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Say/Do Management Track Record</h2><p class="k-card-meta">Historical commitments vs reported actuals</p></div></header>
+          <div class="k-say-do-timeline" id="deskSayDoTimeline"><div class="k-well">Loading Say/Do tracking history…</div></div>
+        </aside>
+      </div>
     </div>
-    <div class="research-grid">
-      <article class="k-card k-card-section">
-        <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Thesis contracts</h2><p class="k-card-meta">Falsifiable conditions attached to the current decision</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="conditions">Ask Copilot</button></header>
-        <div class="research-list" id="deskConditions"><div class="k-well">No governed conditions loaded.</div></div>
-      </article>
-      <aside class="k-card k-card-section">
-        <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Open questions</h2><p class="k-card-meta">Owner and model items remain distinct</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="questions">Ask Copilot</button></header>
-        <form class="research-question-capture" id="deskQuestionCapture">
-          <label class="k-card-meta" for="deskQuestionInput">Add an owner question</label>
-          <div class="research-actions"><input id="deskQuestionInput" maxlength="2000" required placeholder="What should we track?" autocomplete="off"><button class="k-btn k-btn-primary k-btn-sm" type="submit">Track question</button></div>
-          <span class="stat-subtext" id="deskQuestionCaptureStatus" aria-live="polite"></span>
-        </form>
-        <div class="research-list" id="deskQuestions"><div class="k-well">No open research questions loaded.</div></div>
-      </aside>
+
+    <!-- Tab 2: Financials & DCF -->
+    <div class="desk-tab-content" id="deskTabFinancials" role="tabpanel" aria-labelledby="deskTabButtonFinancials" hidden>
+      <div class="k-card k-card-section">
+        <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Valuation Engine &amp; Segments</h2><p class="k-card-meta">DCF model assumptions and segment revenue trajectory</p></div></header>
+        <div id="deskFinancialsSummary" class="k-matrix-grid">
+          <div class="k-well">Select a company to inspect financial projections and DCF valuation bridges.</div>
+        </div>
+      </div>
     </div>
+
+    <!-- Tab 3: Transcripts & QA -->
+    <div class="desk-tab-content" id="deskTabTranscripts" role="tabpanel" aria-labelledby="deskTabButtonTranscripts" hidden>
+      <div class="k-card k-card-section">
+        <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Earnings Transcripts &amp; Executive Quotes</h2><p class="k-card-meta">Verified speaker quotes with timestamped provenance</p></div></header>
+        <div id="deskTranscriptsQA"><div class="k-well">No transcript quotes loaded for this company.</div></div>
+      </div>
+    </div>
+
+    <!-- Tab 4: Notes & Provenance -->
+    <div class="desk-tab-content" id="deskTabNotes" role="tabpanel" aria-labelledby="deskTabButtonNotes" hidden>
+      <div class="research-grid">
+        <article class="k-card k-card-section">
+          <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Open Questions &amp; Triage</h2><p class="k-card-meta">Owner and model items remain distinct</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="questions">Ask Engine</button></header>
+          <form class="research-question-capture" id="deskQuestionCapture">
+            <label class="k-card-meta" for="deskQuestionInput">Add an owner question</label>
+            <div class="research-actions"><input id="deskQuestionInput" maxlength="2000" required placeholder="What should we track?" autocomplete="off"><button class="k-btn k-btn-primary k-btn-sm" type="submit">Track question</button></div>
+            <span class="stat-subtext" id="deskQuestionCaptureStatus" aria-live="polite"></span>
+          </form>
+          <div class="research-list" id="deskQuestions"><div class="k-well">No open research questions loaded.</div></div>
+        </article>
+        <aside class="k-card k-card-section">
+          <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">SEC Provenance &amp; Filing Links</h2><p class="k-card-meta">Direct EDGAR links to 10-K, 10-Q, 8-K sources</p></div></header>
+          <div id="deskProvenanceLinks"><div class="k-well">No filing links indexed.</div></div>
+        </aside>
+      </div>
+    </div>
+
     <div class="k-well" id="deskWarnings" hidden></div>
   </div>
 </section>

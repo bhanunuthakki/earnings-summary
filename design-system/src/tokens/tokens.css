@@ -92,7 +92,16 @@
   --lift-sm: -1px;
   --lift-md: -2px;
   --toast-hide-y: 100px;
+  --z-sidebar: 10;
+  --z-header: 20;
+  --z-scrim: 80;
+  --z-drawer: 90;
+  --z-toast: 100;
   --z-modal: 300;
+  --main-max-width-wide: 1440px;
+  --dismiss-scale: 0.97;
+  --dismiss-y: -2px;
+  --toast-y: 20px;
   --blur-sm: 6px;
   --blur-md: 16px;
   --blur-lg: 24px;

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from integrations.portfolio_allocation import (
     PortfolioAllocationProjection,
@@ -24,6 +24,7 @@ from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.research_cockpit import CockpitRow, PendingAlertRef
 from pipeline.work_os_earnings import EarningsReadoutSummary
+from portfolio_risk_snapshot_store import RiskSnapshot
 
 
 class WorkOsPortfolioCompany(BaseModel):
@@ -75,6 +76,38 @@ class WorkOsPortfolioAction(BaseModel):
     evidence_ref: str | None = None
 
 
+class WorkOsAssetClassSplit(BaseModel):
+    """Asset allocation with explicit availability and source provenance."""
+
+    model_config = ConfigDict(frozen=True)
+
+    availability: Literal["available", "unavailable"]
+    source: Literal["instrument_registry"] = "instrument_registry"
+    as_of: str | None = None
+    reason: str | None = None
+    weights_pct: dict[str, float] = Field(default_factory=dict)
+    unclassified_weight_pct: float | None = None
+
+
+class WorkOsRiskMetricSummary(BaseModel):
+    """Whole-book risk metrics projected only from the persisted snapshot."""
+
+    model_config = ConfigDict(frozen=True)
+
+    availability: Literal["available", "unavailable"]
+    source: Literal["portfolio_risk_snapshot"] = "portfolio_risk_snapshot"
+    captured_at: str | None = None
+    metric_version: str | None = None
+    rebase_basis: str | None = None
+    window_start: str | None = None
+    window_end: str | None = None
+    benchmark: str | None = None
+    portfolio_beta: float | None = None
+    sharpe_ratio: float | None = None
+    tracking_error_annualized: float | None = None
+    max_drawdown_pct: float | None = None
+
+
 @dataclass(frozen=True)
 class _AlertActionIdentity:
     """Internal conversion of an existing alert identity for the API model."""
@@ -102,9 +135,29 @@ class WorkOsPortfolioHydration(BaseModel):
     earnings_readouts: list[EarningsReadoutSummary]
     actions: list[WorkOsPortfolioAction]
     warnings: list[str]
+    asset_class_split: WorkOsAssetClassSplit
+    risk_metric_summary: WorkOsRiskMetricSummary
 
 
 _PUBLIC_WARNING_CODE = re.compile(r"^(?:[A-Z][A-Z0-9_]{0,119}|[a-z][a-z0-9_]{0,119})$")
+
+
+def _risk_metric_summary(snapshot: RiskSnapshot | None) -> WorkOsRiskMetricSummary:
+    if snapshot is None:
+        return WorkOsRiskMetricSummary(availability="unavailable")
+    return WorkOsRiskMetricSummary(
+        availability="available",
+        captured_at=snapshot.captured_at or None,
+        metric_version=snapshot.metric_version,
+        rebase_basis=snapshot.rebase_basis,
+        window_start=snapshot.window_start,
+        window_end=snapshot.window_end,
+        benchmark=snapshot.benchmark,
+        portfolio_beta=snapshot.beta,
+        sharpe_ratio=snapshot.sharpe,
+        tracking_error_annualized=snapshot.tracking_error_annualized,
+        max_drawdown_pct=snapshot.max_drawdown_pct,
+    )
 
 
 def _public_warning_codes(*warning_sets: Sequence[str]) -> list[str]:
@@ -256,6 +309,7 @@ def build_work_os_portfolio(
     latest_readouts: Mapping[str, EarningsReadoutSummary] | None = None,
     readout_warnings: Sequence[str] = (),
     offline_snapshot: OfflinePortfolioSnapshot | None = None,
+    risk_snapshot: RiskSnapshot | None = None,
     generated_at: datetime | None = None,
 ) -> WorkOsPortfolioHydration:
     """Join research portfolio rows to optional current tracker positions."""
@@ -320,6 +374,18 @@ def build_work_os_portfolio(
         tracker_detail = f"Tracker connected · {tracker_state} · As of {live.as_of}"
     else:
         tracker_detail = f"Live tracker connected · {tracker_state} · observation date unavailable"
+    unclassified_weight = (
+        sum(position.percent_of_portfolio or 0.0 for position in portfolio_source.positions)
+        if portfolio_source.available
+        else None
+    )
+    asset_class_split = WorkOsAssetClassSplit(
+        availability="unavailable",
+        reason="Complete instrument asset-class and domicile metadata is unavailable",
+        unclassified_weight_pct=(
+            round(unclassified_weight, 2) if unclassified_weight is not None else None
+        ),
+    )
     return WorkOsPortfolioHydration(
         status=(
             "ok"
@@ -348,4 +414,6 @@ def build_work_os_portfolio(
         ),
         actions=actions,
         warnings=warnings,
+        asset_class_split=asset_class_split,
+        risk_metric_summary=_risk_metric_summary(risk_snapshot),
     )

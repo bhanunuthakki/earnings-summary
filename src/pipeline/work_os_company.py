@@ -90,6 +90,7 @@ class CompanyDeskResponse(BaseModel):
     latest_earnings_readout: EarningsReadoutSummary | None
     earnings_doorway: EarningsDoorway
     warnings: list[str]
+    say_do: dict[str, object] | None = None
 
 
 _PRE_EARNINGS_PURPOSE = "pre_earnings_brief"

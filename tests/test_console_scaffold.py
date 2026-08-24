@@ -91,3 +91,15 @@ def test_console_preserves_more_specific_fragment_heading() -> None:
 
     assert "<h2>Portfolio Posture</h2>" in html
     assert "<h2 hidden>Portfolio Posture</h2>" not in html
+
+
+def test_console_omits_only_an_explicitly_excluded_section_heading() -> None:
+    html = render_console(
+        "Demo",
+        _sections(),
+        wrap_class="demo-console",
+        heading_exclude=("alpha",),
+    )
+
+    assert ">Alpha</h2>" not in html
+    assert ">Beta</h2>" in html

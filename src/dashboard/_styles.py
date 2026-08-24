@@ -69,7 +69,6 @@ button { transition: color var(--transition), border-color var(--transition),
   background: var(--paper);
   border-left: 3px solid var(--border-2);
   border-radius: 0 var(--radius) var(--radius) 0;
-  font-family: var(--serif);
   font-size: var(--fs-body);
   color: var(--fg-soft);
 }
@@ -123,7 +122,7 @@ button { transition: color var(--transition), border-color var(--transition),
   color: var(--muted);
   margin-bottom: 4px;
 }
-.evidence-summary-text { color: var(--fg-soft); font-family: var(--serif); font-size: var(--fs-body); }
+.evidence-summary-text { color: var(--fg-soft); font-size: var(--fs-body); }
 /* P4.4 — the owner's open notes attached to the alert's evidence. */
 .evidence-notes-list { list-style: none; margin: 0; padding: 0; }
 .evidence-notes-list li { padding: 3px 0; font-size: var(--fs-body); color: var(--fg-soft); }
@@ -164,7 +163,7 @@ button { transition: color var(--transition), border-color var(--transition),
 .cite-locator { color: var(--muted); word-break: break-all; }
 .cite-excerpt { color: var(--fg-soft); }
 .cite-prov { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); white-space: nowrap; }
-.prov-source { color: var(--accent); }
+.prov-source { color: var(--fg-soft); }
 .prov-fetched { color: var(--muted); }
 .evidence-raw { margin-top: 4px; }
 .evidence-raw > summary {
@@ -204,7 +203,6 @@ button { transition: color var(--transition), border-color var(--transition),
   justify-content: space-between;
   align-items: center;
   color: var(--muted);
-  font-family: var(--mono);
   font-size: var(--fs-caption);
   letter-spacing: 0.04em;
 }

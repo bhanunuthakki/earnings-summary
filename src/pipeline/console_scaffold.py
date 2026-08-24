@@ -86,6 +86,7 @@ def render_console(
     wrap_class: str,
     extra_nav: str = "",
     nav_exclude: tuple[str, ...] = (),
+    heading_exclude: tuple[str, ...] = (),
     grid: bool = False,
     wide: tuple[str, ...] = (),
 ) -> str:
@@ -102,6 +103,8 @@ def render_console(
     later sections in page order. ``nav_exclude`` drops named anchors' own
     chips (the section still renders), for the landing section whose ``<h2>``
     sits directly under the band and would otherwise duplicate as a chip.
+    ``heading_exclude`` omits the scaffold-owned card heading for a section
+    whose identity is already carried by that merged band.
 
     The nav chips scroll via a ``data-console-jump`` data attribute + a guarded
     document-level listener (``_CONSOLE_NAV_JS``), NOT an ``href="#anchor"``: the
@@ -126,12 +129,19 @@ def render_console(
     rendered_sections: list[str] = []
     for anchor, label, fn in sections:
         fragment = _hide_duplicate_heading(label, _safe(label, fn))
+        heading = (
+            ""
+            if anchor in heading_exclude
+            else (
+                '<header class="k-card-head"><div class="k-card-heading">'
+                f'<h2 class="k-card-title">{escape(label)}</h2>'
+                "</div></header>"
+            )
+        )
         rendered_sections.append(
             f'<article class="console-sec{" csec-wide" if grid and anchor in wide else ""} '
             f'k-card k-card-section" id="csec-{escape(anchor)}">'
-            '<header class="k-card-head"><div class="k-card-heading">'
-            f'<h2 class="k-card-title">{escape(label)}</h2>'
-            f"</div></header>{fragment}</article>"
+            f"{heading}{fragment}</article>"
         )
     body = "".join(rendered_sections)
     if grid:

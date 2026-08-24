@@ -1281,7 +1281,7 @@ def _answer_block(ctx: dict[str, object]) -> str:
     if not isinstance(ans, dict):
         if ctx.get("ledger_answer_pending"):
             return (
-                '<div class="om-answer om-answer-pending">'
+                '<div class="k-well om-answer om-answer-pending">'
                 '<span class="om-answer-label">Answer</span>Answering…</div>'
             )
         return ""
@@ -1289,7 +1289,7 @@ def _answer_block(ctx: dict[str, object]) -> str:
     if not text:
         return ""
     return (
-        '<div class="om-answer"><span class="om-answer-label">Answer</span>'
+        '<div class="k-well om-answer"><span class="om-answer-label">Answer</span>'
         f"{render_prose(text)}</div>"
     )
 
@@ -1403,7 +1403,7 @@ def _feed_card(item: FeedItem) -> str:
             f'title="Open the research queue">{escape(ladder_label)}</button>'
         )
     else:
-        ladder_badge = f'<span class="om-ladder">{escape(ladder_label)}</span>'
+        ladder_badge = f'<span class="k-chip om-ladder">{escape(ladder_label)}</span>'
     when = stamp_html(note.created_at, css="ledger-when")
     return (
         f'<div class="ledger-musing om-item" id="om-note-{note.id}" data-om-id="{note.id}" '
