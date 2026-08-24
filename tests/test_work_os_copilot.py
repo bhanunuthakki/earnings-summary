@@ -90,6 +90,15 @@ def test_copilot_reuses_ask_session_crud_and_stream_contract() -> None:
         assert f"case '{event_type}':" in html
 
 
+def test_copilot_preserves_valid_evaluation_coordinates_at_session_creation() -> None:
+    html = render_work_os_copilot()
+
+    assert "snapshot.evaluation_candidate_id = pendingContext.evaluation_candidate_id" in html
+    assert "snapshot.evaluation_instrument_type = pendingContext.evaluation_instrument_type" in html
+    assert "delete pendingContext.evaluation_candidate_id" in html
+    assert "delete pendingContext.evaluation_instrument_type" in html
+
+
 def test_copilot_emits_ascii_safe_text_for_the_shell_transport() -> None:
     html = render_work_os_copilot()
 
@@ -175,6 +184,18 @@ def test_session_switch_resets_context_and_rehydrates_typed_exchange_artifacts()
     assert "normalizeProposalRef(artifact.proposal_ref)" in html
     assert "renderCopilotProposal(host, {ref: ref, diff: null})" in html
     assert "sessionLoadToken += 1" in html
+
+
+def test_copilot_exposes_the_existing_session_loader_for_linked_dialogues() -> None:
+    html = render_work_os_copilot()
+
+    bridge_start = html.index("window.openWorkOsCopilotSession = function (sessionId)")
+    bridge_end = html.index("window.closeWorkOsCopilot", bridge_start)
+    bridge = html[bridge_start:bridge_end]
+    assert "var safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : ''" in bridge
+    assert "if (!safeSessionId) return false" in bridge
+    assert "copilotOverlay.open()" in bridge
+    assert "loadCopilotSession(safeSessionId)" in bridge
 
 
 def test_session_artifact_proposal_error_reuses_the_live_safe_renderer() -> None:

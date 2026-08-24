@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="mockup-scope" content="Isolated visual prototype; production must compose ui.controls and CCOverlay.">
+  <title>Portfolio Copilot — Page Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --fs-display: 20px;
+      --fs-title: 15px;
+      --fs-body: 13px;
+      --fs-caption: 11px;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      --bg: #090a0c;
+      --surface: #121316;
+      --paper: #18191d;
+      --glass-bg: rgba(18, 19, 22, 0.94);
+      --scrim: rgba(0, 0, 0, 0.65);
+      --fg: #f2f2f3;
+      --fg-soft: #b7b9c0;
+      --muted: #7c7e87;
+      --border: #22242a;
+      --border-2: #31343e;
+      --hairline: #18191d;
+      --accent: #8aa8ff;
+      --accent-soft: #181f38;
+      --accent-contrast: #090a0c;
+      --ok: #4ade80;
+      --warn: #f5c66a;
+      --bad: #f08a8a;
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 20px;
+      --sp-6: 24px;
+      --sp-8: 32px;
+      --radius: 8px;
+      --radius-card: 10px;
+      --radius-drawer: 14px;
+      --radius-full: 999px;
+      --bw-thin: 1px;
+      --sidebar-width: 220px;
+      --header-height: 52px;
+      --drawer-width: 540px;
+      --content-max: 1440px;
+      --summary-min: 250px;
+      --table-min: 900px;
+      --touch-target: 44px;
+      --icon-button-size: 32px;
+      --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      --shadow-drawer: -16px 0 48px rgba(0, 0, 0, 0.75);
+      --transition: 150ms ease;
+      --transition-fluid: 250ms cubic-bezier(0.16, 1, 0.3, 1);
+      --dismiss-y: -2px;
+      --dismiss-scale: 0.97;
+      --toast-y: 20px;
+      --z-sidebar: 10;
+      --z-scrim: 80;
+      --z-drawer: 90;
+      --z-toast: 100;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      line-height: 1.5;
+    }
+    button { font: inherit; }
+    button:focus-visible, a:focus-visible {
+      outline: var(--bw-thin) solid var(--accent);
+      outline-offset: var(--sp-1);
+    }
+
+    .app-shell { min-height: 100dvh; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+    .app-sidebar {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: var(--z-sidebar);
+      min-height: 100dvh;
+      padding: var(--sp-5) var(--sp-3);
+      background: var(--surface);
+      border-inline-end: var(--bw-thin) solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: var(--sp-2); margin-block-end: var(--sp-6); }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      inline-size: var(--icon-button-size);
+      block-size: var(--icon-button-size);
+      border-radius: var(--radius);
+      background: var(--accent);
+      color: var(--accent-contrast);
+      font-family: var(--mono);
+      font-weight: 600;
+    }
+    .brand-name { font-size: var(--fs-title); font-weight: 600; }
+    .nav-layer { margin-block: var(--sp-5) var(--sp-2); color: var(--muted); font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      min-block-size: var(--sp-8);
+      padding: var(--sp-2) var(--sp-3);
+      border-radius: var(--radius);
+      color: var(--fg-soft);
+      text-decoration: none;
+    }
+    .nav-item:hover, .nav-item.is-active { background: var(--paper); color: var(--fg); }
+    .nav-item.is-active { border-inline-start: var(--bw-thin) solid var(--accent); }
+    .nav-glyph { inline-size: var(--sp-4); color: var(--muted); text-align: center; }
+
+    .app-main { min-inline-size: 0; }
+    .app-header {
+      min-block-size: var(--header-height);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-inline: var(--sp-5);
+      border-block-end: var(--bw-thin) solid var(--border);
+      background: color-mix(in srgb, var(--bg) 86%, transparent);
+      backdrop-filter: blur(var(--sp-3));
+    }
+    .header-actions { display: flex; align-items: center; gap: var(--sp-3); }
+    .breadcrumb { color: var(--muted); font-size: var(--fs-caption); }
+    .breadcrumb strong { color: var(--fg-soft); }
+    .live-state { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--muted); font-size: var(--fs-caption); }
+    .live-dot { inline-size: var(--sp-2); block-size: var(--sp-2); border-radius: var(--radius-full); background: var(--ok); }
+    .page { max-inline-size: var(--content-max); margin-inline: auto; padding: var(--sp-6); display: grid; gap: var(--sp-6); }
+    .portfolio-topline { display: grid; grid-template-columns: minmax(0, 0.75fr) minmax(0, 2.25fr); gap: var(--sp-4); align-items: stretch; }
+    /* Visual-only kit simulation. Production composes ui.controls and CCOverlay. */
+    .k-card { background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+    .nav-card { min-inline-size: 0; padding: var(--sp-4); display: grid; align-content: center; }
+    .summary-header { display: flex; align-items: start; justify-content: space-between; gap: var(--sp-3); }
+    .stat-heading { margin: 0; color: var(--muted); font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-number { margin-block-start: var(--sp-2); font-family: var(--mono); font-size: var(--fs-display); font-weight: 600; }
+    .stat-subtext { margin-block-start: var(--sp-1); color: var(--muted); font-size: var(--fs-caption); }
+    .allocation-list { margin-block-start: var(--sp-3); padding-block-start: var(--sp-2); display: grid; gap: var(--sp-1); border-block-start: var(--bw-thin) solid var(--border); }
+    .allocation-row { margin-block-start: 0; }
+
+    .section-stack { display: grid; gap: var(--sp-2); }
+    .section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+    .section-heading h2 { margin: 0; font-size: var(--fs-title); }
+    .count-badge { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); }
+
+    .actions-rail { min-inline-size: 0; padding: var(--sp-2); display: grid; gap: var(--sp-1); }
+    .action-list { display: grid; gap: var(--sp-1); }
+    .k-well.action-card { padding: var(--sp-1) var(--sp-2); overflow: hidden; }
+    .action-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sp-2); }
+    .action-copy { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--sp-2); min-inline-size: 0; }
+    .action-copy h3 { margin: 0; font-size: var(--fs-body); }
+    .action-copy p { margin: 0; color: var(--muted); font-size: var(--fs-caption); }
+    .action-copy .ticker-tile { min-inline-size: var(--icon-button-size); padding: var(--sp-1); }
+    .action-controls { display: flex; flex-wrap: wrap; justify-content: end; gap: var(--sp-1); }
+    .card-dismissing {
+      border-color: transparent;
+      max-block-size: 0;
+      opacity: 0;
+      transform: scale(var(--dismiss-scale)) translateY(var(--dismiss-y));
+      margin: 0;
+      padding-block: 0;
+      transition: max-block-size var(--transition-fluid), opacity var(--transition), transform var(--transition-fluid), margin var(--transition-fluid), padding var(--transition-fluid), border-color var(--transition);
+    }
+
+    .k-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-block-size: var(--icon-button-size);
+      padding: var(--sp-1) var(--sp-3);
+      border: var(--bw-thin) solid transparent;
+      border-radius: var(--radius);
+      cursor: pointer;
+      color: var(--fg);
+      background: transparent;
+      font-size: var(--fs-caption);
+      font-weight: 500;
+      transition: color var(--transition), border-color var(--transition), background-color var(--transition), opacity var(--transition), transform var(--transition);
+    }
+    .k-btn:hover { transform: translateY(var(--dismiss-y)); }
+    .k-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+    .k-btn-quiet { border-color: var(--border); color: var(--fg-soft); }
+    .k-btn-quiet:hover { background: var(--paper); border-color: var(--border-2); color: var(--fg); }
+    .k-btn-danger { color: var(--bad); }
+    .k-btn-sm { min-block-size: var(--icon-button-size); padding: var(--sp-1) var(--sp-2); }
+    .k-ticker { display: inline-flex; align-items: center; gap: var(--sp-2); }
+    .k-ticker-symbol { color: var(--fg); font-family: var(--mono); font-weight: 600; }
+    .k-ticker-name { color: var(--fg-soft); }
+    .ticker-tile { min-inline-size: var(--header-height); padding: var(--sp-2); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); text-align: center; }
+
+    .k-pill { display: inline-flex; align-items: center; max-inline-size: max-content; padding: var(--sp-1) var(--sp-2); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; }
+    .k-pill-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, transparent); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+    .k-pill-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+    .k-pill-bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 30%, transparent); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+    .k-chip { display: inline-flex; align-items: center; min-block-size: var(--icon-button-size); padding: var(--sp-1) var(--sp-2); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-full); background: transparent; color: var(--fg-soft); cursor: pointer; font-size: var(--fs-caption); }
+    .k-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .k-well { padding: var(--sp-3); border: var(--bw-thin) solid var(--border); border-radius: var(--radius); background: var(--paper); color: var(--fg-soft); }
+
+    .table-shell { overflow-x: auto; border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+    .p-table { inline-size: 100%; min-inline-size: var(--table-min); border-collapse: collapse; background: var(--surface); }
+    .p-table th { padding: var(--sp-2) var(--sp-3); background: var(--paper); border-block-end: var(--bw-thin) solid var(--border); text-align: start; }
+    .p-table th.col-weight, .p-table th.col-price-target, .p-table th.col-status { text-align: center; }
+    .p-table th.col-weight .sort-button, .p-table th.col-price-target .sort-button, .p-table th.col-status .sort-button { margin-inline: auto; }
+    .p-table td { padding: var(--sp-3); border-block-end: var(--bw-thin) solid var(--hairline); vertical-align: top; }
+    .p-table tr:last-child td { border-block-end: 0; }
+    .p-table tbody tr:hover { background: color-mix(in srgb, var(--paper) 50%, transparent); }
+    .sort-button { gap: var(--sp-1); }
+    .sort-button.is-sorted { color: var(--accent); }
+    .sort-icon { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); line-height: 1; }
+    .sort-button.is-sorted .sort-icon { color: var(--accent); }
+    .num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: end; white-space: nowrap; }
+    .cell-weight, .cell-price-target, .cell-status { text-align: center; }
+    .price-target { display: grid; justify-items: center; gap: var(--sp-1); }
+    .target { color: var(--accent); }
+    .thresholds { color: var(--muted); font-family: var(--sans); font-size: var(--fs-caption); white-space: normal; }
+    .thresholds strong { color: var(--fg-soft); font-family: var(--mono); }
+    .status-stack { display: grid; justify-items: center; gap: var(--sp-1); }
+    .status-note { color: var(--muted); font-size: var(--fs-caption); }
+    .link-cluster { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+
+    .evaluation-list { display: grid; gap: var(--sp-2); }
+    .evaluation-panel { padding: var(--sp-3); }
+    .evaluation-thread { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sp-4); }
+    .evaluation-copy { min-inline-size: 0; }
+    .evaluation-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+    .evaluation-title h3 { margin: 0; font-size: var(--fs-body); }
+    .evaluation-copy p { margin: var(--sp-2) 0 0; color: var(--fg-soft); }
+    .evaluation-source { margin-block-start: var(--sp-1); color: var(--muted); font-size: var(--fs-caption); }
+    .evaluation-controls { display: flex; flex-wrap: wrap; justify-content: end; gap: var(--sp-1); }
+
+    .k-scrim { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity var(--transition-fluid); }
+    .k-scrim.is-open { opacity: 1; pointer-events: auto; }
+    .k-overlay.k-drawer {
+      position: fixed;
+      inset-block: 0;
+      inset-inline-end: 0;
+      z-index: var(--z-drawer);
+      inline-size: min(var(--drawer-width), 100vw);
+      padding: var(--sp-5);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: var(--sp-4);
+      overflow: hidden;
+      background: var(--glass-bg);
+      border-inline-start: var(--bw-thin) solid var(--border-2);
+      border-start-start-radius: var(--radius-drawer);
+      border-end-start-radius: var(--radius-drawer);
+      box-shadow: var(--shadow-drawer);
+      transform: translateX(100%);
+      visibility: hidden;
+      transition: transform var(--transition-fluid), visibility var(--transition-fluid);
+    }
+    .k-overlay.k-drawer.is-open { transform: translateX(0); visibility: visible; }
+    .drawer-header { display: flex; align-items: start; justify-content: space-between; gap: var(--sp-3); padding-block-end: var(--sp-3); border-block-end: var(--bw-thin) solid var(--border); }
+    .drawer-header h2 { margin: 0; font-size: var(--fs-title); }
+    .drawer-header p { margin: var(--sp-1) 0 0; color: var(--muted); font-size: var(--fs-caption); }
+    .drawer-body { overflow-y: auto; display: grid; align-content: start; gap: var(--sp-3); }
+    .drawer-body h3 { margin: 0; font-size: var(--fs-body); }
+    .drawer-body p { margin: 0; color: var(--fg-soft); }
+    .notification-meta { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+    .drawer-footer { display: flex; flex-wrap: wrap; justify-content: end; gap: var(--sp-2); padding-block-start: var(--sp-3); border-block-start: var(--bw-thin) solid var(--border); }
+    .toast { position: fixed; inset-inline-end: var(--sp-5); inset-block-end: var(--sp-5); z-index: var(--z-toast); padding: var(--sp-3) var(--sp-4); border: var(--bw-thin) solid var(--accent); border-radius: var(--radius-card); background: var(--surface); box-shadow: var(--shadow-card); opacity: 0; transform: translateY(var(--toast-y)); pointer-events: none; transition: opacity var(--transition), transform var(--transition-fluid); }
+    .toast.is-show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 1000px) {
+      .app-shell { grid-template-columns: minmax(0, 1fr); }
+      .app-sidebar { display: none; }
+      .portfolio-topline { grid-template-columns: minmax(0, 1fr); }
+      .action-row { grid-template-columns: minmax(0, 1fr); }
+      .action-controls { justify-content: start; }
+      .evaluation-thread { grid-template-columns: minmax(0, 1fr); }
+      .evaluation-controls { justify-content: start; }
+    }
+    @media (max-width: 600px) {
+      .page { padding: var(--sp-4); }
+      .app-header { align-items: start; gap: var(--sp-2); padding-block: var(--sp-3); }
+      .header-actions { align-items: end; flex-direction: column; gap: var(--sp-2); }
+      .action-controls .k-btn { min-block-size: var(--touch-target); }
+      .evaluation-controls .k-btn { min-block-size: var(--touch-target); }
+      .drawer-footer .k-btn { min-block-size: var(--touch-target); flex: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto; transition-duration: 0.01ms; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="app-sidebar" aria-label="Primary navigation">
+      <div class="brand"><span class="brand-mark">C</span><span class="brand-name">Counterread</span></div>
+      <div class="nav-layer">L1 · Portfolio Intelligence</div>
+      <a class="nav-item is-active" href="#portfolio-copilot"><span class="nav-glyph">⌂</span>Portfolio Copilot</a>
+      <a class="nav-item" href="#performance"><span class="nav-glyph">↗</span>Performance vs Index</a>
+      <a class="nav-item" href="#risk"><span class="nav-glyph">◇</span>Risk &amp; Allocations</a>
+      <div class="nav-layer">L2 · Research Engine</div>
+      <a class="nav-item" href="#company"><span class="nav-glyph">◎</span>Company Desk</a>
+      <a class="nav-item" href="#briefs"><span class="nav-glyph">▤</span>Brief Library</a>
+      <a class="nav-item" href="#analytics"><span class="nav-glyph">⌁</span>Facts &amp; Analytics</a>
+      <div class="nav-layer">L3 · Operations &amp; Governance</div>
+      <a class="nav-item" href="#audit"><span class="nav-glyph">✓</span>Decision Audit Log</a>
+      <a class="nav-item" href="#operations"><span class="nav-glyph">⚙</span>Operations</a>
+    </aside>
+
+    <main class="app-main" id="portfolio-copilot">
+      <header class="app-header">
+        <div class="breadcrumb">Workspaces / <strong>Portfolio Copilot</strong></div>
+        <div class="header-actions">
+          <div class="live-state"><span class="live-dot" aria-hidden="true"></span>Portfolio data as of Aug 20, 2026</div>
+          <button class="k-btn k-btn-quiet k-btn-sm" type="button" onclick="showToast('Portfolio data refreshed for the mockup')">Refresh</button>
+        </div>
+      </header>
+
+      <div class="page">
+        <section class="portfolio-topline" data-testid="portfolio-topline" aria-label="Portfolio summary and actions">
+          <article class="k-card nav-card" data-testid="nav-card">
+            <div class="summary-header"><h2 class="stat-heading">Portfolio NAV</h2></div>
+            <div class="stat-number">$12.45M</div>
+            <div class="stat-subtext">14% free cash reserve · $1.68M</div>
+            <div class="allocation-list" aria-label="Portfolio allocation mix">
+              <div class="stat-subtext allocation-row" data-allocation-pct="18">18% Domestic ETF</div>
+              <div class="stat-subtext allocation-row" data-allocation-pct="7">7% Intl ETF</div>
+              <div class="stat-subtext allocation-row" data-allocation-pct="41">41% Domestic Equity</div>
+              <div class="stat-subtext allocation-row" data-allocation-pct="20">20% Intl Equity</div>
+            </div>
+          </article>
+
+          <article class="k-card actions-rail" data-testid="actions-rail" aria-labelledby="actionsHeading">
+            <div class="section-heading">
+              <h2 id="actionsHeading">Actions</h2>
+              <span class="count-badge" id="actionCount">3 open</span>
+            </div>
+            <div class="action-list" id="actionList">
+              <article class="k-well action-card" data-action-id="nu-buy-watch" data-ticker="NU" data-title="NU approaching buy threshold" data-detail="NU is $1 above the owner-defined add-below level. Review price freshness and the active thesis before deciding whether to prepare an add." data-source="Threshold watch · intended alert">
+                <div class="action-row">
+                  <div class="action-copy"><div class="ticker-tile k-ticker-symbol">NU</div><div><div class="evaluation-title"><h3>Approaching buy threshold</h3><span class="k-pill k-pill-warn">Proposed</span></div><p>Price $14 · Add below $13 · 7.7% away.</p></div></div>
+                  <div class="action-controls">
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="dismiss">Dismiss</button>
+                    <button class="k-btn k-btn-primary k-btn-sm" type="button" data-quick-action="approve">Approve</button>
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="snooze">Snooze</button>
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="open">Open notification</button>
+                  </div>
+                </div>
+              </article>
+
+              <article class="k-well action-card" data-action-id="bkng-add" data-ticker="BKNG" data-title="Review BKNG add threshold" data-detail="The post-Q2 decision card proposes a 0.5% add. Review the updated valuation band, sign off on the falsifier, and record approval before the allocation changes." data-source="Post-Q2 decision card · 2 days ago">
+                <div class="action-row">
+                  <div class="action-copy"><div class="ticker-tile k-ticker-symbol">BKNG</div><div><h3>Review add threshold (+0.5%)</h3><p>Decision card needs falsifier and conviction sign-off.</p></div></div>
+                  <div class="action-controls">
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="dismiss">Dismiss</button>
+                    <button class="k-btn k-btn-primary k-btn-sm" type="button" data-quick-action="approve">Approve</button>
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="snooze">Snooze</button>
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="open">Open notification</button>
+                  </div>
+                </div>
+              </article>
+
+              <article class="k-well action-card" data-action-id="tsm-risk" data-ticker="TSM" data-title="Review TSM geopolitical risk" data-detail="A new semiconductor export restriction update may affect the concentration case. Read the notification, compare it with the current falsifier, and choose the next research action." data-source="Material-news classifier · 1 day ago">
+                <div class="action-row">
+                  <div class="action-copy"><div class="ticker-tile k-ticker-symbol">TSM</div><div><h3>Review geopolitical risk</h3><p>Export restrictions need review against the active thesis.</p></div></div>
+                  <div class="action-controls">
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="dismiss">Dismiss</button>
+                    <button class="k-btn k-btn-primary k-btn-sm" type="button" data-quick-action="approve">Approve</button>
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="snooze">Snooze</button>
+                    <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quick-action="open">Open notification</button>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-stack" data-testid="portfolio-section" aria-labelledby="portfolioHeading">
+          <div class="section-heading">
+            <h2 id="portfolioHeading">Portfolio at a Glance</h2>
+            <span class="count-badge" id="sortStatus" aria-live="polite">Portfolio order</span>
+          </div>
+          <div class="table-shell">
+            <table class="p-table" data-testid="portfolio-table">
+              <thead>
+                <tr>
+                  <th scope="col" aria-sort="none"><button class="sort-button k-btn k-btn-quiet k-btn-sm" type="button" data-sort="company"><span class="sort-label">Company</span><span class="sort-icon" aria-hidden="true">↑</span></button></th>
+                  <th class="col-weight" scope="col" aria-sort="none"><button class="sort-button k-btn k-btn-quiet k-btn-sm" type="button" data-sort="weight"><span class="sort-label">Weight</span><span class="sort-icon" aria-hidden="true">↑</span></button></th>
+                  <th class="col-price-target" scope="col" aria-sort="none"><button class="sort-button k-btn k-btn-quiet k-btn-sm" type="button" data-sort="price"><span class="sort-label">Price/Target</span><span class="sort-icon" aria-hidden="true">↑</span></button></th>
+                  <th class="col-status" scope="col" aria-sort="none"><button class="sort-button k-btn k-btn-quiet k-btn-sm" type="button" data-sort="status"><span class="sort-label">Status</span><span class="sort-icon" aria-hidden="true">↑</span></button></th>
+                  <th scope="col" aria-sort="none"><button class="sort-button k-btn k-btn-quiet k-btn-sm" type="button" data-sort="links"><span class="sort-label">Key Links</span><span class="sort-icon" aria-hidden="true">↑</span></button></th>
+                </tr>
+              </thead>
+              <tbody id="portfolioRows">
+                <tr data-company-row data-company="Nu Holdings" data-weight="12.5" data-price="14" data-status="3" data-links="4">
+                  <td><div class="k-ticker"><span class="k-ticker-symbol">NU</span><span class="k-ticker-name">Nu Holdings</span></div></td>
+                  <td class="cell-weight num">12.5%</td>
+                  <td class="cell-price-target num"><div class="price-target"><div>$14 / <span class="target">$19</span></div><div class="thresholds">Add below <strong>$13</strong> · Hold till <strong>$21</strong> · Sell at <strong>$25</strong></div></div></td>
+                  <td class="cell-status"><div class="status-stack"><span class="k-pill k-pill-ok">Thesis intact</span><span class="status-note">NPL guardrail pending</span></div></td>
+                  <td><div class="link-cluster"><button class="k-chip" type="button" data-link="DCF" data-ticker="NU">DCF</button><button class="k-chip" type="button" data-link="Brief" data-ticker="NU">Brief</button><button class="k-chip" type="button" data-link="Pre-Earnings" data-ticker="NU">Pre-Earnings</button><button class="k-chip" type="button" data-link="Post-Earnings" data-ticker="NU">Post-Earnings</button></div></td>
+                </tr>
+                <tr data-company-row data-company="Booking Holdings" data-weight="8" data-price="4120" data-status="2" data-links="4">
+                  <td><div class="k-ticker"><span class="k-ticker-symbol">BKNG</span><span class="k-ticker-name">Booking Holdings</span></div></td>
+                  <td class="cell-weight num">8.0%</td>
+                  <td class="cell-price-target num"><div class="price-target"><div>$4,120 / <span class="target">$4,850</span></div><div class="thresholds">Add below <strong>$4,000</strong> · Hold till <strong>$5,100</strong> · Sell at <strong>$5,600</strong></div></div></td>
+                  <td class="cell-status"><div class="status-stack"><span class="k-pill k-pill-warn">Monitor</span><span class="status-note">EU regulation</span></div></td>
+                  <td><div class="link-cluster"><button class="k-chip" type="button" data-link="DCF" data-ticker="BKNG">DCF</button><button class="k-chip" type="button" data-link="Brief" data-ticker="BKNG">Brief</button><button class="k-chip" type="button" data-link="Pre-Earnings" data-ticker="BKNG">Pre-Earnings</button><button class="k-chip" type="button" data-link="Post-Earnings" data-ticker="BKNG">Post-Earnings</button></div></td>
+                </tr>
+                <tr data-company-row data-company="Taiwan Semiconductor" data-weight="5.5" data-price="169" data-status="1" data-links="4">
+                  <td><div class="k-ticker"><span class="k-ticker-symbol">TSM</span><span class="k-ticker-name">Taiwan Semiconductor</span></div></td>
+                  <td class="cell-weight num">5.5%</td>
+                  <td class="cell-price-target num"><div class="price-target"><div>$169 / <span class="target">$195</span></div><div class="thresholds">Add below <strong>$160</strong> · Hold till <strong>$205</strong> · Sell at <strong>$225</strong></div></div></td>
+                  <td class="cell-status"><div class="status-stack"><span class="k-pill k-pill-bad">Review</span><span class="status-note">Wafer concentration</span></div></td>
+                  <td><div class="link-cluster"><button class="k-chip" type="button" data-link="DCF" data-ticker="TSM">DCF</button><button class="k-chip" type="button" data-link="Brief" data-ticker="TSM">Brief</button><button class="k-chip" type="button" data-link="Pre-Earnings" data-ticker="TSM">Pre-Earnings</button><button class="k-chip" type="button" data-link="Post-Earnings" data-ticker="TSM">Post-Earnings</button></div></td>
+                </tr>
+                <tr data-company-row data-company="MercadoLibre" data-weight="4.8" data-price="2234" data-status="3" data-links="4">
+                  <td><div class="k-ticker"><span class="k-ticker-symbol">MELI</span><span class="k-ticker-name">MercadoLibre</span></div></td>
+                  <td class="cell-weight num">4.8%</td>
+                  <td class="cell-price-target num"><div class="price-target"><div>$2,234 / <span class="target">$2,600</span></div><div class="thresholds">Add below <strong>$2,100</strong> · Hold till <strong>$2,700</strong> · Sell at <strong>$3,000</strong></div></div></td>
+                  <td class="cell-status"><div class="status-stack"><span class="k-pill k-pill-ok">Thesis intact</span><span class="status-note">Credit stable</span></div></td>
+                  <td><div class="link-cluster"><button class="k-chip" type="button" data-link="DCF" data-ticker="MELI">DCF</button><button class="k-chip" type="button" data-link="Brief" data-ticker="MELI">Brief</button><button class="k-chip" type="button" data-link="Pre-Earnings" data-ticker="MELI">Pre-Earnings</button><button class="k-chip" type="button" data-link="Post-Earnings" data-ticker="MELI">Post-Earnings</button></div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section-stack" data-testid="evaluation-dialogue" aria-labelledby="evaluationHeading">
+          <div class="section-heading">
+            <div><h2 id="evaluationHeading">Evaluation dialogues</h2><div class="stat-subtext">Recent owner dialogue and ready-to-discuss workups · not the full evaluation list</div></div>
+            <span class="count-badge">3 active</span>
+          </div>
+          <div class="k-card evaluation-panel">
+            <div class="evaluation-list">
+              <article class="k-well evaluation-thread" data-testid="evaluation-thread" data-ticker="TOST">
+                <div class="evaluation-copy">
+                  <div class="evaluation-title"><h3><span class="k-ticker-symbol">TOST</span> · Restaurant operating system</h3><span class="k-chip">Stock</span><span class="k-pill k-pill-ok">Open note</span></div>
+                  <p>Does the sticky restaurant OS create enough portfolio orthogonality to support a 2.0% starter position?</p>
+                  <div class="evaluation-source">Owner musing · updated Aug 17</div>
+                </div>
+                <div class="evaluation-controls"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-eval-action="continue">Continue dialogue</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-eval-action="workup">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-eval-action="compare">Compare</button></div>
+              </article>
+
+              <article class="k-well evaluation-thread" data-testid="evaluation-thread" data-ticker="QCOM">
+                <div class="evaluation-copy">
+                  <div class="evaluation-title"><h3><span class="k-ticker-symbol">QCOM</span> · Edge AI optionality</h3><span class="k-chip">Stock</span><span class="k-pill k-pill-warn">Watchlist</span></div>
+                  <p>Is Auto and Meta CPU upside enough to offset Apple runoff and the next QTL renewal risk?</p>
+                  <div class="evaluation-source">Evaluation musing · updated Aug 17</div>
+                </div>
+                <div class="evaluation-controls"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-eval-action="continue">Continue dialogue</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-eval-action="workup">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-eval-action="compare">Compare</button></div>
+              </article>
+
+              <article class="k-well evaluation-thread" data-testid="evaluation-thread" data-ticker="AVDV">
+                <div class="evaluation-copy">
+                  <div class="evaluation-title"><h3><span class="k-ticker-symbol">AVDV</span> · International small value</h3><span class="k-chip">ETF</span><span class="k-pill k-pill-warn">Partial workup</span></div>
+                  <p>The fit refresh is current, but the profile is missing and look-through holdings are dated. Start a dialogue before relying on it.</p>
+                  <div class="evaluation-source">Candidate fit · Aug 21 · holdings snapshot Feb 28 · no dialogue yet</div>
+                </div>
+                <div class="evaluation-controls"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-eval-action="start">Start dialogue</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-eval-action="workup">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-eval-action="compare">Compare</button></div>
+              </article>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="k-scrim" id="notificationScrim" aria-hidden="true"></div>
+  <aside class="k-overlay k-drawer" id="notificationPanel" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="notificationTitle" tabindex="-1">
+    <div class="drawer-header">
+      <div><h2 id="notificationTitle">Notification</h2><p id="notificationSource">Portfolio action</p></div>
+      <button class="k-btn k-btn-quiet k-btn-sm" type="button" id="notificationClose" aria-label="Close notification">Close</button>
+    </div>
+    <div class="drawer-body">
+      <div class="notification-meta"><span class="k-pill k-pill-warn" id="notificationTicker">Ticker</span><span class="k-pill">Owner review</span></div>
+      <div class="k-well"><h3>Why this is here</h3><p id="notificationDetail">Select an action notification to read its grounded context.</p></div>
+      <div><h3>Suggested review</h3><p>Read the supporting company evidence, decide whether the action is still valid, then approve, snooze, or dismiss it. Approval records the review intent; it does not route a broker order.</p></div>
+      <div class="link-cluster"><button class="k-chip" type="button" id="notificationCompany">Open Company</button><button class="k-chip" type="button" id="notificationEvidence">Open Evidence</button></div>
+    </div>
+    <div class="drawer-footer">
+      <button class="k-btn k-btn-danger" type="button" id="notificationDismiss">Dismiss</button>
+      <button class="k-btn k-btn-quiet" type="button" id="notificationSnooze">Snooze</button>
+      <button class="k-btn k-btn-primary" type="button" id="notificationApprove">Approve</button>
+    </div>
+  </aside>
+  <div class="toast" id="toast" role="status" aria-live="polite">Updated</div>
+
+  <script>
+    function formatPrice(value) {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: 0,
+        minimumFractionDigits: 0
+      }).format(value);
+    }
+
+    let activeActionCard = null;
+    let panelTrigger = null;
+    let toastTimer = null;
+    const panel = document.getElementById('notificationPanel');
+    const scrim = document.getElementById('notificationScrim');
+
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('is-show');
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => toast.classList.remove('is-show'), 1800);
+    }
+
+    function openNotificationPanel(card, trigger) {
+      activeActionCard = card;
+      panelTrigger = trigger;
+      document.getElementById('notificationTitle').textContent = card.dataset.title;
+      document.getElementById('notificationTicker').textContent = card.dataset.ticker;
+      document.getElementById('notificationDetail').textContent = card.dataset.detail;
+      document.getElementById('notificationSource').textContent = card.dataset.source;
+      document.getElementById('notificationCompany').textContent = `Open ${card.dataset.ticker} Company`;
+      panel.classList.add('is-open');
+      scrim.classList.add('is-open');
+      panel.setAttribute('aria-hidden', 'false');
+      scrim.setAttribute('aria-hidden', 'false');
+      document.getElementById('notificationClose').focus();
+    }
+
+    function closeNotificationPanel() {
+      panel.classList.remove('is-open');
+      scrim.classList.remove('is-open');
+      panel.setAttribute('aria-hidden', 'true');
+      scrim.setAttribute('aria-hidden', 'true');
+      if (panelTrigger && panelTrigger.isConnected) panelTrigger.focus();
+      panelTrigger = null;
+    }
+
+    function updateActionCount() {
+      const count = document.querySelectorAll('.action-card:not(.card-dismissing)').length;
+      document.getElementById('actionCount').textContent = `${count} open`;
+    }
+
+    function resolveAction(card, verb) {
+      if (!card) return;
+      const label = card.dataset.ticker;
+      card.style.maxBlockSize = `${card.offsetHeight}px`;
+      card.offsetHeight;
+      card.classList.add('card-dismissing');
+      updateActionCount();
+      closeNotificationPanel();
+      showToast(`${label} action ${verb}`);
+      window.setTimeout(() => card.remove(), 300);
+    }
+
+    document.getElementById('actionList').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-quick-action]');
+      if (!button) return;
+      const card = button.closest('.action-card');
+      const action = button.dataset.quickAction;
+      if (action === 'open') openNotificationPanel(card, button);
+      else resolveAction(card, action === 'approve' ? 'approved' : action === 'snooze' ? 'snoozed' : 'dismissed');
+    });
+
+    document.querySelectorAll('.sort-button').forEach((button) => {
+      button.addEventListener('click', () => {
+        const header = button.closest('th');
+        const wasAscending = header.getAttribute('aria-sort') === 'ascending';
+        const direction = wasAscending ? 'descending' : 'ascending';
+        document.querySelectorAll('.p-table th').forEach((cell) => cell.setAttribute('aria-sort', 'none'));
+        document.querySelectorAll('.sort-button').forEach((candidate) => {
+          candidate.classList.remove('is-sorted');
+          candidate.querySelector('.sort-icon').textContent = '↑';
+        });
+        header.setAttribute('aria-sort', direction);
+        button.classList.add('is-sorted');
+        button.querySelector('.sort-icon').textContent = direction === 'ascending' ? '↑' : '↓';
+        const key = button.dataset.sort;
+        const rows = Array.from(document.querySelectorAll('[data-company-row]'));
+        rows.sort((left, right) => {
+          const leftValue = left.dataset[key];
+          const rightValue = right.dataset[key];
+          const numeric = key !== 'company';
+          const order = numeric ? Number(leftValue) - Number(rightValue) : leftValue.localeCompare(rightValue);
+          return direction === 'ascending' ? order : -order;
+        });
+        const body = document.getElementById('portfolioRows');
+        rows.forEach((row) => body.appendChild(row));
+        document.getElementById('sortStatus').textContent = `Sorted by ${button.querySelector('.sort-label').textContent} · ${direction}`;
+      });
+    });
+
+    document.querySelectorAll('[data-link]').forEach((button) => {
+      button.addEventListener('click', () => showToast(`${button.dataset.ticker} ${button.dataset.link} opened in mockup`));
+    });
+
+    document.querySelectorAll('[data-eval-action]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const thread = button.closest('[data-testid="evaluation-thread"]');
+        const labels = { continue: 'dialogue continued', start: 'dialogue started', workup: 'workup opened', compare: 'comparison opened' };
+        showToast(`${thread.dataset.ticker} ${labels[button.dataset.evalAction]} in mockup`);
+      });
+    });
+
+    document.getElementById('notificationClose').addEventListener('click', closeNotificationPanel);
+    scrim.addEventListener('click', closeNotificationPanel);
+    document.getElementById('notificationApprove').addEventListener('click', () => resolveAction(activeActionCard, 'approved'));
+    document.getElementById('notificationSnooze').addEventListener('click', () => resolveAction(activeActionCard, 'snoozed'));
+    document.getElementById('notificationDismiss').addEventListener('click', () => resolveAction(activeActionCard, 'dismissed'));
+    document.getElementById('notificationCompany').addEventListener('click', () => showToast(`${activeActionCard.dataset.ticker} Company opened in mockup`));
+    document.getElementById('notificationEvidence').addEventListener('click', () => showToast(`${activeActionCard.dataset.ticker} evidence opened in mockup`));
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && panel.classList.contains('is-open')) closeNotificationPanel();
+      if (event.key !== 'Tab' || !panel.classList.contains('is-open')) return;
+      const focusable = Array.from(panel.querySelectorAll('button:not([disabled])'));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
+  </script>
+</body>
+</html>

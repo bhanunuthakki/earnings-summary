@@ -195,9 +195,9 @@ def test_work_os_contract_checks_the_runtime_prototype_and_mobile_rail() -> None
     assert "Work OS renderer missing production design contract " in failures[-1]
     assert "mobile-control-font-size" in failures[-1]
 
-    regressed = renderer.replace("k-card-row-title", "stat-heading", 1)
+    regressed = renderer.replace('class="k-well work-os-action-card"', 'class="k-well"', 1)
     failures = check_design_sync.work_os_contract_failures(renderer_source=regressed)
-    assert any("hydrated Action Queue" in failure for failure in failures)
+    assert failures == ["Work OS hydrated Action Queue missing class 'work-os-action-card'"]
 
 
 def test_work_os_contract_accepts_composed_classes_and_rejects_substrings() -> None:

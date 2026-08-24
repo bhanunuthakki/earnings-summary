@@ -41,6 +41,62 @@ def test_work_os_has_the_unified_performance_risk_destination() -> None:
     )
 
 
+def test_portfolio_copilot_home_is_the_compact_three_part_operating_loop() -> None:
+    """The home screen is a live portfolio loop, not a second dashboard."""
+    html = render_work_os_shell()
+    cockpit = _screen_fragment(html, "screen-cockpit")
+
+    assert "Portfolio at a Glance" in cockpit
+    assert "Evaluation dialogues" in cockpit
+    assert "Recent owner dialogue and ready-to-discuss workups" in cockpit
+    assert "not the full evaluation list" in cockpit
+    assert "Portfolio pulse" not in cockpit
+    assert "Portfolio Companies" not in cockpit
+    assert "Performance" not in cockpit.split('id="screen-performance"', 1)[0]
+    assert "Risk &amp; Factors" not in cockpit
+    assert "Action Queue &amp; Review Pack" not in cockpit
+
+
+def test_portfolio_copilot_home_composes_live_sortable_holdings_and_bounded_dialogues() -> None:
+    html = render_work_os_shell()
+    cockpit = _screen_fragment(html, "screen-cockpit")
+
+    assert 'id="workOsPortfolioRows"' in cockpit
+    assert 'id="workOsEvaluationDialogues"' in cockpit
+    assert cockpit.count("data-work-os-portfolio-sort=") == 5
+    for label in ("Company", "Weight", "Price/Target", "Status", "Key Links"):
+        assert f">{label}</span>" in cockpit
+    assert "workOsSortPortfolioRows" in html
+    assert "fetch('/api/work-os/evaluation-dialogues?limit=3'" in html
+    assert "workOsRenderEvaluationDialogues" in html
+    assert "workOsOpenEvaluationDialogue" in html
+    assert "workOsOpenEvaluationWorkup" in html
+    assert "workOsCompareEvaluation" in html
+    assert "data-work-os-evaluation-session" in html
+    assert "data-work-os-evaluation-instrument" in html
+    assert "escapeWorkOsHtml(linked ? sessionId : '')" in html
+    dialogue_runtime = html.split("function workOsOpenEvaluationDialogue(button)", 1)[1].split(
+        "function workOsOpenEvaluationWorkup", 1
+    )[0]
+    assert "window.openWorkOsCopilotSession(sessionId)" in dialogue_runtime
+    workup_runtime = html.split("function workOsOpenEvaluationWorkup(button)", 1)[1].split(
+        "function workOsCompareEvaluation", 1
+    )[0]
+    assert "instrument !== 'stock' && instrument !== 'etf'" in workup_runtime
+    assert "'/api/peek/etf_workup?ticker='" in workup_runtime
+    assert "window.switchCompanyWorkspace(safeTicker)" in workup_runtime
+    compare_runtime = html.split("function workOsCompareEvaluation(ticker)", 1)[1].split(
+        "document.addEventListener('click'", 1
+    )[0]
+    assert "'/api/peek/discovery-compare?tickers='" in compare_runtime
+    assert "window.switchFactPlayground" not in compare_runtime
+    assert "function workOsBindPortfolioInteractions()" in html
+    sort_runtime = html.split("function workOsSortPortfolioRows(key)", 1)[1].split(
+        "function workOsBindPortfolioInteractions", 1
+    )[0]
+    assert "workOsBindPortfolioInteractions();" in sort_runtime
+
+
 def test_work_os_shell_preserves_the_prototype_navigation_and_layers() -> None:
     html = render_work_os_shell(generated_at=datetime(2026, 8, 7, tzinfo=UTC))
     for screen in SCREEN_SPECS:
@@ -525,9 +581,9 @@ def test_work_os_shell_composes_the_canonical_dark_control_baseline() -> None:
 def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hydration() -> None:
     html = render_work_os_shell()
 
-    # Hydrated action rows use the one registered action-card recipe; loading
-    # state stays a semantic well instead of impersonating several cards.
-    assert 'class="k-card k-card-action k-card-interactive"' in html
+    # The compact governed action rail stays a semantic well while preserving
+    # the registered controls that are eligible for each exact alert identity.
+    assert 'class="k-well work-os-action-card"' in html
     assert 'class="k-card k-card-interactive" style="padding:' not in html
     assert html.count("k-card-row-title") >= 1
     assert html.count('class="k-card-meta"') >= 4
@@ -548,15 +604,13 @@ def test_l1_card_titles_and_hydration_hooks_compose_the_registry_roles() -> None
     )
 
     cockpit = _screen_fragment(html, "screen-cockpit")
-    assert cockpit.count('<div class="stat-heading">') == 4
+    assert cockpit.count('class="stat-heading"') == 1
     assert target.count('class="k-card k-card-section research-toolbar"') == 1
     performance = _screen_fragment(html, "screen-performance")
     assert '<h1 class="k-card-title">Performance &amp; Risk</h1>' in performance
     assert 'id="workOsPerformanceMount"' in performance
-    assert "card.querySelector('.stat-heading')" in html
-    assert (
-        '<h3 class="k-card-title k-card-row-title">\' + escapeWorkOsHtml(action.headline)'
-    ) in html
+    assert "workOsPortfolioNavDetail" in html
+    assert "workOsRenderPortfolioRows(companies);" in html
 
 
 def test_cockpit_stats_use_typed_keys_and_native_screen_anchors() -> None:
@@ -564,19 +618,13 @@ def test_cockpit_stats_use_typed_keys_and_native_screen_anchors() -> None:
     cockpit = _screen_fragment(html, "screen-cockpit")
 
     assert 'data-work-os-stat-key="nav"' in cockpit
-    assert 'data-work-os-stat-key="companies"' in cockpit
-    assert (
-        'data-work-os-stat-key="performance" href="#screen-performance" '
-        'aria-label="Open Performance &amp; Risk"'
-    ) in cockpit
-    assert (
-        'data-work-os-stat-key="risk" href="#screen-performance" '
-        'aria-label="Open Performance &amp; Risk"'
-    ) in cockpit
+    assert 'data-work-os-stat-key="companies"' not in cockpit
+    assert 'data-work-os-stat-key="performance"' not in cockpit
+    assert 'data-work-os-stat-key="risk"' not in cockpit
     assert "onclick=" not in cockpit
-    assert [spec.key for spec in COCKPIT_STAT_SPECS] == ["nav", "performance", "risk", "companies"]
+    assert [spec.key for spec in COCKPIT_STAT_SPECS] == ["nav"]
     assert "data-work-os-stat-key" in html
-    assert "querySelectorAll('[data-work-os-stat-key]')" in html
+    assert "workOsPortfolioNavDetail" in html
     assert "payload.tracker_detail" in html
     assert "Tracker unavailable · research data only" in html
     render_index = html.index("workOsRenderPortfolio(payload);")
@@ -593,7 +641,7 @@ def test_l1_live_shells_do_not_ship_prototype_card_grids_or_inline_geometry() ->
 
     assert "card-grid-stat-4col" not in target
     assert 'class="card-grid-stat"' not in target
-    assert 'class="k-stat-grid" id="workOsPortfolioStats"' in target
+    assert 'class="work-os-portfolio-topline"' in target
     assert '<header class="k-section-head">' in _screen_fragment(html, "screen-cockpit")
     for screen_id in ("screen-performance",):
         fragment = _screen_fragment(html, screen_id)
@@ -964,19 +1012,14 @@ def test_full_brief_reader_has_a_resolved_modal_stacking_token() -> None:
 def test_cockpit_hydration_does_not_construct_company_desk() -> None:
     html = render_work_os_shell()
     assert "fetch('/api/work-os/portfolio'" in html
-    assert 'id="workOsPortfolioStats"' in html
+    assert 'id="workOsPortfolioNav"' in html
     assert 'id="workOsActionQueue"' in html
     assert 'id="workOsPortfolioRows"' in html
     assert "workOsHydratePortfolio" in html
     assert "workOsRenderCompanyDesk" in html
-    portfolio_match = re.search(
-        r"function workOsRenderPortfolio\(payload\).*?\n  \}\n\n  "
-        r"async function workOsApplyRequestedResearchState",
-        html,
-        re.DOTALL,
-    )
-    assert portfolio_match is not None
-    portfolio_runtime = portfolio_match.group(0)
+    portfolio_runtime = html.split("function workOsRenderPortfolio(payload)", 1)[1].split(
+        "async function workOsRenderEvaluationDialogues", 1
+    )[0]
     assert "workOsRenderCompanyDesk(" not in portfolio_runtime
     assert "/api/tickers" not in portfolio_runtime
     assert "workOsApplyRequestedResearchState" in html
@@ -993,11 +1036,15 @@ def test_primary_work_os_cards_use_one_declared_composition_archetype() -> None:
     cockpit = _screen_fragment(html, "screen-cockpit")
     company = _screen_fragment(html, "screen-workspace")
 
-    assert 'class="k-card k-card-stat"' in cockpit
-    assert cockpit.count('class="k-stat-cell"') == 4
+    assert 'class="k-card k-card-stat work-os-nav-card"' in cockpit
+    assert 'class="work-os-nav-card-body"' in cockpit
+    assert cockpit.count("data-work-os-stat-key") == 1
+    assert 'class="k-card k-card-section work-os-actions-rail"' in cockpit
+    assert 'class="k-section-title k-card-title" id="workOsActionHeading"' in cockpit
+    assert 'class="k-card-title k-card-row-title"' not in cockpit
     assert 'class="k-section-head"' in cockpit
     assert 'class="k-section-title"' in cockpit
-    assert 'class="k-card k-card-action k-card-interactive"' in html
+    assert 'class="k-well work-os-action-card"' in html
     assert 'class="k-card k-card-section k-desk-hero research-toolbar"' in company
     assert 'class="desk-stats-strip"' in company
     assert company.count('class="k-card k-card-stack"><div class="stat-heading">') == 0
@@ -1131,7 +1178,7 @@ def test_home_and_library_surface_latest_earnings_readouts_before_full_briefs() 
 
     assert "company.latest_earnings_readout || null" in html
     assert "data-work-os-readout" in html
-    assert "Readout unavailable" in html
+    assert "Readout unavailable" not in _screen_fragment(html, "screen-cockpit")
     assert "node.tagName === 'TR'" in html
     assert "event.target.closest('button')" in html
     assert 'id="briefKindFilter"' in html
@@ -1379,10 +1426,10 @@ def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> N
 
     threshold_handler = html.split("document.querySelectorAll('[data-work-os-thresholds]')", 1)[
         1
-    ].split("function workOsApplyRequestedResearchState", 1)[0]
+    ].split("function workOsRenderEvaluationDialogues", 1)[0]
     assert "window.workOsActiveTicker =" not in threshold_handler
     assert "event.stopPropagation();" in threshold_handler
-    assert "switchCompanyWorkspace" not in threshold_handler
+    assert "workOsOpenThresholdReview(node.dataset.workOsThresholds);" in threshold_handler
     assert 'href="/advisor/sizing-intents/' in html
 
 
