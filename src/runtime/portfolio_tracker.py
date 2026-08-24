@@ -196,7 +196,7 @@ def _pid_is_alive(pid: int) -> bool:
 def endpoint_owner_matches_pid(
     host: str, port: int, pid: int, *, require_exclusive: bool = False
 ) -> bool | None:
-    """Prove a TCP listener endpoint belongs to ``pid`` or fail closed.
+    """Prove a TCP listener endpoint belongs to ``pid`` or its child, or fail closed.
 
     Windows' typed ``netstat -ano`` output is the supported local probe. A
     missing/opaque probe returns ``None`` rather than treating a healthy HTTP
@@ -215,7 +215,10 @@ def endpoint_owner_matches_pid(
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    expected_pid = str(pid)
+    if getattr(result, "returncode", None) != 0:
+        return None
+    if not isinstance(pid, int) or pid <= 0:
+        return False
 
     def normalize(value: str) -> str:
         value = value.strip().strip("[]")
@@ -243,28 +246,110 @@ def endpoint_owner_matches_pid(
             return None
         return normalize(host_part), parsed_port
 
-    listeners: list[tuple[str, int, str]] = []
+    listeners: list[tuple[str, int, int]] = []
     for line in result.stdout.splitlines():
         fields = line.split()
-        if len(fields) < 5 or fields[0].upper() != "TCP" or fields[3].upper() != "LISTENING":
+        if not fields or fields[0].upper() != "TCP":
+            continue
+        if len(fields) < 4 or fields[3].upper() != "LISTENING":
             continue
         parsed = parse_local_endpoint(fields[1])
         if parsed is None:
+            if require_exclusive:
+                return False
             continue
-        listeners.append((parsed[0], parsed[1], fields[4]))
+        if len(fields) < 5:
+            if require_exclusive:
+                return False
+            continue
+        try:
+            listener_pid = int(fields[4])
+        except ValueError:
+            if require_exclusive and parsed[1] == port:
+                return False
+            continue
+        if listener_pid <= 0:
+            if require_exclusive and parsed[1] == port:
+                return False
+            continue
+        listeners.append((parsed[0], parsed[1], listener_pid))
 
     if require_exclusive:
         # The BHA-80 always-on service can only claim the endpoint when there
         # is one listener, on exactly the requested local address and port,
-        # owned by its child. A wildcard socket or any companion listener is
+        # owned by its supervised process tree. A wildcard socket or any companion listener is
         # ambiguous even when it happens to share the child PID.
         port_listeners = [entry for entry in listeners if entry[1] == port]
-        return port_listeners == [(expected_host, port, expected_pid)]
+        if len(port_listeners) != 1:
+            return False
+        local_host, local_port, listener_pid = port_listeners[0]
+        if (local_host, local_port) != (expected_host, port):
+            return False
+        return _windows_pid_is_descendant_of(listener_pid, pid)
 
     return any(
-        local_host == expected_host and local_port == port and listener_pid == expected_pid
+        local_host == expected_host and local_port == port and listener_pid == pid
         for local_host, local_port, listener_pid in listeners
     )
+
+
+def _windows_pid_is_descendant_of(child_pid: int, ancestor_pid: int) -> bool:
+    """Return true only when each observed parent leads from child to ancestor.
+
+    Windows virtual-environment redirectors can leave the listening interpreter
+    below the ``Popen`` launcher. This bounded parent walk preserves ownership
+    without allowing a sibling or independently launched loopback server.
+    """
+
+    current_pid = child_pid
+    seen: set[int] = set()
+    for _ in range(32):
+        if current_pid == ancestor_pid:
+            return True
+        if current_pid in seen:
+            return False
+        seen.add(current_pid)
+        parent_pid = _windows_parent_pid(current_pid)
+        if parent_pid is None or parent_pid <= 0:
+            return False
+        current_pid = parent_pid
+    return False
+
+
+def _windows_parent_pid(pid: int) -> int | None:
+    """Read one Windows process parent PID, returning unknown evidence as ``None``."""
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                (
+                    "$process=Get-CimInstance -ClassName Win32_Process "
+                    f"-Filter 'ProcessId={pid}' -ErrorAction Stop;"
+                    "if($null -eq $process){exit 1};"
+                    "[Console]::WriteLine([int]$process.ParentProcessId)"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(values) != 1:
+        return None
+    try:
+        parent_pid = int(values[0])
+    except ValueError:
+        return None
+    return parent_pid if parent_pid >= 0 else None
 
 
 class AtomicFileLease:
