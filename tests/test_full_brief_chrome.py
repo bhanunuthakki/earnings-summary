@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime
 
 from bs4 import BeautifulSoup
@@ -80,6 +81,21 @@ def test_full_brief_has_a_live_research_items_band_outside_the_persisted_body() 
     assert "function workOsLoadBriefResearchItems(ticker)" in shell
     assert "items=1&band=brief&ticker=" in shell
     assert "void workOsLoadBriefResearchItems(artifact.ticker)" in shell
+
+
+def test_full_brief_research_items_band_has_reachable_archive_restore_and_retry_chrome() -> None:
+    shell = render_work_os_shell()
+
+    assert "workOsBriefResearchItemsMount" in shell
+    assert "items=1&band=brief&ticker=" in shell
+    # The mounted Full Brief band owns the live controls; its renderer owns
+    # the archived filter, restore action, and non-OK retry handling.
+    from pipeline import journal_panel
+
+    source = inspect.getsource(journal_panel.render_research_items_band)
+    assert 'data-rib-status="archived"' in source
+    assert 'data-rib-retry' in source
+    assert "response.status === 409" in source
 
 
 def test_work_os_shell_css_decision_band_rules() -> None:

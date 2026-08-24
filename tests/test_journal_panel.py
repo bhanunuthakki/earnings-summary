@@ -363,3 +363,50 @@ def test_full_brief_research_items_band_requires_a_ticker_and_uses_same_lens(
     assert b"Research Items" in response.data
     assert b"MELI note 54." in response.data
     assert b"outside the persisted brief" in response.data
+
+
+def test_full_brief_research_items_actions_cover_lifecycle_and_restore(
+    client: FlaskClient, db_path: Path
+) -> None:
+    resolved = create_note(ticker="NU", kind="question", body="Resolve me.", db_path=db_path)
+    archived = create_note(ticker="NU", kind="watch", body="Archive me.", db_path=db_path)
+    edited = create_note(ticker="NU", kind="observation", body="Edit me.", db_path=db_path)
+    promoted = create_note(ticker="NU", kind="assumption", body="Promote me.", db_path=db_path)
+
+    assert client.post(f"/api/notes/{resolved.id}/resolve", json={}).status_code == 200
+    assert client.post(f"/api/notes/{archived.id}/archive", json={}).status_code == 200
+    assert client.post(
+        f"/api/notes/{edited.id}/supersede",
+        json={"body": "Edited replacement.", "expected_revision": edited.updated_at.isoformat()},
+    ).status_code == 200
+    assert client.post(
+        f"/api/notes/{promoted.id}/supersede",
+        json={
+            "body": "Decision replacement.",
+            "kind": "decision",
+            "expected_revision": promoted.updated_at.isoformat(),
+        },
+    ).status_code == 200
+    assert client.post(f"/api/notes/{archived.id}/unarchive", json={}).status_code == 200
+
+    archived_view = client.get(
+        "/api/panel/journal?items=1&fragment=list&status=archived&ticker=NU"
+    )
+    assert archived_view.status_code == 200
+    assert b"Archive me." not in archived_view.data
+
+
+def test_full_brief_research_items_band_exposes_archived_filter_and_retry_states(
+    db_path: Path,
+) -> None:
+    from pipeline.journal_panel import render_research_items_band
+
+    html = render_research_items_band(db_path, ticker="NU")
+
+    assert 'data-rib-status="archived"' in html
+    assert 'data-act="unarchive"' not in html
+    assert "status=' + encodeURIComponent(activeStatus)" in html
+    assert 'data-rib-feedback' in html and 'data-rib-retry' in html
+    assert "response.status === 409" in html
+    assert "changed elsewhere" in html
+    assert "runAction('/api/notes/" in html

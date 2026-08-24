@@ -605,11 +605,13 @@ def render_research_items_band(
 
     safe_ticker = escape(ticker.upper())
     item_list = render_journal_list(
-        db_path, user_id=user_id, ticker=ticker, research_items_only=True
+        db_path, user_id=user_id, ticker=ticker, status="open", research_items_only=True
     )
     return f"""
 <section class="k-card k-card-section work-os-brief-research-items" id="workOsBriefResearchItems" data-ticker="{safe_ticker}" aria-labelledby="workOsBriefResearchItemsHeading">
-  <header class="k-card-head"><div class="k-card-heading"><div class="k-card-meta">Live research management</div><h2 class="k-card-title" id="workOsBriefResearchItemsHeading">Research Items · {safe_ticker}</h2><p class="k-card-meta">Canonical audit-log items; this band is outside the persisted brief.</p></div><button type="button" class="k-btn k-btn-quiet k-btn-sm" data-rib-refresh>Refresh</button></header>
+  <header class="k-card-head"><div class="k-card-heading"><div class="k-card-meta">Live research management</div><h2 class="k-card-title" id="workOsBriefResearchItemsHeading">Research Items · {safe_ticker}</h2><p class="k-card-meta">Canonical audit-log items; this band is outside the persisted brief.</p></div><div class="research-actions"><button type="button" class="k-chip k-chip-btn is-on" data-rib-status="open" aria-pressed="true">Open</button><button type="button" class="k-chip k-chip-btn" data-rib-status="archived" aria-pressed="false">Archived</button><button type="button" class="k-btn k-btn-quiet k-btn-sm" data-rib-refresh>Refresh</button></div></header>
+  <div class="k-well" data-rib-feedback role="status" aria-live="polite" hidden></div>
+  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-rib-retry hidden>Retry</button>
   <div data-rib-list>{item_list}</div>
 </section>
 <script>
@@ -617,11 +619,41 @@ def render_research_items_band(
   var root = document.getElementById('workOsBriefResearchItems');
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
-  function refresh() {{
+  var activeStatus = 'open';
+  var retry = null;
+  function feedback(message, retryAction) {{
+    var node = root.querySelector('[data-rib-feedback]');
+    var retryButton = root.querySelector('[data-rib-retry]');
+    if (node) {{ node.textContent = message || ''; node.hidden = !message; }}
+    retry = retryAction || null;
+    if (retryButton) retryButton.hidden = !retry;
+  }}
+  function refresh(status) {{
+    activeStatus = status || activeStatus;
+    root.querySelectorAll('[data-rib-status]').forEach(function (button) {{
+      var selected = button.getAttribute('data-rib-status') === activeStatus;
+      button.classList.toggle('is-on', selected); button.setAttribute('aria-pressed', String(selected));
+    }});
     var ticker = root.getAttribute('data-ticker') || '';
-    fetch('/api/panel/journal?items=1&fragment=list&ticker=' + encodeURIComponent(ticker))
-      .then(function (r) {{ return r.text(); }})
-      .then(function (html) {{ var list = root.querySelector('[data-rib-list]'); if (list) list.innerHTML = html; }});
+    fetch('/api/panel/journal?items=1&fragment=list&status=' + encodeURIComponent(activeStatus) + '&ticker=' + encodeURIComponent(ticker))
+      .then(function (r) {{ if (!r.ok) throw new Error('refresh:' + r.status); return r.text(); }})
+      .then(function (html) {{ var list = root.querySelector('[data-rib-list]'); if (list) list.innerHTML = html; feedback('', null); }})
+      .catch(function () {{ feedback('Research items could not refresh. Retry when the local store is available.', function () {{ refresh(activeStatus); }}); }});
+  }}
+  function runAction(url, payload) {{
+    function attempt() {{
+      fetch(url, {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload) }})
+        .then(function (response) {{
+          if (response.ok) {{ feedback('', null); refresh(activeStatus); return; }}
+          if (response.status === 409) {{
+            feedback('This item changed elsewhere. Refresh to load the latest revision before retrying.', function () {{ refresh(activeStatus); }});
+            return;
+          }}
+          feedback('Research item action failed (' + response.status + '). Retry when ready.', attempt);
+        }})
+        .catch(function () {{ feedback('Research item action could not reach the local store. Retry when ready.', attempt); }});
+    }}
+    attempt();
   }}
   function revise(holder, promote) {{
     if (holder.getAttribute('data-editing') === '1') return;
@@ -635,16 +667,19 @@ def render_research_items_band(
     cancel.addEventListener('click', function () {{ editor.remove(); holder.removeAttribute('data-editing'); }});
     save.addEventListener('click', function () {{
       var body = input.value.trim(); if (!body) {{ input.focus(); return; }}
-      fetch('/api/notes/' + holder.getAttribute('data-note-id') + '/supersede', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ body: body, kind: promote ? 'decision' : undefined, expected_revision: holder.getAttribute('data-revision') || null }}) }}).then(function (r) {{ if (r.ok) refresh(); }});
+      runAction('/api/notes/' + holder.getAttribute('data-note-id') + '/supersede', {{ body: body, kind: promote ? 'decision' : undefined, expected_revision: holder.getAttribute('data-revision') || null }});
     }});
   }}
   root.addEventListener('click', function (event) {{
     var button = event.target.closest('button'); if (!button) return;
     if (button.hasAttribute('data-rib-refresh')) {{ refresh(); return; }}
+    if (button.hasAttribute('data-rib-retry')) {{ if (retry) retry(); return; }}
+    var requestedStatus = button.getAttribute('data-rib-status');
+    if (requestedStatus) {{ refresh(requestedStatus); return; }}
     var action = button.getAttribute('data-act'); var holder = button.closest('[data-note-id]');
     if (!action || !holder) return;
     if (action === 'edit' || action === 'promote') {{ revise(holder, action === 'promote'); return; }}
-    fetch('/api/notes/' + holder.getAttribute('data-note-id') + '/' + action, {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{}}) }}).then(function (r) {{ if (r.ok) refresh(); }});
+    runAction('/api/notes/' + holder.getAttribute('data-note-id') + '/' + action, {{}});
   }});
 }})();
 </script>"""
