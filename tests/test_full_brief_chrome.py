@@ -94,7 +94,7 @@ def test_full_brief_research_items_band_has_reachable_archive_restore_and_retry_
 
     source = inspect.getsource(journal_panel.render_research_items_band)
     assert 'data-rib-status="archived"' in source
-    assert 'data-rib-retry' in source
+    assert "data-rib-retry" in source
     assert "response.status === 409" in source
 
 

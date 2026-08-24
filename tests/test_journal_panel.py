@@ -375,23 +375,30 @@ def test_full_brief_research_items_actions_cover_lifecycle_and_restore(
 
     assert client.post(f"/api/notes/{resolved.id}/resolve", json={}).status_code == 200
     assert client.post(f"/api/notes/{archived.id}/archive", json={}).status_code == 200
-    assert client.post(
-        f"/api/notes/{edited.id}/supersede",
-        json={"body": "Edited replacement.", "expected_revision": edited.updated_at.isoformat()},
-    ).status_code == 200
-    assert client.post(
-        f"/api/notes/{promoted.id}/supersede",
-        json={
-            "body": "Decision replacement.",
-            "kind": "decision",
-            "expected_revision": promoted.updated_at.isoformat(),
-        },
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/api/notes/{edited.id}/supersede",
+            json={
+                "body": "Edited replacement.",
+                "expected_revision": edited.updated_at.isoformat(),
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/notes/{promoted.id}/supersede",
+            json={
+                "body": "Decision replacement.",
+                "kind": "decision",
+                "expected_revision": promoted.updated_at.isoformat(),
+            },
+        ).status_code
+        == 200
+    )
     assert client.post(f"/api/notes/{archived.id}/unarchive", json={}).status_code == 200
 
-    archived_view = client.get(
-        "/api/panel/journal?items=1&fragment=list&status=archived&ticker=NU"
-    )
+    archived_view = client.get("/api/panel/journal?items=1&fragment=list&status=archived&ticker=NU")
     assert archived_view.status_code == 200
     assert b"Archive me." not in archived_view.data
 
@@ -406,7 +413,7 @@ def test_full_brief_research_items_band_exposes_archived_filter_and_retry_states
     assert 'data-rib-status="archived"' in html
     assert 'data-act="unarchive"' not in html
     assert "status=' + encodeURIComponent(activeStatus)" in html
-    assert 'data-rib-feedback' in html and 'data-rib-retry' in html
+    assert "data-rib-feedback" in html and "data-rib-retry" in html
     assert "response.status === 409" in html
     assert "changed elsewhere" in html
     assert "runAction('/api/notes/" in html
