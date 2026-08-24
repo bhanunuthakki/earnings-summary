@@ -1968,7 +1968,8 @@ def _production_runtime(generated_at: datetime) -> str:
       target.innerHTML = items.length ? items.map(function (item) {{
         const ticker = String(item.ticker || '').toUpperCase();
         const instrument = item.instrument_type === 'etf' ? 'ETF' : item.instrument_type === 'stock' ? 'Stock' : 'Instrument unavailable';
-        const linked = item.ask_session_link_state === 'linked';
+        const sessionId = typeof item.ask_session_id === 'string' ? item.ask_session_id.trim() : '';
+        const linked = item.ask_session_link_state === 'linked' && Boolean(sessionId);
         const readiness = String(item.workup_readiness || 'unavailable').replaceAll('_', ' ');
         const freshnessClass = item.freshness === 'available'
           ? 'k-pill k-pill-ok'
@@ -1978,7 +1979,7 @@ def _production_runtime(generated_at: datetime) -> str:
           : 'No owner notes recorded';
         const candidateId = Number.isInteger(item.discovery_candidate_id) && item.discovery_candidate_id > 0 ? String(item.discovery_candidate_id) : '';
         const instrumentValue = item.instrument_type === 'stock' || item.instrument_type === 'etf' ? item.instrument_type : '';
-        return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div><div class="research-actions"><h3 class="k-card-title k-card-row-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip">' + escapeWorkOsHtml(instrument) + '</span><span class="' + freshnessClass + '">' + escapeWorkOsHtml(readiness) + ' workup</span></div><div class="k-card-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-evaluation-dialogue="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-candidate="' + escapeWorkOsHtml(candidateId) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">' + (linked ? 'Continue dialogue' : 'Start dialogue') + '</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button></div></article>';
+        return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div><div class="research-actions"><h3 class="k-card-title k-card-row-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip">' + escapeWorkOsHtml(instrument) + '</span><span class="' + freshnessClass + '">' + escapeWorkOsHtml(readiness) + ' workup</span></div><div class="k-card-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-evaluation-dialogue="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-session="' + escapeWorkOsHtml(linked ? sessionId : '') + '" data-work-os-evaluation-candidate="' + escapeWorkOsHtml(candidateId) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">' + (linked ? 'Continue dialogue' : 'Start dialogue') + '</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button></div></article>';
       }}).join('') : '<div class="k-well">No evaluation dialogues are ready to discuss.</div>';
     }} catch (_error) {{
       if (count) count.textContent = 'Unavailable';
@@ -1987,6 +1988,11 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   function workOsOpenEvaluationDialogue(button) {{
+    const sessionId = String(button.getAttribute('data-work-os-evaluation-session') || '').trim();
+    if (sessionId && typeof window.openWorkOsCopilotSession === 'function') {{
+      window.openWorkOsCopilotSession(sessionId);
+      return;
+    }}
     const ticker = workOsNormalizeTicker(button.getAttribute('data-work-os-evaluation-dialogue'));
     if (!ticker || !window.openWorkOsCopilot) return;
     const candidateId = Number(button.getAttribute('data-work-os-evaluation-candidate'));
@@ -1999,14 +2005,20 @@ def _production_runtime(generated_at: datetime) -> str:
     }});
   }}
 
-  function workOsOpenEvaluationWorkup(ticker) {{
-    const safeTicker = workOsNormalizeTicker(ticker);
-    if (safeTicker) window.switchCompanyWorkspace(safeTicker);
+  function workOsOpenEvaluationWorkup(button) {{
+    const safeTicker = workOsNormalizeTicker(button.getAttribute('data-work-os-evaluation-workup'));
+    const instrument = button.getAttribute('data-work-os-evaluation-instrument');
+    if (!safeTicker || (instrument !== 'stock' && instrument !== 'etf')) return;
+    if (instrument === 'etf') {{
+      workOsOpenPeekRoute('/api/peek/etf_workup?ticker=' + encodeURIComponent(safeTicker), 'ETF workup — ' + safeTicker);
+      return;
+    }}
+    window.switchCompanyWorkspace(safeTicker);
   }}
 
   function workOsCompareEvaluation(ticker) {{
     const safeTicker = workOsNormalizeTicker(ticker);
-    if (safeTicker) window.switchFactPlayground(safeTicker);
+    if (safeTicker) workOsOpenPeekRoute('/api/peek/discovery-compare?tickers=' + encodeURIComponent(safeTicker), 'Compare — ' + safeTicker);
   }}
 
   document.addEventListener('click', function (event) {{
@@ -2014,7 +2026,7 @@ def _production_runtime(generated_at: datetime) -> str:
     if (!target) return;
     if (target.hasAttribute('data-work-os-portfolio-sort')) {{ workOsSortPortfolioRows(target.getAttribute('data-work-os-portfolio-sort')); return; }}
     if (target.hasAttribute('data-work-os-evaluation-dialogue')) {{ workOsOpenEvaluationDialogue(target); return; }}
-    if (target.hasAttribute('data-work-os-evaluation-workup')) {{ workOsOpenEvaluationWorkup(target.getAttribute('data-work-os-evaluation-workup')); return; }}
+    if (target.hasAttribute('data-work-os-evaluation-workup')) {{ workOsOpenEvaluationWorkup(target); return; }}
     if (target.hasAttribute('data-work-os-evaluation-compare')) workOsCompareEvaluation(target.getAttribute('data-work-os-evaluation-compare'));
   }});
 

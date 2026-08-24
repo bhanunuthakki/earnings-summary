@@ -72,6 +72,24 @@ def test_portfolio_copilot_home_composes_live_sortable_holdings_and_bounded_dial
     assert "workOsOpenEvaluationDialogue" in html
     assert "workOsOpenEvaluationWorkup" in html
     assert "workOsCompareEvaluation" in html
+    assert "data-work-os-evaluation-session" in html
+    assert "data-work-os-evaluation-instrument" in html
+    assert "escapeWorkOsHtml(linked ? sessionId : '')" in html
+    dialogue_runtime = html.split("function workOsOpenEvaluationDialogue(button)", 1)[1].split(
+        "function workOsOpenEvaluationWorkup", 1
+    )[0]
+    assert "window.openWorkOsCopilotSession(sessionId)" in dialogue_runtime
+    workup_runtime = html.split("function workOsOpenEvaluationWorkup(button)", 1)[1].split(
+        "function workOsCompareEvaluation", 1
+    )[0]
+    assert "instrument !== 'stock' && instrument !== 'etf'" in workup_runtime
+    assert "'/api/peek/etf_workup?ticker='" in workup_runtime
+    assert "window.switchCompanyWorkspace(safeTicker)" in workup_runtime
+    compare_runtime = html.split("function workOsCompareEvaluation(ticker)", 1)[1].split(
+        "document.addEventListener('click'", 1
+    )[0]
+    assert "'/api/peek/discovery-compare?tickers='" in compare_runtime
+    assert "window.switchFactPlayground" not in compare_runtime
     assert "function workOsBindPortfolioInteractions()" in html
     sort_runtime = html.split("function workOsSortPortfolioRows(key)", 1)[1].split(
         "function workOsBindPortfolioInteractions", 1

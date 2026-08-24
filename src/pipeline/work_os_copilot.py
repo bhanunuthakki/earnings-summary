@@ -1231,6 +1231,13 @@ WORK_OS_COPILOT_JS = r"""
   }
 
   window.openWorkOsCopilot = openWorkOsCopilot;
+  window.openWorkOsCopilotSession = function (sessionId) {
+    var safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!safeSessionId) return false;
+    copilotOverlay.open();
+    loadCopilotSession(safeSessionId);
+    return true;
+  };
   window.closeWorkOsCopilot = closeWorkOsCopilot;
   window.workOsOpenCopilot = openWorkOsCopilot;
   window.openCopilotEvidence = openCopilotEvidence;

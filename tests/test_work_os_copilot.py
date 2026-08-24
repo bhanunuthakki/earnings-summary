@@ -186,6 +186,18 @@ def test_session_switch_resets_context_and_rehydrates_typed_exchange_artifacts()
     assert "sessionLoadToken += 1" in html
 
 
+def test_copilot_exposes_the_existing_session_loader_for_linked_dialogues() -> None:
+    html = render_work_os_copilot()
+
+    bridge_start = html.index("window.openWorkOsCopilotSession = function (sessionId)")
+    bridge_end = html.index("window.closeWorkOsCopilot", bridge_start)
+    bridge = html[bridge_start:bridge_end]
+    assert "var safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : ''" in bridge
+    assert "if (!safeSessionId) return false" in bridge
+    assert "copilotOverlay.open()" in bridge
+    assert "loadCopilotSession(safeSessionId)" in bridge
+
+
 def test_session_artifact_proposal_error_reuses_the_live_safe_renderer() -> None:
     html = render_work_os_copilot()
 
