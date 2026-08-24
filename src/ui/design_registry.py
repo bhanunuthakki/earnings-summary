@@ -641,6 +641,7 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "ui/time.py",
     "execution/build_earnings_calendar.py",
     "execution/comments_server_alert_routes.py",
+    "execution/comments_server_governed_alert_routes.py",
 )
 
 _GENERATED_FRONTEND_EMITTERS = (
