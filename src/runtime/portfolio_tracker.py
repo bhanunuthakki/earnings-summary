@@ -193,7 +193,9 @@ def _pid_is_alive(pid: int) -> bool:
     return _pid_liveness(pid) == "alive"
 
 
-def endpoint_owner_matches_pid(host: str, port: int, pid: int) -> bool | None:
+def endpoint_owner_matches_pid(
+    host: str, port: int, pid: int, *, require_exclusive: bool = False
+) -> bool | None:
     """Prove a TCP listener endpoint belongs to ``pid`` or fail closed.
 
     Windows' typed ``netstat -ano`` output is the supported local probe. A
@@ -241,19 +243,28 @@ def endpoint_owner_matches_pid(host: str, port: int, pid: int) -> bool | None:
             return None
         return normalize(host_part), parsed_port
 
+    listeners: list[tuple[str, int, str]] = []
     for line in result.stdout.splitlines():
         fields = line.split()
-        if len(fields) < 5 or fields[0].upper() != "TCP":
-            continue
-        if fields[3].upper() != "LISTENING" or fields[4] != expected_pid:
+        if len(fields) < 5 or fields[0].upper() != "TCP" or fields[3].upper() != "LISTENING":
             continue
         parsed = parse_local_endpoint(fields[1])
-        if parsed is None or parsed[1] != port:
+        if parsed is None:
             continue
-        local_host = parsed[0]
-        if local_host in {"ip:0.0.0.0", "ip::"} or local_host == expected_host:
-            return True
-    return False
+        listeners.append((parsed[0], parsed[1], fields[4]))
+
+    if require_exclusive:
+        # The BHA-80 always-on service can only claim the endpoint when there
+        # is one listener, on exactly the requested local address and port,
+        # owned by its child. A wildcard socket or any companion listener is
+        # ambiguous even when it happens to share the child PID.
+        port_listeners = [entry for entry in listeners if entry[1] == port]
+        return port_listeners == [(expected_host, port, expected_pid)]
+
+    return any(
+        local_host == expected_host and local_port == port and listener_pid == expected_pid
+        for local_host, local_port, listener_pid in listeners
+    )
 
 
 class AtomicFileLease:
@@ -649,7 +660,8 @@ def produce_daily_refresh_receipt(
     api_url: str,
     receipt_path: Path,
     now: datetime,
-    daily_refresh_owner: str = "portfolio-tracker-service",
+    daily_refresh_owner: str | None = None,
+    scheduler_task_name: str | None = None,
     listener_owner: str | None = None,
 ) -> RuntimeReceipt:
     """Record one read-only daily refresh observation; never starts a listener."""
@@ -662,10 +674,12 @@ def produce_daily_refresh_receipt(
     )
     from integrations.portfolio_tracker_v1 import PositionsV1Result, TrackerV1Client
 
-    # ``daily_refresh_owner`` and ``listener_owner`` remain compatibility
-    # parameters for older callers. A read-only probe never trusts either as
-    # evidence of the unattended writer that would own a refresh completion.
+    # ``listener_owner`` remains a compatibility parameter for older callers.
+    # A read-only probe never attributes the API listener. It becomes an
+    # attributable daily completion only when the canonical Scheduler wrapper
+    # supplies both its owner and task identity.
     key = derive_daily_refresh_idempotency_key(now)
+    scheduled_context = daily_refresh_owner is not None and scheduler_task_name is not None
     lease = AtomicFileLease(receipt_path.with_suffix(".lease"))
     if not lease.acquire():
         return RuntimeReceipt(
@@ -742,23 +756,39 @@ def produce_daily_refresh_receipt(
                     terminal = "success"
                     detail = None
                     refresh = RefreshEvidence(
-                        # A read-only API probe cannot identify an unattended
-                        # writer or prove that a refresh job completed.
-                        owner=None,
+                        owner=daily_refresh_owner if scheduled_context else None,
                         snapshot_as_of=snapshot.meta.as_of.isoformat()
                         if snapshot.meta.as_of is not None
                         else None,
-                        completed_at=None,
-                        terminal_result="activation_required",
+                        completed_at=(now if scheduled_context else None),
+                        terminal_result=("success" if scheduled_context else "activation_required"),
                     )
                 else:
                     detail = reconciliation_error[1]
+        if scheduled_context and refresh is None:
+            # The scheduled wrapper is an attributable writer even when its
+            # probe failed. Preserve that failure instead of retaining a
+            # previous successful daily plane as if this invocation had not
+            # happened.
+            refresh = RefreshEvidence(
+                owner=daily_refresh_owner,
+                terminal_result="failed",
+            )
+        scheduler: SchedulerEvidence | None = None
+        if scheduled_context:
+            assert scheduler_task_name is not None
+            scheduler = SchedulerEvidence(
+                task_name=scheduler_task_name,
+                terminal_result="success" if terminal == "success" else "failed",
+                observed_at=now,
+            )
         receipt = RuntimeReceipt(
             idempotency_key=key,
             lifecycle_state="already_running" if terminal == "success" else "failed",
             recorded_at=now,
             listener=listener,
             refresh=refresh,
+            scheduler=scheduler,
             failure_detail=detail,
         )
         return write_runtime_receipt(receipt_path, receipt)

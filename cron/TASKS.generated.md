@@ -27,11 +27,13 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\monthly_calibration_scorecard` | monthly day 2 at 07:30:00 | `monthly_calibration_scorecard.task.xml` | `run_monthly_calibration_scorecard.bat` | Task Scheduler |
 | `\earnings-summary\monthly_p3_refresh` | monthly day 1 at 03:20:00 | `monthly_p3_refresh.task.xml` | `run_monthly_p3_refresh.bat` | Task Scheduler |
 | `\earnings-summary\onboard_pending` | daily from 00:17:00, repeats PT1H | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Task Scheduler |
+| `\earnings-summary\portfolio_tracker_api` | BootTrigger | `portfolio_tracker_api.task.xml` | `run_portfolio_tracker_api.bat` | Task Scheduler |
 | `\earnings-summary\red_team` | weekly Saturday at 10:00:00 | `red_team.task.xml` | `run_red_team.bat` | Task Scheduler |
 | `\earnings-summary\refresh_business_factors` | weekly Sunday at 11:30:00 | `refresh_business_factors.task.xml` | `run_refresh_business_factors.bat` | Task Scheduler |
 | `\earnings-summary\refresh_cache` | daily at 03:00:00 | `refresh_cache.task.xml` | `run_refresh_cache.bat` | Task Scheduler |
 | `\earnings-summary\refresh_dirty_artifacts` | daily at 05:00:00 | `refresh_dirty_artifacts.task.xml` | `run_refresh_dirty_artifacts.bat` | Task Scheduler |
 | `\earnings-summary\refresh_ir_kpis` | weekly Sunday at 01:00:00 | `refresh_ir_kpis.task.xml` | `run_refresh_ir_kpis.bat` | Task Scheduler |
+| `\earnings-summary\refresh_portfolio_tracker` | daily at 07:30:00 | `refresh_portfolio_tracker.task.xml` | `run_refresh_portfolio_tracker.bat` | Task Scheduler |
 | `\earnings-summary\refresh_scenario_priors` | monthly day 1 at 03:40:00 | `refresh_scenario_priors.task.xml` | `run_refresh_scenario_priors.bat` | Task Scheduler |
 | `\earnings-summary\restore_drill` | monthly day 15 at 09:00:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | Task Scheduler |
 | `\earnings-summary\run_morning_pipeline` | daily at 04:00:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | Task Scheduler |

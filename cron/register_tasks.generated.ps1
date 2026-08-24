@@ -51,6 +51,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-su
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\monthly_p3_refresh' }
 & schtasks.exe /Create /TN '\earnings-summary\onboard_pending' /XML (Join-Path $renderDir 'onboard_pending_tickers.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\onboard_pending' }
+& schtasks.exe /Create /TN '\earnings-summary\portfolio_tracker_api' /XML (Join-Path $renderDir 'portfolio_tracker_api.task.xml') /F
+if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\portfolio_tracker_api' }
 & schtasks.exe /Create /TN '\earnings-summary\red_team' /XML (Join-Path $renderDir 'red_team.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\red_team' }
 & schtasks.exe /Create /TN '\earnings-summary\refresh_business_factors' /XML (Join-Path $renderDir 'refresh_business_factors.task.xml') /F
@@ -61,6 +63,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-su
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\refresh_dirty_artifacts' }
 & schtasks.exe /Create /TN '\earnings-summary\refresh_ir_kpis' /XML (Join-Path $renderDir 'refresh_ir_kpis.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\refresh_ir_kpis' }
+& schtasks.exe /Create /TN '\earnings-summary\refresh_portfolio_tracker' /XML (Join-Path $renderDir 'refresh_portfolio_tracker.task.xml') /F
+if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\refresh_portfolio_tracker' }
 & schtasks.exe /Create /TN '\earnings-summary\refresh_scenario_priors' /XML (Join-Path $renderDir 'refresh_scenario_priors.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\refresh_scenario_priors' }
 & schtasks.exe /Create /TN '\earnings-summary\restore_drill' /XML (Join-Path $renderDir 'restore_drill.task.xml') /F

@@ -68,6 +68,22 @@ def test_registry_projects_every_manifest_task_and_wrapper_step() -> None:
     )
     assert collector_step.raw_lane == "operations-runtime-receipts"
     assert collector_step.effective_lane == ("operations-runtime-receipts",)
+    tracker_api = next(
+        task
+        for task in registry.scheduled_tasks
+        if task.task_name == r"\earnings-summary\portfolio_tracker_api"
+    )
+    assert tracker_api.schedule.trigger == "BootTrigger"
+    assert tracker_api.service_owned is False
+    assert tracker_api.scheduler_expectation == "required_enabled"
+    tracker_api_step = next(
+        step for step in registry.job_steps if step.job == "portfolio-tracker-api"
+    )
+    assert tracker_api_step.raw_lane == "portfolio-tracker-api"
+    refresh_step = next(
+        step for step in registry.job_steps if step.job == "refresh-portfolio-tracker"
+    )
+    assert refresh_step.raw_lane == "portfolio-tracker-refresh"
 
 
 def test_registry_projects_canonical_services_llm_sources_and_schema() -> None:
