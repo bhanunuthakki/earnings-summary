@@ -111,3 +111,17 @@ class PanelResponseCache:
         with self._lock:
             self._generation += 1
             self._entries.clear()
+
+    def invalidate_prefix(self, prefix: str) -> None:
+        """Invalidate one bounded panel family without evicting unrelated panels."""
+        ready_events: list[threading.Event] = []
+        with self._lock:
+            for key in tuple(self._entries):
+                if key.startswith(prefix):
+                    self._entries.pop(key, None)
+            for key, in_flight in tuple(self._in_flight.items()):
+                if key.startswith(prefix):
+                    self._in_flight.pop(key, None)
+                    ready_events.append(in_flight.ready)
+        for ready in ready_events:
+            ready.set()

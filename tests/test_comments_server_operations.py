@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import Mock
@@ -15,8 +16,20 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
+from comments_server_panel_cache import (  # noqa: E402
+    PanelCacheEntry,
+    PanelCacheHit,
+    PanelCacheReservation,
+    PanelResponseCache,
+)
 
 from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch  # noqa: E402
+from operations.attention import (  # noqa: E402
+    EvidenceIdentity,
+    EvidenceKind,
+    FindingKind,
+    derive_finding_id,
+)
 from operations.models import OperationsRegistry, OperationsSnapshot  # noqa: E402
 from operations.paths import scheduler_receipt_path, service_receipt_path  # noqa: E402
 from operations.registry import build_operations_registry  # noqa: E402
@@ -28,6 +41,203 @@ from runtime.portfolio_tracker import (  # noqa: E402
     RuntimeReceipt,
     write_runtime_receipt,
 )
+
+ATTENTION_NOW = datetime(2026, 8, 24, 19, 0, tzinfo=UTC)
+ATTENTION_FINGERPRINT = "b" * 64
+ATTENTION_FINDING_ID = derive_finding_id(
+    owner="scheduler.collect_operations_runtime_observations",
+    kind=FindingKind.RUNTIME_HEALTH,
+    evidence=EvidenceIdentity(
+        kind=EvidenceKind.RUNTIME_RECEIPT,
+        fingerprint_sha256=ATTENTION_FINGERPRINT,
+        version="v1",
+        reference="operations.runtime.pair.latest.json",
+        reference_sha256="c" * 64,
+    ),
+)
+
+
+@pytest.fixture
+def attention_db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    path = migrated_db(tmp_path / "attention-actions.db")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            INSERT INTO operations_attention_findings(
+                finding_id,owner,kind,evidence_kind,evidence_fingerprint_sha256,evidence_version,
+                evidence_reference,evidence_reference_sha256,severity,health,lifecycle,opened_at,updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                ATTENTION_FINDING_ID,
+                "scheduler.collect_operations_runtime_observations",
+                "runtime_health",
+                "runtime_receipt",
+                ATTENTION_FINGERPRINT,
+                "v1",
+                "operations.runtime.pair.latest.json",
+                "c" * 64,
+                "warning",
+                "degraded",
+                "open",
+                ATTENTION_NOW.isoformat(),
+                ATTENTION_NOW.isoformat(),
+            ),
+        )
+    return path
+
+
+def _attention_payload(action: str, *, key: str = "operator-action-1") -> dict[str, object]:
+    occurred_at = ATTENTION_NOW + timedelta(minutes=1)
+    payload: dict[str, object] = {
+        "finding_id": ATTENTION_FINDING_ID,
+        "evidence_fingerprint_sha256": ATTENTION_FINGERPRINT,
+        "idempotency_key": key,
+        "occurred_at": occurred_at.isoformat(),
+    }
+    if action == "acknowledge":
+        payload.update(
+            reason={"code": "evidence_reviewed", "reference_sha256": "d" * 64},
+            acknowledge_until=(occurred_at + timedelta(hours=1)).isoformat(),
+        )
+    elif action == "snooze":
+        payload.update(
+            reason={"code": "investigation_in_progress", "reference_sha256": "d" * 64},
+            snooze_until=(occurred_at + timedelta(hours=1)).isoformat(),
+        )
+    return payload
+
+
+def test_operations_cache_invalidation_leaves_unrelated_panel_entries_fresh() -> None:
+    cache = PanelResponseCache(ttl_seconds=30, max_entries=4)
+    operations = cache.get_or_reserve("/api/panel/operations")
+    overview = cache.get_or_reserve("/api/panel/overview")
+    assert isinstance(operations, PanelCacheReservation)
+    assert isinstance(overview, PanelCacheReservation)
+    entry = PanelCacheEntry(body=b"panel", content_type="text/html", etag='"etag"')
+    cache.store(operations, entry)
+    cache.store(overview, entry)
+
+    cache.invalidate_prefix("/api/panel/operations")
+
+    assert isinstance(cache.get_or_reserve("/api/panel/operations"), PanelCacheReservation)
+    assert isinstance(cache.get_or_reserve("/api/panel/overview"), PanelCacheHit)
+
+
+def test_operations_cache_invalidation_cancels_only_matching_in_flight_builds() -> None:
+    cache = PanelResponseCache(ttl_seconds=30, max_entries=4)
+    operations = cache.get_or_reserve("/api/panel/operations")
+    overview = cache.get_or_reserve("/api/panel/overview")
+    assert isinstance(operations, PanelCacheReservation)
+    assert isinstance(overview, PanelCacheReservation)
+
+    cache.invalidate_prefix("/api/panel/operations")
+
+    replacement = cache.get_or_reserve("/api/panel/operations")
+    assert isinstance(replacement, PanelCacheReservation)
+    entry = PanelCacheEntry(body=b"panel", content_type="text/html", etag='"etag"')
+    cache.store(operations, entry)
+    cache.store(overview, entry)
+    cache.store(replacement, entry)
+    assert isinstance(cache.get_or_reserve("/api/panel/overview"), PanelCacheHit)
+    assert isinstance(cache.get_or_reserve("/api/panel/operations"), PanelCacheHit)
+
+
+@pytest.mark.parametrize("action", ("acknowledge", "snooze"))
+def test_operations_attention_action_applies_closed_suppression_actions(
+    attention_db_path: Path, action: str
+) -> None:
+    response = (
+        comments_server.create_app(attention_db_path.parent, db_path=attention_db_path)
+        .test_client()
+        .post(f"/api/operations/attention/{action}", json=_attention_payload(action))
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["receipt"]["result_state"] == "applied"
+    assert body["receipt"]["action"] == action
+    with sqlite3.connect(attention_db_path) as conn:
+        assert conn.execute(
+            "SELECT actor,lifecycle FROM operations_attention_action_receipts "
+            "JOIN operations_attention_findings USING(finding_id)"
+        ).fetchone() == (comments_server.DEFAULT_USER_ID, f"{action}d")
+
+
+def test_operations_attention_action_resolves_only_through_writer(attention_db_path: Path) -> None:
+    with sqlite3.connect(attention_db_path) as conn:
+        conn.execute(
+            "UPDATE operations_attention_findings SET health='healthy' WHERE finding_id=?",
+            (ATTENTION_FINDING_ID,),
+        )
+
+    response = (
+        comments_server.create_app(attention_db_path.parent, db_path=attention_db_path)
+        .test_client()
+        .post("/api/operations/attention/resolve", json=_attention_payload("resolve"))
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["receipt"]["result_state"] == "applied"
+    with sqlite3.connect(attention_db_path) as conn:
+        assert conn.execute(
+            "SELECT lifecycle FROM operations_attention_findings WHERE finding_id=?",
+            (ATTENTION_FINDING_ID,),
+        ).fetchone() == ("resolved",)
+
+
+def test_operations_attention_action_rejects_invalid_shape_and_spoofed_actor(
+    attention_db_path: Path,
+) -> None:
+    client = comments_server.create_app(
+        attention_db_path.parent, db_path=attention_db_path
+    ).test_client()
+    missing_reason = _attention_payload("acknowledge")
+    missing_reason.pop("reason")
+    spoofed_actor = _attention_payload("acknowledge", key="actor-spoof")
+    spoofed_actor["actor"] = "attacker"
+
+    invalid = client.post("/api/operations/attention/acknowledge", json=missing_reason)
+    spoofed = client.post("/api/operations/attention/acknowledge", json=spoofed_actor)
+    unknown = client.post("/api/operations/attention/detected", json=_attention_payload("resolve"))
+
+    assert invalid.status_code == 400
+    assert spoofed.status_code == 400
+    assert unknown.status_code == 404
+    with sqlite3.connect(attention_db_path) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM operations_attention_action_receipts"
+        ).fetchone() == (0,)
+
+
+def test_operations_attention_action_preserves_replay_conflict_and_targeted_cache_invalidation(
+    attention_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    panel_cache = Mock()
+    monkeypatch.setattr(comments_server, "PanelResponseCache", Mock(return_value=panel_cache))
+    client = comments_server.create_app(
+        attention_db_path.parent, db_path=attention_db_path
+    ).test_client()
+    payload = _attention_payload("acknowledge")
+
+    applied = client.post("/api/operations/attention/acknowledge", json=payload)
+    replayed = client.post("/api/operations/attention/acknowledge", json=payload)
+    conflict_payload = _attention_payload("acknowledge")
+    conflict_payload["acknowledge_until"] = (ATTENTION_NOW + timedelta(hours=2)).isoformat()
+    conflicted = client.post("/api/operations/attention/acknowledge", json=conflict_payload)
+    stale_payload = _attention_payload("acknowledge", key="stale-evidence")
+    stale_payload["evidence_fingerprint_sha256"] = "e" * 64
+    rejected = client.post("/api/operations/attention/acknowledge", json=stale_payload)
+
+    assert applied.status_code == 200
+    assert replayed.status_code == 200
+    assert replayed.get_json()["receipt"]["result_state"] == "replayed"
+    assert conflicted.status_code == 409
+    assert conflicted.get_json()["receipt"]["result_state"] == "conflict"
+    assert rejected.status_code == 409
+    assert rejected.get_json()["receipt"]["result_state"] == "rejected"
+    panel_cache.invalidate_prefix.assert_called_once_with("/api/panel/operations")
+    panel_cache.clear.assert_not_called()
 
 
 def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_miss(
