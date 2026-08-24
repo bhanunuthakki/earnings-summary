@@ -382,8 +382,8 @@ def _production_runtime(generated_at: datetime) -> str:
     const context = workOsReadCompanyContext();
     const breadcrumb = document.getElementById('breadcrumb-title');
     if (!breadcrumb || !context.ticker) return;
-    if (context.screen === 'company-desk') breadcrumb.textContent = 'Company Desk (' + context.ticker + ')';
-    if (context.screen === 'analytics-playground') breadcrumb.textContent = 'Fact & Metric Playground (' + context.ticker + ')';
+    if (context.screen === 'company-desk') breadcrumb.textContent = 'Company Desk';
+    if (context.screen === 'analytics-playground') breadcrumb.textContent = 'Fact & Metric Playground';
   }}
 
   function workOsCompanyContextUrl(ticker, screen) {{

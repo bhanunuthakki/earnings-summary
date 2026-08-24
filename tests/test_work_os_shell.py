@@ -752,7 +752,7 @@ def test_company_desk_and_library_use_production_read_models_not_demo_facts() ->
     assert "openWorkOsCopilot" in html
     assert "item.list_type === 'portfolio' || item.list_type === 'evaluation'" in html
     assert "function workOsRenderCompanyBreadcrumb()" in html
-    assert "Company Desk (' + context.ticker + ')'" in html
+    assert "breadcrumb.textContent = 'Company Desk';" in html
     assert "try { await workOsEnsureResearchCompanies(); }" in html
     assert 'id="deskQuestionCapture"' in html
     assert "kind: 'question'" in html
@@ -1105,7 +1105,10 @@ def test_company_context_coordinator_owns_desk_playground_and_breadcrumb_state()
     assert "function workOsReadCompanyContext()" in html
     assert "function workOsWriteCompanyContext(ticker, screen, options)" in html
     assert "function workOsRenderCompanyBreadcrumb()" in html
-    assert "Fact & Metric Playground (' + context.ticker + ')'" in html
+    assert "breadcrumb.textContent = 'Company Desk';" in html
+    assert "breadcrumb.textContent = 'Fact & Metric Playground';" in html
+    assert "Company Desk (' + context.ticker + ')'" not in html
+    assert "Fact & Metric Playground (' + context.ticker + ')'" not in html
     assert "workOsWriteCompanyContext(requested, 'company-desk'" in html
     assert "workOsWriteCompanyContext(requested, 'analytics-playground'" in html
     assert "workOsRenderCompanyBreadcrumb();" in html
