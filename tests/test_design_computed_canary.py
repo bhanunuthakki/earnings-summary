@@ -866,9 +866,7 @@ def test_route_canary_rejects_card_motion_under_reduced_motion(tmp_path: Path) -
     _require_playwright()
     root = _copy_route_fixtures(tmp_path)
     target = root / "tests" / "fixtures" / "design_canaries" / "cockpit.desktop.html"
-    motion_rule = (
-        "#screen-cockpit .k-card .stat-heading { transition-duration: 1s !important; }"
-    )
+    motion_rule = "#screen-cockpit .k-card .stat-heading { transition-duration: 1s !important; }"
     markup = target.read_text(encoding="utf-8")
     assert "</style>" in markup
     target.write_text(
