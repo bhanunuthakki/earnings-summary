@@ -18,7 +18,7 @@ from execution.ingest_earnings_surprises import ingest_one_ticker
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0007_add_earnings_surprise_observations"
-ACTIVE_HEAD = "0022_add_governed_alert_action_receipts"
+ACTIVE_HEAD = "0023_add_price_action_sensor_state"
 
 
 def _config(path: Path) -> Config:

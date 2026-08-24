@@ -105,17 +105,23 @@ def test_sensor_migration_round_trips_on_a_clean_database(
     command.downgrade(cfg, "0022_add_governed_alert_action_receipts")
     conn = sqlite3.connect(path)
     try:
-        assert conn.execute(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='price_action_sensor_events'"
-        ).fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='price_action_sensor_events'"
+            ).fetchone()[0]
+            == 0
+        )
     finally:
         conn.close()
-    command.upgrade(cfg, "head")
+    migrated_db(path, target="head", upgrade_existing=True)
     conn = sqlite3.connect(path)
     try:
-        assert conn.execute(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='price_action_sensor_events'"
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='price_action_sensor_events'"
+            ).fetchone()[0]
+            == 1
+        )
     finally:
         conn.close()
 

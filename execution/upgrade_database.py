@@ -36,7 +36,7 @@ from sqlite_runtime import (
 )
 
 ACTIVE_BASE = "0001_initial_schema"
-ACTIVE_HEAD = "0022_add_governed_alert_action_receipts"
+ACTIVE_HEAD = "0023_add_price_action_sensor_state"
 OPERATION_EVENTS_CONTRACT_REVISION = "0012_close_operation_event_detail_reason"
 _MANAGED_RUNTIME_REPOSITORY = "earnings-summary"
 _WINDOWS_CSIDL_PROFILE = 0x0028
