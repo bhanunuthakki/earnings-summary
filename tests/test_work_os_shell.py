@@ -1037,7 +1037,11 @@ def test_primary_work_os_cards_use_one_declared_composition_archetype() -> None:
     company = _screen_fragment(html, "screen-workspace")
 
     assert 'class="k-card k-card-stat work-os-nav-card"' in cockpit
+    assert 'class="work-os-nav-card-body"' in cockpit
     assert cockpit.count("data-work-os-stat-key") == 1
+    assert 'class="k-card k-card-section work-os-actions-rail"' in cockpit
+    assert 'class="k-section-title k-card-title" id="workOsActionHeading"' in cockpit
+    assert 'class="k-card-title k-card-row-title"' not in cockpit
     assert 'class="k-section-head"' in cockpit
     assert 'class="k-section-title"' in cockpit
     assert 'class="k-well work-os-action-card"' in html

@@ -234,14 +234,16 @@ def _render_portfolio_cockpit_shell() -> str:
 <section id="screen-cockpit" class="screen-view is-active">
   <section class="work-os-portfolio-topline" aria-label="Portfolio NAV and governed actions">
     <article class="k-card k-card-stat work-os-nav-card" data-work-os-stat-key="nav" aria-labelledby="workOsPortfolioNavHeading">
-      <div class="stat-heading" id="workOsPortfolioNavHeading">Portfolio NAV</div>
-      <div class="stat-number" id="workOsPortfolioNav">—</div>
-      <div class="stat-subtext" id="workOsPortfolioNavDetail">Loading governed portfolio state</div>
-      <div class="work-os-allocation-list" id="workOsPortfolioAllocation" aria-label="Portfolio allocation mix"></div>
+      <div class="work-os-nav-card-body">
+        <div class="stat-heading" id="workOsPortfolioNavHeading">Portfolio NAV</div>
+        <div class="stat-number" id="workOsPortfolioNav">—</div>
+        <div class="stat-subtext" id="workOsPortfolioNavDetail">Loading governed portfolio state</div>
+        <div class="work-os-allocation-list" id="workOsPortfolioAllocation" aria-label="Portfolio allocation mix"></div>
+      </div>
     </article>
-    <article class="k-card work-os-actions-rail" aria-labelledby="workOsActionHeading">
+    <article class="k-card k-card-section work-os-actions-rail" aria-labelledby="workOsActionHeading">
       <header class="k-section-head">
-        <div class="k-section-title" id="workOsActionHeading" role="heading" aria-level="2">Actions</div>
+        <h2 class="k-section-title k-card-title" id="workOsActionHeading">Actions</h2>
         <span class="k-card-meta" id="workOsActionCount" aria-live="polite">Loading</span>
       </header>
       <div id="workOsActionQueue" class="work-os-action-queue">
@@ -1946,7 +1948,7 @@ def _production_runtime(generated_at: datetime) -> str:
     if (actionQueue) {{
       actionQueue.innerHTML = payload.actions && payload.actions.length ? payload.actions.map(function (action) {{
         return '<article class="k-well work-os-action-card"><div class="work-os-action-row"><div class="work-os-action-copy">' +
-          '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-title k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
+          '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
           '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div>' + workOsActionEvidence(action) + workOsGovernedActionControls(action) + '</div></div>' +
           '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company</button></div></article>';
       }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
