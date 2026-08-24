@@ -11,6 +11,10 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from advisor.price_action_bands import (
+    PriceActionBandProjection,
+    resolve_price_action_bands,
+)
 from identity import DEFAULT_USER_ID
 from research.owner_decision_checkpoint import (
     CheckpointInvariantError,
@@ -53,6 +57,12 @@ class SizingIntentReviewEntry:
     target_verification: TargetVerification | None = None
     target_band: TargetBand | None = None
     price_level: float | None = None
+    price_action_bands: PriceActionBandProjection = field(
+        default_factory=lambda: resolve_price_action_bands(
+            owner_ratified=None,
+            source_available=False,
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +294,9 @@ def _review_entry(
             intent=intent,
             checkpoint_linked=False,
             checkpoint_evidence_available=False,
+            price_action_bands=resolve_price_action_bands(
+                owner_ratified=None,
+            ),
         )
 
     try:
@@ -306,6 +319,10 @@ def _review_entry(
             checkpoint_schema_version=link.schema_version,
             checkpoint_payload_sha256=link.payload_sha256,
             checkpoint_confirmed_at=link.confirmed_at,
+            price_action_bands=resolve_price_action_bands(
+                owner_ratified=None,
+                source_available=False,
+            ),
         )
 
     return SizingIntentReviewEntry(
@@ -326,6 +343,11 @@ def _review_entry(
         target_verification=leg.target_verification,
         target_band=checkpoint_intent.target_band,
         price_level=leg.price_level,
+        price_action_bands=resolve_price_action_bands(
+            owner_ratified=checkpoint_intent.price_action_bands,
+            checkpoint_id=link.checkpoint_id,
+            checkpoint_payload_sha256=link.payload_sha256,
+        ),
     )
 
 

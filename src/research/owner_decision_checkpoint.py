@@ -19,6 +19,7 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from advisor.price_action_bands import PriceActionBands
 from identity import DEFAULT_USER_ID
 from user_state._db import now_iso, open_conn
 
@@ -192,6 +193,7 @@ class SizingIntentSpec(BaseModel):
     narrative: str
     existing_sizing_intent_id: int | None = Field(default=None, ge=1)
     target_band: TargetBand | None = None
+    price_action_bands: PriceActionBands | None = None
 
     @field_validator("ticker")
     @classmethod

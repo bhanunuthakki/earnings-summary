@@ -84,6 +84,61 @@ def test_add_is_atomic_idempotent_and_returns_checkpointed_projection(
     assert first.projection.sizing_intent_id == first.receipt.sizing_intent_ids[0]
     assert first.projection.checkpoint_id == first.receipt.checkpoint_id
     assert first.projection.checkpoint_evidence_available is True
+    assert first.projection.price_action_bands.state == "unencoded"
+    assert first.projection.price_action_bands.is_actionable is False
+
+
+def test_checkpointed_meli_ladder_returns_typed_ratified_provenance(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    database = migrated_db(tmp_path / "checkpoint-api-meli-price-bands.db")
+    body = _body()
+    leg = cast(dict[str, object], body["leg"])
+    holdings_basis = cast(dict[str, object], body["holdings_basis"])
+    sizing_intent = cast(dict[str, object], body["sizing_intent"])
+    body["leg"] = {**leg, "ticker": "MELI", "leg_id": "meli-target"}
+    body["holdings_basis"] = {
+        **holdings_basis,
+        "embedded_positions": [{"ticker": "MELI", "availability": "observed", "weight_pct": 4.75}],
+    }
+    body["sizing_intent"] = {
+        **sizing_intent,
+        "ticker": "MELI",
+        "leg_id": "meli-target",
+        "price_action_bands": {
+            "add_below": 1400.0,
+            "hold_low": 1400.0,
+            "hold_high": 1800.0,
+            "trim_above": 1800.0,
+            "sell_above": 2200.0,
+            "currency": "USD",
+            "owner": "owner@example.test",
+            "revision": "meli-owner-v1",
+            "as_of": "2026-08-23T12:00:00+00:00",
+            "source_ref": "owner-decision-checkpoint:meli-v1",
+            "source_content_sha256": "c" * 64,
+        },
+    }
+
+    result = confirm_sizing_intent_checkpoint(
+        SizingIntentCheckpointRequest.model_validate(body), ticker="MELI", db_path=database
+    )
+
+    assert result.projection.price_action_bands.state == "ratified"
+    assert result.projection.price_action_bands.source_kind == "structured_owner"
+    assert result.projection.price_action_bands.revision == "meli-owner-v1"
+    assert result.projection.price_action_bands.is_actionable is True
+    assert (
+        result.projection.price_action_bands.source_ref
+        == f"owner-decision-checkpoint:{result.receipt.checkpoint_id}"
+    )
+    assert (
+        result.projection.price_action_bands.source_content_sha256 == result.receipt.payload_sha256
+    )
+    assert (
+        result.projection.price_action_bands.declared_source_ref
+        == "owner-decision-checkpoint:meli-v1"
+    )
 
 
 def test_add_conflicts_when_the_expected_empty_state_has_changed(

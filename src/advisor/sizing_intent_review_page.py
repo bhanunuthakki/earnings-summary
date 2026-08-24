@@ -12,6 +12,7 @@ import json
 from html import escape
 from pathlib import Path
 
+from advisor.price_action_bands import PriceActionBandProjection
 from advisor.sizing_intent_review import (
     SizingIntentReview,
     SizingIntentReviewEntry,
@@ -117,7 +118,10 @@ def _entry_evidence_block(entry: SizingIntentReviewEntry) -> str:
     facts = (
         ("Revision", str(intent.id)),
         ("Intent kind", intent.intent_kind),
-        ("Intent value", _number(intent.intent_value, "%")),
+        (
+            "Intent value",
+            _number(intent.intent_value, "%" if intent.intent_kind.endswith("_pct") else ""),
+        ),
         ("Recorded", intent.created_at.isoformat()),
         ("Updated", intent.updated_at.isoformat()),
         ("Checkpoint", _number(entry.checkpoint_id)),
@@ -136,6 +140,7 @@ def _entry_evidence_block(entry: SizingIntentReviewEntry) -> str:
         for label, value in facts
     )
     narrative = escape(intent.narrative or "unencoded")
+    price_action_bands = _price_action_band_block(entry.price_action_bands, intent.id)
     return (
         '<section class="k-card sir-section" aria-labelledby="sir-evidence-title-'
         + str(intent.id)
@@ -145,8 +150,71 @@ def _entry_evidence_block(entry: SizingIntentReviewEntry) -> str:
         + '">Persisted evidence · '
         + escape(intent.intent_kind)
         + "</h2>"
-        f'<dl class="sir-facts">{rows}</dl><div class="k-well sir-narrative"><p class="k-label">Owner narrative</p><p>{narrative}</p></div>'
+        f'<dl class="sir-facts">{rows}</dl>{price_action_bands}<div class="k-well sir-narrative"><p class="k-label">Owner narrative</p><p>{narrative}</p></div>'
         '<p class="sir-boundary">No broker connection or execution control is available on this page.</p></section>'
+    )
+
+
+def _price_action_band_block(projection: PriceActionBandProjection, intent_id: int) -> str:
+    """Render only the typed ladder projection, never an inferred condition."""
+
+    state = projection.state.value
+    actionability = (
+        "Actionable for a future deterministic sensor only; no execution route exists."
+        if projection.is_actionable
+        else "Not actionable; no sensor may arm this ladder."
+    )
+    facts = (
+        ("Ladder state", state),
+        ("Actionability", actionability),
+        ("Add / Buy below", _price_level(projection.add_below, projection.currency)),
+        ("Hold low", _price_level(projection.hold_low, projection.currency)),
+        ("Hold high", _price_level(projection.hold_high, projection.currency)),
+        ("Trim above", _price_level(projection.trim_above, projection.currency)),
+        ("Sell above", _price_level(projection.sell_above, projection.currency)),
+        (
+            "Approach add / buy below",
+            _price_level(
+                None
+                if projection.approach_bands is None
+                else projection.approach_bands.add_buy_below,
+                projection.currency,
+            ),
+        ),
+        (
+            "Approach trim above",
+            _price_level(
+                None if projection.approach_bands is None else projection.approach_bands.trim_above,
+                projection.currency,
+            ),
+        ),
+        (
+            "Approach sell above",
+            _price_level(
+                None if projection.approach_bands is None else projection.approach_bands.sell_above,
+                projection.currency,
+            ),
+        ),
+        ("Band owner", projection.owner or "unencoded"),
+        ("Band revision", projection.revision or "unencoded"),
+        ("Band as-of", _datetime_value(projection.as_of)),
+        ("Checkpoint-bound source", projection.source_ref or "unencoded"),
+        ("Checkpoint-bound digest", projection.source_content_sha256 or "unencoded"),
+        ("Declared input source", projection.declared_source_ref or "unencoded"),
+        (
+            "Declared input digest",
+            projection.declared_source_content_sha256 or "unencoded",
+        ),
+    )
+    rows = "".join(
+        f'<div class="sir-fact"><dt>{escape(label)}</dt><dd>{escape(value)}</dd></div>'
+        for label, value in facts
+    )
+    return (
+        f'<section class="k-well sir-price-action-bands" aria-labelledby="sir-bands-title-{intent_id}">'
+        f'<p class="k-label" id="sir-bands-title-{intent_id}">Structured price-action bands</p>'
+        '<p class="sir-sub">Only typed checkpoint fields appear here. Owner narrative and thesis conditions are not sizing thresholds.</p>'
+        f'<dl class="sir-facts">{rows}</dl></section>'
     )
 
 
@@ -186,6 +254,19 @@ def _target_band(entry: SizingIntentReviewEntry) -> str:
     if entry.target_band is None:
         return "unencoded"
     return f"{entry.target_band.minimum_pct}% to {entry.target_band.maximum_pct}%"
+
+
+def _price_level(value: float | None, currency: str | None) -> str:
+    if value is None:
+        return "unencoded"
+    return f"{value} {currency or 'currency unencoded'}"
+
+
+def _datetime_value(value: object | None) -> str:
+    if value is None:
+        return "unencoded"
+    isoformat = getattr(value, "isoformat", None)
+    return str(isoformat() if callable(isoformat) else value)
 
 
 _PAGE_JS = r"""
