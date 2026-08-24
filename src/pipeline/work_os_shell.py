@@ -1379,7 +1379,7 @@ def _production_runtime(generated_at: datetime) -> str:
         return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
           '<td><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono">' + workOsMoney(company.price) + ' / <strong>' + workOsMoney(company.fair_value) + '</strong></td>' +
           '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span></td><td><div class="research-actions">' + readoutAction + briefAction + '</div></td>' +
-          '<td class="num"><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '">Review Thresholds</button></td></tr>';
+          '<td class="num"><a class="k-btn k-btn-quiet k-btn-sm" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="/advisor/sizing-intents/' + encodeURIComponent(company.ticker) + '">Review Thresholds</a></td></tr>';
       }}).join('');
     }}
     document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
@@ -1390,12 +1390,7 @@ def _production_runtime(generated_at: datetime) -> str:
       event.preventDefault(); event.stopPropagation(); workOsSubmitGovernedAlertAction(node);
     }}); }});
     document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
-    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
-      event.stopPropagation();
-      window.switchCompanyWorkspace(node.dataset.workOsThresholds).then(function (committed) {{
-        if (committed) openDrillDrawer('thresholds');
-      }});
-    }}); }});
+    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); }}); }});
   }}
 
   async function workOsApplyRequestedResearchState() {{

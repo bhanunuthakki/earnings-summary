@@ -783,6 +783,7 @@ def _holding_band(tcc: TickerCommandCenter) -> str:
     links = [
         f'<a href="/reports/{t}" target="_blank" rel="noopener">Report ↗</a>',
         f'<a href="/dcf/{t}">DCF ↓</a>',
+        f'<a href="/advisor/sizing-intents/{t}">Thresholds</a>',
         f'<a href="/ticker/{t}" data-peek-url="/api/peek/review/{t}" '
         f'data-peek-title="Position review · {t}">Review</a>',
     ]

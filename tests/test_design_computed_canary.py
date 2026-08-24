@@ -260,6 +260,10 @@ def test_cockpit_stat_links_use_native_hash_navigation_without_layout_shift(
                 """() => document.getElementById('workOsLiveStatus')?.textContent ===
                 'Tracker connected · current · As of 2026-01-01'"""
             )
+            page.evaluate("() => document.fonts.ready")
+            page.evaluate(
+                "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+            )
 
             stats = page.locator("#workOsPortfolioStats")
             assert stats.locator(".k-stat-cell").count() == 4

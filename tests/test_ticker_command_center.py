@@ -549,6 +549,7 @@ def test_holding_band_combobox_prefills_current_ticker(repo: Path) -> None:
     frag = render_ticker_fragment(tcc)
     assert 'data-current="NU"' in frag
     assert 'value="NU"' in frag
+    assert 'href="/advisor/sizing-intents/NU">Thresholds</a>' in frag
     assert '<span class="cc-combo-name" title="Nu Holdings">Nu Holdings</span>' in frag
     assert "NU · Nu Holdings" not in frag
 
