@@ -55,6 +55,7 @@ def render_company_desk_shell() -> str:
           <div class="k-tick">
             <span class="k-tick-sym k-tick-sym-display" id="deskTicker">—</span>
             <span class="k-tick-name" id="deskCompanyName">Choose a portfolio company</span>
+            <span class="k-card-meta" id="deskCoverageRole">unknown coverage</span>
           </div>
           <button class="company-picker-trigger k-btn k-btn-quiet k-btn-sm" id="companyPickerTrigger"
                   type="button" aria-haspopup="listbox" aria-controls="companyPickerPopover"
@@ -72,9 +73,9 @@ def render_company_desk_shell() -> str:
       </div>
       <div class="desk-stats-strip">
         <div class="k-stat-cell"><div class="stat-heading">Price</div><div class="stat-number" id="deskLivePrice">—</div></div>
-        <div class="k-stat-cell"><div class="stat-heading">DCF Fair Value</div><div class="stat-number" id="deskFairValue">—</div></div>
+        <div class="k-stat-cell"><div class="stat-heading">DCF Fair Value</div><div class="stat-number" id="deskHeroFairValue">—</div></div>
         <div class="k-stat-cell"><div class="stat-heading">Valuation Gap</div><div class="stat-number" id="deskValuationGap"><span class="k-pill">—</span></div></div>
-        <div class="k-stat-cell"><div class="stat-heading">Position Weight</div><div class="stat-number" id="deskPositionWeight">—</div></div>
+        <div class="k-stat-cell"><div class="stat-heading">Position Weight</div><div class="stat-number" id="deskHeroPositionWeight">—</div></div>
       </div>
       <div class="research-actions">
         <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="company">Ask Engine</button>
@@ -82,7 +83,6 @@ def render_company_desk_shell() -> str:
         <button class="k-btn k-btn-primary k-btn-sm" id="workOsFullBriefButton" type="button" disabled>Read full brief →</button>
       </div>
     </header>
-
     <!-- 4-Tab Navigation Bar -->
     <nav class="desk-tabs-bar" aria-label="Company desk sections" role="tablist">
       <button class="k-btn k-btn-quiet k-btn-sm is-active" id="deskTabButtonThesis" type="button" role="tab" aria-selected="true" aria-controls="deskTabThesis" data-desk-tab="thesis">1. Thesis &amp; Say-Do</button>
@@ -91,11 +91,30 @@ def render_company_desk_shell() -> str:
       <button class="k-btn k-btn-quiet k-btn-sm" id="deskTabButtonNotes" type="button" role="tab" aria-selected="false" aria-controls="deskTabNotes" data-desk-tab="notes">4. Notes &amp; Provenance</button>
     </nav>
 
+    <div class="k-card k-card-stat research-decision-band" id="deskDecisionBand" data-units="8" aria-label="Company decision summary">
+      <div class="k-stat-cell"><div class="stat-heading">Owner posture</div><div class="stat-number" id="deskOwnerState">—</div><div class="stat-subtext" id="deskOwnerRevision">No owner decision recorded</div></div>
+      <div class="k-stat-cell"><div class="stat-heading">Model recommendation</div><div class="stat-number" id="deskModelState">—</div><div class="stat-subtext" id="deskModelRevision">No model recommendation recorded</div></div>
+      <div class="k-stat-cell"><div class="stat-heading">Decision relationship</div><div class="k-pill k-pill-warn" id="deskDecisionRelationship">Unavailable</div><div class="stat-subtext" id="deskDecisionFreshness">Decision state unavailable</div></div>
+      <div class="k-stat-cell"><div class="stat-heading">Thesis risk</div><div class="k-pill k-pill-warn" id="deskThesisStatus">Unavailable</div><div class="stat-subtext" id="deskThesisAsOf">No current evaluated thesis state</div></div>
+      <div class="k-stat-cell"><div class="stat-heading">Position weight</div><div class="stat-number" id="deskPositionWeight">Weight unavailable</div><div class="stat-subtext" id="deskPositionSource">Tracker snapshot unavailable</div></div>
+      <div class="k-stat-cell"><div class="stat-heading">DCF input price</div><div class="stat-number" id="deskInputPrice">—</div><div class="stat-subtext" id="deskInputPriceSource">No governed input price</div></div>
+      <div class="k-stat-cell"><div class="stat-heading">DCF fair value</div><div class="stat-number" id="deskFairValue">—</div><div class="stat-subtext" id="deskFairValueSource">No governed fair value</div></div>
+      <div class="k-stat-cell"><div class="stat-heading">Latest brief</div><div class="stat-number" id="deskBriefDate">—</div><div class="stat-subtext" id="deskBriefStatus">No indexed artifact</div></div>
+    </div>
+
     <!-- Tab 1: Thesis & Say-Do -->
     <div class="desk-tab-content" id="deskTabThesis" role="tabpanel" aria-labelledby="deskTabButtonThesis">
+      <section class="k-card k-card-section" aria-labelledby="deskThesisRiskHeading">
+        <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title" id="deskThesisRiskHeading">Thesis risk</h2><p class="k-card-meta">Current report-backed thesis status; distinct from the allocation decision below</p></div><button class="k-btn k-btn-quiet k-btn-sm" id="deskThesisBriefDoorway" type="button" disabled>Read matching full brief →</button></header>
+        <div class="research-list" id="deskThesisRisk"><div class="k-well">Current thesis evidence unavailable.</div></div>
+      </section>
+      <section class="k-card k-card-section" aria-labelledby="deskKpiSummaryHeading">
+        <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title" id="deskKpiSummaryHeading">Tier-1 KPI summary</h2><p class="k-card-meta">Exact governed series only · source and as-of shown on each item</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="thesis-kpis">Ask Copilot</button></header>
+        <div class="research-list" id="deskKpiSummary"><div class="k-well">Tier-1 KPI evidence unavailable.</div></div>
+      </section>
       <div class="research-grid">
         <article class="k-card k-card-section">
-          <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Thesis Contracts &amp; Falsifiers</h2><p class="k-card-meta">Falsifiable conditions attached to the current decision</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="conditions">Ask Copilot</button></header>
+          <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title">Decision conditions</h2><p class="k-card-meta">Falsifiable conditions attached to the current allocation decision</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="conditions">Ask Copilot</button></header>
           <div class="research-list" id="deskConditions"><div class="k-well">No governed conditions loaded.</div></div>
         </article>
         <aside class="k-card k-card-section">

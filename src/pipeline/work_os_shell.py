@@ -1368,15 +1368,44 @@ def _production_runtime(generated_at: datetime) -> str:
       if (identityTicker !== normalized) throw new Error('Company response mismatch');
       document.getElementById('deskTicker').textContent = identity.ticker || normalized;
       document.getElementById('deskCompanyName').textContent = identity.name || company.name;
+      document.getElementById('deskCoverageRole').textContent = String(identity.coverage_role || 'unknown') + ' coverage';
+      const decision = desk.current_decision || {{ relationship: 'unavailable' }};
+      const ownerDecision = decision.owner || null;
+      const modelDecision = decision.model || null;
+      document.getElementById('deskDecisionBand').dataset.freshness = decision.freshness || 'unavailable';
+      document.getElementById('deskOwnerState').textContent = ownerDecision ? String(ownerDecision.value).toUpperCase() : '—';
+      document.getElementById('deskModelState').textContent = modelDecision ? String(modelDecision.value).toUpperCase() : '—';
+      document.getElementById('deskOwnerRevision').textContent = workOsDecisionMeta(ownerDecision, 'No owner decision recorded') + (decision.freshness === 'stale' ? ' · stale' : '');
+      document.getElementById('deskModelRevision').textContent = workOsDecisionMeta(modelDecision, 'No model recommendation recorded');
+      const relationship = String(decision.relationship || 'unavailable');
+      const decisionRelationship = document.getElementById('deskDecisionRelationship');
+      if (decisionRelationship) {{
+        decisionRelationship.textContent = relationship.replaceAll('_', ' ').toUpperCase();
+        decisionRelationship.className = 'k-pill';
+        decisionRelationship.classList.toggle('k-pill-ok', relationship === 'agree');
+        decisionRelationship.classList.toggle('k-pill-bad', relationship === 'conflict');
+        decisionRelationship.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
+      }}
+      const decisionFreshness = document.getElementById('deskDecisionFreshness');
+      if (decisionFreshness) {{
+        const freshness = String(decision.freshness || 'unavailable');
+        decisionFreshness.textContent = freshness === 'current'
+          ? 'Current decision state'
+          : 'Decision state ' + freshness.replaceAll('_', ' ') + ' · do not treat as current';
+      }}
       const position = desk.position || {{}};
       const weight = Number.isFinite(position.weight_pct) ? position.weight_pct : null;
       const positionState = String(position.position_state || 'unavailable');
       document.getElementById('deskPositionWeight').textContent = Number.isFinite(weight)
         ? workOsPercent(weight)
         : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
+      document.getElementById('deskHeroPositionWeight').textContent = Number.isFinite(weight)
+        ? workOsPercent(weight)
+        : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
       const valuationSource = position.source ? String(position.source).replaceAll('_', ' ') : 'governed DCF snapshot';
       document.getElementById('deskLivePrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : 'Unavailable';
       document.getElementById('deskFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
+      document.getElementById('deskHeroFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
       const valuationGap = Number.isFinite(position.price) && Number.isFinite(position.fair_value) && position.price !== 0
         ? ((position.fair_value / position.price) - 1) * 100 : null;
       document.getElementById('deskValuationGap').innerHTML = Number.isFinite(valuationGap)
@@ -1403,6 +1432,70 @@ def _production_runtime(generated_at: datetime) -> str:
       if (briefButton) {{
         briefButton.disabled = !brief;
         briefButton.onclick = brief ? function () {{ openWorkOsBriefReader(brief); }} : null;
+      }}
+      const thesisRisk = desk.thesis_risk || {{ status: 'unavailable', unavailable_reason: 'missing' }};
+      const thesisAvailable = thesisRisk.status === 'available';
+      const thesisStatus = document.getElementById('deskThesisStatus');
+      if (thesisStatus) {{
+        const status = thesisAvailable ? String(thesisRisk.overall_breach_status || 'unavailable') : 'unavailable';
+        thesisStatus.textContent = status.toUpperCase();
+        thesisStatus.className = 'k-pill';
+        thesisStatus.classList.toggle('k-pill-ok', status === 'ok');
+        thesisStatus.classList.toggle('k-pill-bad', status === 'breach');
+        thesisStatus.classList.toggle('k-pill-warn', status !== 'ok' && status !== 'breach');
+      }}
+      const thesisAsOf = document.getElementById('deskThesisAsOf');
+      if (thesisAsOf) {{
+        thesisAsOf.textContent = thesisAvailable
+          ? 'Evaluated · as of ' + String(thesisRisk.evaluated_at || 'date unavailable')
+          : 'Thesis evidence ' + String(thesisRisk.unavailable_reason || 'unavailable') + ' · do not treat as current';
+      }}
+      const thesisMount = document.getElementById('deskThesisRisk');
+      if (thesisMount) {{
+        if (!thesisAvailable) {{
+          thesisMount.innerHTML = '<div class="k-well" role="alert">Current thesis risk is unavailable because its report-backed facts are ' + escapeWorkOsHtml(String(thesisRisk.unavailable_reason || 'unavailable')) + '.</div>';
+        }} else {{
+          const conditions = Array.isArray(thesisRisk.break_conditions) ? thesisRisk.break_conditions : [];
+          const conditionList = conditions.length
+            ? '<ul>' + conditions.map(function (condition) {{ return '<li>' + escapeWorkOsHtml(condition) + '</li>'; }}).join('') + '</ul>'
+            : '<div class="stat-subtext">No report break conditions were persisted.</div>';
+          thesisMount.innerHTML = '<div class="k-well"><strong>' + escapeWorkOsHtml(String(thesisRisk.overall_breach_status || 'unavailable').toUpperCase()) + '</strong><div class="stat-subtext">Report evaluation · as of ' + escapeWorkOsHtml(String(thesisRisk.evaluated_at || 'date unavailable')) + '</div><p>' + escapeWorkOsHtml(String(thesisRisk.thesis || '')) + '</p>' + conditionList + '</div>';
+        }}
+      }}
+      const thesisBriefDoorway = document.getElementById('deskThesisBriefDoorway');
+      if (thesisBriefDoorway) {{
+        thesisBriefDoorway.disabled = !brief;
+        thesisBriefDoorway.onclick = brief ? function () {{ openWorkOsBriefReader(brief); }} : null;
+      }}
+      const kpiSummary = desk.kpi_summary || {{ status: 'unavailable', unavailable_reason: 'missing' }};
+      const kpiMount = document.getElementById('deskKpiSummary');
+      if (kpiMount) {{
+        const kpis = Array.isArray(kpiSummary.items) ? kpiSummary.items : [];
+        if (kpiSummary.status !== 'available' || !kpis.length) {{
+          kpiMount.innerHTML = '<div class="k-well" role="alert">Tier-1 KPI evidence is ' + escapeWorkOsHtml(String(kpiSummary.unavailable_reason || 'unavailable')) + '. No inferred values are shown.</div>';
+        }} else {{
+          kpiMount.innerHTML = kpis.map(function (kpi) {{
+            const status = String(kpi.current_status || 'unknown');
+            const safeCurrent = status === 'green' || status === 'yellow' || status === 'red';
+            const evidenceButton = safeCurrent && kpi.evidence_ref
+              ? '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-desk-kpi-evidence="' + escapeWorkOsHtml(String(kpi.evidence_ref)) + '" data-desk-kpi-name="' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '">Open exact evidence →</button>'
+              : '';
+            return '<div class="k-well research-row"><div><strong>' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '</strong><div class="stat-subtext">Tier 1 · source ' + escapeWorkOsHtml(String(kpi.evidence_ref || 'unavailable')) + ' · as of ' + escapeWorkOsHtml(String(kpi.latest_period || 'date unavailable')) + '</div><div class="stat-number">' + escapeWorkOsHtml(String(kpi.latest_value)) + (kpi.unit ? ' ' + escapeWorkOsHtml(String(kpi.unit)) : '') + '</div></div><div><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status.toUpperCase()) + '</span>' + evidenceButton + '</div></div>';
+          }}).join('');
+          kpiMount.querySelectorAll('[data-desk-kpi-evidence]').forEach(function (button) {{
+            button.addEventListener('click', function () {{
+              window.openWorkOsCopilot({{
+                company_ticker: identityTicker,
+                category: 'research',
+                origin_key: 'work-os:thesis-kpi-evidence',
+                fact_ref: button.getAttribute('data-desk-kpi-evidence'),
+                prompt: 'Review the exact evidence for ' + String(button.getAttribute('data-desk-kpi-name') || 'this Tier-1 KPI') + '.',
+                coverage_role_at_creation: String(identity.coverage_role || 'unknown'),
+                lifecycle_at_creation: 'active'
+              }});
+            }});
+          }});
+        }}
       }}
       workOsRenderEarningsDoorway(
         desk.earnings_doorway || null,

@@ -384,6 +384,12 @@ def test_company_desk_api_is_read_only_and_no_store(
     assert payload["current_decision"]["relationship"] == "conflict"
     assert payload["conditions"][0]["status"] == "PENDING DATA"
     assert payload["conditions"][0]["evidence_ref"] == "financial_facts:NPL 90+:unobserved"
+    assert payload["thesis_risk"]["status"] == "unavailable"
+    assert payload["kpi_summary"] == {
+        "status": "unavailable",
+        "items": [],
+        "unavailable_reason": "missing",
+    }
 
 
 def test_company_desk_api_fetches_one_canonical_tracker_snapshot(

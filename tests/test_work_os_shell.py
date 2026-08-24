@@ -869,6 +869,25 @@ def test_company_desk_condition_row_keeps_telemetry_rule_evidence_and_status_ton
     assert "PENDING DATA" in condition_row
 
 
+def test_company_desk_separates_current_thesis_risk_from_decision_conditions() -> None:
+    html = render_work_os_shell()
+
+    assert 'id="deskDecisionBand" data-units="8"' in html
+    assert 'id="deskDecisionRelationship"' in html
+    assert 'id="deskThesisStatus"' in html
+    assert 'id="deskThesisRiskHeading">Thesis risk</h2>' in html
+    assert 'id="deskKpiSummaryHeading">Tier-1 KPI summary</h2>' in html
+    assert 'id="deskConditions"' in html
+    assert ">Decision conditions</h2>" in html
+    assert "desk.thesis_risk" in html
+    assert "desk.kpi_summary" in html
+    assert "data-desk-kpi-evidence" in html
+    assert "fact_ref: button.getAttribute('data-desk-kpi-evidence')" in html
+    assert "No inferred values are shown." in html
+    assert "deskThesisBriefDoorway" in html
+    assert "Thesis evidence " in html
+
+
 def test_earnings_peek_ignores_stale_requests_and_aborts_on_close() -> None:
     html = render_work_os_shell()
 
