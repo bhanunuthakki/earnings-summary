@@ -29,6 +29,7 @@ from pipeline.work_os_research import (
     render_company_desk_shell,
     render_fact_playground_shell,
 )
+from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
 from pipeline.work_os_styles import WORK_OS_CSS
 from ui.controls import controls_css
 from ui.living_grid import head_assets as living_grid_head_assets
@@ -325,6 +326,7 @@ def _nav_button(match: re.Match[str]) -> str:
 def _production_runtime(generated_at: datetime) -> str:
     endpoint_json = json.dumps(_endpoint_map(), indent=2, sort_keys=False)
     legacy_hash_json = json.dumps(_LEGACY_HASHES, indent=2, sort_keys=False)
+    route_destinations_json = json.dumps(DESTINATION_SURFACE_IDS)
     stamp = escape(generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     return f"""
 <style id="work-os-production-css">
@@ -336,6 +338,14 @@ def _production_runtime(generated_at: datetime) -> str:
 <script id="work-os-production-runtime">
   const WORK_OS_ENDPOINTS = {endpoint_json};
   const WORK_OS_LEGACY_HASHES = {legacy_hash_json};
+  // Kept in sync with pipeline.work_os_route_contract: browser state is only
+  // replayable when it names a registered destination and known transient.
+  const WORK_OS_ROUTE_DESTINATIONS = {route_destinations_json};
+  const WORK_OS_HISTORY_DRAWER_TYPES = new Set([
+    'comparative-viewer', 'dcf-priors', 'dcf-sensitivity', 'factor-heatmap',
+    'falsifier', 'financials', 'governance-limits', 'live-detail', 'llm-routing',
+    'peers', 'rebalance-plan', 'saydo', 'thresholds', 'updates'
+  ]);
   const workOsRequests = new WeakMap();
   let workOsRequestGeneration = 0;
   const WORK_OS_FETCH_TIMEOUT_MS = 15000;
@@ -354,6 +364,8 @@ def _production_runtime(generated_at: datetime) -> str:
   let workOsCompanyRequestController = null;
   let workOsPeekRequestSequence = 0;
   let workOsPeekRequestController = null;
+  let workOsLastTransientFocusId = null;
+  let workOsReplayingHistory = false;
   let workOsReaderContext = null;
   let workOsFactPlaygroundLoading = null;
   let workOsFactPlaygroundRequestSequence = 0;
@@ -412,6 +424,83 @@ def _production_runtime(generated_at: datetime) -> str:
     return true;
   }}
 
+  function workOsValidHistoryTicker(value) {{
+    return value == null || (/^[A-Z][A-Z0-9.=-]{{0,14}}$/).test(String(value));
+  }}
+
+  function workOsValidHistorySection(value) {{
+    return value == null || (/^[a-z][a-z0-9_-]*$/).test(String(value));
+  }}
+
+  function workOsEncodeHistoryRoute(route) {{
+    const origin = route.origin || {{}};
+    return [
+      route.surface || '', route.ticker || '', route.section || '', route.overlay || '',
+      origin.surface || '', origin.ticker || '', origin.section || ''
+    ].join('|');
+  }}
+
+  function workOsRouteFromHistoryState(state) {{
+    if (!state || typeof state !== 'object' || Array.isArray(state) || typeof state.workOsRoute !== 'string') return null;
+    const fields = state.workOsRoute.split('|');
+    if (fields.length !== 7 || fields.some(function (field) {{ return field.indexOf('\\0') !== -1; }})) return null;
+    const surface = fields[0];
+    const ticker = fields[1] || null;
+    const section = fields[2] || null;
+    const overlay = fields[3] || null;
+    const originSurface = fields[4] || null;
+    const originTicker = fields[5] || null;
+    const originSection = fields[6] || null;
+    if (!WORK_OS_ROUTE_DESTINATIONS.includes(surface) || !WORK_OS_ROUTE_DESTINATIONS.includes(originSurface)) return null;
+    if (overlay !== 'risk_drawer' && overlay !== 'peek') return null;
+    if (!workOsValidHistoryTicker(ticker) || !workOsValidHistoryTicker(originTicker)) return null;
+    if (!workOsValidHistorySection(section) || !workOsValidHistorySection(originSection)) return null;
+    return {{
+      surface: surface, ticker: ticker, section: section, overlay: overlay,
+      origin: {{ surface: originSurface, ticker: originTicker, section: originSection }}
+    }};
+  }}
+
+  function workOsHistoryFocusId() {{
+    const active = document.activeElement;
+    return active instanceof HTMLElement && active.id ? active.id : null;
+  }}
+
+  function workOsHistoryOrigin() {{
+    const current = workOsRouteFromHistoryState(window.history.state);
+    if (current) return current.origin;
+    const context = workOsReadCompanyContext();
+    const screen = workOsScreenFromHash();
+    return {{
+      surface: WORK_OS_ROUTE_DESTINATIONS.includes(screen) ? screen : 'screen-cockpit',
+      ticker: workOsValidHistoryTicker(context.ticker) ? context.ticker || null : null,
+      section: workOsValidHistorySection(context.screen) ? context.screen || null : null
+    }};
+  }}
+
+  function workOsPushTransientHistory(overlay, transient) {{
+    const origin = workOsHistoryOrigin();
+    const route = {{
+      surface: origin.surface, ticker: origin.ticker, section: origin.section,
+      overlay: overlay, origin: origin
+    }};
+    const state = Object.assign({{}}, window.history.state || {{}}, {{
+      screenId: route.surface,
+      ticker: route.ticker,
+      workOsRoute: workOsEncodeHistoryRoute(route),
+      workOsTransient: transient
+    }});
+    const currentUrl = window.location.pathname + window.location.search + window.location.hash;
+    workOsLastTransientFocusId = transient.focusId || null;
+    window.history.pushState(state, '', currentUrl);
+  }}
+
+  function workOsRestoreHistoryFocus(focusId) {{
+    if (!focusId) return;
+    const focusTarget = document.getElementById(focusId);
+    if (focusTarget && typeof focusTarget.focus === 'function') focusTarget.focus();
+  }}
+
   window.workOsOpenGlobalCopilot = function () {{
     window.openWorkOsCopilot({{
       company_ticker: workOsCurrentCompanyTicker(),
@@ -454,6 +543,7 @@ def _production_runtime(generated_at: datetime) -> str:
       drillDrawer.classList.remove('is-open');
       drillDrawer.setAttribute('aria-hidden', 'true');
       originalCloseDrillDrawer();
+      workOsDiscardClosedTransient('risk_drawer');
     }}
   }});
   const peekOverlay = peekDrawer && window.CCOverlay.register(peekDrawer, {{
@@ -469,6 +559,7 @@ def _production_runtime(generated_at: datetime) -> str:
       peekDrawer.classList.remove('is-open');
       peekDrawer.setAttribute('aria-hidden', 'true');
       originalClosePeekDrawer();
+      workOsDiscardClosedTransient('peek');
     }}
   }});
   const briefReaderOverlay = briefReader && window.CCOverlay.register(briefReader, {{
@@ -502,26 +593,49 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }});
 
-  window.openDrillDrawer = function (type) {{
-    originalOpenDrillDrawer(type);
+  window.openDrillDrawer = function (type, options) {{
+    const drawerType = typeof type === 'string' && WORK_OS_HISTORY_DRAWER_TYPES.has(type)
+      ? type : null;
+    if (!drawerType) return false;
+    if (!(options && options.fromHistory)) {{
+      workOsPushTransientHistory('risk_drawer', {{
+        drawerType: drawerType, focusId: workOsHistoryFocusId()
+      }});
+    }}
+    originalOpenDrillDrawer(drawerType);
     const reportTabs = {{ financials: 'financials', saydo: 'saydo', peers: 'comps', falsifier: 'bear' }};
-    if (reportTabs[type]) {{
+    if (reportTabs[drawerType]) {{
       const ticker = workOsCurrentCompanyTicker();
       const title = document.getElementById('drawerTitle');
       const subtitle = document.getElementById('drawerSubtitle');
       const body = document.getElementById('drawerBody');
-      if (title) title.textContent = ticker + ' · ' + type;
+      if (title) title.textContent = ticker + ' · ' + drawerType;
       if (subtitle) subtitle.textContent = 'Live company brief detail';
-      if (body) body.innerHTML = workOsReportFrame(ticker, reportTabs[type], 'work-os-report-frame');
+      if (body) body.innerHTML = workOsReportFrame(ticker, reportTabs[drawerType], 'work-os-report-frame');
     }}
     if (drillOverlay) drillOverlay.open();
+    return true;
   }};
-  window.closeDrillDrawer = function () {{ if (drillOverlay) drillOverlay.close(); }};
+  function workOsDiscardClosedTransient(overlay) {{
+    if (workOsReplayingHistory) return false;
+    const route = workOsRouteFromHistoryState(window.history.state);
+    if (!route || route.overlay !== overlay) return false;
+    window.history.back();
+    return true;
+  }}
+  function workOsCloseTransientFromHistory(overlay) {{
+    return workOsDiscardClosedTransient(overlay);
+  }}
+  window.closeDrillDrawer = function () {{
+    if (!workOsCloseTransientFromHistory('risk_drawer') && drillOverlay) drillOverlay.close();
+  }};
   window.openPeekDrawer = function (refKey) {{
     originalOpenPeekDrawer(refKey);
     if (peekOverlay) peekOverlay.open();
   }};
-  window.closePeekDrawer = function () {{ if (peekOverlay) peekOverlay.close(); }};
+  window.closePeekDrawer = function () {{
+    if (!workOsCloseTransientFromHistory('peek') && peekOverlay) peekOverlay.close();
+  }};
 
   function workOsReportFrame(ticker, tabId, className) {{
     const safeTicker = encodeURIComponent(String(ticker || 'NU').toUpperCase());
@@ -779,12 +893,21 @@ def _production_runtime(generated_at: datetime) -> str:
     target.innerHTML = '<span class="k-card-meta">Earnings artifact unavailable</span>';
   }}
 
-  async function workOsOpenPeekRoute(route, title) {{
+  async function workOsOpenPeekRoute(route, title, options) {{
     const ref = document.getElementById('peekRefKey');
     const body = document.getElementById('peekProse');
     if (!ref || !body || !peekOverlay) return;
-    const requestSequence = ++workOsPeekRequestSequence;
     const parsedRoute = new URL(route, window.location.origin);
+    if (parsedRoute.origin !== window.location.origin || !parsedRoute.pathname.startsWith('/api/peek/')) return;
+    const canonicalRoute = parsedRoute.pathname + parsedRoute.search + parsedRoute.hash;
+    if (!(options && options.fromHistory)) {{
+      workOsPushTransientHistory('peek', {{
+        route: canonicalRoute,
+        title: String(title || 'Research detail'),
+        focusId: workOsHistoryFocusId()
+      }});
+    }}
+    const requestSequence = ++workOsPeekRequestSequence;
     const sourceLocator = parsedRoute.hash ? parsedRoute.hash.slice(1) : '';
     if (workOsPeekRequestController) workOsPeekRequestController.abort();
     const controller = new AbortController();
@@ -1645,12 +1768,57 @@ def _production_runtime(generated_at: datetime) -> str:
     return true;
   }}
 
+  function workOsCloseHistoryTransients() {{
+    if (peekOverlay) peekOverlay.close();
+    if (drillOverlay) drillOverlay.close();
+    workOsRestoreHistoryFocus(workOsLastTransientFocusId);
+    workOsLastTransientFocusId = null;
+  }}
+
+  async function workOsRestoreTransientFromHistory(state) {{
+    const route = workOsRouteFromHistoryState(state);
+    if (!route) {{
+      workOsReplayingHistory = true;
+      try {{
+        workOsCloseHistoryTransients();
+        return await workOsRestoreCompanyContextFromHistory();
+      }} finally {{
+        workOsReplayingHistory = false;
+      }}
+    }}
+    const transient = state && typeof state === 'object' ? state.workOsTransient : null;
+    if (!transient || typeof transient !== 'object') {{
+      workOsReplayingHistory = true;
+      try {{
+        workOsCloseHistoryTransients();
+        return await workOsRestoreCompanyContextFromHistory();
+      }} finally {{
+        workOsReplayingHistory = false;
+      }}
+    }}
+    workOsReplayingHistory = true;
+    try {{
+      workOsCloseHistoryTransients();
+      await workOsRestoreCompanyContextFromHistory();
+      workOsLastTransientFocusId = typeof transient.focusId === 'string' ? transient.focusId : null;
+      if (route.overlay === 'peek' && typeof transient.route === 'string') {{
+        return await workOsOpenPeekRoute(transient.route, transient.title, {{ fromHistory: true }});
+      }}
+      if (route.overlay === 'risk_drawer' && typeof transient.drawerType === 'string') {{
+        return window.openDrillDrawer(transient.drawerType, {{ fromHistory: true }});
+      }}
+      return true;
+    }} finally {{
+      workOsReplayingHistory = false;
+    }}
+  }}
+
   function workOsApplyHash(replaceLegacy) {{
     const screenId = workOsScreenFromHash();
     if (replaceLegacy && window.location.hash !== '#' + screenId) {{
       window.history.replaceState({{ screenId }}, '', '#' + screenId);
     }}
-    workOsRestoreCompanyContextFromHistory();
+    workOsRestoreTransientFromHistory(window.history.state);
   }}
 
   window.addEventListener('hashchange', function () {{ workOsApplyHash(false); }});

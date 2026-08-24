@@ -375,6 +375,40 @@ def test_work_os_deep_links_old_surfaces_into_the_unified_screen_ia() -> None:
     assert "history.replaceState" in html
 
 
+def test_work_os_transient_history_uses_the_typed_route_wire_and_replays_only_known_surfaces() -> (
+    None
+):
+    """Back/Forward has a closed state contract for the two supported transients."""
+
+    html = render_work_os_shell()
+
+    assert "WORK_OS_ROUTE_DESTINATIONS" in html
+    assert "WORK_OS_HISTORY_DRAWER_TYPES" in html
+    assert "function workOsEncodeHistoryRoute(route)" in html
+    assert "function workOsRouteFromHistoryState(state)" in html
+    assert "workOsRoute: workOsEncodeHistoryRoute(route)" in html
+    assert "workOsPushTransientHistory('risk_drawer'" in html
+    assert "workOsPushTransientHistory('peek'" in html
+    assert "window.history.back();" in html
+    assert "window.addEventListener('popstate', function () { workOsApplyHash(false); });" in html
+    assert "workOsRestoreTransientFromHistory(window.history.state)" in html
+    assert "workOsCloseTransientFromHistory('risk_drawer')" in html
+    assert "workOsCloseTransientFromHistory('peek')" in html
+    assert "WORK_OS_HISTORY_DRAWER_TYPES.has(type)" in html
+    assert "if (workOsReplayingHistory) return false;" in html
+
+
+def test_work_os_transient_history_preserves_only_existing_origin_and_focus_state() -> None:
+    html = render_work_os_shell()
+
+    assert "function workOsHistoryOrigin()" in html
+    assert "focusId: workOsHistoryFocusId()" in html
+    assert "workOsRestoreHistoryFocus(workOsLastTransientFocusId);" in html
+    assert "workOsCloseHistoryTransients();" in html
+    assert "workOsOpenPeekRoute(transient.route, transient.title, { fromHistory: true })" in html
+    assert "window.openDrillDrawer(transient.drawerType, { fromHistory: true });" in html
+
+
 def test_work_os_shell_has_one_search_ask_entry_and_accessible_transients() -> None:
     html = render_work_os_shell()
     assert html.count("Search / Ask") == 1
