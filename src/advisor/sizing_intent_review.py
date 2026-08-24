@@ -28,6 +28,7 @@ __all__ = [
     "SizingIntentReview",
     "SizingIntentReviewEntry",
     "load_sizing_intent_review",
+    "load_sizing_intent_review_entry",
 ]
 
 
@@ -122,6 +123,50 @@ def load_sizing_intent_review(
         conn.close()
 
 
+def load_sizing_intent_review_entry(
+    db_path: Path | str,
+    *,
+    sizing_intent_id: int,
+    user_id: str = DEFAULT_USER_ID,
+) -> SizingIntentReview:
+    """Load one exact persisted intent with the same evidence verification.
+
+    This is for append-only receipt replay, where a previously confirmed intent
+    need not be the current intent for its ticker and kind.
+    """
+
+    try:
+        conn = open_read_conn(db_path)
+    except (FileNotFoundError, RuntimeError, sqlite3.Error):
+        return SizingIntentReview(False, False, ())
+
+    try:
+        intents = _intents_by_id(conn, sizing_intent_id=sizing_intent_id, user_id=user_id)
+        if intents is None:
+            return SizingIntentReview(False, False, ())
+        links = _checkpoint_links(conn, intents)
+        if links is None:
+            return SizingIntentReview(
+                True,
+                False,
+                tuple(
+                    SizingIntentReviewEntry(
+                        intent=intent,
+                        checkpoint_linked=False,
+                        checkpoint_evidence_available=False,
+                    )
+                    for intent in intents
+                ),
+            )
+        return SizingIntentReview(
+            True,
+            True,
+            tuple(_review_entry(intent, links.get(intent.id)) for intent in intents),
+        )
+    finally:
+        conn.close()
+
+
 def _latest_intents(
     conn: sqlite3.Connection, *, user_id: str
 ) -> tuple[PositionSizingIntentRow, ...] | None:
@@ -152,6 +197,35 @@ def _latest_intents(
         )
         latest.setdefault((intent.ticker.upper(), intent.intent_kind), intent)
     return tuple(latest.values())
+
+
+def _intents_by_id(
+    conn: sqlite3.Connection, *, sizing_intent_id: int, user_id: str
+) -> tuple[PositionSizingIntentRow, ...] | None:
+    try:
+        row = conn.execute(
+            """
+            SELECT id,user_id,ticker,intent_kind,intent_value,narrative,created_at,updated_at
+            FROM position_sizing_intent WHERE id=? AND user_id=?
+            """,
+            (sizing_intent_id, user_id),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return ()
+    return (
+        PositionSizingIntentRow(
+            id=int(row["id"]),
+            user_id=str(row["user_id"]),
+            ticker=str(row["ticker"]),
+            intent_kind=str(row["intent_kind"]),
+            intent_value=(None if row["intent_value"] is None else float(row["intent_value"])),
+            narrative=None if row["narrative"] is None else str(row["narrative"]),
+            created_at=parse_dt(row["created_at"]),
+            updated_at=parse_dt(row["updated_at"]),
+        ),
+    )
 
 
 def _checkpoint_links(

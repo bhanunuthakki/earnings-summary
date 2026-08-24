@@ -4143,6 +4143,43 @@ def create_app(
         ]
         return {"ticker": ticker, "ok": True, "created_ids": created}
 
+    @app.route("/api/sizing-intents/<ticker>/checkpoint", methods=["POST", "OPTIONS"])
+    def sizing_intent_checkpoint_api(ticker: str):
+        """Confirm one reviewed sizing intent through the canonical checkpoint writer.
+
+        This localhost-only, CSRF-guarded route records owner evidence; it does
+        not submit, simulate, or otherwise execute a broker action.
+        """
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from advisor.sizing_intent_checkpoint_api import (
+            SizingIntentCheckpointConflictError,
+            SizingIntentCheckpointRequest,
+            SizingIntentCheckpointUnavailableError,
+            SizingIntentCheckpointValidationError,
+            confirm_sizing_intent_checkpoint,
+        )
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return _client_error("validation_error: JSON request body must be an object", 400)
+        try:
+            checkpoint_request = SizingIntentCheckpointRequest.model_validate(body)
+            result = confirm_sizing_intent_checkpoint(
+                checkpoint_request,
+                ticker=ticker,
+                db_path=resolved_db_path,
+            )
+        except ValidationError as exc:
+            return _client_error(f"validation_error: {exc.errors()[0]['msg']}", 400)
+        except SizingIntentCheckpointValidationError as exc:
+            return _client_error(f"validation_error: {exc}", 400)
+        except SizingIntentCheckpointConflictError as exc:
+            return _client_error(f"conflict_error: {exc}", 409)
+        except SizingIntentCheckpointUnavailableError as exc:
+            return _client_error(f"unavailable_error: {exc}", 503)
+        return result.model_dump(mode="json"), 201 if result.receipt.created else 200
+
     @app.route("/api/coach/unmute", methods=["POST", "OPTIONS"])
     def coach_unmute_api():
         """Clear a coach_mutes row (REQ-12: mutes must be visible AND
