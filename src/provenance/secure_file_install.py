@@ -448,6 +448,36 @@ def _assert_windows_root_stable(root: Path, root_fd: int, expected: tuple[int, i
         raise OSError("root handle identity changed")
 
 
+def _verify_windows_owned_install(
+    descriptor: int,
+    identity: tuple[int, int],
+    payload: bytes,
+) -> None:
+    """Prove the renamed file through the still-owned Windows descriptor.
+
+    The target name is deliberately not reopened until this handle is closed:
+    a pathname read before then would introduce a replacement race between the
+    successful no-replace rename and verification.
+    """
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or int(metadata.st_nlink) != 1
+        or (int(metadata.st_dev), int(metadata.st_ino)) != identity
+        or int(metadata.st_size) != len(payload)
+    ):
+        raise OSError("installed target descriptor changed")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    observed = bytearray()
+    while len(observed) < len(payload):
+        chunk = os.read(descriptor, len(payload) - len(observed))
+        if not chunk:
+            raise OSError("installed target descriptor ended before expected payload")
+        observed.extend(chunk)
+    if bytes(observed) != payload:
+        raise OSError("installed target descriptor bytes differ from expected payload")
+
+
 def _assert_posix_root_stable(root: Path, root_fd: int, expected: tuple[int, int]) -> None:
     try:
         direct = root.lstat()
@@ -543,12 +573,12 @@ def _install_windows_handle_relative(
             _verify_no_clobber_install(root, relative_name, payload)
             _assert_windows_root_stable(root, root_fd, root_identity)
             return SecureFileInstallResult(target, created=False)
-        after = os.fstat(descriptor)
-        if (int(after.st_dev), int(after.st_ino)) != identity or int(after.st_nlink) != 1:
-            raise OSError("installed target identity changed")
+        _verify_windows_owned_install(descriptor, identity, payload)
         installed = True
         token = _issue_ownership_token(target, identity)
         _assert_windows_root_stable(root, root_fd, root_identity)
+        os.close(descriptor)
+        descriptor = None
         try:
             _verify_no_clobber_install(root, relative_name, payload)
         except SecureFileInstallError as exc:

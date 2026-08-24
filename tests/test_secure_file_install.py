@@ -364,6 +364,102 @@ def test_windows_collision_closes_the_owned_descriptor(
     assert not result.created and descriptor in closed
 
 
+def test_windows_success_closes_owned_descriptor_before_stable_target_reopen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "attempt"
+    root.mkdir()
+    target = root / "source.pdf"
+    payload = b"issuer bytes"
+    root_fd = os.open(root, os.O_RDONLY)
+    temporary = root / ".owned.tmp"
+    descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
+    metadata = os.fstat(descriptor)
+    closed: list[int] = []
+    original_close = install.os.close
+    original_read_stable = install.read_stable_artifact
+
+    def record_close(value: int) -> None:
+        closed.append(value)
+        original_close(value)
+
+    def create_temp(_root_fd: int, _digest: str) -> tuple[int, str, tuple[int, int]]:
+        return descriptor, temporary.name, (metadata.st_dev, metadata.st_ino)
+
+    def rename(_descriptor: int, _root_fd: int, _target_name: str) -> None:
+        temporary.rename(target)
+
+    def seal_temp(_descriptor: int) -> None:
+        return None
+
+    def read_target_only_after_close(path: Path) -> tuple[object, bytes]:
+        assert descriptor in closed
+        return original_read_stable(path)
+
+    monkeypatch.setattr(install, "_windows_open_root", _return_root_descriptor(root_fd))
+    monkeypatch.setattr(install, "_windows_create_temp", create_temp)
+    monkeypatch.setattr(install, "_windows_set_read_only", seal_temp)
+    monkeypatch.setattr(install, "_windows_rename_no_replace", rename)
+    monkeypatch.setattr(install, "read_stable_artifact", read_target_only_after_close)
+    monkeypatch.setattr(install.os, "close", record_close)
+
+    result = install._install_windows_handle_relative(
+        root, target.name, payload, hashlib.sha256(payload).hexdigest()
+    )
+
+    assert result.created and result.ownership is not None
+    assert target.read_bytes() == payload
+    assert descriptor in closed
+
+
+def test_windows_owned_descriptor_byte_mismatch_prevents_target_reopen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "attempt"
+    root.mkdir()
+    target = root / "source.pdf"
+    payload = b"issuer bytes"
+    root_fd = os.open(root, os.O_RDONLY)
+    temporary = root / ".owned.tmp"
+    descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
+    metadata = os.fstat(descriptor)
+    original_read = install.os.read
+
+    def create_temp(_root_fd: int, _digest: str) -> tuple[int, str, tuple[int, int]]:
+        return descriptor, temporary.name, (metadata.st_dev, metadata.st_ino)
+
+    def rename(_descriptor: int, _root_fd: int, _target_name: str) -> None:
+        temporary.rename(target)
+
+    def seal_temp(_descriptor: int) -> None:
+        return None
+
+    def tampered_descriptor_read(value: int, count: int) -> bytes:
+        if value == descriptor:
+            return b"x" * count
+        return original_read(value, count)
+
+    def target_reopen_forbidden(_path: Path) -> tuple[object, bytes]:
+        raise AssertionError("target path must not reopen after owned-byte mismatch")
+
+    def delete_owned(_descriptor: int) -> None:
+        target.unlink()
+
+    monkeypatch.setattr(install, "_windows_open_root", _return_root_descriptor(root_fd))
+    monkeypatch.setattr(install, "_windows_create_temp", create_temp)
+    monkeypatch.setattr(install, "_windows_set_read_only", seal_temp)
+    monkeypatch.setattr(install, "_windows_rename_no_replace", rename)
+    monkeypatch.setattr(install, "_windows_delete_owned", delete_owned)
+    monkeypatch.setattr(install.os, "read", tampered_descriptor_read)
+    monkeypatch.setattr(install, "read_stable_artifact", target_reopen_forbidden)
+
+    with pytest.raises(install.SecureFileInstallError, match="windows_handle_install_failed"):
+        install._install_windows_handle_relative(
+            root, target.name, payload, hashlib.sha256(payload).hexdigest()
+        )
+    assert not target.exists()
+
+
 def test_windows_failed_owned_delete_reports_named_residue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
