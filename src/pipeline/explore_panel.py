@@ -37,10 +37,18 @@ from pathlib import Path
 from dcf.fact_drivers import driver_field_options
 from identity import DEFAULT_USER_ID
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
+from report.models import CellSource
+from report.renderers.charts_v2 import fmt_compact, fmt_pct
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.source_chip import source_chip_html
 from user_state.saved_views import SavedViewRow, list_views
 from viewspec.engine import metric_catalog
 from viewspec.spec import CADENCES, TRANSFORMS
+from viewspec.workbench import (
+    RankedMetricCandidate,
+    RankedMetricWorkbench,
+    build_ranked_metric_workbench,
+)
 
 _PANEL_STYLE = RESEARCH_PANEL_STYLE
 
@@ -693,6 +701,49 @@ def render_keymetrics_fragment(db_path: Path, tickers: list[str]) -> str:
     return render_key_metrics_inner(bubbles, symbols)
 
 
+def _workbench_value(value: float, unit: str | None) -> str:
+    if (unit or "").lower() in {"%", "percent"}:
+        return f"{value:.1f}%"
+    if (unit or "").lower() == "bps":
+        return f"{value:.0f}bps"
+    return fmt_compact(value)
+
+
+def render_ranked_workbench(workbench: RankedMetricWorkbench) -> str:
+    """Compact factual front door; advanced DIY controls remain opt-in."""
+    if workbench.state == "unavailable":
+        return '<section class="k-well vx-workbench vx-workbench-state"><strong>Metrics unavailable</strong><span>Local fact data is unavailable; DIY remains available when the store returns.</span></section>'
+    if workbench.state == "empty":
+        return '<section class="k-well vx-workbench vx-workbench-state"><strong>No ranked metrics yet</strong><span>Use DIY to browse governed facts while thesis ranking is unavailable.</span></section>'
+    if workbench.state == "stale":
+        return '<section class="k-well vx-workbench vx-workbench-state"><strong>Ranked metrics need fresh facts</strong><span>The current ranked list has no matching observations. Inspect the catalog or refresh the governed data pipeline.</span></section>'
+    cards: list[str] = []
+    for row in workbench.rows:
+        trend = fmt_pct(row.change_pct) if row.change_pct is not None else "—"
+        cell_source = row.source if isinstance(row.source, CellSource) else None
+        source = (
+            source_chip_html(cell_source)
+            if cell_source is not None
+            else '<span class="vx-workbench-muted">source unavailable</span>'
+        )
+        rank = "Thesis tier" if row.rank_source == "tier" else "Cached research rank"
+        cards.append(
+            '<article class="vx-workbench-card">'
+            f'<div class="vx-workbench-kicker">{escape(row.ticker)} · {escape(rank)}</div>'
+            f'<strong title="{escape(row.token)}">{escape(row.label)}</strong>'
+            f'<div class="vx-workbench-value">{escape(_workbench_value(row.value, row.unit))}</div>'
+            f'<div class="vx-workbench-meta">Trend {escape(trend)} · as of {escape(row.as_of)} {source}</div>'
+            f'<div class="vx-workbench-why">Why it matters: {escape(row.why)}</div>'
+            f'<details class="vx-workbench-inspect"><summary>Inspect metric</summary><code>{escape(row.token)}</code></details>'
+            "</article>"
+        )
+    return (
+        '<section class="vx-workbench" aria-label="Ranked metrics">'
+        '<div class="vx-workbench-head"><strong>Ranked metrics</strong><span>Current governed facts</span></div>'
+        f'<div class="vx-workbench-grid">{"".join(cards)}</div></section>'
+    )
+
+
 def render_explore_panel(
     db_path: Path,
     *,
@@ -714,8 +765,12 @@ def render_explore_panel(
     # above so the render path stays a single catalog read.
     from pipeline.key_metrics import key_metric_bubbles, render_key_metrics_inner
 
-    keymetrics_inner = render_key_metrics_inner(
-        key_metric_bubbles(db_path, tickers, catalog), tickers
+    bubbles = key_metric_bubbles(db_path, tickers, catalog)
+    keymetrics_inner = render_key_metrics_inner(bubbles, tickers)
+    workbench = build_ranked_metric_workbench(
+        db_path,
+        tickers,
+        [RankedMetricCandidate(b.token, b.source, b.title) for b in bubbles],
     )
     transform_opts = "".join(
         f'<option value="{escape(t)}"{" selected" if t == "level" else ""}>{escape(t)}</option>'
@@ -729,7 +784,14 @@ def render_explore_panel(
     tickers_val = escape(", ".join(tickers))
     saved = render_saved_views_list(db_path, user_id=user_id)
     first = tickers[0] if tickers else "NU"
-    second = tickers[1] if len(tickers) > 1 else "MELI"
+    second = next((ticker for ticker in tickers if ticker != first), None)
+    comparison_chips = ""
+    if second is not None:
+        comparison_chips = (
+            f'<button type="button" class="k-chip" data-ask-q="{escape(first)} vs {escape(second)} revenue growth, last 8 quarters">'
+            f"{escape(first)} vs {escape(second)} revenue growth</button>"
+            f'<button type="button" class="k-chip" data-ask-q="revenue 3-year CAGR for {escape(first)}, {escape(second)}, annual">3y revenue CAGR</button>'
+        )
     # Research prompts are doorway controls into Work OS Copilot.  The panel
     # itself owns only deterministic ViewSpec compilation and execution.
     runtime = f"<script>{EXPLORE_PANEL_JS}</script>" if include_runtime else ""
@@ -741,19 +803,15 @@ def render_explore_panel(
  questions use cited lexical evidence. Use DIY to build a table or chart directly from
  governed facts without an answering LLM.
     <div class="ask-chips">
-      <button type="button" class="k-chip"
-        data-ask-q="{escape(first)} vs {escape(second)} revenue growth, last 8 quarters">
-        {escape(first)} vs {escape(second)} revenue growth</button>
+      {comparison_chips}
       <button type="button" class="k-chip"
         data-ask-q="{escape(first)} margins, last 12 quarters">{escape(first)} margins</button>
-      <button type="button" class="k-chip"
-        data-ask-q="revenue 3-year CAGR for {escape(first)}, {escape(second)}, annual">
-        3y revenue CAGR</button>
     </div>
   </div>
 </div>
+{render_ranked_workbench(workbench)}
 <div class="ask-inputrow">
-  <input id="ask-q" placeholder="Send to Copilot — e.g. {escape(first)} vs {escape(second)} revenue growth" autocomplete="off">
+  <input id="ask-q" placeholder="Send to Copilot — e.g. {escape(first)} revenue growth" autocomplete="off">
   <button type="button" id="ask-go" class="k-btn k-btn-primary">Open Copilot</button>
   <button type="button" id="ask-diy" class="k-btn k-btn-quiet"
     title="Build a view by hand — tickers, metrics, transform, saved views">DIY</button>

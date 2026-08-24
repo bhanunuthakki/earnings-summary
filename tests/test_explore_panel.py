@@ -21,8 +21,20 @@ from alembic.config import Config
 from flask.testing import FlaskClient
 
 from alembic import command
-from pipeline.explore_panel import render_explore_panel, render_saved_views_list
+from pipeline.explore_panel import (
+    render_explore_panel,
+    render_ranked_workbench,
+    render_saved_views_list,
+)
+from report.models import CellSource
 from tests.ask_stream_support import fold_sse_response
+from viewspec.workbench import (
+    RankedMetricCandidate,
+    RankedMetricRow,
+    RankedMetricWorkbench,
+    WorkbenchState,
+    build_ranked_metric_workbench,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -141,6 +153,105 @@ def test_explore_panel_renders_with_default_universe(db_path: Path) -> None:
     assert "TST" in html_out
     assert 'value="fin:revenue"' in html_out
     assert "Save view" in html_out
+
+
+def test_explore_panel_keeps_single_ticker_recipes_non_comparative(db_path: Path) -> None:
+    html_out = render_explore_panel(db_path)
+
+    assert "TST vs TST" not in html_out
+    assert 'class="k-well vx-workbench vx-workbench-state"' in html_out
+    assert "No ranked metrics yet" in html_out
+
+
+def test_ranked_workbench_renders_readable_value_trend_and_provenance() -> None:
+    html_out = render_ranked_workbench(
+        RankedMetricWorkbench(
+            state="ready",
+            rows=(
+                RankedMetricRow(
+                    token="fin:operating_cash_flow",
+                    label="Operating cash flow",
+                    ticker="MELI",
+                    rank_source="llm",
+                    why="funds investment capacity",
+                    value=125.0,
+                    prior_value=100.0,
+                    change_pct=25.0,
+                    unit="millions",
+                    as_of="Q2'26",
+                    source=CellSource(source="sec_official", doc_id=7),
+                ),
+            ),
+        )
+    )
+
+    assert "Ranked metrics" in html_out
+    assert "Operating cash flow" in html_out
+    assert "125" in html_out and "25.0%" in html_out and "Q2&#x27;26" in html_out
+    assert "funds investment capacity" in html_out
+    assert "fin:operating_cash_flow" in html_out
+    assert "SEC" in html_out
+
+
+def test_ranked_workbench_drops_unvalidated_render_evidence() -> None:
+    html_out = render_ranked_workbench(
+        RankedMetricWorkbench(
+            state="ready",
+            rows=(
+                RankedMetricRow(
+                    token="fin:operating_cash_flow",
+                    label="Operating cash flow",
+                    ticker="MELI",
+                    rank_source="tier",
+                    why="Cash conversion",
+                    value=125.0,
+                    prior_value=None,
+                    change_pct=None,
+                    unit="millions",
+                    as_of="Q2'26",
+                    source=cast(CellSource | None, "legacy source"),
+                ),
+            ),
+        )
+    )
+
+    assert "source unavailable" in html_out
+
+
+def test_ranked_workbench_projects_governed_db_facts_with_current_provenance(
+    db_path: Path,
+) -> None:
+    workbench = build_ranked_metric_workbench(
+        db_path,
+        ["TST"],
+        [RankedMetricCandidate("fin:revenue", "tier", "Core sales signal")],
+    )
+
+    assert workbench.state == "ready"
+    (row,) = workbench.rows
+    assert row.value == 160.0
+    assert row.prior_value == 150.0
+    assert row.change_pct == pytest.approx(6.67, abs=0.01)
+    assert row.as_of == "Q4'25"
+    assert row.source is not None
+    assert row.source.doc_id == 1
+    assert row.source.source_url == "https://fmp.example/f.json"
+
+    html_out = render_ranked_workbench(workbench)
+    assert "160" in html_out
+    assert "6.7%" in html_out
+    assert "Q4&#x27;25" in html_out
+    assert "FMP" in html_out
+
+
+@pytest.mark.parametrize("state", ["stale", "unavailable"])
+def test_non_ready_ranked_workbench_never_claims_current_facts(
+    state: WorkbenchState,
+) -> None:
+    html_out = render_ranked_workbench(RankedMetricWorkbench(state=state))
+
+    assert "Current governed facts" not in html_out
+    assert "vx-workbench-value" not in html_out
 
 
 def test_explore_panel_has_searchable_tracked_ticker_picker_and_flexible_window(
