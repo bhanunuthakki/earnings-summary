@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -564,8 +565,13 @@ def confirm_owner_decision_checkpoint(
     *,
     db_path: Path | str | None = None,
     user_id: str = DEFAULT_USER_ID,
+    before_create: Callable[[sqlite3.Connection], None] | None = None,
 ) -> CheckpointConfirmation:
-    """Confirm ``payload`` atomically, with collision-safe idempotency."""
+    """Confirm ``payload`` atomically, with collision-safe idempotency.
+
+    ``before_create`` is an optional transaction-local compare-and-swap guard
+    for a caller-owned boundary. It never runs for an idempotent replay.
+    """
 
     # Revalidate at the persistence boundary so ``model_copy``/``model_construct``
     # cannot bypass the checkpoint's cross-field invariants.
@@ -597,6 +603,9 @@ def confirm_owner_decision_checkpoint(
             receipt = _existing_confirmation(conn, checkpoint_id, digest)
             conn.commit()
             return receipt
+
+        if before_create is not None:
+            before_create(conn)
 
         stamp = now_iso()
         cur = conn.execute(
