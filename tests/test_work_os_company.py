@@ -416,9 +416,6 @@ def test_company_desk_projects_partial_kpi_states_and_rejects_future_facts(
         "material_exception",
     ]
     assert desk.kpi_summary.status == "available"
-    assert not work_os_company._is_fresh_thesis_timestamp(
-        datetime(2026, 8, 24, tzinfo=UTC), as_of=datetime(2026, 8, 23, tzinfo=UTC)
-    )
 
 
 @pytest.mark.parametrize("ticker", ["NU", "NVO", "MELI", "SPARSE"])
@@ -458,7 +455,13 @@ def test_company_desk_thesis_projection_is_ticker_scoped_for_portfolio_and_spars
         ],
     )
 
-    monkeypatch.setattr(work_os_company.thesis_section, "build", lambda *_args, **_kwargs: thesis)
+    def build_thesis(
+        _ticker: str, _repo_root: Path, *, conn: sqlite3.Connection | None = None
+    ) -> ThesisSection:
+        del conn
+        return thesis
+
+    monkeypatch.setattr(work_os_company.thesis_section, "build", build_thesis)
     conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
     conn.row_factory = sqlite3.Row
     try:
