@@ -264,6 +264,11 @@ def test_cockpit_stat_links_use_native_hash_navigation_without_layout_shift(
             page.evaluate(
                 "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
             )
+            # Portfolio hydration publishes the live status before every
+            # background panel has finished its final layout pass. Match the
+            # hosted route-canary settle window so focus is the only mutation
+            # measured below.
+            page.wait_for_timeout(400)
 
             stats = page.locator("#workOsPortfolioStats")
             assert stats.locator(".k-stat-cell").count() == 4
@@ -693,9 +698,12 @@ def test_route_canary_rejects_untyped_or_overflowing_card(tmp_path: Path) -> Non
     desktop.write_text(
         desktop.read_text(encoding="utf-8").replace(
             '<div class="research-screen" id="workOsCompanyDesk" aria-live="polite">\n'
-            '    <header class="k-card k-card-section research-toolbar">',
+            "    <!-- Sticky Valuation & Identity Hero Bar -->\n"
+            '    <header class="k-card k-card-section k-desk-hero research-toolbar" '
+            'id="companyDeskHero">',
             '<div class="research-screen" id="workOsCompanyDesk" aria-live="polite">\n'
-            '    <header class="k-card research-toolbar">',
+            "    <!-- Sticky Valuation & Identity Hero Bar -->\n"
+            '    <header class="k-card k-desk-hero research-toolbar" id="companyDeskHero">',
             1,
         ),
         encoding="utf-8",
@@ -724,9 +732,9 @@ def test_route_canary_rejects_nested_unregistered_boxed_card(tmp_path: Path) -> 
     target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
     markup = target.read_text(encoding="utf-8")
     markup = markup.replace(
-        '<h2 class="k-card-title">Thesis contracts</h2>',
+        '<h2 class="k-card-title">Thesis Contracts &amp; Falsifiers</h2>',
         '<div class="legacy-card">Rogue nested card</div>'
-        '<h2 class="k-card-title">Thesis contracts</h2>',
+        '<h2 class="k-card-title">Thesis Contracts &amp; Falsifiers</h2>',
         1,
     ).replace(
         "</style>",

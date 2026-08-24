@@ -425,6 +425,8 @@ def test_card_kit_owns_semantic_archetypes_and_title_alignment() -> None:
     assert "padding: var(--sp-2) var(--sp-3)" in action
     section = css.split(".k-card-section {", 1)[1].split("}", 1)[0]
     assert "display: flex" in section and "gap: var(--sp-3)" in section
+    desk_hero = css.split(".k-desk-hero {", 1)[1].split("}", 1)[0]
+    assert "padding: var(--sp-3)" in desk_hero
     navigation = css.split(".k-card-nav {", 1)[1].split("}", 1)[0]
     assert "display: flex" in navigation
 

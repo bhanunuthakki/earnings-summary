@@ -160,7 +160,7 @@ def _proposed_card(t: InsightRow) -> str:
         f'<div class="ledger-musing" data-tenet-id="{t.id}">'
         '<div class="ledger-musing-head">'
         f'<span class="wv-scope">{escape(t.scope_key)}</span>'
-        f'{tension_badge}<span class="wv-proposed-badge">proposed</span>'
+        f'{tension_badge}<span class="k-chip k-chip-warn wv-proposed-badge">proposed</span>'
         f'<span class="ledger-stance-meta">{_from_n(t)}</span></div>'
         f'<div class="ledger-body">{render_prose(t.body_md)}</div>'
         f"{tension_note}"

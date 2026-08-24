@@ -782,8 +782,14 @@ def _browser_canary_findings(
                 const hit = hitRoot && typeof hitRoot.elementFromPoint === 'function'
                   ? hitRoot.elementFromPoint(centerX, centerY)
                   : document.elementFromPoint(centerX, centerY);
-                if (!hit || !composedContains(card, hit)) {
-                  findings.push({kind: 'card', actual: `card[${index}] is occluded at its visible center`});
+                const coveringOverlay = hit
+                  ? composedClosest(hit, '[data-conformance-role="overlay"]')
+                  : null;
+                if ((!hit || !composedContains(card, hit)) && !coveringOverlay) {
+                  const hitLabel = hit
+                    ? `${hit.tagName.toLowerCase()}${hit.id ? `#${hit.id}` : ''}`
+                    : 'nothing';
+                  findings.push({kind: 'card', actual: `card[${index}] is occluded at its visible center by ${hitLabel}`});
                 }
               }
               if (contract.titleSelector) {

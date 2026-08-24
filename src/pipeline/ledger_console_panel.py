@@ -33,10 +33,9 @@ def render_ledger_console(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> s
     ``embedded`` (its internal chip toolbar suppressed) and contributes its six
     jump chips to the console band via ``extra_nav`` — ``data-ledger-jump``
     behavior included, since the chips ship with their own nav listener. The
-    feed's own "Ledger" chip is dropped from the band (``nav_exclude``). The
-    leading canonical card is titled "Capture" instead of repeating the page's
-    Ledger name; Triage + Journal + Decisions chips stay. Decisions (P2.1,
-    PRD §9.3) is a FOURTH section — a separate
+    feed's own "Ledger" chip is dropped from the band (``nav_exclude``): its
+    ``<h2>Ledger</h2>`` sits directly below; Triage + Journal + Decisions chips
+    stay. Decisions (P2.1, PRD §9.3) is a FOURTH section — a separate
     ``v_decision_journal`` reader, not the ``analyst_notes`` lifecycle Journal
     above it."""
     from pipeline.decision_journal_panel import render_decision_journal_panel
@@ -46,7 +45,7 @@ def render_ledger_console(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> s
 
     _ = RESEARCH_PANEL_STYLE
     sections: list[ConsoleSection] = [
-        ("feed", "Capture", lambda: render_ledger_panel(db_path, user_id=user_id, embedded=True)),
+        ("feed", "Ledger", lambda: render_ledger_panel(db_path, user_id=user_id, embedded=True)),
         # Triage/Journal/Decisions render embedded too: their tab-level chrome
         # (a panel_toolbar / an <h2>) collapses to a section h3 — the band's
         # chip names the section, and a second tab title under it was the
@@ -69,4 +68,5 @@ def render_ledger_console(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> s
         wrap_class="ledger-console",
         extra_nav=render_ledger_jump_chips(db_path),
         nav_exclude=("feed",),
+        heading_exclude=("feed",),
     )

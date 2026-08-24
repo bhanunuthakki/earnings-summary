@@ -218,9 +218,19 @@ CHROME_TOKENS: dict[str, str] = {
     "lift-sm": "-1px",
     "lift-md": "-2px",
     "toast-hide-y": "100px",
+    # Elevation & layering hierarchy
+    "z-sidebar": "10",
+    "z-header": "20",
+    "z-scrim": "80",
+    "z-drawer": "90",
+    "z-toast": "100",
     # The full-document reader sits above Work OS sticky chrome and scrims so
     # its visible toolbar remains the pointer target.
     "z-modal": "300",
+    "main-max-width-wide": "1440px",
+    "dismiss-scale": "0.97",
+    "dismiss-y": "-2px",
+    "toast-y": "20px",
     "blur-sm": "6px",
     "blur-md": "16px",
     "blur-lg": "24px",

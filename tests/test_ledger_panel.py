@@ -353,7 +353,7 @@ def test_incorporated_ladder_badge_is_a_research_doorway(db_path: Path) -> None:
         FeedItem(note=note, item_type="musing", ladder="saved", wondering=None)
     )
     assert "data-ledger-jump" not in saved
-    assert '<span class="om-ladder">saved</span>' in saved
+    assert '<span class="k-chip om-ladder">saved</span>' in saved
 
 
 def test_queues_summary_reflects_armed_falsifiers(

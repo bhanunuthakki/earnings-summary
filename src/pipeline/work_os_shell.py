@@ -1300,6 +1300,33 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }});
 
+  const workOsDeskTabs = {{
+    thesis: 'deskTabThesis',
+    financials: 'deskTabFinancials',
+    transcripts: 'deskTabTranscripts',
+    notes: 'deskTabNotes'
+  }};
+
+  function workOsSwitchDeskTab(tab) {{
+    const panelId = workOsDeskTabs[tab];
+    if (!panelId) return false;
+    document.querySelectorAll('[data-desk-tab]').forEach(function (button) {{
+      const active = button.getAttribute('data-desk-tab') === tab;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+    }});
+    Object.values(workOsDeskTabs).forEach(function (candidateId) {{
+      const panel = document.getElementById(candidateId);
+      if (panel) panel.hidden = candidateId !== panelId;
+    }});
+    return true;
+  }}
+
+  document.addEventListener('click', function (event) {{
+    const tab = event.target instanceof Element ? event.target.closest('[data-desk-tab]') : null;
+    if (tab) workOsSwitchDeskTab(tab.getAttribute('data-desk-tab'));
+  }});
+
   async function workOsEnsureResearchCompanies() {{
     if (Array.isArray(workOsResearchCompanies)) return workOsResearchCompanies;
     const response = await fetch('/api/tickers', {{ headers: {{ Accept: 'application/json' }} }});
@@ -1328,44 +1355,50 @@ def _production_runtime(generated_at: datetime) -> str:
       if (requestSequence !== workOsCompanyRequestSequence) return false;
       const company = workOsCompanyByTicker(normalized);
       if (!company) throw new Error('Unknown company ' + normalized);
+      const sayDoRequest = fetch('/api/company/' + encodeURIComponent(normalized) + '/say-do', {{ signal: controller.signal, headers: {{ Accept: 'application/json' }} }})
+        .then(function (candidate) {{ return candidate.ok ? candidate.json() : null; }})
+        .catch(function () {{ return null; }});
       const response = await fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk', {{ signal: controller.signal, headers: {{ Accept: 'application/json' }} }});
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const desk = await response.json();
+      const sayDo = await sayDoRequest;
       if (requestSequence !== workOsCompanyRequestSequence) return false;
       const identity = desk.company || {{}};
       const identityTicker = String(identity.ticker || normalized).toUpperCase();
       if (identityTicker !== normalized) throw new Error('Company response mismatch');
       document.getElementById('deskTicker').textContent = identity.ticker || normalized;
       document.getElementById('deskCompanyName').textContent = identity.name || company.name;
-      document.getElementById('deskCoverageRole').textContent = String(identity.coverage_role || 'unknown') + ' coverage';
-      const decision = desk.current_decision || {{ relationship: 'unavailable' }};
-      const ownerDecision = decision.owner || null;
-      const modelDecision = decision.model || null;
-      document.getElementById('deskDecisionBand').dataset.freshness = decision.freshness || 'unavailable';
-      document.getElementById('deskOwnerState').textContent = ownerDecision ? String(ownerDecision.value).toUpperCase() : '—';
-      document.getElementById('deskModelState').textContent = modelDecision ? String(modelDecision.value).toUpperCase() : '—';
-      document.getElementById('deskOwnerRevision').textContent = workOsDecisionMeta(ownerDecision, 'No owner decision recorded') + (decision.freshness === 'stale' ? ' · stale' : '');
-      document.getElementById('deskModelRevision').textContent = workOsDecisionMeta(modelDecision, 'No model recommendation recorded');
       const position = desk.position || {{}};
       const weight = Number.isFinite(position.weight_pct) ? position.weight_pct : null;
       const positionState = String(position.position_state || 'unavailable');
       document.getElementById('deskPositionWeight').textContent = Number.isFinite(weight)
         ? workOsPercent(weight)
         : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
-      const trackerPositionSource = position.position_source === 'portfolio_tracker_api'
-        ? 'Portfolio Tracker snapshot'
-        : 'Portfolio Tracker';
-      document.getElementById('deskPositionSource').textContent = positionState === 'unavailable'
-        ? 'Tracker snapshot unavailable'
-        : trackerPositionSource + (position.position_as_of ? ' · as of ' + position.position_as_of : '') + (positionState === 'not_held' ? ' · not held' : '');
       const valuationSource = position.source ? String(position.source).replaceAll('_', ' ') : 'governed DCF snapshot';
-      document.getElementById('deskInputPrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : '—';
-      document.getElementById('deskInputPriceSource').textContent = Number.isFinite(position.price) ? valuationSource + ' · as of ' + (position.price_as_of || 'date unavailable') : 'No governed input price';
+      document.getElementById('deskLivePrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : 'Unavailable';
       document.getElementById('deskFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
-      document.getElementById('deskFairValueSource').textContent = Number.isFinite(position.fair_value) ? valuationSource + ' · as of ' + (position.fair_value_as_of || 'date unavailable') : 'No governed fair value';
+      const valuationGap = Number.isFinite(position.price) && Number.isFinite(position.fair_value) && position.price !== 0
+        ? ((position.fair_value / position.price) - 1) * 100 : null;
+      document.getElementById('deskValuationGap').innerHTML = Number.isFinite(valuationGap)
+        ? '<span class="k-pill ' + (valuationGap >= 0 ? 'k-pill-ok' : 'k-pill-bad') + '">' + escapeWorkOsHtml(workOsPercent(valuationGap)) + '</span>'
+        : '<span class="k-pill">Unavailable</span>';
+      const financials = document.getElementById('deskFinancialsSummary');
+      if (financials) financials.innerHTML = Number.isFinite(position.price) || Number.isFinite(position.fair_value)
+        ? '<div class="k-well"><strong>Governed valuation snapshot</strong><div class="stat-subtext">Price: ' + escapeWorkOsHtml(Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : 'unavailable') + ' · Fair value: ' + escapeWorkOsHtml(Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : 'unavailable') + ' · Source: ' + escapeWorkOsHtml(valuationSource) + ' · Price as of ' + escapeWorkOsHtml(position.price_as_of || 'unavailable') + ' · Fair value as of ' + escapeWorkOsHtml(position.fair_value_as_of || 'unavailable') + '</div></div>'
+        : '<div class="k-well">Governed valuation inputs are unavailable for this company.</div>';
+      const commitments = sayDo && Array.isArray(sayDo.commitments) ? sayDo.commitments : [];
+      document.getElementById('deskSayDoTimeline').innerHTML = commitments.length ? commitments.map(function (commitment) {{
+        return '<div class="k-well"><strong>' + escapeWorkOsHtml(commitment.statement) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(commitment.status || 'evaluating') + ' · ' + escapeWorkOsHtml(commitment.source_ref || 'source unavailable') + ' · as of ' + escapeWorkOsHtml(commitment.as_of || sayDo.as_of || 'unavailable') + '</div></div>';
+      }}).join('') : '<div class="k-well">Say/Do history is unavailable or has no governed commitments.</div>';
+      const transcripts = document.getElementById('deskTranscriptsQA');
+      if (transcripts) transcripts.innerHTML = desk.latest_earnings_readout
+        ? '<div class="k-well"><strong>' + escapeWorkOsHtml(desk.latest_earnings_readout.period_label || 'Latest earnings readout') + '</strong><div class="stat-subtext">Open the governed earnings artifact for sourced transcript evidence.</div></div>'
+        : '<div class="k-well">No governed transcript Q&amp;A projection is available.</div>';
+      const provenance = document.getElementById('deskProvenanceLinks');
+      if (provenance) provenance.innerHTML = desk.latest_brief
+        ? '<div class="k-well"><strong>Persisted research brief</strong><div class="stat-subtext">' + escapeWorkOsHtml(desk.latest_brief.report_date || 'date unavailable') + ' · ' + escapeWorkOsHtml(desk.latest_brief.coverage_role || 'unknown') + ' coverage</div></div>'
+        : '<div class="k-well">No persisted research artifact is indexed for provenance.</div>';
       const brief = desk.latest_brief || null;
-      document.getElementById('deskBriefDate').textContent = brief ? brief.report_date : '—';
-      document.getElementById('deskBriefStatus').textContent = brief ? (brief.reader_mode === 'shared_body' ? 'Shared reader ready' : 'Legacy standalone') : 'No indexed artifact';
       const briefButton = document.getElementById('workOsFullBriefButton');
       if (briefButton) {{
         briefButton.disabled = !brief;

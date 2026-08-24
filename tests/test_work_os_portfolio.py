@@ -23,6 +23,7 @@ from pipeline.dashboard_status import DashboardRow, TranscriptStatus
 from pipeline.research_cockpit import CockpitRow, PendingAlertRef
 from pipeline.work_os_earnings import EarningsReadoutSummary
 from pipeline.work_os_portfolio import build_work_os_portfolio
+from portfolio_risk_snapshot_store import RiskSnapshot
 
 
 def _available_allocation(
@@ -132,6 +133,54 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
     assert company.latest_earnings_readout.period_label == "Q2 · Jun 2026"
     assert company.earnings_route == "/api/peek/earnings-readout?ticker=NU&artifact_id=44"
     assert company.earnings_label == "Q2 · Jun 2026 readout →"
+    assert payload.asset_class_split.availability == "unavailable"
+    assert payload.asset_class_split.source == "instrument_registry"
+    assert payload.asset_class_split.unclassified_weight_pct == 17.5
+
+
+def test_portfolio_hydration_projects_only_provenanced_risk_snapshot_metrics() -> None:
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        LivePortfolio(available=True, api_url="http://tracker.test"),
+        _available_allocation(),
+        risk_snapshot=RiskSnapshot(
+            captured_at="2026-08-08T11:30:00",
+            metric_version="v1",
+            rebase_basis="observed",
+            window_start="2025-08-08",
+            window_end="2026-08-08",
+            benchmark="SPY",
+            beta=1.03,
+            sharpe=1.41,
+            tracking_error_annualized=0.038,
+            max_drawdown_pct=-9.6,
+        ),
+    )
+
+    risk = payload.risk_metric_summary
+    assert risk.availability == "available"
+    assert risk.source == "portfolio_risk_snapshot"
+    assert risk.captured_at == "2026-08-08T11:30:00"
+    assert risk.metric_version == "v1"
+    assert risk.rebase_basis == "observed"
+    assert risk.portfolio_beta == 1.03
+    assert risk.sharpe_ratio == 1.41
+    assert risk.tracking_error_annualized == 0.038
+    assert risk.max_drawdown_pct == -9.6
+
+
+def test_portfolio_hydration_marks_missing_risk_snapshot_unavailable() -> None:
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        LivePortfolio(available=True, api_url="http://tracker.test"),
+        _available_allocation(),
+    )
+
+    risk = payload.risk_metric_summary
+    assert risk.availability == "unavailable"
+    assert risk.source == "portfolio_risk_snapshot"
+    assert risk.portfolio_beta is None
+    assert risk.sharpe_ratio is None
 
 
 def test_portfolio_hydration_surfaces_readout_projection_failure() -> None:

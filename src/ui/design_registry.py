@@ -316,7 +316,12 @@ def validate_visual_emitter_manifest(entries: tuple[VisualEmitterEntry, ...]) ->
 SHAPE_ARCHETYPES = (
     ShapeArchetype(
         "macro-container",
-        (ShapeSignature(".k-card", "radius-card", "bw-thin solid border", "shadow-card"),),
+        (
+            ShapeSignature(".k-card", "radius-card", "bw-thin solid border", "shadow-card"),
+            ShapeSignature(".k-desk-hero", "radius-card", "bw-thin solid border", "shadow-card"),
+            ShapeSignature(".k-say-do-timeline", "radius-card", "bw-thin solid border", None),
+            ShapeSignature(".k-action-card", "radius-card", "bw-thin solid border", "shadow-card"),
+        ),
     ),
     ShapeArchetype("micro-inset", (ShapeSignature(".k-well", "radius", None, None),)),
     ShapeArchetype(
@@ -406,6 +411,7 @@ GRID_ARCHETYPES = (
             GridSignature(".card-grid-stat", "repeat(auto-fit, minmax(grid-card-sm, 1fr))"),
             GridSignature(".card-grid-risk", "repeat(auto-fit, minmax(grid-card-md, 1fr))"),
             GridSignature(".card-grid-action", "repeat(auto-fit, minmax(grid-card-lg, 1fr))"),
+            GridSignature(".k-matrix-grid", "repeat(auto-fit, minmax(grid-card-md, 1fr))"),
         ),
     ),
 )
@@ -1013,18 +1019,18 @@ MASTER_SOURCES = GLOBAL_MASTER_SOURCES | FAMILY_MASTER_SOURCES
 _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
     {
         "dashboard/_styles.py": "06bef447e15928290d39104bbf46e7741a77547aa46a7e766a3aceb388ec5b4a",  # pragma: allowlist secret
-        "design-system/src/styles/controls.css": "07008e3f577d92d3de28e72b8852651a208fff1c612c9640210cb6e80f31cf2b",  # pragma: allowlist secret
+        "design-system/src/styles/controls.css": "4a086f122923dc5ea35c588e370545e7a6cd600852e8d45bd4dce2033f3f9336",  # pragma: allowlist secret
         "design-system/src/tokens/tokens.css": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "74b499524634752191345da39ba30ec8eda4eac95f17030063eb1111dc46af68",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "8241af8be09f54d58d430febf0199fdbbdd0790c2289ea2153cd43128cf63bdc",  # pragma: allowlist secret
-        "pipeline/research_panel_styles.py": "0d2f83758209c93e1f3fc4e8571f53740cf78f10adda361e6f61076687c342a9",  # pragma: allowlist secret
+        "pipeline/research_panel_styles.py": "430015d0f97507f8d418d90199dd4a9db3217be2dec492a93c54bf13f41ece0f",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "d191da9e8b1e716097da19e014c2518404aff878601ba1c16df4073a5b4fa950",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
         "report/renderers/workspace_styles.py": "493583b93b400f4d775bc54f7541165ce6fbc776f486d86ba3fe77f4fdcb9e71",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
-        "ui/controls.py": "4cb401b247f239728513074e7b8ae2e421cf37ab003a8bea2c2e8427c6082c54",  # pragma: allowlist secret
+        "ui/controls.py": "5fc62b0e29a1d9202dc816efe2d4cef81ed7f9ee71a166f3c5ed6bfe2b69dc97",  # pragma: allowlist secret
         "ui/living_grid.py": "e95fb454ffbc17e2d248d48f9b5e7563ecd7383a063ad94e0b3ef9088dab4374",  # pragma: allowlist secret
         "ui/source_chip.py": "374338d4d1132239c3de1c91fb84f1214e87b57472f6c5df2c0582708792f141",  # pragma: allowlist secret
         "viewspec/render.py": "743c2211158fef8be8fc86530004b6dbed51c6f9c862743bf42c8b7d677fff11",  # pragma: allowlist secret
@@ -1044,7 +1050,7 @@ MASTER_GEOMETRY_CONTRACTS = tuple(
 _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
     {
         "advisor/sizing_intent_review_page.py": "441b8fb18ddaba95b98c58a4977006718b24ace5d19d11d9be742f14d32883f1",  # pragma: allowlist secret
-        "dashboard/_styles.py": "64b87f3359d0f751bc9a7928b9a4828af2aa8c365895d584306b133846fb3f47",  # pragma: allowlist secret
+        "dashboard/_styles.py": "124c663aa46bb419635e76850e7d0dc03f4749b008e6a5bfa1a972e525e68dba",  # pragma: allowlist secret
         "dashboard/feed.py": "11a36cf4d3d850906aa5bbec059ba7f7b9d132cb1398269ed4c0cf8f9fa5820a",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "6177205661002d8572d7b790e97f4e3bbf6b43d8d07589d37b774be632b9200b",  # pragma: allowlist secret
         "execution/comments_server_alert_routes.py": "d8d2e88171b61d42b5b2fb3a8317869ac6c575409b3e151cbbe41f62d5267a33",  # pragma: allowlist secret
@@ -1064,7 +1070,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "a4184d915f89580c2658c2349a84c9a4148276799f7da24ab25a70c3b58d5c65",  # pragma: allowlist secret
+        "pipeline/work_os_shell.py": "66eff74e610a540a248b0748e86bd738121df9b576c495627fc917ecdd3cb100",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "65f82d255c249213e51e3572a04594925ec497b16daae4705cceac4d02f8f53e",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret

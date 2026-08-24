@@ -163,6 +163,7 @@ from integrations.portfolio_offline_snapshot import (  # noqa: E402
 from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
 from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
+from llm.postprocess import strip_inline_markdown  # noqa: E402
 from log_redact import redact  # noqa: E402
 from logging_config import (  # noqa: E402
     configure_logging,
@@ -200,6 +201,7 @@ from pipeline.work_os_earnings import load_latest_earnings_readouts  # noqa: E40
 from pipeline.work_os_overview import render_overview_panel  # noqa: E402
 from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
+from portfolio_risk_snapshot_store import read_latest_snapshot  # noqa: E402
 from readme_updater import evidence_sha256  # noqa: E402
 from research.proposal_approval import (  # noqa: E402
     AskProposalDecisionV1,
@@ -1821,8 +1823,110 @@ def create_app(
             offline_snapshot=(
                 read_configured_offline_portfolio_snapshot() if not live.available else None
             ),
+            risk_snapshot=read_latest_snapshot(db_path=db_path),
         )
         response = app.json.response(payload.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/company/<ticker>/say-do", methods=["GET"])
+    def company_say_do_api(ticker: str):
+        """Generation 3 Company Desk Say/Do historical tracking endpoint."""
+        from get_company_say_do import load_company_say_do
+
+        data = load_company_say_do(db_path, ticker)
+        response = app.json.response(data.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/portfolio/risk-matrix", methods=["GET"])
+    def portfolio_risk_matrix_api():
+        """Generation 3 Performance & Risk cross-asset correlation and factor exposure."""
+        from get_portfolio_risk_matrix import load_portfolio_risk_matrix
+
+        data = load_portfolio_risk_matrix(repo_root)
+        response = app.json.response(data.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/work-os/open-loops", methods=["GET"])
+    def work_os_open_loops_api():
+        """Generation 3 Today Console aggregated open-loops priority queue."""
+        conn = get_read_db()
+        open_loops: list[dict[str, object]] = []
+
+        try:
+            cursor = conn.execute(
+                """
+                SELECT id, ticker, recommendation_kind, status, created_at, action_memo_md
+                FROM decisions
+                WHERE status IN ('draft', 'unconfirmed', 'review_requested')
+                ORDER BY created_at DESC LIMIT 10
+                """
+            )
+            for row in cursor.fetchall():
+                open_loops.append(
+                    {
+                        "id": int(row["id"]),
+                        "type": "decision_draft",
+                        "ticker": str(row["ticker"]).upper(),
+                        "title": f"Decision draft ({row['recommendation_kind']})",
+                        "detail": strip_inline_markdown(str(row["action_memo_md"] or ""))[:140],
+                        "urgency": "high",
+                        "created_at": str(row["created_at"] or ""),
+                    }
+                )
+        except sqlite3.Error:
+            pass
+
+        try:
+            cursor = conn.execute(
+                """
+                SELECT id, ticker, body, created_at
+                FROM analyst_notes
+                WHERE (status = 'triage' OR status IS NULL)
+                ORDER BY created_at DESC LIMIT 10
+                """
+            )
+            for row in cursor.fetchall():
+                open_loops.append(
+                    {
+                        "id": int(row["id"]),
+                        "type": "unmapped_note",
+                        "ticker": str(row["ticker"] or "GENERAL").upper(),
+                        "title": "Unmapped analyst thought",
+                        "detail": strip_inline_markdown(str(row["body"] or ""))[:140],
+                        "urgency": "medium",
+                        "created_at": str(row["created_at"] or ""),
+                    }
+                )
+        except sqlite3.Error:
+            pass
+
+        response = app.json.response(
+            {
+                "open_loops": open_loops,
+                "total_count": len(open_loops),
+                "as_of": datetime.now(UTC).isoformat(),
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/positioning/simulate", methods=["POST", "OPTIONS"])
+    def positioning_simulate_api():
+        """Generation 3 pre-trade portfolio impact simulator."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from simulate_trade_impact import SimulateTradeRequest, simulate_trade_impact
+
+        raw = cast("dict[str, object]", request.get_json(silent=True) or {})
+        try:
+            simulation = SimulateTradeRequest.model_validate(raw)
+        except ValidationError as exc:
+            return ({"error": str(exc)}, 400)
+        result = simulate_trade_impact(repo_root, simulation)
+        response = app.json.response(result.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response
 

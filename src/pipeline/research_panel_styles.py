@@ -272,14 +272,14 @@ RESEARCH_PANEL_STYLE = (
 .ledger-queues-sum::before { content: "\\25B8"; color: var(--muted); font-size: var(--fs-caption); }
 .ledger-queues[open] .ledger-queues-sum::before { content: "\\25BE"; }
 .ledger-queues-hint { font-size: var(--fs-caption); font-weight: 400; color: var(--muted); }
-.ledger-queues-count { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); }
+.ledger-queues-count { font-size: var(--fs-caption); font-weight: 600; color: var(--fg); }
 .ledger-queues-body { padding-top: var(--sp-2); }
 /* migrated src/pipeline/ledger_panel.py _ONMYMIND_STYLE */
 /* Reuses the panel's own micro-tag / warn-tag treatment (.ledger-chan,
    .ledger-needs — see _PANEL_STYLE) rather than a second copy of the same
    rule under a card-local name; only the accent ladder badge is genuinely
    new here. */
-.om-ladder { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
+.om-ladder { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .om-ladder:empty { display: none; }
 .om-actions { flex-wrap: wrap; }
 /* Backlink from a research item to its source note + the brief highlight the
@@ -301,10 +301,10 @@ RESEARCH_PANEL_STYLE = (
    capture, generated once at capture time and stored on the note. A quiet
    accent-bordered block under the captured thought — distinct from the thought
    itself, token-only. */
-.om-answer { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); font-size: var(--fs-caption); line-height: 1.55; color: var(--fg-soft); }
+.om-answer { margin-top: var(--sp-2); font-size: var(--fs-caption); line-height: 1.55; color: var(--fg-soft); }
 .om-answer > :first-child { margin-top: 0; }
 .om-answer > :last-child { margin-bottom: 0; }
-.om-answer-label { display: block; font-size: var(--fs-caption); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1); }
+.om-answer-label { display: block; font-size: var(--fs-caption); font-weight: 600; color: var(--fg); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1); }
 /* The answer is being generated on a background thread — an honest quiet
    in-progress state the poll swaps for the real answer when it lands. */
 .om-answer-pending { color: var(--muted); font-style: italic; }
@@ -320,7 +320,7 @@ RESEARCH_PANEL_STYLE = (
 /* The universal reply box (Phase B) — one input per card, routed by the
    reply-intent classifier; the receipt bubble is the acted-path acknowledgement. */
 .om-reply-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
-.om-chat-receipt { color: var(--accent); font-weight: 600; }
+.om-chat-receipt { color: var(--ok); font-weight: 600; }
 #onmymind-more { margin-top: var(--sp-2); }
 /* migrated src/pipeline/ledger_panel.py _PACKET_STYLE */
 .ledger-packet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
@@ -329,7 +329,7 @@ RESEARCH_PANEL_STYLE = (
 .pk-hint, .pk-payoff { font-size: var(--fs-caption); color: var(--muted); }
 .pk-payoff { flex-basis: 100%; }
 .pk-progress { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-2) 0; flex-wrap: wrap; }
-.pk-tally { color: var(--accent); font-weight: 600; }
+.pk-tally { color: var(--fg); font-weight: 600; }
 .pk-item > .ledger-musing, .pk-item > .ledger-stance { margin-bottom: 0; }
 .pk-class-header { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 var(--sp-1); }
 .pk-class-why { font-size: var(--fs-caption); color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: normal; margin-left: var(--sp-2); }

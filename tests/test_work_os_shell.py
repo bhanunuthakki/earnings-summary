@@ -531,7 +531,7 @@ def test_work_os_cards_use_canonical_density_and_type_roles_before_and_after_hyd
     assert '<h2 class="k-card-title" id="workOsBriefLibraryHeading">Brief Library</h2>' in html
     assert '<h3 class="k-card-title">' in html
     assert 'class="k-stat-cell"><div class="stat-heading">Owner posture</div>' in html
-    assert 'class="stat-number" id="deskOwnerState"' in html
+    assert 'class="stat-number" id="deskLivePrice"' in html
 
 
 def test_l1_card_titles_and_hydration_hooks_compose_the_registry_roles() -> None:
@@ -830,8 +830,8 @@ def test_company_desk_and_library_use_production_read_models_not_demo_facts() ->
     assert "workOsRenderBriefLibrary" in html
     assert html.count("async function workOsRenderCompanyDesk") == 1
     assert html.count("window.openWorkOsBriefReader = async function") == 1
-    assert 'id="deskOwnerState"' in html
-    assert 'id="deskModelState"' in html
+    assert 'id="deskLivePrice"' in html
+    assert 'id="deskValuationGap"' in html
     assert 'id="workOsBriefLibrary"' in html
     assert "Mexico deposits crossed" not in html
     assert "Structural Compounder in Latin American" not in html
@@ -942,8 +942,8 @@ def test_primary_work_os_cards_use_one_declared_composition_archetype() -> None:
     assert 'class="k-section-head"' in cockpit
     assert 'class="k-section-title"' in cockpit
     assert 'class="k-card k-card-action k-card-interactive"' in html
-    assert 'class="k-card k-card-section research-toolbar"' in company
-    assert 'class="k-card k-card-stat research-decision-band"' in company
+    assert 'class="k-card k-card-section k-desk-hero research-toolbar"' in company
+    assert 'class="desk-stats-strip"' in company
     assert company.count('class="k-card k-card-stack"><div class="stat-heading">') == 0
     assert 'class="company-picker-popover k-overlay k-card-stack"' in company
 
@@ -977,23 +977,44 @@ def test_design_directive_routes_product_behavior_to_owned_contracts() -> None:
 def test_company_desk_renders_governed_valuation_provenance() -> None:
     html = render_work_os_shell()
 
-    assert 'id="deskInputPrice"' in html
+    assert 'id="deskLivePrice"' in html
     assert 'id="deskFairValue"' in html
+    assert 'id="deskValuationGap"' in html
     assert "Weight unavailable" in html
     assert "position.price_as_of" in html
     assert "position.fair_value_as_of" in html
     assert "workOsMoney(position.price, position.currency)" in html
     assert "workOsMoney(position.fair_value, position.currency)" in html
-    assert "position.position_source" in html
-    assert "Portfolio Tracker snapshot" in html
-    assert "Portfolio Cockpit snapshot" not in html
+    assert "Governed valuation snapshot" in html
     assert "positionState === 'not_held' ? 'Not held' : 'Weight unavailable'" in html
-    assert "positionState === 'unavailable'" in html
-    assert "positionState === 'not_held' ? ' · not held' : ''" in html
     company_desk_runtime = html.split("async function workOsRenderCompanyDesk", 1)[1].split(
         "function workOsBriefFilterCompanies", 1
     )[0]
     assert "company.current_weight_pct" not in company_desk_runtime
+    for removed_id in (
+        "deskCoverageRole",
+        "deskDecisionBand",
+        "deskOwnerState",
+        "deskModelState",
+        "deskInputPrice",
+        "deskPositionSource",
+        "deskBriefDate",
+    ):
+        assert removed_id not in company_desk_runtime
+
+
+def test_company_desk_tabs_use_a_guarded_local_runtime() -> None:
+    html = render_work_os_shell()
+
+    assert 'onclick="switchDeskTab' not in html
+    assert "function workOsSwitchDeskTab(tab)" in html
+    assert "const workOsDeskTabs =" in html
+    assert "event.target.closest('[data-desk-tab]')" in html
+    assert "button.setAttribute('aria-selected', active ? 'true' : 'false')" in html
+    assert "panel.hidden = candidateId !== panelId" in html
+    assert 'role="tablist"' in html
+    assert html.count('role="tab"') == 4
+    assert html.count('role="tabpanel"') == 4
 
 
 def test_cockpit_availability_does_not_use_missing_as_of_as_offline() -> None:
