@@ -1423,9 +1423,18 @@ def _production_runtime(generated_at: datetime) -> str:
       document.getElementById('deskHeroPositionWeight').textContent = Number.isFinite(weight)
         ? workOsPercent(weight)
         : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
+      const trackerPositionSource = position.position_source === 'portfolio_tracker_api'
+        ? 'Portfolio Tracker snapshot'
+        : 'Portfolio Tracker';
+      document.getElementById('deskPositionSource').textContent = positionState === 'unavailable'
+        ? 'Tracker snapshot unavailable'
+        : trackerPositionSource + (position.position_as_of ? ' · as of ' + position.position_as_of : '') + (positionState === 'not_held' ? ' · not held' : '');
       const valuationSource = position.source ? String(position.source).replaceAll('_', ' ') : 'governed DCF snapshot';
       document.getElementById('deskLivePrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : 'Unavailable';
+      document.getElementById('deskInputPrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : '—';
+      document.getElementById('deskInputPriceSource').textContent = Number.isFinite(position.price) ? valuationSource + ' · as of ' + (position.price_as_of || 'date unavailable') : 'No governed input price';
       document.getElementById('deskFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
+      document.getElementById('deskFairValueSource').textContent = Number.isFinite(position.fair_value) ? valuationSource + ' · as of ' + (position.fair_value_as_of || 'date unavailable') : 'No governed fair value';
       document.getElementById('deskHeroFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
       const valuationGap = Number.isFinite(position.price) && Number.isFinite(position.fair_value) && position.price !== 0
         ? ((position.fair_value / position.price) - 1) * 100 : null;
@@ -1449,6 +1458,8 @@ def _production_runtime(generated_at: datetime) -> str:
         ? '<div class="k-well"><strong>Persisted research brief</strong><div class="stat-subtext">' + escapeWorkOsHtml(desk.latest_brief.report_date || 'date unavailable') + ' · ' + escapeWorkOsHtml(desk.latest_brief.coverage_role || 'unknown') + ' coverage</div></div>'
         : '<div class="k-well">No persisted research artifact is indexed for provenance.</div>';
       const brief = desk.latest_brief || null;
+      document.getElementById('deskBriefDate').textContent = brief ? brief.report_date : '—';
+      document.getElementById('deskBriefStatus').textContent = brief ? (brief.reader_mode === 'shared_body' ? 'Shared reader ready' : 'Legacy standalone') : 'No indexed artifact';
       const briefButton = document.getElementById('workOsFullBriefButton');
       if (briefButton) {{
         briefButton.disabled = !brief;

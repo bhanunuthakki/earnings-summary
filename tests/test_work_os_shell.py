@@ -871,6 +871,8 @@ def test_company_desk_condition_row_keeps_telemetry_rule_evidence_and_status_ton
 
 def test_company_desk_separates_current_thesis_risk_from_decision_conditions() -> None:
     html = render_work_os_shell()
+    desk = _screen_fragment(html, "screen-workspace")
+    desk_ids = re.findall(r'\bid="([^"]+)"', desk)
 
     assert 'id="deskDecisionBand" data-units="8"' in html
     assert 'id="deskDecisionRelationship"' in html
@@ -891,6 +893,7 @@ def test_company_desk_separates_current_thesis_risk_from_decision_conditions() -
     assert "No inferred values are shown." in html
     assert "deskThesisBriefDoorway" in html
     assert "Thesis evidence " in html
+    assert len(desk_ids) == len(set(desk_ids))
 
 
 def test_company_desk_evidence_controls_target_the_brief_thesis_and_exact_fact_anchor() -> None:
@@ -1037,16 +1040,11 @@ def test_company_desk_renders_governed_valuation_provenance() -> None:
         "function workOsBriefFilterCompanies", 1
     )[0]
     assert "company.current_weight_pct" not in company_desk_runtime
-    for removed_id in (
-        "deskCoverageRole",
-        "deskDecisionBand",
-        "deskOwnerState",
-        "deskModelState",
-        "deskInputPrice",
-        "deskPositionSource",
-        "deskBriefDate",
-    ):
-        assert removed_id not in company_desk_runtime
+    assert "position.position_source === 'portfolio_tracker_api'" in company_desk_runtime
+    assert "deskPositionSource" in company_desk_runtime
+    assert "deskInputPriceSource" in company_desk_runtime
+    assert "deskFairValueSource" in company_desk_runtime
+    assert "deskBriefStatus" in company_desk_runtime
 
 
 def test_company_desk_tabs_use_a_guarded_local_runtime() -> None:
