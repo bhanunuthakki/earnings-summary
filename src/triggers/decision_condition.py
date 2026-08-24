@@ -106,7 +106,7 @@ def _breach_is_fresh(cond: DecisionCondition, breach_period_end: datetime, now: 
     return age_days <= _LEGACY_FRESHNESS_DAYS
 
 
-def _condition_rule(decision_id: int, index: int, cond: DecisionCondition) -> BreakRule | None:
+def condition_to_rule(decision_id: int, index: int, cond: DecisionCondition) -> BreakRule | None:
     """A condition as a BreakRule, so evaluation IS the break-rule engine.
     None when the op/unit doesn't validate (corrupt stored JSON survives
     parse but not the Pydantic gate) — skipped, logged."""
@@ -197,7 +197,7 @@ class DecisionConditionTrigger:
                     continue
                 if cond.metric_source not in ("kpi", "financial"):
                     continue  # unresolved at extraction — display-only
-                rule = _condition_rule(decision.decision_id, index, cond)
+                rule = condition_to_rule(decision.decision_id, index, cond)
                 if rule is None:
                     continue
                 if cond.metric_source == "kpi":

@@ -845,6 +845,28 @@ def test_company_desk_and_library_use_production_read_models_not_demo_facts() ->
     assert "kind: 'question'" in html
     assert "desk.question_store_status === 'unavailable'" in html
     assert "question.origin" in html and "question.approval" in html
+    assert "condition.latest_value" in html
+    assert "condition.observation_period" in html
+    assert "condition.observation_unit || condition.unit" in html
+    assert "condition.prior_value" in html
+    assert "condition.observation_delta" in html
+    assert "No prior observation" in html
+    assert "condition.evidence_ref" in html
+    assert "condition.status || 'PENDING DATA'" in html
+
+
+def test_company_desk_condition_row_keeps_telemetry_rule_evidence_and_status_tone() -> None:
+    html = render_work_os_shell()
+    condition_row = html.split("const conditions =", 1)[1].split("const questions =", 1)[0]
+
+    assert "condition.latest_value" in condition_row
+    assert "condition.observation_period" in condition_row
+    assert "condition.prior_value" in condition_row
+    assert "condition.observation_delta" in condition_row
+    assert "condition.evidence_ref" in condition_row
+    assert "condition.operator" in condition_row and "condition.threshold" in condition_row
+    assert "workOsPillClass(status)" in condition_row
+    assert "PENDING DATA" in condition_row
 
 
 def test_earnings_peek_ignores_stale_requests_and_aborts_on_close() -> None:

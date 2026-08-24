@@ -1378,7 +1378,13 @@ def _production_runtime(generated_at: datetime) -> str:
       );
       const conditions = Array.isArray(desk.conditions) ? desk.conditions : [];
       document.getElementById('deskConditions').innerHTML = conditions.length ? conditions.map(function (condition) {{
-        return '<div class="k-well research-row" data-stable-id="' + escapeWorkOsHtml(condition.stable_id) + '"><div><strong>' + escapeWorkOsHtml(condition.metric) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(condition.note || 'Governed decision condition') + '</div></div><span class="k-chip k-chip-mono">' + escapeWorkOsHtml(condition.operator) + ' ' + escapeWorkOsHtml(condition.threshold) + ' ' + escapeWorkOsHtml(condition.unit) + '</span></div>';
+        const latest = Number.isFinite(condition.latest_value) ? String(condition.latest_value) + ' ' + String(condition.observation_unit || condition.unit || '') + ' · ' + String(condition.observation_period || 'period unavailable') : 'No observed value';
+        const prior = Number.isFinite(condition.prior_value)
+          ? 'Prior ' + String(condition.prior_value) + ' ' + String(condition.prior_observation_unit || condition.unit || '') + ' · ' + String(condition.prior_observation_period || 'period unavailable') + (Number.isFinite(condition.observation_delta) ? ' · ' + (condition.observation_delta >= 0 ? '+' : '') + String(condition.observation_delta) + ' (' + String(condition.observation_comparison || 'unavailable') + ')' : ' · comparison unavailable')
+          : 'No prior observation';
+        const detail = condition.status_detail || condition.note || 'Governed decision condition';
+        const status = String(condition.status || 'PENDING DATA');
+        return '<div class="k-well research-row" data-stable-id="' + escapeWorkOsHtml(condition.stable_id) + '"><div><strong>' + escapeWorkOsHtml(condition.metric) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(latest) + ' · ' + escapeWorkOsHtml(detail) + '</div><div class="stat-subtext">' + escapeWorkOsHtml(prior) + '</div><div class="stat-subtext">Evidence: ' + escapeWorkOsHtml(condition.evidence_ref || 'unavailable') + '</div></div><div><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span><div class="stat-subtext">' + escapeWorkOsHtml(condition.operator) + ' ' + escapeWorkOsHtml(condition.threshold) + ' ' + escapeWorkOsHtml(condition.unit) + (Number(condition.for_periods) > 1 ? ' · ' + escapeWorkOsHtml(condition.for_periods) + ' periods' : '') + '</div></div></div>';
       }}).join('') : '<div class="k-well">No governed conditions are attached to the current decision.</div>';
       const questions = Array.isArray(desk.open_questions) ? desk.open_questions : [];
       document.getElementById('deskQuestions').innerHTML = questions.length ? questions.map(function (question) {{
