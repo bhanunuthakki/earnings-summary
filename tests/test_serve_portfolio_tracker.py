@@ -89,34 +89,55 @@ def test_tracker_server_argv_uses_tracker_managed_python_and_exact_loopback_bind
 
 
 @pytest.mark.parametrize(
-    ("parent_pids", "supervisor_pid", "expected"),
+    ("process_snapshot", "supervisor_pid", "expected"),
     (
-        # Live Windows activation: listener -> redirectors -> launched cmd.exe.
-        ((17688, 24524, 2724, 17256, 10216), 10216, True),
-        ((17688, 24524, 9999, 0), 10216, False),
-        ((24524, 14648), 4321, False),
+        # Live Windows activation: listener -> Python redirectors -> Scheduler parent.
+        (
+            "\n".join(
+                (
+                    "17880|25888",
+                    "25888|10156",
+                    "10156|22732",
+                    "22732|856",
+                    "856|26104",
+                    "26104|14236",
+                    "14236|2564",
+                    "2564|1560",
+                    "1560|1424",
+                    "1424|1",
+                )
+            ),
+            1424,
+            True,
+        ),
+        ("17880|25888\n25888|9999\n9999|0", 1424, False),
+        ("17880|25888\n25888|17880", 4321, False),
     ),
 )
 def test_windows_exclusive_endpoint_proof_accepts_only_supervised_descendants(
     monkeypatch: pytest.MonkeyPatch,
-    parent_pids: tuple[int, ...],
+    process_snapshot: str,
     supervisor_pid: int,
     expected: bool,
 ) -> None:
-    """A venv redirector may own the listener below the launched Python PID."""
+    """One process-table snapshot proves a venv redirector chain or rejects it."""
 
     class _Result:
         def __init__(self, stdout: str, returncode: int = 0) -> None:
             self.stdout = stdout
             self.returncode = returncode
 
-    parent_values = iter(parent_pids)
+    powershell_calls = 0
+    powershell_command: list[str] | None = None
 
     def run(command: list[str], **_kwargs: object) -> _Result:
+        nonlocal powershell_calls, powershell_command
         if command[0] == "netstat":
-            return _Result("  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    14648\n")
+            return _Result("  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    17880\n")
         assert command[:3] == ["powershell.exe", "-NoProfile", "-NonInteractive"]
-        return _Result(f"{next(parent_values)}\n")
+        powershell_calls += 1
+        powershell_command = command
+        return _Result(process_snapshot)
 
     monkeypatch.setattr(runtime.os, "name", "nt")
     monkeypatch.setattr(runtime.subprocess, "run", run)
@@ -126,6 +147,39 @@ def test_windows_exclusive_endpoint_proof_accepts_only_supervised_descendants(
             "127.0.0.1", 8000, supervisor_pid, require_exclusive=True
         )
         is expected
+    )
+    assert powershell_calls == 1
+    assert powershell_command is not None
+    assert "Where-Object { [int]$_.ProcessId -gt 0 }" in powershell_command[-1]
+
+
+@pytest.mark.parametrize(
+    ("snapshot_stdout", "returncode"),
+    (
+        ("17880|25888\nnot-a-row", 0),
+        ("17880|25888\n17880|9999", 0),
+        ("17880|not-a-pid", 0),
+        ("", 1),
+    ),
+)
+def test_windows_exclusive_endpoint_proof_fails_closed_for_invalid_process_snapshot(
+    monkeypatch: pytest.MonkeyPatch, snapshot_stdout: str, returncode: int
+) -> None:
+    class _Result:
+        def __init__(self, stdout: str, result_code: int = 0) -> None:
+            self.stdout = stdout
+            self.returncode = result_code
+
+    def run(command: list[str], **_kwargs: object) -> _Result:
+        if command[0] == "netstat":
+            return _Result("  TCP    127.0.0.1:8000    0.0.0.0:0    LISTENING    17880\n")
+        return _Result(snapshot_stdout, returncode)
+
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    assert (
+        runtime.endpoint_owner_matches_pid("127.0.0.1", 8000, 1424, require_exclusive=True) is None
     )
 
 

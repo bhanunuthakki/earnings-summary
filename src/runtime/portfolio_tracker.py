@@ -136,6 +136,8 @@ def derive_daily_refresh_idempotency_key(recorded_at: datetime) -> str:
 
 
 ProcessLiveness = Literal["alive", "dead", "unknown"]
+WINDOWS_PROCESS_TREE_TIMEOUT_SECONDS = 2.0
+MAX_WINDOWS_PROCESS_SNAPSHOT_ROWS = 4_096
 
 
 def _windows_last_error() -> int | None:
@@ -293,14 +295,23 @@ def endpoint_owner_matches_pid(
     )
 
 
-def _windows_pid_is_descendant_of(child_pid: int, ancestor_pid: int) -> bool:
-    """Return true only when each observed parent leads from child to ancestor.
+def _windows_pid_is_descendant_of(child_pid: int, ancestor_pid: int) -> bool | None:
+    """Prove one bounded descendant path from a single Windows process snapshot.
 
-    Windows virtual-environment redirectors can leave the listening interpreter
-    below the ``Popen`` launcher. This bounded parent walk preserves ownership
-    without allowing a sibling or independently launched loopback server.
+    A managed virtual environment can introduce several short-lived redirector
+    processes between ``Popen.pid`` and the interpreter that owns the socket.
+    Querying one parent at a time launches a new PowerShell process for every
+    hop, which can exhaust the startup deadline despite a healthy tracker. A
+    single snapshot makes the proof atomic enough for this local observation,
+    bounded, and still rejects siblings, cycles, missing rows, and unknown
+    process state.
     """
 
+    if child_pid == ancestor_pid:
+        return True
+    parents = _windows_process_parent_snapshot()
+    if parents is None:
+        return None
     current_pid = child_pid
     seen: set[int] = set()
     for _ in range(32):
@@ -309,15 +320,20 @@ def _windows_pid_is_descendant_of(child_pid: int, ancestor_pid: int) -> bool:
         if current_pid in seen:
             return False
         seen.add(current_pid)
-        parent_pid = _windows_parent_pid(current_pid)
+        parent_pid = parents.get(current_pid)
         if parent_pid is None or parent_pid <= 0:
             return False
         current_pid = parent_pid
     return False
 
 
-def _windows_parent_pid(pid: int) -> int | None:
-    """Read one Windows process parent PID, returning unknown evidence as ``None``."""
+def _windows_process_parent_snapshot() -> dict[int, int] | None:
+    """Return one validated Windows PID-to-parent snapshot or unknown evidence.
+
+    The raw process table is intentionally parsed as a closed ``pid|parent``
+    format. A partial, duplicate, oversized, or malformed table cannot prove
+    scheduler ownership and therefore never authorizes a listener claim.
+    """
 
     try:
         result = subprocess.run(
@@ -327,29 +343,40 @@ def _windows_parent_pid(pid: int) -> int | None:
                 "-NonInteractive",
                 "-Command",
                 (
-                    "$process=Get-CimInstance -ClassName Win32_Process "
-                    f"-Filter 'ProcessId={pid}' -ErrorAction Stop;"
-                    "if($null -eq $process){exit 1};"
-                    "[Console]::WriteLine([int]$process.ParentProcessId)"
+                    "$ErrorActionPreference='Stop';"
+                    "Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | "
+                    "Where-Object { [int]$_.ProcessId -gt 0 } | "
+                    "ForEach-Object { "
+                    "[Console]::WriteLine(('{0}|{1}' -f "
+                    "[int]$_.ProcessId,[int]$_.ParentProcessId))"
+                    "}"
                 ),
             ],
             capture_output=True,
             text=True,
-            timeout=1.0,
+            timeout=WINDOWS_PROCESS_TREE_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    if result.returncode != 0:
+    if getattr(result, "returncode", None) != 0:
         return None
     values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if len(values) != 1:
+    if not values or len(values) > MAX_WINDOWS_PROCESS_SNAPSHOT_ROWS:
         return None
-    try:
-        parent_pid = int(values[0])
-    except ValueError:
-        return None
-    return parent_pid if parent_pid >= 0 else None
+    parents: dict[int, int] = {}
+    for value in values:
+        fields = value.split("|")
+        if len(fields) != 2:
+            return None
+        try:
+            process_pid, parent_pid = (int(field) for field in fields)
+        except ValueError:
+            return None
+        if process_pid <= 0 or parent_pid < 0 or process_pid in parents:
+            return None
+        parents[process_pid] = parent_pid
+    return parents
 
 
 class AtomicFileLease:
