@@ -467,6 +467,7 @@ def render_portfolio_record_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
     Triggers ladder sit as side-by-side tiles."""
     from pipeline.advisor_memos_panel import render_advisor_memos_panel
     from pipeline.allocation_decisions_panel import render_allocation_decisions_panel
+    from pipeline.journal_panel import render_journal_panel
 
     sections: list[ConsoleSection] = [
         ("brief", "Read", lambda: _record_brief(db_path)),
@@ -474,6 +475,16 @@ def render_portfolio_record_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
             "decisions",
             "Decisions",
             lambda: render_allocation_decisions_panel(db_path, user_id=user_id),
+        ),
+        (
+            "research-items",
+            "Research Items",
+            lambda: render_journal_panel(
+                db_path,
+                user_id=user_id,
+                embedded=True,
+                research_items_only=True,
+            ),
         ),
         ("memos", "Memos", lambda: render_advisor_memos_panel(db_path, user_id=user_id)),
         ("triggers", "Triggers", lambda: _render_triggers(db_path)),

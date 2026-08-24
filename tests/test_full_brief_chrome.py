@@ -71,6 +71,17 @@ def test_brief_reader_shell_and_decision_band_markup() -> None:
     assert "—" in html
 
 
+def test_full_brief_has_a_live_research_items_band_outside_the_persisted_body() -> None:
+    html = render_brief_reader_shell()
+    assert 'id="workOsBriefResearchItemsMount"' in html
+    assert html.index("workOsBriefResearchItemsMount") < html.index("workOsBriefReaderBody")
+
+    shell = render_work_os_shell()
+    assert "function workOsLoadBriefResearchItems(ticker)" in shell
+    assert "items=1&band=brief&ticker=" in shell
+    assert "void workOsLoadBriefResearchItems(artifact.ticker)" in shell
+
+
 def test_work_os_shell_css_decision_band_rules() -> None:
     """Work OS shell CSS must define auto height and zero overflow for .work-os-reader-decision."""
     shell_html = render_work_os_shell()

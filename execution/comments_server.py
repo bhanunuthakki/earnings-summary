@@ -2480,12 +2480,21 @@ def create_app(
                 render_journal_list,
                 render_journal_panel,
                 render_reconciliation_list,
+                render_research_items_band,
             )
 
             user_id = DEFAULT_USER_ID
             j_ticker = (request.args.get("ticker") or "").strip().upper() or None
             j_kind = (request.args.get("kind") or "").strip() or None
             j_status = (request.args.get("status") or "open").strip() or "open"
+            research_items_only = request.args.get("items") == "1"
+            if request.args.get("band") == "brief":
+                if not research_items_only or j_ticker is None:
+                    abort(400)
+                return Response(
+                    render_research_items_band(db_path, user_id=user_id, ticker=j_ticker),
+                    mimetype="text/html",
+                )
             if request.args.get("fragment") == "reconcile":
                 return Response(
                     render_reconciliation_list(db_path, user_id=user_id, ticker=j_ticker),
@@ -2497,7 +2506,14 @@ def create_app(
                 else render_journal_panel
             )
             return Response(
-                renderer(db_path, user_id=user_id, ticker=j_ticker, kind=j_kind, status=j_status),
+                renderer(
+                    db_path,
+                    user_id=user_id,
+                    ticker=j_ticker,
+                    kind=j_kind,
+                    status=j_status,
+                    research_items_only=research_items_only,
+                ),
                 mimetype="text/html",
             )
 
