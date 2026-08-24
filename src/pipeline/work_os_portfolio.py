@@ -20,6 +20,7 @@ from integrations.portfolio_allocation import (
     PortfolioAllocationProjection,
     unavailable_portfolio_allocation,
 )
+from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.research_cockpit import CockpitRow, PendingAlertRef
 from pipeline.work_os_earnings import EarningsReadoutSummary
@@ -91,7 +92,7 @@ class WorkOsPortfolioHydration(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: Literal["ok", "degraded"]
-    tracker_state: Literal["current", "stale", "partial", "unavailable"]
+    tracker_state: Literal["current", "stale", "partial", "unavailable", "offline_snapshot"]
     tracker_detail: str
     generated_at: str
     as_of: str | None = None
@@ -254,12 +255,17 @@ def build_work_os_portfolio(
     *,
     latest_readouts: Mapping[str, EarningsReadoutSummary] | None = None,
     readout_warnings: Sequence[str] = (),
+    offline_snapshot: OfflinePortfolioSnapshot | None = None,
     generated_at: datetime | None = None,
 ) -> WorkOsPortfolioHydration:
     """Join research portfolio rows to optional current tracker positions."""
 
     built_at = (generated_at or datetime.now(UTC)).astimezone(UTC)
-    positions = _live_by_ticker(live)
+    snapshot_active = not live.available and offline_snapshot is not None
+    portfolio_source = (
+        offline_snapshot.portfolio if offline_snapshot is not None and snapshot_active else live
+    )
+    positions = _live_by_ticker(portfolio_source)
     readouts = latest_readouts or {}
     companies = [
         _company(
@@ -271,13 +277,19 @@ def build_work_os_portfolio(
     ]
     actions = [action for row in rows if (action := _action(row)) is not None][:3]
     tracker_warnings: list[str] = list(live.envelope_warnings)
+    if snapshot_active:
+        tracker_warnings.extend(portfolio_source.envelope_warnings)
     if not live.available:
         tracker_warnings.append("portfolio_tracker_unavailable")
     elif live.is_stale:
         tracker_warnings.append("portfolio_tracker_stale")
     if live.is_partial:
         tracker_warnings.append("portfolio_tracker_partial")
-    if live.as_of and allocation.as_of and live.as_of != allocation.as_of.isoformat():
+    if (
+        portfolio_source.as_of
+        and allocation.as_of
+        and portfolio_source.as_of != allocation.as_of.isoformat()
+    ):
         allocation = unavailable_portfolio_allocation("snapshot_date_mismatch")
     allocation_warnings: list[str] = []
     if allocation.state == "incomplete":
@@ -289,8 +301,10 @@ def build_work_os_portfolio(
         tracker_warnings,
         allocation_warnings,
     )
-    tracker_state: Literal["current", "stale", "partial", "unavailable"]
-    if not live.available:
+    tracker_state: Literal["current", "stale", "partial", "unavailable", "offline_snapshot"]
+    if snapshot_active:
+        tracker_state = "offline_snapshot"
+    elif not live.available:
         tracker_state = "unavailable"
     elif live.is_stale:
         tracker_state = "stale"
@@ -298,7 +312,9 @@ def build_work_os_portfolio(
         tracker_state = "partial"
     else:
         tracker_state = "current"
-    if tracker_state == "unavailable":
+    if tracker_state == "offline_snapshot":
+        tracker_detail = f"Offline snapshot · {portfolio_source.as_of}"
+    elif tracker_state == "unavailable":
         tracker_detail = "Tracker unavailable · research data only"
     elif live.as_of:
         tracker_detail = f"Tracker connected · {tracker_state} · As of {live.as_of}"
@@ -319,8 +335,10 @@ def build_work_os_portfolio(
         tracker_state=tracker_state,
         tracker_detail=tracker_detail,
         generated_at=built_at.isoformat().replace("+00:00", "Z"),
-        as_of=live.as_of,
-        total_market_value=live.total_market_value if live.available else None,
+        as_of=portfolio_source.as_of if snapshot_active else live.as_of,
+        total_market_value=(
+            portfolio_source.total_market_value if portfolio_source.available else None
+        ),
         allocation=allocation,
         companies=companies,
         earnings_readouts=sorted(

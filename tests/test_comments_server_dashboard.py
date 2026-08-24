@@ -29,6 +29,7 @@ from integrations.portfolio_allocation import (  # noqa: E402
     PortfolioAllocationReconciliation,
     unavailable_portfolio_allocation,
 )
+from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot  # noqa: E402
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition  # noqa: E402
 
 
@@ -395,6 +396,44 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
     assert [row["ticker"] for row in payload["companies"]] == ["NU"]
     assert payload["companies"][0]["current_weight_pct"] == 50.0
     assert "MELI" not in response.get_data(as_text=True)
+
+
+def test_work_os_portfolio_api_uses_governed_snapshot_only_after_tracker_failure(
+    app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = OfflinePortfolioSnapshot(
+        source_identity="fixture:sha256:" + "a" * 64,
+        as_of="2026-08-08",
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="snapshot://governed-local",
+            total_market_value=250_000.0,
+            as_of="2026-08-08",
+            positions=[LivePosition("NU", "Nubank", 100.0, 125_000.0, 90_000.0, 35_000.0, 50.0)],
+            envelope_warnings=["portfolio_offline_snapshot"],
+        ),
+    )
+    monkeypatch.setattr(
+        comments_server,
+        "fetch_live_portfolio",
+        lambda: LivePortfolio(available=False, api_url="http://tracker.test", error="account 1234"),
+    )
+    monkeypatch.setattr(comments_server, "fetch_portfolio_allocation", _available_allocation)
+    monkeypatch.setattr(
+        comments_server,
+        "read_configured_offline_portfolio_snapshot",
+        lambda: snapshot,
+    )
+
+    payload = (
+        comments_server.create_app(app_repo).test_client().get("/api/work-os/portfolio").get_json()
+    )
+
+    assert payload["tracker_state"] == "offline_snapshot"
+    assert payload["tracker_detail"] == "Offline snapshot · 2026-08-08"
+    assert payload["total_market_value"] == 250_000.0
+    assert payload["companies"][0]["current_weight_pct"] == 50.0
+    assert "account 1234" not in str(payload)
 
 
 def test_work_os_portfolio_api_serializes_single_alert_identity(

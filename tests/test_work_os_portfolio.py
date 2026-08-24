@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -15,6 +17,7 @@ from integrations.portfolio_allocation import (
     PortfolioAllocationReconciliation,
     unavailable_portfolio_allocation,
 )
+from integrations.portfolio_offline_snapshot import read_configured_offline_portfolio_snapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.dashboard_status import DashboardRow, TranscriptStatus
 from pipeline.research_cockpit import CockpitRow, PendingAlertRef
@@ -223,6 +226,80 @@ def test_portfolio_hydration_fails_closed_when_tracker_is_offline() -> None:
     assert payload.companies[0].ticker == "BKNG"
     assert payload.companies[0].current_weight_pct is None
     assert "internal detail" not in payload.model_dump_json()
+
+
+def _write_governed_snapshot(path: Path) -> None:
+    fixtures = Path(__file__).parent / "fixtures" / "tracker_v1"
+    path.write_text(
+        json.dumps(
+            {
+                "source_identity": "test-governed-local-snapshot",
+                "health": json.loads((fixtures / "health.json").read_text(encoding="utf-8")),
+                "portfolio_snapshot": json.loads(
+                    (fixtures / "portfolio-snapshot.json").read_text(encoding="utf-8")
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_portfolio_hydration_uses_valid_offline_snapshot_only_after_live_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot_path = tmp_path / "governed-tracker-snapshot.json"
+    _write_governed_snapshot(snapshot_path)
+    before = snapshot_path.read_bytes()
+    monkeypatch.setenv("PORTFOLIO_TRACKER_SNAPSHOT_PATH", str(snapshot_path))
+
+    snapshot = read_configured_offline_portfolio_snapshot()
+    assert snapshot is not None
+    assert snapshot.as_of == "2026-07-22"
+    assert snapshot.source_identity.startswith("test-governed-local-snapshot:sha256:")
+    assert snapshot_path.read_bytes() == before  # adapter has no writer path
+
+    live_payload = build_work_os_portfolio(
+        [_row("AAAA", name="Snapshot Company")],
+        LivePortfolio(available=True, api_url="http://tracker.test", as_of="2026-08-08"),
+        _available_allocation(as_of=date(2026, 8, 8)),
+        offline_snapshot=snapshot,
+    )
+    assert live_payload.tracker_state == "current"
+    assert "Offline snapshot" not in live_payload.tracker_detail
+
+    unavailable_payload = build_work_os_portfolio(
+        [_row("AAAA", name="Snapshot Company")],
+        LivePortfolio(available=False, api_url="http://tracker.test", error="account 1234"),
+        _available_allocation(),
+        offline_snapshot=snapshot,
+    )
+    assert unavailable_payload.tracker_state == "offline_snapshot"
+    assert unavailable_payload.tracker_detail == "Offline snapshot · 2026-07-22"
+    assert unavailable_payload.total_market_value == pytest.approx(20000.0)
+    assert unavailable_payload.companies[0].current_weight_pct == pytest.approx(66.0)
+    assert unavailable_payload.status == "degraded"
+    assert "portfolio_offline_snapshot" in unavailable_payload.warnings
+    assert "account 1234" not in unavailable_payload.model_dump_json()
+
+
+def test_portfolio_hydration_rejects_invalid_snapshot_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot_path = tmp_path / "invalid-governed-tracker-snapshot.json"
+    snapshot_path.write_text('{"source_identity":"untrusted"}', encoding="utf-8")
+    monkeypatch.setenv("PORTFOLIO_TRACKER_SNAPSHOT_PATH", str(snapshot_path))
+
+    assert read_configured_offline_portfolio_snapshot() is None
+    payload = build_work_os_portfolio(
+        [_row("NU", name="Nu Holdings")],
+        LivePortfolio(
+            available=False, api_url="http://tracker.test", error="secret transport detail"
+        ),
+        _available_allocation(),
+    )
+    assert payload.tracker_state == "unavailable"
+    assert payload.tracker_detail == "Tracker unavailable · research data only"
+    assert "secret transport detail" not in payload.model_dump_json()
 
 
 @pytest.mark.parametrize(

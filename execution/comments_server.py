@@ -153,6 +153,9 @@ from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Job, Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
 from integrations.portfolio_allocation import fetch_portfolio_allocation  # noqa: E402
+from integrations.portfolio_offline_snapshot import (  # noqa: E402
+    read_configured_offline_portfolio_snapshot,
+)
 from integrations.portfolio_tracker_client import fetch_live_portfolio  # noqa: E402
 from integrations.portfolio_tracker_v1 import TrackerV1Client  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
@@ -1804,12 +1807,16 @@ def create_app(
             list(coverage_roles),
             coverage_roles=coverage_roles,
         )
+        live = fetch_live_portfolio()
         payload = build_work_os_portfolio(
             rows,
-            fetch_live_portfolio(),
+            live,
             fetch_portfolio_allocation(),
             latest_readouts=readout_projection.readouts,
             readout_warnings=readout_projection.warnings,
+            offline_snapshot=(
+                read_configured_offline_portfolio_snapshot() if not live.available else None
+            ),
         )
         response = app.json.response(payload.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
