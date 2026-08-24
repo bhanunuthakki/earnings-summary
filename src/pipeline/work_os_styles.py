@@ -149,6 +149,8 @@ WORK_OS_COPILOT_CSS = """
   inset-inline-end: calc(var(--sp-4) + env(safe-area-inset-right, 0));
   inset-block-end: calc(var(--sp-4) + env(safe-area-inset-bottom, 0));
   z-index: 230;
+  gap: var(--sp-1);
+  min-block-size: var(--icon-button-size);
   box-shadow: var(--shadow-pop);
   transition: opacity var(--transition);
 }

@@ -13,9 +13,15 @@ WORK_OS_COPILOT_CSS = WORK_OS_COPILOT_CSS_MASTER
 
 
 _WORK_OS_COPILOT_HTML = """
-<button class="work-os-copilot-launcher k-btn k-btn-quiet k-icon-btn"
+<button class="work-os-copilot-launcher k-btn k-btn-quiet"
   id="workOsCopilotLauncher" type="button" aria-label="Open Copilot"
-  aria-controls="workOsCopilot" aria-expanded="false">__ASK_ICON__</button>
+  aria-controls="workOsCopilot" aria-expanded="false" data-copilot-dock-state="idle">__ASK_ICON__
+  <span class="k-chip k-chip-mono k-chip-accent" id="workOsCopilotLauncherPillStreaming" hidden
+    aria-live="polite" aria-atomic="true">Researching</span>
+  <span class="k-chip k-chip-mono k-chip-ok" id="workOsCopilotLauncherPillComplete" hidden
+    aria-live="polite" aria-atomic="true">Response ready</span>
+  <span class="k-chip k-chip-mono k-chip-bad" id="workOsCopilotLauncherPillError" hidden
+    aria-live="polite" aria-atomic="true">Needs attention</span></button>
 <section class="work-os-copilot" id="workOsCopilot" data-mode="canvas" role="dialog"
   aria-modal="true" aria-hidden="true" aria-labelledby="workOsCopilotTitle" hidden>
   <aside class="work-os-copilot-history" aria-label="Conversation history">
@@ -97,6 +103,11 @@ WORK_OS_COPILOT_JS = r"""
   root.dataset.controllerReady = 'true';
 
   var launcher = document.getElementById('workOsCopilotLauncher');
+  var launcherPills = {
+    streaming: document.getElementById('workOsCopilotLauncherPillStreaming'),
+    complete: document.getElementById('workOsCopilotLauncherPillComplete'),
+    error: document.getElementById('workOsCopilotLauncherPillError')
+  };
   var fullscreen = document.getElementById('workOsCopilotFullscreen');
   var historyNode = document.getElementById('workOsCopilotHistory');
   var historySearch = document.getElementById('workOsCopilotHistorySearch');
@@ -127,6 +138,7 @@ WORK_OS_COPILOT_JS = r"""
     onOpen: function () {
       root.setAttribute('aria-hidden', 'false');
       launcher.setAttribute('aria-expanded', 'true');
+      if (launcher.dataset.copilotDockState === 'complete') setCopilotDockState('idle');
       loadCopilotSessions();
       window.setTimeout(function () { input.focus(); }, 0);
     },
@@ -147,6 +159,21 @@ WORK_OS_COPILOT_JS = r"""
     var node = document.createElement('span');
     node.textContent = String(value == null ? '' : value);
     return node.innerHTML;
+  }
+
+  function setCopilotDockState(nextState) {
+    var states = {
+      idle: {label: 'Open Copilot'},
+      streaming: {label: 'Open Copilot - researching'},
+      complete: {label: 'Open Copilot - response ready'},
+      error: {label: 'Open Copilot - response needs attention'}
+    };
+    var state = states[nextState] || states.idle;
+    launcher.dataset.copilotDockState = nextState in states ? nextState : 'idle';
+    launcher.setAttribute('aria-label', state.label);
+    Object.keys(launcherPills).forEach(function (name) {
+      launcherPills[name].hidden = name !== launcher.dataset.copilotDockState;
+    });
   }
 
   function contextFor(session) {
@@ -1058,6 +1085,8 @@ WORK_OS_COPILOT_JS = r"""
     });
     status.textContent = state.error ? 'Copilot request failed' :
       (state.proposalErrors.length ? 'Grounded response complete with proposal warning' : 'Grounded response complete');
+    if (copilotOverlay.isOpen()) setCopilotDockState('idle');
+    else setCopilotDockState(state.error ? 'error' : 'complete');
     loadCopilotSessions();
   }
 
@@ -1105,6 +1134,7 @@ WORK_OS_COPILOT_JS = r"""
     if (busy || !query) return;
     busy = true;
     send.disabled = true;
+    setCopilotDockState('streaming');
     var oldEmpty = thread.querySelector('.k-well[role="status"]');
     if (oldEmpty) oldEmpty.remove();
     appendTurn('user', query);

@@ -387,7 +387,7 @@ def test_copilot_has_resilient_states_and_keyboard_mobile_contracts() -> None:
 def test_copilot_launcher_is_calm_fixed_and_reports_workspace_state() -> None:
     html = render_work_os_copilot()
     assert html.count('id="workOsCopilotLauncher"') == 1
-    assert 'class="work-os-copilot-launcher k-btn k-btn-quiet k-icon-btn"' in html
+    assert 'class="work-os-copilot-launcher k-btn k-btn-quiet"' in html
     assert 'aria-controls="workOsCopilot"' in html
     assert 'aria-expanded="false"' in html
     assert 'aria-label="Open Copilot"' in html
@@ -410,6 +410,26 @@ def test_copilot_minimize_restore_preserves_live_workspace_state() -> None:
     assert "input.value = ''" not in close_handler
     assert "thread.innerHTML" not in close_handler
     assert "thread.scrollTop" not in close_handler
+
+
+def test_copilot_minimized_dock_reports_live_turn_state_without_navigation() -> None:
+    html = render_work_os_copilot()
+
+    assert 'id="workOsCopilotLauncherPillStreaming"' in html
+    assert 'id="workOsCopilotLauncherPillComplete"' in html
+    assert 'id="workOsCopilotLauncherPillError"' in html
+    assert 'data-copilot-dock-state="idle"' in html
+    assert "function setCopilotDockState(nextState)" in html
+    assert "'streaming'" in html
+    assert "'complete'" in html
+    assert "'error'" in html
+    assert "setCopilotDockState('streaming')" in html
+    assert "setCopilotDockState(state.error ? 'error' : 'complete')" in html
+    assert "if (copilotOverlay.isOpen()) setCopilotDockState('idle');" in html
+    assert "history.pushState" not in html
+    assert "history.replaceState" not in html
+    assert "window.location.hash =" not in html
+    assert "workOsActiveTicker =" not in html
 
 
 def test_copilot_company_doorway_detaches_an_incompatible_session() -> None:
