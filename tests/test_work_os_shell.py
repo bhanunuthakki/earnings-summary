@@ -409,6 +409,59 @@ def test_work_os_transient_history_preserves_only_existing_origin_and_focus_stat
     assert "window.openDrillDrawer(transient.drawerType, { fromHistory: true });" in html
 
 
+def test_work_os_routed_peeks_have_one_safe_full_page_host_and_deep_link_contract() -> None:
+    """Only registered read-only content routes can escape the compact peek."""
+
+    html = render_work_os_shell()
+
+    assert 'id="workOsFullPageDetail"' in html
+    assert 'id="workOsPeekOpenFullPage"' in html
+    assert 'id="workOsFullPageDetailBack"' in html
+    assert "const WORK_OS_FULL_PAGE_PEEK_PATHS" in html
+    assert "earnings-prep|earnings-readout" in html
+    assert "new RegExp('^/source/[0-9]+$')" in html
+    assert "function workOsCanonicalDetailRoute(route)" in html
+    assert "function workOsOpenPeekFullPage(route, title, options)" in html
+    assert "work_os_detail_origin" in html
+    assert "window.history.pushState" in html
+    assert "function workOsClosePeekFullPage()" in html
+    assert "surface: 'screen-cockpit'" in html
+    assert "window.matchMedia('(max-width: 47.5rem)').matches" in html
+    assert (
+        "originalOpenPeekDrawer(refKey)"
+        not in html.split("function workOsOpenPeekFullPage(route, title, options)", 1)[1].split(
+            "function workOsAbortPeekRequest", 1
+        )[0]
+    )
+
+
+def test_work_os_full_brief_and_threshold_return_contracts_are_routed() -> None:
+    html = render_work_os_shell()
+
+    assert "function workOsBriefUrl(ticker, origin, focusId)" in html
+    assert "work_os_brief" in html
+    assert "workOsBriefReader" in html
+    assert "window.openWorkOsBriefReader(briefTicker, { fromHistory: true })" in html
+    assert "if (briefReaderOverlay) briefReaderOverlay.close();" in html
+    assert "function workOsOpenThresholdReview(ticker)" in html
+    assert "'/advisor/sizing-intents/' + encodeURIComponent(safeTicker)" in html
+    assert "url.searchParams.set('work_os_origin'" in html
+    assert "workOsOpenThresholdReview(node.dataset.workOsThresholds)" in html
+
+
+def test_work_os_full_page_detail_reuses_known_content_routes_and_source_fragment_mode() -> None:
+    html = render_work_os_shell()
+    detail_runtime = html.split("function workOsCanonicalDetailRoute(route)", 1)[1].split(
+        "async function workOsOpenPeekRoute", 1
+    )[0]
+
+    assert "parsed.pathname.startsWith('/source/')" in detail_runtime
+    assert "parsed.searchParams.set('fragment', '1')" in detail_runtime
+    assert "headers: { Accept: 'text/html' }" in detail_runtime
+    assert "This persisted research detail is unavailable." in detail_runtime
+    assert "workOsDecodeDetailOrigin(params.get('work_os_detail_origin'))" in html
+
+
 def test_work_os_shell_has_one_search_ask_entry_and_accessible_transients() -> None:
     html = render_work_os_shell()
     assert html.count("Search / Ask") == 1

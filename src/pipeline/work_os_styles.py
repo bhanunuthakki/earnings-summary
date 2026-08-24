@@ -48,6 +48,11 @@ a.k-stat-cell[data-work-os-stat-key]:hover { color: var(--fg); background: var(-
 .work-os-reader-group-sections { display: flex; flex-direction: column; gap: var(--sp-half); padding-inline-start: var(--sp-3); }
 .work-os-reader-section-button { inline-size: 100%; justify-content: flex-start; }
 .work-os-reader-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.work-os-detail-page { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; padding: var(--sp-4); background: var(--bg); overflow: hidden; }
+.work-os-detail-page[hidden] { display: none !important; }
+.work-os-detail-page-header { position: sticky; inset-block-start: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); padding-bottom: var(--sp-3); border-bottom: var(--bw-thin) solid var(--border); background: var(--bg); }
+.work-os-detail-page-title { min-width: 0; overflow-wrap: anywhere; }
+.work-os-detail-page-body { flex: 1 1 auto; min-height: 0; overflow: auto; max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; }
 .work-os-company-desk { display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }
 .work-os-company-toolbar { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
 .work-os-company-picker { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
@@ -103,6 +108,9 @@ a.k-stat-cell[data-work-os-stat-key]:hover { color: var(--fg); background: var(-
   #screen-brief-library .research-actions .k-select { min-width: 0; inline-size: 100%; }
   .research-actions .k-chip, .research-actions .k-btn, .research-library-card .k-btn { min-block-size: var(--touch-target-size); }
   .work-os-reader { padding: var(--sp-3); }
+  .work-os-detail-page { padding: var(--sp-3); }
+  .work-os-detail-page-header { grid-template-columns: auto minmax(0, 1fr); }
+  .work-os-detail-page-header .work-os-detail-page-close { grid-column: 1 / -1; justify-self: start; min-block-size: var(--touch-target-size); }
   .work-os-reader-layout { display: block; overflow: auto; }
   .work-os-reader-sections { display: flex; flex-direction: row; max-block-size: none; overflow-x: auto; overflow-y: visible; margin-block-end: var(--sp-3); }
   .work-os-reader-group { flex: 0 0 auto; }
