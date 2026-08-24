@@ -731,15 +731,17 @@ def test_route_canary_rejects_nested_unregistered_boxed_card(tmp_path: Path) -> 
     root = _copy_route_fixtures(tmp_path)
     target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
     markup = target.read_text(encoding="utf-8")
+    anchor = '<h2 class="k-card-title" id="deskThesisRiskHeading">Thesis risk</h2>'
+    assert anchor in markup
     markup = markup.replace(
-        '<h2 class="k-card-title">Thesis Contracts &amp; Falsifiers</h2>',
-        '<div class="legacy-card">Rogue nested card</div>'
-        '<h2 class="k-card-title">Thesis Contracts &amp; Falsifiers</h2>',
+        anchor,
+        '<div class="legacy-card">Rogue nested card</div>' + anchor,
         1,
     ).replace(
         "</style>",
         ".legacy-card { background: var(--surface); border: var(--bw-thin) solid var(--border); border-radius: var(--radius-card); }</style>",
     )
+    assert markup.count("Rogue nested card") == 1
     target.write_text(markup, encoding="utf-8")
     result = next(
         item

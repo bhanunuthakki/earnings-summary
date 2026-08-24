@@ -721,7 +721,7 @@ def _production_runtime(generated_at: datetime) -> str:
     'overview', 'quarter', 'financials', 'thesis-risk', 'valuation-comps', 'sources'
   ];
 
-  async function workOsLoadBriefArtifact(artifact) {{
+  async function workOsLoadBriefArtifact(artifact, options) {{
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
     const meta = document.getElementById('workOsBriefReaderMeta');
@@ -784,6 +784,7 @@ def _production_runtime(generated_at: datetime) -> str:
         const orderedGroups = canonicalGroups.length ? canonicalGroups : discoveredGroups;
         const groupControls = new Map();
         const sectionControls = new Map();
+        const sectionGroupIds = new Map();
 
         function activateReaderSection(groupPane, sectionId, shouldScroll) {{
           const sectionPanes = Array.from(groupPane.querySelectorAll('.subtab-pane[data-tab]'));
@@ -860,6 +861,7 @@ def _production_runtime(generated_at: datetime) -> str:
             sectionButton.textContent = section.label || workOsHumanizeSection(sectionId);
             sectionButton.dataset.sectionId = sectionId;
             sectionControls.set(sectionId, sectionButton);
+            sectionGroupIds.set(sectionId, groupId);
             sectionButton.addEventListener('click', function () {{
               activateReaderGroup(groupId, false);
               activateReaderSection(groupPane, sectionId, true);
@@ -869,8 +871,27 @@ def _production_runtime(generated_at: datetime) -> str:
           group.append(button, nested);
           sections.appendChild(group);
         }});
-        const initialGroup = orderedGroups[0];
-        if (initialGroup) activateReaderGroup(String(initialGroup.dataset.tabGroup || ''), false);
+        const requestedSectionId = options && typeof options.sectionId === 'string'
+          ? options.sectionId : '';
+        const requestedGroupId = sectionGroupIds.get(requestedSectionId);
+        const requestedGroup = requestedGroupId ? groupById.get(requestedGroupId) : null;
+        if (requestedGroup) {{
+          activateReaderGroup(requestedGroupId, false);
+          activateReaderSection(requestedGroup, requestedSectionId, true);
+        }} else {{
+          const initialGroup = orderedGroups[0];
+          if (initialGroup) activateReaderGroup(String(initialGroup.dataset.tabGroup || ''), false);
+        }}
+        const requestedFactRef = options && typeof options.factRef === 'string' ? options.factRef : '';
+        if (requestedFactRef) {{
+          const factAnchor = Array.from(root.querySelectorAll('[data-fact-ref]')).find(function (node) {{
+            return node.getAttribute('data-fact-ref') === requestedFactRef;
+          }});
+          if (factAnchor) {{
+            factAnchor.classList.add('is-cited-location');
+            factAnchor.scrollIntoView({{ block: 'center' }});
+          }}
+        }}
       }}
       root.addEventListener('click', function (event) {{
         const trigger = event.composedPath().find(function (node) {{ return node && node.dataset && node.dataset.peekUrl; }});
@@ -901,7 +922,7 @@ def _production_runtime(generated_at: datetime) -> str:
         const focusId = workOsHistoryFocusId();
         workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: tickerOrArtifact.ticker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), workOsBriefUrl(tickerOrArtifact.ticker, origin, focusId));
       }}
-      await workOsLoadBriefArtifact(tickerOrArtifact);
+      await workOsLoadBriefArtifact(tickerOrArtifact, options);
       return;
     }}
     const requestedTicker = workOsNormalizeTicker(tickerOrArtifact) || workOsCurrentCompanyTicker();
@@ -921,7 +942,7 @@ def _production_runtime(generated_at: datetime) -> str:
       if (briefReaderOverlay) briefReaderOverlay.open();
       return;
     }}
-    await workOsLoadBriefArtifact(payload.items[0]);
+    await workOsLoadBriefArtifact(payload.items[0], options);
   }};
   window.openFullBriefCanvas = window.openWorkOsBriefReader;
 
@@ -1368,15 +1389,53 @@ def _production_runtime(generated_at: datetime) -> str:
       if (identityTicker !== normalized) throw new Error('Company response mismatch');
       document.getElementById('deskTicker').textContent = identity.ticker || normalized;
       document.getElementById('deskCompanyName').textContent = identity.name || company.name;
+      document.getElementById('deskCoverageRole').textContent = String(identity.coverage_role || 'unknown') + ' coverage';
+      const decision = desk.current_decision || {{ relationship: 'unavailable' }};
+      const ownerDecision = decision.owner || null;
+      const modelDecision = decision.model || null;
+      document.getElementById('deskDecisionBand').dataset.freshness = decision.freshness || 'unavailable';
+      document.getElementById('deskOwnerState').textContent = ownerDecision ? String(ownerDecision.value).toUpperCase() : '—';
+      document.getElementById('deskModelState').textContent = modelDecision ? String(modelDecision.value).toUpperCase() : '—';
+      document.getElementById('deskOwnerRevision').textContent = workOsDecisionMeta(ownerDecision, 'No owner decision recorded') + (decision.freshness === 'stale' ? ' · stale' : '');
+      document.getElementById('deskModelRevision').textContent = workOsDecisionMeta(modelDecision, 'No model recommendation recorded');
+      const relationship = String(decision.relationship || 'unavailable');
+      const decisionRelationship = document.getElementById('deskDecisionRelationship');
+      if (decisionRelationship) {{
+        decisionRelationship.textContent = relationship.replaceAll('_', ' ').toUpperCase();
+        decisionRelationship.className = 'k-pill';
+        decisionRelationship.classList.toggle('k-pill-ok', relationship === 'agree');
+        decisionRelationship.classList.toggle('k-pill-bad', relationship === 'conflict');
+        decisionRelationship.classList.toggle('k-pill-warn', relationship !== 'agree' && relationship !== 'conflict');
+      }}
+      const decisionFreshness = document.getElementById('deskDecisionFreshness');
+      if (decisionFreshness) {{
+        const freshness = String(decision.freshness || 'unavailable');
+        decisionFreshness.textContent = freshness === 'current'
+          ? 'Current decision state'
+          : 'Decision state ' + freshness.replaceAll('_', ' ') + ' · do not treat as current';
+      }}
       const position = desk.position || {{}};
       const weight = Number.isFinite(position.weight_pct) ? position.weight_pct : null;
       const positionState = String(position.position_state || 'unavailable');
       document.getElementById('deskPositionWeight').textContent = Number.isFinite(weight)
         ? workOsPercent(weight)
         : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
+      document.getElementById('deskHeroPositionWeight').textContent = Number.isFinite(weight)
+        ? workOsPercent(weight)
+        : (positionState === 'not_held' ? 'Not held' : 'Weight unavailable');
+      const trackerPositionSource = position.position_source === 'portfolio_tracker_api'
+        ? 'Portfolio Tracker snapshot'
+        : 'Portfolio Tracker';
+      document.getElementById('deskPositionSource').textContent = positionState === 'unavailable'
+        ? 'Tracker snapshot unavailable'
+        : trackerPositionSource + (position.position_as_of ? ' · as of ' + position.position_as_of : '') + (positionState === 'not_held' ? ' · not held' : '');
       const valuationSource = position.source ? String(position.source).replaceAll('_', ' ') : 'governed DCF snapshot';
       document.getElementById('deskLivePrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : 'Unavailable';
+      document.getElementById('deskInputPrice').textContent = Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : '—';
+      document.getElementById('deskInputPriceSource').textContent = Number.isFinite(position.price) ? valuationSource + ' · as of ' + (position.price_as_of || 'date unavailable') : 'No governed input price';
       document.getElementById('deskFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
+      document.getElementById('deskFairValueSource').textContent = Number.isFinite(position.fair_value) ? valuationSource + ' · as of ' + (position.fair_value_as_of || 'date unavailable') : 'No governed fair value';
+      document.getElementById('deskHeroFairValue').textContent = Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : '—';
       const valuationGap = Number.isFinite(position.price) && Number.isFinite(position.fair_value) && position.price !== 0
         ? ((position.fair_value / position.price) - 1) * 100 : null;
       document.getElementById('deskValuationGap').innerHTML = Number.isFinite(valuationGap)
@@ -1399,10 +1458,83 @@ def _production_runtime(generated_at: datetime) -> str:
         ? '<div class="k-well"><strong>Persisted research brief</strong><div class="stat-subtext">' + escapeWorkOsHtml(desk.latest_brief.report_date || 'date unavailable') + ' · ' + escapeWorkOsHtml(desk.latest_brief.coverage_role || 'unknown') + ' coverage</div></div>'
         : '<div class="k-well">No persisted research artifact is indexed for provenance.</div>';
       const brief = desk.latest_brief || null;
+      document.getElementById('deskBriefDate').textContent = brief ? brief.report_date : '—';
+      document.getElementById('deskBriefStatus').textContent = brief ? (brief.reader_mode === 'shared_body' ? 'Shared reader ready' : 'Legacy standalone') : 'No indexed artifact';
       const briefButton = document.getElementById('workOsFullBriefButton');
       if (briefButton) {{
         briefButton.disabled = !brief;
         briefButton.onclick = brief ? function () {{ openWorkOsBriefReader(brief); }} : null;
+      }}
+      const thesisRisk = desk.thesis_risk || {{ status: 'unavailable', unavailable_reason: 'missing' }};
+      const thesisAvailable = thesisRisk.status === 'available';
+      const thesisStatus = document.getElementById('deskThesisStatus');
+      if (thesisStatus) {{
+        const status = thesisAvailable ? String(thesisRisk.overall_breach_status || 'unavailable') : 'unavailable';
+        thesisStatus.textContent = status.toUpperCase();
+        thesisStatus.className = 'k-pill';
+        thesisStatus.classList.toggle('k-pill-ok', status === 'ok');
+        thesisStatus.classList.toggle('k-pill-bad', status === 'breach');
+        thesisStatus.classList.toggle('k-pill-warn', status !== 'ok' && status !== 'breach');
+      }}
+      const thesisAsOf = document.getElementById('deskThesisAsOf');
+      if (thesisAsOf) {{
+        thesisAsOf.textContent = thesisAvailable
+          ? 'Evaluated · as of ' + String(thesisRisk.evaluated_at || 'date unavailable')
+          : 'Thesis evidence ' + String(thesisRisk.unavailable_reason || 'unavailable') + ' · do not treat as current';
+      }}
+      const thesisMount = document.getElementById('deskThesisRisk');
+      if (thesisMount) {{
+        if (!thesisAvailable) {{
+          thesisMount.innerHTML = '<div class="k-well" role="alert">Current thesis risk is unavailable because its report-backed facts are ' + escapeWorkOsHtml(String(thesisRisk.unavailable_reason || 'unavailable')) + '.</div>';
+        }} else {{
+          const breakRules = Array.isArray(thesisRisk.break_rules) ? thesisRisk.break_rules : [];
+          const ruleList = breakRules.length
+            ? '<ul>' + breakRules.map(function (rule) {{
+                const latest = Number.isFinite(rule.latest_value) ? String(rule.latest_value) + (rule.unit ? ' ' + escapeWorkOsHtml(String(rule.unit)) : '') : 'unknown';
+                const distance = Number.isFinite(rule.distance_to_threshold) ? ' · distance ' + String(rule.distance_to_threshold) : '';
+                const doorway = brief
+                  ? '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-desk-thesis-rule="true">Open thesis evidence →</button>'
+                  : '';
+                return '<li><strong>' + escapeWorkOsHtml(String(rule.status || 'unresolved').toUpperCase()) + '</strong> · ' + escapeWorkOsHtml(String(rule.kpi_name || rule.rule_id || 'Break rule')) + ' · latest ' + latest + ' vs ' + escapeWorkOsHtml(String(rule.comparator || '')) + ' ' + escapeWorkOsHtml(String(rule.threshold ?? '')) + distance + '<div class="stat-subtext">Source ' + escapeWorkOsHtml(String(rule.provenance_ref || 'unavailable')) + ' · ' + escapeWorkOsHtml(String(rule.latest_period || thesisRisk.evaluated_at || 'date unavailable')) + '</div>' + doorway + '</li>';
+              }}).join('') + '</ul>'
+            : '<div class="stat-subtext">No evaluated canonical break rules are available.</div>';
+          thesisMount.innerHTML = '<div class="k-well"><strong>' + escapeWorkOsHtml(String(thesisRisk.overall_breach_status || 'unavailable').toUpperCase()) + '</strong><div class="stat-subtext">Report evaluation · as of ' + escapeWorkOsHtml(String(thesisRisk.evaluated_at || 'date unavailable')) + '</div><p>' + escapeWorkOsHtml(String(thesisRisk.thesis || '')) + '</p>' + ruleList + '</div>';
+          thesisMount.querySelectorAll('[data-desk-thesis-rule]').forEach(function (button) {{
+            button.addEventListener('click', function () {{
+              openWorkOsBriefReader(brief, {{ sectionId: 'thesis' }});
+            }});
+          }});
+        }}
+      }}
+      const thesisBriefDoorway = document.getElementById('deskThesisBriefDoorway');
+      if (thesisBriefDoorway) {{
+        thesisBriefDoorway.disabled = !brief;
+        thesisBriefDoorway.onclick = brief ? function () {{ openWorkOsBriefReader(brief, {{ sectionId: 'thesis' }}); }} : null;
+      }}
+      const kpiSummary = desk.kpi_summary || {{ status: 'unavailable', unavailable_reason: 'missing' }};
+      const kpiMount = document.getElementById('deskKpiSummary');
+      if (kpiMount) {{
+        const kpis = Array.isArray(kpiSummary.items) ? kpiSummary.items : [];
+        if (kpiSummary.status !== 'available' || !kpis.length) {{
+          kpiMount.innerHTML = '<div class="k-well" role="alert">Tier-1 KPI evidence is ' + escapeWorkOsHtml(String(kpiSummary.unavailable_reason || 'unavailable')) + '. No inferred values are shown.</div>';
+        }} else {{
+          kpiMount.innerHTML = kpis.map(function (kpi) {{
+            const currentStatus = String(kpi.current_status || 'unknown');
+            const state = String(kpi.state || 'awaiting_data');
+            const evidenceButton = brief && kpi.evidence_ref
+              ? '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-desk-kpi-evidence="' + escapeWorkOsHtml(String(kpi.evidence_ref)) + '" data-desk-kpi-name="' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '">Open exact evidence →</button>'
+              : '';
+            return '<div class="k-well research-row"><div><strong>' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '</strong><div class="stat-subtext">Tier 1 · source ' + escapeWorkOsHtml(String(kpi.evidence_ref || kpi.source_hint || 'unavailable')) + ' · as of ' + escapeWorkOsHtml(String(kpi.latest_period || 'date unavailable')) + '</div><div class="stat-number">' + (Number.isFinite(kpi.latest_value) ? escapeWorkOsHtml(String(kpi.latest_value)) + (kpi.unit ? ' ' + escapeWorkOsHtml(String(kpi.unit)) : '') : 'Awaiting data') + '</div></div><div><span class="' + workOsPillClass(currentStatus) + '">' + escapeWorkOsHtml(state.replaceAll('_', ' ').toUpperCase()) + '</span>' + evidenceButton + '</div></div>';
+          }}).join('');
+          kpiMount.querySelectorAll('[data-desk-kpi-evidence]').forEach(function (button) {{
+            button.addEventListener('click', function () {{
+              openWorkOsBriefReader(brief, {{
+                sectionId: 'thesis',
+                factRef: button.getAttribute('data-desk-kpi-evidence')
+              }});
+            }});
+          }});
+        }}
       }}
       workOsRenderEarningsDoorway(
         desk.earnings_doorway || null,
