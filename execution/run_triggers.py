@@ -53,6 +53,7 @@ from alerts.store import (  # noqa: E402
 )
 from db_paths import resolve_db_path as canonical_db_path  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from log_redact import redact  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from triggers.base import (  # noqa: E402
     AlertDraft,
@@ -492,7 +493,7 @@ def _process_candidate(
                     "trigger_kind": trigger.kind,
                     "alert_id": alert_row.id,
                     "action_kind": action_draft.action_kind,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": redact(f"{type(exc).__name__}: {exc}"),
                 }
             )
             summary.errors += 1
@@ -550,7 +551,7 @@ def _process_ticker_trigger(
                     "event": "stateful_trigger_failed",
                     "ticker": ticker,
                     "trigger_kind": trigger.kind,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": redact(f"{type(exc).__name__}: {exc}"),
                 }
             )
             summary.errors += 1

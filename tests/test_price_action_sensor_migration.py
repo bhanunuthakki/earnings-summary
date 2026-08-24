@@ -7,7 +7,12 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from alembic.config import Config
+
+from alembic import command
 from alerts.store import TRIGGER_KINDS, fire_alert
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_price_action_kind_and_sensor_tables_are_at_head(
@@ -77,6 +82,40 @@ def test_price_action_kind_and_sensor_tables_are_at_head(
             assert "append-only" in str(exc)
         else:
             raise AssertionError("price-action events permitted deletion")
+        try:
+            conn.execute(
+                "UPDATE price_action_sensor_events SET transition='approaching' WHERE event_key=?",
+                ("f" * 64,),
+            )
+        except sqlite3.IntegrityError as exc:
+            assert "append-only" in str(exc)
+        else:
+            raise AssertionError("price-action events permitted update")
+    finally:
+        conn.close()
+
+
+def test_sensor_migration_round_trips_on_a_clean_database(
+    migrated_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    path = migrated_db(tmp_path / "price-action-round-trip.db", target="head")
+    cfg = Config(str(ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path.as_posix()}")
+    command.downgrade(cfg, "0022_add_governed_alert_action_receipts")
+    conn = sqlite3.connect(path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='price_action_sensor_events'"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+    command.upgrade(cfg, "head")
+    conn = sqlite3.connect(path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='price_action_sensor_events'"
+        ).fetchone()[0] == 1
     finally:
         conn.close()
 

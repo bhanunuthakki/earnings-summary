@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import ClassVar, Literal, cast
 
 from advisor.price_action_bands import (
-    PriceActionApproachBands,
     PriceActionBands,
     PriceActionProjectionState,
     resolve_price_action_bands,
@@ -161,6 +160,12 @@ class PriceActionTrigger:
                 generation += 1
                 prior_phase = "clear"
                 _record_event(conn, snapshot, rung, generation, "rearmed", now, None, user_id)
+            # A breach is terminal for its generation.  Letting a price move
+            # back into the approach band without a full rearm emit a second
+            # pending alert leaves that alert stale when the original breach
+            # deduplicates on a subsequent crossing.
+            if prior_phase == "breached" and phase == "approaching":
+                phase = "breached"
             if phase == "clear":
                 _upsert_state(conn, snapshot, rung, generation, "clear", now, None, None, user_id)
                 continue
@@ -228,10 +233,7 @@ def load_price_action_snapshot(
     if row is None:
         return None
     try:
-        payload = cast(
-            OwnerDecisionCheckpointPayload,
-            OwnerDecisionCheckpointPayload.model_validate_json(str(row["payload_json"])),
-        )
+        payload = OwnerDecisionCheckpointPayload.model_validate_json(str(row["payload_json"]))
         if payload_sha256(payload) != str(row["payload_sha256"]):
             return None
         linked = conn.execute(
@@ -242,7 +244,7 @@ def load_price_action_snapshot(
         intents: tuple[SizingIntentSpec, ...] = payload.sizing_intents
         bands = next(
             (
-                cast(PriceActionBands, intent.price_action_bands)
+                intent.price_action_bands
                 for intent in intents
                 if intent.ticker == ticker.upper()
                 and intent.leg_id in linked_legs
@@ -309,7 +311,7 @@ def _rungs(bands: PriceActionBands) -> tuple[PriceActionRung, ...]:
         and bands.trim_above is not None
         and bands.sell_above is not None
     )
-    approaches = cast(PriceActionApproachBands | None, bands.approach_bands)
+    approaches = bands.approach_bands
     add_below = bands.add_below
     trim_above = bands.trim_above
     sell_above = bands.sell_above
@@ -471,6 +473,8 @@ def _record_event(
     key = _sha(
         json.dumps(
             {
+                "user_id": user_id,
+                "ticker": snapshot.ticker,
                 "ladder": snapshot.ladder_id,
                 "revision": snapshot.revision_sha256,
                 "rung": rung.rung_id,
