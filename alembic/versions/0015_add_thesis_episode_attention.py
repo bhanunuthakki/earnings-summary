@@ -95,8 +95,13 @@ def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS thesis_evaluation_episode_delivery_receipts")
     op.execute("ALTER TABLE coach_pings DROP COLUMN review_cycle_id")
     op.execute("ALTER TABLE coach_pings DROP COLUMN thesis_evaluation_episode_id")
-    op.execute("ALTER TABLE alerts DROP COLUMN review_cycle_id")
-    op.execute("ALTER TABLE alerts DROP COLUMN thesis_evaluation_episode_id")
+    # SQLite cannot reliably DROP a column that participates in an inline
+    # foreign-key definition after a later migration has rebuilt the table.
+    # Batch recreation preserves the remaining schema while removing both
+    # attention columns and their attached constraints.
+    with op.batch_alter_table("alerts", recreate="always") as batch:
+        batch.drop_column("review_cycle_id")
+        batch.drop_column("thesis_evaluation_episode_id")
     op.execute("ALTER TABLE thesis_evaluation_episodes DROP COLUMN attention_updated_at")
     op.execute("ALTER TABLE thesis_evaluation_episodes DROP COLUMN superseded_by_episode_id")
     op.execute("ALTER TABLE thesis_evaluation_episodes DROP COLUMN acted_on_decision_id")

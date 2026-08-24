@@ -40,6 +40,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import TypeAlias
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -52,9 +53,11 @@ from alerts.store import (  # noqa: E402
 )
 from db_paths import resolve_db_path as canonical_db_path  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from log_redact import redact  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from triggers.base import (  # noqa: E402
     AlertDraft,
+    StatefulTrigger,
     Trigger,
     TriggerCandidate,
     UserStateContext,
@@ -67,6 +70,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_MAX_COST_USD = 10.0
 DISMISSED_LOOKBACK_DAYS = 90
+RegisteredTrigger: TypeAlias = type[Trigger] | type[StatefulTrigger]
 
 
 def _emit(event: dict[str, object]) -> None:
@@ -265,7 +269,7 @@ def query_run_cost_usd(db_path: Path, run_started_at: datetime) -> Decimal:
 # --------------------------------------------------------------------------
 
 
-def _select_triggers(names: list[str] | None) -> list[type[Trigger]]:
+def _select_triggers(names: list[str] | None) -> list[RegisteredTrigger]:
     """Resolve the active trigger list from ``--triggers`` (or the registry default).
 
     When ``names`` is None (no CLI flag), returns ``ENABLED_TRIGGERS``.
@@ -275,9 +279,9 @@ def _select_triggers(names: list[str] | None) -> list[type[Trigger]]:
     driver instead of silently dropping a trigger.
     """
     if names is None:
-        return list(ENABLED_TRIGGERS)
+        return [item for item in ENABLED_TRIGGERS]
     by_kind = {cls.kind: cls for cls in ALL_TRIGGERS}
-    out: list[type[Trigger]] = []
+    out: list[RegisteredTrigger] = []
     for name in names:
         cls = by_kind.get(name)
         if cls is None:
@@ -489,7 +493,7 @@ def _process_candidate(
                     "trigger_kind": trigger.kind,
                     "alert_id": alert_row.id,
                     "action_kind": action_draft.action_kind,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": redact(f"{type(exc).__name__}: {exc}"),
                 }
             )
             summary.errors += 1
@@ -514,7 +518,7 @@ def _process_candidate(
 
 def _process_ticker_trigger(
     *,
-    trigger: Trigger,
+    trigger: Trigger | StatefulTrigger,
     ticker: str,
     db_path: Path,
     user_id: str,
@@ -533,6 +537,39 @@ def _process_ticker_trigger(
     final processed-count.
     """
     summary.seen_tickers.add(ticker)
+    if isinstance(trigger, StatefulTrigger):
+        try:
+            result = trigger.run(
+                ticker=ticker,
+                db_path=db_path,
+                user_id=user_id,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            _emit(
+                {
+                    "event": "stateful_trigger_failed",
+                    "ticker": ticker,
+                    "trigger_kind": trigger.kind,
+                    "error": redact(f"{type(exc).__name__}: {exc}"),
+                }
+            )
+            summary.errors += 1
+            return True
+        summary.alerts_fired += result.alerts_fired
+        summary.dedup_skips += result.dedup_skips
+        summary.dry_run_alerts += result.dry_run_alerts
+        summary.no_candidate_skips += int(result.no_candidate)
+        _emit(
+            {
+                "event": "stateful_trigger_complete",
+                "ticker": ticker,
+                "trigger_kind": trigger.kind,
+                "alerts_fired": result.alerts_fired,
+                "no_candidate": result.no_candidate,
+            }
+        )
+        return True
     try:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:

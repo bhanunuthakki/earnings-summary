@@ -33,6 +33,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 
@@ -230,3 +231,36 @@ class Trigger(Protocol):
         alert: AlertDraft,
         candidate: TriggerCandidate,
     ) -> list[QueuedActionDraft]: ...
+
+
+@dataclass(frozen=True)
+class StatefulTriggerResult:
+    """Outcome of an atomic, persistent sensor pass.
+
+    Stateful sensors own a transaction because their hysteresis state and an
+    alert must advance together.  The ordinary ``Trigger`` contract remains
+    deliberately read-only during ``scan``.
+    """
+
+    alerts_fired: int = 0
+    dedup_skips: int = 0
+    no_candidate: bool = False
+    dry_run_alerts: int = 0
+
+
+@runtime_checkable
+class StatefulTrigger(Protocol):
+    """Optional driver seam for sensors whose state transition is atomic."""
+
+    kind: ClassVar[str]
+    cadence: ClassVar[Cadence]
+
+    def run(
+        self,
+        *,
+        ticker: str,
+        db_path: Path,
+        user_id: str,
+        dry_run: bool,
+        as_of: datetime | None = None,
+    ) -> StatefulTriggerResult: ...

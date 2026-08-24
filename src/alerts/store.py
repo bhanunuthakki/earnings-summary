@@ -93,6 +93,7 @@ TRIGGER_KINDS: frozenset[str] = frozenset(
         "data_feed_stale",
         "risk_drift",
         "model_pin_switch",
+        "price_action",
     }
 )
 # Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).
@@ -190,6 +191,7 @@ def fire_alert(
     thesis_evaluation_episode_id: str | None = None,
     review_cycle_id: str | None = None,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> AlertRow:
     """Insert one alert row. ``status`` lands as 'pending' (the column default).
 
@@ -202,7 +204,7 @@ def fire_alert(
         raise ValueError(
             f"unknown trigger_kind {trigger_kind!r}; expected one of {sorted(TRIGGER_KINDS)}"
         )
-    conn = _open(db_path)
+    db_conn = conn or _open(db_path)
     try:
         values = (
             user_id,
@@ -216,7 +218,7 @@ def fire_alert(
         )
         try:
             if thesis_evaluation_episode_id is None:
-                cur = conn.execute(
+                cur = db_conn.execute(
                     """
                     INSERT INTO alerts(
                         user_id, ticker, trigger_kind, fired_at, status,
@@ -226,7 +228,7 @@ def fire_alert(
                     values,
                 )
             else:
-                cur = conn.execute(
+                cur = db_conn.execute(
                     """
                     INSERT INTO alerts(
                         user_id, ticker, trigger_kind, fired_at, status,
@@ -243,7 +245,7 @@ def fire_alert(
         except sqlite3.IntegrityError:
             # The migration-owned partial unique index is the concurrency-safe
             # dedup authority. A racing producer returns the active winner.
-            prior = conn.execute(
+            prior = db_conn.execute(
                 "SELECT * FROM alerts WHERE user_id=? AND signature_sha=? "
                 "AND status<>? ORDER BY id DESC LIMIT 1",
                 (user_id, signature_sha, ALERT_STATUS_EXPIRED),
@@ -252,10 +254,12 @@ def fire_alert(
                 raise
             return _row_to_alert(prior)
         row_id = int(cur.lastrowid or 0)
-        conn.commit()
-        return _fetch_alert(conn, row_id)
+        if conn is None:
+            db_conn.commit()
+        return _fetch_alert(db_conn, row_id)
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
 
 
 def find_by_signature(

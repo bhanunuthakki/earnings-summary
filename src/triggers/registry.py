@@ -26,11 +26,12 @@ the driver doesn't depend on it.
 
 from __future__ import annotations
 
-from triggers.base import Trigger
+from triggers.base import StatefulTrigger, Trigger
 from triggers.decision_condition import DecisionConditionTrigger
 from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
 from triggers.material_news import MaterialNewsTrigger
+from triggers.price_action import PriceActionTrigger
 from triggers.restatement import RestatementTrigger
 from triggers.saydo_due import SayDoDueTrigger
 
@@ -44,11 +45,14 @@ ENABLED_TRIGGERS: list[type[Trigger]] = [
     RestatementTrigger,
 ]
 
-ALL_TRIGGERS: list[type[Trigger]] = [
+ALL_TRIGGERS: list[type[Trigger] | type[StatefulTrigger]] = [
     EarningsToneTrigger,
     KpiInflectionTrigger,
     SayDoDueTrigger,
     MaterialNewsTrigger,
     DecisionConditionTrigger,
     RestatementTrigger,
+    # Stateful and intentionally dark: requires an explicitly armed BHA-85
+    # checkpoint ladder and is available only through --triggers price_action.
+    PriceActionTrigger,
 ]
