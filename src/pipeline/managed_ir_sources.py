@@ -601,7 +601,11 @@ def validate_prepared_staging(
             raise PreparedIssuerDocumentPublisherError("staged_bytes_mismatch")
         if source.stat().st_nlink != 1:
             raise PreparedIssuerDocumentPublisherError("staged_object_linked")
-        result = classify_ir_file(source, ticker_hint=request.inventory_request.ticker)
+        result = classify_ir_file(
+            source,
+            ticker_hint=request.inventory_request.ticker,
+            source_url=item.source_url,
+        )
         if isinstance(result, CategorizationFailure) or (
             result.ticker != item.ticker
             or result.doc_type.value != item.document_type

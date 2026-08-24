@@ -649,7 +649,11 @@ def prepare_issuer_document_sources(
                     objects=objects,
                 )
             try:
-                outcome = classify_ir_file(destination, ticker_hint=inventory.ticker)
+                outcome = classify_ir_file(
+                    destination,
+                    ticker_hint=inventory.ticker,
+                    source_url=expected.source_url,
+                )
             except (OSError, ValueError) as exc:
                 raise _preparation_failure(
                     "staging_classification_failed",
