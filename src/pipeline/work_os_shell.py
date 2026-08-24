@@ -1455,11 +1455,15 @@ def _production_runtime(generated_at: datetime) -> str:
         if (!thesisAvailable) {{
           thesisMount.innerHTML = '<div class="k-well" role="alert">Current thesis risk is unavailable because its report-backed facts are ' + escapeWorkOsHtml(String(thesisRisk.unavailable_reason || 'unavailable')) + '.</div>';
         }} else {{
-          const conditions = Array.isArray(thesisRisk.break_conditions) ? thesisRisk.break_conditions : [];
-          const conditionList = conditions.length
-            ? '<ul>' + conditions.map(function (condition) {{ return '<li>' + escapeWorkOsHtml(condition) + '</li>'; }}).join('') + '</ul>'
-            : '<div class="stat-subtext">No report break conditions were persisted.</div>';
-          thesisMount.innerHTML = '<div class="k-well"><strong>' + escapeWorkOsHtml(String(thesisRisk.overall_breach_status || 'unavailable').toUpperCase()) + '</strong><div class="stat-subtext">Report evaluation · as of ' + escapeWorkOsHtml(String(thesisRisk.evaluated_at || 'date unavailable')) + '</div><p>' + escapeWorkOsHtml(String(thesisRisk.thesis || '')) + '</p>' + conditionList + '</div>';
+          const breakRules = Array.isArray(thesisRisk.break_rules) ? thesisRisk.break_rules : [];
+          const ruleList = breakRules.length
+            ? '<ul>' + breakRules.map(function (rule) {{
+                const latest = Number.isFinite(rule.latest_value) ? String(rule.latest_value) + (rule.unit ? ' ' + escapeWorkOsHtml(String(rule.unit)) : '') : 'unknown';
+                const distance = Number.isFinite(rule.distance_to_threshold) ? ' · distance ' + String(rule.distance_to_threshold) : '';
+                return '<li><strong>' + escapeWorkOsHtml(String(rule.status || 'unresolved').toUpperCase()) + '</strong> · ' + escapeWorkOsHtml(String(rule.kpi_name || rule.rule_id || 'Break rule')) + ' · latest ' + latest + ' vs ' + escapeWorkOsHtml(String(rule.comparator || '')) + ' ' + escapeWorkOsHtml(String(rule.threshold ?? '')) + distance + '<div class="stat-subtext">Source ' + escapeWorkOsHtml(String(rule.provenance_ref || 'unavailable')) + ' · ' + escapeWorkOsHtml(String(rule.latest_period || thesisRisk.evaluated_at || 'date unavailable')) + '</div></li>';
+              }}).join('') + '</ul>'
+            : '<div class="stat-subtext">No evaluated canonical break rules are available.</div>';
+          thesisMount.innerHTML = '<div class="k-well"><strong>' + escapeWorkOsHtml(String(thesisRisk.overall_breach_status || 'unavailable').toUpperCase()) + '</strong><div class="stat-subtext">Report evaluation · as of ' + escapeWorkOsHtml(String(thesisRisk.evaluated_at || 'date unavailable')) + '</div><p>' + escapeWorkOsHtml(String(thesisRisk.thesis || '')) + '</p>' + ruleList + '</div>';
         }}
       }}
       const thesisBriefDoorway = document.getElementById('deskThesisBriefDoorway');
@@ -1475,12 +1479,12 @@ def _production_runtime(generated_at: datetime) -> str:
           kpiMount.innerHTML = '<div class="k-well" role="alert">Tier-1 KPI evidence is ' + escapeWorkOsHtml(String(kpiSummary.unavailable_reason || 'unavailable')) + '. No inferred values are shown.</div>';
         }} else {{
           kpiMount.innerHTML = kpis.map(function (kpi) {{
-            const status = String(kpi.current_status || 'unknown');
-            const safeCurrent = status === 'green' || status === 'yellow' || status === 'red';
-            const evidenceButton = safeCurrent && kpi.evidence_ref
+            const currentStatus = String(kpi.current_status || 'unknown');
+            const state = String(kpi.state || 'awaiting_data');
+            const evidenceButton = kpi.evidence_ref
               ? '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-desk-kpi-evidence="' + escapeWorkOsHtml(String(kpi.evidence_ref)) + '" data-desk-kpi-name="' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '">Open exact evidence →</button>'
               : '';
-            return '<div class="k-well research-row"><div><strong>' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '</strong><div class="stat-subtext">Tier 1 · source ' + escapeWorkOsHtml(String(kpi.evidence_ref || 'unavailable')) + ' · as of ' + escapeWorkOsHtml(String(kpi.latest_period || 'date unavailable')) + '</div><div class="stat-number">' + escapeWorkOsHtml(String(kpi.latest_value)) + (kpi.unit ? ' ' + escapeWorkOsHtml(String(kpi.unit)) : '') + '</div></div><div><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status.toUpperCase()) + '</span>' + evidenceButton + '</div></div>';
+            return '<div class="k-well research-row"><div><strong>' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '</strong><div class="stat-subtext">Tier 1 · source ' + escapeWorkOsHtml(String(kpi.evidence_ref || kpi.source_hint || 'unavailable')) + ' · as of ' + escapeWorkOsHtml(String(kpi.latest_period || 'date unavailable')) + '</div><div class="stat-number">' + (Number.isFinite(kpi.latest_value) ? escapeWorkOsHtml(String(kpi.latest_value)) + (kpi.unit ? ' ' + escapeWorkOsHtml(String(kpi.unit)) : '') : 'Awaiting data') + '</div></div><div><span class="' + workOsPillClass(currentStatus) + '">' + escapeWorkOsHtml(state.replaceAll('_', ' ').toUpperCase()) + '</span>' + evidenceButton + '</div></div>';
           }}).join('');
           kpiMount.querySelectorAll('[data-desk-kpi-evidence]').forEach(function (button) {{
             button.addEventListener('click', function () {{

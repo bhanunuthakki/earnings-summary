@@ -881,6 +881,9 @@ def test_company_desk_separates_current_thesis_risk_from_decision_conditions() -
     assert ">Decision conditions</h2>" in html
     assert "desk.thesis_risk" in html
     assert "desk.kpi_summary" in html
+    assert "thesisRisk.break_rules" in html
+    assert "rule.provenance_ref" in html
+    assert "kpi.state" in html
     assert "data-desk-kpi-evidence" in html
     assert "fact_ref: button.getAttribute('data-desk-kpi-evidence')" in html
     assert "No inferred values are shown." in html

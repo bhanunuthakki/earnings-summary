@@ -9,7 +9,13 @@ from flask.testing import FlaskClient
 
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.work_os_company import build_company_desk
-from report.models import KpiLedgerRow, SectionStatus, ThesisSection
+from report.models import (
+    BreakRuleEvaluation,
+    BreakRuleObservation,
+    KpiLedgerRow,
+    SectionStatus,
+    ThesisSection,
+)
 from tests.test_comments_server_dashboard import comments_server, create_dashboard_test_schema
 
 
@@ -201,6 +207,21 @@ def test_company_desk_projects_only_fresh_canonical_thesis_evidence(
         break_conditions=["Revenue declines for two quarters."],
         overall_breach_status="ok",
         last_evaluated_at=datetime(2026, 8, 20, tzinfo=UTC),
+        break_rule_evaluations=[
+            BreakRuleEvaluation(
+                rule_id="revenue_floor",
+                kpi_name="Revenue",
+                comparator="lt",
+                threshold=100.0,
+                consecutive_periods=2,
+                status="ok",
+                detail="Above the revenue floor.",
+                narrative="Revenue remains above the hard floor.",
+                observations=[
+                    BreakRuleObservation(period_end="2026-06-30", value=123.4, unit="USD M")
+                ],
+            )
+        ],
         kpi_ledger=[
             KpiLedgerRow(
                 name="Revenue",
@@ -234,9 +255,13 @@ def test_company_desk_projects_only_fresh_canonical_thesis_evidence(
 
     assert desk.thesis_risk.status == "available"
     assert desk.thesis_risk.overall_breach_status == "ok"
+    assert desk.thesis_risk.break_rules[0].rule_id == "revenue_floor"
+    assert desk.thesis_risk.break_rules[0].distance_to_threshold == pytest.approx(23.4)
+    assert desk.thesis_risk.break_rules[0].provenance_ref == "thesis_evaluation:NU:revenue_floor"
     assert desk.kpi_summary.status == "available"
     assert desk.kpi_summary.items[0].evidence_ref == "kpi:NU:42"
     assert desk.kpi_summary.items[0].latest_value == pytest.approx(123.4)
+    assert desk.kpi_summary.items[0].state == "tracked"
 
 
 def test_company_desk_withholds_stale_or_noncanonical_thesis_facts(
@@ -282,9 +307,181 @@ def test_company_desk_withholds_stale_or_noncanonical_thesis_facts(
     assert desk.thesis_risk.status == "unavailable"
     assert desk.thesis_risk.unavailable_reason == "stale"
     assert desk.thesis_risk.thesis is None
-    assert desk.kpi_summary.status == "unavailable"
-    assert desk.kpi_summary.items == []
-    assert desk.kpi_summary.unavailable_reason == "stale"
+    assert desk.kpi_summary.status == "available"
+    assert desk.kpi_summary.items[0].state == "stale"
+
+
+def test_company_desk_projects_partial_kpi_states_and_rejects_future_facts(
+    work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partial ledger stays useful without treating future facts as current."""
+
+    from pipeline import work_os_company
+
+    partial_thesis = ThesisSection(
+        status=SectionStatus.OK,
+        thesis_full="Project only evaluated facts.",
+        overall_breach_status="warn",
+        last_evaluated_at=datetime(2026, 8, 20, tzinfo=UTC),
+        break_rule_evaluations=[
+            BreakRuleEvaluation(
+                rule_id="npl_floor",
+                kpi_name="NPL 90+",
+                comparator="gt",
+                threshold=4.0,
+                consecutive_periods=1,
+                status="warn",
+                detail="Approaching the threshold.",
+                narrative="Asset quality needs monitoring.",
+                observations=[
+                    BreakRuleObservation(period_end="2026-06-30", value=3.7, unit="%")
+                ],
+            ),
+            BreakRuleEvaluation(
+                rule_id="future_rule",
+                kpi_name="Future KPI",
+                comparator="lt",
+                threshold=0.0,
+                consecutive_periods=1,
+                status="unresolved",
+                detail="No evaluated observation.",
+                narrative="Awaiting data.",
+            ),
+        ],
+        kpi_ledger=[
+            KpiLedgerRow(
+                name="NPL 90+",
+                tier="tier_1",
+                kpi_definition_id=11,
+                history=[("2026-03-31", 3.2), ("2026-06-30", 3.7)],
+                current_status="yellow",
+            ),
+            KpiLedgerRow(
+                name="Unreported KPI",
+                tier="tier_1",
+                kpi_definition_id=12,
+                current_status="unknown",
+            ),
+            KpiLedgerRow(
+                name="Old KPI",
+                tier="tier_1",
+                kpi_definition_id=13,
+                history=[("2025-01-01", 1.0)],
+                current_status="green",
+            ),
+            KpiLedgerRow(
+                name="Future KPI",
+                tier="tier_1",
+                kpi_definition_id=14,
+                history=[("2026-10-01", 2.0)],
+                current_status="green",
+            ),
+            KpiLedgerRow(
+                name="Broken KPI",
+                tier="tier_1",
+                kpi_definition_id=15,
+                history=[("2026-06-30", 9.0)],
+                current_status="red",
+            ),
+        ],
+    )
+
+    def build_partial_thesis(
+        _ticker: str, _repo_root: Path, *, conn: sqlite3.Connection | None = None
+    ) -> ThesisSection:
+        del conn
+        return partial_thesis
+
+    monkeypatch.setattr(work_os_company.thesis_section, "build", build_partial_thesis)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        desk = build_company_desk(
+            work_os_app_repo,
+            conn,
+            "MELI",
+            generated_at=datetime(2026, 8, 23, tzinfo=UTC),
+        )
+    finally:
+        conn.close()
+
+    assert desk.thesis_risk.status == "available"
+    assert desk.thesis_risk.break_rules[0].status == "warn"
+    assert desk.thesis_risk.break_rules[0].distance_to_threshold == pytest.approx(-0.3)
+    assert desk.thesis_risk.break_rules[1].status == "unresolved"
+    assert desk.thesis_risk.break_rules[1].latest_period is None
+    assert [item.state for item in desk.kpi_summary.items] == [
+        "improving",
+        "awaiting_data",
+        "stale",
+        "stale",
+        "material_exception",
+    ]
+    assert desk.kpi_summary.status == "available"
+    assert not work_os_company._is_fresh_thesis_timestamp(
+        datetime(2026, 8, 24, tzinfo=UTC), as_of=datetime(2026, 8, 23, tzinfo=UTC)
+    )
+
+
+@pytest.mark.parametrize("ticker", ["NU", "NVO", "MELI", "SPARSE"])
+def test_company_desk_thesis_projection_is_ticker_scoped_for_portfolio_and_sparse_names(
+    work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch, ticker: str
+) -> None:
+    """Portfolio, evaluation, and sparse names share the same fail-closed contract."""
+
+    from pipeline import work_os_company
+
+    thesis = ThesisSection(
+        status=SectionStatus.OK,
+        thesis_full="A canonical thesis.",
+        overall_breach_status="ok",
+        last_evaluated_at=datetime(2026, 8, 20, tzinfo=UTC),
+        break_rule_evaluations=[
+            BreakRuleEvaluation(
+                rule_id="canonical_floor",
+                kpi_name="Revenue",
+                comparator="lt",
+                threshold=1.0,
+                consecutive_periods=1,
+                status="ok",
+                detail="Evaluated.",
+                narrative="Canonical rule.",
+                observations=[BreakRuleObservation(period_end="2026-06-30", value=2.0, unit="M")],
+            )
+        ],
+        kpi_ledger=[
+            KpiLedgerRow(
+                name="Revenue",
+                tier="tier_1",
+                kpi_definition_id=1,
+                history=[("2026-06-30", 2.0)],
+                current_status="green",
+            )
+        ],
+    )
+
+    monkeypatch.setattr(work_os_company.thesis_section, "build", lambda *_args, **_kwargs: thesis)
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        if ticker == "SPARSE":
+            conn.execute(
+                "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
+                "VALUES ('SPARSE', 'Sparse Company', 'evaluation', 'equity')"
+            )
+            conn.commit()
+        desk = build_company_desk(
+            work_os_app_repo,
+            conn,
+            ticker,
+            generated_at=datetime(2026, 8, 23, tzinfo=UTC),
+        )
+    finally:
+        conn.close()
+
+    assert desk.thesis_risk.status == "available"
+    assert desk.thesis_risk.break_rules[0].provenance_ref == f"thesis_evaluation:{ticker}:canonical_floor"
+    assert desk.kpi_summary.items[0].evidence_ref == f"kpi:{ticker}:1"
 
 
 def test_company_desk_projects_live_tracker_position_without_losing_dcf(

@@ -33,10 +33,18 @@ from pipeline.work_os_decisions import (
 from pipeline.work_os_earnings import EarningsReadoutSummary, load_latest_earnings_readouts
 from provenance.selection import selected_transcripts_relation
 from report.artifacts import load_report_artifact_index
-from report.models import SectionStatus, ThesisSection
+from report.models import BreakRuleEvaluation, KpiLedgerRow, SectionStatus, ThesisSection
 from report.sections import thesis as thesis_section
 
 CoverageRole = Literal["portfolio", "evaluation", "unknown"]
+KpiProjectionState = Literal[
+    "tracked",
+    "awaiting_data",
+    "stale",
+    "improving",
+    "deteriorating",
+    "material_exception",
+]
 
 
 class CompanyIdentity(BaseModel):
@@ -77,17 +85,37 @@ class DeskQuestion(BaseModel):
 
 
 class DeskKpiEvidence(BaseModel):
-    """One Tier-1 KPI only when its canonical series is safe to surface."""
+    """One Tier-1 KPI with an explicit state for every evidence condition."""
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     tier: Literal["tier_1"]
     unit: str | None = None
-    latest_period: str
-    latest_value: float
-    current_status: Literal["green", "yellow", "red"]
-    evidence_ref: str
+    latest_period: str | None = None
+    latest_value: float | None = None
+    current_status: Literal["green", "yellow", "red", "unknown"] = "unknown"
+    state: KpiProjectionState
+    evidence_ref: str | None = None
+    source_hint: str | None = None
+
+
+class DeskBreakRuleEvidence(BaseModel):
+    """One canonical hard-break evaluation, distinct from decision conditions."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rule_id: str
+    kpi_name: str
+    comparator: str
+    threshold: float
+    status: Literal["ok", "warn", "breach", "unresolved"]
+    latest_period: str | None = None
+    latest_value: float | None = None
+    unit: str | None = None
+    distance_to_threshold: float | None = None
+    detail: str | None = None
+    provenance_ref: str
 
 
 class ThesisRiskProjection(BaseModel):
@@ -99,7 +127,7 @@ class ThesisRiskProjection(BaseModel):
     thesis: str | None = None
     overall_breach_status: Literal["ok", "warn", "breach", "unresolved"] | None = None
     evaluated_at: str | None = None
-    break_conditions: list[str] = []
+    break_rules: list[DeskBreakRuleEvidence] = []
     unavailable_reason: Literal["missing", "stale", "incomplete"] | None = None
 
 
@@ -434,54 +462,106 @@ def _is_fresh_thesis_timestamp(value: datetime | None, *, as_of: datetime) -> bo
     if value is None:
         return False
     normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-    return (as_of - normalized.astimezone(UTC)).days <= _THESIS_FACT_FRESHNESS_DAYS
+    age = as_of - normalized.astimezone(UTC)
+    return 0 <= age.total_seconds() <= _THESIS_FACT_FRESHNESS_DAYS * 86_400
+
+
+def _kpi_state(
+    row: KpiLedgerRow,
+    latest_period: date | None,
+    latest_value: float | None,
+    *,
+    as_of: datetime,
+) -> DeskKpiEvidence:
+    """Project a ledger row without hiding partial or stale evidence."""
+
+    evidence_ref = (
+        f"kpi:{row.name}:{row.kpi_definition_id}" if row.kpi_definition_id is not None else None
+    )
+    latest_label = latest_period.isoformat() if latest_period is not None else None
+    if latest_period is None or latest_value is None:
+        state: KpiProjectionState = "awaiting_data"
+    elif not 0 <= (as_of.date() - latest_period).days <= _THESIS_FACT_FRESHNESS_DAYS:
+        state = "stale"
+    elif row.current_status == "red":
+        state = "material_exception"
+    else:
+        values = [value for _, value in row.history if value is not None]
+        if len(values) >= 2 and values[-1] > values[-2]:
+            state = "improving"
+        elif len(values) >= 2 and values[-1] < values[-2]:
+            state = "deteriorating"
+        else:
+            state = "tracked"
+    return DeskKpiEvidence(
+        name=row.name,
+        tier="tier_1",
+        unit=row.unit,
+        latest_period=latest_label,
+        latest_value=latest_value,
+        current_status=row.current_status,
+        state=state,
+        evidence_ref=evidence_ref,
+        source_hint=row.source_hint,
+    )
 
 
 def _tier_one_evidence(
-    thesis: ThesisSection,
-    ticker: str,
-    *,
-    as_of: datetime,
-) -> tuple[list[DeskKpiEvidence], Literal["missing", "stale", "incomplete"] | None]:
-    """Return every Tier-1 metric only when each has fresh, exact evidence.
-
-    The report's ledger owns KPI resolution and status.  This adapter deliberately
-    does not fall back to free-text holdings values: the Desk either has the
-    canonical definition-backed series for every Tier-1 metric or exposes no KPI
-    summary at all.
-    """
+    thesis: ThesisSection, ticker: str, *, as_of: datetime
+) -> KpiSummaryProjection:
+    """Return every Tier-1 row with explicit partial-data states and provenance."""
 
     tier_one = [row for row in thesis.kpi_ledger if row.tier == "tier_1"]
     if not tier_one:
-        return [], "missing"
-    evidence: list[DeskKpiEvidence] = []
+        return KpiSummaryProjection(status="unavailable", unavailable_reason="missing")
+    items: list[DeskKpiEvidence] = []
     for row in tier_one:
-        if row.kpi_definition_id is None or row.current_status == "unknown" or not row.history:
-            return [], "incomplete"
-        latest_period, latest_value = row.history[-1]
-        try:
-            period_end = date.fromisoformat(latest_period)
-        except ValueError:
-            return [], "incomplete"
-        if (as_of.date() - period_end).days > _THESIS_FACT_FRESHNESS_DAYS:
-            return [], "stale"
-        if latest_value is None:
-            return [], "incomplete"
-        status = row.current_status
-        if status not in {"green", "yellow", "red"}:
-            return [], "incomplete"
+        latest_period: date | None = None
+        latest_value: float | None = None
+        if row.history:
+            raw_period, latest_value = row.history[-1]
+            try:
+                latest_period = date.fromisoformat(raw_period)
+            except ValueError:
+                latest_value = None
+        item = _kpi_state(row, latest_period, latest_value, as_of=as_of)
+        item = item.model_copy(
+            update={
+                "evidence_ref": (
+                    f"kpi:{ticker}:{row.kpi_definition_id}"
+                    if row.kpi_definition_id is not None
+                    else None
+                )
+            }
+        )
+        items.append(item)
+    return KpiSummaryProjection(status="available", items=items)
+
+
+def _break_rule_evidence(
+    rules: list[BreakRuleEvaluation], ticker: str
+) -> list[DeskBreakRuleEvidence]:
+    """Keep rule-level status, distance, and provenance with the Desk projection."""
+
+    evidence: list[DeskBreakRuleEvidence] = []
+    for rule in rules:
+        latest = rule.observations[-1] if rule.observations else None
         evidence.append(
-            DeskKpiEvidence(
-                name=row.name,
-                tier="tier_1",
-                unit=row.unit,
-                latest_period=latest_period,
-                latest_value=latest_value,
-                current_status=status,
-                evidence_ref=f"kpi:{ticker}:{row.kpi_definition_id}",
+            DeskBreakRuleEvidence(
+                rule_id=rule.rule_id,
+                kpi_name=rule.kpi_name,
+                comparator=rule.comparator,
+                threshold=rule.threshold,
+                status=rule.status,
+                latest_period=latest.period_end if latest else None,
+                latest_value=latest.value if latest else None,
+                unit=latest.unit if latest else None,
+                distance_to_threshold=(latest.value - rule.threshold) if latest else None,
+                detail=rule.detail or None,
+                provenance_ref=f"thesis_evaluation:{ticker}:{rule.rule_id}",
             )
         )
-    return evidence, None
+    return evidence
 
 
 def _thesis_projections(
@@ -494,24 +574,20 @@ def _thesis_projections(
     """Project the canonical thesis section without inventing live facts."""
 
     thesis = thesis_section.build(ticker, repo_root, conn=conn)
-    evidence, evidence_reason = _tier_one_evidence(thesis, ticker, as_of=as_of)
-    kpi_summary = KpiSummaryProjection(
-        status="available" if evidence_reason is None else "unavailable",
-        items=evidence,
-        unavailable_reason=evidence_reason,
-    )
+    kpi_summary = _tier_one_evidence(thesis, ticker, as_of=as_of)
+    break_rules = _break_rule_evidence(thesis.break_rule_evaluations, ticker)
     evaluation_is_fresh = _is_fresh_thesis_timestamp(thesis.last_evaluated_at, as_of=as_of)
     if (
         thesis.status != SectionStatus.OK
         or thesis.stub_warning is not None
         or not thesis.thesis_full
-        or evidence_reason is not None
+        or not break_rules
         or not evaluation_is_fresh
         or thesis.overall_breach_status in {"unknown", "unresolved"}
     ):
         if thesis.status == SectionStatus.MISSING_DATA or not thesis.thesis_full:
             reason: Literal["missing", "stale", "incomplete"] = "missing"
-        elif evidence_reason == "stale" or not evaluation_is_fresh:
+        elif not evaluation_is_fresh:
             reason = "stale"
         else:
             reason = "incomplete"
@@ -538,7 +614,7 @@ def _thesis_projections(
             evaluated_at=thesis.last_evaluated_at.astimezone(UTC)
             .isoformat()
             .replace("+00:00", "Z"),
-            break_conditions=thesis.break_conditions,
+            break_rules=break_rules,
         )
     warnings: list[str] = []
     if thesis_risk.status == "unavailable":
