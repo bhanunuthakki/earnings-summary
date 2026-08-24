@@ -151,17 +151,28 @@ def work_os_contract_failures(
     ):
         if required not in renderer:
             failures.append(f"Work OS renderer missing production design contract {required!r}")
-    action_classes = (
+    static_action_classes = (
         "k-card",
         "k-card-action",
         "k-card-interactive",
         "k-card-row-title",
         "k-card-meta",
     )
-    for class_name in action_classes:
+    for class_name in static_action_classes:
         if not has_html_class(mockup, class_name):
             failures.append(f"Work OS static Action Queue missing class {class_name!r}")
-    for class_name in action_classes:
+    # BHA-93 deliberately compacts hydrated governed actions into a well, not
+    # interactive cards. Keep the typography, provenance, and registered
+    # controls inside the compact action grammar without importing the
+    # superseded page-only mockup treatment into production.
+    hydrated_action_classes = (
+        "k-well",
+        "work-os-action-card",
+        "work-os-action-row",
+        "k-card-row-title",
+        "k-card-meta",
+    )
+    for class_name in hydrated_action_classes:
         if not has_html_class(renderer, class_name):
             failures.append(f"Work OS hydrated Action Queue missing class {class_name!r}")
     return failures
