@@ -25,7 +25,7 @@ import sqlite3
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -43,7 +43,7 @@ _TIER_TITLE = {
 class KeyMetricBubble:
     token: str
     label: str
-    source: str  # 'tier' | 'llm'
+    source: Literal["tier", "llm"]
     title: str  # tooltip text
 
 

@@ -60,6 +60,26 @@ FIN_GLOSSARY: dict[str, str] = {
     "income_tax_expense": "Income tax expense for the period.",
 }
 
+_FIN_DISPLAY_LABELS: dict[str, str] = {
+    "ebitda": "EBITDA",
+    "eps": "EPS",
+    "eps_diluted": "Diluted EPS",
+    "research_and_development": "R&D expense",
+    "selling_general_admin": "SG&A expense",
+    "capital_expenditure": "Capital expenditure",
+    "operating_cash_flow": "Operating cash flow",
+    "free_cash_flow": "Free cash flow",
+}
+
+
+def metric_display_label(metric: MetricRef) -> str:
+    """Readable metric name for decision surfaces; the token remains canonical."""
+    if metric.domain == "fin":
+        return _FIN_DISPLAY_LABELS.get(metric.key, metric.key.replace("_", " ").title())
+    if metric.domain == "seg":
+        return f"{metric.dim_name} · {metric.key.replace('_', ' ').title()}"
+    return metric.key
+
 
 def fin_definition(line_item: str) -> str:
     curated = FIN_GLOSSARY.get(line_item)
@@ -204,5 +224,6 @@ __all__ = [
     "fin_definition",
     "kpi_definition_titles",
     "metric_definitions",
+    "metric_display_label",
     "seg_definition",
 ]

@@ -7,6 +7,8 @@ changed once and inherited by every research surface.
 
 from __future__ import annotations
 
+from ui.source_chip import SOURCE_CHIP_CSS
+
 DIET_PANEL_STYLE = """<style>
 .diet-sec { margin-top: var(--sp-5); }
 .diet-sec.first { margin-top: var(--sp-3); }
@@ -30,7 +32,8 @@ DIET_PANEL_STYLE = """<style>
   color: var(--muted); }
 </style>"""
 
-RESEARCH_PANEL_STYLE = """<style>
+RESEARCH_PANEL_STYLE = (
+    """<style>
 /* Research family foundation: controls are supplied by the shell's kit. */
 .cc-peek-attest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
   display: flex; align-items: center; gap: 10px; }
@@ -87,6 +90,21 @@ RESEARCH_PANEL_STYLE = """<style>
 .vx-picker { display:flex; flex-direction:column; }
 .vx-picker label { margin-bottom:var(--sp-half); text-transform:uppercase; letter-spacing:.04em; }
 .vx-picker select { width:100%; }
+.vx-workbench { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface);
+  padding:var(--sp-3) var(--sp-4); margin:var(--sp-1) 0 var(--sp-4); }
+.vx-workbench-head { display:flex; justify-content:space-between; gap:var(--sp-2); align-items:baseline;
+  color:var(--fg); font-size:var(--fs-body); margin-bottom:var(--sp-2); }
+.vx-workbench-head span, .vx-workbench-meta, .vx-workbench-why, .vx-workbench-muted,
+.vx-workbench-state span { color:var(--muted); font-size:var(--fs-caption); }
+.vx-workbench-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:var(--sp-2); }
+.vx-workbench-card { border:1px solid var(--hairline); border-radius:var(--radius); padding:var(--sp-2) var(--sp-3);
+  display:flex; flex-direction:column; gap:var(--sp-half); }
+.vx-workbench-kicker { color:var(--muted); font-size:var(--fs-caption); }
+.vx-workbench-value { color:var(--fg); font-family:var(--mono); font-size:var(--fs-title); }
+.vx-workbench-meta { display:flex; align-items:center; gap:var(--sp-1); flex-wrap:wrap; }
+.vx-workbench-inspect { color:var(--muted); font-size:var(--fs-caption); }
+.vx-workbench-inspect code { color:var(--fg-soft); font-family:var(--mono); }
+.vx-workbench-state { display:flex; flex-direction:column; gap:var(--sp-half); }
 .vx-error { color:var(--bad); font-size:var(--fs-body); margin:var(--sp-2) 0; }
 .vx-inject-ok { color:var(--fg); font-size:var(--fs-body); line-height:1.5;
   border-left:var(--bw-thick) solid var(--ok); padding:var(--sp-1) 0 var(--sp-1) var(--sp-3); }
@@ -386,7 +404,11 @@ RESEARCH_PANEL_STYLE = """<style>
 .sv-fallback { max-width: 720px; margin: 60px auto; padding: 22px;
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 
+"""  # nosec B608 -- static CSS family recipe; never constructed or executed as SQL.
+    + SOURCE_CHIP_CSS
+    + """
 </style>"""
+)
 
 
 def research_panel_style() -> str:
