@@ -601,3 +601,16 @@ def test_posture_affirmed_constraints_and_actions(tmp_path: Path) -> None:
     # Actions: Mostly right (confirm) + Adjust (jumps into Positioning).
     assert 'id="posture-confirm"' in html
     assert 'data-console-jump="csec-positioning"' in html
+
+
+def test_posture_display_only_mode_has_no_persistent_actions(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    _seed_weights(tmp_path, {"NU": 0.24, "MELI": 0.10})
+
+    html = render_portfolio_posture_section(db_path, tmp_path, include_actions=False)
+
+    assert "Your book currently reads as" in html
+    assert "governed Positioning workflow" in html
+    assert 'id="posture-confirm"' not in html
+    assert 'data-console-jump="csec-positioning"' not in html
+    assert "/api/positioning/confirm-posture" not in html

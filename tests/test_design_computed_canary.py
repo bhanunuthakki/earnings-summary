@@ -188,14 +188,12 @@ def test_guarded_persistent_routes_exactly_match_the_production_screen_registry(
     assert guarded == {screen.screen_id for screen in SCREEN_SPECS}
 
 
-def test_performance_canary_contains_deterministic_populated_driver_grid() -> None:
-    from execution.design_route_canaries import render_route_canary
+def test_performance_canary_contains_deterministic_index_benchmarking_without_driver_grid() -> None:
+    from execution.design_route_canaries import canary_portfolio_fragment
 
-    html = render_route_canary(route="performance", viewport="narrow")
-    assert "Deterministic Responsive Grid Company" in html
-    assert "pf-alpha-details" in html
-    assert "lg-filter" in html
-    assert "alpha-table" in html
+    html = canary_portfolio_fragment("performance", None)
+    assert "Index Benchmarking" in html
+    assert '<details class="pf-alpha-details">' not in html
 
 
 def test_cockpit_canary_uses_the_current_portfolio_hydration_contract() -> None:
@@ -218,14 +216,7 @@ def test_cockpit_canary_uses_the_current_portfolio_hydration_contract() -> None:
             "performance",
             "screen-performance",
             "workOsPerformanceMount",
-            "/api/panel/portfolio_allocation",
-        ),
-        (
-            "risk-allocations",
-            "risk",
-            "screen-allocation",
-            "workOsAllocationMount",
-            "/api/panel/portfolio_health",
+            "/api/panel/performance_risk",
         ),
     ),
 )
@@ -731,29 +722,6 @@ def test_route_canary_rejects_unresolved_visible_loading_shell(tmp_path: Path) -
     )
     assert result.status == "failed"
     assert any("unresolved visible loading shell" in finding for finding in result.findings)
-
-
-def test_performance_canary_opens_driver_grid_and_rejects_uncontained_table(
-    tmp_path: Path,
-) -> None:
-    _require_playwright()
-    root = _copy_route_fixtures(tmp_path)
-    target = root / "tests" / "fixtures" / "design_canaries" / "performance.narrow.html"
-    target.write_text(
-        target.read_text(encoding="utf-8").replace(
-            "</style>",
-            ".pf-alpha-details .lg { max-width:none!important; overflow-x:visible!important; }</style>",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    result = next(
-        item
-        for item in _scan_route_canaries(fixture_root=root)
-        if item.route == "performance" and item.viewport == "narrow"
-    )
-    assert result.status == "failed"
-    assert any("table" in finding and "clipped" in finding for finding in result.findings)
 
 
 def test_route_canary_rejects_clipped_or_occluded_overlay(tmp_path: Path) -> None:

@@ -732,7 +732,12 @@ def _posture_paragraph(
     return "Your book currently reads as " + ", ".join(bits) + "."
 
 
-def render_portfolio_posture_section(db_path: Path, repo_root: Path) -> str:
+def render_portfolio_posture_section(
+    db_path: Path,
+    repo_root: Path,
+    *,
+    include_actions: bool = True,
+) -> str:
     """§7.5: a short derived paragraph, affirmed facts as stated constraints,
     inferred behavior as a proposal with Mostly-right/Adjust actions.
     Confirmation persists via ``owner_profile.store.append_fact`` — no
@@ -759,6 +764,17 @@ def render_portfolio_posture_section(db_path: Path, repo_root: Path) -> str:
     constraints = _affirmed_constraint_lines(db_path)
     weights_as_of = read_materialized_weights_as_of(repo_root) or ""
 
+    actions = (
+        '<div class="posture-actions">'
+        '<button type="button" class="k-btn k-btn-primary k-btn-sm" id="posture-confirm" '
+        f'data-narrative="{escape(narrative, quote=True)}">Mostly right</button>'
+        '<button type="button" class="k-chip k-chip-btn" data-console-jump="csec-positioning">'
+        "Adjust &rarr;</button>"
+        '<span id="posture-status" class="muted" aria-live="polite"></span>'
+        "</div>"
+        if include_actions
+        else '<p class="muted">Posture review remains available in the governed Positioning workflow.</p>'
+    )
     return (
         f"{_STYLE}{head}"
         f'<div class="k-well"><p>{escape(narrative)}</p>'
@@ -770,14 +786,9 @@ def render_portfolio_posture_section(db_path: Path, repo_root: Path) -> str:
             if constraints
             else ""
         )
-        + '<div class="posture-actions">'
-        '<button type="button" class="k-btn k-btn-primary k-btn-sm" id="posture-confirm" '
-        f'data-narrative="{escape(narrative, quote=True)}">Mostly right</button>'
-        '<button type="button" class="k-chip k-chip-btn" data-console-jump="csec-positioning">'
-        "Adjust &rarr;</button>"
-        '<span id="posture-status" class="muted" aria-live="polite"></span>'
-        "</div></div></section>"
-        f"{_POSTURE_JS}"
+        + actions
+        + "</div></section>"
+        + (_POSTURE_JS if include_actions else "")
     )
 
 

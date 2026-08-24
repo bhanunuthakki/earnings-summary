@@ -1155,9 +1155,26 @@ def test_compose_page_embeds_window_bar_with_echoed_values(mock_tracker: None) -
     assert 'value="2026-01-01"' in html and 'value="2026-06-10"' in html
     assert 'id="pf-backfill" checked' in html
     assert 'data-preset="ytd"' in html and 'data-preset="default"' in html
-    assert "/api/panel/portfolio" in html  # the refetch script targets this panel
+    assert 'data-refresh-endpoint="/api/panel/portfolio"' in html
     # The book attribution narrative is no longer mounted on the page.
     assert "Attribution narratives" not in html
+
+
+def test_compose_page_can_refresh_an_owning_composite(mock_tracker: None) -> None:
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    live = LivePortfolio(available=True, api_url="http://x", total_market_value=0.0)
+
+    html = compose_portfolio_page(
+        analytics,
+        live,
+        refresh_endpoint="/api/panel/performance_risk",
+        refresh_target_selector="#workOsPerformanceMount",
+    )
+
+    assert 'data-refresh-endpoint="/api/panel/performance_risk"' in html
+    assert 'data-refresh-target="#workOsPerformanceMount"' in html
+    assert "bar.getAttribute('data-refresh-endpoint')" in html
+    assert "bar.getAttribute('data-refresh-target')" in html
 
 
 def test_compose_page_default_window_bar_is_unset(mock_tracker: None) -> None:
@@ -1192,6 +1209,22 @@ def test_compose_page_offline_leads_with_start_banner() -> None:
     assert "banner.closest('.console-sec')" in html
     assert 'id="pf-window-bar"' not in html  # no chart, so no window controls
     assert html.count("<section") == 1  # just the banner — nothing buried below it
+
+
+def test_compose_page_offline_recovery_refreshes_the_owning_composite() -> None:
+    analytics = PortfolioAnalytics(available=False, api_url="http://localhost:8000")
+    live = LivePortfolio(available=False, api_url="http://localhost:8000", error="offline")
+
+    html = compose_portfolio_page(
+        analytics,
+        live,
+        refresh_endpoint="/api/panel/performance_risk",
+        refresh_target_selector="#workOsPerformanceMount",
+    )
+
+    assert 'data-refresh-endpoint="/api/panel/performance_risk"' in html
+    assert 'data-refresh-target="#workOsPerformanceMount"' in html
+    assert "banner.getAttribute('data-refresh-target')" in html
 
 
 # ----- Portfolio → Synthesis tab: rollup / exposure / next-dollar / memo -----

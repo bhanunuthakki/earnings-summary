@@ -18,19 +18,19 @@ from tempfile import TemporaryDirectory
 
 from bs4 import BeautifulSoup
 
+from integrations.portfolio_allocation import unavailable_portfolio_allocation
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
+    PerformancePoint,
+    PerformanceSeries,
     PortfolioAnalytics,
     PositionAlpha,
     PositionAlphaRow,
 )
 from pipeline.explore_panel import render_explore_panel
 from pipeline.operations_panel import OperationsPanelView, render_operations_panel
-from pipeline.portfolio_console_panel import (
-    render_portfolio_allocation_panel,
-    render_portfolio_health_panel,
-    render_portfolio_record_panel,
-)
+from pipeline.performance_risk_panel import render_performance_risk_panel
+from pipeline.portfolio_console_panel import render_portfolio_record_panel
 from pipeline.portfolio_panel import compose_portfolio_page
 from pipeline.work_os_shell import SCREEN_SPECS, render_work_os_shell
 from report.legacy_body import extract_legacy_reader_body
@@ -59,7 +59,6 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 ROUTE_SCREEN_IDS: dict[str, str] = {
     "cockpit": "screen-cockpit",
     "performance": "screen-performance",
-    "risk-allocations": "screen-allocation",
     "company-desk": "screen-workspace",
     "brief-library": "screen-brief-library",
     "fact-metric-playground": "screen-analytics-playground",
@@ -261,18 +260,17 @@ def _canary_shell_loader() -> str:
     )
 
 
-def _canary_portfolio_fragment(route: str, db_path: Path | None) -> str:
+def canary_portfolio_fragment(route: str, db_path: Path | None) -> str:
     """Render the real portfolio-console fragment for one persistent route."""
 
     if db_path is not None:
         if route == "performance":
-            return render_portfolio_allocation_panel(
+            return render_performance_risk_panel(
                 db_path,
                 db_path.parent.parent,
+                allocation=unavailable_portfolio_allocation("design_canary"),
                 performance_renderer=_canary_performance_fragment,
             )
-        if route == "risk-allocations":
-            return render_portfolio_health_panel(db_path)
         if route == "decision-audit":
             return render_portfolio_record_panel(db_path)
         raise ValueError(f"unknown portfolio design canary route: {route!r}")
@@ -288,13 +286,12 @@ def _canary_portfolio_fragment(route: str, db_path: Path | None) -> str:
         )
         isolated_conn.close()
         if route == "performance":
-            return render_portfolio_allocation_panel(
+            return render_performance_risk_panel(
                 isolated_db,
                 isolated_root,
+                allocation=unavailable_portfolio_allocation("design_canary"),
                 performance_renderer=_canary_performance_fragment,
             )
-        if route == "risk-allocations":
-            return render_portfolio_health_panel(isolated_db)
         if route == "decision-audit":
             return render_portfolio_record_panel(isolated_db)
     raise ValueError(f"unknown portfolio design canary route: {route!r}")
@@ -347,10 +344,29 @@ def _canary_performance_fragment() -> str:
     analytics = PortfolioAnalytics(
         available=True,
         api_url="http://design-canary.invalid",
+        performance=PerformanceSeries(
+            start_date="2025-10-01",
+            end_date="2026-01-01",
+            base_value=10000.0,
+            net_external_cashflow_in=500.0,
+            backfill_start_unreliable=False,
+            points=[
+                PerformancePoint("2025-10-01", 0.0, 0.0, 0.0, 0.0),
+                PerformancePoint("2026-01-01", 8.5, 6.3, 7.8, 6.9),
+            ],
+        ),
         position_alpha=alpha,
     )
     live = LivePortfolio(available=True, api_url="http://design-canary.invalid")
-    return compose_portfolio_page(analytics, live, include_live=False)
+    return compose_portfolio_page(
+        analytics,
+        live,
+        include_live=False,
+        performance_title="Index Benchmarking",
+        include_position_drivers=False,
+        refresh_endpoint="/api/panel/performance_risk",
+        refresh_target_selector="#workOsPerformanceMount",
+    )
 
 
 def render_route_canary(*, route: str, viewport: str, db_path: Path | None = None) -> str:
@@ -374,14 +390,19 @@ def render_route_canary(*, route: str, viewport: str, db_path: Path | None = Non
         _canary_shell_loader() + '\n<script id="work-os-production-runtime">',
         1,
     )
-    if route in {"performance", "risk-allocations", "decision-audit"}:
-        fragment_json = json.dumps(_canary_portfolio_fragment(route, db_path)).replace("</", "<\\/")
+    if route in {"performance", "decision-audit"}:
+        fragment_json = json.dumps(canary_portfolio_fragment(route, db_path)).replace("</", "<\\/")
         endpoint = next(screen.endpoint for screen in SCREEN_SPECS if screen.screen_id == screen_id)
         loader = (
             '<script id="design-canary-portfolio-loader">'
             f"const designCanaryPortfolioFragment={fragment_json};"
+            'const designCanaryRiskFragment=\'<div class="k-well" data-design-canary-risk>'
+            "Deterministic risk fragment</div>';"
             "const designCanaryPortfolioFetch=window.fetch.bind(window);"
-            f"window.fetch=(input,init)=>String(input)==={json.dumps(endpoint)}"
+            f"window.fetch=(input,init)=>String(input).startsWith({json.dumps(endpoint + '?fragment=')})"
+            "?Promise.resolve(new Response(designCanaryRiskFragment,"
+            "{status:200,headers:{'Content-Type':'text/html'}}))"
+            f":String(input).split('?')[0]==={json.dumps(endpoint)}"
             "?Promise.resolve(new Response(designCanaryPortfolioFragment,"
             "{status:200,headers:{'Content-Type':'text/html'}}))"
             ":designCanaryPortfolioFetch(input,init);"
