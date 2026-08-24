@@ -465,6 +465,17 @@ def _production_runtime(generated_at: datetime) -> str:
     return value == null || (/^[a-z][a-z0-9_-]*$/).test(String(value));
   }}
 
+  function workOsPushHistoryState(state, url) {{
+    try {{
+      window.history.pushState(state, '', url);
+      return true;
+    }} catch (_error) {{
+      // Embedded/static specimens can have an opaque origin. History is a
+      // progressive enhancement there; the requested research view must still open.
+      return false;
+    }}
+  }}
+
   function workOsEncodeHistoryRoute(route) {{
     const origin = route.origin || {{}};
     return [
@@ -525,7 +536,7 @@ def _production_runtime(generated_at: datetime) -> str:
     }});
     const currentUrl = window.location.pathname + window.location.search + window.location.hash;
     workOsLastTransientFocusId = transient.focusId || null;
-    window.history.pushState(state, '', currentUrl);
+    workOsPushHistoryState(state, currentUrl);
   }}
 
   function workOsRestoreHistoryFocus(focusId) {{
@@ -888,7 +899,7 @@ def _production_runtime(generated_at: datetime) -> str:
       if (!(options && options.fromHistory)) {{
         const origin = workOsHistoryOrigin();
         const focusId = workOsHistoryFocusId();
-        window.history.pushState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: tickerOrArtifact.ticker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), '', workOsBriefUrl(tickerOrArtifact.ticker, origin, focusId));
+        workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: tickerOrArtifact.ticker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), workOsBriefUrl(tickerOrArtifact.ticker, origin, focusId));
       }}
       await workOsLoadBriefArtifact(tickerOrArtifact);
       return;
@@ -898,7 +909,7 @@ def _production_runtime(generated_at: datetime) -> str:
     if (!(options && options.fromHistory)) {{
       const origin = workOsHistoryOrigin();
       const focusId = workOsHistoryFocusId();
-      window.history.pushState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: requestedTicker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), '', workOsBriefUrl(requestedTicker, origin, focusId));
+      workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: requestedTicker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), workOsBriefUrl(requestedTicker, origin, focusId));
     }}
     const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&limit=1', {{ headers: {{ Accept: 'application/json' }} }});
     const payload = response.ok ? await response.json() : null;
@@ -1016,10 +1027,10 @@ def _production_runtime(generated_at: datetime) -> str:
     if (!canonicalRoute || !body || !heading || !fullPageDetailOverlay) return false;
     const origin = options && options.origin ? options.origin : workOsHistoryOrigin();
     if (!(options && options.fromHistory)) {{
-      window.history.pushState(Object.assign({{}}, window.history.state || {{}}, {{
+      workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{
         screenId: origin.surface, ticker: origin.ticker,
         workOsFullPageDetail: {{ route: canonicalRoute, title: String(title || 'Research detail'), origin: workOsEncodeDetailOrigin(origin) }}
-      }}), '', workOsFullPageDetailUrl(canonicalRoute, title, origin));
+      }}), workOsFullPageDetailUrl(canonicalRoute, title, origin));
     }}
     heading.textContent = String(title || 'Research detail');
     body.innerHTML = '<div class="k-well" role="status">Loading persisted research detail…</div>';
