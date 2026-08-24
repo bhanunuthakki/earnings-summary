@@ -11,6 +11,7 @@ three severities, then assert that:
 
 from __future__ import annotations
 
+import importlib
 import json
 import sqlite3
 from datetime import date
@@ -20,6 +21,7 @@ from pathlib import Path
 from report.models import SectionStatus, SignalsSection
 from report.renderers import markdown as markdown_renderer
 from report.renderers import workspace_html
+from report.renderers.workspace_styles import CSS as WORKSPACE_CSS
 from report.sections import signals as signals_section
 
 # ---------------------------------------------------------------------------
@@ -540,6 +542,36 @@ def test_workspace_card_uses_direction_safe_status_for_favorable_anomaly() -> No
     assert "signal-card sig-red" not in rendered
     assert "statistical severity red" in rendered
     assert "All signals (1)" in rendered
+
+
+def test_workspace_signal_disclosure_is_keyboard_reachable_at_both_widths() -> None:
+    """The compact ranked scan expands its full evidence table with the keyboard."""
+    playwright_api = importlib.import_module("playwright.sync_api")
+    body = StringIO()
+    workspace_html._signals_panel(body, _make_section_with_data())
+    html = f"<!doctype html><style>{WORKSPACE_CSS}</style><main>{body.getvalue()}</main>"
+
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            for width, height in ((1440, 900), (390, 844)):
+                context = browser.new_context(viewport={"width": width, "height": height})
+                try:
+                    page = context.new_page()
+                    page.set_content(html, wait_until="load")
+                    disclosure = page.locator("details.signals-all")
+                    summary = disclosure.locator("summary")
+                    assert disclosure.get_attribute("open") is None
+                    assert summary.bounding_box() is not None
+                    summary.focus()
+                    assert summary.evaluate("node => document.activeElement === node")
+                    summary.press("Enter")
+                    assert disclosure.get_attribute("open") == ""
+                    assert disclosure.locator("tbody tr").count() == 3
+                finally:
+                    context.close()
+        finally:
+            browser.close()
 
 
 def test_workspace_renderer_skips_when_empty() -> None:
