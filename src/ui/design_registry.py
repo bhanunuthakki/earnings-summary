@@ -1016,7 +1016,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "74b499524634752191345da39ba30ec8eda4eac95f17030063eb1111dc46af68",  # pragma: allowlist secret
-        "pipeline/portfolio_styles.py": "7c4b4300bd8be1f8532b994439d8a6be8b05e8f05e6e0d1900514df6e045fd4b",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "cab670b7b1a03b3081203916221a57f62e54a42cafd1cdca5dc4dc22ad815b3d",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "1e3fa030fe6be002e37fa5c14fb7c92fe1f04b86b1548aa68671f60951c3a4db",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "6d570bbb1f156426dc9c1c338f10805c1110f325079fcfc0c3970b16f327bcca",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret

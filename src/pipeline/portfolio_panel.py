@@ -200,6 +200,7 @@ def render_portfolio_panel(
     include_position_drivers: bool = True,
     refresh_endpoint: str = "/api/panel/portfolio",
     refresh_target_selector: str | None = None,
+    analytics_observer: Callable[[PortfolioAnalytics], None] | None = None,
 ) -> str:
     """The Portfolio → Performance fragment: the benchmark scorecard plus
     expandable position drivers.
@@ -230,6 +231,8 @@ def render_portfolio_panel(
             available=False, api_url=base, errors={"performance": _PROBE_DOWN_ERROR}
         )
         live = LivePortfolio(available=False, api_url=base, error=_PROBE_DOWN_ERROR)
+    if analytics_observer is not None:
+        analytics_observer(analytics)
     return compose_portfolio_page(
         analytics,
         live,
