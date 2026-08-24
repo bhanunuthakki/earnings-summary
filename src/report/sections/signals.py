@@ -23,8 +23,9 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from report.models import (
     MissingReason,
@@ -32,9 +33,20 @@ from report.models import (
     SignalRow,
     SignalsSection,
 )
+from report.render_clock import render_today
 from report.sections._common import has_table, open_repo_db
 
 log = logging.getLogger(__name__)
+
+_SIGNAL_STALE_AFTER_DAYS = 200
+_SUMMARY_LIMIT = 3
+_MetricKind = Literal["financial", "kpi", "segment"]
+_SignalType = Literal[
+    "trend", "inflection", "anomaly", "yoy_acceleration", "seasonal", "correlation"
+]
+_SignalSeverity = Literal["green", "yellow", "red"]
+_InvestmentDirection = Literal["favorable", "unfavorable", "ambiguous"]
+_SignalFreshness = Literal["fresh", "stale", "unknown"]
 
 
 def build(
@@ -42,6 +54,7 @@ def build(
     repo_root: Path,
     *,
     conn: sqlite3.Connection | None = None,
+    as_of: date | None = None,
 ) -> SignalsSection:
     """Build the §3.5 SignalsSection for one ticker.
 
@@ -63,27 +76,32 @@ def build(
     try:
         if not has_table(db_conn, "timeseries_signals"):
             return SignalsSection(status=SectionStatus.OK)
-        rows = _fetch_signal_rows(db_conn, ticker)
+        rows = _fetch_signal_rows(db_conn, ticker, as_of=as_of or render_today())
     finally:
         if conn is None:
             db_conn.close()
 
     red, yellow, green = _bucket_and_sort(rows)
+    all_signals = red + yellow + green
+    ranked = _rank(all_signals)
+    summary = _summary_candidates(ranked)
     return SignalsSection(
         status=SectionStatus.OK,
         red_signals=red,
         yellow_signals=yellow,
         green_signals=green,
+        summary_signals=summary[:_SUMMARY_LIMIT],
+        all_signals=ranked,
     )
 
 
-def _fetch_signal_rows(conn: sqlite3.Connection, ticker: str) -> list[SignalRow]:
+def _fetch_signal_rows(conn: sqlite3.Connection, ticker: str, *, as_of: date) -> list[SignalRow]:
     """Pull every timeseries_signals row for the ticker, hydrated into SignalRow."""
     conn.row_factory = sqlite3.Row
     rs = conn.execute(
         """
         SELECT metric_name, metric_kind, signal_type, severity,
-               narrative, value_json
+               narrative, value_json, computed_at
         FROM timeseries_signals
         WHERE ticker = ?
         """,
@@ -92,8 +110,20 @@ def _fetch_signal_rows(conn: sqlite3.Connection, ticker: str) -> list[SignalRow]
 
     out: list[SignalRow] = []
     for r in rs:
+        metric_kind = str(r["metric_kind"])
         signal_type = str(r["signal_type"])
         severity = str(r["severity"])
+        if metric_kind not in ("financial", "kpi", "segment"):
+            continue
+        if signal_type not in (
+            "trend",
+            "inflection",
+            "anomaly",
+            "yoy_acceleration",
+            "seasonal",
+            "correlation",
+        ):
+            continue
         if severity not in ("green", "yellow", "red"):
             continue
         try:
@@ -101,18 +131,75 @@ def _fetch_signal_rows(conn: sqlite3.Connection, ticker: str) -> list[SignalRow]
         except (TypeError, ValueError, json.JSONDecodeError):
             payload = {}
         magnitude = _magnitude_for(signal_type, payload)
+        source_period = _source_period(payload)
         out.append(
             SignalRow(
                 metric_name=str(r["metric_name"]),
-                metric_kind=cast("str", r["metric_kind"]),  # CHECK constraint guarantees enum
-                signal_type=cast("str", signal_type),
-                severity=cast("str", severity),
+                metric_kind=metric_kind,
+                signal_type=signal_type,
+                severity=severity,
                 narrative=r["narrative"],
                 value_summary=_value_summary(signal_type, payload),
                 severity_magnitude=magnitude,
+                investment_direction=_investment_direction(payload),
+                statistical_significance=_statistical_significance(payload),
+                freshness=_freshness(source_period, as_of),
+                source_period=source_period,
+                computed_at=_parse_datetime(r["computed_at"]),
+                is_thesis_kpi=payload.get("is_thesis_kpi") is True,
             )
         )
     return out
+
+
+def _investment_direction(payload: dict[str, object]) -> _InvestmentDirection:
+    direction = payload.get("investment_direction")
+    if direction in ("favorable", "unfavorable", "ambiguous"):
+        return direction
+    return "ambiguous"
+
+
+def _object_list(value: object) -> list[object] | None:
+    """Narrow a validated JSON array without allowing ``Unknown`` downstream."""
+    return cast("list[object]", value) if isinstance(value, list) else None
+
+
+def _object_mapping(value: object) -> dict[str, object] | None:
+    """Narrow a validated JSON object at the report payload boundary."""
+    return cast("dict[str, object]", value) if isinstance(value, dict) else None
+
+
+def _statistical_significance(payload: dict[str, object]) -> bool | None:
+    significance = payload.get("statistical_significance")
+    return significance if isinstance(significance, bool) else None
+
+
+def _source_period(payload: dict[str, object]) -> date | None:
+    raw = payload.get("source_period")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
+def _parse_datetime(raw: object) -> datetime | None:
+    if isinstance(raw, datetime):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _freshness(source_period: date | None, as_of: date) -> _SignalFreshness:
+    """Evaluate the source period against the report's explicit render date."""
+    if source_period is None:
+        return "unknown"
+    return "stale" if source_period < as_of - timedelta(days=_SIGNAL_STALE_AFTER_DAYS) else "fresh"
 
 
 def _bucket_and_sort(
@@ -133,6 +220,41 @@ def _bucket_and_sort(
     return red, yellow, green
 
 
+def _rank(rows: list[SignalRow]) -> list[SignalRow]:
+    """Rank all disclosed signals; the summary applies a stricter admission gate."""
+    freshness_rank = {"fresh": 3, "unknown": 2, "stale": 1}
+    significance_rank = {True: 3, None: 2, False: 1}
+    direction_rank = {"unfavorable": 3, "ambiguous": 2, "favorable": 1}
+    severity_rank = {"red": 3, "yellow": 2, "green": 1}
+
+    def key(row: SignalRow) -> tuple[int, int, int, int, int, int, float, str]:
+        return (
+            freshness_rank[row.freshness],
+            significance_rank[row.statistical_significance],
+            direction_rank[row.investment_direction],
+            int(row.is_thesis_kpi),
+            severity_rank[row.severity],
+            row.source_period.toordinal() if row.source_period is not None else 0,
+            abs(row.severity_magnitude or 0.0),
+            row.metric_name.lower(),
+        )
+
+    ordered = sorted(rows, key=key, reverse=True)
+    return [row.model_copy(update={"rank": index}) for index, row in enumerate(ordered, start=1)]
+
+
+def _summary_candidates(rows: list[SignalRow]) -> list[SignalRow]:
+    """Admit only current, statistically credible evidence to the compact summary.
+
+    Statistical outliers without a current source period or significance remain
+    available in the all-signals disclosure. No signal type currently carries a
+    deterministic domain rule that overrides this gate.
+    """
+    return [
+        row for row in rows if row.freshness == "fresh" and row.statistical_significance is True
+    ]
+
+
 def _magnitude_for(signal_type: str, payload: dict[str, object]) -> float | None:
     """Pull the per-signal magnitude scalar from the JSON payload.
 
@@ -142,13 +264,14 @@ def _magnitude_for(signal_type: str, payload: dict[str, object]) -> float | None
     the row into that tier in the first place.
     """
     if signal_type == "anomaly":
-        anomalies = payload.get("anomalies")
-        if isinstance(anomalies, list) and anomalies:
+        anomalies = _object_list(payload.get("anomalies"))
+        if anomalies:
             zs: list[float] = []
             for a in anomalies:
-                if not isinstance(a, dict):
+                anomaly = _object_mapping(a)
+                if anomaly is None:
                     continue
-                z = a.get("zscore")
+                z = anomaly.get("zscore")
                 if isinstance(z, (int, float)):
                     zs.append(abs(float(z)))
             if zs:
@@ -177,16 +300,17 @@ def _value_summary(signal_type: str, payload: dict[str, object]) -> str | None:
     "Δ=-180bps" — short enough to live in a small chip beside the narrative.
     """
     if signal_type == "anomaly":
-        anomalies = payload.get("anomalies")
-        if not isinstance(anomalies, list) or not anomalies:
+        anomalies = _object_list(payload.get("anomalies"))
+        if not anomalies:
             return None
         # Most-recent anomaly + max |z| in the window.
         zs: list[float] = []
         last_z: float | None = None
         for a in anomalies:
-            if not isinstance(a, dict):
+            anomaly = _object_mapping(a)
+            if anomaly is None:
                 continue
-            z = a.get("zscore")
+            z = anomaly.get("zscore")
             if isinstance(z, (int, float)):
                 last_z = float(z)
                 zs.append(abs(last_z))

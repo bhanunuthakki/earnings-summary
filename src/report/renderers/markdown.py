@@ -33,6 +33,7 @@ from report.models import (
     SegmentSeries,
     SegmentsSection,
     SegmentWeighting,
+    SignalRow,
     SignalsSection,
     SnapshotSection,
     SoftRuleEvaluation,
@@ -702,29 +703,47 @@ def _signals(out: StringIO, s: SignalsSection) -> None:
         return
     out.write("## §3.5 Signals\n\n")
     out.write(f"_Status: `{s.status.value}`_\n\n")
-    fires = list(s.red_signals) + list(s.yellow_signals)
-    if fires:
-        out.write("### Fires\n\n")
-        for r in fires:
+    summary = s.summary_signals or (list(s.red_signals) + list(s.yellow_signals))
+    if summary:
+        out.write("### Fires & priorities\n\n")
+        for r in summary:
             tag = _SEVERITY_BULLET.get(r.severity, "")
             type_s = r.signal_type.replace("_", " ")
             narrative = r.narrative or "(no narrative)"
             stat = f" ({r.value_summary})" if r.value_summary else ""
-            out.write(f"- {tag} **{r.metric_name}** · _{type_s}_ — {narrative}{stat}\n")
+            out.write(
+                f"- {tag} **{r.metric_name}** · _{type_s}_ · "
+                f"{_signal_context(r)} — {narrative}{stat}\n"
+            )
         out.write("\n")
     total = len(s.red_signals) + len(s.yellow_signals) + len(s.green_signals)
     out.write(f"<details><summary>All signals ({total})</summary>\n\n")
-    out.write("| Sev | Metric | Kind | Signal | Narrative | Stat |\n")
-    out.write("|---|---|---|---|---|---|\n")
-    all_rows = list(s.red_signals) + list(s.yellow_signals) + list(s.green_signals)
+    out.write("| # | Sev | Direction | Metric | Signal | Evidence | Source | Narrative | Stat |\n")
+    out.write("|---|---|---|---|---|---|---|---|---|\n")
+    all_rows = s.all_signals or (
+        list(s.red_signals) + list(s.yellow_signals) + list(s.green_signals)
+    )
     for r in all_rows:
         narrative = r.narrative or "—"
         stat = r.value_summary or "—"
         out.write(
-            f"| {r.severity} | {r.metric_name} | {r.metric_kind} | "
-            f"{r.signal_type.replace('_', ' ')} | {narrative} | {stat} |\n"
+            f"| {r.rank or '—'} | {r.severity} | {r.investment_direction} | "
+            f"{r.metric_name} | {r.signal_type.replace('_', ' ')} | "
+            f"{_evidence_label(r)} | {r.source_period or '—'} ({r.freshness}) | "
+            f"{narrative} | {stat} |\n"
         )
     out.write("\n</details>\n\n")
+
+
+def _evidence_label(row: SignalRow) -> str:
+    if row.statistical_significance is None:
+        return "not tested"
+    return "significant" if row.statistical_significance else "not significant"
+
+
+def _signal_context(row: SignalRow) -> str:
+    thesis = "thesis KPI" if row.is_thesis_kpi else row.metric_kind
+    return f"{row.investment_direction} · {thesis} · {row.freshness} · {_evidence_label(row)}"
 
 
 def _segments(out: StringIO, s: SegmentsSection) -> None:

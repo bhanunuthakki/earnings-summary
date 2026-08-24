@@ -54,6 +54,7 @@ from timeseries.primitives import (
     seasonal_decompose,
     yoy_acceleration,
 )
+from user_state.kpi_polarity import Polarity, infer_polarity_from_table
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +92,9 @@ class _MetricSpec:
     loader: str  # 'financial' | 'kpi' | 'segment'
     # Loader args needed for the segment case (segment_name, metric):
     segment_args: tuple[str, str] | None = None
+    # A holdings tier-1 KPI is explicitly thesis-linked. Other metrics may be
+    # useful statistical context, but must not imply thesis relevance.
+    is_thesis_kpi: bool = False
 
 
 def compute_and_persist_signals(
@@ -190,8 +194,8 @@ def _collect_metric_specs(ticker: str, repo_root: Path) -> list[_MetricSpec]:
     if holdings is None:
         return specs
 
-    raw_priorities = holdings.get("chart_priorities") or []
-    if isinstance(raw_priorities, list):
+    raw_priorities = _object_list(holdings.get("chart_priorities"))
+    if raw_priorities is not None:
         for label in raw_priorities:
             if not isinstance(label, str):
                 continue
@@ -199,18 +203,20 @@ def _collect_metric_specs(ticker: str, repo_root: Path) -> list[_MetricSpec]:
             if mapped is not None:
                 _add(_MetricSpec(metric_name=mapped, metric_kind="financial", loader="financial"))
 
-    raw_kpis = holdings.get("tier_1_kpis") or []
-    if isinstance(raw_kpis, list):
-        for k in raw_kpis:
-            if not isinstance(k, dict):
+    raw_kpis = _object_list(holdings.get("tier_1_kpis"))
+    if raw_kpis is not None:
+        for raw_kpi in raw_kpis:
+            kpi = _object_mapping(raw_kpi)
+            if kpi is None:
                 continue
-            name = k.get("name")
+            name = kpi.get("name")
             if isinstance(name, str) and name.strip():
                 _add(
                     _MetricSpec(
                         metric_name=name.strip(),
                         metric_kind="kpi",
                         loader="kpi",
+                        is_thesis_kpi=True,
                     )
                 )
 
@@ -226,6 +232,16 @@ def _load_holdings(ticker: str, repo_root: Path) -> dict[str, object] | None:
     except (OSError, json.JSONDecodeError) as exc:
         log.warning({"event": "holdings_load_failed", "ticker": ticker, "error": str(exc)})
         return None
+
+
+def _object_list(value: object) -> list[object] | None:
+    """Narrow parsed JSON arrays at the holdings boundary."""
+    return cast("list[object]", value) if isinstance(value, list) else None
+
+
+def _object_mapping(value: object) -> dict[str, object] | None:
+    """Narrow parsed JSON objects at the holdings boundary."""
+    return cast("dict[str, object]", value) if isinstance(value, dict) else None
 
 
 # Display labels in holdings JSON ("Revenue", "Operating income") need to
@@ -286,15 +302,23 @@ def _iter_signals(
 ) -> Iterable[tuple[str, str, str, str | None]]:
     """Yield (signal_type, value_json, severity, narrative) for each
     primitive that produced a usable result. Skips ``insufficient_data``."""
+    source_period = series[-1].period_end.date().isoformat()
+    polarity = infer_polarity_from_table(spec.metric_name)
+
     trend = detect_trend(series)
     if "insufficient_data" not in trend:
         sev, narr = _severity_trend(spec, trend)
-        yield "trend", json.dumps(trend, default=str), sev, narr
+        yield "trend", _serialize_signal(spec, trend, source_period, polarity, "trend"), sev, narr
 
     infl = detect_inflection(series)
     if "insufficient_data" not in infl and infl.get("inflection_period"):
         sev, narr = _severity_inflection(spec, infl, len(series))
-        yield "inflection", json.dumps(infl, default=str), sev, narr
+        yield (
+            "inflection",
+            _serialize_signal(spec, infl, source_period, polarity, "inflection"),
+            sev,
+            narr,
+        )
 
     anomalies = rolling_zscore_anomalies(series, window=8, threshold=_ZSCORE_YELLOW)
     if anomalies:
@@ -304,7 +328,7 @@ def _iter_signals(
         sev, narr = _severity_anomalies(spec, anomalies)
         yield (
             "anomaly",
-            json.dumps({"anomalies": anomalies}, default=str),
+            _serialize_signal(spec, {"anomalies": anomalies}, source_period, polarity, "anomaly"),
             sev,
             narr,
         )
@@ -312,7 +336,12 @@ def _iter_signals(
     yoy = yoy_acceleration(series)
     if "insufficient_data" not in yoy:
         sev, narr = _severity_yoy_acceleration(spec, yoy)
-        yield "yoy_acceleration", json.dumps(yoy, default=str), sev, narr
+        yield (
+            "yoy_acceleration",
+            _serialize_signal(spec, yoy, source_period, polarity, "yoy_acceleration"),
+            sev,
+            narr,
+        )
 
     decomp = seasonal_decompose(series, period=4)
     if "insufficient_data" not in decomp:
@@ -325,7 +354,80 @@ def _iter_signals(
             "seasonal_strength": decomp.get("seasonal_strength"),
         }
         sev, narr = _severity_seasonal(spec, summary)
-        yield "seasonal", json.dumps(summary, default=str), sev, narr
+        yield (
+            "seasonal",
+            _serialize_signal(spec, summary, source_period, polarity, "seasonal"),
+            sev,
+            narr,
+        )
+
+
+def _serialize_signal(
+    spec: _MetricSpec,
+    payload: dict[str, object],
+    source_period: str,
+    polarity: Polarity | None,
+    signal_type: str,
+) -> str:
+    """Persist statistical output with its investment interpretation.
+
+    Primitives describe what happened statistically. Direction is a distinct,
+    polarity-aware interpretation; a metric without a known polarity remains
+    ambiguous rather than inheriting a bullish/bearish meaning from its slope.
+    """
+    persisted = dict(payload)
+    persisted["source_period"] = source_period
+    persisted["is_thesis_kpi"] = spec.is_thesis_kpi
+    if polarity is not None:
+        persisted["polarity"] = polarity.value
+    persisted["investment_direction"] = classify_investment_direction(
+        signal_type, persisted, polarity
+    )
+    return json.dumps(persisted, default=str)
+
+
+def classify_investment_direction(
+    signal_type: str,
+    payload: dict[str, object],
+    polarity: Polarity | None,
+) -> str:
+    """Return favorable, unfavorable, or ambiguous without overstating evidence."""
+    if polarity is None:
+        return "ambiguous"
+    if signal_type == "trend" and payload.get("statistical_significance") is not True:
+        # A non-significant slope may be informative context, never an adverse
+        # investment conclusion without a separately encoded domain rule.
+        return "ambiguous"
+
+    signed_change = _signed_change(signal_type, payload)
+    if signed_change is None or signed_change == 0:
+        return "ambiguous"
+    higher_is_better = polarity is Polarity.HIGHER_IS_BETTER
+    favorable = signed_change > 0 if higher_is_better else signed_change < 0
+    return "favorable" if favorable else "unfavorable"
+
+
+def _signed_change(signal_type: str, payload: dict[str, object]) -> float | None:
+    """Extract the signed movement relevant to a polarity interpretation."""
+    candidate: object | None = None
+    if signal_type == "trend":
+        candidate = payload.get("slope")
+    elif signal_type == "anomaly":
+        anomalies = _object_list(payload.get("anomalies"))
+        if anomalies:
+            latest = _object_mapping(anomalies[-1])
+            if latest is not None:
+                candidate = latest.get("zscore")
+    elif signal_type == "inflection":
+        prior = payload.get("prior_slope")
+        post = payload.get("post_slope")
+        if isinstance(prior, (int, float)) and isinstance(post, (int, float)):
+            return float(post) - float(prior)
+    elif signal_type == "yoy_acceleration":
+        candidate = payload.get("most_recent_delta")
+    if isinstance(candidate, (int, float)):
+        return float(candidate)
+    return None
 
 
 def _severity_trend(spec: _MetricSpec, payload: dict[str, object]) -> tuple[str, str]:

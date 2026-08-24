@@ -717,6 +717,13 @@ class SignalRow(BaseModel):
     narrative: str | None = None
     value_summary: str | None = None  # short numeric hint, e.g. "z=2.8", "slope=-12%/yr"
     severity_magnitude: float | None = None
+    investment_direction: Literal["favorable", "unfavorable", "ambiguous"] = "ambiguous"
+    statistical_significance: bool | None = None
+    freshness: Literal["fresh", "stale", "unknown"] = "unknown"
+    source_period: date | None = None
+    computed_at: datetime | None = None
+    is_thesis_kpi: bool = False
+    rank: int | None = None
 
 
 class SignalsSection(BaseModel):
@@ -737,6 +744,8 @@ class SignalsSection(BaseModel):
     red_signals: list[SignalRow] = Field(default_factory=list[SignalRow])
     yellow_signals: list[SignalRow] = Field(default_factory=list[SignalRow])
     green_signals: list[SignalRow] = Field(default_factory=list[SignalRow])
+    summary_signals: list[SignalRow] = Field(default_factory=list[SignalRow])
+    all_signals: list[SignalRow] = Field(default_factory=list[SignalRow])
 
 
 # ---------------------------------------------------------------------------

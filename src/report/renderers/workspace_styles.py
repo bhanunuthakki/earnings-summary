@@ -684,6 +684,8 @@ details.panel > summary:hover { background: var(--paper); }
 .signal-card.sig-red { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 16%, transparent); }
 .signal-card.sig-yellow { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
 .signal-card.sig-green { border-left-color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.signal-card.sig-favorable { border-left-color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.signal-card.sig-ambiguous { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .signal-card-head {
   display: flex; justify-content: space-between;
   gap: var(--sp-2); align-items: baseline; margin-bottom: var(--sp-1);
@@ -695,10 +697,12 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .signal-card-narrative { line-height: 1.45; margin: var(--sp-1) 0 var(--sp-2); }
 .signal-card-stat { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }
+.signal-card-context { margin-top: var(--sp-2); font-size: var(--fs-caption); color: var(--muted); }
 .signal-sev { font-weight: 600; color: var(--muted); }
 .signal-sev.sig-red { color: var(--bad); }
 .signal-sev.sig-yellow { color: var(--warn); }
 .signal-sev.sig-green { color: var(--ok); }
+.signal-direction { font-weight: 600; }
 
 .signals-all { padding: 0 var(--panel-pad-x) var(--sp-3); }
 .signals-all > summary {
