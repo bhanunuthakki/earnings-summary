@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 DestinationSurfaceId: TypeAlias = Literal[
     "screen-cockpit",
     "screen-performance",
-    "screen-allocation",
     "screen-workspace",
     "screen-brief-library",
     "screen-analytics-playground",
@@ -89,7 +88,6 @@ DEFAULT_ROUTE = OverlayRoute(surface="screen-cockpit")
 DESTINATION_SURFACE_IDS: Final[tuple[DestinationSurfaceId, ...]] = (
     "screen-cockpit",
     "screen-performance",
-    "screen-allocation",
     "screen-workspace",
     "screen-brief-library",
     "screen-analytics-playground",
