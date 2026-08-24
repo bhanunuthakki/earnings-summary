@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 from ask.exchange_store import StoredExchangeDataError, get_session_context
 from ask.store import list_sessions
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from user_state.notes import AnalystNoteRow, list_notes
 
 __all__ = ["EvaluationDialogue", "EvaluationDialogueItem", "load_evaluation_dialogues"]
@@ -109,9 +110,12 @@ def load_evaluation_dialogues(
 
     safe_limit = max(1, min(int(limit), _MAX_ITEMS))
     path = Path(db_path)
+    if not path.is_file():
+        return EvaluationDialogue(
+            state="unavailable", items=(), reason_codes=("evaluation_source_unavailable",)
+        )
     try:
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
     except (OSError, sqlite3.Error):
         return EvaluationDialogue(
             state="unavailable", items=(), reason_codes=("database_unavailable",)
