@@ -29,6 +29,7 @@ from pipeline.work_os_research import (
     render_company_desk_shell,
     render_fact_playground_shell,
 )
+from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
 from pipeline.work_os_styles import WORK_OS_CSS
 from ui.controls import controls_css
 from ui.living_grid import head_assets as living_grid_head_assets
@@ -159,6 +160,28 @@ _NAV_ITEM_RE = re.compile(
     r"(?P<body>.*?)</a>",
     re.DOTALL,
 )
+
+
+def _render_full_page_detail_host() -> str:
+    """Render the one registered, read-only host for routed detail peeks."""
+
+    return """
+<section class="work-os-detail-page" id="workOsFullPageDetail" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="workOsFullPageDetailTitle" hidden>
+  <header class="work-os-detail-page-header">
+    <button class="k-btn k-btn-quiet k-btn-sm work-os-detail-page-close" id="workOsFullPageDetailBack" type="button">Back</button>
+    <div class="work-os-detail-page-title">
+      <div class="k-card-meta">Research detail</div>
+      <h1 class="k-card-title" id="workOsFullPageDetailTitle">Research detail</h1>
+    </div>
+    <button class="k-btn k-btn-quiet k-btn-sm" id="workOsFullPageDetailClose" type="button" aria-label="Close research detail">Close</button>
+  </header>
+  <main class="work-os-detail-page-body k-doc" id="workOsFullPageDetailBody" tabindex="-1">
+    <div class="k-well" role="status">Loading persisted research detail…</div>
+  </main>
+</section>
+""".strip()
+
+
 _ALLOCATION_NAV_RE = re.compile(
     r'\s*<a onclick="navigateTo\(\'screen-allocation\'\)".*?id="nav-allocation".*?</a>',
     re.DOTALL,
@@ -325,6 +348,7 @@ def _nav_button(match: re.Match[str]) -> str:
 def _production_runtime(generated_at: datetime) -> str:
     endpoint_json = json.dumps(_endpoint_map(), indent=2, sort_keys=False)
     legacy_hash_json = json.dumps(_LEGACY_HASHES, indent=2, sort_keys=False)
+    route_destinations_json = json.dumps(DESTINATION_SURFACE_IDS)
     stamp = escape(generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     return f"""
 <style id="work-os-production-css">
@@ -336,6 +360,23 @@ def _production_runtime(generated_at: datetime) -> str:
 <script id="work-os-production-runtime">
   const WORK_OS_ENDPOINTS = {endpoint_json};
   const WORK_OS_LEGACY_HASHES = {legacy_hash_json};
+  // Kept in sync with pipeline.work_os_route_contract: browser state is only
+  // replayable when it names a registered destination and known transient.
+  const WORK_OS_ROUTE_DESTINATIONS = {route_destinations_json};
+  // These are the existing read-only content handlers registered by
+  // comments_server_content_routes.  Full-page detail never upgrades an
+  // arbitrary prototype callback or an unregistered endpoint into navigation.
+  const WORK_OS_FULL_PAGE_PEEK_PATHS = [
+    new RegExp('^/api/peek/(?:alerts|news-events|documents|score|earnings-prep|earnings-readout|fit|weekly-packet|whatif|etf_workup|discovery-compare)$'),
+    new RegExp('^/api/peek/(?:alert/[0-9]+|ticker/[A-Za-z0-9.=-]+|memo/[a-z_]+|review/[A-Za-z0-9.=-]+|provenance(?:/[A-Za-z0-9_:-]+)?)$'),
+    new RegExp('^/api/governed-alerts/[1-9][0-9]*/evidence$'),
+    new RegExp('^/source/[0-9]+$')
+  ];
+  const WORK_OS_HISTORY_DRAWER_TYPES = new Set([
+    'comparative-viewer', 'dcf-priors', 'dcf-sensitivity', 'factor-heatmap',
+    'falsifier', 'financials', 'governance-limits', 'live-detail', 'llm-routing',
+    'peers', 'rebalance-plan', 'saydo', 'thresholds', 'updates'
+  ]);
   const workOsRequests = new WeakMap();
   let workOsRequestGeneration = 0;
   const WORK_OS_FETCH_TIMEOUT_MS = 15000;
@@ -354,6 +395,10 @@ def _production_runtime(generated_at: datetime) -> str:
   let workOsCompanyRequestController = null;
   let workOsPeekRequestSequence = 0;
   let workOsPeekRequestController = null;
+  let workOsFullPageDetailRequestSequence = 0;
+  let workOsFullPageDetailRequestController = null;
+  let workOsLastTransientFocusId = null;
+  let workOsReplayingHistory = false;
   let workOsReaderContext = null;
   let workOsFactPlaygroundLoading = null;
   let workOsFactPlaygroundRequestSequence = 0;
@@ -412,6 +457,94 @@ def _production_runtime(generated_at: datetime) -> str:
     return true;
   }}
 
+  function workOsValidHistoryTicker(value) {{
+    return value == null || (/^[A-Z][A-Z0-9.=-]{{0,14}}$/).test(String(value));
+  }}
+
+  function workOsValidHistorySection(value) {{
+    return value == null || (/^[a-z][a-z0-9_-]*$/).test(String(value));
+  }}
+
+  function workOsPushHistoryState(state, url) {{
+    try {{
+      window.history.pushState(state, '', url);
+      return true;
+    }} catch (_error) {{
+      // Embedded/static specimens can have an opaque origin. History is a
+      // progressive enhancement there; the requested research view must still open.
+      return false;
+    }}
+  }}
+
+  function workOsEncodeHistoryRoute(route) {{
+    const origin = route.origin || {{}};
+    return [
+      route.surface || '', route.ticker || '', route.section || '', route.overlay || '',
+      origin.surface || '', origin.ticker || '', origin.section || ''
+    ].join('|');
+  }}
+
+  function workOsRouteFromHistoryState(state) {{
+    if (!state || typeof state !== 'object' || Array.isArray(state) || typeof state.workOsRoute !== 'string') return null;
+    const fields = state.workOsRoute.split('|');
+    if (fields.length !== 7 || fields.some(function (field) {{ return field.indexOf('\\0') !== -1; }})) return null;
+    const surface = fields[0];
+    const ticker = fields[1] || null;
+    const section = fields[2] || null;
+    const overlay = fields[3] || null;
+    const originSurface = fields[4] || null;
+    const originTicker = fields[5] || null;
+    const originSection = fields[6] || null;
+    if (!WORK_OS_ROUTE_DESTINATIONS.includes(surface) || !WORK_OS_ROUTE_DESTINATIONS.includes(originSurface)) return null;
+    if (overlay !== 'risk_drawer' && overlay !== 'peek') return null;
+    if (!workOsValidHistoryTicker(ticker) || !workOsValidHistoryTicker(originTicker)) return null;
+    if (!workOsValidHistorySection(section) || !workOsValidHistorySection(originSection)) return null;
+    return {{
+      surface: surface, ticker: ticker, section: section, overlay: overlay,
+      origin: {{ surface: originSurface, ticker: originTicker, section: originSection }}
+    }};
+  }}
+
+  function workOsHistoryFocusId() {{
+    const active = document.activeElement;
+    return active instanceof HTMLElement && active.id ? active.id : null;
+  }}
+
+  function workOsHistoryOrigin() {{
+    const current = workOsRouteFromHistoryState(window.history.state);
+    if (current) return current.origin;
+    const context = workOsReadCompanyContext();
+    const screen = workOsScreenFromHash();
+    return {{
+      surface: WORK_OS_ROUTE_DESTINATIONS.includes(screen) ? screen : 'screen-cockpit',
+      ticker: workOsValidHistoryTicker(context.ticker) ? context.ticker || null : null,
+      section: workOsValidHistorySection(context.screen) ? context.screen || null : null
+    }};
+  }}
+
+  function workOsPushTransientHistory(overlay, transient) {{
+    const origin = workOsHistoryOrigin();
+    const route = {{
+      surface: origin.surface, ticker: origin.ticker, section: origin.section,
+      overlay: overlay, origin: origin
+    }};
+    const state = Object.assign({{}}, window.history.state || {{}}, {{
+      screenId: route.surface,
+      ticker: route.ticker,
+      workOsRoute: workOsEncodeHistoryRoute(route),
+      workOsTransient: transient
+    }});
+    const currentUrl = window.location.pathname + window.location.search + window.location.hash;
+    workOsLastTransientFocusId = transient.focusId || null;
+    workOsPushHistoryState(state, currentUrl);
+  }}
+
+  function workOsRestoreHistoryFocus(focusId) {{
+    if (!focusId) return;
+    const focusTarget = document.getElementById(focusId);
+    if (focusTarget && typeof focusTarget.focus === 'function') focusTarget.focus();
+  }}
+
   window.workOsOpenGlobalCopilot = function () {{
     window.openWorkOsCopilot({{
       company_ticker: workOsCurrentCompanyTicker(),
@@ -431,6 +564,7 @@ def _production_runtime(generated_at: datetime) -> str:
   const originalClosePeekDrawer = window.closePeekDrawer;
   const drillDrawer = document.getElementById('drillDrawer');
   const peekDrawer = document.getElementById('peekDrawer');
+  const fullPageDetail = document.getElementById('workOsFullPageDetail');
   const briefReader = document.getElementById('workOsBriefReader');
   const companyPickerRoot = document.getElementById('companyPickerRoot');
   const companyPickerTrigger = document.getElementById('companyPickerTrigger');
@@ -454,6 +588,7 @@ def _production_runtime(generated_at: datetime) -> str:
       drillDrawer.classList.remove('is-open');
       drillDrawer.setAttribute('aria-hidden', 'true');
       originalCloseDrillDrawer();
+      workOsDiscardClosedTransient('risk_drawer');
     }}
   }});
   const peekOverlay = peekDrawer && window.CCOverlay.register(peekDrawer, {{
@@ -469,7 +604,16 @@ def _production_runtime(generated_at: datetime) -> str:
       peekDrawer.classList.remove('is-open');
       peekDrawer.setAttribute('aria-hidden', 'true');
       originalClosePeekDrawer();
+      workOsDiscardClosedTransient('peek');
     }}
+  }});
+  const fullPageDetailOverlay = fullPageDetail && window.CCOverlay.register(fullPageDetail, {{
+    modal: true, priority: window.CCOverlay.PRIORITY.PEEK, scrim: false,
+    trapFocus: true, restoreFocus: true, motion: 'fade',
+    group: 'work-os-detail-page', closeId: 'workOsFullPageDetailClose', wireClose: true,
+    onOpen: function () {{ fullPageDetail.hidden = false; fullPageDetail.setAttribute('aria-hidden', 'false'); }},
+    onBeforeClose: function () {{ workOsAbortFullPageDetailRequest(); }},
+    onClose: function () {{ fullPageDetail.hidden = true; fullPageDetail.setAttribute('aria-hidden', 'true'); }}
   }});
   const briefReaderOverlay = briefReader && window.CCOverlay.register(briefReader, {{
     modal: true, priority: window.CCOverlay.PRIORITY.PALETTE, scrim: false,
@@ -502,26 +646,49 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }});
 
-  window.openDrillDrawer = function (type) {{
-    originalOpenDrillDrawer(type);
+  window.openDrillDrawer = function (type, options) {{
+    const drawerType = typeof type === 'string' && WORK_OS_HISTORY_DRAWER_TYPES.has(type)
+      ? type : null;
+    if (!drawerType) return false;
+    if (!(options && options.fromHistory)) {{
+      workOsPushTransientHistory('risk_drawer', {{
+        drawerType: drawerType, focusId: workOsHistoryFocusId()
+      }});
+    }}
+    originalOpenDrillDrawer(drawerType);
     const reportTabs = {{ financials: 'financials', saydo: 'saydo', peers: 'comps', falsifier: 'bear' }};
-    if (reportTabs[type]) {{
+    if (reportTabs[drawerType]) {{
       const ticker = workOsCurrentCompanyTicker();
       const title = document.getElementById('drawerTitle');
       const subtitle = document.getElementById('drawerSubtitle');
       const body = document.getElementById('drawerBody');
-      if (title) title.textContent = ticker + ' · ' + type;
+      if (title) title.textContent = ticker + ' · ' + drawerType;
       if (subtitle) subtitle.textContent = 'Live company brief detail';
-      if (body) body.innerHTML = workOsReportFrame(ticker, reportTabs[type], 'work-os-report-frame');
+      if (body) body.innerHTML = workOsReportFrame(ticker, reportTabs[drawerType], 'work-os-report-frame');
     }}
     if (drillOverlay) drillOverlay.open();
+    return true;
   }};
-  window.closeDrillDrawer = function () {{ if (drillOverlay) drillOverlay.close(); }};
+  function workOsDiscardClosedTransient(overlay) {{
+    if (workOsReplayingHistory) return false;
+    const route = workOsRouteFromHistoryState(window.history.state);
+    if (!route || route.overlay !== overlay) return false;
+    window.history.back();
+    return true;
+  }}
+  function workOsCloseTransientFromHistory(overlay) {{
+    return workOsDiscardClosedTransient(overlay);
+  }}
+  window.closeDrillDrawer = function () {{
+    if (!workOsCloseTransientFromHistory('risk_drawer') && drillOverlay) drillOverlay.close();
+  }};
   window.openPeekDrawer = function (refKey) {{
     originalOpenPeekDrawer(refKey);
     if (peekOverlay) peekOverlay.open();
   }};
-  window.closePeekDrawer = function () {{ if (peekOverlay) peekOverlay.close(); }};
+  window.closePeekDrawer = function () {{
+    if (!workOsCloseTransientFromHistory('peek') && peekOverlay) peekOverlay.close();
+  }};
 
   function workOsReportFrame(ticker, tabId, className) {{
     const safeTicker = encodeURIComponent(String(ticker || 'NU').toUpperCase());
@@ -529,7 +696,18 @@ def _production_runtime(generated_at: datetime) -> str:
     return '<iframe class="' + className + '" src="/reports/' + safeTicker + '#tab=' + safeTab + '" title="' + safeTicker + ' live research brief" loading="lazy"></iframe>';
   }}
 
-  window.closeWorkOsBriefReader = function () {{ if (briefReaderOverlay) briefReaderOverlay.close(); }};
+  function workOsBriefUrl(ticker, origin, focusId) {{
+    const url = new URL(window.location.href);
+    url.searchParams.set('work_os_brief', ticker);
+    url.searchParams.set('work_os_detail_origin', workOsEncodeDetailOrigin(origin));
+    if (focusId) url.searchParams.set('work_os_focus', focusId);
+    url.hash = origin.surface;
+    return url.pathname + url.search + url.hash;
+  }}
+  window.closeWorkOsBriefReader = function () {{
+    if (window.history.state && window.history.state.workOsBriefReader) {{ window.history.back(); return; }}
+    if (briefReaderOverlay) briefReaderOverlay.close();
+  }};
   const briefReaderBack = document.getElementById('workOsBriefReaderBack');
   if (briefReaderBack) briefReaderBack.addEventListener('click', window.closeWorkOsBriefReader);
 
@@ -716,12 +894,23 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
-  window.openWorkOsBriefReader = async function (tickerOrArtifact) {{
+  window.openWorkOsBriefReader = async function (tickerOrArtifact, options) {{
     if (tickerOrArtifact && typeof tickerOrArtifact === 'object' && tickerOrArtifact.artifact_id) {{
+      if (!(options && options.fromHistory)) {{
+        const origin = workOsHistoryOrigin();
+        const focusId = workOsHistoryFocusId();
+        workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: tickerOrArtifact.ticker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), workOsBriefUrl(tickerOrArtifact.ticker, origin, focusId));
+      }}
       await workOsLoadBriefArtifact(tickerOrArtifact);
       return;
     }}
     const requestedTicker = workOsNormalizeTicker(tickerOrArtifact) || workOsCurrentCompanyTicker();
+    if (!requestedTicker) return;
+    if (!(options && options.fromHistory)) {{
+      const origin = workOsHistoryOrigin();
+      const focusId = workOsHistoryFocusId();
+      workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: requestedTicker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), workOsBriefUrl(requestedTicker, origin, focusId));
+    }}
     const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&limit=1', {{ headers: {{ Accept: 'application/json' }} }});
     const payload = response.ok ? await response.json() : null;
     if (!payload || !payload.items || !payload.items.length) {{
@@ -779,17 +968,148 @@ def _production_runtime(generated_at: datetime) -> str:
     target.innerHTML = '<span class="k-card-meta">Earnings artifact unavailable</span>';
   }}
 
-  async function workOsOpenPeekRoute(route, title) {{
+  function workOsCanonicalDetailRoute(route) {{
+    let parsed;
+    try {{ parsed = new URL(route, window.location.origin); }} catch (_error) {{ return null; }}
+    if (parsed.origin !== window.location.origin || !WORK_OS_FULL_PAGE_PEEK_PATHS.some(function (pattern) {{ return pattern.test(parsed.pathname); }})) return null;
+    if (parsed.pathname.startsWith('/source/')) parsed.searchParams.set('fragment', '1');
+    return parsed.pathname + parsed.search + parsed.hash;
+  }}
+
+  function workOsEncodeDetailOrigin(origin) {{
+    return [origin.surface || '', origin.ticker || '', origin.section || ''].join('|');
+  }}
+
+  function workOsDecodeDetailOrigin(value) {{
+    const fields = typeof value === 'string' ? value.split('|') : [];
+    if (fields.length !== 3 || !WORK_OS_ROUTE_DESTINATIONS.includes(fields[0])) return null;
+    const ticker = fields[1] || null;
+    const section = fields[2] || null;
+    if (!workOsValidHistoryTicker(ticker) || !workOsValidHistorySection(section)) return null;
+    return {{ surface: fields[0], ticker: ticker, section: section }};
+  }}
+
+  function workOsFullPageDetailUrl(route, title, origin) {{
+    const url = new URL(window.location.href);
+    url.searchParams.set('work_os_detail', route);
+    url.searchParams.set('work_os_detail_title', String(title || 'Research detail'));
+    url.searchParams.set('work_os_detail_origin', workOsEncodeDetailOrigin(origin));
+    url.hash = origin.surface;
+    return url.pathname + url.search + url.hash;
+  }}
+
+  function workOsDetailOriginUrl(origin) {{
+    const safeOrigin = origin || {{ surface: 'screen-cockpit', ticker: null, section: null }};
+    const url = new URL(window.location.href);
+    url.searchParams.delete('work_os_detail');
+    url.searchParams.delete('work_os_detail_title');
+    url.searchParams.delete('work_os_detail_origin');
+    if (safeOrigin.ticker) url.searchParams.set('ticker', safeOrigin.ticker);
+    else url.searchParams.delete('ticker');
+    if (safeOrigin.section === 'company-desk' || safeOrigin.section === 'analytics-playground') url.searchParams.set('screen', safeOrigin.section);
+    else url.searchParams.delete('screen');
+    url.hash = safeOrigin.surface || 'screen-cockpit';
+    return url.pathname + url.search + url.hash;
+  }}
+
+  function workOsAbortFullPageDetailRequest() {{
+    workOsFullPageDetailRequestSequence += 1;
+    if (workOsFullPageDetailRequestController) {{
+      workOsFullPageDetailRequestController.abort();
+      workOsFullPageDetailRequestController = null;
+    }}
+  }}
+
+  async function workOsOpenPeekFullPage(route, title, options) {{
+    const canonicalRoute = workOsCanonicalDetailRoute(route);
+    const body = document.getElementById('workOsFullPageDetailBody');
+    const heading = document.getElementById('workOsFullPageDetailTitle');
+    if (!canonicalRoute || !body || !heading || !fullPageDetailOverlay) return false;
+    const origin = options && options.origin ? options.origin : workOsHistoryOrigin();
+    if (!(options && options.fromHistory)) {{
+      workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{
+        screenId: origin.surface, ticker: origin.ticker,
+        workOsFullPageDetail: {{ route: canonicalRoute, title: String(title || 'Research detail'), origin: workOsEncodeDetailOrigin(origin) }}
+      }}), workOsFullPageDetailUrl(canonicalRoute, title, origin));
+    }}
+    heading.textContent = String(title || 'Research detail');
+    body.innerHTML = '<div class="k-well" role="status">Loading persisted research detail…</div>';
+    const requestSequence = ++workOsFullPageDetailRequestSequence;
+    if (workOsFullPageDetailRequestController) workOsFullPageDetailRequestController.abort();
+    const controller = new AbortController();
+    workOsFullPageDetailRequestController = controller;
+    fullPageDetailOverlay.open();
+    try {{
+      const parsedRoute = new URL(canonicalRoute, window.location.origin);
+      const response = await fetch(parsedRoute.pathname + parsedRoute.search, {{ signal: controller.signal, headers: {{ Accept: 'text/html' }} }});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const markup = await response.text();
+      if (requestSequence !== workOsFullPageDetailRequestSequence) return false;
+      body.innerHTML = markup;
+      const sourceLocator = parsedRoute.hash ? parsedRoute.hash.slice(1) : '';
+      if (sourceLocator) {{
+        const located = body.querySelector('#' + CSS.escape(sourceLocator));
+        if (located) {{ located.classList.add('is-cited-location'); located.scrollIntoView({{ block: 'center' }}); }}
+      }}
+      return true;
+    }} catch (error) {{
+      if ((error && error.name === 'AbortError') || requestSequence !== workOsFullPageDetailRequestSequence) return false;
+      body.innerHTML = '<div class="k-well" role="alert">This persisted research detail is unavailable.</div>';
+      return false;
+    }} finally {{
+      if (requestSequence === workOsFullPageDetailRequestSequence && workOsFullPageDetailRequestController === controller) workOsFullPageDetailRequestController = null;
+    }}
+  }}
+  window.workOsOpenPeekFullPage = workOsOpenPeekFullPage;
+
+  function workOsClosePeekFullPage() {{
+    const state = window.history.state && window.history.state.workOsFullPageDetail;
+    if (state) {{ window.history.back(); return; }}
+    const params = new URLSearchParams(window.location.search);
+    const origin = workOsDecodeDetailOrigin(params.get('work_os_detail_origin')) || {{ surface: 'screen-cockpit', ticker: null, section: null }};
+    window.history.replaceState({{ screenId: origin.surface, ticker: origin.ticker }}, '', workOsDetailOriginUrl(origin));
+    if (fullPageDetailOverlay) fullPageDetailOverlay.close();
+    window.navigateTo(origin.surface, {{ fromHistory: true }});
+  }}
+  window.closeWorkOsFullPageDetail = workOsClosePeekFullPage;
+  const fullPageDetailBack = document.getElementById('workOsFullPageDetailBack');
+  if (fullPageDetailBack) fullPageDetailBack.addEventListener('click', workOsClosePeekFullPage);
+
+  async function workOsOpenPeekRoute(route, title, options) {{
     const ref = document.getElementById('peekRefKey');
     const body = document.getElementById('peekProse');
-    if (!ref || !body || !peekOverlay) return;
+    const openFullPage = document.getElementById('workOsPeekOpenFullPage');
+    const canonicalRoute = workOsCanonicalDetailRoute(route);
+    if (!ref || !body || !peekOverlay || !canonicalRoute) return;
+    if (!(options && options.fromHistory) && window.matchMedia('(max-width: 47.5rem)').matches) {{
+      return workOsOpenPeekFullPage(canonicalRoute, title);
+    }}
+    const parsedRoute = new URL(canonicalRoute, window.location.origin);
+    if (!(options && options.fromHistory)) {{
+      workOsPushTransientHistory('peek', {{
+        route: canonicalRoute,
+        title: String(title || 'Research detail'),
+        focusId: workOsHistoryFocusId()
+      }});
+    }}
     const requestSequence = ++workOsPeekRequestSequence;
-    const parsedRoute = new URL(route, window.location.origin);
     const sourceLocator = parsedRoute.hash ? parsedRoute.hash.slice(1) : '';
     if (workOsPeekRequestController) workOsPeekRequestController.abort();
     const controller = new AbortController();
     workOsPeekRequestController = controller;
     ref.textContent = title || 'Research detail';
+    if (openFullPage) {{
+      openFullPage.hidden = false;
+      openFullPage.onclick = function () {{
+        const origin = workOsHistoryOrigin();
+        const routeState = workOsRouteFromHistoryState(window.history.state);
+        if (routeState && routeState.overlay === 'peek') {{
+          window.history.replaceState({{ screenId: origin.surface, ticker: origin.ticker }}, '', workOsDetailOriginUrl(origin));
+        }}
+        if (peekOverlay) peekOverlay.close();
+        void workOsOpenPeekFullPage(canonicalRoute, title, {{ origin: origin }});
+      }};
+    }}
     body.innerHTML = '<div class="k-well" role="status">Loading persisted research artifact…</div>';
     peekOverlay.open();
     try {{
@@ -816,6 +1136,16 @@ def _production_runtime(generated_at: datetime) -> str:
         workOsPeekRequestController = null;
       }}
     }}
+  }}
+
+  function workOsOpenThresholdReview(ticker) {{
+    const safeTicker = workOsNormalizeTicker(ticker);
+    if (!safeTicker) return false;
+    const origin = workOsHistoryOrigin();
+    const url = new URL('/advisor/sizing-intents/' + encodeURIComponent(safeTicker), window.location.origin);
+    url.searchParams.set('work_os_origin', workOsEncodeDetailOrigin(origin));
+    window.location.assign(url.pathname + url.search);
+    return true;
   }}
 
   function workOsAbortPeekRequest() {{
@@ -1390,7 +1720,7 @@ def _production_runtime(generated_at: datetime) -> str:
       event.preventDefault(); event.stopPropagation(); workOsSubmitGovernedAlertAction(node);
     }}); }});
     document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
-    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); }}); }});
+    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.preventDefault(); event.stopPropagation(); workOsOpenThresholdReview(node.dataset.workOsThresholds); }}); }});
   }}
 
   async function workOsApplyRequestedResearchState() {{
@@ -1645,12 +1975,83 @@ def _production_runtime(generated_at: datetime) -> str:
     return true;
   }}
 
-  function workOsApplyHash(replaceLegacy) {{
+  function workOsCloseHistoryTransients() {{
+    if (peekOverlay) peekOverlay.close();
+    if (drillOverlay) drillOverlay.close();
+    if (briefReaderOverlay) briefReaderOverlay.close();
+    workOsRestoreHistoryFocus(workOsLastTransientFocusId);
+    workOsLastTransientFocusId = null;
+  }}
+
+  async function workOsRestoreTransientFromHistory(state) {{
+    const route = workOsRouteFromHistoryState(state);
+    if (!route) {{
+      workOsReplayingHistory = true;
+      try {{
+        workOsCloseHistoryTransients();
+        return await workOsRestoreCompanyContextFromHistory();
+      }} finally {{
+        workOsReplayingHistory = false;
+      }}
+    }}
+    const transient = state && typeof state === 'object' ? state.workOsTransient : null;
+    if (!transient || typeof transient !== 'object') {{
+      workOsReplayingHistory = true;
+      try {{
+        workOsCloseHistoryTransients();
+        return await workOsRestoreCompanyContextFromHistory();
+      }} finally {{
+        workOsReplayingHistory = false;
+      }}
+    }}
+    workOsReplayingHistory = true;
+    try {{
+      workOsCloseHistoryTransients();
+      await workOsRestoreCompanyContextFromHistory();
+      workOsLastTransientFocusId = typeof transient.focusId === 'string' ? transient.focusId : null;
+      if (route.overlay === 'peek' && typeof transient.route === 'string') {{
+        return await workOsOpenPeekRoute(transient.route, transient.title, {{ fromHistory: true }});
+      }}
+      if (route.overlay === 'risk_drawer' && typeof transient.drawerType === 'string') {{
+        return window.openDrillDrawer(transient.drawerType, {{ fromHistory: true }});
+      }}
+      return true;
+    }} finally {{
+      workOsReplayingHistory = false;
+    }}
+  }}
+
+  async function workOsApplyHash(replaceLegacy) {{
     const screenId = workOsScreenFromHash();
     if (replaceLegacy && window.location.hash !== '#' + screenId) {{
       window.history.replaceState({{ screenId }}, '', '#' + screenId);
     }}
-    workOsRestoreCompanyContextFromHistory();
+    const stateDetail = window.history.state && window.history.state.workOsFullPageDetail;
+    const params = new URLSearchParams(window.location.search);
+    const route = stateDetail && typeof stateDetail.route === 'string'
+      ? stateDetail.route : params.get('work_os_detail');
+    if (route && workOsCanonicalDetailRoute(route)) {{
+      const origin = workOsDecodeDetailOrigin(stateDetail && stateDetail.origin)
+        || workOsDecodeDetailOrigin(params.get('work_os_detail_origin'))
+        || {{ surface: 'screen-cockpit', ticker: null, section: null }};
+      return workOsOpenPeekFullPage(route, stateDetail && stateDetail.title || params.get('work_os_detail_title') || 'Research detail', {{ fromHistory: true, origin: origin }});
+    }}
+    if (route) {{
+      const fallback = {{ surface: 'screen-cockpit', ticker: null, section: null }};
+      window.history.replaceState({{ screenId: fallback.surface }}, '', workOsDetailOriginUrl(fallback));
+      window.navigateTo(fallback.surface, {{ fromHistory: true }});
+      return false;
+    }}
+    const briefState = window.history.state && window.history.state.workOsBriefReader;
+    const briefTicker = briefState && typeof briefState.ticker === 'string'
+      ? briefState.ticker : params.get('work_os_brief');
+    if (briefTicker && workOsValidHistoryTicker(briefTicker)) {{
+      workOsLastTransientFocusId = briefState && typeof briefState.focusId === 'string'
+        ? briefState.focusId : params.get('work_os_focus');
+      return window.openWorkOsBriefReader(briefTicker, {{ fromHistory: true }});
+    }}
+    if (fullPageDetailOverlay) fullPageDetailOverlay.close();
+    return workOsRestoreTransientFromHistory(window.history.state);
   }}
 
   window.addEventListener('hashchange', function () {{ workOsApplyHash(false); }});
@@ -2058,6 +2459,7 @@ def _add_production_contract(
     peek_close_at = html.index(peek_close, peek_start)
     html = (
         html[:peek_close_at]
+        + '<button id="workOsPeekOpenFullPage" class="k-btn k-btn-quiet k-btn-sm" type="button" hidden>Open full page</button>'
         + '<button id="peekDrawerClose" class="k-btn k-btn-quiet k-btn-sm" onclick="closePeekDrawer()">'
         + html[peek_close_at + len(peek_close) :]
     )
@@ -2072,6 +2474,7 @@ def _add_production_contract(
     runtime = _production_runtime(generated_at)
     copilot = render_work_os_copilot()
     reader = render_brief_reader_shell()
+    full_page_detail = _render_full_page_detail_host()
     controls = (
         f'<style id="work-os-controls-css">{palette_css("dark")}{controls_css("dark")}</style>'
     )
@@ -2083,6 +2486,8 @@ def _add_production_contract(
         + grid_assets
         + "\n"
         + reader
+        + "\n"
+        + full_page_detail
         + f'\n<script id="work-os-explore-runtime">{EXPLORE_PANEL_JS}</script>\n'
         + runtime
         + "\n"

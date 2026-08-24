@@ -9,6 +9,7 @@ target, a threshold, or a thesis break condition.
 from __future__ import annotations
 
 import json
+import re
 from html import escape
 from pathlib import Path
 
@@ -19,13 +20,39 @@ from advisor.sizing_intent_review import (
     load_sizing_intent_review,
 )
 from pipeline.portfolio_styles import sizing_intent_review_css
+from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
 from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
 
 __all__ = ["render_sizing_intent_review_page"]
 
 
-def render_sizing_intent_review_page(db_path: Path, ticker: str) -> str:
+_TICKER_RE = re.compile(r"[A-Z][A-Z0-9.=-]{0,14}\Z")
+_SECTION_RE = re.compile(r"[a-z][a-z0-9_-]*\Z")
+
+
+def _work_os_return_url(origin: str | None) -> str:
+    """Decode only the compact Work OS origin contract; never reflect a URL."""
+
+    fields = origin.split("|") if isinstance(origin, str) else []
+    if len(fields) != 3 or fields[0] not in DESTINATION_SURFACE_IDS:
+        return "/"
+    surface, ticker, section = fields
+    if ticker and _TICKER_RE.fullmatch(ticker) is None:
+        return "/"
+    if section and _SECTION_RE.fullmatch(section) is None:
+        return "/"
+    query: list[str] = []
+    if ticker:
+        query.append(f"ticker={ticker}")
+    if section in {"company-desk", "analytics-playground"}:
+        query.append(f"screen={section}")
+    return "/" + ("?" + "&".join(query) if query else "") + "#" + surface
+
+
+def render_sizing_intent_review_page(
+    db_path: Path, ticker: str, *, work_os_origin: str | None = None
+) -> str:
     """Render one ticker's dense, full-page owner review surface."""
 
     clean_ticker = ticker.strip().upper()
@@ -40,7 +67,7 @@ def render_sizing_intent_review_page(db_path: Path, ticker: str) -> str:
             controls_css("dark"),
             sizing_intent_review_css(),
             '</style></head><body class="sir-body"><main class="sir-main">',
-            f'<a class="sir-back" href="/">← Workspace</a><header class="sir-head"><p class="k-label">Owner decision record</p><h1>{escape(clean_ticker)} sizing-intent review</h1>',
+            f'<a class="sir-back" href="{escape(_work_os_return_url(work_os_origin), quote=True)}">← Workspace</a><header class="sir-head"><p class="k-label">Owner decision record</p><h1>{escape(clean_ticker)} sizing-intent review</h1>',
             '<p class="sir-sub">Review persisted owner evidence only. This page does not recommend a trade and cannot place one.</p></header>',
             _status_block(review, entries),
             _evidence_block(entries),
