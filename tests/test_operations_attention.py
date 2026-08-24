@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -318,10 +319,12 @@ def test_attention_persistence_slice_is_a_deliberate_surface_exclusion() -> None
     assert "attention_findings" not in OperationsSnapshot.model_fields
 
 
-def test_migration_creates_append_only_bounded_attention_receipts(tmp_path: Path) -> None:
-    path = tmp_path / "attention.db"
+def test_migration_creates_append_only_bounded_attention_receipts(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    path = migrated_db(tmp_path / "attention.db")
     config = _config(path)
-    command.upgrade(config, "head")
 
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (HEAD,)
