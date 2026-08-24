@@ -7,10 +7,12 @@ import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
 from execution import produce_issuer_fact_manifest as cli
+from models.documents import SourceType
 from models.facts import (
     Currency,
     FactLocator,
@@ -30,6 +32,7 @@ from pipeline.issuer_fact_manifest_producer import (
     produce_issuer_fact_manifest,
 )
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue
+from provenance import secure_file_install as install
 
 _STAMP = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
 _PERIOD = date(2026, 6, 30)
@@ -199,9 +202,14 @@ def test_producer_rejects_missing_or_extra_population_members() -> None:
         produce_issuer_fact_manifest(captured, _frame(), _segments())
 
 
-def test_cli_no_replace_output_is_canonical_and_replay_is_deterministic(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_producer_rejects_non_ir_legacy_manifest_before_conversion() -> None:
+    non_ir = _legacy(locator_version=1).model_copy(update={"primary_source": SourceType.FMP})
+
+    with pytest.raises(ValueError, match="IR_DOC"):
+        produce_issuer_fact_manifest(non_ir, _frame(), _segments())
+
+
+def _cli_inputs(tmp_path: Path) -> tuple[list[str], Path]:
     legacy_path = tmp_path / "legacy.json"
     frame_path = tmp_path / "frame.json"
     segment_path = tmp_path / "segments.json"
@@ -211,17 +219,26 @@ def test_cli_no_replace_output_is_canonical_and_replay_is_deterministic(
     )
     frame_path.write_text(_frame().model_dump_json(), encoding="utf-8")
     segment_path.write_text(_segments().model_dump_json(), encoding="utf-8")
-    argv = [
-        "produce_issuer_fact_manifest.py",
-        "--legacy-kpi-manifest",
-        str(legacy_path),
-        "--population-frame",
-        str(frame_path),
-        "--segment-values",
-        str(segment_path),
-        "--output",
-        str(output),
-    ]
+    return (
+        [
+            "produce_issuer_fact_manifest.py",
+            "--legacy-kpi-manifest",
+            str(legacy_path),
+            "--population-frame",
+            str(frame_path),
+            "--segment-values",
+            str(segment_path),
+            "--output",
+            str(output),
+        ],
+        output,
+    )
+
+
+def test_cli_publishes_canonical_output_and_exact_replay_is_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv, output = _cli_inputs(tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
 
     assert cli.main() == 0
@@ -232,6 +249,52 @@ def test_cli_no_replace_output_is_canonical_and_replay_is_deterministic(
     assert json.loads(capsys.readouterr().out)["expected_count"] == 61
 
     monkeypatch.setattr(sys, "argv", argv)
-    with pytest.raises(FileExistsError):
-        cli.main()
+    assert cli.main() == 0
     assert output.read_text(encoding="utf-8") == rendered
+
+
+def test_cli_never_exposes_partial_target_while_staged_write_is_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    argv, output = _cli_inputs(tmp_path)
+    real_write = install.os.write
+    entered = Event()
+    release = Event()
+    result: list[int] = []
+
+    def blocked_write(descriptor: int, payload: bytes | memoryview) -> int:
+        entered.set()
+        assert release.wait(timeout=2)
+        return real_write(descriptor, payload)
+
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(install.os, "write", blocked_write)
+    thread = Thread(target=lambda: result.append(cli.main()))
+    thread.start()
+    assert entered.wait(timeout=2)
+    assert not output.exists()
+    release.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert result == [0]
+
+
+def test_cli_collision_preserves_existing_target_and_failed_stage_creates_no_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    argv, output = _cli_inputs(tmp_path)
+    output.write_text("malformed target", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(install.SecureFileInstallError, match="existing_target_conflict"):
+        cli.main()
+    assert output.read_text(encoding="utf-8") == "malformed target"
+
+    output.unlink()
+
+    def failed_stage(_descriptor: int, _payload: bytes) -> None:
+        raise OSError("interrupted staged write")
+
+    monkeypatch.setattr(install, "_write_all", failed_stage)
+    with pytest.raises(install.SecureFileInstallError, match="secure_install_failed"):
+        cli.main()
+    assert not output.exists()

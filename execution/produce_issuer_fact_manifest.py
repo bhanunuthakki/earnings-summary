@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-from contextlib import suppress
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -26,6 +24,7 @@ from pipeline.issuer_fact_manifest_producer import (  # noqa: E402
     produce_issuer_fact_manifest,
 )
 from pipeline.kpi_persistence import KpiExtractionManifest  # noqa: E402
+from provenance.secure_file_install import install_bytes_no_clobber  # noqa: E402
 
 
 class LegacyKpiManifestFile(BaseModel):
@@ -46,18 +45,20 @@ def _read_model(path: Path, model: type[BaseModel]) -> BaseModel:
     return model.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def _write_no_replace(path: Path, contents: str) -> None:
-    """Atomically create one UTF-8 artifact, never replacing an existing one."""
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(contents)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except Exception:
-        with suppress(OSError):
-            path.unlink(missing_ok=True)
-        raise
+def _publish_no_clobber(path: Path, contents: str) -> None:
+    """Stage exact bytes, then atomically publish a no-clobber target.
+
+    ``install_bytes_no_clobber`` keeps the final name absent until the staged
+    bytes are complete and verified, and treats a pre-existing different target
+    as a conflict rather than overwriting it.
+    """
+    payload = contents.encode("utf-8")
+    install_bytes_no_clobber(
+        path.parent,
+        path.name,
+        payload,
+        expected_size=len(payload),
+    )
 
 
 def main() -> int:
@@ -74,7 +75,7 @@ def main() -> int:
     assert isinstance(frame, ExtractorFactPopulationFrame)
     assert isinstance(segments, ReviewedSegmentValues)
     manifest = produce_issuer_fact_manifest(legacy_file.manifests[0], frame, segments)
-    _write_no_replace(args.output, manifest.canonical_json)
+    _publish_no_clobber(args.output, manifest.canonical_json)
     print(
         json.dumps(
             {

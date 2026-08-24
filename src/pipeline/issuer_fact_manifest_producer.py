@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from models.documents import SourceType
 from models.facts import FactLocator, FiscalPeriodType
 from pipeline.issuer_document_coverage import ExtractorFactPopulationFrame
 from pipeline.issuer_fact_manifest import (
@@ -129,6 +130,8 @@ def produce_issuer_fact_manifest(
     plus its explicit rejection identities must form its exact expected set.
     No inference fills a gap, and no database writes occur in this function.
     """
+    if legacy.primary_source is not SourceType.IR_DOC:
+        raise ValueError("legacy KPI manifest primary_source must be IR_DOC")
     _assert_header_agreement(legacy, frame, segments)
     values = (*_legacy_kpi_values(legacy), *segments.values)
     captured_by_identity = {value.expected().identity_key: value for value in values}
