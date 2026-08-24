@@ -13,7 +13,7 @@ from alembic import command
 from execution.evaluate_deletion_catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "0023_add_price_action_sensor_state"
+HEAD = "0024_add_operations_attention_findings"
 RETAINED_TABLES = {
     "archive_generations",
     "ask_exchange_artifacts",
@@ -31,6 +31,10 @@ RETAINED_TABLES = {
     "search_corpus_manifests",
     "managed_ir_publications",
     "managed_ir_inventory_evidence",
+    "operations_attention_findings",
+    "operations_attention_lifecycle_events",
+    "operations_attention_action_receipts",
+    "operations_attention_repair_references",
 }
 
 

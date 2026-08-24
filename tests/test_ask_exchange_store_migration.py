@@ -12,7 +12,7 @@ from sqlalchemy.exc import OperationalError
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-ACTIVE_HEAD = "0023_add_price_action_sensor_state"
+ACTIVE_HEAD = "0024_add_operations_attention_findings"
 GROUNDING_REVISION = "0016_add_ask_grounding_traces"
 
 
