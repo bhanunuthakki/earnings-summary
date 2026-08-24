@@ -173,7 +173,8 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +2 governed README status/preview-or-apply routes.
     # +1 thesis-episode acknowledgement route.
     # +2 governed alert lifecycle routes (action and evidence).
-    assert len(rules) == 165
+    # +1 governed portfolio policy write proxy.
+    assert len(rules) == 166
     assert rules["readme_governance_status"] == "/api/readme-governance/status"
     assert rules["start_readme_update"] == "/actions/readme-update"
     assert rules["ir_approval_action"] == ("/api/ir-approval/candidates/<candidate_id>/<action>")

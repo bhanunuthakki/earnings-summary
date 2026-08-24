@@ -914,9 +914,9 @@ def create_app(
         if allowed is not None:
             response.headers["Access-Control-Allow-Origin"] = allowed
             response.headers["Vary"] = "Origin"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = (
-            f"Content-Type, {REPORT_CAPABILITY_HEADER}"
+            f"Content-Type, {REPORT_CAPABILITY_HEADER}, X-Portfolio-Write-Intent"
         )
         # Security headers — the dashboard is network-reachable over Tailscale.
         # SAMEORIGIN (not DENY) because the command center embeds /reports/<T> in
@@ -1825,6 +1825,57 @@ def create_app(
         response = app.json.response(payload.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.route("/api/portfolio/policy", methods=["PUT", "OPTIONS"])
+    def replace_portfolio_policy_api():
+        """Proxy one explicit owner-approved policy replacement to the tracker.
+
+        The companion tracker remains the only policy writer. This server does
+        not cache, transform, or persist the submitted state: a caller receives
+        either tracker-confirmed state or a stable failure category.
+        """
+        if request.method == "OPTIONS":
+            return ("", 204)
+        if request.headers.get("X-Portfolio-Write-Intent") != "replace-policy":
+            return _client_error("explicit policy replacement intent required", 403)
+
+        from integrations.portfolio_tracker_client import (
+            PolicyReplacementRequest,
+            replace_portfolio_policy,
+        )
+
+        try:
+            replacement = PolicyReplacementRequest.model_validate(
+                request.get_json(silent=True) or {}
+            )
+        except ValidationError:
+            return _client_error("invalid policy replacement request", 400)
+        if replacement.source != "earnings_summary":
+            return _client_error("policy replacement source must be earnings_summary", 400)
+
+        result = replace_portfolio_policy(replacement)
+        if result.accepted or result.pending_recomputation:
+            assert result.policy is not None
+            response = app.json.response(
+                {"status": result.status, "policy": result.policy.model_dump(mode="json")}
+            )
+            if result.pending_recomputation:
+                response.status_code = 202
+            return response
+        status_codes = {
+            "validation_error": 422,
+            "revision_conflict": 409,
+            "idempotency_conflict": 409,
+            "unauthorized": 403,
+            "offline": 503,
+            "recomputation_failure": 503,
+            "provider_error": 502,
+            "malformed_response": 502,
+        }
+        payload: dict[str, object] = {"error": result.status}
+        if result.current_revision is not None:
+            payload["current_revision"] = result.current_revision
+        return (payload, status_codes[result.status])
 
     @app.route("/api/dashboard", methods=["GET"])
     def dashboard_api():
