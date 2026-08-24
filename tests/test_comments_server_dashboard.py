@@ -175,7 +175,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +2 governed alert lifecycle routes (action and evidence).
     # +1 governed portfolio policy write proxy.
     # +1 governed sizing-intent checkpoint route.
-    assert len(rules) == 167
+    assert len(rules) == 168
     assert rules["readme_governance_status"] == "/api/readme-governance/status"
     assert rules["start_readme_update"] == "/actions/readme-update"
     assert rules["ir_approval_action"] == ("/api/ir-approval/candidates/<candidate_id>/<action>")

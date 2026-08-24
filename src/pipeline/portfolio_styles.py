@@ -136,6 +136,15 @@ _MEMOS = r"""
 * { box-sizing:border-box; }.soc-page-body { margin:0; padding:var(--sp-4) var(--sp-5) var(--sp-6); font-family:var(--sans); background:var(--bg); color:var(--fg); line-height:1.55; font-size:var(--fs-body); }.soc-page-main { max-width:var(--grid-card-lg); margin:0 auto; }.soc-page-main h1 { font-size:var(--fs-display); margin:0 0 var(--sp-1); }.soc-page-main h2 { font-size:var(--fs-title); margin:0 0 var(--sp-1); }.soc-page-panel { background:var(--surface); border:var(--bw-thin) solid var(--border); border-radius:var(--radius); padding:var(--sp-3) var(--sp-4); margin-bottom:var(--sp-4); }.soc-page-panel .sub { color:var(--muted); font-size:var(--fs-caption); margin:0 0 var(--sp-2); }.soc-page-muted { color:var(--muted); }
 """
 
+_SIZING_INTENT_REVIEW = r"""
+* { box-sizing:border-box; }
+.sir-body { margin:0; padding:var(--sp-4) var(--sp-5) var(--sp-6); background:var(--bg); color:var(--fg); }
+.sir-main { max-width:68rem; margin:0 auto; }
+.sir-back { color:var(--accent); font-size:var(--fs-caption); }
+.sir-head { margin:var(--sp-4) 0 var(--sp-4); }.sir-head h1 { margin:var(--sp-half) 0; font-size:var(--fs-display); }.sir-sub,.sir-help,.sir-boundary { color:var(--muted); font-size:var(--fs-body); line-height:1.5; }.sir-status { margin-bottom:var(--sp-3); }.sir-status-line { margin:var(--sp-half) 0 0; display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap; }.sir-state-key { margin:var(--sp-1) 0 0; color:var(--muted); font-size:var(--fs-caption); }.sir-section { margin-bottom:var(--sp-3); }.sir-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--sp-2) var(--sp-4); margin:var(--sp-3) 0; }.sir-fact { min-width:0; border-bottom:var(--bw-thin) solid var(--border); padding-bottom:var(--sp-1); }.sir-fact dt { color:var(--muted); font-size:var(--fs-caption); }.sir-fact dd { margin:var(--sp-half) 0 0; overflow-wrap:anywhere; font-family:var(--mono); font-size:var(--fs-body); }.sir-narrative { margin-top:var(--sp-3); }.sir-narrative p:last-child { margin-bottom:0; white-space:pre-wrap; }.sir-form-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--sp-2); }.sir-form-grid label,.sir-payload-label { display:grid; gap:var(--sp-half); color:var(--muted); font-size:var(--fs-caption); }.sir-form-grid input,.sir-form-grid select,.sir-payload-label + textarea { width:100%; }.sir-payload-label { margin-top:var(--sp-3); }.sir-payload-label + textarea { min-height:14rem; font-family:var(--mono); line-height:1.5; }.sir-actions { display:flex; gap:var(--sp-2); align-items:center; flex-wrap:wrap; margin-top:var(--sp-3); }.sir-error { min-height:1.5em; color:var(--bad); margin:var(--sp-2) 0 0; }.sir-result { color:var(--ok); font-size:var(--fs-body); }.sir-boundary { margin-bottom:0; }
+@media (max-width:700px) { .sir-body { padding:var(--sp-3) var(--sp-3) var(--sp-5); }.sir-facts,.sir-form-grid { grid-template-columns:1fr; }.sir-form-grid input,.sir-form-grid select,.sir-payload-label + textarea { font-size:var(--mobile-control-font-size); }.sir-actions .k-btn { min-height:44px; } }
+"""
+
 
 def portfolio_css() -> str:
     return _block(_PORTFOLIO)
@@ -163,6 +172,12 @@ def decisions_css() -> str:
 
 def memos_css() -> str:
     return _block(_MEMOS)
+
+
+def sizing_intent_review_css() -> str:
+    """Registered visual master for the standalone sizing-intent review page."""
+
+    return _block(_SIZING_INTENT_REVIEW)
 
 
 def page_css() -> str:

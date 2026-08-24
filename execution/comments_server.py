@@ -4180,6 +4180,16 @@ def create_app(
             return _client_error(f"unavailable_error: {exc}", 503)
         return result.model_dump(mode="json"), 201 if result.receipt.created else 200
 
+    @app.route("/advisor/sizing-intents/<ticker>", methods=["GET"])
+    def sizing_intent_review_page(ticker: str):
+        """Standalone local owner review; writes remain behind the checkpoint API."""
+        from advisor.sizing_intent_review_page import render_sizing_intent_review_page
+
+        return Response(
+            render_sizing_intent_review_page(resolved_db_path, ticker),
+            mimetype="text/html",
+        )
+
     @app.route("/api/coach/unmute", methods=["POST", "OPTIONS"])
     def coach_unmute_api():
         """Clear a coach_mutes row (REQ-12: mutes must be visible AND

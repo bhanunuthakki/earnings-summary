@@ -1200,8 +1200,9 @@ def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> N
         1
     ].split("function workOsApplyRequestedResearchState", 1)[0]
     assert "window.workOsActiveTicker =" not in threshold_handler
-    assert "switchCompanyWorkspace(node.dataset.workOsThresholds).then" in threshold_handler
-    assert "if (committed) openDrillDrawer('thresholds')" in threshold_handler
+    assert "event.stopPropagation();" in threshold_handler
+    assert "switchCompanyWorkspace" not in threshold_handler
+    assert 'href="/advisor/sizing-intents/' in html
 
 
 def test_company_context_coordinator_owns_desk_playground_and_breadcrumb_state() -> None:
