@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import date
 from io import StringIO
 from pathlib import Path
 
@@ -177,7 +178,7 @@ def _populated_repo(tmp_path: Path) -> Path:
 
 def test_build_signals_section_buckets_and_orders(tmp_path: Path) -> None:
     repo = _populated_repo(tmp_path)
-    section = signals_section.build("GOOG", repo)
+    section = signals_section.build("GOOG", repo, as_of=date(2026, 8, 23))
     assert section.status == SectionStatus.OK
     assert len(section.red_signals) == 2
     assert len(section.yellow_signals) == 1
@@ -197,6 +198,184 @@ def test_build_signals_section_buckets_and_orders(tmp_path: Path) -> None:
     assert yellow_first.metric_kind == "kpi"
     assert yellow_first.value_summary is not None
     assert "YoY=" in yellow_first.value_summary
+
+
+def test_build_signal_summary_keeps_direction_separate_from_statistical_severity(
+    tmp_path: Path,
+) -> None:
+    """A statistically unusual KPI is not automatically an investment negative.
+
+    The persisted payload is the writer/report boundary: direction is derived
+    from known KPI polarity, while missing polarity and stale source periods
+    stay explicit instead of being guessed away by the renderer.
+    """
+    repo = _populated_repo(tmp_path)
+    db_path = repo / "data" / "portfolio.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO timeseries_signals(ticker, metric_name, metric_kind, signal_type, "
+            "value_json, severity, narrative, computed_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "GOOG",
+                "Monthly churn",
+                "kpi",
+                "trend",
+                json.dumps(
+                    {
+                        "direction": "decelerating",
+                        "slope_pct_of_mean": 0.12,
+                        "statistical_significance": True,
+                        "investment_direction": "unfavorable",
+                        "polarity": "lower_is_better",
+                        "source_period": "2026-03-31",
+                        "is_thesis_kpi": True,
+                    }
+                ),
+                "yellow",
+                "Churn increased materially.",
+                "2026-08-01 12:00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO timeseries_signals(ticker, metric_name, metric_kind, signal_type, "
+            "value_json, severity, narrative, computed_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "GOOG",
+                "Unknown operating metric",
+                "kpi",
+                "trend",
+                json.dumps(
+                    {
+                        "direction": "decelerating",
+                        "slope_pct_of_mean": -0.12,
+                        "statistical_significance": False,
+                        "investment_direction": "ambiguous",
+                        "source_period": "2020-03-31",
+                        "is_thesis_kpi": False,
+                    }
+                ),
+                "red",
+                "An old, non-significant movement.",
+                "2020-04-01 12:00:00",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    section = signals_section.build("GOOG", repo, as_of=date(2026, 8, 23))
+    churn = next(row for row in section.summary_signals if row.metric_name == "Monthly churn")
+    assert churn.investment_direction == "unfavorable"
+    assert churn.statistical_significance is True
+    assert churn.is_thesis_kpi is True
+    assert churn.freshness == "fresh"
+    assert churn.rank == 1
+
+    unknown = next(
+        row for row in section.all_signals if row.metric_name == "Unknown operating metric"
+    )
+    assert unknown.investment_direction == "ambiguous"
+    assert unknown.statistical_significance is False
+    assert unknown.freshness == "stale"
+    assert [row.metric_name for row in section.summary_signals] == ["Monthly churn"]
+
+
+def test_summary_only_elevates_current_significant_decision_evidence(tmp_path: Path) -> None:
+    repo = _populated_repo(tmp_path)
+    db_path = repo / "data" / "portfolio.db"
+    rows = [
+        (
+            "Monthly churn",
+            "trend",
+            "yellow",
+            {
+                "statistical_significance": True,
+                "investment_direction": "unfavorable",
+                "source_period": "2026-06-30",
+                "is_thesis_kpi": True,
+            },
+        ),
+        (
+            "Custom KPI",
+            "trend",
+            "red",
+            {
+                "statistical_significance": True,
+                "investment_direction": "ambiguous",
+                "source_period": "2026-07-31",
+                "is_thesis_kpi": False,
+            },
+        ),
+        (
+            "High quality revenue",
+            "anomaly",
+            "red",
+            {
+                "anomalies": [{"period_end": "2026-08-01", "zscore": 3.4}],
+                "statistical_significance": True,
+                "investment_direction": "favorable",
+                "source_period": "2026-08-01",
+                "is_thesis_kpi": True,
+            },
+        ),
+        (
+            "Old churn",
+            "trend",
+            "red",
+            {
+                "statistical_significance": True,
+                "investment_direction": "unfavorable",
+                "source_period": "2020-03-31",
+                "is_thesis_kpi": True,
+            },
+        ),
+        (
+            "Noisy churn",
+            "trend",
+            "red",
+            {
+                "statistical_significance": False,
+                "investment_direction": "unfavorable",
+                "source_period": "2026-08-01",
+                "is_thesis_kpi": True,
+            },
+        ),
+    ]
+    conn = sqlite3.connect(str(db_path))
+    try:
+        for metric, signal_type, severity, payload in rows:
+            conn.execute(
+                "INSERT INTO timeseries_signals(ticker, metric_name, metric_kind, signal_type, "
+                "value_json, severity, narrative, computed_at) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    "GOOG",
+                    metric,
+                    "kpi",
+                    signal_type,
+                    json.dumps(payload),
+                    severity,
+                    f"{metric} test signal.",
+                    "2026-08-01 12:00:00",
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    section = signals_section.build("GOOG", repo)
+    assert [row.metric_name for row in section.summary_signals] == [
+        "Monthly churn",
+        "Custom KPI",
+        "High quality revenue",
+    ]
+    assert [row.rank for row in section.summary_signals] == [1, 2, 3]
+    assert all(row.freshness == "fresh" for row in section.summary_signals)
+    assert all(row.statistical_significance is True for row in section.summary_signals)
+    assert {row.metric_name for row in section.all_signals} >= {"Old churn", "Noisy churn"}
+    assert all(
+        row.metric_name not in {"Old churn", "Noisy churn"} for row in section.summary_signals
+    )
 
 
 def test_ticker_case_insensitive(tmp_path: Path) -> None:
@@ -301,7 +480,7 @@ def _row(
 
 def test_markdown_renderer_emits_signals_block() -> None:
     out = StringIO()
-    markdown_renderer._signals(out, _make_section_with_data())
+    markdown_renderer._signals(out, _make_section_with_data())  # pyright: ignore[reportPrivateUsage]
     rendered = out.getvalue()
     assert "## §3.5 Signals" in rendered
     assert "### Fires" in rendered
@@ -317,7 +496,9 @@ def test_markdown_renderer_emits_signals_block() -> None:
 
 def test_markdown_renderer_skips_when_empty() -> None:
     out = StringIO()
-    markdown_renderer._signals(out, SignalsSection(status=SectionStatus.OK))
+    markdown_renderer._signals(  # pyright: ignore[reportPrivateUsage]
+        out, SignalsSection(status=SectionStatus.OK)
+    )
     assert out.getvalue() == ""
 
 
@@ -330,6 +511,35 @@ def test_workspace_renderer_emits_signals_panel() -> None:
     assert "free_cash_flow" in rendered
     assert "GCP revenue growth (YoY)" in rendered
     assert "All signals (3)" in rendered
+
+
+def test_workspace_card_uses_direction_safe_status_for_favorable_anomaly() -> None:
+    from report.models import SignalRow
+
+    favorable = SignalRow(
+        metric_name="High quality revenue",
+        metric_kind="kpi",
+        signal_type="anomaly",
+        severity="red",
+        narrative="A high positive z-score on a higher-is-better KPI.",
+        value_summary="z=+3.4",
+        investment_direction="favorable",
+        statistical_significance=True,
+        freshness="fresh",
+    )
+    section = SignalsSection(
+        status=SectionStatus.OK,
+        red_signals=[favorable],
+        summary_signals=[favorable],
+        all_signals=[favorable],
+    )
+    body = StringIO()
+    workspace_html._signals_panel(body, section)
+    rendered = body.getvalue()
+    assert "signal-card sig-favorable" in rendered
+    assert "signal-card sig-red" not in rendered
+    assert "statistical severity red" in rendered
+    assert "All signals (1)" in rendered
 
 
 def test_workspace_renderer_skips_when_empty() -> None:

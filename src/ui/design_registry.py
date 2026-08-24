@@ -1028,7 +1028,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/research_panel_styles.py": "430015d0f97507f8d418d90199dd4a9db3217be2dec492a93c54bf13f41ece0f",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "38a5472f5d72d0168f4df2411cf9a522bb2fd7cf4b2f912afb351c51fd08b958",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "493583b93b400f4d775bc54f7541165ce6fbc776f486d86ba3fe77f4fdcb9e71",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "27eba0547bdad4a8bf4178452b7e8f5e8ba947a3f8d141ce05f4c5a4e90573a1",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
         "ui/controls.py": "5fc62b0e29a1d9202dc816efe2d4cef81ed7f9ee71a166f3c5ed6bfe2b69dc97",  # pragma: allowlist secret
         "ui/living_grid.py": "e95fb454ffbc17e2d248d48f9b5e7563ecd7383a063ad94e0b3ef9088dab4374",  # pragma: allowlist secret
@@ -1076,7 +1076,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "report/renderers/workspace_html.py": "88f9c90d589e7c12f98fb7ce97f7af0e6f2b985b59839f4c737957066e9c07f5",  # pragma: allowlist secret
         "report/renderers/workspace_sections/company.py": "a2a7e88bb845c9eafa39e7673ac009ee3220e068430e91dc0160c3ef62b53551",  # pragma: allowlist secret
         "report/renderers/workspace_sections/thesis_risk.py": "ea6efda97e1eba69cdeb02e03744784f89ff7e606dcb86ccddceb1d4d12c0fea",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "d609a3af40f14682a1e7f0947c6adb0e8e9125adefebb8669e70bbd6ee330690",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "c166389b6f9260cf74379856f43c0e903ba0c8a2f72837c5802a4f836189a8f0",  # pragma: allowlist secret
         "ui/cite_marks.py": "3f76335ae581654995341743785185a7c317ac131a9c2e95182775ba1c4a6a7d",  # pragma: allowlist secret
         "ui/controls.py": "e4480459ae842f18982fc17967c6c6673a87588887097786508ce94f17e2483d",  # pragma: allowlist secret
         "viewspec/render.py": "7c533b52604f1cd0ad7564644dbeee92631041a047434299cc88fcc32fbf7e74",  # pragma: allowlist secret

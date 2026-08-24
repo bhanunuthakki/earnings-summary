@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 
 from timeseries import compute_and_persist_signals
+from timeseries.signal_writer import classify_investment_direction
+from user_state.kpi_polarity import Polarity
 
 
 def _build_db(path: Path) -> None:
@@ -227,7 +229,7 @@ def test_writer_persists_signals_for_seeded_ticker(tmp_path: Path) -> None:
     try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT ticker, metric_name, metric_kind, signal_type, severity, narrative "
+            "SELECT ticker, metric_name, metric_kind, signal_type, severity, narrative, value_json "
             "FROM timeseries_signals WHERE ticker = 'GOOG'"
         ).fetchall()
     finally:
@@ -250,6 +252,36 @@ def test_writer_persists_signals_for_seeded_ticker(tmp_path: Path) -> None:
     # At least one signal carried a rendered narrative (the writer always
     # emits one — guard against an accidental refactor that strips them).
     assert any(r["narrative"] for r in rows)
+    assert all(json.loads(str(r["value_json"]))["source_period"] == "2023-12-11" for r in rows)
+
+
+def test_direction_requires_known_polarity_and_significant_trend() -> None:
+    """Statistical direction alone must never be rendered as investment direction."""
+    assert (
+        classify_investment_direction(
+            "trend",
+            {"slope": -1.0, "statistical_significance": True},
+            Polarity.HIGHER_IS_BETTER,
+        )
+        == "unfavorable"
+    )
+    assert (
+        classify_investment_direction(
+            "trend",
+            {"slope": -1.0, "statistical_significance": False},
+            Polarity.HIGHER_IS_BETTER,
+        )
+        == "ambiguous"
+    )
+    assert classify_investment_direction("trend", {"slope": -1.0}, None) == "ambiguous"
+    assert (
+        classify_investment_direction(
+            "trend",
+            {"slope": 1.0, "statistical_significance": True},
+            Polarity.HIGHER_IS_BETTER,
+        )
+        == "favorable"
+    )
 
 
 def test_writer_is_idempotent(tmp_path: Path) -> None:

@@ -441,7 +441,7 @@ def _signals_panel(body: StringIO, signals: SignalsSection) -> None:
     if not (signals.red_signals or signals.yellow_signals or signals.green_signals):
         return
     total = len(signals.red_signals) + len(signals.yellow_signals) + len(signals.green_signals)
-    fires = list(signals.red_signals) + list(signals.yellow_signals)
+    summary = signals.summary_signals or (list(signals.red_signals) + list(signals.yellow_signals))
     body.write(
         _panel_head(
             "§3.5 Signals",
@@ -451,13 +451,13 @@ def _signals_panel(body: StringIO, signals: SignalsSection) -> None:
             panel_id="panel-signals",
         )
     )
-    if fires:
+    if summary:
         body.write('<div class="signals-fires">')
-        for r in fires:
+        for r in summary:
             _signal_card_workspace(body, r)
         body.write("</div>")
     body.write(f'<details class="signals-all"><summary>All signals ({total})</summary>')
-    all_rows = (
+    all_rows = signals.all_signals or (
         list(signals.red_signals) + list(signals.yellow_signals) + list(signals.green_signals)
     )
     _signals_table_workspace(body, all_rows)
@@ -477,7 +477,7 @@ def _signal_severity_class(severity: str) -> str:
 
 def _signal_card_workspace(body: StringIO, r: SignalRow) -> None:
     type_label = r.signal_type.replace("_", " ")
-    body.write(f'<div class="signal-card {_signal_severity_class(r.severity)}">')
+    body.write(f'<div class="signal-card {_signal_card_class(r)}">')
     body.write('<div class="signal-card-head">')
     body.write(
         f'<span class="signal-card-metric">{_esc(r.metric_name)}</span>'
@@ -488,6 +488,7 @@ def _signal_card_workspace(body: StringIO, r: SignalRow) -> None:
         body.write(f'<div class="signal-card-narrative">{_esc(r.narrative)}</div>')
     if r.value_summary:
         body.write(f'<div class="signal-card-stat">{_esc(r.value_summary)}</div>')
+    body.write(f'<div class="signal-card-context">{_esc(_signal_context(r))}</div>')
     body.write("</div>")
 
 
@@ -501,10 +502,13 @@ def _signals_table_workspace(body: StringIO, rows: list[SignalRow]) -> None:
     body.write('<div class="table-scroll">')
     body.write('<table class="tbl"><thead><tr>')
     body.write(
-        lg.th("Sev", "sev", "num")
+        lg.th("#", "rank", "num")
+        + lg.th("Sev", "sev", "num")
+        + lg.th("Direction", "direction", "text", num=False)
         + lg.th("Metric", "metric", "text", num=False)
-        + lg.th("Kind", "kind", "text", num=False)
         + lg.th("Signal", "signal", "text", num=False)
+        + lg.th("Evidence", "evidence", "text", num=False)
+        + lg.th("Source", "source", "text", num=False)
         + "<th>Narrative</th><th>Stat</th>"
     )
     body.write("</tr></thead><tbody>")
@@ -513,24 +517,54 @@ def _signals_table_workspace(body: StringIO, rows: list[SignalRow]) -> None:
         stat = _esc(r.value_summary) if r.value_summary else "—"
         signal_label = r.signal_type.replace("_", " ")
         data = (
-            lg.data_text(f"{r.severity} {r.metric_name} {r.metric_kind} {signal_label}")
+            lg.data_text(f"{r.severity} {r.investment_direction} {r.metric_name} {signal_label}")
+            + lg.data_num("rank", r.rank)
             + lg.data_num("sev", _SEVERITY_RANK.get(r.severity))
+            + lg.data_text_key("direction", r.investment_direction)
             + lg.data_text_key("metric", r.metric_name)
-            + lg.data_text_key("kind", r.metric_kind)
             + lg.data_text_key("signal", signal_label)
+            + lg.data_text_key("evidence", _evidence_label(r))
+            + lg.data_text_key("source", r.source_period.isoformat() if r.source_period else "")
         )
         body.write(
-            f'<tr{data}><td class="signal-sev {_signal_severity_class(r.severity)}">'
+            f'<tr{data}><td class="num">{r.rank or "—"}</td>'
+            f'<td class="signal-sev {_signal_severity_class(r.severity)}">'
             f"{_esc(r.severity)}</td>"
+            f'<td class="signal-direction">{_esc(r.investment_direction)}</td>'
             f"<td><strong>{_esc(r.metric_name)}</strong></td>"
-            f"<td>{_esc(r.metric_kind)}</td>"
             f"<td>{_esc(signal_label)}</td>"
+            f"<td>{_esc(_evidence_label(r))}</td>"
+            f"<td>{_esc(_signal_context(r))}</td>"
             f"<td>{narrative}</td>"
             f'<td class="mono">{stat}</td></tr>'
         )
     body.write("</tbody></table></div>")
     body.write(lg.grid_close())
     body.write("</div>")
+
+
+def _evidence_label(row: SignalRow) -> str:
+    if row.statistical_significance is None:
+        return "not tested"
+    return "significant" if row.statistical_significance else "not significant"
+
+
+def _signal_context(row: SignalRow) -> str:
+    thesis = "thesis KPI" if row.is_thesis_kpi else row.metric_kind
+    source = row.source_period.isoformat() if row.source_period else "source unknown"
+    return (
+        f"{row.investment_direction} · {thesis} · {source} · {row.freshness} · "
+        f"{_evidence_label(row)} · statistical severity {row.severity}"
+    )
+
+
+def _signal_card_class(row: SignalRow) -> str:
+    """Color cards by investment direction, never by statistical severity alone."""
+    if row.investment_direction == "favorable":
+        return "sig-favorable"
+    if row.investment_direction == "ambiguous":
+        return "sig-ambiguous"
+    return _signal_severity_class(row.severity)
 
 
 def _line_items_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:

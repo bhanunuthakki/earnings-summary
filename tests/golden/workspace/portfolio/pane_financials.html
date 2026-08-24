@@ -10,21 +10,23 @@
 </span>
 </div>
 <div class="signals-fires">
-<div class="signal-card sig-red">
+<div class="signal-card sig-ambiguous">
 <div class="signal-card-head">
 <span class="signal-card-metric">services_revenue</span>
 <span class="signal-card-type">anomaly</span>
 </div>
 <div class="signal-card-narrative">Services revenue printed 2.8 sigma below its 8Q trend.</div>
 <div class="signal-card-stat">z=-2.8</div>
+<div class="signal-card-context">ambiguous · segment · source unknown · unknown · not tested · statistical severity red</div>
 </div>
-<div class="signal-card sig-yellow">
+<div class="signal-card sig-ambiguous">
 <div class="signal-card-head">
 <span class="signal-card-metric">operating_margin</span>
 <span class="signal-card-type">yoy acceleration</span>
 </div>
 <div class="signal-card-narrative">Margin expansion pace halved vs the prior four quarters.</div>
 <div class="signal-card-stat">delta=-180bps</div>
+<div class="signal-card-context">ambiguous · financial · source unknown · unknown · not tested · statistical severity yellow</div>
 </div>
 </div>
 <details class="signals-all">
@@ -40,16 +42,25 @@
 <table class="tbl">
 <thead>
 <tr>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('rank','num')" @keydown.enter.prevent="sortBy('rank','num')" :aria-sort="ariaSort('rank')">#<span class="lg-ind" x-text="arrow('rank')">
+</span>
+</th>
 <th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('sev','num')" @keydown.enter.prevent="sortBy('sev','num')" :aria-sort="ariaSort('sev')">Sev<span class="lg-ind" x-text="arrow('sev')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('direction','text')" @keydown.enter.prevent="sortBy('direction','text')" :aria-sort="ariaSort('direction')">Direction<span class="lg-ind" x-text="arrow('direction')">
 </span>
 </th>
 <th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('metric','text')" @keydown.enter.prevent="sortBy('metric','text')" :aria-sort="ariaSort('metric')">Metric<span class="lg-ind" x-text="arrow('metric')">
 </span>
 </th>
-<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('kind','text')" @keydown.enter.prevent="sortBy('kind','text')" :aria-sort="ariaSort('kind')">Kind<span class="lg-ind" x-text="arrow('kind')">
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('signal','text')" @keydown.enter.prevent="sortBy('signal','text')" :aria-sort="ariaSort('signal')">Signal<span class="lg-ind" x-text="arrow('signal')">
 </span>
 </th>
-<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('signal','text')" @keydown.enter.prevent="sortBy('signal','text')" :aria-sort="ariaSort('signal')">Signal<span class="lg-ind" x-text="arrow('signal')">
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('evidence','text')" @keydown.enter.prevent="sortBy('evidence','text')" :aria-sort="ariaSort('evidence')">Evidence<span class="lg-ind" x-text="arrow('evidence')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('source','text')" @keydown.enter.prevent="sortBy('source','text')" :aria-sort="ariaSort('source')">Source<span class="lg-ind" x-text="arrow('source')">
 </span>
 </th>
 <th>Narrative</th>
@@ -57,33 +68,42 @@
 </tr>
 </thead>
 <tbody>
-<tr data-text="red services_revenue segment anomaly" data-sev="3.000000" data-metric="services_revenue" data-kind="segment" data-signal="anomaly">
+<tr data-text="red ambiguous services_revenue anomaly" data-sev="3.000000" data-direction="ambiguous" data-metric="services_revenue" data-signal="anomaly" data-evidence="not tested" data-source="">
+<td class="num">—</td>
 <td class="signal-sev sig-red">red</td>
+<td class="signal-direction">ambiguous</td>
 <td>
 <strong>services_revenue</strong>
 </td>
-<td>segment</td>
 <td>anomaly</td>
+<td>not tested</td>
+<td>ambiguous · segment · source unknown · unknown · not tested · statistical severity red</td>
 <td>Services revenue printed 2.8 sigma below its 8Q trend.</td>
 <td class="mono">z=-2.8</td>
 </tr>
-<tr data-text="yellow operating_margin financial yoy acceleration" data-sev="2.000000" data-metric="operating_margin" data-kind="financial" data-signal="yoy acceleration">
+<tr data-text="yellow ambiguous operating_margin yoy acceleration" data-sev="2.000000" data-direction="ambiguous" data-metric="operating_margin" data-signal="yoy acceleration" data-evidence="not tested" data-source="">
+<td class="num">—</td>
 <td class="signal-sev sig-yellow">yellow</td>
+<td class="signal-direction">ambiguous</td>
 <td>
 <strong>operating_margin</strong>
 </td>
-<td>financial</td>
 <td>yoy acceleration</td>
+<td>not tested</td>
+<td>ambiguous · financial · source unknown · unknown · not tested · statistical severity yellow</td>
 <td>Margin expansion pace halved vs the prior four quarters.</td>
 <td class="mono">delta=-180bps</td>
 </tr>
-<tr data-text="green active customers kpi trend" data-sev="1.000000" data-metric="active customers" data-kind="kpi" data-signal="trend">
+<tr data-text="green ambiguous active customers trend" data-sev="1.000000" data-direction="ambiguous" data-metric="active customers" data-signal="trend" data-evidence="not tested" data-source="">
+<td class="num">—</td>
 <td class="signal-sev sig-green">green</td>
+<td class="signal-direction">ambiguous</td>
 <td>
 <strong>Active customers</strong>
 </td>
-<td>kpi</td>
 <td>trend</td>
+<td>not tested</td>
+<td>ambiguous · kpi · source unknown · unknown · not tested · statistical severity green</td>
 <td>Customer growth trend intact.</td>
 <td class="mono">slope=+11%/yr</td>
 </tr>
