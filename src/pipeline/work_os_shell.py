@@ -721,7 +721,7 @@ def _production_runtime(generated_at: datetime) -> str:
     'overview', 'quarter', 'financials', 'thesis-risk', 'valuation-comps', 'sources'
   ];
 
-  async function workOsLoadBriefArtifact(artifact) {{
+  async function workOsLoadBriefArtifact(artifact, options) {{
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
     const meta = document.getElementById('workOsBriefReaderMeta');
@@ -784,6 +784,7 @@ def _production_runtime(generated_at: datetime) -> str:
         const orderedGroups = canonicalGroups.length ? canonicalGroups : discoveredGroups;
         const groupControls = new Map();
         const sectionControls = new Map();
+        const sectionGroupIds = new Map();
 
         function activateReaderSection(groupPane, sectionId, shouldScroll) {{
           const sectionPanes = Array.from(groupPane.querySelectorAll('.subtab-pane[data-tab]'));
@@ -860,6 +861,7 @@ def _production_runtime(generated_at: datetime) -> str:
             sectionButton.textContent = section.label || workOsHumanizeSection(sectionId);
             sectionButton.dataset.sectionId = sectionId;
             sectionControls.set(sectionId, sectionButton);
+            sectionGroupIds.set(sectionId, groupId);
             sectionButton.addEventListener('click', function () {{
               activateReaderGroup(groupId, false);
               activateReaderSection(groupPane, sectionId, true);
@@ -869,8 +871,27 @@ def _production_runtime(generated_at: datetime) -> str:
           group.append(button, nested);
           sections.appendChild(group);
         }});
-        const initialGroup = orderedGroups[0];
-        if (initialGroup) activateReaderGroup(String(initialGroup.dataset.tabGroup || ''), false);
+        const requestedSectionId = options && typeof options.sectionId === 'string'
+          ? options.sectionId : '';
+        const requestedGroupId = sectionGroupIds.get(requestedSectionId);
+        const requestedGroup = requestedGroupId ? groupById.get(requestedGroupId) : null;
+        if (requestedGroup) {{
+          activateReaderGroup(requestedGroupId, false);
+          activateReaderSection(requestedGroup, requestedSectionId, true);
+        }} else {{
+          const initialGroup = orderedGroups[0];
+          if (initialGroup) activateReaderGroup(String(initialGroup.dataset.tabGroup || ''), false);
+        }}
+        const requestedFactRef = options && typeof options.factRef === 'string' ? options.factRef : '';
+        if (requestedFactRef) {{
+          const factAnchor = Array.from(root.querySelectorAll('[data-fact-ref]')).find(function (node) {{
+            return node.getAttribute('data-fact-ref') === requestedFactRef;
+          }});
+          if (factAnchor) {{
+            factAnchor.classList.add('is-cited-location');
+            factAnchor.scrollIntoView({{ block: 'center' }});
+          }}
+        }}
       }}
       root.addEventListener('click', function (event) {{
         const trigger = event.composedPath().find(function (node) {{ return node && node.dataset && node.dataset.peekUrl; }});
@@ -901,7 +922,7 @@ def _production_runtime(generated_at: datetime) -> str:
         const focusId = workOsHistoryFocusId();
         workOsPushHistoryState(Object.assign({{}}, window.history.state || {{}}, {{ workOsBriefReader: {{ ticker: tickerOrArtifact.ticker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId }} }}), workOsBriefUrl(tickerOrArtifact.ticker, origin, focusId));
       }}
-      await workOsLoadBriefArtifact(tickerOrArtifact);
+      await workOsLoadBriefArtifact(tickerOrArtifact, options);
       return;
     }}
     const requestedTicker = workOsNormalizeTicker(tickerOrArtifact) || workOsCurrentCompanyTicker();
@@ -921,7 +942,7 @@ def _production_runtime(generated_at: datetime) -> str:
       if (briefReaderOverlay) briefReaderOverlay.open();
       return;
     }}
-    await workOsLoadBriefArtifact(payload.items[0]);
+    await workOsLoadBriefArtifact(payload.items[0], options);
   }};
   window.openFullBriefCanvas = window.openWorkOsBriefReader;
 
@@ -1460,16 +1481,24 @@ def _production_runtime(generated_at: datetime) -> str:
             ? '<ul>' + breakRules.map(function (rule) {{
                 const latest = Number.isFinite(rule.latest_value) ? String(rule.latest_value) + (rule.unit ? ' ' + escapeWorkOsHtml(String(rule.unit)) : '') : 'unknown';
                 const distance = Number.isFinite(rule.distance_to_threshold) ? ' · distance ' + String(rule.distance_to_threshold) : '';
-                return '<li><strong>' + escapeWorkOsHtml(String(rule.status || 'unresolved').toUpperCase()) + '</strong> · ' + escapeWorkOsHtml(String(rule.kpi_name || rule.rule_id || 'Break rule')) + ' · latest ' + latest + ' vs ' + escapeWorkOsHtml(String(rule.comparator || '')) + ' ' + escapeWorkOsHtml(String(rule.threshold ?? '')) + distance + '<div class="stat-subtext">Source ' + escapeWorkOsHtml(String(rule.provenance_ref || 'unavailable')) + ' · ' + escapeWorkOsHtml(String(rule.latest_period || thesisRisk.evaluated_at || 'date unavailable')) + '</div></li>';
+                const doorway = brief
+                  ? '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-desk-thesis-rule="true">Open thesis evidence →</button>'
+                  : '';
+                return '<li><strong>' + escapeWorkOsHtml(String(rule.status || 'unresolved').toUpperCase()) + '</strong> · ' + escapeWorkOsHtml(String(rule.kpi_name || rule.rule_id || 'Break rule')) + ' · latest ' + latest + ' vs ' + escapeWorkOsHtml(String(rule.comparator || '')) + ' ' + escapeWorkOsHtml(String(rule.threshold ?? '')) + distance + '<div class="stat-subtext">Source ' + escapeWorkOsHtml(String(rule.provenance_ref || 'unavailable')) + ' · ' + escapeWorkOsHtml(String(rule.latest_period || thesisRisk.evaluated_at || 'date unavailable')) + '</div>' + doorway + '</li>';
               }}).join('') + '</ul>'
             : '<div class="stat-subtext">No evaluated canonical break rules are available.</div>';
           thesisMount.innerHTML = '<div class="k-well"><strong>' + escapeWorkOsHtml(String(thesisRisk.overall_breach_status || 'unavailable').toUpperCase()) + '</strong><div class="stat-subtext">Report evaluation · as of ' + escapeWorkOsHtml(String(thesisRisk.evaluated_at || 'date unavailable')) + '</div><p>' + escapeWorkOsHtml(String(thesisRisk.thesis || '')) + '</p>' + ruleList + '</div>';
+          thesisMount.querySelectorAll('[data-desk-thesis-rule]').forEach(function (button) {{
+            button.addEventListener('click', function () {{
+              openWorkOsBriefReader(brief, {{ sectionId: 'thesis' }});
+            }});
+          }});
         }}
       }}
       const thesisBriefDoorway = document.getElementById('deskThesisBriefDoorway');
       if (thesisBriefDoorway) {{
         thesisBriefDoorway.disabled = !brief;
-        thesisBriefDoorway.onclick = brief ? function () {{ openWorkOsBriefReader(brief); }} : null;
+        thesisBriefDoorway.onclick = brief ? function () {{ openWorkOsBriefReader(brief, {{ sectionId: 'thesis' }}); }} : null;
       }}
       const kpiSummary = desk.kpi_summary || {{ status: 'unavailable', unavailable_reason: 'missing' }};
       const kpiMount = document.getElementById('deskKpiSummary');
@@ -1481,21 +1510,16 @@ def _production_runtime(generated_at: datetime) -> str:
           kpiMount.innerHTML = kpis.map(function (kpi) {{
             const currentStatus = String(kpi.current_status || 'unknown');
             const state = String(kpi.state || 'awaiting_data');
-            const evidenceButton = kpi.evidence_ref
+            const evidenceButton = brief && kpi.evidence_ref
               ? '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-desk-kpi-evidence="' + escapeWorkOsHtml(String(kpi.evidence_ref)) + '" data-desk-kpi-name="' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '">Open exact evidence →</button>'
               : '';
             return '<div class="k-well research-row"><div><strong>' + escapeWorkOsHtml(String(kpi.name || 'KPI')) + '</strong><div class="stat-subtext">Tier 1 · source ' + escapeWorkOsHtml(String(kpi.evidence_ref || kpi.source_hint || 'unavailable')) + ' · as of ' + escapeWorkOsHtml(String(kpi.latest_period || 'date unavailable')) + '</div><div class="stat-number">' + (Number.isFinite(kpi.latest_value) ? escapeWorkOsHtml(String(kpi.latest_value)) + (kpi.unit ? ' ' + escapeWorkOsHtml(String(kpi.unit)) : '') : 'Awaiting data') + '</div></div><div><span class="' + workOsPillClass(currentStatus) + '">' + escapeWorkOsHtml(state.replaceAll('_', ' ').toUpperCase()) + '</span>' + evidenceButton + '</div></div>';
           }}).join('');
           kpiMount.querySelectorAll('[data-desk-kpi-evidence]').forEach(function (button) {{
             button.addEventListener('click', function () {{
-              window.openWorkOsCopilot({{
-                company_ticker: identityTicker,
-                category: 'research',
-                origin_key: 'work-os:thesis-kpi-evidence',
-                fact_ref: button.getAttribute('data-desk-kpi-evidence'),
-                prompt: 'Review the exact evidence for ' + String(button.getAttribute('data-desk-kpi-name') || 'this Tier-1 KPI') + '.',
-                coverage_role_at_creation: String(identity.coverage_role || 'unknown'),
-                lifecycle_at_creation: 'active'
+              openWorkOsBriefReader(brief, {{
+                sectionId: 'thesis',
+                factRef: button.getAttribute('data-desk-kpi-evidence')
               }});
             }});
           }});

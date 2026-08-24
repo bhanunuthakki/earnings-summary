@@ -885,10 +885,34 @@ def test_company_desk_separates_current_thesis_risk_from_decision_conditions() -
     assert "rule.provenance_ref" in html
     assert "kpi.state" in html
     assert "data-desk-kpi-evidence" in html
-    assert "fact_ref: button.getAttribute('data-desk-kpi-evidence')" in html
+    assert "data-desk-thesis-rule" in html
+    assert "sectionId: 'thesis'" in html
+    assert "factRef: button.getAttribute('data-desk-kpi-evidence')" in html
     assert "No inferred values are shown." in html
     assert "deskThesisBriefDoorway" in html
     assert "Thesis evidence " in html
+
+
+def test_company_desk_evidence_controls_target_the_brief_thesis_and_exact_fact_anchor() -> None:
+    """The Desk interaction path carries stable navigation, not copied evidence."""
+    html = render_work_os_shell()
+    reader = html.split("async function workOsLoadBriefArtifact", 1)[1].split(
+        "window.openWorkOsBriefReader", 1
+    )[0]
+    desk = html.split("async function workOsRenderCompanyDesk", 1)[1].split(
+        "async function workOsRenderBriefLibrary", 1
+    )[0]
+
+    assert "sectionGroupIds.set(sectionId, groupId)" in reader
+    assert "const requestedSectionId = options" in reader
+    assert "sectionGroupIds.get(requestedSectionId)" in reader
+    assert "root.querySelectorAll('[data-fact-ref]')" in reader
+    assert "node.getAttribute('data-fact-ref') === requestedFactRef" in reader
+    assert "factAnchor.classList.add('is-cited-location')" in reader
+    assert "data-desk-thesis-rule" in desk
+    assert "openWorkOsBriefReader(brief, { sectionId: 'thesis' })" in desk
+    assert "factRef: button.getAttribute('data-desk-kpi-evidence')" in desk
+    assert "const evidenceButton = brief && kpi.evidence_ref" in desk
 
 
 def test_earnings_peek_ignores_stale_requests_and_aborts_on_close() -> None:
