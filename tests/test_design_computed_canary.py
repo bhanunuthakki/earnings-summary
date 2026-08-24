@@ -280,34 +280,19 @@ def test_cockpit_canary_uses_the_current_portfolio_hydration_contract() -> None:
     assert '"warnings": []' in html
 
 
-@pytest.mark.parametrize(
-    ("route", "stat_key", "screen_id", "mount_id", "endpoint"),
-    (
-        (
-            "performance",
-            "performance",
-            "screen-performance",
-            "workOsPerformanceMount",
-            "/api/panel/performance_risk",
-        ),
-    ),
-)
 @pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
-def test_cockpit_stat_links_use_native_hash_navigation_without_layout_shift(
-    route: str,
-    stat_key: str,
-    screen_id: str,
-    mount_id: str,
-    endpoint: str,
+def test_portfolio_copilot_sort_control_is_keyboard_reachable_without_layout_shift(
     viewport: tuple[int, int],
 ) -> None:
-    """The keyed Cockpit controls remain truthful and keyboard-reachable at both layouts."""
+    """The compact portfolio loop keeps its one live sort control usable at both widths."""
 
     _require_playwright()
     playwright_api = importlib.import_module("playwright.sync_api")
     from execution.design_route_canaries import render_route_canary
 
-    html = render_route_canary(route=route, viewport="desktop" if viewport[0] > 400 else "narrow")
+    html = render_route_canary(
+        route="performance", viewport="desktop" if viewport[0] > 400 else "narrow"
+    )
     with playwright_api.sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(
@@ -342,35 +327,27 @@ def test_cockpit_stat_links_use_native_hash_navigation_without_layout_shift(
             # measured below.
             page.wait_for_timeout(400)
 
-            stats = page.locator("#workOsPortfolioStats")
-            assert stats.locator(".k-stat-cell").count() == 4
-            assert stats.locator("a[data-work-os-stat-key]").count() == 2
-            assert stats.locator("div[data-work-os-stat-key]").count() == 2
+            nav = page.locator("#workOsPortfolioNav")
             assert (
-                stats.locator("[data-work-os-stat-key='nav'] .stat-subtext").text_content()
+                page.locator("#workOsPortfolioNavDetail").text_content()
                 == "Tracker connected · current · As of 2026-01-01"
             )
+            assert nav.text_content() == "$100,000"
+            assert (
+                page.locator("#workOsEvaluationDialogues")
+                .locator("[data-work-os-evaluation-ticker]")
+                .count()
+                == 1
+            )
 
-            control = stats.locator(f"a[data-work-os-stat-key='{stat_key}']")
+            control = page.locator("[data-work-os-portfolio-sort='weight']")
             before_focus = control.bounding_box()
             assert before_focus is not None
             control.focus()
             assert control.evaluate("element => document.activeElement === element")
             assert control.bounding_box() == before_focus
             control.press("Enter")
-
-            page.wait_for_function(
-                "screenId => window.location.hash === '#' + screenId",
-                arg=screen_id,
-            )
-            page.wait_for_function(
-                "screenId => document.getElementById(screenId)?.classList.contains('is-active')",
-                arg=screen_id,
-            )
-            page.wait_for_function(
-                "([id, expected]) => document.getElementById(id)?.dataset.loadedEndpoint === expected",
-                arg=[mount_id, endpoint],
-            )
+            assert control.locator("xpath=ancestor::th").get_attribute("aria-sort") == "ascending"
             assert page_errors == []
         finally:
             context.close()

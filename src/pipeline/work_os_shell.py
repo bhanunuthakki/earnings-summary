@@ -46,7 +46,7 @@ class ScreenSpec:
     endpoint: str
 
 
-CockpitStatKey = Literal["nav", "performance", "risk", "companies"]
+CockpitStatKey = Literal["nav"]
 CockpitStatTarget = Literal["screen-performance"]
 
 
@@ -60,22 +60,7 @@ class CockpitStatSpec:
     accessible_name: str | None = None
 
 
-COCKPIT_STAT_SPECS: tuple[CockpitStatSpec, ...] = (
-    CockpitStatSpec("nav", "Portfolio NAV"),
-    CockpitStatSpec(
-        "performance",
-        "Performance",
-        target="screen-performance",
-        accessible_name="Open Performance & Risk",
-    ),
-    CockpitStatSpec(
-        "risk",
-        "Risk & Factors",
-        target="screen-performance",
-        accessible_name="Open Performance & Risk",
-    ),
-    CockpitStatSpec("companies", "Portfolio Companies"),
-)
+COCKPIT_STAT_SPECS: tuple[CockpitStatSpec, ...] = (CockpitStatSpec("nav", "Portfolio NAV"),)
 
 
 SCREEN_SPECS: tuple[ScreenSpec, ...] = (
@@ -243,67 +228,57 @@ def _endpoint_map() -> dict[str, str]:
 
 
 def _render_portfolio_cockpit_shell() -> str:
-    """Return the live-first portfolio landing surface with one card grammar."""
+    """Return the compact, live-first Portfolio Copilot operating loop."""
 
-    stats = """
-      <div class="k-stat-cell" data-work-os-stat-key="nav">
-        <div class="stat-heading">Portfolio NAV</div>
-        <div class="stat-number">—</div>
-        <div class="stat-subtext">Loading governed portfolio state</div>
-      </div>
-      <a class="k-stat-cell" data-work-os-stat-key="performance" href="#screen-performance" aria-label="Open Performance &amp; Risk">
-        <div class="stat-heading">Performance</div>
-        <div class="stat-number">—</div>
-        <div class="stat-subtext">Loading governed portfolio state</div>
-      </a>
-      <a class="k-stat-cell" data-work-os-stat-key="risk" href="#screen-performance" aria-label="Open Performance &amp; Risk">
-        <div class="stat-heading">Risk &amp; Factors</div>
-        <div class="stat-number">—</div>
-        <div class="stat-subtext">Loading governed portfolio state</div>
-      </a>
-      <div class="k-stat-cell" data-work-os-stat-key="companies">
-        <div class="stat-heading">Portfolio Companies</div>
-        <div class="stat-number">—</div>
-        <div class="stat-subtext">Loading governed portfolio state</div>
-      </div>
-    """
-    return f"""
+    return """
 <section id="screen-cockpit" class="screen-view is-active">
-  <section class="k-card k-card-stat" aria-labelledby="workOsPortfolioPulseHeading">
-    <header class="k-card-head work-os-stat-head">
-      <div class="k-card-heading">
-        <div class="k-card-meta">Portfolio Intelligence</div>
-        <h1 class="k-card-title" id="workOsPortfolioPulseHeading">Portfolio pulse</h1>
-        <p class="k-card-meta">Current governed book state and live research coverage</p>
+  <section class="work-os-portfolio-topline" aria-label="Portfolio NAV and governed actions">
+    <article class="k-card k-card-stat work-os-nav-card" data-work-os-stat-key="nav" aria-labelledby="workOsPortfolioNavHeading">
+      <div class="stat-heading" id="workOsPortfolioNavHeading">Portfolio NAV</div>
+      <div class="stat-number" id="workOsPortfolioNav">—</div>
+      <div class="stat-subtext" id="workOsPortfolioNavDetail">Loading governed portfolio state</div>
+      <div class="work-os-allocation-list" id="workOsPortfolioAllocation" aria-label="Portfolio allocation mix"></div>
+    </article>
+    <article class="k-card work-os-actions-rail" aria-labelledby="workOsActionHeading">
+      <header class="k-section-head">
+        <div class="k-section-title" id="workOsActionHeading" role="heading" aria-level="2">Actions</div>
+        <span class="k-card-meta" id="workOsActionCount" aria-live="polite">Loading</span>
+      </header>
+      <div id="workOsActionQueue" class="work-os-action-queue">
+        <div class="k-well" role="status">Loading governed portfolio actions…</div>
       </div>
-    </header>
-    <div class="k-stat-grid" id="workOsPortfolioStats">{stats}</div>
-  </section>
-
-  <section class="work-os-section" aria-labelledby="workOsActionHeading">
-    <header class="k-section-head">
-      <h2 class="k-section-title" id="workOsActionHeading">Action Queue &amp; Review Pack</h2>
-      <p class="k-section-meta">Completing an item clears it from this session</p>
-    </header>
-    <div id="workOsActionQueue" class="work-os-action-queue">
-      <div class="k-well" role="status">Loading material portfolio-company reviews…</div>
-    </div>
+    </article>
   </section>
 
   <section class="work-os-section" aria-labelledby="workOsHoldingsHeading">
     <header class="k-section-head">
-      <h2 class="k-section-title" id="workOsHoldingsHeading">Portfolio holdings &amp; active coverage</h2>
-      <p class="k-section-meta">Open a company for its current decision workspace</p>
+      <div class="k-section-title" id="workOsHoldingsHeading" role="heading" aria-level="2">Portfolio at a Glance</div>
+      <span class="k-card-meta" id="workOsPortfolioSortStatus" aria-live="polite">Portfolio order</span>
     </header>
     <div class="k-table-shell">
-      <table class="matrix-table">
+      <table class="matrix-table work-os-portfolio-table">
         <thead><tr>
-          <th>Ticker / Company</th><th>Position &amp; Weight</th><th class="num">Price / Target</th>
-          <th>Thesis / Falsifier Status</th><th>Earnings Brief &amp; Full Canvas</th>
-          <th class="num">Action / Threshold</th>
+          <th scope="col" aria-sort="none"><button class="k-btn k-btn-quiet k-btn-sm work-os-sort-button" type="button" data-work-os-portfolio-sort="company"><span>Company</span><span aria-hidden="true">↑</span></button></th>
+          <th scope="col" aria-sort="none"><button class="k-btn k-btn-quiet k-btn-sm work-os-sort-button" type="button" data-work-os-portfolio-sort="weight"><span>Weight</span><span aria-hidden="true">↑</span></button></th>
+          <th scope="col" aria-sort="none"><button class="k-btn k-btn-quiet k-btn-sm work-os-sort-button" type="button" data-work-os-portfolio-sort="price"><span>Price/Target</span><span aria-hidden="true">↑</span></button></th>
+          <th scope="col" aria-sort="none"><button class="k-btn k-btn-quiet k-btn-sm work-os-sort-button" type="button" data-work-os-portfolio-sort="status"><span>Status</span><span aria-hidden="true">↑</span></button></th>
+          <th scope="col" aria-sort="none"><button class="k-btn k-btn-quiet k-btn-sm work-os-sort-button" type="button" data-work-os-portfolio-sort="links"><span>Key Links</span><span aria-hidden="true">↑</span></button></th>
         </tr></thead>
-        <tbody id="workOsPortfolioRows"><tr><td colspan="6"><div class="k-well" role="status">Loading governed portfolio companies…</div></td></tr></tbody>
+        <tbody id="workOsPortfolioRows"><tr><td colspan="5"><div class="k-well" role="status">Loading governed portfolio companies…</div></td></tr></tbody>
       </table>
+    </div>
+  </section>
+
+  <section class="work-os-section" aria-labelledby="workOsEvaluationHeading">
+    <header class="k-section-head">
+      <div>
+        <div class="k-section-title" id="workOsEvaluationHeading" role="heading" aria-level="2">Evaluation dialogues</div>
+        <p class="k-section-meta">Recent owner dialogue and ready-to-discuss workups · not the full evaluation list</p>
+      </div>
+      <span class="k-card-meta" id="workOsEvaluationCount" aria-live="polite">Loading</span>
+    </header>
+    <div class="work-os-evaluation-list" id="workOsEvaluationDialogues">
+      <div class="k-well" role="status">Loading bounded evaluation dialogues…</div>
     </div>
   </section>
 </section>
@@ -969,6 +944,32 @@ def _production_runtime(generated_at: datetime) -> str:
   function workOsPercent(value) {{
     if (!Number.isFinite(value)) return '-';
     return new Intl.NumberFormat('en-US', {{ maximumFractionDigits: 1, signDisplay: 'exceptZero' }}).format(value) + '%';
+  }}
+
+  function workOsPortfolioPercent(value) {{
+    if (!Number.isFinite(value)) return 'Weight unavailable';
+    return new Intl.NumberFormat('en-US', {{ maximumFractionDigits: 1 }}).format(value) + '%';
+  }}
+
+  function workOsIntegerMoney(value, currency) {{
+    if (!Number.isFinite(value)) return '—';
+    const resolvedCurrency = typeof currency === 'string' && /^[A-Z]{{3}}$/.test(currency) ? currency : 'USD';
+    return new Intl.NumberFormat('en-US', {{ style: 'currency', currency: resolvedCurrency, maximumFractionDigits: 0, minimumFractionDigits: 0 }}).format(value);
+  }}
+
+  function workOsAllocationRows(allocation) {{
+    if (!allocation || allocation.state !== 'available' || !allocation.buckets) {{
+      return '<div class="stat-subtext">Allocation mix unavailable</div>';
+    }}
+    const buckets = allocation.buckets;
+    const entries = [
+      ['Domestic ETF', buckets.us_etf], ['Intl ETF', buckets.international_etf],
+      ['Domestic Equity', buckets.us_equity], ['Intl Equity', buckets.international_equity],
+      ['Cash reserve', buckets.cash], ['Unclassified', buckets.unclassified]
+    ];
+    const rendered = entries.filter(function (entry) {{ return Number.isFinite(Number(entry[1] && entry[1].weight_pct)); }})
+      .map(function (entry) {{ return '<div class="stat-subtext work-os-allocation-row">' + workOsPortfolioPercent(Number(entry[1].weight_pct)) + ' ' + entry[0] + '</div>'; }});
+    return rendered.length ? rendered.join('') : '<div class="stat-subtext">Allocation mix unavailable</div>';
   }}
 
   function workOsPillClass(status) {{
@@ -1833,80 +1834,189 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }}
 
+  let workOsPortfolioSort = {{ key: 'company', direction: 'ascending' }};
+
+  function workOsPortfolioSortValue(company, key) {{
+    if (key === 'weight') return Number.isFinite(company.current_weight_pct) ? company.current_weight_pct : -Infinity;
+    if (key === 'price') return Number.isFinite(company.price) ? company.price : -Infinity;
+    if (key === 'status') return String(company.thesis_status || 'status pending').toLowerCase();
+    if (key === 'links') {{
+      return (company.report_url ? 1 : 0) + (company.earnings_route ? 1 : 0) + 2;
+    }}
+    return String(company.name || company.ticker || '').toLowerCase();
+  }}
+
+  function workOsRenderPortfolioRows(companies) {{
+    const rows = document.getElementById('workOsPortfolioRows');
+    if (!rows) return;
+    const direction = workOsPortfolioSort.direction === 'ascending' ? 1 : -1;
+    const ordered = companies.slice().sort(function (left, right) {{
+      const leftValue = workOsPortfolioSortValue(left, workOsPortfolioSort.key);
+      const rightValue = workOsPortfolioSortValue(right, workOsPortfolioSort.key);
+      if (typeof leftValue === 'number' && typeof rightValue === 'number') return direction * (leftValue - rightValue);
+      return direction * String(leftValue).localeCompare(String(rightValue));
+    }});
+    rows.innerHTML = ordered.length ? ordered.map(function (company) {{
+      const weight = workOsPortfolioPercent(company.current_weight_pct);
+      const status = company.thesis_status || 'status pending';
+      const readout = company.latest_earnings_readout || null;
+      const statusDetail = company.pending_tier1_alerts
+        ? company.pending_tier1_alerts + ' thesis-decisive alert' + (company.pending_tier1_alerts === 1 ? '' : 's')
+        : company.pending_alerts
+          ? company.pending_alerts + ' pending alert' + (company.pending_alerts === 1 ? '' : 's')
+          : company.new_documents
+            ? company.new_documents + ' new document' + (company.new_documents === 1 ? '' : 's')
+            : 'No current portfolio alert';
+      const readoutAction = readout && readout.route
+        ? '<button class="k-chip is-active" type="button" data-work-os-readout data-peek-url="' + escapeWorkOsHtml(readout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(company.ticker) + '">Earnings</button>'
+        : company.earnings_route
+          ? '<button class="k-chip" type="button" data-peek-url="' + escapeWorkOsHtml(company.earnings_route) + '" data-peek-title="Earnings research — ' + escapeWorkOsHtml(company.ticker) + '">Earnings</button>'
+          : '';
+      const briefAction = company.report_url
+        ? '<button class="k-chip is-active" type="button" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Brief</button>'
+        : '';
+      return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
+        '<td class="num"><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono"><div>' + workOsIntegerMoney(company.price) + ' / <strong>' + workOsIntegerMoney(company.fair_value) + '</strong></div><a class="k-card-meta work-os-threshold-link" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="/advisor/sizing-intents/' + encodeURIComponent(company.ticker) + '">Open buy / hold / trim / sell ladder</a></td>' +
+        '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span><div class="k-card-meta">' + escapeWorkOsHtml(statusDetail) + '</div></td><td><div class="research-actions"><button class="k-chip" type="button" data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '">Company Desk</button>' + briefAction + readoutAction + '</div></td></tr>';
+    }}).join('') : '<tr><td colspan="5"><div class="k-well">No governed portfolio companies are available.</div></td></tr>';
+  }}
+
+  function workOsSortPortfolioRows(key) {{
+    if (!workOsPortfolioHydration || !Array.isArray(workOsPortfolioHydration.companies)) return;
+    workOsPortfolioSort = {{ key: key, direction: workOsPortfolioSort.key === key && workOsPortfolioSort.direction === 'ascending' ? 'descending' : 'ascending' }};
+    document.querySelectorAll('[data-work-os-portfolio-sort]').forEach(function (button) {{
+      const active = button.getAttribute('data-work-os-portfolio-sort') === key;
+      const header = button.closest('th');
+      if (header) header.setAttribute('aria-sort', active ? workOsPortfolioSort.direction : 'none');
+      const icon = button.querySelector('[aria-hidden="true"]');
+      if (icon) icon.textContent = active && workOsPortfolioSort.direction === 'descending' ? '↓' : '↑';
+    }});
+    const status = document.getElementById('workOsPortfolioSortStatus');
+    if (status) status.textContent = key + ' ' + workOsPortfolioSort.direction;
+    workOsRenderPortfolioRows(workOsPortfolioHydration.companies);
+    workOsBindPortfolioInteractions();
+  }}
+
+  function workOsBindPortfolioInteractions() {{
+    document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{
+      if (node.dataset.workOsTickerBound === 'true') return;
+      node.dataset.workOsTickerBound = 'true';
+      node.addEventListener('click', function (event) {{
+        if (node.tagName === 'TR' && event.target instanceof Element && event.target.closest('button')) return;
+        switchCompanyWorkspace(node.dataset.workOsTicker);
+      }});
+    }});
+    document.querySelectorAll('[data-governed-alert-action]').forEach(function (node) {{
+      if (node.dataset.workOsAlertBound === 'true') return;
+      node.dataset.workOsAlertBound = 'true';
+      node.addEventListener('click', function (event) {{
+        event.preventDefault(); event.stopPropagation(); workOsSubmitGovernedAlertAction(node);
+      }});
+    }});
+    document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{
+      if (node.dataset.workOsBriefBound === 'true') return;
+      node.dataset.workOsBriefBound = 'true';
+      node.addEventListener('click', function (event) {{
+        event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief);
+      }});
+    }});
+    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{
+      if (node.dataset.workOsThresholdBound === 'true') return;
+      node.dataset.workOsThresholdBound = 'true';
+      node.addEventListener('click', function (event) {{
+        event.preventDefault(); event.stopPropagation(); workOsOpenThresholdReview(node.dataset.workOsThresholds);
+      }});
+    }});
+  }}
+
   function workOsRenderPortfolio(payload) {{
     workOsPortfolioHydration = payload;
-    const companies = payload.companies || [];
-    const stats = document.getElementById('workOsPortfolioStats');
-    if (stats) {{
-      const trackerDetail = String(payload.tracker_detail || 'Tracker unavailable · research data only');
-      const statValues = {{
-        nav: workOsMoney(payload.total_market_value),
-        performance: 'Open live view',
-        risk: 'Open live view',
-        companies: String(companies.length)
-      }};
-      const statLabels = {{
-        nav: 'Portfolio NAV',
-        performance: 'Performance',
-        risk: 'Risk & Factors',
-        companies: 'Portfolio Companies'
-      }};
-      const statDetails = {{
-        nav: trackerDetail,
-        performance: 'Performance & Risk',
-        risk: 'Performance & Risk',
-        companies: 'Governed portfolio universe'
-      }};
-      stats.querySelectorAll('[data-work-os-stat-key]').forEach(function (card) {{
-        const key = String(card.dataset.workOsStatKey || '');
-        const heading = card.querySelector('.stat-heading');
-        const number = card.querySelector('.stat-number');
-        const detail = card.querySelector('.stat-subtext');
-        if (heading) heading.textContent = statLabels[key] || 'Portfolio statistic';
-        if (number) number.textContent = statValues[key] || '—';
-        if (detail) detail.textContent = statDetails[key] || 'Live state unavailable';
-      }});
-    }}
+    const companies = Array.isArray(payload.companies) ? payload.companies : [];
+    const nav = document.getElementById('workOsPortfolioNav');
+    const navDetail = document.getElementById('workOsPortfolioNavDetail');
+    const allocation = document.getElementById('workOsPortfolioAllocation');
+    if (nav) nav.textContent = workOsIntegerMoney(payload.total_market_value);
+    if (navDetail) navDetail.textContent = String(payload.tracker_detail || 'Tracker unavailable · research data only');
+    if (allocation) allocation.innerHTML = workOsAllocationRows(payload.allocation);
     const actionHeading = document.getElementById('workOsActionHeading');
-    if (actionHeading) actionHeading.textContent = 'Action Queue & Review Pack (' + payload.actions.length + ' Items)';
+    const actionCount = document.getElementById('workOsActionCount');
+    if (actionHeading) actionHeading.textContent = 'Actions';
+    if (actionCount) actionCount.textContent = String((payload.actions || []).length) + ' open';
     const actionQueue = document.getElementById('workOsActionQueue');
     if (actionQueue) {{
-      actionQueue.innerHTML = payload.actions.length ? payload.actions.map(function (action) {{
-        return '<article class="k-card k-card-action k-card-interactive"><div class="k-action-row"><div class="work-os-action-copy">' +
+      actionQueue.innerHTML = payload.actions && payload.actions.length ? payload.actions.map(function (action) {{
+        return '<article class="k-well work-os-action-card"><div class="work-os-action-row"><div class="work-os-action-copy">' +
           '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-title k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
           '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div>' + workOsActionEvidence(action) + workOsGovernedActionControls(action) + '</div></div>' +
-          '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company &rarr;</button></div></article>';
+          '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company</button></div></article>';
       }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
     }}
-    const rows = document.getElementById('workOsPortfolioRows');
-    if (rows) {{
-      rows.innerHTML = companies.map(function (company) {{
-        const weight = Number.isFinite(company.current_weight_pct) ? workOsPercent(company.current_weight_pct) : 'Weight unavailable';
-        const status = company.thesis_status || 'status pending';
-        const readout = company.latest_earnings_readout || null;
-        const fallbackReadoutAction = company.earnings_route
-          ? '<button class="k-chip is-active" type="button" data-peek-url="' + escapeWorkOsHtml(company.earnings_route) + '" data-peek-title="Earnings research — ' + escapeWorkOsHtml(company.ticker) + '">' + escapeWorkOsHtml(company.earnings_label || 'Open earnings research →') + '</button>'
-          : '<span class="k-chip">Readout unavailable</span>';
-        const readoutAction = readout && readout.route
-          ? '<button class="k-chip is-active" type="button" data-work-os-readout data-peek-url="' + escapeWorkOsHtml(readout.route) + '" data-peek-title="Post-earnings readout — ' + escapeWorkOsHtml(company.ticker) + '">' + escapeWorkOsHtml(readout.period_label) + ' readout &rarr;</button>'
-          : fallbackReadoutAction;
-        const briefAction = company.report_url ? '<button class="k-chip is-active" type="button" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Full Brief Canvas &rarr;</button>' : '<span class="k-chip">Brief pending</span>';
-        return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
-          '<td><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono">' + workOsMoney(company.price) + ' / <strong>' + workOsMoney(company.fair_value) + '</strong></td>' +
-          '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span></td><td><div class="research-actions">' + readoutAction + briefAction + '</div></td>' +
-          '<td class="num"><a class="k-btn k-btn-quiet k-btn-sm" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="/advisor/sizing-intents/' + encodeURIComponent(company.ticker) + '">Review Thresholds</a></td></tr>';
-      }}).join('');
-    }}
-    document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
-      if (node.tagName === 'TR' && event.target instanceof Element && event.target.closest('button')) return;
-      switchCompanyWorkspace(node.dataset.workOsTicker);
-    }}); }});
-    document.querySelectorAll('[data-governed-alert-action]').forEach(function (node) {{ node.addEventListener('click', function (event) {{
-      event.preventDefault(); event.stopPropagation(); workOsSubmitGovernedAlertAction(node);
-    }}); }});
-    document.querySelectorAll('[data-work-os-full-brief]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief); }}); }});
-    document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{ node.addEventListener('click', function (event) {{ event.preventDefault(); event.stopPropagation(); workOsOpenThresholdReview(node.dataset.workOsThresholds); }}); }});
+    workOsRenderPortfolioRows(companies);
+    workOsBindPortfolioInteractions();
   }}
+
+  async function workOsRenderEvaluationDialogues() {{
+    const target = document.getElementById('workOsEvaluationDialogues');
+    const count = document.getElementById('workOsEvaluationCount');
+    if (!target) return;
+    try {{
+      const response = await fetch('/api/work-os/evaluation-dialogues?limit=3', {{ headers: {{ Accept: 'application/json' }} }});
+      const payload = response.ok ? await response.json() : null;
+      if (!payload || !Array.isArray(payload.items)) throw new Error('Invalid evaluation response');
+      const items = payload.items;
+      if (count) count.textContent = String(items.length) + ' active';
+      target.innerHTML = items.length ? items.map(function (item) {{
+        const ticker = String(item.ticker || '').toUpperCase();
+        const instrument = item.instrument_type === 'etf' ? 'ETF' : item.instrument_type === 'stock' ? 'Stock' : 'Instrument unavailable';
+        const linked = item.ask_session_link_state === 'linked';
+        const readiness = String(item.workup_readiness || 'unavailable').replaceAll('_', ' ');
+        const freshnessClass = item.freshness === 'available'
+          ? 'k-pill k-pill-ok'
+          : item.freshness === 'unavailable' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn';
+        const noteDetail = Number.isInteger(item.open_note_count) && item.open_note_count > 0
+          ? item.open_note_count + ' owner note' + (item.open_note_count === 1 ? '' : 's')
+          : 'No owner notes recorded';
+        const candidateId = Number.isInteger(item.discovery_candidate_id) && item.discovery_candidate_id > 0 ? String(item.discovery_candidate_id) : '';
+        const instrumentValue = item.instrument_type === 'stock' || item.instrument_type === 'etf' ? item.instrument_type : '';
+        return '<article class="k-well work-os-evaluation-thread" data-work-os-evaluation-ticker="' + escapeWorkOsHtml(ticker) + '"><div><div class="research-actions"><h3 class="k-card-title k-card-row-title"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span> · ' + escapeWorkOsHtml(item.name || ticker) + '</h3><span class="k-chip">' + escapeWorkOsHtml(instrument) + '</span><span class="' + freshnessClass + '">' + escapeWorkOsHtml(readiness) + ' workup</span></div><div class="k-card-meta">' + escapeWorkOsHtml(noteDetail) + (item.latest_note_at ? ' · updated ' + escapeWorkOsHtml(String(item.latest_note_at)) : '') + '</div></div><div class="research-actions"><button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-evaluation-dialogue="' + escapeWorkOsHtml(ticker) + '" data-work-os-evaluation-candidate="' + escapeWorkOsHtml(candidateId) + '" data-work-os-evaluation-instrument="' + escapeWorkOsHtml(instrumentValue) + '">' + (linked ? 'Continue dialogue' : 'Start dialogue') + '</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-workup="' + escapeWorkOsHtml(ticker) + '">Open workup</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-evaluation-compare="' + escapeWorkOsHtml(ticker) + '">Compare</button></div></article>';
+      }}).join('') : '<div class="k-well">No evaluation dialogues are ready to discuss.</div>';
+    }} catch (_error) {{
+      if (count) count.textContent = 'Unavailable';
+      target.innerHTML = '<div class="k-well" role="alert">Evaluation dialogues are temporarily unavailable. No prototype candidates are being shown.</div>';
+    }}
+  }}
+
+  function workOsOpenEvaluationDialogue(button) {{
+    const ticker = workOsNormalizeTicker(button.getAttribute('data-work-os-evaluation-dialogue'));
+    if (!ticker || !window.openWorkOsCopilot) return;
+    const candidateId = Number(button.getAttribute('data-work-os-evaluation-candidate'));
+    const instrument = button.getAttribute('data-work-os-evaluation-instrument');
+    window.openWorkOsCopilot({{
+      company_ticker: ticker, category: 'research', origin_key: 'work-os:evaluation-dialogue:' + ticker,
+      coverage_role_at_creation: 'evaluation', lifecycle_at_creation: 'active',
+      evaluation_candidate_id: Number.isInteger(candidateId) && candidateId > 0 ? candidateId : null,
+      evaluation_instrument_type: instrument === 'stock' || instrument === 'etf' ? instrument : null
+    }});
+  }}
+
+  function workOsOpenEvaluationWorkup(ticker) {{
+    const safeTicker = workOsNormalizeTicker(ticker);
+    if (safeTicker) window.switchCompanyWorkspace(safeTicker);
+  }}
+
+  function workOsCompareEvaluation(ticker) {{
+    const safeTicker = workOsNormalizeTicker(ticker);
+    if (safeTicker) window.switchFactPlayground(safeTicker);
+  }}
+
+  document.addEventListener('click', function (event) {{
+    const target = event.target instanceof Element ? event.target.closest('[data-work-os-portfolio-sort], [data-work-os-evaluation-dialogue], [data-work-os-evaluation-workup], [data-work-os-evaluation-compare]') : null;
+    if (!target) return;
+    if (target.hasAttribute('data-work-os-portfolio-sort')) {{ workOsSortPortfolioRows(target.getAttribute('data-work-os-portfolio-sort')); return; }}
+    if (target.hasAttribute('data-work-os-evaluation-dialogue')) {{ workOsOpenEvaluationDialogue(target); return; }}
+    if (target.hasAttribute('data-work-os-evaluation-workup')) {{ workOsOpenEvaluationWorkup(target.getAttribute('data-work-os-evaluation-workup')); return; }}
+    if (target.hasAttribute('data-work-os-evaluation-compare')) workOsCompareEvaluation(target.getAttribute('data-work-os-evaluation-compare'));
+  }});
 
   async function workOsApplyRequestedResearchState() {{
     const context = workOsReadCompanyContext();
@@ -1933,17 +2043,14 @@ def _production_runtime(generated_at: datetime) -> str:
           workOsRenderPortfolio(payload);
           if (status) status.textContent = String(payload.tracker_detail || 'Tracker unavailable · research data only');
         }} catch (error) {{
-          const stats = document.getElementById('workOsPortfolioStats');
-          if (stats) stats.querySelectorAll('[data-work-os-stat-key]').forEach(function (card) {{
-            const number = card.querySelector('.stat-number');
-            const detail = card.querySelector('.stat-subtext');
-            if (number) number.textContent = '—';
-            if (detail) detail.textContent = 'Tracker unavailable · research data only';
-          }});
+          const nav = document.getElementById('workOsPortfolioNav');
+          const navDetail = document.getElementById('workOsPortfolioNavDetail');
+          if (nav) nav.textContent = '—';
+          if (navDetail) navDetail.textContent = 'Tracker unavailable · research data only';
           const queue = document.getElementById('workOsActionQueue');
           if (queue) queue.innerHTML = '<div class="k-well" role="alert">Portfolio companies are temporarily unavailable. No prototype values are being shown.</div>';
           const rows = document.getElementById('workOsPortfolioRows');
-          if (rows) rows.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
+          if (rows) rows.innerHTML = '<tr><td colspan="5"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
           if (status) status.textContent = 'Tracker unavailable · research data only';
         }}
       }})().finally(function () {{ workOsPortfolioLoading = null; }});
@@ -1952,7 +2059,7 @@ def _production_runtime(generated_at: datetime) -> str:
   }}
 
   async function workOsHydratePortfolio() {{
-    await workOsEnsurePortfolioHydration();
+    await Promise.all([workOsEnsurePortfolioHydration(), workOsRenderEvaluationDialogues()]);
     workOsApplyRequestedResearchState();
   }}
 

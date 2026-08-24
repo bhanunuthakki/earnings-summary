@@ -90,6 +90,15 @@ def test_copilot_reuses_ask_session_crud_and_stream_contract() -> None:
         assert f"case '{event_type}':" in html
 
 
+def test_copilot_preserves_valid_evaluation_coordinates_at_session_creation() -> None:
+    html = render_work_os_copilot()
+
+    assert "snapshot.evaluation_candidate_id = pendingContext.evaluation_candidate_id" in html
+    assert "snapshot.evaluation_instrument_type = pendingContext.evaluation_instrument_type" in html
+    assert "delete pendingContext.evaluation_candidate_id" in html
+    assert "delete pendingContext.evaluation_instrument_type" in html
+
+
 def test_copilot_emits_ascii_safe_text_for_the_shell_transport() -> None:
     html = render_work_os_copilot()
 

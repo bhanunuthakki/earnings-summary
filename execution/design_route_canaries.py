@@ -205,6 +205,17 @@ def _canary_shell_payloads() -> dict[str, object]:
             "generated_at": "2026-01-01T00:00:00Z",
             "as_of": "2026-01-01",
             "total_market_value": 100000.0,
+            "allocation": {
+                "state": "available",
+                "buckets": {
+                    "us_equity": {"weight_pct": 40.0},
+                    "international_equity": {"weight_pct": 20.0},
+                    "us_etf": {"weight_pct": 15.0},
+                    "international_etf": {"weight_pct": 10.0},
+                    "cash": {"weight_pct": 15.0},
+                    "unclassified": {"weight_pct": 0.0},
+                },
+            },
             "companies": [company],
             "actions": [
                 {
@@ -229,6 +240,24 @@ def _canary_shell_payloads() -> dict[str, object]:
         "tickers": {
             "tickers": [{"ticker": "NU", "name": "Canary Company", "list_type": "portfolio"}]
         },
+        "evaluation_dialogues": {
+            "state": "available",
+            "items": [
+                {
+                    "ticker": "TOST",
+                    "name": "Canary Evaluation",
+                    "instrument_type": "stock",
+                    "lifecycle": "evaluation",
+                    "discovery_candidate_id": 7,
+                    "open_note_count": 1,
+                    "latest_note_at": "2026-01-01T00:00:00Z",
+                    "workup_readiness": "partial",
+                    "ask_session_id": None,
+                    "ask_session_link_state": "unlinked",
+                    "freshness": "available",
+                }
+            ],
+        },
         "briefs": {"items": [brief]},
         "desk": {
             "company": company,
@@ -251,6 +280,7 @@ def _canary_shell_loader() -> str:
         "const designCanaryShellFetch=window.fetch.bind(window);"
         "window.fetch=(input,init)=>{const url=String(input);"
         "if(url==='/api/work-os/portfolio')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.portfolio),{status:200,headers:{'Content-Type':'application/json'}}));"
+        "if(url==='/api/work-os/evaluation-dialogues?limit=3')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.evaluation_dialogues),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url==='/api/tickers')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.tickers),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url.startsWith('/api/work-os/briefs?'))return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.briefs),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url==='/api/work-os/companies/NU/desk')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.desk),{status:200,headers:{'Content-Type':'application/json'}}));"

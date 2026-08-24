@@ -1111,6 +1111,12 @@ WORK_OS_COPILOT_JS = r"""
     if (pendingContext.thesis_version) snapshot.thesis_version = pendingContext.thesis_version;
     if (pendingContext.report_date) snapshot.report_date = pendingContext.report_date;
     if (pendingContext.origin_key) snapshot.origin_key = pendingContext.origin_key;
+    if (Number.isInteger(pendingContext.evaluation_candidate_id) && pendingContext.evaluation_candidate_id > 0) {
+      snapshot.evaluation_candidate_id = pendingContext.evaluation_candidate_id;
+    }
+    if (pendingContext.evaluation_instrument_type === 'stock' || pendingContext.evaluation_instrument_type === 'etf') {
+      snapshot.evaluation_instrument_type = pendingContext.evaluation_instrument_type;
+    }
     return snapshot;
   }
 
@@ -1201,6 +1207,12 @@ WORK_OS_COPILOT_JS = r"""
     }
     if (!['active', 'archived', 'unknown'].includes(supplied.lifecycle_at_creation)) {
       delete pendingContext.lifecycle_at_creation;
+    }
+    if (!Number.isInteger(supplied.evaluation_candidate_id) || supplied.evaluation_candidate_id <= 0) {
+      delete pendingContext.evaluation_candidate_id;
+    }
+    if (!['stock', 'etf'].includes(supplied.evaluation_instrument_type)) {
+      delete pendingContext.evaluation_instrument_type;
     }
     if (pendingContext.company_ticker) {
       pendingContext.company_ticker = String(pendingContext.company_ticker).toUpperCase();
