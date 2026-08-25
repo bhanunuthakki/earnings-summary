@@ -305,7 +305,7 @@ def _render_evaluation_shell() -> str:
 
     return """
 <section id="screen-evaluation" class="screen-view" data-layout="research-evaluation" role="region" aria-labelledby="workOsEvaluationSurfaceHeading">
-  <header class="research-toolbar k-card">
+  <header class="research-toolbar k-card k-card-section">
     <div>
       <div class="k-card-meta">Research Engine · Complete evaluation coverage</div>
       <h1 class="k-card-title" id="workOsEvaluationSurfaceHeading">Evaluation</h1>
@@ -316,7 +316,7 @@ def _render_evaluation_shell() -> str:
       <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-refresh-evaluation>Refresh</button>
     </div>
   </header>
-  <section class="k-card work-os-section" aria-label="Evaluation coverage list">
+  <section class="k-card k-card-section work-os-section" aria-label="Evaluation coverage list">
     <header class="k-section-head">
       <div>
         <div class="k-section-title" role="heading" aria-level="2">Coverage</div>

@@ -110,6 +110,7 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "Evaluation" in evaluation
     assert "Complete evaluation coverage" in evaluation
     assert 'id="workOsEvaluationRows"' in evaluation
+    assert evaluation.count("k-card k-card-section") == 2
     assert 'data-live-endpoint="/api/work-os/evaluation" id="screen-evaluation"' in html
     for label in (
         "Company",
