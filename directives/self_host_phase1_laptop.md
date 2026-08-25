@@ -80,6 +80,12 @@ tailscale serve --bg 7421        # HTTPS via MagicDNS → proxies to 127.0.0.1:7
 tailscale serve status           # prints your https://<host>.<tailnet>.ts.net URL
 ```
 
+The URL printed by live `tailscale serve status` is the only client-facing
+hostname authority. Never synthesize it from the Windows computer name, a
+cached device alias/IP, or `tailscale status`. If the serving host has been
+renamed and Serve reports a stale hostname, run `tailscale serve reset`, repeat
+`tailscale serve --bg 7421`, and use the newly printed URL everywhere below.
+
 `tailscale serve` terminates TLS and forwards to localhost, so **the app never binds a non-loopback port** — there is no public listener to attack. The dashboard is reachable *only* from devices on your tailnet.
 
 **[You]** Keep the tailnet private — don't share nodes and don't enable Funnel (that would expose it publicly). If a second person/device ever joins, add a Tailscale ACL scoping port `7421` to your own device tag.
