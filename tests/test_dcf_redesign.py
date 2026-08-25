@@ -1600,6 +1600,26 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     m0 = base_inp.exit_multiple
     conn = sqlite3.connect(str(db))
     npv0 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
+    primary_overlay = {
+        "status": "ok",
+        "statements": {
+            "income": {
+                "status": "ok",
+                "applied": [
+                    {
+                        "fact_id": 42,
+                        "source_url": "https://www.sec.gov/example",
+                        "as_of": "2026-08-20T12:00:00+00:00",
+                    }
+                ],
+            }
+        },
+    }
+    conn.execute(
+        "UPDATE dcf_runs SET provenance_json=? WHERE ticker='TESTCO'",
+        (json.dumps({"ticker": "TESTCO", "primary_fact_overlay": primary_overlay}),),
+    )
+    conn.commit()
     conn.close()
 
     payload = base_inp.to_dict()
@@ -1617,12 +1637,14 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     # dcf_runs re-persisted; the prior market quote was carried forward.
     conn = sqlite3.connect(str(db))
     row = conn.execute(
-        "SELECT npv_per_share, live_price FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT npv_per_share, live_price, provenance_json FROM dcf_runs WHERE ticker='TESTCO'"
     ).fetchone()
     conn.close()
     assert row is not None
     assert row[1] == pytest.approx(50.0)
     assert res["fair_value_per_share"] == pytest.approx(float(row[0]))
+    persisted_provenance = json.loads(str(row[2]))
+    assert persisted_provenance["primary_fact_overlay"] == primary_overlay
 
     # The override ledger records the edit; the Opus baseline is NOT overwritten.
     adata = json.loads(

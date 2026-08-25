@@ -49,7 +49,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -58,13 +58,16 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.worksheet.worksheet import Worksheet
 
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
+CODE_ROOT = Path(__file__).resolve().parents[1]
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or CODE_ROOT)
 T = os.environ.get("DCF_TICKER", "BN")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
-sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(CODE_ROOT / "src"))
 
 
+from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
+from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort — the workbook builds without a DB
@@ -177,8 +180,60 @@ def value(s: Sotp) -> tuple[float, float]:
     return eq, eq * 1000.0 / s.shares_m
 
 
+@dataclass(frozen=True)
+class SyncResult:
+    """The BN workbook-to-owner-JSON sync outcome, kept durable on the run."""
+
+    status: str  # synced | failed: <detail> | not_applicable
+    synced_at: datetime | None = None
+
+
+def reverse_valuation(s: Sotp, eq: float, vps: float) -> dict[str, object] | None:
+    """Persist BN's existing exact market-implied carry/private-RE residual."""
+    if s.price <= 0 or vps <= 0:
+        return None
+    floor = _am(s) + _bws(s) + s.ic_listed - _corp(s)
+    implied_carry_re = s.price * s.shares_m / 1000.0 - floor
+    modeled_carry_re = _carry(s) + s.ic_private * (1 - s.ic_re_haircut)
+    residual = reverse_valuation_mod.residual_lever(
+        lever_id="implied_carry_private_re_value",
+        label="Market-implied carry + private / real-estate value",
+        unit="usd_b",
+        base_value=modeled_carry_re,
+        implied_value=implied_carry_re,
+        note="Market equity less asset management, insurance, listed affiliates, and corporate costs.",
+    )
+    return reverse_valuation_mod.ReverseValuation(
+        archetype="holdco_sotp",
+        price=s.price,
+        base_value_per_share_usd=vps,
+        valuation_scope="equity",
+        levers=(residual,),
+    ).to_snapshot_dict()
+
+
+def _profile_price_metadata(ticker: str) -> tuple[datetime | None, str | None]:
+    """The existing cached-profile price policy, with auditable observation time."""
+    profile = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
+    if not profile.is_file():
+        return None, "assumption_seed"
+    try:
+        raw: object = json.loads(profile.read_text(encoding="utf-8"))
+        item = raw[0] if isinstance(raw, list) and raw else raw
+        if not isinstance(item, dict) or not isinstance(item.get("price"), (int, float)):
+            return None, "fmp_profile_unusable"
+    except (OSError, ValueError, TypeError):
+        return None, "fmp_profile_unusable"
+    return datetime.fromtimestamp(profile.stat().st_mtime, tz=UTC), "fmp_profile"
+
+
 def persist_dcf_run(
-    eq: float, vps: float, price: float, ke: float, snapshot: dict[str, object]
+    eq: float,
+    vps: float,
+    price: float,
+    ke: float,
+    snapshot: dict[str, object],
+    sync_result: SyncResult | None = None,
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. Shape-agnostic (BN or BRK). No-op without the DB / persist module."""
@@ -192,6 +247,26 @@ def persist_dcf_run(
             mos = json.loads(holdings.read_text(encoding="utf-8")).get("mos_bar")
         except (OSError, json.JSONDecodeError):
             mos = None
+    live_price_at, live_price_source = _profile_price_metadata(T)
+    snapshot_payload = {**snapshot, "workbook": str(DEST)}
+    provenance = build_file_provenance(
+        ticker=T,
+        repo_root=REPO,
+        workbook_path=DEST,
+        engine_version="holdco_sotp_v1",
+        effective_inputs=(
+            snapshot.get("marks", {}) if isinstance(snapshot.get("marks"), dict) else {}
+        ),
+        assumption_snapshot=snapshot_payload,
+        live_price=price or None,
+        live_price_at=live_price_at,
+        live_price_source=live_price_source,
+        source_files=(
+            (REPO / "data" / "dcf_assumptions" / f"{T}.json", "owner_assumptions"),
+            (REPO / "data" / "historical" / "fmp" / f"{T}_profile.json", "company_profile"),
+            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+        ),
+    )
     row = persist_mod.DcfRunRow(
         ticker=T,
         valuation_date=date.today(),
@@ -202,14 +277,66 @@ def persist_dcf_run(
         shares_outstanding=eq * 1e9 / vps,  # back out shares from equity/value-per-share
         currency="USD",
         live_price=price or None,
-        live_price_at=None,
+        live_price_at=live_price_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
-        assumption_snapshot_json=json.dumps({**snapshot, "workbook": str(DEST)}, indent=2),
+        assumption_snapshot_json=json.dumps(snapshot_payload, indent=2),
         notes=f"workbook={DEST.name} ({snapshot.get('model', 'holdco SOTP')})",
+        assumptions_sync_status=None,
+        assumptions_synced_at=None,
+        provenance=provenance,
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+        columns = {str(item[1]) for item in conn.execute("PRAGMA table_info(dcf_runs)")}
+        if {
+            "assumptions_sync_status",
+            "assumptions_synced_at",
+        }.issubset(columns) and sync_result is not None:
+            row = dataclasses.replace(
+                row,
+                assumptions_sync_status=(
+                    sync_result.status if sync_result.status != "not_applicable" else None
+                ),
+                assumptions_synced_at=sync_result.synced_at,
+            )
+        if not schema_supports_provenance(conn):
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "dcf_provenance_not_persisted",
+                        "ticker": T,
+                        "reason": "database schema lacks provenance columns",
+                    }
+                )
+                + "\n"
+            )
+            row = dataclasses.replace(row, provenance=None)
         persist_mod.upsert(conn, row)
     return True
+
+
+def _persist_then_sync_bn(
+    s: Sotp,
+    eq: float,
+    vps: float,
+    snapshot: dict[str, object],
+) -> tuple[bool, SyncResult]:
+    """Persist effective marks before mutating their owner-authority JSON."""
+    pending = SyncResult("pending")
+    snapshot["assumption_provenance"] = {
+        "authority": f"data/dcf_assumptions/{T}.json",
+        "workbook_capture": "supported",
+        "sync_status": pending.status,
+    }
+    persisted = persist_dcf_run(eq, vps, s.price, s.ke, snapshot, pending)
+    if not persisted:
+        return False, SyncResult("not_attempted: DCF run was not persisted")
+
+    sync_result = _sync_sotp_json_result(T, s)
+    assumption_provenance = snapshot.get("assumption_provenance")
+    if isinstance(assumption_provenance, dict):
+        assumption_provenance["sync_status"] = sync_result.status
+    recorded = persist_dcf_run(eq, vps, s.price, s.ke, snapshot, sync_result)
+    return recorded, sync_result
 
 
 def _run_bn() -> int:
@@ -240,8 +367,10 @@ def _run_bn() -> int:
             "bear": {"fair_value_per_share_usd": bear},
         },
     }
-    persisted = persist_dcf_run(eq, vps, s.price, s.ke, snap)
-    synced = _sync_sotp_json(T, s)
+    reverse = reverse_valuation(s, eq, vps)
+    if reverse is not None:
+        snap["reverse_valuation"] = reverse
+    persisted, sync_result = _persist_then_sync_bn(s, eq, vps, snap)
     # reverse-solve: what the market implies for carry + private RE at the price
     implied_eq = s.price * s.shares_m / 1000.0
     floor = _am(s) + _bws(s) + s.ic_listed - _corp(s)  # AM + BWS + listed only − corp
@@ -250,7 +379,7 @@ def _run_bn() -> int:
     print(
         f"RESULT\t{T}\tSOTP/sh=${vps:.2f}\tprice=${s.price:.2f}\tupside={vps / s.price - 1:+.0%}"
         f"\tvs plan ${s.plan_value:.0f}={vps / s.plan_value - 1:+.0%}"
-        f"\tdcf_runs={'ok' if persisted else 'skip'}\tjson_sync={'ok' if synced else 'skip'}"
+        f"\tdcf_runs={'ok' if persisted else 'skip'}\tjson_sync={sync_result.status}"
         f"\t-> {DEST}"
     )
     print(f"  (1) Asset mgmt (FRE x{s.fre_mult:.0f} x {s.bn_own:.0%})... ${_am(s):6.1f}B")
@@ -352,28 +481,28 @@ def _capture_bn_inputs(path: Path) -> dict[str, float]:
     return out
 
 
-def _sync_sotp_json(ticker: str, s: Sotp) -> bool:
+def _sync_sotp_json_result(ticker: str, s: Sotp) -> SyncResult:
     """Mirror the effective marks back into the assumptions JSON (the redesign
     `sync_assumptions_json` convention): numeric values only — the per-mark
     justification notes are never touched. Price is live, not a mark, so it is
-    skipped. Returns True when written."""
+    skipped. The detailed outcome is persisted with the DCF run."""
     path = _sotp_json_path(ticker)
     if not path.exists():
-        return False
+        return SyncResult("not_applicable")
     try:
         raw: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
+        return SyncResult("failed: unreadable assumptions JSON")
     if not isinstance(raw, dict):
-        return False
+        return SyncResult("failed: assumptions JSON is not an object")
     data = cast("dict[str, object]", raw)
     sotp_obj = data.setdefault("sotp", {})
     if not isinstance(sotp_obj, dict):
-        return False
+        return SyncResult("failed: sotp key is not an object")
     sotp = cast("dict[str, object]", sotp_obj)
     marks_obj = sotp.setdefault("marks", {})
     if not isinstance(marks_obj, dict):
-        return False
+        return SyncResult("failed: marks key is not an object")
     marks = cast("dict[str, object]", marks_obj)
     for field, _row, _label, _fmt in _SOTP_SPEC:
         if field == "price":
@@ -386,9 +515,14 @@ def _sync_sotp_json(ticker: str, s: Sotp) -> bool:
     sotp["last_synced"] = date.today().isoformat()
     try:
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except OSError:
-        return False
-    return True
+    except OSError as exc:
+        return SyncResult(f"failed: write failed: {exc}")
+    return SyncResult("synced", datetime.now(UTC).replace(tzinfo=None))
+
+
+def _sync_sotp_json(ticker: str, s: Sotp) -> bool:
+    """Compatibility wrapper for existing direct callers and tests."""
+    return _sync_sotp_json_result(ticker, s).status == "synced"
 
 
 def _load(ticker: str) -> tuple[Sotp, dict[str, str]]:
