@@ -1184,7 +1184,7 @@ def _prior_live_price(db_path: Path, ticker: str) -> tuple[float | None, datetim
     return price, at
 
 
-def _prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object] | None:
+def prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object] | None:
     """Recover validated primary lineage from the current generic DCF run."""
     if not db_path.exists():
         return None
@@ -1193,18 +1193,66 @@ def _prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object]
             columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(dcf_runs)")}
             if "provenance_json" not in columns:
                 return None
-            predicates = ["UPPER(ticker) = UPPER(?)"]
-            if "is_latest" in columns:
-                predicates.append("COALESCE(is_latest, 1) = 1")
-            if "segment_name" in columns:
-                predicates.append("COALESCE(segment_name, '') = ''")
-            order = "created_at DESC, id DESC" if "created_at" in columns else "id DESC"
-            row = conn.execute(
-                "SELECT provenance_json FROM dcf_runs WHERE "
-                + " AND ".join(predicates)
-                + f" ORDER BY {order} LIMIT 1",  # nosec B608 - identifiers are fixed above
-                (ticker,),
-            ).fetchone()
+            has_latest = "is_latest" in columns
+            has_segment = "segment_name" in columns
+            has_created_at = "created_at" in columns
+            if has_latest and has_segment and has_created_at:
+                query = """
+                    SELECT provenance_json FROM dcf_runs
+                    WHERE UPPER(ticker) = UPPER(?)
+                      AND COALESCE(is_latest, 1) = 1
+                      AND COALESCE(segment_name, '') = ''
+                    ORDER BY created_at DESC, id DESC LIMIT 1
+                """
+            elif has_latest and has_segment:
+                query = """
+                    SELECT provenance_json FROM dcf_runs
+                    WHERE UPPER(ticker) = UPPER(?)
+                      AND COALESCE(is_latest, 1) = 1
+                      AND COALESCE(segment_name, '') = ''
+                    ORDER BY id DESC LIMIT 1
+                """
+            elif has_latest and has_created_at:
+                query = """
+                    SELECT provenance_json FROM dcf_runs
+                    WHERE UPPER(ticker) = UPPER(?)
+                      AND COALESCE(is_latest, 1) = 1
+                    ORDER BY created_at DESC, id DESC LIMIT 1
+                """
+            elif has_latest:
+                query = """
+                    SELECT provenance_json FROM dcf_runs
+                    WHERE UPPER(ticker) = UPPER(?)
+                      AND COALESCE(is_latest, 1) = 1
+                    ORDER BY id DESC LIMIT 1
+                """
+            elif has_segment and has_created_at:
+                query = """
+                    SELECT provenance_json FROM dcf_runs
+                    WHERE UPPER(ticker) = UPPER(?)
+                      AND COALESCE(segment_name, '') = ''
+                    ORDER BY created_at DESC, id DESC LIMIT 1
+                """
+            elif has_segment:
+                query = """
+                    SELECT provenance_json FROM dcf_runs
+                    WHERE UPPER(ticker) = UPPER(?)
+                      AND COALESCE(segment_name, '') = ''
+                    ORDER BY id DESC LIMIT 1
+                """
+            elif has_created_at:
+                query = """
+                    SELECT provenance_json FROM dcf_runs
+                    WHERE UPPER(ticker) = UPPER(?)
+                    ORDER BY created_at DESC, id DESC LIMIT 1
+                """
+            else:
+                query = """
+                    SELECT provenance_json FROM dcf_runs
+                    WHERE UPPER(ticker) = UPPER(?)
+                    ORDER BY id DESC LIMIT 1
+                """
+            row = conn.execute(query, (ticker,)).fetchone()
     except sqlite3.Error:
         return None
     if row is None or row[0] is None:
@@ -1324,7 +1372,7 @@ def apply_edits(
         live_price_at=prior_price_at,
         live_price_source="prior_dcf_run",
         mos_bar=mos_bar_f,
-        primary_fact_overlay=_prior_primary_fact_overlay(db_path, ticker),
+        primary_fact_overlay=prior_primary_fact_overlay(db_path, ticker),
     )
 
     row = persist_mod.DcfRunRow(

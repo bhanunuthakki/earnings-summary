@@ -1655,6 +1655,58 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     assert adata["redesign"]["exit_multiple"] == pytest.approx(m0 + 3.0)
 
 
+@pytest.mark.parametrize(
+    ("is_latest_column", "segment_column", "created_at_column"),
+    (
+        (False, False, False),
+        (False, False, True),
+        (False, True, False),
+        (False, True, True),
+        (True, False, False),
+        (True, False, True),
+        (True, True, False),
+        (True, True, True),
+    ),
+)
+def test_prior_primary_overlay_supports_only_explicit_static_schema_variants(
+    tmp_path: Path,
+    is_latest_column: bool,
+    segment_column: bool,
+    created_at_column: bool,
+) -> None:
+    db = tmp_path / "portfolio.db"
+    optional_columns: list[str] = []
+    optional_values: list[object] = []
+    if is_latest_column:
+        optional_columns.append("is_latest INTEGER")
+        optional_values.append(1)
+    if segment_column:
+        optional_columns.append("segment_name TEXT")
+        optional_values.append("")
+    if created_at_column:
+        optional_columns.append("created_at TEXT")
+        optional_values.append("2026-08-20T12:00:00+00:00")
+    schema_suffix = ", " + ", ".join(optional_columns) if optional_columns else ""
+    insert_columns = ["id", "ticker", "provenance_json"] + [
+        column.split()[0] for column in optional_columns
+    ]
+    placeholders = ", ".join("?" for _ in insert_columns)
+    overlay: dict[str, object] = {"status": "ok", "statements": {}}
+    payload = json.dumps({"ticker": "TESTCO", "primary_fact_overlay": overlay})
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE dcf_runs "
+            f"(id INTEGER PRIMARY KEY, ticker TEXT, provenance_json TEXT{schema_suffix})"
+        )
+        conn.execute(
+            f"INSERT INTO dcf_runs ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            (1, "TESTCO", payload, *optional_values),
+        )
+
+    assert refresh_dcf.prior_primary_fact_overlay(db, "testco") == overlay
+
+
 _KPI_SCHEMA = """
 CREATE TABLE documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
