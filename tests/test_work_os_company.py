@@ -332,7 +332,9 @@ def test_company_desk_say_do_normalizes_known_outcomes_and_keeps_older_quarters(
     conn.close()
     assert desk.say_do.quarters == ["2026-03", "2025-12", "2025-09", "2025-06"]
     assert desk.say_do.commitments[0].outcome == "miss"
-    assert {item.outcome for item in desk.say_do.commitments} >= {"hit", "miss", "no_data"}
+    assert len(desk.say_do.commitments) <= 4
+    assert [item.id for item in desk.say_do.commitments] == [100, 101, 102, 103]
+    assert {item.outcome for item in desk.say_do.commitments} >= {"hit", "miss", "mixed"}
 
 
 def test_company_desk_projects_only_fresh_canonical_thesis_evidence(

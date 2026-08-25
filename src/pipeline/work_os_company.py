@@ -163,7 +163,7 @@ class DeskSayDoCommitment(BaseModel):
     unit: str
     narrative: str
     realized_value: float | None = None
-    outcome: Literal["hit", "miss", "beat", "no_data"] | None = None
+    outcome: Literal["hit", "miss", "beat", "mixed", "no_data"] | None = None
     evaluated_at: str | None = None
     source_ref: str
 
@@ -536,11 +536,13 @@ def _parse_say_do_date(value: object) -> datetime:
     return parsed
 
 
-def _normalize_say_do_outcome(value: object) -> Literal["hit", "miss", "beat", "no_data"] | None:
+def _normalize_say_do_outcome(
+    value: object,
+) -> Literal["hit", "miss", "beat", "mixed", "no_data"] | None:
     if value is None:
         return None
     normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
-    outcome_map: dict[str, Literal["hit", "miss", "beat", "no_data"]] = {
+    outcome_map: dict[str, Literal["hit", "miss", "beat", "mixed", "no_data"]] = {
         "hit": "hit",
         "met": "hit",
         "beat": "beat",
@@ -549,8 +551,8 @@ def _normalize_say_do_outcome(value: object) -> Literal["hit", "miss", "beat", "
         "missed": "miss",
         "no_data": "no_data",
         "awaiting_data": "no_data",
-        "mixed": "no_data",
-        "partial": "no_data",
+        "mixed": "mixed",
+        "partial": "mixed",
     }
     return outcome_map.get(normalized)
 
@@ -587,13 +589,16 @@ def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjec
     except sqlite3.Error:
         return DeskSayDoProjection(status="unavailable", unavailable_reason="query_failed")
 
-    parsed_rows: list[tuple[sqlite3.Row, datetime, str]] = []
+    parsed_rows: list[tuple[sqlite3.Row, datetime, datetime, datetime | None, str]] = []
     for row in rows:
         try:
             period_made = _parse_say_do_date(row["period_made"])
-            _parse_say_do_date(row["period_target"])
-            if row["evaluated_at"] is not None:
+            period_target = _parse_say_do_date(row["period_target"])
+            evaluated_at = (
                 _parse_say_do_date(row["evaluated_at"])
+                if row["evaluated_at"] is not None
+                else None
+            )
             target_value = float(row["target_value"])
             if not math.isfinite(target_value):
                 raise ValueError("target_value is non-finite")
@@ -601,24 +606,27 @@ def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjec
                 raise ValueError("realized_value is non-finite")
         except (TypeError, ValueError, OverflowError):
             return DeskSayDoProjection(status="unavailable", unavailable_reason="malformed_row")
-        parsed_rows.append((row, period_made, period_made.strftime("%Y-%m")))
+        parsed_rows.append((row, period_made, period_target, evaluated_at, period_made.strftime("%Y-%m")))
 
     quarters: list[str] = []
     commitments: list[DeskSayDoCommitment] = []
     as_of: str | None = None
-    for row, period_made_dt, quarter in parsed_rows:
-        if quarter not in quarters:
-            if len(quarters) == 4:
-                continue
-            quarters.append(quarter)
-        evaluated_at = str(row["evaluated_at"]) if row["evaluated_at"] else None
-        as_of = max(value for value in (as_of, evaluated_at, period_made_dt.date().isoformat()) if value is not None)
+    for row, period_made_dt, period_target_dt, evaluated_at_dt, quarter in parsed_rows:
+        if quarter in quarters:
+            continue
+        if len(quarters) == 4:
+            break
+        quarters.append(quarter)
+        period_made = period_made_dt.date().isoformat()
+        period_target = period_target_dt.date().isoformat()
+        evaluated_at = evaluated_at_dt.date().isoformat() if evaluated_at_dt else None
+        as_of = max(value for value in (as_of, evaluated_at, period_target, period_made) if value is not None)
         outcome = _normalize_say_do_outcome(row["outcome"])
         commitments.append(
             DeskSayDoCommitment(
                 id=int(row["id"]),
-                period_made=period_made_dt.date().isoformat(),
-                period_target=str(row["period_target"]),
+                period_made=period_made,
+                period_target=period_target,
                 kpi_name=str(row["kpi_name"]),
                 comparator=str(row["comparator"]),
                 target_value=float(row["target_value"]),

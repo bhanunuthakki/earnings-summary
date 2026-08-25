@@ -1469,7 +1469,7 @@ def _production_runtime(generated_at: datetime) -> str:
       }};
       document.getElementById('deskSayDoTimeline').innerHTML = commitments.length ? commitments.map(function (commitment) {{
         const outcome = String(commitment.outcome || 'tracking');
-        const outcomeLabel = outcome === 'hit' ? 'MET' : outcome === 'beat' ? 'BEAT' : outcome === 'miss' ? 'MISS' : outcome === 'no_data' ? 'AWAITING DATA' : 'TRACKING';
+        const outcomeLabel = outcome === 'hit' ? 'MET' : outcome === 'beat' ? 'BEAT' : outcome === 'miss' ? 'MISS' : outcome === 'mixed' ? 'MIXED' : outcome === 'no_data' ? 'AWAITING DATA' : 'TRACKING';
         const outcomeClass = outcome === 'hit' || outcome === 'beat' ? 'k-pill k-pill-ok' : outcome === 'miss' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn';
         const target = escapeWorkOsHtml(String(commitment.kpi_name || 'Commitment')) + ' ' + escapeWorkOsHtml(String(commitment.comparator || '')) + ' ' + escapeWorkOsHtml(sayDoNumber(commitment.target_value)) + ' ' + escapeWorkOsHtml(String(commitment.unit || ''));
         const actual = Number.isFinite(commitment.realized_value) ? ' · actual ' + escapeWorkOsHtml(sayDoNumber(commitment.realized_value)) + ' ' + escapeWorkOsHtml(String(commitment.unit || '')) : '';

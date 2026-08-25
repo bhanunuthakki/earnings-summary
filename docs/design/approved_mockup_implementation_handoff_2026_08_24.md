@@ -94,7 +94,7 @@ The existing `company_desk.v1` response remains backward compatible and gains:
 | `price_action_bands` | typed `PriceActionBandProjection` | Latest exact-ticker sizing intent and ratified checkpoint payload | “Not encoded” and reason text; never decode or print opaque payloads |
 | `say_do.status` | available/unavailable | `management_commitments` table | Explicit missing-source/schema/query state |
 | `say_do.quarters[]` | latest four distinct `period_made` year-months | canonical commitment rows | Empty available history is distinct from unavailable source |
-| `say_do.commitments[]` | stable row id, made/target periods, KPI, comparator, target, unit, narrative, actual, outcome, evaluation date, transcript source ref | canonical commitment rows | Unknown outcome renders “Tracking”; no fabricated result |
+| `say_do.commitments[]` | at most one latest-ID representative per latest four distinct valid statement periods; stable row id, made/target periods, KPI, comparator, target, unit, narrative, actual, normalized outcome, evaluation date, transcript source ref | canonical commitment rows | `met`/`missed`/`mixed`/`partial` normalize to MET/MISS/MIXED; unknown outcome renders “Tracking”; full detail remains in the Full Say/Do doorway |
 
 Numeric presentation uses locale formatting with at most two decimal places. Raw hashes, payload JSON, or encoded checkpoint data never render as primary user content.
 
