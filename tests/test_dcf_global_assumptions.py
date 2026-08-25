@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -84,7 +85,10 @@ def test_load_with_provenance_records_exact_rows_values_and_version_time(tmp_pat
     assert source["observed_at"] == _NOW.replace(tzinfo=UTC).isoformat()
     fields = source["fields"]
     assert isinstance(fields, list)
-    assert {item["field"] for item in fields if isinstance(item, dict)} == set(ga.KNOWN_FIELDS)
+    typed_fields = cast("list[object]", fields)
+    assert {item["field"] for item in typed_fields if isinstance(item, dict)} == set(
+        ga.KNOWN_FIELDS
+    )
 
 
 def test_load_with_provenance_marks_seed_fallback_without_faking_observation_time(
