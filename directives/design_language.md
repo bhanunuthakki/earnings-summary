@@ -38,7 +38,7 @@ A governed surface may provide content, semantic HTML, data attributes, and nonv
 2. one registered family master for surface-specific arrangement; and
 3. an exact typed contract for any approved dynamic or runtime visual state.
 
-No local visual CSS, inline styles, runtime style mutation, arbitrary SVG presentation, or open-ended `style` APIs.
+Consumers must not add local visual CSS, inline styles, runtime style mutation, arbitrary SVG presentation, or open-ended `style` APIs.
 
 If no recipe fits, choose the nearest variant or extend the owning master. Cross-family reuse is global.
 
