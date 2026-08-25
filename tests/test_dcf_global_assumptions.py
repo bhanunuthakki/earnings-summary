@@ -74,6 +74,42 @@ def test_load_returns_typed_object(tmp_path: Path) -> None:
     assert g.tax_rate == 0.24
 
 
+def test_load_with_provenance_records_exact_rows_values_and_version_time(tmp_path: Path) -> None:
+    loaded = ga.load_with_provenance(db_path=_seeded_db(tmp_path))
+
+    assert loaded.assumptions.as_dict() == dict(_SEED)
+    source = loaded.source_record
+    assert source["role"] == "global_dcf_assumptions"
+    assert source["status"] == "database"
+    assert source["observed_at"] == _NOW.replace(tzinfo=UTC).isoformat()
+    fields = source["fields"]
+    assert isinstance(fields, list)
+    assert {item["field"] for item in fields if isinstance(item, dict)} == set(ga.KNOWN_FIELDS)
+
+
+def test_load_with_provenance_marks_seed_fallback_without_faking_observation_time(
+    tmp_path: Path,
+) -> None:
+    loaded = ga.load_with_provenance(db_path=tmp_path / "missing.db")
+
+    assert loaded.assumptions.as_dict() == dict(ga.SEED_DEFAULTS)
+    assert loaded.source_record["status"] == "missing_database"
+    assert loaded.source_record["observed_at"] is None
+
+
+def test_load_with_provenance_distinguishes_missing_schema_from_empty_store(
+    tmp_path: Path,
+) -> None:
+    missing_schema = tmp_path / "missing_schema.db"
+    sqlite3.connect(missing_schema).close()
+
+    degraded = ga.load_with_provenance(db_path=missing_schema)
+    intentional_seed = ga.load_with_provenance(db_path=_empty_db(tmp_path))
+
+    assert degraded.source_record["status"] == "missing_schema"
+    assert intentional_seed.source_record["status"] == "seed_default"
+
+
 def test_get_returns_none_for_unset_field(tmp_path: Path) -> None:
     # Empty table → no stored row → get() is None even for a known field.
     assert ga.get("risk_free_rate", db_path=_empty_db(tmp_path)) is None

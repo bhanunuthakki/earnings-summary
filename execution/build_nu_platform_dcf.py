@@ -35,8 +35,8 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -45,13 +45,16 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
+CODE_ROOT = Path(__file__).resolve().parents[1]
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or CODE_ROOT)
 T = os.environ.get("DCF_TICKER", "NU")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
-sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(CODE_ROOT / "src"))
 
 
+from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
+from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort -- the workbook builds without a DB
@@ -128,6 +131,7 @@ class Assum:
     years: int = 10
     shares: float = 4907.0  # diluted shares (M)
     price: float = 12.29
+    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
 
 
 def _interp(near: float, term: float, t: int, n: int) -> float:
@@ -233,14 +237,91 @@ def mirror(s: Assum) -> Mirror:
     return m
 
 
+def reverse_valuation(s: Assum, m: Mirror) -> dict[str, object] | None:
+    """What the market implies for NU's own platform-FCFE mechanics.
+
+    The growth inversion deliberately applies the same shift to customer and
+    ARPAC near-term growth that the existing scenario mapping uses.  It does
+    not invent a preference between the two growth engines.  Terminal ROE is
+    reported separately because it is the model's FCFE terminal reinvestment
+    lever, not an FCFF exit multiple.
+    """
+    if s.price <= 0 or m.vps <= 0:
+        return None
+    joint_growth = reverse_valuation_mod.solve_lever(
+        lever_id="implied_joint_customer_arpac_growth_shift",
+        label="Implied joint customer / ARPAC near-growth shift",
+        unit="pct",
+        base_value=0.0,
+        method="monotonic_bisection",
+        price_at=lambda shift: (
+            mirror(
+                replace(
+                    s,
+                    custg_near=s.custg_near + shift,
+                    arpacg_near=s.arpacg_near + shift,
+                )
+            ).vps
+        ),
+        target_price=s.price,
+        lower_bound=-0.50,
+        upper_bound=0.50,
+    )
+    terminal_roe = reverse_valuation_mod.solve_lever(
+        lever_id="implied_terminal_roe",
+        label="Implied terminal ROE",
+        unit="pct",
+        base_value=s.terminal_roe,
+        method="monotonic_bisection",
+        price_at=lambda roe: mirror(replace(s, terminal_roe=roe)).vps,
+        target_price=s.price,
+        lower_bound=max(s.g_term + 0.01, 0.01),
+        upper_bound=1.00,
+    )
+    return reverse_valuation_mod.ReverseValuation(
+        archetype="platform_dcf",
+        price=s.price,
+        base_value_per_share_usd=m.vps,
+        valuation_scope="equity",
+        levers=(joint_growth, terminal_roe),
+    ).to_snapshot_dict()
+
+
+def _profile_price_metadata(ticker: str) -> tuple[datetime | None, str | None]:
+    """The existing cached-profile price policy, with auditable observation time."""
+    profile = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
+    if not profile.is_file():
+        return None, "assumption_seed"
+    try:
+        raw: Any = json.loads(profile.read_text(encoding="utf-8"))
+        item = raw[0] if isinstance(raw, list) and raw else raw
+        if not isinstance(item, dict) or not isinstance(item.get("price"), (int, float)):
+            return None, "fmp_profile_unusable"
+    except (OSError, ValueError, TypeError):
+        return None, "fmp_profile_unusable"
+    return datetime.fromtimestamp(profile.stat().st_mtime, tz=UTC), "fmp_profile"
+
+
 def load_assumptions(ticker: str) -> Assum:
     """Assum defaults overridden by data/bank_assumptions/<T>_platform.json."""
     s = Assum()
     # Seed the editable global tax default before the per-ticker JSON below, so
     # an unpinned platform name tracks the dashboard-set global while a pinned
     # tax still wins (NU pins 0.28 -- a genuinely company-specific Brazilian rate).
-    if global_dcf is not None:
-        s.tax = global_dcf.load(db_path=REPO / "data" / "portfolio.db").tax_rate
+    global_loaded = (
+        global_dcf.load_with_provenance(db_path=REPO / "data" / "portfolio.db")
+        if global_dcf is not None
+        else None
+    )
+    if global_loaded is not None:
+        s.global_assumption_source = global_loaded.source_record
+        s.tax = global_loaded.assumptions.tax_rate
+    else:
+        s.global_assumption_source = {
+            "role": "global_dcf_assumptions",
+            "status": "module_unavailable",
+            "observed_at": None,
+        }
     p = REPO / "data" / "bank_assumptions" / f"{ticker}_platform.json"
     if p.exists():
         try:
@@ -253,11 +334,11 @@ def load_assumptions(ticker: str) -> Assum:
                     setattr(s, k, v)
     # Opt-in: derive ke from the global risk-free/ERP when the name asks for it.
     # Runs after the JSON overrides so beta / CRP / the flag can be tuned per name.
-    if global_dcf is not None and s.derive_ke_capm:
-        s.ke = global_dcf.capm_ke(
-            s.beta,
-            country_risk_premium=s.country_risk_premium,
-            db_path=REPO / "data" / "portfolio.db",
+    if global_loaded is not None and s.derive_ke_capm:
+        s.ke = (
+            global_loaded.assumptions.risk_free_rate
+            + s.beta * global_loaded.assumptions.equity_risk_premium
+            + s.country_risk_premium
         )
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
     if prof.exists():
@@ -688,6 +769,7 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
     if holdings is None:
         holdings = _load_holdings(T)
     mos: object = holdings.get("mos_bar") if holdings else None
+    live_price_at, live_price_source = _profile_price_metadata(T)
     snap_payload: dict[str, object] = {
         "model": "platform_dcf",
         "value_per_share_fcfe": m.vps,
@@ -699,10 +781,35 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         "terminal_arpac": m.rows[-1].arpac,
         "ke": s.ke,
         "workbook": str(DEST),
+        "assumption_provenance": {
+            "authority": f"data/bank_assumptions/{T}_platform.json",
+            "workbook_capture": "unsupported",
+            "sync_status": "not_applicable",
+        },
     }
     if redesign_mod is not None:
         snap_payload["scenarios"] = scenarios_block(s, m, holdings)
+    reverse = reverse_valuation(s, m)
+    if reverse is not None:
+        snap_payload["reverse_valuation"] = reverse
     snap = json.dumps(snap_payload, indent=2)
+    provenance = build_file_provenance(
+        ticker=T,
+        repo_root=REPO,
+        workbook_path=DEST,
+        engine_version="nu_platform_fcfe_v1",
+        effective_inputs=asdict(s),
+        assumption_snapshot=snap_payload,
+        live_price=s.price or None,
+        live_price_at=live_price_at,
+        live_price_source=live_price_source,
+        source_files=(
+            (REPO / "data" / "bank_assumptions" / f"{T}_platform.json", "owner_assumptions"),
+            (REPO / "data" / "historical" / "fmp" / f"{T}_profile.json", "company_profile"),
+            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+        ),
+        source_records=(s.global_assumption_source,),
+    )
     row = persist_mod.DcfRunRow(
         ticker=T,
         valuation_date=date.today(),
@@ -713,12 +820,25 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         shares_outstanding=s.shares * 1e6,
         currency="USD",
         live_price=s.price or None,
-        live_price_at=None,
+        live_price_at=live_price_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (customer-driven platform DCF)",
+        provenance=provenance,
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+        if not schema_supports_provenance(conn):
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "dcf_provenance_not_persisted",
+                        "ticker": T,
+                        "reason": "database schema lacks provenance columns",
+                    }
+                )
+                + "\n"
+            )
+            row = replace(row, provenance=None)
         persist_mod.upsert(conn, row)
     return True
 

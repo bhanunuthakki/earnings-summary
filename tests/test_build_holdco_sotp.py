@@ -16,8 +16,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 import pytest
@@ -92,6 +97,21 @@ def test_scenarios_bear_below_base_below_bull() -> None:
     assert abs(bear - floor * 1000.0 / s.shares_m) < 1e-9
 
 
+def test_reverse_valuation_is_the_existing_carry_private_re_residual() -> None:
+    s = h.Sotp()
+    eq, vps = h.value(s)
+
+    snapshot = h.reverse_valuation(s, eq, vps)
+
+    assert snapshot is not None
+    levers = cast("list[dict[str, object]]", snapshot["levers"])
+    lever = levers[0]
+    expected = s.price * s.shares_m / 1000.0 - (h._am(s) + h._bws(s) + s.ic_listed - h._corp(s))
+    assert lever["id"] == "implied_carry_private_re_value"
+    assert lever["method"] == "bridge_residual"
+    assert lever["implied_value"] == pytest.approx(expected)
+
+
 # --------------------------------------------------------------------------- #
 # JSON marks + capture-inject + sync-back
 # --------------------------------------------------------------------------- #
@@ -158,6 +178,58 @@ def test_sync_back_updates_values_and_preserves_notes(tmp_repo: Path) -> None:
     assert marks["ic_listed"]["value"] == s.ic_listed  # created for unlisted fields
     assert "price" not in marks  # live, never synced
     assert data["sotp"]["last_synced"]
+
+
+def test_bn_owner_json_is_not_mutated_when_dcf_persistence_does_not_succeed(
+    tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _write_marks(tmp_repo, {"bws_mult": {"value": 12.0, "note": "keep me"}})
+    before = path.read_text(encoding="utf-8")
+    s = h.Sotp(bws_mult=14.0)
+    monkeypatch.setattr(h, "persist_dcf_run", lambda *_args, **_kwargs: False)
+
+    persisted, sync_result = h._persist_then_sync_bn(s, *h.value(s), {"marks": {}})
+
+    assert persisted is False
+    assert sync_result.status.startswith("not_attempted")
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_holdco_persistence_degrades_truthfully_on_legacy_schema_without_sync_columns(
+    tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_repo / "data" / "portfolio.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.touch()
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE dcf_runs (id INTEGER PRIMARY KEY, ticker TEXT)")
+    captured: list[object] = []
+
+    @contextmanager
+    def fake_connect(*_args: object, **_kwargs: object) -> Iterator[sqlite3.Connection]:
+        yield conn
+
+    monkeypatch.setattr(h, "connect_sqlite", fake_connect)
+    assert h.persist_mod is not None
+    monkeypatch.setattr(h.persist_mod, "upsert", lambda _conn, row: captured.append(row))
+
+    s = h.Sotp()
+    eq, vps = h.value(s)
+    persisted = h.persist_dcf_run(
+        eq,
+        vps,
+        s.price,
+        s.ke,
+        {"model": "holdco_sotp", "marks": {}},
+        h.SyncResult("synced", datetime(2026, 8, 25, tzinfo=UTC).replace(tzinfo=None)),
+    )
+
+    assert persisted is True
+    assert captured
+    row = captured[0]
+    assert getattr(row, "assumptions_sync_status") is None
+    assert getattr(row, "assumptions_synced_at") is None
+    assert getattr(row, "provenance") is None
 
 
 # --------------------------------------------------------------------------- #

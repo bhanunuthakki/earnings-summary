@@ -127,7 +127,41 @@ def _source_file(
     )
 
 
-def _build_dcf_provenance(
+def _primary_fact_observed_times(
+    primary_fact_overlay: Mapping[str, object] | None,
+) -> list[datetime]:
+    """Return validated primary-document timestamps carried by overlay lineage."""
+    if primary_fact_overlay is None:
+        return []
+    statements = primary_fact_overlay.get("statements")
+    if not isinstance(statements, Mapping):
+        return []
+    observed: list[datetime] = []
+    for statement_raw in cast("Mapping[str, object]", statements).values():
+        if not isinstance(statement_raw, Mapping):
+            continue
+        statement = cast("Mapping[str, object]", statement_raw)
+        applied = statement.get("applied")
+        if not isinstance(applied, list):
+            continue
+        for lineage_raw in cast("list[object]", applied):
+            if not isinstance(lineage_raw, Mapping):
+                continue
+            lineage = cast("Mapping[str, object]", lineage_raw)
+            raw = lineage.get("as_of")
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            try:
+                parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            observed.append(
+                parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+            )
+    return observed
+
+
+def build_dcf_provenance(
     *,
     ticker: str,
     repo_root: Path,
@@ -138,6 +172,7 @@ def _build_dcf_provenance(
     live_price_at: datetime | None,
     live_price_source: str | None,
     mos_bar: float | None,
+    primary_fact_overlay: Mapping[str, object] | None = None,
 ) -> DcfInputProvenance:
     """Build reproducible lineage for the effective DCF input set."""
     ticker = ticker.upper()
@@ -174,9 +209,8 @@ def _build_dcf_provenance(
         repo_root=repo_root,
     )
     if workbook_source is not None:
-        workbook_detail, workbook_observed_at = workbook_source
+        workbook_detail, _generated_at = workbook_source
         sources.append(workbook_detail)
-        observed_times.append(workbook_observed_at)
 
     normalized_live_at: datetime | None = None
     if live_price_at is not None:
@@ -186,6 +220,7 @@ def _build_dcf_provenance(
             else live_price_at.astimezone(UTC)
         )
         observed_times.append(normalized_live_at)
+    observed_times.extend(_primary_fact_observed_times(primary_fact_overlay))
     market_price: dict[str, object] = {
         "price": live_price,
         "observed_at": _iso_utc(normalized_live_at),
@@ -199,6 +234,7 @@ def _build_dcf_provenance(
         "market_price": market_price,
         "mos_bar": mos_bar,
         "workbook_sha256": workbook_sha256,
+        "primary_fact_overlay": dict(primary_fact_overlay) if primary_fact_overlay else None,
     }
     canonical = json.dumps(
         canonical_inputs,
@@ -212,13 +248,68 @@ def _build_dcf_provenance(
         input_sha256=input_sha256,
         workbook_sha256=workbook_sha256,
         engine_version=DCF_ENGINE_VERSION,
-        inputs_as_of=max(observed_times, default=datetime.now(UTC)),
+        inputs_as_of=max(observed_times, default=datetime(1970, 1, 1, tzinfo=UTC)),
         detail={
             "market_price": market_price,
             "sources": sources,
+            "primary_fact_overlay": dict(primary_fact_overlay) if primary_fact_overlay else None,
             "ticker": ticker,
+            "inputs_as_of_status": "observed" if observed_times else "unavailable",
         },
     )
+
+
+_PRIMARY_OVERLAY_STATEMENTS = frozenset({"income", "balance", "cash_flow"})
+
+
+def primary_fact_overlay_from_builder(
+    stderr: str, *, expected_ticker: str | None = None
+) -> dict[str, object]:
+    """Aggregate complete, ticker-matched builder overlay receipts truthfully."""
+    statements: dict[str, object] = {}
+    reasons: set[str] = set()
+    for line in stderr.splitlines():
+        try:
+            payload_raw: object = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload_raw, dict):
+            continue
+        payload = cast("dict[str, object]", payload_raw)
+        if payload.get("event") != "dcf_primary_fact_overlay":
+            continue
+        receipt_ticker = payload.get("ticker")
+        if expected_ticker is not None and (
+            not isinstance(receipt_ticker, str) or receipt_ticker.upper() != expected_ticker.upper()
+        ):
+            reasons.add("ticker_mismatch")
+            continue
+        statement = payload.get("statement")
+        if not isinstance(statement, str) or statement not in _PRIMARY_OVERLAY_STATEMENTS:
+            reasons.add("unexpected_statement_receipt")
+            continue
+        if statement in statements:
+            reasons.add("duplicate_statement_receipt")
+            continue
+        statements[statement] = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"event", "ticker", "statement"}
+        }
+    if not statements:
+        if reasons:
+            return {"status": "degraded", "statements": {}, "reasons": sorted(reasons)}
+        return {"status": "unavailable", "reason": "builder emitted no overlay receipt"}
+    if frozenset(statements) != _PRIMARY_OVERLAY_STATEMENTS:
+        reasons.add("missing_statement_receipts")
+    for statement in statements.values():
+        if not isinstance(statement, Mapping) or statement.get("status") != "ok":
+            reasons.add("statement_degraded")
+    return {
+        "status": "degraded" if reasons else "ok",
+        "statements": statements,
+        "reasons": sorted(reasons),
+    }
 
 
 def main() -> int:
@@ -937,6 +1028,7 @@ def _refresh_redesign(
         tail = (proc.stderr.strip().splitlines() or [""])[-1][:200]
         return {"ticker": ticker, "status": "failed", "reason": f"builder: {tail or 'no RESULT'}"}
 
+    primary_fact_overlay = primary_fact_overlay_from_builder(proc.stderr, expected_ticker=ticker)
     redesign_mod.inject_dashboard(tmp, captured, current_price=live.price if live else None)
 
     try:
@@ -1005,7 +1097,7 @@ def _refresh_redesign(
         scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
         holdings=holdings,
     )
-    input_provenance = _build_dcf_provenance(
+    input_provenance = build_dcf_provenance(
         ticker=ticker,
         repo_root=repo_root,
         workbook_path=dest,
@@ -1015,6 +1107,7 @@ def _refresh_redesign(
         live_price_at=live.fetched_at if live else None,
         live_price_source=getattr(live, "source_name", None) if live else None,
         mos_bar=mos_bar_f,
+        primary_fact_overlay=primary_fact_overlay,
     )
 
     row = persist_mod.DcfRunRow(
@@ -1058,6 +1151,8 @@ def _refresh_redesign(
         "inputs_preserved": captured is not None,
         "dcf_run_persisted": persisted,
         "input_sha256": input_provenance.input_sha256,
+        "primary_fact_overlay_status": primary_fact_overlay.get("status"),
+        "primary_fact_overlay_reasons": primary_fact_overlay.get("reasons", []),
     }
 
 
@@ -1087,6 +1182,53 @@ def _prior_live_price(db_path: Path, ticker: str) -> tuple[float | None, datetim
         with contextlib.suppress(ValueError):
             at = datetime.fromisoformat(at_raw)
     return price, at
+
+
+def _prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object] | None:
+    """Recover validated primary lineage from the current generic DCF run."""
+    if not db_path.exists():
+        return None
+    try:
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(dcf_runs)")}
+            if "provenance_json" not in columns:
+                return None
+            predicates = ["UPPER(ticker) = UPPER(?)"]
+            if "is_latest" in columns:
+                predicates.append("COALESCE(is_latest, 1) = 1")
+            if "segment_name" in columns:
+                predicates.append("COALESCE(segment_name, '') = ''")
+            order = "created_at DESC, id DESC" if "created_at" in columns else "id DESC"
+            row = conn.execute(
+                "SELECT provenance_json FROM dcf_runs WHERE "
+                + " AND ".join(predicates)
+                + f" ORDER BY {order} LIMIT 1",  # nosec B608 - identifiers are fixed above
+                (ticker,),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None or row[0] is None:
+        return None
+    try:
+        detail_raw: object = json.loads(str(row[0]))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(detail_raw, dict):
+        return None
+    detail = cast("dict[str, object]", detail_raw)
+    recorded_ticker = detail.get("ticker")
+    if not isinstance(recorded_ticker, str) or recorded_ticker.upper() != ticker.upper():
+        return None
+    overlay_raw = detail.get("primary_fact_overlay")
+    if not isinstance(overlay_raw, dict):
+        return None
+    overlay = cast("dict[str, object]", overlay_raw)
+    if overlay.get("status") not in {"ok", "degraded", "unavailable"}:
+        return None
+    statements = overlay.get("statements")
+    if statements is not None and not isinstance(statements, dict):
+        return None
+    return dict(overlay)
 
 
 def apply_edits(
@@ -1172,7 +1314,7 @@ def apply_edits(
         scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
         holdings=holdings,
     )
-    input_provenance = _build_dcf_provenance(
+    input_provenance = build_dcf_provenance(
         ticker=ticker,
         repo_root=repo_root,
         workbook_path=dest,
@@ -1182,6 +1324,7 @@ def apply_edits(
         live_price_at=prior_price_at,
         live_price_source="prior_dcf_run",
         mos_bar=mos_bar_f,
+        primary_fact_overlay=_prior_primary_fact_overlay(db_path, ticker),
     )
 
     row = persist_mod.DcfRunRow(
