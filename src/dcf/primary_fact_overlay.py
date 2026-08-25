@@ -263,34 +263,22 @@ def _load_candidates(
     mappings: Sequence[FieldMapping],
 ) -> list[_FactCandidate]:
     fact_relation = canonical_fact_relation(conn, "financial_facts").sql
-    if fact_relation == "v_financial_facts_resolved_current":
-        query = """
-        SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
-               fact.value, fact.currency, fact.unit, fact.source_doc_id,
-               fact.locator, document.source_quality_tier, document.source_url,
-               document.fetched_at, document.source_type
-        FROM v_financial_facts_resolved_current AS fact
-        LEFT JOIN documents AS document
-          ON document.id = fact.source_doc_id
-         AND UPPER(document.ticker) = UPPER(fact.ticker)
-        WHERE UPPER(fact.ticker) = UPPER(?)
-        ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
-        """
-    elif fact_relation == "financial_facts":
-        query = """
-        SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
-               fact.value, fact.currency, fact.unit, fact.source_doc_id,
-               fact.locator, document.source_quality_tier, document.source_url,
-               document.fetched_at, document.source_type
-        FROM financial_facts AS fact
-        LEFT JOIN documents AS document
-          ON document.id = fact.source_doc_id
-         AND UPPER(document.ticker) = UPPER(fact.ticker)
-        WHERE UPPER(fact.ticker) = UPPER(?)
-        ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
-        """
-    else:
-        raise RuntimeError(f"unsupported canonical financial-fact relation: {fact_relation}")
+    if fact_relation != "v_financial_facts_resolved_current":
+        raise RuntimeError(
+            "canonical financial-fact cutover is unavailable; refusing a legacy read"
+        )
+    query = """
+    SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
+           fact.value, fact.currency, fact.unit, fact.source_doc_id,
+           fact.locator, document.source_quality_tier, document.source_url,
+           document.fetched_at, document.source_type
+    FROM v_financial_facts_resolved_current AS fact
+    LEFT JOIN documents AS document
+      ON document.id = fact.source_doc_id
+     AND UPPER(document.ticker) = UPPER(fact.ticker)
+    WHERE UPPER(fact.ticker) = UPPER(?)
+    ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
+    """
     rows = conn.execute(
         query,
         (ticker,),
