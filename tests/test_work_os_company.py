@@ -282,6 +282,59 @@ def test_company_desk_projects_canonical_say_do_for_latest_four_statement_quarte
     assert desk.say_do.commitments[0].source_ref == "transcript_segment:105"
 
 
+def test_company_desk_dcf_url_requires_a_route_artifact(work_os_app_repo: Path) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE dcf_runs (id INTEGER PRIMARY KEY, ticker TEXT, created_at TEXT, "
+        "npv_per_share REAL, live_price REAL, currency TEXT, live_price_at TEXT, "
+        "valuation_date TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO dcf_runs VALUES (1, 'NU', '2026-08-20T00:00:00Z', 22.0, 14.0, 'USD', "
+        "'2026-08-20', '2026-08-20')"
+    )
+    conn.commit()
+    desk_without_artifact = build_company_desk(work_os_app_repo, conn, "NU")
+    assert desk_without_artifact.position.dcf_url is None
+    (work_os_app_repo / "dcf").mkdir()
+    (work_os_app_repo / "dcf" / "NU.xlsx").write_bytes(b"fixture")
+    desk_with_artifact = build_company_desk(work_os_app_repo, conn, "NU")
+    conn.close()
+    assert desk_with_artifact.position.dcf_url == "/dcf/NU"
+
+
+def test_company_desk_say_do_normalizes_known_outcomes_and_keeps_older_quarters(
+    work_os_app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE management_commitments (id INTEGER PRIMARY KEY, ticker TEXT, "
+        "period_made TEXT, period_target TEXT, transcript_segment_id INTEGER, kpi_name TEXT, "
+        "comparator TEXT, target_value REAL, unit TEXT, narrative TEXT, realized_value REAL, "
+        "outcome TEXT, evaluated_at TEXT)"
+    )
+    rows = []
+    for index in range(100):
+        rows.append((index + 1, "NU", "2026-03-31", "2026-06-30", index, "KPI", "<=", 5.0, "percent", "dense", 5.1, "missed", "2026-07-01"))
+    rows.extend(
+        [
+            (101, "NU", "2025-12-31", "2026-03-31", 101, "KPI", "<=", 5.0, "percent", "met", 4.0, "met", "2026-01-01"),
+            (102, "NU", "2025-09-30", "2025-12-31", 102, "KPI", "<=", 5.0, "percent", "mixed", 5.0, "mixed", "2025-10-01"),
+            (103, "NU", "2025-06-30", "2025-09-30", 103, "KPI", "<=", 5.0, "percent", "partial", None, "partial", None),
+            (104, "NU", "2025-03-31", "2025-06-30", 104, "KPI", "<=", 5.0, "percent", "old", 4.9, "hit", "2025-04-01"),
+        ]
+    )
+    conn.executemany("INSERT INTO management_commitments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    desk = build_company_desk(work_os_app_repo, conn, "NU")
+    conn.close()
+    assert desk.say_do.quarters == ["2026-03", "2025-12", "2025-09", "2025-06"]
+    assert desk.say_do.commitments[0].outcome == "miss"
+    assert {item.outcome for item in desk.say_do.commitments} >= {"hit", "miss", "no_data"}
+
+
 def test_company_desk_projects_only_fresh_canonical_thesis_evidence(
     work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -617,7 +670,7 @@ def test_company_desk_projects_live_tracker_position_without_losing_dcf(
     assert desk.position.price == pytest.approx(14.25)
     assert desk.position.fair_value == pytest.approx(18.50)
     assert desk.position.source == "latest_governed_dcf_run"
-    assert desk.position.dcf_url == "/dcf/NU"
+    assert desk.position.dcf_url is None
 
 
 def test_company_desk_distinguishes_not_held_from_tracker_unavailable(
@@ -852,7 +905,7 @@ def test_company_desk_exposes_latest_governed_dcf_snapshot(
             assert desk.position.price_as_of is not None
             assert desk.position.fair_value_as_of == "2026-07-31"
             assert desk.position.source == "latest_governed_dcf_run"
-            assert desk.position.dcf_url == f"/dcf/{ticker}"
+            assert desk.position.dcf_url is None
             assert "position_snapshot_unavailable" not in desk.warnings
     finally:
         conn.close()

@@ -8,6 +8,7 @@ directories, or invokes an LLM while a screen is loading.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from advisor.price_action_bands import (
 )
 from advisor.sizing_intent_review import load_sizing_intent_review_from_connection
 from calendar_clock import calendar_today
+from dcf.availability import resolve_dcf_route_artifact
 from dcf.latest import latest_dcf_row
 from integrations.portfolio_tracker_client import LivePortfolio
 from pipeline.earnings_doorway import (
@@ -177,7 +179,9 @@ class DeskSayDoProjection(BaseModel):
         default_factory=lambda: list[DeskSayDoCommitment]()
     )
     as_of: str | None = None
-    unavailable_reason: Literal["missing_source", "schema_mismatch", "query_failed"] | None = None
+    unavailable_reason: Literal[
+        "missing_source", "schema_mismatch", "query_failed", "malformed_row"
+    ] | None = None
 
 
 class CompanyDeskResponse(BaseModel):
@@ -460,7 +464,10 @@ def _latest_brief(repo_root: Path, ticker: str) -> BriefLibraryItem | None:
 
 
 def _position_snapshot(
-    conn: sqlite3.Connection, ticker: str, live: LivePortfolio | None = None
+    repo_root: Path,
+    conn: sqlite3.Connection,
+    ticker: str,
+    live: LivePortfolio | None = None,
 ) -> DeskPositionSnapshot:
     """Join canonical live position data to the governed DCF basis."""
 
@@ -493,7 +500,7 @@ def _position_snapshot(
         source="latest_governed_dcf_run" if dcf is not None else None,
         price_as_of=dcf.live_price_at if dcf is not None else None,
         fair_value_as_of=dcf.valuation_date if dcf is not None else None,
-        dcf_url=f"/dcf/{ticker}" if dcf is not None else None,
+        dcf_url=(f"/dcf/{ticker}" if resolve_dcf_route_artifact(repo_root, ticker) else None),
     )
 
 
@@ -516,6 +523,36 @@ def _price_action_bands(
         ),
     )
     return selected.price_action_bands
+
+
+def _parse_say_do_date(value: object) -> datetime:
+    text = str(value).strip()
+    if not text:
+        raise ValueError("date is empty")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = datetime.combine(date.fromisoformat(text), datetime.min.time())
+    return parsed
+
+
+def _normalize_say_do_outcome(value: object) -> Literal["hit", "miss", "beat", "no_data"] | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    outcome_map: dict[str, Literal["hit", "miss", "beat", "no_data"]] = {
+        "hit": "hit",
+        "met": "hit",
+        "beat": "beat",
+        "exceeded": "beat",
+        "miss": "miss",
+        "missed": "miss",
+        "no_data": "no_data",
+        "awaiting_data": "no_data",
+        "mixed": "no_data",
+        "partial": "no_data",
+    }
+    return outcome_map.get(normalized)
 
 
 def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjection:
@@ -544,36 +581,43 @@ def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjec
             "SELECT id, period_made, period_target, transcript_segment_id, kpi_name, "
             "comparator, target_value, unit, narrative, realized_value, outcome, evaluated_at "
             "FROM management_commitments WHERE UPPER(ticker) = ? "
-            "ORDER BY period_made DESC, id DESC LIMIT 80",
+            "ORDER BY period_made DESC, id DESC",
             (ticker,),
         ).fetchall()
     except sqlite3.Error:
         return DeskSayDoProjection(status="unavailable", unavailable_reason="query_failed")
 
+    parsed_rows: list[tuple[sqlite3.Row, datetime, str]] = []
+    for row in rows:
+        try:
+            period_made = _parse_say_do_date(row["period_made"])
+            _parse_say_do_date(row["period_target"])
+            if row["evaluated_at"] is not None:
+                _parse_say_do_date(row["evaluated_at"])
+            target_value = float(row["target_value"])
+            if not math.isfinite(target_value):
+                raise ValueError("target_value is non-finite")
+            if row["realized_value"] is not None and not math.isfinite(float(row["realized_value"])):
+                raise ValueError("realized_value is non-finite")
+        except (TypeError, ValueError, OverflowError):
+            return DeskSayDoProjection(status="unavailable", unavailable_reason="malformed_row")
+        parsed_rows.append((row, period_made, period_made.strftime("%Y-%m")))
+
     quarters: list[str] = []
     commitments: list[DeskSayDoCommitment] = []
     as_of: str | None = None
-    for row in rows:
-        period_made = str(row["period_made"])
-        quarter = period_made[:7]
+    for row, period_made_dt, quarter in parsed_rows:
         if quarter not in quarters:
             if len(quarters) == 4:
                 continue
             quarters.append(quarter)
-        if quarter not in quarters:
-            continue
         evaluated_at = str(row["evaluated_at"]) if row["evaluated_at"] else None
-        as_of = max(value for value in (as_of, evaluated_at, period_made) if value is not None)
-        raw_outcome = str(row["outcome"]) if row["outcome"] else None
-        outcome: Literal["hit", "miss", "beat", "no_data"] | None = (
-            cast("Literal['hit', 'miss', 'beat', 'no_data']", raw_outcome)
-            if raw_outcome in {"hit", "miss", "beat", "no_data"}
-            else None
-        )
+        as_of = max(value for value in (as_of, evaluated_at, period_made_dt.date().isoformat()) if value is not None)
+        outcome = _normalize_say_do_outcome(row["outcome"])
         commitments.append(
             DeskSayDoCommitment(
                 id=int(row["id"]),
-                period_made=period_made,
+                period_made=period_made_dt.date().isoformat(),
                 period_target=str(row["period_target"]),
                 kpi_name=str(row["kpi_name"]),
                 comparator=str(row["comparator"]),
@@ -792,7 +836,7 @@ def build_company_desk(
         normalized,
         today=today or calendar_today(generated_at),
     )
-    position = _position_snapshot(conn, normalized, live)
+    position = _position_snapshot(repo_root, conn, normalized, live)
     thesis_risk, kpi_summary, thesis_warnings = _thesis_projections(
         repo_root, conn, normalized, as_of=built_at
     )

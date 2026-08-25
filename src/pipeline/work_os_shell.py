@@ -1528,9 +1528,9 @@ def _production_runtime(generated_at: datetime) -> str:
         const currency = bands.currency || position.currency || 'USD';
         const bandMoney = function (value) {{ return Number.isFinite(value) ? workOsMoney(value, currency) : 'Not encoded'; }};
         const reasonCodes = Array.isArray(bands.reason_codes) ? bands.reason_codes : [];
-        const buyLabel = bands.approach_bands && Number.isFinite(bands.approach_bands.add_buy_below)
-          ? '< ' + bandMoney(bands.approach_bands.add_buy_below)
-          : 'Not encoded';
+        // The canonical projection does not yet carry a separate Buy rung;
+        // add_buy_below is an approach checkpoint and must not be relabeled.
+        const buyLabel = 'Not encoded';
         const addLabel = Number.isFinite(bands.add_below) ? '< ' + bandMoney(bands.add_below) : 'Not encoded';
         const holdLabel = Number.isFinite(bands.hold_low) && Number.isFinite(bands.hold_high)
           ? bandMoney(bands.hold_low) + ' to ' + bandMoney(bands.hold_high)

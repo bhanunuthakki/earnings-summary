@@ -521,17 +521,14 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             validated = context.safe_ticker(ticker)
         except ValueError:
             abort(400)
-        _sheet_id, sheet_url = context.linked_gsheet(repo_root, validated)
-        if sheet_url:
-            return redirect(sheet_url, code=302)
-        live = repo_root / "dcf" / f"{validated}.xlsx"
-        if live.exists():
-            return send_file(live)
-        research_dir = repo_root / "output" / "research" / validated
-        dated = sorted(research_dir.glob("*_dcf.xlsx")) if research_dir.exists() else []
-        if not dated:
+        from dcf.availability import resolve_dcf_route_artifact
+
+        artifact = resolve_dcf_route_artifact(repo_root, validated)
+        if artifact is None:
             abort(404)
-        return send_file(dated[-1])
+        if artifact.kind == "sheet":
+            return redirect(artifact.target, code=302)
+        return send_file(artifact.target)
 
     @app.route("/api/tickers", methods=["GET"])
     def tickers_api():
