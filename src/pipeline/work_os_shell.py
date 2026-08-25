@@ -1896,7 +1896,8 @@ def _production_runtime(generated_at: datetime) -> str:
       return '<div class="k-card-meta" data-work-os-action-evidence="partial">Alert evidence doorway · full identity metadata unavailable</div>';
     }}
     const alertId = alertMatch[1];
-    return '<div class="k-card-meta" data-work-os-action-evidence="exact">Pending alert · source ' + escapeWorkOsHtml(actionId) + ' · ' + escapeWorkOsHtml(actionType) + ' · ' + escapeWorkOsHtml(lifecycleState) + ' · evidence ' + escapeWorkOsHtml(evidenceRef) + '</div>' + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-peek-url="/api/governed-alerts/' + escapeWorkOsHtml(alertId) + '/evidence" data-peek-title="Pending alert evidence — ' + escapeWorkOsHtml(action.ticker) + '">Open alert evidence &rarr;</button>';
+    const humanActionType = actionType.replaceAll('_', ' ');
+    return '<div class="k-card-meta" data-work-os-action-evidence="exact">Evidence-bound alert · ' + escapeWorkOsHtml(humanActionType) + ' · ' + escapeWorkOsHtml(lifecycleState) + ' · evidence available</div>' + '<button class="k-btn k-btn-quiet k-btn-sm" type="button" data-peek-url="/api/governed-alerts/' + escapeWorkOsHtml(alertId) + '/evidence" data-peek-title="Pending alert evidence — ' + escapeWorkOsHtml(action.ticker) + '">Open alert evidence &rarr;</button>';
   }}
 
   // The core owns the transition rules.  This small, closed browser map only
@@ -2018,6 +2019,33 @@ def _production_runtime(generated_at: datetime) -> str:
     return String(company.name || company.ticker || '').toLowerCase();
   }}
 
+  function workOsRenderPriceActionBands(company) {{
+    const bands = company.price_action_bands || {{ state: 'unavailable' }};
+    const currency = typeof bands.currency === 'string' ? bands.currency : 'USD';
+    const money = function (value) {{
+      return Number.isFinite(value) ? workOsMoney(value, currency) : '';
+    }};
+    const rungs = [];
+    if (Number.isFinite(bands.add_below)) rungs.push('<div class="k-card-meta"><strong>Add/Buy ≤</strong> ' + escapeWorkOsHtml(money(bands.add_below)) + '</div>');
+    if (Number.isFinite(bands.hold_low) && Number.isFinite(bands.hold_high)) rungs.push('<div class="k-card-meta"><strong>Hold</strong> ' + escapeWorkOsHtml(money(bands.hold_low) + '\\u2013' + money(bands.hold_high)) + '</div>');
+    if (Number.isFinite(bands.trim_above)) rungs.push('<div class="k-card-meta"><strong>Trim ≥</strong> ' + escapeWorkOsHtml(money(bands.trim_above)) + '</div>');
+    if (Number.isFinite(bands.sell_above)) rungs.push('<div class="k-card-meta"><strong>Sell ≥</strong> ' + escapeWorkOsHtml(money(bands.sell_above)) + '</div>');
+    const state = String(bands.state || 'unavailable');
+    const note = state === 'ratified' && bands.is_actionable
+      ? 'Checkpoint-ratified owner ladder.'
+      : state === 'unencoded'
+        ? 'No checkpoint-ratified price ladder recorded.'
+        : state === 'unavailable'
+          ? 'Price ladder evidence unavailable.'
+          : 'Price ladder is incomplete or not actionable.';
+    const reviewLink = bands.review_url
+      ? '<a class="k-card-meta work-os-threshold-link" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="' + escapeWorkOsHtml(bands.review_url) + '">Review sizing evidence</a>'
+      : '<a class="k-card-meta work-os-threshold-link" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="/advisor/sizing-intents/' + encodeURIComponent(company.ticker) + '">Review sizing evidence</a>';
+    return (rungs.length ? '<div class="work-os-price-action-bands" aria-label="Price action bands">' + rungs.join('') + '</div>' : '') +
+      '<div class="k-card-meta work-os-price-action-note">' + escapeWorkOsHtml(note) +
+      '</div>' + reviewLink;
+  }}
+
   function workOsRenderPortfolioRows(companies) {{
     const rows = document.getElementById('workOsPortfolioRows');
     if (!rows) return;
@@ -2051,7 +2079,7 @@ def _production_runtime(generated_at: datetime) -> str:
         ? '<a class="k-chip" href="' + escapeWorkOsHtml(company.dcf_url) + '">DCF</a>'
         : '';
       return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
-        '<td class="num"><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono"><div>' + workOsIntegerMoney(company.price) + ' / <strong>' + workOsIntegerMoney(company.fair_value) + '</strong></div><a class="k-card-meta work-os-threshold-link" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="/advisor/sizing-intents/' + encodeURIComponent(company.ticker) + '">Open buy / hold / trim / sell ladder</a></td>' +
+        '<td class="num"><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono"><div>' + workOsIntegerMoney(company.price) + ' / <strong>' + workOsIntegerMoney(company.fair_value) + '</strong></div>' + workOsRenderPriceActionBands(company) + '</td>' +
         '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span><div class="k-card-meta">' + escapeWorkOsHtml(statusDetail) + '</div></td><td><div class="research-actions"><a class="k-chip" href="/ticker/' + encodeURIComponent(company.ticker) + '" data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '">Company Desk</a>' + dcfAction + briefAction + readoutAction + '</div></td></tr>';
     }}).join('') : '<tr><td colspan="5"><div class="k-well">No governed portfolio companies are available.</div></td></tr>';
   }}

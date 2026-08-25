@@ -13,6 +13,11 @@ from typing import Literal
 import pytest
 
 import pipeline.work_os_portfolio as portfolio
+from advisor.price_action_bands import (
+    PriceActionBandProjection,
+    PriceActionProjectionState,
+    resolve_price_action_bands,
+)
 from dcf.availability import DcfRouteArtifact
 from integrations.portfolio_allocation import (
     PortfolioAllocationBucket,
@@ -27,6 +32,7 @@ from pipeline.dashboard_status import DashboardRow, TranscriptStatus
 from pipeline.research_cockpit import CockpitRow, PendingAlertRef
 from pipeline.work_os_earnings import EarningsReadoutSummary
 from pipeline.work_os_portfolio import (
+    WorkOsPortfolioPriceActionBands,
     WorkOsPortfolioResearchLinks,
     build_work_os_portfolio,
     build_work_os_portfolio_research_links,
@@ -129,6 +135,19 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
                 dcf_url="/dcf/NU",
             )
         },
+        price_action_bands={
+            "NU": WorkOsPortfolioPriceActionBands(
+                state="ratified",
+                add_below=10.0,
+                hold_low=11.0,
+                hold_high=15.0,
+                trim_above=16.0,
+                sell_above=18.0,
+                currency="USD",
+                as_of="2026-08-08T12:00:00Z",
+                review_url="/advisor/sizing-intents/NU",
+            )
+        },
         generated_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
     )
 
@@ -144,6 +163,9 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
     assert company.market_value == 125_000.0
     assert company.report_url == "/reports/NU?artifact_id=verified"
     assert company.dcf_url == "/dcf/NU"
+    assert company.price_action_bands.state == "ratified"
+    assert company.price_action_bands.hold_low == 11.0
+    assert company.price_action_bands.review_url == "/advisor/sizing-intents/NU"
     assert company.latest_earnings_readout is not None
     assert company.latest_earnings_readout.period_label == "Q2 · Jun 2026"
     assert company.earnings_route == "/api/peek/earnings-readout?ticker=NU&artifact_id=44"
@@ -151,6 +173,101 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
     assert payload.asset_class_split.availability == "unavailable"
     assert payload.asset_class_split.source == "instrument_registry"
     assert payload.asset_class_split.unclassified_weight_pct == 17.5
+
+
+def test_price_action_band_loader_reuses_connection_and_degrades_missing_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+
+    def forbidden_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        raise AssertionError("price-action-band loading must reuse the request connection")
+
+    monkeypatch.setattr(portfolio.sqlite3, "connect", forbidden_connect)
+    try:
+        bands = portfolio.load_work_os_price_action_bands(conn, ["NU", "NU"])
+    finally:
+        conn.close()
+
+    assert list(bands) == ["NU"]
+    assert bands["NU"].state == "unavailable"
+    assert bands["NU"].review_url == "/advisor/sizing-intents/NU"
+    assert "source_content_sha256" not in bands["NU"].model_dump_json()
+
+
+def test_price_action_band_loader_prefers_human_useful_state_and_strips_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ratified = PriceActionBandProjection(
+        state=PriceActionProjectionState.RATIFIED,
+        source_kind="structured_owner",
+        approval_state="owner_ratified",
+        add_below=10.0,
+        hold_low=11.0,
+        hold_high=15.0,
+        trim_above=16.0,
+        sell_above=18.0,
+        currency="USD",
+        owner="owner",
+        revision="revision-1",
+        as_of=datetime(2026, 8, 8, 12, tzinfo=UTC),
+        source_ref="checkpoint:42",
+        source_content_sha256="a" * 64,
+        is_actionable=True,
+    )
+    newer_unencoded = resolve_price_action_bands(owner_ratified=None)
+    review = SimpleNamespace(
+        sizing_intent_source_available=True,
+        entries=(
+            SimpleNamespace(
+                intent=SimpleNamespace(
+                    ticker="NU",
+                    updated_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
+                    id=1,
+                ),
+                price_action_bands=ratified,
+            ),
+            SimpleNamespace(
+                intent=SimpleNamespace(
+                    ticker="NU",
+                    updated_at=datetime(2026, 8, 9, 12, tzinfo=UTC),
+                    id=2,
+                ),
+                price_action_bands=newer_unencoded,
+            ),
+        ),
+    )
+
+    def load_review(_conn: sqlite3.Connection) -> SimpleNamespace:
+        return review
+
+    monkeypatch.setattr(
+        portfolio,
+        "load_sizing_intent_review_from_connection",
+        load_review,
+    )
+    conn = sqlite3.connect(":memory:")
+    try:
+        bands = portfolio.load_work_os_price_action_bands(conn, ["nu"])["NU"]
+    finally:
+        conn.close()
+
+    assert bands.state == "ratified"
+    assert bands.is_actionable is True
+    assert bands.hold_low == 11.0
+    serialized = bands.model_dump_json()
+    assert "checkpoint:42" not in serialized
+    assert "a" * 64 not in serialized
+    assert "owner" not in serialized
+
+
+def test_human_price_action_band_contract_rejects_nonfinite_values() -> None:
+    with pytest.raises(ValueError):
+        WorkOsPortfolioPriceActionBands(
+            state="ratified",
+            add_below=float("nan"),
+            review_url="/advisor/sizing-intents/NU",
+        )
 
 
 def test_portfolio_hydration_projects_only_provenanced_risk_snapshot_metrics() -> None:

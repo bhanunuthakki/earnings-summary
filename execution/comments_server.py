@@ -208,6 +208,7 @@ from pipeline.work_os_overview import render_overview_panel  # noqa: E402
 from pipeline.work_os_portfolio import (  # noqa: E402
     build_work_os_portfolio,
     build_work_os_portfolio_research_links,
+    load_work_os_price_action_bands,
 )
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
 from portfolio_risk_snapshot_store import read_latest_snapshot  # noqa: E402
@@ -1815,12 +1816,17 @@ def create_app(
             coverage_roles=coverage_roles,
         )
         live = fetch_live_portfolio()
+        price_action_bands = load_work_os_price_action_bands(
+            conn,
+            [row.base.ticker for row in rows],
+        )
         payload = build_work_os_portfolio(
             rows,
             live,
             fetch_portfolio_allocation(),
             latest_readouts=readout_projection.readouts,
             research_links=build_work_os_portfolio_research_links(rows, repo_root, conn),
+            price_action_bands=price_action_bands,
             readout_warnings=readout_projection.warnings,
             offline_snapshot=(
                 read_configured_offline_portfolio_snapshot() if not live.available else None
