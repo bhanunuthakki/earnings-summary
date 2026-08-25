@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from dcf.availability import resolve_dcf_route_artifact
 from pipeline.research_cockpit import CockpitRow
 from pipeline.work_os_briefs import build_brief_library
+from ticker_validation import safe_ticker
 
 EvaluationInstrument = Literal["company", "etf"]
 ThesisSource = Literal["micro_thesis", "position_entry", "unavailable"]
@@ -31,6 +32,48 @@ _EXPLANATION_LIMIT = 320
 _NAME_LIMIT = 160
 _EXCERPT_SUFFIX = "…"
 _MACHINE_REFERENCE_RE = re.compile(r"\b(?:sha256:)?[a-f0-9]{40,}\b", re.IGNORECASE)
+_POSITION_ENTRY_QUERIES: dict[tuple[str, ...], str] = {
+    (): (
+        "SELECT entry_thesis_excerpt FROM position_entries "
+        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != '' "
+        "LIMIT 1"
+    ),
+    ("id",): (
+        "SELECT entry_thesis_excerpt FROM position_entries "
+        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != '' "
+        "ORDER BY id DESC LIMIT 1"
+    ),
+    ("created_at",): (
+        "SELECT entry_thesis_excerpt FROM position_entries "
+        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != '' "
+        "ORDER BY created_at DESC LIMIT 1"
+    ),
+    ("created_at", "id"): (
+        "SELECT entry_thesis_excerpt FROM position_entries "
+        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != '' "
+        "ORDER BY created_at DESC, id DESC LIMIT 1"
+    ),
+    ("updated_at",): (
+        "SELECT entry_thesis_excerpt FROM position_entries "
+        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != '' "
+        "ORDER BY updated_at DESC LIMIT 1"
+    ),
+    ("updated_at", "id"): (
+        "SELECT entry_thesis_excerpt FROM position_entries "
+        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != '' "
+        "ORDER BY updated_at DESC, id DESC LIMIT 1"
+    ),
+    ("updated_at", "created_at"): (
+        "SELECT entry_thesis_excerpt FROM position_entries "
+        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != '' "
+        "ORDER BY updated_at DESC, created_at DESC LIMIT 1"
+    ),
+    ("updated_at", "created_at", "id"): (
+        "SELECT entry_thesis_excerpt FROM position_entries "
+        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != '' "
+        "ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1"
+    ),
+}
 
 
 class WorkOsEvaluationItem(BaseModel):
@@ -38,7 +81,7 @@ class WorkOsEvaluationItem(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    ticker: str
+    ticker: str = Field(min_length=1, max_length=12, pattern=r"^[A-Z0-9][A-Z0-9.\-]{0,11}$")
     name: str = Field(max_length=_NAME_LIMIT)
     instrument_type: EvaluationInstrument
     score: float | None = None
@@ -167,15 +210,8 @@ def _position_entry_excerpt(
     if not required <= columns:
         return None, True
 
-    order_columns = [
-        f"{column} DESC" for column in ("updated_at", "created_at", "id") if column in columns
-    ]
-    order_sql = f" ORDER BY {', '.join(order_columns)}" if order_columns else ""
-    query = (
-        "SELECT entry_thesis_excerpt FROM position_entries "
-        "WHERE UPPER(ticker) = ? AND TRIM(COALESCE(entry_thesis_excerpt, '')) != ''"
-        f"{order_sql} LIMIT 1"
-    )
+    order_key = tuple(column for column in ("updated_at", "created_at", "id") if column in columns)
+    query = _POSITION_ENTRY_QUERIES[order_key]
     try:
         row = conn.execute(query, (ticker,)).fetchone()
     except sqlite3.Error:
@@ -255,7 +291,11 @@ def build_work_os_evaluation(
     report_urls = _report_urls(repo_root, conn, warnings)
     items: list[WorkOsEvaluationItem] = []
     for row in rows:
-        ticker = row.base.ticker.strip().upper()
+        try:
+            ticker = safe_ticker(row.base.ticker)
+        except ValueError:
+            warnings.add("invalid_ticker_omitted")
+            continue
         thesis_excerpt, source = _thesis_excerpt(repo_root, conn, ticker, warnings)
         instrument_type: EvaluationInstrument = "etf" if row.is_etf else "company"
         held_weight = _finite(row.held_weight)

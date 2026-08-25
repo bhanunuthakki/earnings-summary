@@ -298,3 +298,27 @@ def test_unreviewed_dcf_and_large_machine_explanations_fail_closed(
     assert len(item.fit_why) <= 320
     assert machine_ref not in item.score_why
     assert "source reference" in item.score_why
+
+
+def test_invalid_machine_reference_ticker_is_omitted_before_serialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    machine_ref = "a" * 64
+
+    def empty_brief_builder(*args: object, **kwargs: object) -> BriefLibraryResponse:
+        return _brief_response()
+
+    monkeypatch.setattr(evaluation, "build_brief_library", empty_brief_builder)
+
+    payload = evaluation.build_work_os_evaluation(
+        [_row(machine_ref), _row("meli")],
+        tmp_path,
+        conn,
+    )
+
+    assert [item.ticker for item in payload.items] == ["MELI"]
+    assert payload.count == 1
+    assert "invalid_ticker_omitted" in payload.warnings
+    assert machine_ref not in payload.model_dump_json()

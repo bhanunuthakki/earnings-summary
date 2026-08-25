@@ -242,8 +242,8 @@ _ROUTE_CANARY_ROLE_CONTRACTS: dict[str, tuple[tuple[str, ...], bool]] = {
     # still covers every required role across the complete production census.
     "cockpit": (("container", "type", "table", "help-footnote"), False),
     "performance": (("container", "control", "type", "help-footnote"), True),
-    "risk-allocations": (("container", "control", "type", "help-footnote"), True),
     "company-desk": (("container", "control", "type", "help-footnote", "overlay"), True),
+    "evaluation": (("container", "control", "type", "table", "help-footnote"), True),
     "brief-library": (("container", "control", "type", "help-footnote"), True),
     "fact-metric-playground": (("container", "control", "type", "help-footnote"), True),
     "decision-audit": (("container", "control", "type", "help-footnote"), True),
@@ -1220,8 +1220,8 @@ def _scan_route_canaries(
                         settled_selectors = {
                             "cockpit": "#workOsActionQueue .work-os-action-card",
                             "performance": "#workOsPerformanceMount .performance-risk-panel",
-                            "risk-allocations": "#workOsAllocationMount .portfolio-health-console",
                             "company-desk": "#deskCompanyName",
+                            "evaluation": "#workOsEvaluationBody [data-work-os-evaluation-ticker]",
                             "brief-library": "#workOsBriefLibrary [data-artifact-id]",
                             "fact-metric-playground": "#workOsFactPlayground #vx-root",
                             "decision-audit": "#workOsAuditMount .portfolio-record-console",
