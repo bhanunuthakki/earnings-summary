@@ -2,15 +2,18 @@
 
 **Status:** canonical agent contract for the visual system.
 
-This directive governs visual decisions. Emitter, exception, geometry, and debt inventories live in code.
+Governs visual decisions; inventories live in code.
 
 ## Operating metadata
 
 - **Target:** every shipped component or emitter that changes rendered UI.
-- **Inputs/source:** task, hierarchy, interaction state, and the owning master.
-- **Output/schema:** registered markup, or a tested master/registry extension.
+- **Inputs:** task, hierarchy, state, and owning master.
+- **Output:** registered markup or a tested master/registry extension.
 - **Refresh:** only when the decision model changes, not when inventory changes.
-- **Idempotency key:** changed master or contract plus its test.
+- **Logical Idempotency Key:** owning master or canonical contract plus the named visual decision.
+- **Content Identity:** digest of master, registry, or rendered evidence.
+- **Observation Version:** current master and registry revision inspected for the change.
+- **Attempt Identity:** unique validation or browser-audit invocation and its receipt.
 - **Rate-limit budget:** none; verification is local and deterministic.
 - **Failure policy:** reject the change; never widen an approval to make a check green.
 
@@ -41,6 +44,15 @@ A governed surface may provide content, semantic HTML, data attributes, and nonv
 Consumers must not add local visual CSS, inline styles, runtime style mutation, arbitrary SVG presentation, or open-ended `style` APIs.
 
 If no recipe fits, choose the nearest variant or extend the owning master. Cross-family reuse is global.
+
+### Same-project page continuity
+
+For a new or reworked page, start from the nearest shipped sibling serving the same task.
+Preserve its registered shell, navigation, four type roles, controls, density, responsive
+behavior, and state anatomy; incidental content need not match.
+
+A new visual family is allowed only when no existing family can express the task. Use the
+extension protocol with a typed rationale and an adversarial continuity test.
 
 ## 3. Visual grammar
 
@@ -112,13 +124,18 @@ The shared `frontend-quality` procedure owns the generic rubric. This project na
 - Before the composed guard, perform the page-level reduction pass: remove non-semantic
   decoration, redundant containers, headings, subtitles, badges, dividers, and icons. A remaining
   visual difference needs a typed master rationale and adversarial test under the extension protocol.
+- For material work, inspect the sibling and affected page in a browser before implementation,
+  then exercise final states and widths. Mockup CSS is prototype-only; production recomposes it
+  through registered masters.
 
 Product behavior is owned elsewhere. Do not copy it into this directive:
 
 - navigation and destination hierarchy: `directives/navigation_ia.md`; executable routes and shell
   tests remain authority, and the directive is draft evidence only until owner approval;
-- doorway, overlay, dismissal, and interaction laws: `directives/interaction_contract.md`;
-- broader interaction model: `directives/interaction_paradigm_2026_06.md`;
+- all active interaction, doorway, overlay, and dismissal behavior:
+  `directives/interaction_contract.md`;
+- `directives/interaction_paradigm_2026_06.md` is record-only history and never an input to
+  current behavior;
 - comments and chat: `directives/report_comments_and_chat.md`;
 - provenance behavior: `directives/data_provenance.md`;
 - operational controls: `directives/operations_governance_surface.md`;
@@ -167,5 +184,3 @@ DOM, and check archetype, anatomy, type, spacing, shape, depth, alignment, fit, 
 
 Report-renderer changes require workspace golden regeneration and diff review;
 generated React changes require the design-system check/build.
-
-Scanner, UI tests, and review own structure, behavior, and hierarchy respectively; red evidence blocks.

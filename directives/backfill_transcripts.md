@@ -55,13 +55,14 @@ catches:
 - Tickers that bypassed `track_company`'s auto-spawn (raw SQL inserts).
 - Newly-reported quarters as they land in the aggregator chain.
 
-## Idempotency
+## Identity and repeat safety
 
-| Layer | Key |
-|---|---|
-| Fetch | File presence check: skip if `transcripts/raw/<T>_Q<n>_<Y>.txt` OR `transcripts/processed/<T>_Q<n>_<Y>.txt` exists |
-| Ingest | sha256 of the file (`compute.transcript_ingest.ingest_one`) |
-| Extract | "transcripts pending extraction" = transcripts with zero `management_commitments` rows |
+- **Logical Idempotency Key:** `(ticker, fiscal_year, fiscal_quarter, transcript)` for fetch and ingest; `(transcript_id, commitment_extractor_version)` for extraction.
+- **Content Identity:** SHA-256 of the exact transcript bytes, computed by `compute.transcript_ingest.ingest_one`.
+- **Observation Version:** source period plus source URL/published time when available, fetched-at knowledge time, and Content Identity.
+- **Attempt Identity:** the unique job/runtime invocation used by logs and checkpoints; it changes on retry.
+
+File-presence and pending-row checks are repeat-safety guards, not identities: fetch skips when the matching raw or processed file exists, and extraction selects transcripts with no terminal scan/commitment outcome.
 
 Running the script three times in a row produces zero new rows the second
 and third times.

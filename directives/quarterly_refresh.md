@@ -105,8 +105,16 @@ structured report:
 }
 ```
 
-`run_id` is also persisted to `ingestion_runs` and every `thesis_evaluations`
-row that gets appended in this run.
+`run_id` is the Attempt Identity. It is also persisted to `ingestion_runs` and
+every `thesis_evaluations` row appended in the attempt.
+
+- **Logical Idempotency Key:** `(quarterly_refresh, ticker_scope, source_period,
+  stage)`.
+- **Content Identity:** SHA-256 of each exact input document and generated artifact.
+- **Observation Version:** source filing/release identity, fetched-at knowledge time,
+  prompt/schema version where applicable, and Content Identity.
+- **Attempt Identity:** `run_id`; every retry gets a distinct value while stage
+  repeat-safety guards prevent duplicate logical effects.
 
 ## Failure-mode policy
 

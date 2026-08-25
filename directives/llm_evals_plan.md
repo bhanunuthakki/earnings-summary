@@ -1,5 +1,8 @@
 # Directive: LLM Eval System — scoping + build plan
 
+**Class:** history. This is retained build evidence and cannot govern current LLM
+evaluation. Use `llm_evals.md` for the live quality/failure contract.
+
 Goal: every LLM call in this repo measured against the hardening-fleet llm-evals bar —
 **(1)** a deliberate model-picker with rationale, **(2)** an eval harness scoring response
 quality, **(3)** structured schema-validated output, **(4)** logging of cost/latency/failure.

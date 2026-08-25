@@ -69,7 +69,7 @@ _DEFAULT_WINDOW_DAYS = 90
 _LEDGER_LABELS: dict[str, str] = {
     "thesis_update": "thesis update",
     "bear_append": "bear-case append",
-    "earnings_prep_append": "earnings-prep note",
+    "earnings_prep_append": "open question",
     "sizing_update": "sizing change",
     "advisor_memo": "advisor memo",
 }

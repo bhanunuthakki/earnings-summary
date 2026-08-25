@@ -24,7 +24,7 @@ The ledger/sizing dispatch is keyed by ``action_kind``:
 
   thesis_update         → thesis_ledger_entries(entry_kind='thesis_update')
   bear_append           → thesis_ledger_entries(entry_kind='bear_append')
-  earnings_prep_append  → thesis_ledger_entries(entry_kind='earnings_prep_append')
+  earnings_prep_append  → analyst_notes(kind='question', status='open')
   sizing_update         → position_sizing_intent row (NOT the ledger)
 
 For sizing_update the payload is expected to carry intent_kind /
@@ -59,6 +59,8 @@ from alerts import (  # noqa: E402
 from db_paths import configured_db_path  # noqa: E402
 from db_paths import resolve_db_path as canonical_db_path  # noqa: E402
 from user_state.ledger import ThesisLedgerEntryRow, append_entry  # noqa: E402
+from user_state.ledger_policy import is_ledger_source_eligible  # noqa: E402
+from user_state.notes import AnalystNoteRow, create_note_once  # noqa: E402
 from user_state.sizing import PositionSizingIntentRow, append_intent  # noqa: E402
 
 # action_kind → entry_kind for the ledger-family kinds. sizing_update is
@@ -66,7 +68,11 @@ from user_state.sizing import PositionSizingIntentRow, append_intent  # noqa: E4
 _ACTION_TO_ENTRY_KIND: dict[str, str] = {
     "thesis_update": "thesis_update",
     "bear_append": "bear_append",
-    "earnings_prep_append": "earnings_prep_append",
+}
+
+_ACTION_SUMMARY_KIND: dict[str, str] = {
+    **_ACTION_TO_ENTRY_KIND,
+    "earnings_prep_append": "open_question",
 }
 
 
@@ -213,7 +219,7 @@ def approve_alert_and_apply_all(alert_id: int, db_path: Path | None = None) -> s
         # Each call settles its own action and writes its downstream row; the
         # final one drains the queue and _settle_parent_alert closes the alert.
         approve_and_apply(qa.id, db_path=db_path)
-        written.append(_ACTION_TO_ENTRY_KIND.get(qa.action_kind, qa.action_kind))
+        written.append(_ACTION_SUMMARY_KIND.get(qa.action_kind, qa.action_kind))
     kinds = ", ".join(sorted(set(written)))
     return (
         f"Approved alert id={alert_id} ({alert.ticker} · {alert.trigger_kind}): "
@@ -228,7 +234,7 @@ def approve_and_apply(action_id: int, db_path: Path | None = None) -> str:
     Order of operations:
       1. Fetch the queued_action (raises LookupError if missing).
       2. Dispatch on ``action_kind`` to write the downstream row
-         (thesis_ledger_entries or position_sizing_intent). Done BEFORE
+         (thesis_ledger_entries, analyst_notes, or position_sizing_intent). Done BEFORE
          apply_action so a downstream-write failure leaves the queued
          action 'pending' (the user can retry).
       3. Mark the queued_action 'applied' via apply_action.
@@ -258,6 +264,15 @@ def approve_and_apply(action_id: int, db_path: Path | None = None) -> str:
             f"value={intent.intent_value}."
         ) + _settle_parent_alert(qa.alert_id, db_path)
 
+    if qa.action_kind == "earnings_prep_append":
+        note = _write_earnings_question(qa, db_path)
+        applied = apply_action(action_id, db_path=db_path)
+        return (
+            f"Approved queued_action id={applied.id} "
+            "(action_kind='earnings_prep_append'). "
+            f"Open analyst question id={note.id} written: {note.ticker} · {note.body}."
+        ) + _settle_parent_alert(qa.alert_id, db_path)
+
     if qa.action_kind in _ACTION_TO_ENTRY_KIND:
         entry = _write_ledger_entry(qa, db_path)
         applied = apply_action(action_id, db_path=db_path)
@@ -271,7 +286,7 @@ def approve_and_apply(action_id: int, db_path: Path | None = None) -> str:
     raise ValueError(
         f"queued_action id={action_id} has unsupported action_kind="
         f"{qa.action_kind!r}; expected one of: "
-        f"{sorted({'sizing_update', *_ACTION_TO_ENTRY_KIND.keys()})}"
+        f"{sorted({'sizing_update', 'earnings_prep_append', *_ACTION_TO_ENTRY_KIND.keys()})}"
     )
 
 
@@ -361,7 +376,13 @@ def _write_ledger_entry(qa: QueuedActionRow, db_path: Path | None) -> ThesisLedg
     ``ticker`` comes from the parent alert, not the payload — see
     ``_resolve_ticker``.
     """
+    source_alert = get_alert(qa.alert_id, db_path=db_path)
     entry_kind = _ACTION_TO_ENTRY_KIND[qa.action_kind]
+    if not is_ledger_source_eligible(source_alert.trigger_kind, entry_kind):
+        raise ValueError(
+            f"alert id={source_alert.id} trigger_kind={source_alert.trigger_kind!r} "
+            f"entry_kind={entry_kind!r} is not eligible to write thesis-ledger entries"
+        )
     ticker = _resolve_ticker(qa, db_path)
     body = _require_str(qa.payload, "body", qa)
     return append_entry(
@@ -369,6 +390,29 @@ def _write_ledger_entry(qa: QueuedActionRow, db_path: Path | None) -> ThesisLedg
         entry_kind=entry_kind,
         body=body,
         source_alert_id=qa.alert_id,
+        db_path=db_path,
+    )
+
+
+def _write_earnings_question(qa: QueuedActionRow, db_path: Path | None) -> AnalystNoteRow:
+    """Persist an approved next-call prompt in lifecycle-aware analyst memory."""
+    source_alert = get_alert(qa.alert_id, db_path=db_path)
+    ticker = _resolve_ticker(qa, db_path)
+    body = _require_str(qa.payload, "body", qa)
+    return create_note_once(
+        ticker=ticker,
+        kind="question",
+        body=body,
+        source="alert",
+        source_ref=f"queued_action:{qa.id}:earnings_prep",
+        anchor_type="ticker",
+        anchor_key=ticker,
+        context={
+            "queued_action_id": qa.id,
+            "source_alert_id": qa.alert_id,
+            "trigger_kind": source_alert.trigger_kind,
+            "purpose": "earnings_call_open_question",
+        },
         db_path=db_path,
     )
 

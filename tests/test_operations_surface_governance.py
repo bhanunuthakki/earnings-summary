@@ -22,7 +22,7 @@ def test_surface_directive_states_the_complete_decision_contract() -> None:
         "Target sources",
         "Output schema",
         "Refresh cadence",
-        "Idempotency key",
+        "Logical Idempotency Key",
         "Rate-limit budget",
         "Failure-mode policy",
         "Trigger matrix",

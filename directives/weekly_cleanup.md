@@ -36,7 +36,7 @@ No network or LLM calls are authorized.
 Pydantic-validated JSON object to stdout:
 
 - `policy_version`
-- `idempotency_key`
+- `idempotency_key` (legacy serialized field name for the Logical Idempotency Key)
 - `mode`
 - aggregate `files_scanned`, `would_delete`, `deleted`, `bytes`, and
   `skipped_invalid`
@@ -45,11 +45,16 @@ Pydantic-validated JSON object to stdout:
 Any eligible file that cannot be deleted produces `skipped_error` and a nonzero
 exit. A filesystem-cleanup failure prevents the research-expiry stage.
 
-## Cadence and idempotency
+## Cadence, identity, and repeat safety
 
 - Refresh cadence: Sunday at 13:00 America/Los_Angeles.
-- Idempotency key:
+- **Logical Idempotency Key:**
   `weekly_cleanup:{ISO-year-week}:{policy-version}`.
+- **Content Identity:** digest of the canonical policy and eligible-target inventory
+  recorded by the decision receipt.
+- **Observation Version:** bounded filesystem/database evidence time and inventory
+  digest for the sweep.
+- **Attempt Identity:** unique job-runtime invocation and its receipt; retries change it.
 - Re-running the same policy after a successful application finds no eligible
   files until new artifacts cross their retention boundary.
 - Rate-limit budget: zero network requests and zero LLM calls.

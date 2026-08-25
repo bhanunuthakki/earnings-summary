@@ -5,7 +5,10 @@
 - **Target sources:** canonical Scheduler manifest and wrappers, managed-service registry, LLM and eval registries, issuer/source policy, typed runtime receipts, bounded database observations, schema compatibility, and separately governed operator capabilities.
 - **Output schema:** an explicit disposition of `primary surface`, `linked governed view`, or `deliberate exclusion`, plus the affected typed registry/snapshot/view models and evidence-backed tests.
 - **Refresh cadence:** declared configuration is projected at application start; request snapshots use the panel cache contract; runtime state comes only from typed receipts or bounded read-only observations with their own recorded time and freshness policy.
-- **Idempotency key:** canonical owner identity plus registry/snapshot version. Repeating the projection over unchanged owners and evidence must yield the same disposition and rendered meaning.
+- **Logical Idempotency Key:** canonical owner identity plus the required surface disposition. Repeating a projection for the same owner/disposition must not create a second logical surface item.
+- **Content Identity:** digest of the typed registry, receipt, or snapshot payload used by the projection.
+- **Observation Version:** registry/snapshot version, evidence-recorded time, and observed-at time.
+- **Attempt Identity:** unique application-start projection or request snapshot invocation and its receipt.
 - **Rate-limit budget:** zero network calls, subprocess probes, service-control calls, or unbounded filesystem/database reads in the Operations render path. Live producers write bounded receipts outside the request path.
 - **Failure-mode policy:** render Missing, Stale, Invalid, or Unavailable with evidence source and time. Never turn absent or malformed evidence into a healthy claim, and never block unrelated product work merely because an internal implementation detail is not an operator workflow.
 

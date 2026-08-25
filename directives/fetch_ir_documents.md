@@ -127,8 +127,8 @@ best-effort step on onboard (`execution/onboard_ticker.py`, `--skip-ir` to skip)
    Reads the active roster from the DB at run time; scheduled scope is portfolio-only
    and explicitly named evaluation work is on demand. It runs steps 1–2 per ticker subprocess-isolated, never aborts
    on one ticker's failure; exit code = count of FAILED tickers.
-4. **Idempotency**: a URL already in `documents.source_url` is skipped; identical
-   bytes are a sha256-keyed no-op. Re-running discovery or the batch is safe.
+4. **Repeat safety**: a URL already in `documents.source_url` is skipped; identical
+   bytes are a Content Identity no-op. Re-running discovery or the batch is safe.
 
 ## Path B: Manual upload (Categorize → Register)
 
@@ -138,7 +138,7 @@ best-effort step on onboard (`execution/onboard_ticker.py`, `--skip-ir` to skip)
    - First-page content fingerprint (first ~2 PDF pages or first xlsx sheet) confirms ticker via the issuer-name registry, identifies doc_type via cover-page phrase rules, and locates period via quarter/date/fiscal regex.
    - Files where ticker, doc_type, and period all resolve are moved to `ir_documents/{TICKER}/{period_end_iso}/{doc_type}__{sha8}.{ext}` and a `documents` row is inserted (`source_type='ir_doc'`, `source_url='manual_upload:{original-filename}'`).
    - Files that fail to resolve are quarantined under `ir_documents/_unsorted/` next to a `.error.json` sidecar carrying the failure reason and partial evidence — never silently dropped, never guessed.
-3. **Idempotency**: sha256-keyed unique constraint on `documents`. Re-uploading identical bytes is a no-op; modified content writes a new row and supersedes (never mutates).
+3. **Repeat safety**: the Content Identity unique constraint on `documents` makes identical bytes a no-op; modified content writes a new Observation Version and supersedes rather than mutating.
 4. **Optionality**: When the root has no uncategorized files, the step prints `{"status":"empty",...}` and exits 0 — orchestrator continues.
 
 ## Issuer-name registry (manual-upload classifier)
@@ -180,7 +180,11 @@ no fuzzy matching — a name either appears or doesn't.
 ## Edge Cases & Constraints
 
 - **Rate limiting**: 0.5 second pause between downloads. Never more than 10 requests per minute to any single domain.
-- **Idempotency key**: canonical source URL for fetch plus content SHA-256 for registration; manifest merge is URL-keyed.
+- **Logical Idempotency Key:** `(ticker, document_type, fiscal_period, canonical_source_url)` for a discovered document; manual intake substitutes its stable submission identity.
+- **Content Identity:** SHA-256 of exact downloaded or uploaded bytes.
+- **Observation Version:** source-published/filing identity when available, fetched-at knowledge time, and Content Identity.
+- **Attempt Identity:** unique discovery, fetch, or categorization invocation used for logs and checkpoints; it changes on retry.
+- URL and Content Identity constraints are repeat-safety guards. Manifest merge is URL-keyed.
 - **Failure policy**: stored-identity/role denial happens before network access. An explicit HTTP 401/403 is classified as a typed auth denial and halts the current job without retry or bypass. Ordinary non-auth transport errors, timeouts, and other source failures are logged per ticker and isolated; schema drift is not guessed around.
 - **robots.txt**: Always respect. These are all major public company IR pages; PDF downloads are explicitly intended for investor use.
 - **Auth**: Never attempt to bypass authentication. HTTP 401/403 halts the current job immediately; do not silently skip it as an ordinary unavailable document.

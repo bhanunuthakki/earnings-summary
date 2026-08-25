@@ -79,10 +79,9 @@ def _build_db(db_path: Path) -> None:
 
     command.upgrade(cfg, "head")
 
-    # NU: a real thesis + two ledger entries + one open question + one open musing.
+    # NU: a real thesis + one ledger entry + one open question + one open musing.
     _seed_thesis_state(db_path, "NU", "NIM holds despite mix shift.", "ok")
     append_entry(ticker="NU", entry_kind="thesis_update", body="entry 1", db_path=db_path)
-    append_entry(ticker="NU", entry_kind="earnings_prep_append", body="entry 2", db_path=db_path)
     create_note(
         ticker="NU", kind="question", body="What is deposit beta trending to?", db_path=db_path
     )
@@ -111,7 +110,7 @@ def test_read_thesis_status_rich_ticker(tmp_path: Path) -> None:
     nu = out["NU"]
     assert nu.has_written_thesis is True
     assert nu.breach_status == "ok"
-    assert nu.ledger_entry_count == 2
+    assert nu.ledger_entry_count == 1
     assert nu.last_ledger_at is not None
     assert nu.open_notes_count == 2
     assert nu.open_questions_count == 1

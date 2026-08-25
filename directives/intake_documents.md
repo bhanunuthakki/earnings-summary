@@ -97,8 +97,12 @@ re-runs `intake_documents.py`. The marker is cleared on successful intake.
   fallback). The doc_type field is the closed `DocType` enum — never a free string.
 - **No substring classification**: filename keyword matching (`"transcript" in filename.lower()`)
   is forbidden. Use the LLM with structured output for `doc_type` decisions.
-- **Idempotency**: dest path includes `<sha8>`. Re-dropping the same bytes is a no-op
-  (duplicate detected by `dest.exists()`; source removed from inbox).
+- **Identity and repeat safety**: the Logical Idempotency Key is the stable intake
+  submission plus resolved `(ticker, doc_type, period_end)`; SHA-256 of exact bytes is
+  the Content Identity; resolved source/period plus fetched-at knowledge time is the
+  Observation Version; each CLI invocation has a unique Attempt Identity. The
+  destination's `<sha8>` is a Content Identity duplicate guard, so re-dropping the
+  same bytes is a no-op.
 - **Fiscal-calendar quirks**: VEEV / RBRK (Jan FYE), NVO (H1/9M periods) — handled
   by the LLM via the period-end mapping in the prompt. The classifier returns a
   date, not a fiscal label, so downstream code never has to translate.

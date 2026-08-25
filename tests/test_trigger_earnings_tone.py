@@ -471,19 +471,13 @@ def test_build_alert_cache_hit_skips_llm_call(
     assert first_alert.signature_sha == second_alert.signature_sha
 
 
-def test_draft_actions_full_action_mix(
+def test_draft_actions_only_create_earnings_prep(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Confirm the per-shift action policy across the cases:
-
-    - earnings_prep_append fires for EVERY shift (always)
-    - thesis_update fires only for directional shifts with confidence ≥ 0.6
-    - bear_append fires for adverse (softer/dropped_topic) shifts that
-      name a thesis KPI — confidence doesn't gate bear_append
-    """
+    """Machine tone analysis stays in earnings prep, never thesis or bear history."""
     _ = _seed_five_quarters(fixture_db)
     shifts: list[dict[str, object]] = [
-        # Adverse + thesis-touching + confident → all three actions
+        # Adverse + thesis-touching + confident still remains prep evidence.
         {
             "topic": "Cloud margin commentary softened",
             "direction": "softer",
@@ -491,7 +485,7 @@ def test_draft_actions_full_action_mix(
             "citations": [],
             "related_thesis_kpi": "Cloud Op Margin",
         },
-        # Firmer + confident but no KPI → earnings_prep + thesis_update
+        # Firmer + confident but no KPI also remains prep evidence.
         {
             "topic": "Capex pacing tightened",
             "direction": "firmer",
@@ -499,10 +493,7 @@ def test_draft_actions_full_action_mix(
             "citations": [],
             "related_thesis_kpi": None,
         },
-        # Adverse + KPI but LOW confidence → earnings_prep + bear_append
-        # (no thesis_update because confidence is below the floor; bear_append
-        # has no confidence gate per spec — adverse direction + thesis-relevant
-        # KPI is enough to warrant adding to the bear file)
+        # Low-confidence adverse output remains prep evidence as well.
         {
             "topic": "FX color qualitative",
             "direction": "softer",
@@ -523,26 +514,10 @@ def test_draft_actions_full_action_mix(
     for a in actions:
         by_kind.setdefault(a.action_kind, []).append(dict(a.payload))
 
-    # Every shift → one earnings_prep_append.
+    # Every shift → one earnings_prep_append, with no machine-authored
+    # thesis_update or bear_append side effects.
     assert len(by_kind.get("earnings_prep_append", [])) == 3
-
-    # Two high-confidence directional shifts → two thesis_updates;
-    # the low-confidence one is excluded.
-    assert len(by_kind.get("thesis_update", [])) == 2
-    thesis_topics = {p["source_shift_topic"] for p in by_kind["thesis_update"]}
-    assert thesis_topics == {
-        "Cloud margin commentary softened",
-        "Capex pacing tightened",
-    }
-
-    # Two bear_appends: both softer shifts that named a thesis KPI.
-    # Confidence gating belongs to thesis_update only.
-    assert len(by_kind.get("bear_append", [])) == 2
-    bear_topics = {p["source_shift_topic"] for p in by_kind["bear_append"]}
-    assert bear_topics == {
-        "Cloud margin commentary softened",
-        "FX color qualitative",
-    }
+    assert set(by_kind) == {"earnings_prep_append"}
 
 
 def test_draft_actions_returns_empty_when_no_material_shifts(
@@ -581,16 +556,12 @@ def test_full_pipeline_integration_smoke(
     assert alert.memo_text
 
     actions = trigger.draft_actions(alert, candidates[0])
-    # Two shifts in the canned default; one is adverse+KPI, one firmer no-KPI.
-    # earnings_prep x 2 + thesis_update x 2 + bear_append x 1 = 5 actions.
-    assert len(actions) == 5
+    # Two shifts in the canned default become two prep prompts only.
+    assert len(actions) == 2
     kinds = sorted(a.action_kind for a in actions)
     assert kinds == [
-        "bear_append",
         "earnings_prep_append",
         "earnings_prep_append",
-        "thesis_update",
-        "thesis_update",
     ]
 
 

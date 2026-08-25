@@ -184,6 +184,57 @@ def test_unlinked_direct_append_has_no_checkpoint_evidence(tmp_path: Path) -> No
     assert entry.intent.intent_value == 3.0
 
 
+def test_withdrawn_intent_is_absent_from_current_review(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    _insert_intent(database, intent_id=8, value=3.0, created_at="2026-08-23T12:01:00")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TABLE position_sizing_intent_withdrawals (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                sizing_intent_id INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO position_sizing_intent_withdrawals "
+            "(id,user_id,sizing_intent_id,reason,created_at) "
+            "VALUES (1,'bhanu',8,'owner rejected','2026-08-25T00:00:00')"
+        )
+
+    assert load_sizing_intent_review(database).entries == ()
+
+
+def test_superseded_intent_is_absent_from_current_review(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    _insert_intent(database, intent_id=8, value=3.0, created_at="2026-08-23T12:01:00")
+    _insert_intent(database, intent_id=9, value=4.0, created_at="2026-08-25T12:01:00")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TABLE position_sizing_intent_supersessions (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                superseded_intent_id INTEGER NOT NULL,
+                superseding_intent_id INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO position_sizing_intent_supersessions "
+            "(id,user_id,superseded_intent_id,superseding_intent_id,reason,created_at) "
+            "VALUES (1,'bhanu',8,9,'new DCF ladder','2026-08-25T12:01:00')"
+        )
+
+    review = load_sizing_intent_review(database)
+    assert [entry.intent.id for entry in review.entries] == [9]
+
+
 def test_partial_checkpoint_evidence_keeps_the_link_without_inventing_a_band(
     tmp_path: Path,
 ) -> None:

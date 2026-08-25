@@ -96,7 +96,7 @@ _LEDGER_KIND_LABELS: dict[str, str] = {
     "thesis_update": "Thesis update",
     "bear_append": "Bear-case append",
     "sizing_update": "Sizing change",
-    "earnings_prep_append": "Earnings-prep note",
+    "earnings_prep_append": "Open question",
     # The shared constant keeps the label in lockstep with inbox_rank's
     # advisor-memo → synthesis-category refinement.
     "advisor_memo": ADVISOR_MEMO_TITLE,

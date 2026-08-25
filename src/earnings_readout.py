@@ -20,7 +20,6 @@ from pathlib import Path
 from db_paths import db_path_context
 from earnings_brief import (
     kpi_text,
-    queued_notes_text,
     tone_text,
     valuation_text,
     watch_items_text,
@@ -267,7 +266,6 @@ def assemble_context(
         ("Tracked KPI moves", kpis),
         ("Thesis, break rules, and prior context", anchors),
         ("Open watch items and questions", watch_items_text(db_path, quarter.ticker)),
-        ("Items queued for this call", queued_notes_text(db_path, quarter.ticker)),
         ("Call-tone change already detected", tone_text(db_path, quarter.ticker)),
         ("Current valuation stance", valuation),
         ("Speaker-attributed earnings-call transcript", transcript),

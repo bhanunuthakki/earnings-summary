@@ -1,191 +1,120 @@
-# Directive: LLM Calls
+# LLM call boundary
 
-## Goal
+**Class:** canonical. This file owns live call entry, model/backend resolution,
+transport fallback, structured-output behavior, budgets, and call attribution. It
+does not qualify candidate quality or promote cheaper models; `llm_evals.md`,
+`model_eval_loop.md`, and `cheapest_model_routing.md` own those decisions.
 
-Every LLM call in this repo goes through ONE entry point so retunes (model
-swap, timeout change, billing change, fallback policy) happen in one place
-and never silently diverge per script.
+## Outcome
 
-## The canonical entry point
+Every application LLM call crosses one governed facade, declares a purpose, resolves
+against a capability profile, produces attributable telemetry, and fails or degrades
+in a way the caller can distinguish from a valid empty result.
 
-```python
-from llm_client import call_llm
+## Executable authority
 
-response = call_llm(prompt, purpose="bear_case")
-```
+- `src/llm_client.py`: public facade.
+- `src/llm/cli.py`: call implementation, purpose registry, transport dispatch,
+  budgets, retries, capture, and ledger integration.
+- `src/llm/resolver.py`: single model/backend resolution and capability validation.
+- `src/llm/model_ladder.py`: executable provider-family and cost registry.
+- `src/llm/structured.py`: schema-oriented response parsing and bounded repair.
+- `src/llm/prompt_registry.py`, `src/llm/prompt_versions.py`, and
+  `src/llm/prompt_ab.py`: prompt attribution, versioning, and governed overrides.
 
-`call_llm(prompt, *, purpose=None, model=None, timeout_seconds=None)` is
-implemented in `src/llm/cli.py` and re-exported by `src/llm_client.py`. It:
+Provider names, model IDs, capability entries, and prices are executable or dated
+registry facts. This directive never qualifies a model by reputation or duplicates
+those registries.
 
-1. Resolves `purpose` to the existing eval-gated quality tier in `LLM_MODELS`
-   (or uses an explicit `model` arg as an escape hatch).
-2. For normal purpose-resolved traffic, calls the isolated Codex membership
-   transport first: Haiku-class purposes map to `gpt-5.6-luna`,
-   Sonnet-class purposes to `gpt-5.6-terra`, and Opus/Fable-class purposes to
-   `gpt-5.6-sol`.
-3. On an operational Codex failure, falls back to the Claude subscription
-   transport and records `fallback_used='claude'`. The existing Claude
-   operational fallback remains available after that where configured.
-4. Explicit provider-family requests remain explicit: a caller passing a
-   Claude, Gemini, or OpenRouter model id routes to that family rather than
-   being silently translated.
-5. `LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude` is the reversible rollback
-   switch. The production default is `codex`.
-6. `call_llm_with_web` follows the SAME Codex-first order (2026-08-03 owner
-   ratification: "everything routed to Codex first, Claude is backup" —
-   including web-grounded calls). The Codex membership wrapper now supports
-   an opt-in `web_search` mode (`disabled` default / `cached` / `indexed` /
-   `live`); `call_llm_with_web`'s Codex leg passes `web_search="live"` so it
-   can fetch fresh pages, falling back to the existing Claude
-   WebSearch/WebFetch tool-call path on an OPERATIONAL Codex failure only —
-   never as a routing preference. Every other Codex call site keeps the
-   `"disabled"` default (byte-identical to before this changed).
-   **GROUNDEDNESS GATE (`require_grounding`, default True)**: a Codex web
-   answer citing no source is treated as an OPERATIONAL failure and falls
-   through to the Claude leg. Measured 2026-08-03: on the real
-   `recent_developments` prompt Codex returned that template's own sanctioned
-   escape hatch ("*No material news in the last 7 days.*", 0 URLs) for
-   NU/MELI/UBER while Claude found real material news for all three the same
-   day — exit 0, well-formatted, confidently wrong, so neither the routing
-   guard nor the operational fallback could see it. Root cause is
-   prompt/transport coupling, not a Codex capability limit: the template is
-   written against Claude's tool loop (names `web_search`/`web_fetch`,
-   front-loads HARD CAPS, offers an explicit say-nothing output), and Codex
-   searches correctly when asked plainly. Until that prompt is made
-   transport-neutral, expect the Codex web leg to fail this gate often and
-   the Claude leg to serve — correct output at the cost of one wasted call.
-   Pass `require_grounding=False` only for a web purpose whose output
-   legitimately carries no URL.
-   **Budget-cap nuance**: the Claude web leg's hard per-call
-   `--max-budget-usd` ceiling (`CLAUDE_WEB_MAX_BUDGET_USD`, $2) is a
-   Claude-CLI-only mechanism — Codex is membership-billed with no per-call
-   price and the wrapper reports no token usage, so there is no dollar
-   figure to clamp on the Codex leg. That is a deliberate gap, not a
-   silently dropped concept: the per-purpose MONTHLY budget
-   (`_enforce_budget_pre_call`) still gates every leg, Codex included,
-   identically, and the Codex wrapper's own isolation (read-only sandbox, no
-   shell/apps/hooks) bounds a runaway call's blast radius even without a
-   $-ceiling.
+The typed model `CapabilityProfile` covers only intrinsic context length, vision, and
+structured-output support. Tool availability, live grounding, privacy, and deployment
+constraints are separate transport and evaluation gates; they must not be inferred from
+the model profile.
 
-## Hard rules
+## Call contract
 
-1. **Direct provider SDKs are forbidden outside `src/llm_client.py`.** No
-   `import google.generativeai` in `execution/`, `src/report/sections/`, or
-   anywhere else. No `import anthropic`. The fallback wiring inside
-   `llm_client._try_gemini_fallback` is the ONLY place Gemini is touched.
-2. **Every `call_llm` invocation MUST pass `purpose="..."`.** Anonymous calls
-   default to `DEFAULT_MODEL` with a warning log; that warning means a new
-   purpose key needs registering, not silenced.
-3. **Per-section model selection lives in `LLM_MODELS` only.** Don't pass
-   `model="claude-..."` ad-hoc at call sites. If a section needs a different
-   model, add or update its entry in `LLM_MODELS` so the choice is reviewable.
-4. **No `genai.GenerativeModel(...)` retries, no parallel `_try_*` helpers.**
-   Ordered transport fallback lives in `call_llm` / `_call_claude` and is the
-   only retry logic. Single source of truth.
+Use `llm_client.call_llm` or the corresponding governed web/structured facade. New
+calls must:
 
-## Adding an LLM-backed section
+1. pass a stable `purpose` registered in the executable purpose registry;
+2. define typed inputs and outputs, including valid empty and failure states;
+3. provide a `CapabilityProfile` when context, vision, or structured-output support is
+   load-bearing;
+4. keep prompt text attributable to a prompt version and Content Identity;
+5. pass ticker/scope metadata when applicable; and
+6. handle typed budget, setup, transport, and parse failures without manufacturing a
+   successful empty value.
 
-1. Pick a purpose key (e.g., `"saydo_extraction"`). Use `snake_case`.
-2. Add it to `LLM_MODELS` in `src/llm_client.py` with a model id (`DEFAULT_MODEL`
-   for analytical writing, `FAST_CLASSIFIER_MODEL` for short structured calls)
-   and a one-line comment on rationale.
-3. In your section / script, write the prompt as a module-level constant
-   (greppable, reviewable) and call:
-   ```python
-   from llm_client import call_llm
-   raw = call_llm(my_prompt, purpose="saydo_extraction")
-   ```
-4. Strip JSON fences if your prompt expects strict JSON — the Claude CLI
-   sometimes wraps despite instruction. Use the `JSON_FENCE_RX` pattern
-   that's already established in the extractors.
+Direct provider clients are allowed only inside registered adapters under `src/llm/`.
+Call sites do not add ad-hoc provider retries, model IDs, fallback chains, or open-ended
+response parsing.
 
-## Failure modes you don't have to handle
+## Resolution and fallback
 
-- Codex membership transport unavailable → a structured warning and Claude
-  fallback, with both attempts separately ledgered.
-- Claude CLI timeout / empty output after Codex fallback → the existing
-  configured fallback policy applies.
-- Explicit/forced backend failure → raises; forced-family comparisons never
-  silently switch contestants.
+`src/llm/resolver.py` resolves in this order:
 
-## Failure modes you DO have to handle
+1. explicit model argument;
+2. active database model-pin override for the purpose;
+3. the purpose entry in `LLM_MODELS`; then
+4. the executable default.
 
-- Caller-side prompt errors (no input, prompt too long for the chosen model).
-- Caller-side response parsing (the LLM didn't follow your output format).
-- JSON-fence wrapping when you asked for strict JSON.
+An explicit backend wins; otherwise the registered model family selects the provider.
+For normal purpose-resolved Claude-family pins, the production default is `codex`:
+the Codex membership transport runs first and an operational failure falls back to the
+Claude subscription transport. `LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude` is the
+documented rollback switch.
 
-## Structured output (JSON-expecting calls)
+Registered explicit provider-family model IDs route to that provider. A model-routed
+provider adapter may use the operational fallback implemented in `src/llm/cli.py`,
+with both legs attributed separately. A forced backend must fail rather than silently
+switch; any explicit emergency escape hatch is an operator action, not normal routing.
+Setup, authorization, budget, capability, and schema failures never become a successful
+fallback result.
 
-New call sites that expect JSON should route through
-`llm.structured.call_llm_structured(prompt, purpose=..., expect="object"|"array",
-required_keys=(...))` instead of hand-rolling fence-strip + `json.loads` +
-`except`. It gives you the proven retry-with-feedback (one re-ask telling the
-model its previous response wasn't valid JSON) and it is LOUD on final
-failure (`StructuredParseError`) — never return a `{}`/`[]`/`None` that is
-indistinguishable from a real "nothing found" (the silent-empty pathology,
-llm_evals_plan §5.4; `risk_factor_classify` used to persist fabricated
-"other" categories this way). Existing sites migrate opportunistically.
+Every resolved model and actual fallback model must have an entry in the executable
+capability registry. Unknown capability metadata fails closed even when the caller has
+no additional profile requirements.
 
-## Prompt-change workflow (the regression gate)
+`call_llm_with_web` uses the same purpose resolution and Codex-first subscription order.
+Its live-grounding requirement is enforced by code; a response that lacks required
+source evidence is a failure, not a grounded answer.
 
-Materially rewriting a prompt is a measurable change, not a vibe
-(directives/llm_evals_plan.md §2.4). The loop:
+## Structured output
 
-1. Edit the prompt.
-2. Bump its entry in `src/llm/prompt_versions.py` (`"v1"` → `"v2"`);
-   unregistered purposes get registered on first bump.
-3. Run its eval against the production DB:
-   `python execution/run_llm_evals.py --purpose <p> --min-score 0.8
-   --repo-root <MAIN repo>` — exit 3 means the rewrite regressed below the
-   bar; don't merge it. (Which purposes have eval coverage:
-   `python execution/run_llm_evals.py --coverage`.)
-4. Compare versions: the System → Evals panel's "Score by prompt version"
-   strip (or `summarize_by_prompt_version`) shows v2 vs v1 side by side.
-   First real win of this loop: viewspec_compile v2 scored 16/16 vs v1's
-   13/16 (#427).
+JSON-expecting call sites use `llm.structured.call_llm_structured` with an explicit
+object/array shape and required keys. One bounded repair may explain the parse failure.
+The structured facade always adds `requires_structured_output=True` to the caller's
+profile and preserves that effective profile across repair and escalation attempts.
+Final failure raises `StructuredParseError`; it never returns `{}`, `[]`, or `None`
+unless that value is a schema-valid product result.
 
-The gate is a pre-merge MANUAL step — LLM calls in CI are forbidden /
-monkeypatched by design.
+## Identity and telemetry
 
-## Migration history
+- **Logical Idempotency Key:** product purpose plus the durable business effect the
+  caller intends; it is owned by the calling directive.
+- **Content Identity:** prompt-body/input/output digests captured by the prompt and
+  call ledgers.
+- **Observation Version:** prompt version, source-data versions, resolved runtime
+  configuration, and knowledge time used for the call.
+- **Attempt Identity:** `run_id` or the unique call receipt for one execution. It
+  changes on retry and is never the Logical Idempotency Key.
 
-This directive supersedes the inconsistent state where scripts called
-`google.generativeai` directly:
+Every attempted leg records purpose, resolved model and backend, prompt version/digest,
+latency, cost or billing class when observable, outcome/failure class, fallback
+attribution, and Attempt Identity. Missing ledger or budget infrastructure fails closed
+where the call would otherwise authorize spend or a durable decision.
 
-- `execution/extract_nvo_patent_timeline.py` — migrated 2026-05-09
+## Change workflow
 
-Any future script that goes around `call_llm` is a regression and should be
-caught in code review.
+- New purpose or material prompt change: register the purpose, bump its prompt version,
+  add representative eval coverage, and run the purpose-specific regression command in
+  `execution/run_llm_evals.py`.
+- Transport/resolver change: test family resolution, forced-backend failure,
+  operational fallback attribution, budgets, and structured failure behavior.
+- Model switch: do not edit prose here to qualify it. Follow `model_eval_loop.md`; the
+  executable override is the production change.
+- Prompt experiment: use the executable prompt experiment/override mechanism. Retain
+  brand-blind evidence and reconcile a proven override back into versioned source.
 
-## Prompt-A/B promotion workflow (meta_eval_governance.md §4 + §10 Q1)
-
-Prompt improvements are MEASURED, then AUTO-APPLIED (owner decision Q1) —
-never hand-tuned in place:
-
-1. **Propose** — `python execution/run_prompt_ab.py --purpose <p> --propose
-   --template-file <the checked-in constant's text>`. The Opus proposer emits
-   1-4 exact-match edits on the instruction scaffold; anchors are validated
-   against the template AND real captured renders BEFORE any spend
-   (`rejected_anchor` otherwise).
-2. **Run** — `--experiment <id>` (≥2 runs on fresh samples). Baseline reuses
-   captured incumbent outputs when the capture's model equals the frozen model;
-   the variant runs under the SAME frozen model, `scope="prompt_ab"`, capture
-   OFF. The brand-blind judge grades baseline (slot A) vs variant (slot B) with
-   §3 criteria derived from the BASELINE prompt; judges never see the edits.
-3. **Promote** — `--experiment <id> --promote`: if the pooled §4.4 bar holds
-   (≥60% strict variant wins AND ≤20% baseline wins per judge, agreement ≥0.6,
-   ≥2 promoting runs over ≥10 pooled cases, zero KEEP_BASELINE runs), an ACTIVE
-   `prompt_pin_overrides` row applies the edits to PRODUCTION traffic at
-   `call_llm`/`call_llm_with_web` time (production scopes only — replays stay
-   byte-identical; anchor drift fails OPEN to the original prompt).
-4. **Reconcile git** — the override's `reason_json.edits` carries the exact
-   diff. Catch the checked-in prompt constant up in a routine PR and bump its
-   `prompt_versions` entry (v2→v3 …); once the constant matches, the override
-   is redundant and can be deactivated.
-5. **Auto-demote** — a later experiment run concluding KEEP_BASELINE
-   deactivates the override automatically (mirrors the model loop's regression
-   revert). Manual revert: deactivate the row (history is kept).
-
-Rule-3 kinship: an override never bypasses `_model_for` or the ledger — the
-edited prompt is THE production prompt (its sha, capture, and cost accounting
-all follow it).
+CI never substitutes a live model call for deterministic tests. Unavailable live eval
+evidence is reported as unavailable or HOLD, not inferred from a green unit suite.

@@ -1,41 +1,94 @@
-# Directive: Folder Structure
+# Folder structure contract
 
-## Goal
+**Class:** canonical. This document owns repository topology; the validator reads
+the embedded contract below. Runtime-only directories may be absent in a clean
+checkout and are created only by their named producer.
 
-To enforce a standardized, deterministic directory hierarchy for data flow and state management. This prevents organic folder sprawl, ensures reproducible pipeline stages, and maintains consistent locations for input and output artifacts.
+## Machine contract
 
-## Architecture
+<!-- folder-contract:start -->
+```json
+{
+  "required_source_directories": [
+    "alembic",
+    "config",
+    "cron",
+    "dcf",
+    "design-system",
+    "directives",
+    "docs",
+    "evals",
+    "examples",
+    "execution",
+    "instruction_tests",
+    "micro_thesis",
+    "mockups",
+    "scripts",
+    "src",
+    "templates",
+    "tests",
+    "vendor"
+  ],
+  "required_state_directories": ["data"],
+  "optional_runtime_directories": [
+    ".cache",
+    ".tmp",
+    "_inbox",
+    "ir_documents",
+    "output",
+    "transcripts"
+  ],
+  "tooling_directories": [
+    ".claude",
+    ".codex",
+    ".design-sync",
+    ".githooks",
+    ".github",
+    ".harden"
+  ],
+  "registered_exception_directories": ["outputs", "scratch"],
+  "forbidden_top_level_directories": [
+    "cache",
+    "tmp_tests",
+    "transcripts_in"
+  ]
+}
+```
+<!-- folder-contract:end -->
 
-| Directory | Purpose | Lifecycle / Safety |
-|---|---|---|
-| `_inbox/` | The single drop folder for any user-supplied artifact (IR PDF, transcript text, earnings audio). The intake handler classifies and files contents into `ir_documents/` or `transcripts/raw/`. | Staging only. Files are moved out on successful intake. |
-| `transcripts/raw/` | The entry point for the audio/legacy transcript pipeline. Audio files land here (filed by intake or fetched by `fetch_audio_transcripts.py`); whisper consumes them in-place. | Source material. Safe to delete only after successful processing. |
-| `transcripts/processed/` | Archive of raw files that have been successfully parsed, transcribed, or evaluated (populated automatically by `execution/ingest_transcripts.py`; no manual moves needed). | Retained for reference and raw text serving. |
-| `output/research/<TICKER>/` | Generated brief artifacts (`<DATE>_workspace.html`/`<DATE>_report.md`/`_sections.json`) — the primary deliverable per ticker, written by `execution/build_artifacts.py`. | Long-term storage. Reproducible from inputs. |
-| `.tmp/` | Canonical ephemeral state storage. Used for caches, indexes, temporary audio downloads, JSON status dumps, intermediate PDF building blocks, and test scripts. | Ephemeral. Safe to wipe completely. |
-| `execution/` | Isolated, deterministic Python tools that act as Layer 3 executors. No ad-hoc debug scripts. | Source code. Should not be written to programmatically by the pipeline. |
-| `directives/` | Layer 1 Intent definitions and rules. | Immutable baseline, updated only manually. |
-| `micro_thesis/` | Thesis tracker module: `holdings/` (per-ticker JSON KPI specs), `sources/` (per-ticker document drop folders), and periodic tracker notes. | Working data for the micro-thesis tracking module. |
-| `ir_documents/` | Canonical store for IR PDFs and user-intaked transcripts: `ir_documents/<TICKER>/<YYYY-MM-DD>/ir_<doctype>__<sha8>.<ext>`. Populated by `fetch_ir_documents.py` (downloads) and `intake_documents.py` (user drops). | Long-term storage. Gitignored (large binaries). |
-| `ir_documents/_events/` | Non-quarterly IR artifacts (investor days, AGMs, capital markets days, conference decks): `ir_documents/_events/<TICKER>/<event_date>/ir_event__<sha8>.<ext>`. Indexed in `document_index.json` under the `{TICKER}_event_{event_date}_{sha8}` keyspace. | Long-term storage. Gitignored. |
-| `examples/` | Example artifacts and seed data (e.g., `seed_ir_urls.sql`). | Reference material. |
-| `src/` | Core application code: DB, LLM client, parser, brief generator (`src/report/`), DCF subsystem (`src/dcf/`), compute modules (`src/compute/`), pipeline orchestration (`src/pipeline/`), Pydantic schemas (`src/models/`). | Source code. |
-| `tests/` | Pytest suite. | Source code. |
-| `alembic/` | DB migrations for `data/portfolio.db`. | Source code; append-only revisions. |
-| `data/` | Persistent app state: `portfolio.db`, FMP/SEC caches, LLM-output caches, per-ticker research feeds. | Mostly gitignored; DB under alembic. |
-| `dcf/` | Canonical per-ticker DCF workbooks (`<TICKER>.xlsx`, user-edited; system refreshes historicals only). | Deliverable-adjacent working data. |
-| `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers — the authoritative scheduled-task set. | Source of truth for automation. |
-| `evals/` | LLM eval harness: rubrics, goldens, rung configs. | Source code + fixtures. |
-| `docs/` | Design docs, hardening audit reports, guided tour / QA walkthrough. | Reference material. |
-| `templates/industry/` | Industry onboarding templates consumed by `onboard_ticker.py`. | Reference material. |
-| `design-system/`, `.design-sync/` | Extracted design-system package + claude.ai/design sync state. | Source code. |
-| `scripts/` | Repo tooling (e.g. design-token codegen). | Source code. |
-| `scratch/` | Ad-hoc analysis scripts and one-offs, excluded from the changed-file CI gates. Subfolders: `archive/` (completed one-offs, see its README), `plans/` (historical plan docs still cited by code comments), `proposals/` (KPI-seeder YAML flow), `reports/` (one-off deep-dive memos). | Keep root minimal: only still-referenced scripts + the `sweep.py` ops driver; everything done moves to `archive/`. |
+`execution/validate_folder_contract.py` fails when a required root is absent, an
+unregistered tracked root appears, or a forbidden root exists. It ignores ordinary
+tool/runtime directories such as `.git`, `.venv`, and caches.
+
+## Ownership and lifecycle
+
+| Root | Authority and lifecycle |
+|---|---|
+| `src/` | Importable business logic, application services, schemas, and UI masters. |
+| `execution/` | Thin deterministic CLI entry points. No ad-hoc scripts. |
+| `directives/` | Canonical contracts, runbooks, drafts, and history classified by `directive_manifest.json`. |
+| `tests/` | Application tests; may use application fixtures. |
+| `instruction_tests/` | Standalone instruction and hook tests; never imports `tests/conftest.py` or opens the app DB. |
+| `alembic/` | Append-only migrations governing `data/portfolio.db`. |
+| `data/` | Durable local application state and source caches. Preserve unless a specific recovery or deletion workflow authorizes mutation. |
+| `.tmp/` | Resumable intermediates, checkpoints, and disposable task state. Safe to clear only when no active run depends on it. |
+| `.cache/` | Optional reproducible cache with an explicit TTL or invalidation rule. |
+| `output/` | Canonical generated application deliverables, including `output/research/<TICKER>/`. Reproducible unless a directive says otherwise. |
+| `_inbox/` | Optional user drop zone. Successful intake moves content into a canonical source store. |
+| `ir_documents/` | Optional durable issuer-document store, organized by ticker and period/event. |
+| `transcripts/` | Optional raw/processed transcript source store. |
+| `dcf/` | User-editable canonical per-ticker DCF workbooks. |
+| `cron/` | Windows Task Scheduler manifests and wrappers. |
+| `evals/` | LLM evaluation cases, rubrics, and versioned fixtures. |
+| `design-system/`, `.design-sync/` | Design-system source and generated-sync metadata; `.design-sync/` is a registered tooling root. |
+| `scratch/` | Registered compatibility exception for still-referenced one-offs and historical plans. New durable product logic is prohibited here. |
+| `outputs/` | Registered artifact-tool output. It is not the application `output/` destination and must not be read by product code. |
 
 ## Rules
 
-1. **No Sprawl**: Scripts **must not** create intermediate or ad-hoc folders like `transcripts_in`, `cache`, `tmp_tests`, etc. at the project root.
-2. **State Management**: Any intermediate data that needs to persist across pipeline stages (e.g. `transcript_index.json`, status caches, summary text, downloaded audio, tickers cache) must be written exclusively to `.tmp/`.
-3. **Artifact Promotion**: Transcript files move strictly from `raw/` to `processed/` after ingestion. The final assembled brief per ticker goes into `output/research/<TICKER>/`.
-4. **Root Hygiene**: The project root contains only the directories above plus: config/manifest files (`.env`, `.gitignore`, `.gitattributes`, `.pre-commit-config.yaml`, `pyproject.toml`, `requirements.txt`, `Makefile`, `alembic.ini`), the rulebook/guide docs (`README.md`, `HOW_TO_USE_REPORTS.md`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `DEFINITIONS.md`), and the documented `.bat` launchers. No loose scripts, one-off memos, or generated artifacts at root — memos go to `scratch/reports/`, ad-hoc scripts to `scratch/`, test/debug scripts to `.tmp/test_scripts/`.
-5. **Audio Downloads**: Temporary audio files (from yt-dlp) must download to `.tmp/` and be cleaned up after transcription.
+1. Intermediates and debug artifacts go under `.tmp/`, not a new root.
+2. Product deliverables go under `output/` or a directive-declared external destination.
+3. Raw evidence moves only through a typed intake path; do not silently delete it after derivation.
+4. New top-level directories require updating this contract and its validator evidence in the same change.
+5. Root-level scripts and memos are prohibited. Use `execution/`, `scripts/`, `docs/`, or a registered historical location.
+6. A path's lifecycle comes from this contract and the owning directive, not from whether it is currently gitignored or absent.

@@ -54,18 +54,20 @@ def test_panel_renders_entries(tmp_path: Path) -> None:
         body="Asset quality risk",
         db_path=db,
     )
-    append_entry(
-        user_id="bhanu",
-        ticker="MELI",
-        entry_kind="earnings_prep_append",
-        body="Watch take rate",
-        db_path=db,
-    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO thesis_ledger_entries "
+            "(user_id,ticker,entry_kind,body,created_at,accepted_at) "
+            "VALUES ('bhanu','MELI','earnings_prep_append','Watch take rate',"
+            "'2026-08-01','2026-08-01')"
+        )
 
     html = render_thesis_ledger_panel(db, user_id="bhanu")
     assert "Thesis ledger" in html
     assert "Ledger entries" in html
-    assert "NU" in html and "MELI" in html
+    assert "NU" in html
+    assert "MELI" not in html
+    assert "Watch take rate" not in html
     assert "NIM compressed q/q" in html
     assert "Thesis update" in html and "Bear case" in html  # kind labels
 

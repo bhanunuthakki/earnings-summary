@@ -2,8 +2,10 @@
 
 Per directives/data_provenance.md, every row in financial_facts, segment_facts,
 kpi_facts, transcript_segments, and dcf_runs MUST reference a Document via
-source_doc_id. Documents are written once per ingestion (sha256-keyed for
-idempotence) and never mutated; replacements get a new row.
+source_doc_id. Documents are written once per ingestion, use SHA-256 as their
+Content Identity, and are never mutated; a changed source observation gets a new
+row. Logical Idempotency Key and Attempt Identity are owned by the ingest/run contract;
+source metadata supplies the Observation Version.
 """
 
 from __future__ import annotations

@@ -204,7 +204,12 @@ not provenance. Event truth requires immutable raw bytes and a source-observatio
 ## Checkpoint, resume, and lock
 
 Use `.tmp/ir_events/<run_id>/state.json`, atomically replaced after each surface/ticker.
-`run_id` is `ir_events_<Pacific date>_<roster sha12>_<policy sha12>`. Checkpoint hashes,
+The Logical Idempotency Key is
+`ir_events_<Pacific date>_<roster sha12>_<policy sha12>` for a sweep. The roster and
+policy digest is a Content Identity; source publication/observation fields and
+raw-response digests form each Observation Version. `run_id` is the Attempt Identity
+and appends a unique start-time/random suffix to the logical key; it changes on retry.
+Checkpoint hashes,
 completed source keys, cursors, raw paths/hashes, typed candidates, telemetry, and ticker
 status. Resume only within 36 hours with matching hashes; otherwise start a new run.
 Never repeat a completed source key. Output over 100 KB or 2,000 lines goes to the run

@@ -29,7 +29,11 @@ failure mode.
 
 - **Cadence**: first Saturday, 10:00 America/Los_Angeles (clear of the 04:00 pipeline, the 03:00
   monthly prior refresh, and Sun 10:30 eval rungs). Window registered in
-  `llm_quota_scheduling.md`. Idempotency key: `red_team_{YYYY_MM}`.
+  `llm_quota_scheduling.md`.
+- **Identity:** Logical Idempotency Key `red_team_{YYYY_MM}`; Content Identity is
+  the digest of the canonical book snapshot, lens configuration, and generated
+  brief; Observation Version is the month-end/as-of source snapshot; Attempt
+  Identity is the unique governed run and call receipt.
 - **Per-name pass**: one adversarial LLM call per held name with a **rotating lens** —
   `shared_factor`, `fx_translation`, `competitive_encroachment`, `model_vs_market` (fair value
   disagrees with market >2x → attack the model), `behavioral_consistency`, `missed_upside` (PR9 —
@@ -68,7 +72,10 @@ failure mode.
   trajectory; the owner edits and signs. The yearly scorecard is three numbers: Brier trend,
   cut-discipline hit rate, and rule-execution fidelity in drawdowns. Built (PR7): no dedicated
   January cron — invoke by hand each January, `python execution/draft_annual_letter.py --year <YYYY>`
-  (idempotency key `annual_letter_{YYYY}`, defaults to last year); the three scorecard numbers
+  (Logical Idempotency Key `annual_letter_{YYYY}`, defaults to last year; source
+  snapshot/report digests are Content Identities, the selected year and as-of cutoff
+  form the Observation Version, and each invocation has a unique Attempt Identity);
+  the three scorecard numbers
   render wherever Decision P&L renders (`redteam.decision_pnl.build_yearly_scorecard`).
 
 ## Component map (build order)

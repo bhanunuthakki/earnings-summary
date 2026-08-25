@@ -23,7 +23,7 @@ Defined in `src/models/documents.py::SourceType`. Never substring-match. Never s
 
 Every row in every fact table — `financial_facts`, `segment_facts`, `kpi_facts`, `transcript_segments`, `dcf_runs.dcf_inputs`, `metric_facts` — **must** include a non-null `source_doc_id` foreign-keyed to `documents.id`.
 
-Every row in `documents` must have `(source_type, doc_type, file_path, sha256, fetched_at, fetch_status)` populated. `sha256` is computed from raw bytes and is the idempotence key for that file: re-ingesting the same bytes is a no-op; different bytes for the same `(ticker, source_type, doc_type, period_end)` writes a new `documents` row and supersedes the previous (we never mutate, we add).
+Every row in `documents` must have `(source_type, doc_type, file_path, sha256, fetched_at, fetch_status)` populated. `sha256` is the Content Identity of the raw bytes: re-ingesting the same bytes is a no-op; different bytes for the same logical source slot create a new Observation Version and supersede the previous row (we never mutate, we add). Source-specific Logical Idempotency Keys below identify the source slot; Attempt Identity belongs to the run ledger, not the document.
 
 LLM-extracted documents must carry `parent_document_id` pointing at the primary document the LLM read from.
 
@@ -67,13 +67,13 @@ Manual override always wins over automated sources, but it must include a reason
 - `doc_type` is one of the `FMP_*` values in `DocType`. Files land in `data/historical/fmp/` named `{TICKER}_{endpoint_slug}.json`.
 - Currency from `reportedCurrency` field; halt if absent.
 - Period from `date` or `fillingDate`; halt if absent or malformed.
-- Idempotence key: `(ticker, doc_type, period_end)`.
+- Logical Idempotency Key: `(ticker, doc_type, period_end)`; payload SHA-256 is its Content Identity and a changed payload is a new Observation Version.
 - ETF tickers route to `ETF_*` doc types only — never `FMP_INCOME_STATEMENT` etc.
 
 ### `sec_xbrl`
 - `doc_type` ∈ `{SEC_10K, SEC_10Q, SEC_20F, SEC_40F, SEC_8K, SEC_6K}`. Files land in `data/historical/sec/{TICKER}/{accession_number}/`.
 - Currency from XBRL context; halt if absent.
-- Idempotence key: SEC accession number.
+- Logical Idempotency Key and source Observation Version: SEC accession number; payload SHA-256 remains the Content Identity.
 - Filing regime branches by `companies.filing_regime`: 10-K/10-Q for US issuers, 20-F/6-K for foreign private issuers, 40-F for Canadian issuers.
 
 ### `sec_s1`
@@ -87,7 +87,7 @@ Manual override always wins over automated sources, but it must include a reason
 - `source_url` **required** in `documents.source_url`. Two flavors:
   - Auto-fetch (URL manifest → download): the original IR-page PDF URL.
   - Manual upload (`categorize_ir_uploads.py`): `manual_upload:{original-filename}`, where the original filename is the basename the user dropped in `ir_documents/` before triage. Preserves the user-visible identity for audit.
-- Idempotence key: `sha256` (UNIQUE in `documents`). Re-uploading identical bytes is a no-op; modified bytes for the same `(ticker, doc_type, period_end)` write a new row and supersede the previous one — never mutate.
+- Logical Idempotency Key: `(ticker, doc_type, period_end, source_url)` when known. SHA-256 is the UNIQUE Content Identity: re-uploading identical bytes is a no-op; modified bytes for the same logical slot write a new Observation Version and supersede the previous one — never mutate.
 - Manual uploads where ticker, doc_type, **and** period_end cannot all be determined from filename + first-page fingerprint are quarantined to `ir_documents/_unsorted/` with a `.error.json` sidecar. They are **not** registered in `documents` and **not** silently merged with any existing row — the user must repair (rename the file, extend the issuer registry, or delete the upload) and re-run.
 - The IR step is **optional**: tickers with no `ir_doc` rows in `documents` proceed through the rest of the pipeline (FMP, SEC, transcripts) without any IR-derived facts. Downstream consumers must `LEFT JOIN` against `ir_doc` rows, never `INNER JOIN`.
 
@@ -99,7 +99,7 @@ Manual override always wins over automated sources, but it must include a reason
 - Whisper transcription writes a new `documents` row with `source_type=transcript_audio` and `parent_document_id` = the audio document.
 
 ### `manual_*`
-- Idempotence key: `(ticker, doc_type, period_end, user_id, submitted_at)`.
+- Logical Idempotency Key: `(ticker, doc_type, period_end, user_id, submitted_at)`; the submission's bytes are its Content Identity.
 - Reason string required and stored in `documents.source_url` as `manual:{reason}`.
 
 ### `llm_extracted`

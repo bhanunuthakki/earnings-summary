@@ -1140,15 +1140,15 @@ def _seed_prep_ticker(db_path: Path, ticker: str = "NU") -> None:
 
 def test_earnings_prep_peek_assembles_grounded_memo(repo: Path, db_path: Path) -> None:
     from pipeline.peeks import render_earnings_prep_peek
-    from user_state.ledger import append_entry
     from user_state.notes import create_note
 
     _seed_prep_ticker(db_path)
     create_note(ticker="NU", kind="watch", body="Watch the NIM print.", db_path=db_path)
-    append_entry(
+    create_note(
         ticker="NU",
-        entry_kind="earnings_prep_append",
+        kind="question",
         body="Re-check Grasberg-style ramp confidence.",
+        source="alert",
         db_path=db_path,
     )
 
@@ -1157,8 +1157,8 @@ def test_earnings_prep_peek_assembles_grounded_memo(repo: Path, db_path: Path) -
     # The owner's open watch item, as an Ask doorway.
     assert "What you said to watch" in html
     assert 'data-ask-q="Watch the NIM print. (NU)"' in html
-    # Prior-quarter prep note from the ledger.
-    assert "Queued from prior signals" in html
+    # Alert-derived follow-up is consolidated into the same open-question list.
+    assert "Queued from prior signals" not in html
     assert "Re-check Grasberg-style ramp confidence." in html
     # Valuation stance with the DCF gap.
     assert "Valuation stance" in html
@@ -1417,15 +1417,15 @@ def _seed_readout_ticker(
 
 def test_earnings_readout_peek_assembles_grounded_readout(repo: Path, db_path: Path) -> None:
     from pipeline.peeks import render_earnings_readout_peek
-    from user_state.ledger import append_entry
     from user_state.notes import create_note
 
     _seed_readout_ticker(db_path)
     create_note(ticker="NU", kind="watch", body="Watch the NIM print.", db_path=db_path)
-    append_entry(
+    create_note(
         ticker="NU",
-        entry_kind="earnings_prep_append",
+        kind="question",
         body="Re-check Mexico deposit ramp.",
+        source="alert",
         db_path=db_path,
     )
 
@@ -1441,8 +1441,8 @@ def test_earnings_readout_peek_assembles_grounded_readout(repo: Path, db_path: P
     # The owner's open watch item, reframed as the post-ER question.
     assert "did they answer it?" in html
     assert 'data-ask-q="Watch the NIM print. (NU)"' in html
-    # Last quarter's queued prep note, reframed for this call.
-    assert "Queued for this call last quarter" in html
+    # Alert-derived follow-up shares the lifecycle-aware open-question section.
+    assert "Queued for this call last quarter" not in html
     assert "Re-check Mexico deposit ramp." in html
     # Valuation stance reused verbatim.
     assert "Valuation stance" in html

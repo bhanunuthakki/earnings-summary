@@ -91,7 +91,15 @@ The `--skip-commitments` flag suppresses the extraction stage globally
 (useful for runs where LLM auth is unavailable or you want to keep
 runtime predictable).
 
-## Idempotency
+## Identity and repeat safety
+
+- **Logical Idempotency Key:** `(ticker, pending_reason, required_stage_set)` at the
+  current required Observation Version.
+- **Content Identity:** digests of the fetched source documents, holdings input, and
+  generated DCF/artifact bytes used by each stage.
+- **Observation Version:** current tracked-company state plus the source filing,
+  transcript, facts, and configuration revisions that caused the ticker to be pending.
+- **Attempt Identity:** the report's `run_id`; retries always receive a distinct value.
 
 - `save_fmp_data --skip-existing` (called by `onboard_ticker.py`) is a no-op
   on already-fetched endpoints.
@@ -156,7 +164,7 @@ two together make "has FMP started covering this IPO yet?" answerable from
 
 ## Output
 
-- stdout: a JSON `RunReport` containing `run_id`, per-ticker stage outcomes,
+- stdout: a JSON `RunReport` containing `run_id` (the Attempt Identity), per-ticker stage outcomes,
   log file path. Designed for downstream parsing.
 - stderr: structured logs via Python `logging` (one line per ticker).
 - Per-run log: `.tmp/cron_logs/onboard_pending_<UTC>.log` with the full
