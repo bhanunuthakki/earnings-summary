@@ -360,7 +360,23 @@ def test_company_desk_say_do_normalizes_known_outcomes_and_keeps_older_quarters(
         "comparator TEXT, target_value REAL, unit TEXT, narrative TEXT, realized_value REAL, "
         "outcome TEXT, evaluated_at TEXT)"
     )
-    rows = []
+    rows: list[
+        tuple[
+            int,
+            str,
+            str,
+            str,
+            int,
+            str,
+            str,
+            float,
+            str,
+            str,
+            float | None,
+            str,
+            str | None,
+        ]
+    ] = []
     for index in range(100):
         rows.append(
             (

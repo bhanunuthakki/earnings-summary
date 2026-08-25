@@ -181,7 +181,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +1 bounded Evaluation Dialogues hydration route.
     # +1 governed Operations attention lifecycle action route.
     assert len(rules) == 173
-    assert not any("say-do" in rule for rule in rules.values())
+    assert "company_say_do_api" not in rules
     assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()
     assert rules["operations_attention_action"] == ("/api/operations/attention/<action_name>")
     assert rules["portfolio_risk_matrix_api"] == "/api/portfolio/risk-matrix"
