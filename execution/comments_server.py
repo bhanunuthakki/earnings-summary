@@ -203,8 +203,12 @@ from pipeline.ticker_command_center import (  # noqa: E402
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 from pipeline.work_os_earnings import load_latest_earnings_readouts  # noqa: E402
+from pipeline.work_os_evaluation import build_work_os_evaluation  # noqa: E402
 from pipeline.work_os_overview import render_overview_panel  # noqa: E402
-from pipeline.work_os_portfolio import build_work_os_portfolio  # noqa: E402
+from pipeline.work_os_portfolio import (  # noqa: E402
+    build_work_os_portfolio,
+    build_work_os_portfolio_research_links,
+)
 from pipeline.work_os_shell import render_work_os_shell  # noqa: E402
 from portfolio_risk_snapshot_store import read_latest_snapshot  # noqa: E402
 from readme_updater import evidence_sha256  # noqa: E402
@@ -1816,12 +1820,23 @@ def create_app(
             live,
             fetch_portfolio_allocation(),
             latest_readouts=readout_projection.readouts,
+            research_links=build_work_os_portfolio_research_links(rows, repo_root, conn),
             readout_warnings=readout_projection.warnings,
             offline_snapshot=(
                 read_configured_offline_portfolio_snapshot() if not live.available else None
             ),
             risk_snapshot=read_latest_snapshot(db_path=db_path),
         )
+        response = app.json.response(payload.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/work-os/evaluation", methods=["GET"])
+    def work_os_evaluation_api():
+        """Complete company and ETF evaluation coverage for the Research Engine."""
+        conn = get_read_db()
+        rows = build_cockpit_rows(conn, repo_root).get("evaluation", [])
+        payload = build_work_os_evaluation(rows, repo_root, conn)
         response = app.json.response(payload.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response

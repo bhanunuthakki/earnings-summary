@@ -60,6 +60,7 @@ ROUTE_SCREEN_IDS: dict[str, str] = {
     "cockpit": "screen-cockpit",
     "performance": "screen-performance",
     "company-desk": "screen-workspace",
+    "evaluation": "screen-evaluation",
     "brief-library": "screen-brief-library",
     "fact-metric-playground": "screen-analytics-playground",
     "decision-audit": "screen-audit-log",
@@ -258,6 +259,54 @@ def _canary_shell_payloads() -> dict[str, object]:
                 }
             ],
         },
+        "evaluation": {
+            "schema_version": "evaluation_surface.v1",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "count": 2,
+            "items": [
+                {
+                    "ticker": "TOST",
+                    "name": "Canary Evaluation Company",
+                    "instrument_type": "company",
+                    "score": 1.2,
+                    "score_why": "Attractive valuation with durable growth",
+                    "score_partial": False,
+                    "fit": 1.05,
+                    "fit_why": "Adds differentiated consumer exposure",
+                    "fit_partial": False,
+                    "sharpe_delta_bps": 12.0,
+                    "held_weight_pct": None,
+                    "dcf_upside_pct": 20.0,
+                    "thesis_excerpt": "Canary thesis copy remains readable and bounded.",
+                    "source": "micro_thesis",
+                    "company_desk_url": "/ticker/TOST",
+                    "workup_url": None,
+                    "dcf_url": "/dcf/TOST",
+                    "report_url": "/reports/TOST?artifact_id=design-canary",
+                },
+                {
+                    "ticker": "VDE",
+                    "name": "Canary Energy ETF",
+                    "instrument_type": "etf",
+                    "score": 0.9,
+                    "score_why": "Fund-appropriate evaluation factors",
+                    "score_partial": True,
+                    "fit": 1.1,
+                    "fit_why": "Diversifies the modeled book",
+                    "fit_partial": False,
+                    "sharpe_delta_bps": 8.0,
+                    "held_weight_pct": 2.5,
+                    "dcf_upside_pct": None,
+                    "thesis_excerpt": "Broad energy exposure under evaluation.",
+                    "source": "position_entry",
+                    "company_desk_url": None,
+                    "workup_url": "/api/peek/etf_workup?ticker=VDE",
+                    "dcf_url": None,
+                    "report_url": None,
+                },
+            ],
+            "warnings": [],
+        },
         "briefs": {"items": [brief]},
         "desk": {
             "company": company,
@@ -281,6 +330,7 @@ def _canary_shell_loader() -> str:
         "window.fetch=(input,init)=>{const url=String(input);"
         "if(url==='/api/work-os/portfolio')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.portfolio),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url==='/api/work-os/evaluation-dialogues?limit=3')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.evaluation_dialogues),{status:200,headers:{'Content-Type':'application/json'}}));"
+        "if(url==='/api/work-os/evaluation')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.evaluation),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url==='/api/tickers')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.tickers),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url.startsWith('/api/work-os/briefs?'))return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.briefs),{status:200,headers:{'Content-Type':'application/json'}}));"
         "if(url==='/api/work-os/companies/NU/desk')return Promise.resolve(new Response(JSON.stringify(designCanaryShellPayloads.desk),{status:200,headers:{'Content-Type':'application/json'}}));"

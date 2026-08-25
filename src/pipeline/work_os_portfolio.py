@@ -9,13 +9,16 @@ leaks transport errors into the page.
 from __future__ import annotations
 
 import re
+import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dcf.availability import resolve_dcf_route_artifact
 from integrations.portfolio_allocation import (
     PortfolioAllocationProjection,
     unavailable_portfolio_allocation,
@@ -23,6 +26,7 @@ from integrations.portfolio_allocation import (
 from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.research_cockpit import CockpitRow, PendingAlertRef
+from pipeline.work_os_briefs import build_brief_library
 from pipeline.work_os_earnings import EarningsReadoutSummary
 from portfolio_risk_snapshot_store import RiskSnapshot
 
@@ -49,6 +53,7 @@ class WorkOsPortfolioCompany(BaseModel):
     next_earnings: str | None = None
     research_refreshed_at: str | None = None
     report_url: str | None = None
+    dcf_url: str | None = None
     earnings_route: str | None = None
     earnings_label: str | None = None
     latest_earnings_readout: EarningsReadoutSummary | None = None
@@ -74,6 +79,15 @@ class WorkOsPortfolioAction(BaseModel):
     lifecycle_state: Literal["pending"] | None = None
     source_ref: str | None = None
     evidence_ref: str | None = None
+
+
+class WorkOsPortfolioResearchLinks(BaseModel):
+    """Artifact-verified research doorways for one portfolio company."""
+
+    model_config = ConfigDict(frozen=True)
+
+    report_url: str | None = None
+    dcf_url: str | None = None
 
 
 class WorkOsAssetClassSplit(BaseModel):
@@ -188,6 +202,7 @@ def _company(
     row: CockpitRow,
     live_position: LivePosition | None,
     latest_earnings_readout: EarningsReadoutSummary | None,
+    research_links: WorkOsPortfolioResearchLinks | None,
 ) -> WorkOsPortfolioCompany:
     ticker = row.base.ticker.strip().upper()
     if latest_earnings_readout is not None:
@@ -221,7 +236,8 @@ def _company(
         new_documents=row.new_docs,
         next_earnings=row.next_earnings,
         research_refreshed_at=row.base.last_build_at or row.base.fmp_last_pulled,
-        report_url=f"/reports/{ticker}" if row.base.last_build_at else None,
+        report_url=research_links.report_url if research_links is not None else None,
+        dcf_url=research_links.dcf_url if research_links is not None else None,
         earnings_route=earnings_route,
         earnings_label=earnings_label,
         latest_earnings_readout=latest_earnings_readout,
@@ -307,6 +323,7 @@ def build_work_os_portfolio(
     allocation: PortfolioAllocationProjection,
     *,
     latest_readouts: Mapping[str, EarningsReadoutSummary] | None = None,
+    research_links: Mapping[str, WorkOsPortfolioResearchLinks] | None = None,
     readout_warnings: Sequence[str] = (),
     offline_snapshot: OfflinePortfolioSnapshot | None = None,
     risk_snapshot: RiskSnapshot | None = None,
@@ -321,11 +338,13 @@ def build_work_os_portfolio(
     )
     positions = _live_by_ticker(portfolio_source)
     readouts = latest_readouts or {}
+    verified_links = research_links or {}
     companies = [
         _company(
             row,
             positions.get(row.base.ticker.strip().upper()),
             readouts.get(row.base.ticker.strip().upper()),
+            verified_links.get(row.base.ticker.strip().upper()),
         )
         for row in rows
     ]
@@ -355,6 +374,7 @@ def build_work_os_portfolio(
         tracker_warnings,
         allocation_warnings,
     )
+
     tracker_state: Literal["current", "stale", "partial", "unavailable", "offline_snapshot"]
     if snapshot_active:
         tracker_state = "offline_snapshot"
@@ -417,3 +437,44 @@ def build_work_os_portfolio(
         asset_class_split=asset_class_split,
         risk_metric_summary=_risk_metric_summary(risk_snapshot),
     )
+
+
+def build_work_os_portfolio_research_links(
+    rows: Sequence[CockpitRow],
+    repo_root: Path,
+    conn: sqlite3.Connection,
+) -> dict[str, WorkOsPortfolioResearchLinks]:
+    """Resolve only concrete brief and DCF artifacts for portfolio rows."""
+
+    try:
+        library = build_brief_library(
+            repo_root,
+            conn=conn,
+            coverage_role="portfolio",
+            limit=10_000,
+        )
+        report_urls = {
+            item.ticker.strip().upper(): item.standalone_url
+            for item in library.items
+            if item.coverage_role == "portfolio" and item.standalone_url
+        }
+    except (OSError, ValueError, sqlite3.Error):
+        report_urls = {}
+
+    links: dict[str, WorkOsPortfolioResearchLinks] = {}
+    for row in rows:
+        ticker = row.base.ticker.strip().upper()
+        dcf_url = None
+        if not row.is_etf:
+            try:
+                if resolve_dcf_route_artifact(repo_root, ticker) is not None:
+                    dcf_url = f"/dcf/{ticker}"
+            except (OSError, TypeError, ValueError):
+                dcf_url = None
+        report_url = report_urls.get(ticker)
+        if report_url or dcf_url:
+            links[ticker] = WorkOsPortfolioResearchLinks(
+                report_url=report_url,
+                dcf_url=dcf_url,
+            )
+    return links

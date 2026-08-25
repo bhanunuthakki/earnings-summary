@@ -260,6 +260,18 @@ def test_guarded_persistent_routes_exactly_match_the_production_screen_registry(
     assert guarded == {screen.screen_id for screen in SCREEN_SPECS}
 
 
+def test_every_route_canary_has_a_role_contract() -> None:
+    assert set(design_conformance._ROUTE_CANARY_ROLE_CONTRACTS) == set(  # pyright: ignore[reportPrivateUsage]
+        ROUTE_SCREEN_IDS
+    )
+
+
+def test_every_persistent_route_canary_has_a_production_settle_selector() -> None:
+    settled = design_conformance._ROUTE_CANARY_SETTLED_SELECTORS  # pyright: ignore[reportPrivateUsage]
+    assert set(settled) == set(ROUTE_SCREEN_IDS) - {"full-brief"}
+    assert settled["evaluation"] == "#workOsEvaluationRows [data-work-os-evaluation-row]"
+
+
 def test_performance_canary_contains_deterministic_index_benchmarking_without_driver_grid() -> None:
     from execution.design_route_canaries import canary_portfolio_fragment
 

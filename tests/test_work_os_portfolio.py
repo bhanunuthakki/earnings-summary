@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 
 import pytest
 
+import pipeline.work_os_portfolio as portfolio
+from dcf.availability import DcfRouteArtifact
 from integrations.portfolio_allocation import (
     PortfolioAllocationBucket,
     PortfolioAllocationBuckets,
@@ -22,7 +26,11 @@ from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
 from pipeline.dashboard_status import DashboardRow, TranscriptStatus
 from pipeline.research_cockpit import CockpitRow, PendingAlertRef
 from pipeline.work_os_earnings import EarningsReadoutSummary
-from pipeline.work_os_portfolio import build_work_os_portfolio
+from pipeline.work_os_portfolio import (
+    WorkOsPortfolioResearchLinks,
+    build_work_os_portfolio,
+    build_work_os_portfolio_research_links,
+)
 from portfolio_risk_snapshot_store import RiskSnapshot
 
 
@@ -115,6 +123,12 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
                 route="/api/peek/earnings-readout?ticker=NU&artifact_id=44",
             )
         },
+        research_links={
+            "NU": WorkOsPortfolioResearchLinks(
+                report_url="/reports/NU?artifact_id=verified",
+                dcf_url="/dcf/NU",
+            )
+        },
         generated_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
     )
 
@@ -128,7 +142,8 @@ def test_portfolio_hydration_keeps_only_research_portfolio_companies() -> None:
     assert company.name == "Nu Holdings"
     assert company.current_weight_pct == 12.5
     assert company.market_value == 125_000.0
-    assert company.report_url == "/reports/NU"
+    assert company.report_url == "/reports/NU?artifact_id=verified"
+    assert company.dcf_url == "/dcf/NU"
     assert company.latest_earnings_readout is not None
     assert company.latest_earnings_readout.period_label == "Q2 · Jun 2026"
     assert company.earnings_route == "/api/peek/earnings-readout?ticker=NU&artifact_id=44"
@@ -181,6 +196,45 @@ def test_portfolio_hydration_marks_missing_risk_snapshot_unavailable() -> None:
     assert risk.source == "portfolio_risk_snapshot"
     assert risk.portfolio_beta is None
     assert risk.sharpe_ratio is None
+    assert payload.companies[0].report_url is None
+    assert payload.companies[0].dcf_url is None
+
+
+def test_portfolio_research_links_require_concrete_report_and_dcf_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+
+    def brief_builder(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    ticker="NU",
+                    coverage_role="portfolio",
+                    standalone_url="/reports/NU?artifact_id=verified",
+                )
+            ]
+        )
+
+    def resolve_dcf(_repo_root: Path, ticker: str) -> DcfRouteArtifact | None:
+        return DcfRouteArtifact(kind="workbook", target="NU.xlsx") if ticker == "NU" else None
+
+    monkeypatch.setattr(portfolio, "build_brief_library", brief_builder)
+    monkeypatch.setattr(portfolio, "resolve_dcf_route_artifact", resolve_dcf)
+
+    links = build_work_os_portfolio_research_links(
+        [_row("NU", name="Nu Holdings"), _row("MELI", name="MercadoLibre")],
+        tmp_path,
+        conn,
+    )
+
+    assert links == {
+        "NU": WorkOsPortfolioResearchLinks(
+            report_url="/reports/NU?artifact_id=verified",
+            dcf_url="/dcf/NU",
+        )
+    }
 
 
 def test_portfolio_hydration_surfaces_readout_projection_failure() -> None:
