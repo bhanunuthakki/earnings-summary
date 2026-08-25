@@ -283,6 +283,8 @@ def test_company_desk_projects_canonical_say_do_for_latest_four_statement_quarte
 
 
 def test_company_desk_dcf_url_requires_a_route_artifact(work_os_app_repo: Path) -> None:
+    (work_os_app_repo / "dcf").mkdir()
+    (work_os_app_repo / "dcf" / "NU.xlsx").write_bytes(b"fixture")
     conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
     conn.row_factory = sqlite3.Row
     conn.execute(
@@ -290,18 +292,61 @@ def test_company_desk_dcf_url_requires_a_route_artifact(work_os_app_repo: Path) 
         "npv_per_share REAL, live_price REAL, currency TEXT, live_price_at TEXT, "
         "valuation_date TEXT)"
     )
+    conn.commit()
+    artifact_without_run = build_company_desk(work_os_app_repo, conn, "NU")
+    assert artifact_without_run.position.dcf_url is None
     conn.execute(
         "INSERT INTO dcf_runs VALUES (1, 'NU', '2026-08-20T00:00:00Z', 22.0, 14.0, 'USD', "
         "'2026-08-20', '2026-08-20')"
     )
     conn.commit()
-    desk_without_artifact = build_company_desk(work_os_app_repo, conn, "NU")
-    assert desk_without_artifact.position.dcf_url is None
-    (work_os_app_repo / "dcf").mkdir()
-    (work_os_app_repo / "dcf" / "NU.xlsx").write_bytes(b"fixture")
     desk_with_artifact = build_company_desk(work_os_app_repo, conn, "NU")
+    (work_os_app_repo / "dcf" / "NU.xlsx").unlink()
+    run_without_artifact = build_company_desk(work_os_app_repo, conn, "NU")
     conn.close()
     assert desk_with_artifact.position.dcf_url == "/dcf/NU"
+    assert run_without_artifact.position.dcf_url is None
+
+
+def test_company_desk_say_do_uses_highest_id_not_latest_day(
+    work_os_app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE management_commitments (id INTEGER PRIMARY KEY, ticker TEXT, "
+        "period_made TEXT, period_target TEXT, transcript_segment_id INTEGER, kpi_name TEXT, "
+        "comparator TEXT, target_value REAL, unit TEXT, narrative TEXT, realized_value REAL, "
+        "outcome TEXT, evaluated_at TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO management_commitments VALUES (?, 'NU', ?, '2026-06-30', ?, 'KPI', '<=', 5.0, 'percent', ?, 4.0, 'met', '2026-07-01')",
+        [(10, "2026-03-31", 10, "older id"), (11, "2026-03-01", 11, "newer id")],
+    )
+    conn.commit()
+    desk = build_company_desk(work_os_app_repo, conn, "NU")
+    conn.close()
+    assert [item.id for item in desk.say_do.commitments] == [11]
+
+
+def test_company_desk_say_do_rejects_malformed_identifiers(
+    work_os_app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE management_commitments (id TEXT, ticker TEXT, period_made TEXT, "
+        "period_target TEXT, transcript_segment_id TEXT, kpi_name TEXT, comparator TEXT, "
+        "target_value REAL, unit TEXT, narrative TEXT, realized_value REAL, outcome TEXT, evaluated_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO management_commitments VALUES ('bad', 'NU', '2026-03-31', '2026-06-30', '105', 'KPI', '<=', 5.0, 'percent', 'bad', 4.0, 'met', '2026-07-01')"
+    )
+    conn.commit()
+    desk = build_company_desk(work_os_app_repo, conn, "NU")
+    conn.close()
+    assert desk.say_do.status == "unavailable"
+    assert desk.say_do.unavailable_reason == "malformed_row"
 
 
 def test_company_desk_say_do_normalizes_known_outcomes_and_keeps_older_quarters(
@@ -323,7 +368,7 @@ def test_company_desk_say_do_normalizes_known_outcomes_and_keeps_older_quarters(
                 "NU",
                 "2026-03-31",
                 "2026-06-30",
-                index,
+                    index + 100,
                 "KPI",
                 "<=",
                 5.0,

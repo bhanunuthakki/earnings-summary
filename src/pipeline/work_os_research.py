@@ -89,7 +89,7 @@ def render_company_desk_shell() -> str:
         <div><div class="stat-heading">Current action</div><div class="stat-number" id="deskOwnerState">Unavailable</div><div class="stat-subtext" id="deskOwnerRevision">No owner decision recorded</div></div>
         <div><div class="stat-heading">Thesis status</div><div class="k-pill k-pill-warn" id="deskThesisStatus">Unavailable</div><div class="stat-subtext" id="deskThesisAsOf">No current evaluated thesis state</div></div>
       </div>
-      <div class="company-desk-tracking-grid" id="deskTrackingBands" aria-label="Buy, add, hold, trim and sell price bands">
+      <div class="company-desk-tracking-grid" id="deskTrackingBands" aria-label="Buy, add, hold and trim price bands">
         <div class="k-well" role="status">Governed price bands are loading.</div>
       </div>
     </article>

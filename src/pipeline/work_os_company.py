@@ -500,7 +500,11 @@ def _position_snapshot(
         source="latest_governed_dcf_run" if dcf is not None else None,
         price_as_of=dcf.live_price_at if dcf is not None else None,
         fair_value_as_of=dcf.valuation_date if dcf is not None else None,
-        dcf_url=(f"/dcf/{ticker}" if resolve_dcf_route_artifact(repo_root, ticker) else None),
+        dcf_url=(
+            f"/dcf/{ticker}"
+            if dcf is not None and resolve_dcf_route_artifact(repo_root, ticker)
+            else None
+        ),
     )
 
 
@@ -589,9 +593,13 @@ def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjec
     except sqlite3.Error:
         return DeskSayDoProjection(status="unavailable", unavailable_reason="query_failed")
 
-    parsed_rows: list[tuple[sqlite3.Row, datetime, datetime, datetime | None, str]] = []
+    parsed_rows: list[tuple[int, int, sqlite3.Row, datetime, datetime, datetime | None, str]] = []
     for row in rows:
         try:
+            commitment_id = int(row["id"])
+            transcript_segment_id = int(row["transcript_segment_id"])
+            if commitment_id <= 0 or transcript_segment_id <= 0:
+                raise ValueError("identifiers must be positive")
             period_made = _parse_say_do_date(row["period_made"])
             period_target = _parse_say_do_date(row["period_target"])
             evaluated_at = (
@@ -607,18 +615,33 @@ def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjec
         except (TypeError, ValueError, OverflowError):
             return DeskSayDoProjection(status="unavailable", unavailable_reason="malformed_row")
         parsed_rows.append(
-            (row, period_made, period_target, evaluated_at, period_made.strftime("%Y-%m"))
+            (
+                commitment_id,
+                transcript_segment_id,
+                row,
+                period_made,
+                period_target,
+                evaluated_at,
+                period_made.strftime("%Y-%m"),
+            )
         )
 
-    quarters: list[str] = []
+    representatives: dict[
+        str, tuple[int, int, sqlite3.Row, datetime, datetime, datetime | None, str]
+    ] = {}
+    for parsed in parsed_rows:
+        quarter = parsed[-1]
+        current = representatives.get(quarter)
+        if current is None or parsed[0] > current[0]:
+            representatives[quarter] = parsed
+
+    quarters = sorted(representatives, reverse=True)[:4]
     commitments: list[DeskSayDoCommitment] = []
     as_of: str | None = None
-    for row, period_made_dt, period_target_dt, evaluated_at_dt, quarter in parsed_rows:
-        if quarter in quarters:
-            continue
-        if len(quarters) == 4:
-            break
-        quarters.append(quarter)
+    for quarter in quarters:
+        _, transcript_segment_id, row, period_made_dt, period_target_dt, evaluated_at_dt, _ = (
+            representatives[quarter]
+        )
         period_made = period_made_dt.date().isoformat()
         period_target = period_target_dt.date().isoformat()
         evaluated_at = evaluated_at_dt.date().isoformat() if evaluated_at_dt else None
@@ -643,7 +666,7 @@ def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjec
                 ),
                 outcome=outcome,
                 evaluated_at=evaluated_at,
-                source_ref=f"transcript_segment:{int(row['transcript_segment_id'])}",
+                source_ref=f"transcript_segment:{transcript_segment_id}",
             )
         )
     return DeskSayDoProjection(

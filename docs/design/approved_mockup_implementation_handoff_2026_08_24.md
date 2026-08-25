@@ -90,7 +90,7 @@ The existing `company_desk.v1` response remains backward compatible and gains:
 
 | Field | Type / units | Source | Empty or error behavior |
 |---|---|---|---|
-| `position.dcf_url` | relative route or null | Presence of latest governed DCF run | Disabled, non-focusable DCF doorway when null |
+| `position.dcf_url` | relative route or null | Presence of a latest governed DCF run and a resolvable sheet/workbook/date fallback artifact | Disabled, non-focusable DCF doorway when either source is absent |
 | `price_action_bands` | typed `PriceActionBandProjection` | Latest exact-ticker sizing intent and ratified checkpoint payload | “Not encoded” and reason text; never decode or print opaque payloads |
 | `say_do.status` | available/unavailable | `management_commitments` table | Explicit missing-source/schema/query state |
 | `say_do.quarters[]` | latest four distinct `period_made` year-months | canonical commitment rows | Empty available history is distinct from unavailable source |
