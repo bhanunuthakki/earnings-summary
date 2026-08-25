@@ -51,8 +51,15 @@ treat as context, not open work.
 
 - Layer-1 baselines (immutable without owner sign-off): [`data_pipeline_dag.md`](data_pipeline_dag.md),
   [`data_provenance.md`](data_provenance.md), [`per_ticker_enhancements.md`](per_ticker_enhancements.md).
-- UI / output contracts: [`design_language.md`](design_language.md) (canonical v3),
-  [`report_comments_and_chat.md`](report_comments_and_chat.md), [`navigation_ia.md`](navigation_ia.md).
+- UI / output authority:
+
+  | Concern | Current owner | Status |
+  |---|---|---|
+  | visual roles, controls, recipes, and verification | [`design_language.md`](design_language.md) | canonical |
+  | interaction laws and executable interaction boundaries | [`interaction_contract.md`](interaction_contract.md) | living |
+  | report comments and Work OS Copilot behavior | [`report_comments_and_chat.md`](report_comments_and_chat.md) | living |
+  | navigation IA proposal | [`navigation_ia.md`](navigation_ia.md) | draft evidence only; non-governing until owner sign-off |
+  | semantic design review cadence and ignored report output | [`design_conformance_audit.md`](design_conformance_audit.md) | runbook; explicit request or already registered schedule |
 - Operating governance: [`operations_governance_surface.md`](operations_governance_surface.md)
   (any change to an operation / operator action must follow this), [`operating_ritual.md`](operating_ritual.md).
 - LLM mechanics & governance: [`llm_calls.md`](llm_calls.md), [`llm_evals_plan.md`](llm_evals_plan.md),
