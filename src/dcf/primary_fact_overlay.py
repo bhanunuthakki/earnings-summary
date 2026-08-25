@@ -263,24 +263,41 @@ def _load_candidates(
     mappings: Sequence[FieldMapping],
 ) -> list[_FactCandidate]:
     fact_relation = canonical_fact_relation(conn, "financial_facts").sql
-    placeholders = ", ".join("?" for _ in mappings)
-    rows = conn.execute(
-        f"""
+    if fact_relation == "v_financial_facts_resolved_current":
+        query = """
         SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
                fact.value, fact.currency, fact.unit, fact.source_doc_id,
                fact.locator, document.source_quality_tier, document.source_url,
                document.fetched_at, document.source_type
-        FROM {fact_relation} AS fact
+        FROM v_financial_facts_resolved_current AS fact
         LEFT JOIN documents AS document
           ON document.id = fact.source_doc_id
          AND UPPER(document.ticker) = UPPER(fact.ticker)
         WHERE UPPER(fact.ticker) = UPPER(?)
-          AND fact.line_item IN ({placeholders})
         ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
-        """,
-        (ticker, *(mapping.line_item for mapping in mappings)),
+        """
+    elif fact_relation == "financial_facts":
+        query = """
+        SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
+               fact.value, fact.currency, fact.unit, fact.source_doc_id,
+               fact.locator, document.source_quality_tier, document.source_url,
+               document.fetched_at, document.source_type
+        FROM financial_facts AS fact
+        LEFT JOIN documents AS document
+          ON document.id = fact.source_doc_id
+         AND UPPER(document.ticker) = UPPER(fact.ticker)
+        WHERE UPPER(fact.ticker) = UPPER(?)
+        ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
+        """
+    else:
+        raise RuntimeError(f"unsupported canonical financial-fact relation: {fact_relation}")
+    rows = conn.execute(
+        query,
+        (ticker,),
     ).fetchall()
-    return [_candidate_from_row(row) for row in rows]
+    requested_line_items = {mapping.line_item for mapping in mappings}
+    candidates = [_candidate_from_row(row) for row in rows]
+    return [candidate for candidate in candidates if candidate.line_item in requested_line_items]
 
 
 def _candidate_from_row(row: sqlite3.Row | tuple[object, ...]) -> _FactCandidate:
