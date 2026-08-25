@@ -319,7 +319,7 @@ def _render_evaluation_shell() -> str:
   <section class="k-card k-card-section work-os-section" aria-label="Evaluation coverage list">
     <header class="k-section-head">
       <div>
-        <div class="k-section-title" role="heading" aria-level="2">Coverage</div>
+        <div class="k-section-title k-card-title" role="heading" aria-level="2">Coverage</div>
         <div class="k-section-meta">Human-readable thesis, scores, portfolio fit, valuation, and verified research links. No internal identifiers or encoded payloads are shown.</div>
       </div>
     </header>
