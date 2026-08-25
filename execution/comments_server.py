@@ -68,6 +68,10 @@ except ImportError:  # pragma: no cover - install hint
 import sqlite3  # noqa: E402
 
 from comments_server_alert_routes import AppContext, register_alert_routes  # noqa: E402
+from comments_server_attention_routes import (  # noqa: E402
+    AttentionRouteContext,
+    register_attention_routes,
+)
 from comments_server_content_routes import (  # noqa: E402
     ContentRouteContext,
     register_content_routes,
@@ -774,8 +778,10 @@ def create_app(
     @app.before_request
     def start_request_timer() -> None:
         g.request_started_ns = time.perf_counter_ns()
-        if request.method not in ("GET", "HEAD", "OPTIONS") and request.path != (
-            "/api/metrics/panel"
+        if (
+            request.method not in ("GET", "HEAD", "OPTIONS")
+            and request.path != "/api/metrics/panel"
+            and not request.path.startswith("/api/operations/attention/")
         ):
             # A successful mutation can affect several panels. Clear before it
             # runs so the next read cannot reuse a pre-mutation fragment; a
@@ -2892,6 +2898,15 @@ def create_app(
     register_governed_alert_routes(
         app,
         GovernedAlertRouteContext(db_path=db_path, owner_actor=DEFAULT_USER_ID),
+    )
+    register_attention_routes(
+        app,
+        AttentionRouteContext(
+            resolved_db_path,
+            DEFAULT_USER_ID,
+            lambda: panel_cache.invalidate_prefix("/api/panel/operations"),
+            _client_error,
+        ),
     )
     register_journal_routes(
         app,
