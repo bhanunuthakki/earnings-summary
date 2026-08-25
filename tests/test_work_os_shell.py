@@ -971,6 +971,27 @@ def test_company_desk_evidence_controls_target_the_brief_thesis_and_exact_fact_a
     assert "const evidenceButton = brief && kpi.evidence_ref" in desk
 
 
+def test_company_desk_thesis_presentation_is_readable_and_human_labeled() -> None:
+    """Thesis prose and rule telemetry must be scannable without losing evidence links."""
+    html = render_work_os_shell()
+    desk = html.split("async function workOsRenderCompanyDesk", 1)[1].split(
+        "async function workOsRenderBriefLibrary", 1
+    )[0]
+
+    assert "function workOsSplitThesisSentences" in html
+    assert 'class="stat-subtext"' in desk
+    assert 'class="research-list"' in desk
+    assert "function workOsFormatThesisNumber" in html
+    assert "maximumFractionDigits: 2" in desk
+    assert "function workOsThesisStatus" in html
+    assert "PASS" in html and "WATCH" in html and "BREACH" in html and "UNRESOLVED" in html
+    assert "workOsFormatThesisNumber(rule.latest_value)" in desk
+    assert "workOsFormatThesisNumber(rule.threshold)" in desk
+    assert "workOsFormatThesisNumber(rule.distance_to_threshold)" in desk
+    assert "String(rule.latest_value)" not in desk
+    assert "String(rule.distance_to_threshold)" not in desk
+
+
 def test_earnings_peek_ignores_stale_requests_and_aborts_on_close() -> None:
     html = render_work_os_shell()
 
