@@ -20,6 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 SCHEDULED_TASK_NAME = r"\earnings-summary\refresh_portfolio_tracker"
+SCHEDULER_PROOF_TIMEOUT_SECONDS = 5.0
 
 from operations.paths import portfolio_tracker_receipt_path  # noqa: E402
 from runtime.portfolio_tracker import produce_daily_refresh_receipt  # noqa: E402
@@ -88,7 +89,7 @@ def canonical_scheduler_task_is_running(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             text=True,
-            timeout=2.0,
+            timeout=SCHEDULER_PROOF_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
