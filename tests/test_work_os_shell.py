@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import re
 import shutil
 import subprocess
@@ -979,8 +980,8 @@ def test_company_desk_thesis_presentation_is_readable_and_human_labeled() -> Non
     )[0]
 
     assert "function workOsSplitThesisSentences" in html
-    assert "Intl.Segmenter" in html
-    assert "(?=[A-Z0-9])" in html
+    assert "acronymMarker" in html
+    assert "(?=[A-Z0-9(])" in html
     assert 'class="stat-subtext"' in desk
     assert 'class="research-list"' in desk
     assert "function workOsFormatThesisNumber" in html
@@ -995,6 +996,36 @@ def test_company_desk_thesis_presentation_is_readable_and_human_labeled() -> Non
     assert "attentionRules" in desk
     assert "passingCount" in desk
     assert "thesisStatus.textContent = presentation.label" in desk
+
+
+def test_company_desk_sentence_splitter_preserves_nu_acronyms_and_decimals() -> None:
+    """Execute the browser helper against the approved NU thesis and decimal prose."""
+    node = shutil.which("node")
+    if node is None:
+        return
+    html = render_work_os_shell()
+    splitter = html.split("function workOsSplitThesisSentences", 1)[1].split(
+        "function workOsFormatThesisNumber", 1
+    )[0]
+    thesis_path = Path(__file__).resolve().parents[1] / "micro_thesis/holdings/NU.json"
+    thesis = json.loads(thesis_path.read_text(encoding="utf-8"))["thesis"]
+    harness = f"""
+function workOsSplitThesisSentences{splitter}
+const thesis = {json.dumps(thesis)};
+const segments = workOsSplitThesisSentences(thesis);
+const optionality = segments.filter(segment => segment.includes('Bull-case optionality'));
+if (optionality.length !== 1) throw new Error('NU optionality sentence was fragmented');
+if (!optionality[0].includes('U.S. (Nubank, N.A.')) throw new Error('NU acronyms were split');
+const decimalSegments = workOsSplitThesisSentences('Margin reached 29.5%. Growth stayed above 20.25%.');
+if (decimalSegments.length !== 2) throw new Error('decimal sentence boundaries were malformed');
+if (!decimalSegments[0].includes('29.5%') || !decimalSegments[1].includes('20.25%')) {{
+  throw new Error('decimal values were split');
+}}
+"""
+    result = subprocess.run(
+        [node, "-"], input=harness, text=True, capture_output=True, check=False, timeout=10
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_earnings_peek_ignores_stale_requests_and_aborts_on_close() -> None:

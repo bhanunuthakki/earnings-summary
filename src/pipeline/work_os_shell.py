@@ -984,13 +984,12 @@ def _production_runtime(generated_at: datetime) -> str:
   function workOsSplitThesisSentences(value) {{
     const text = String(value || '').replace(/\\s+/g, ' ').trim();
     if (!text) return [];
-    if (typeof Intl.Segmenter === 'function') {{
-      return Array.from(new Intl.Segmenter('en', {{ granularity: 'sentence' }}).segment(text), function (part) {{
-        return String(part.segment || '').trim();
-      }}).filter(Boolean);
-    }}
-    return text.replace(/([.!?])\\s+(?=[A-Z0-9])/g, '$1\\n').split('\\n').map(function (sentence) {{
-      return sentence.trim();
+    const acronymMarker = '__WORK_OS_ACRONYM_PERIOD__';
+    const protectedText = text.replace(/\\b(?:[A-Za-z]\\.){{2,}}/g, function (acronym) {{
+      return acronym.replace(/\\./g, acronymMarker);
+    }});
+    return protectedText.replace(/([.!?])\\s+(?=[A-Z0-9(])/g, '$1\\n').split('\\n').map(function (sentence) {{
+      return sentence.split(acronymMarker).join('.').trim();
     }}).filter(Boolean);
   }}
 
