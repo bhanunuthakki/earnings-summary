@@ -344,8 +344,9 @@ def test_operations_renderer_has_governance_tab_and_related_views(
     html = render_operations_panel(_view(tmp_path))
     tablist = html.split('role="tablist"', 1)[1].split("</div>", 1)[0]
 
-    assert tablist.count('role="tab"') == 4
+    assert tablist.count('role="tab"') == 5
     assert ">Overview</button>" in tablist
+    assert ">Attention</button>" in tablist
     assert ">Jobs</button>" in tablist
     assert ">Runtime &amp; Recovery</button>" in tablist
     assert ">Governance</button>" in tablist

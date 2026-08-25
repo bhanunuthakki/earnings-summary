@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from log_redact import sanitize_operational_text
+from operations.attention_projection import AttentionPanelView
 from operations.models import (
     JobReceiptObservation,
     ObservationEnvelope,
@@ -41,7 +42,7 @@ class SurfaceDisposition(_ViewModel):
 
     field: str
     destination: Literal[
-        "overview", "jobs", "runtime_recovery", "governance", "linked_view", "internal"
+        "overview", "attention", "jobs", "runtime_recovery", "governance", "linked_view", "internal"
     ]
     targets: tuple[str, ...] = ()
     rationale: str
@@ -210,6 +211,11 @@ OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS = (
 
 OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS = (
     SurfaceDisposition(
+        field="attention",
+        destination="attention",
+        rationale="The Attention tab owns safe, writer-governed lifecycle findings.",
+    ),
+    SurfaceDisposition(
         field="evidence_gap_count",
         destination="overview",
         rationale="Counts stale or missing evidence separately from current actionable failures.",
@@ -276,6 +282,7 @@ class OperationsPanelView(_ViewModel):
     runtime_rows: tuple[RuntimeRowView, ...]
     readme_status: ReadmeGovernanceStatus | None = None
     portfolio_tracker_runtime: EvidenceView | None = None
+    attention: AttentionPanelView | None = None
 
 
 def _clock(value: datetime | None, *, prefix: str) -> str:
@@ -631,6 +638,7 @@ def build_operations_panel_view(
     snapshot: OperationsSnapshot,
     *,
     readme_status: ReadmeGovernanceStatus | None = None,
+    attention: AttentionPanelView | None = None,
 ) -> OperationsPanelView:
     """Join declared task ownership to bounded observations without doing I/O."""
 
@@ -867,15 +875,24 @@ def build_operations_panel_view(
         ),
     )
     managed_service_labels = {f"Managed service · {service.name}" for service in registry.services}
-    attention = sum(task.attention for task in tasks) + sum(
+    runtime_attention_count = sum(task.attention for task in tasks) + sum(
         _actionable_evidence(row.evidence)
         for row in runtime_rows
         if row.label not in managed_service_labels or snapshot.services.state == "current"
     )
-    attention += snapshot.scheduler.state == "invalid"
-    attention += snapshot.services.state == "invalid"
+    attention_count = runtime_attention_count
+    if attention is not None and attention.state == "available":
+        # Durable findings and legacy runtime observations can describe the
+        # same incident. De-duplicate those two representations without
+        # collapsing distinct Scheduler, service, or governance failures.
+        attention_count = max(
+            runtime_attention_count,
+            sum(finding.actionable for finding in attention.findings),
+        )
+    attention_count += snapshot.scheduler.state == "invalid"
+    attention_count += snapshot.services.state == "invalid"
     if readme_status is None or readme_status.state in {"rejected", "invalid"}:
-        attention += 1
+        attention_count += 1
     gap_states = {"missing", "stale", "unavailable"}
     evidence_gap_keys: set[tuple[str, str]] = set()
     for domain, observation in (
@@ -901,15 +918,16 @@ def build_operations_panel_view(
     evidence_gap_count = len(evidence_gap_keys)
     return OperationsPanelView(
         observed_label=_clock(snapshot.observed_at, prefix="Observed"),
-        attention_count=attention,
+        attention_count=attention_count,
         evidence_gap_count=evidence_gap_count,
-        runtime_summary_tone="ok" if attention == 0 and evidence_gap_count == 0 else "warn",
+        runtime_summary_tone="ok" if attention_count == 0 and evidence_gap_count == 0 else "warn",
         tasks=tuple(
             sorted(tasks, key=lambda task: (task.attention_rank, task.task_name.casefold()))
         ),
         runtime_rows=runtime_rows,
         readme_status=readme_status,
         portfolio_tracker_runtime=portfolio_tracker_runtime,
+        attention=attention,
     )
 
 
@@ -929,6 +947,111 @@ def _evidence_html(evidence: EvidenceView) -> str:
         f"{_html(evidence.label)} · {_html(evidence.observed_label)} · "
         f"{_html(evidence.recorded_label)}</div>"
         f'<div class="k-card-meta">{_html(evidence.detail)}</div>'
+    )
+
+
+def _attention(view: OperationsPanelView) -> str:
+    """Render the writer-owned attention inbox from its safe read projection."""
+
+    attention = view.attention
+    if attention is None or attention.state == "unavailable":
+        return (
+            '<div class="k-well k-well-warn" role="status" data-attention-state="unavailable">'
+            "Attention findings are unavailable. Existing Operations evidence remains readable."
+            "</div>"
+        )
+    if attention.state == "empty":
+        return (
+            '<div class="k-well" role="status" data-attention-state="empty">'
+            "No attention findings are recorded."
+            "</div>"
+        )
+    cards: list[str] = []
+    for index, finding in enumerate(attention.findings):
+        severity_class = {
+            "ok": "k-pill-ok",
+            "warn": "k-pill-warn",
+            "bad": "k-pill-bad",
+        }[finding.severity_tone]
+        health_class = {
+            "ok": "k-pill-ok",
+            "warn": "k-pill-warn",
+            "bad": "k-pill-bad",
+        }[finding.health_tone]
+        action_buttons = "".join(
+            f'<button type="button" class="k-btn {"k-btn-primary" if action.action == "resolve" else "k-btn-quiet"}" '
+            f'data-attention-action="{_html(action.action)}">{_html(action.label)}</button>'
+            for action in finding.actions
+        )
+        action_block = (
+            '<div class="ops-attention-actions" role="group" aria-label="Available attention actions">'
+            f"{action_buttons}</div>"
+            if action_buttons
+            else '<div class="k-card-meta">No operator action is currently eligible.</div>'
+        )
+        temporary_actions = {action.action for action in finding.actions} & {
+            "acknowledge",
+            "snooze",
+        }
+        temporary_controls = ""
+        if temporary_actions:
+            snooze_reason = (
+                f'<label class="ops-attention-control" for="attention-snooze-reason-{index}">'
+                '<span class="k-label">Snooze reason</span>'
+                f'<select id="attention-snooze-reason-{index}" data-attention-snooze-reason>'
+                '<option value="investigation_in_progress">Investigation in progress</option>'
+                '<option value="follow_up_scheduled">Follow-up scheduled</option>'
+                '<option value="maintenance_window">Maintenance window</option>'
+                "</select></label>"
+                if "snooze" in temporary_actions
+                else ""
+            )
+            acknowledgement_reason = (
+                '<div class="ops-attention-control"><span class="k-label">Acknowledgement reason</span>'
+                '<div class="k-card-meta">Evidence reviewed</div></div>'
+                if "acknowledge" in temporary_actions
+                else ""
+            )
+            temporary_controls = (
+                '<div class="ops-attention-controls" data-attention-temporary-controls>'
+                f"{acknowledgement_reason}{snooze_reason}"
+                f'<label class="ops-attention-control" for="attention-until-{index}">'
+                '<span class="k-label">Temporary action expiry</span>'
+                f'<input id="attention-until-{index}" type="datetime-local" data-attention-until required '
+                'aria-describedby="attention-expiry-help"></label>'
+                "</div>"
+            )
+        cards.append(
+            f'<article class="k-well ops-attention-card" data-attention-card="true" '
+            f'aria-labelledby="attention-heading-{index}" '
+            f'data-finding-id="{_html(finding.finding_id)}" '
+            f'data-evidence-fingerprint="{_html(finding.evidence_fingerprint_sha256)}" '
+            f'data-evidence-reference-sha256="{_html(finding.evidence_reference_sha256)}">'
+            '<div class="k-toolbar"><div>'
+            f'<h2 class="k-card-title" id="attention-heading-{index}">{_html(finding.kind.replace("_", " ").title())}</h2>'
+            f'<div class="k-card-meta">{_html(finding.owner)}</div></div>'
+            f'<span class="k-pill {severity_class}">{_html(finding.severity.title())}</span></div>'
+            '<div class="ops-attention-facts">'
+            f'<div><span class="k-label">Health</span><div><span class="k-pill {health_class}">{_html(finding.health.title())}</span></div></div>'
+            f'<div><span class="k-label">Lifecycle</span><div>{_html(finding.lifecycle_detail)}</div></div>'
+            f'<div><span class="k-label">Evidence version</span><div>{_html(finding.evidence_version)}</div></div>'
+            f'<div><span class="k-label">Evidence reference</span><div class="ops-attention-ref">{_html(finding.evidence_reference)}</div></div>'
+            f'<div><span class="k-label">Opened</span><div>{_html(finding.opened_label)}</div></div>'
+            f'<div><span class="k-label">Updated</span><div>{_html(finding.updated_label)}</div></div>'
+            f'<div><span class="k-label">Effective at</span><div>{_html(finding.effective_label)}</div></div>'
+            "</div>"
+            '<div class="k-card-meta">Evidence and runbook inspection are unavailable: no governed route is registered for this finding.</div>'
+            f"{temporary_controls}"
+            f"{action_block}"
+            '<div class="k-card-meta" role="status" aria-live="polite" aria-atomic="true" data-attention-status></div>'
+            "</article>"
+        )
+    return (
+        '<div class="k-card-meta">'
+        f"{_html(attention.message)} Observed {_html(attention.observed_label)}."
+        "</div>"
+        '<div class="k-card-meta" id="attention-expiry-help">Temporary actions require a future expiry; times use your browser\'s local time.</div>'
+        f'<div class="ops-attention-list" data-attention-state="available">{"".join(cards)}</div>'
     )
 
 
@@ -1078,17 +1201,19 @@ def render_operations_panel(view: OperationsPanelView) -> str:
   {OPERATIONS_STYLE}
   <div class="k-toolbar">
     <div><h1 class="k-card-title" id="operations-title">Operations</h1>
-      <div class="k-card-meta">Read-only declared ownership, runtime receipts, and recovery evidence · {_html(view.observed_label)}</div></div>
+      <div class="k-card-meta">Declared ownership, runtime receipts, recovery evidence, and governed attention actions · {_html(view.observed_label)}</div></div>
     <span class="k-pill k-pill-warn">{view.attention_count} need attention</span>
   </div>
   <div class="operations-related" aria-label="Related Operations views">{related_views}</div>
   <div class="operations-tabs" role="tablist" aria-label="Operations views">
     <button type="button" class="k-chip k-chip-btn k-chip-tab is-on operations-tab" id="operations-tab-overview" role="tab" aria-selected="true" aria-controls="operations-pane-overview" tabindex="0">Overview</button>
+    <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-attention" role="tab" aria-selected="false" aria-controls="operations-pane-attention" tabindex="-1">Attention</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-jobs" role="tab" aria-selected="false" aria-controls="operations-pane-jobs" tabindex="-1">Jobs</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-runtime" role="tab" aria-selected="false" aria-controls="operations-pane-runtime" tabindex="-1">Runtime &amp; Recovery</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-governance" role="tab" aria-selected="false" aria-controls="operations-pane-governance" tabindex="-1">Governance</button>
   </div>
   <div id="operations-pane-overview" role="tabpanel" aria-labelledby="operations-tab-overview">{_overview(view)}</div>
+  <div id="operations-pane-attention" role="tabpanel" aria-labelledby="operations-tab-attention" hidden>{_attention(view)}</div>
   <div id="operations-pane-jobs" role="tabpanel" aria-labelledby="operations-tab-jobs" hidden>{_jobs(view)}</div>
   <div id="operations-pane-runtime" role="tabpanel" aria-labelledby="operations-tab-runtime" hidden>{_runtime(view)}</div>
   <div id="operations-pane-governance" role="tabpanel" aria-labelledby="operations-tab-governance" hidden>{_governance(view)}</div>
@@ -1152,6 +1277,100 @@ def render_operations_panel(view: OperationsPanelView) -> str:
   }});
   if (search) search.addEventListener('input', applyJobFilter);
   applyJobFilter();
+
+  const attentionCards = Array.from(root.querySelectorAll('[data-attention-card]'));
+  const opaqueIdempotencyKey = () => {{
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {{
+      return 'operations-attention-' + window.crypto.randomUUID();
+    }}
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    return 'operations-attention-' + Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  }};
+  const localDateTimeValue = (date) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  attentionCards.forEach((card) => {{
+    const until = card.querySelector('[data-attention-until]');
+    if (until && !until.value) until.value = localDateTimeValue(new Date(Date.now() + 60 * 60 * 1000));
+  }});
+  const attentionPayload = (card, action) => {{
+    const occurredAt = new Date();
+    const payload = {{
+      finding_id: card.dataset.findingId,
+      evidence_fingerprint_sha256: card.dataset.evidenceFingerprint,
+      idempotency_key: opaqueIdempotencyKey(),
+      occurred_at: occurredAt.toISOString()
+    }};
+    if (action === 'acknowledge' || action === 'snooze') {{
+      const untilInput = card.querySelector('[data-attention-until]');
+      const until = new Date(String(untilInput && untilInput.value || ''));
+      if (!Number.isFinite(until.getTime()) || until <= occurredAt) return null;
+      if (action === 'acknowledge') {{
+        payload.reason = {{code: 'evidence_reviewed', reference_sha256: card.dataset.evidenceReferenceSha256}};
+        payload.acknowledge_until = until.toISOString();
+      }} else {{
+        const reason = card.querySelector('[data-attention-snooze-reason]');
+        payload.reason = {{code: String(reason && reason.value || ''), reference_sha256: card.dataset.evidenceReferenceSha256}};
+        payload.snooze_until = until.toISOString();
+      }}
+    }}
+    return payload;
+  }};
+  const refreshOperations = () => fetch('/api/panel/operations', {{headers: {{Accept: 'text/html'}}}})
+    .then((response) => {{
+      if (!response.ok) throw new Error('Operations refresh failed');
+      return response.text();
+    }})
+    .then((markup) => {{
+      const mount = root.parentElement;
+      if (!mount || typeof window.workOsMountHtml !== 'function') throw new Error('Operations refresh is unavailable');
+      window.workOsMountHtml(mount, markup, '/api/panel/operations');
+    }});
+  attentionCards.forEach((card) => {{
+    const buttons = Array.from(card.querySelectorAll('[data-attention-action]'));
+    const status = card.querySelector('[data-attention-status]');
+    const setBusy = (busy) => buttons.forEach((button) => {{ button.disabled = busy; }});
+    buttons.forEach((button) => button.addEventListener('click', () => {{
+      const action = button.dataset.attentionAction;
+      if (!action) return;
+      if (action === 'resolve' && !window.confirm('Resolve this healthy finding? This closes the current finding.')) return;
+      const payload = attentionPayload(card, action);
+      if (!payload) {{
+        if (status) status.textContent = 'Choose a future expiry before this temporary action.';
+        const until = card.querySelector('[data-attention-until]');
+        if (until) until.focus();
+        return;
+      }}
+      setBusy(true);
+      if (status) status.textContent = action + ' in progress…';
+      fetch('/api/operations/attention/' + encodeURIComponent(action), {{
+        method: 'POST', headers: {{'Content-Type': 'application/json', Accept: 'application/json'}},
+        body: JSON.stringify(payload)
+      }}).then((response) => response.json().catch(() => ({{}})).then((body) => ({{status: response.status, body}})))
+        .then((result) => {{
+          const receipt = result.body && result.body.receipt;
+          if (result.status === 409) {{
+            if (status) status.textContent = 'Action conflicted. Refreshing current finding…';
+            return refreshOperations().catch(() => {{
+              if (status) status.textContent = 'Action conflicted; current finding refresh is unavailable.';
+              setBusy(false);
+            }});
+          }}
+          if (!receipt || (receipt.result_state !== 'applied' && receipt.result_state !== 'replayed')) {{
+            if (status) status.textContent = 'Action was not applied.';
+            setBusy(false);
+            return;
+          }}
+          if (status) status.textContent = receipt.result_state === 'replayed' ? 'Prior action confirmed. Refreshing…' : 'Action applied. Refreshing…';
+          return refreshOperations().catch(() => {{
+            if (status) status.textContent = 'Action recorded; Operations refresh is unavailable.';
+            setBusy(false);
+          }});
+        }}).catch(() => {{
+          if (status) status.textContent = 'Action request failed. No retry was sent.';
+          setBusy(false);
+        }});
+    }}));
+  }});
 
   const readmeButtons = Array.from(root.querySelectorAll('[data-readme-action]'));
   const readmeStatus = root.querySelector('[data-readme-action-status]');

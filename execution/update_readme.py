@@ -77,6 +77,7 @@ _ARGPARSE_OPTION = re.compile(r"add_argument\(\s*[\"'](--[a-z0-9][a-z0-9-]*)[\"'
 _RUN_ID = re.compile(r"[0-9a-f]{32}\Z")
 _MAX_STORED_RECEIPT_BYTES = 1_000_000
 _MAX_STORED_CANDIDATE_BYTES = 250_000
+_MAX_CLI_SOURCE_BYTES = 300_000
 _CLI_CONTRACT_PATHS = (
     "execution/comments_server.py",
     "execution/generate_cron_artifacts.py",
@@ -216,7 +217,7 @@ def _cli_contracts(repo_root: Path) -> tuple[CliContract, ...]:
         path = repo_root / relative_path
         if not path.is_file():
             continue
-        source = _read_regular_file(path, limit=250_000).decode("utf-8")
+        source = _read_regular_file(path, limit=_MAX_CLI_SOURCE_BYTES).decode("utf-8")
         contracts.append(
             CliContract(
                 path=relative_path,

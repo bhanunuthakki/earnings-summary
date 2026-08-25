@@ -175,6 +175,7 @@ from logging_config import (  # noqa: E402
     new_correlation_id,
     set_correlation_id,
 )
+from operations.attention_projection import build_attention_panel_view  # noqa: E402
 from operations.models import OperationsRegistry  # noqa: E402
 from operations.paths import (  # noqa: E402
     portfolio_tracker_receipt_path,
@@ -2088,6 +2089,9 @@ def create_app(
                         declared_operations,
                         snapshot,
                         readme_status=_collect_current_readme_status(),
+                        attention=build_attention_panel_view(
+                            get_read_db(), observed_at=snapshot.observed_at
+                        ),
                     )
                 ),
                 mimetype="text/html",
