@@ -179,9 +179,9 @@ class DeskSayDoProjection(BaseModel):
         default_factory=lambda: list[DeskSayDoCommitment]()
     )
     as_of: str | None = None
-    unavailable_reason: Literal[
-        "missing_source", "schema_mismatch", "query_failed", "malformed_row"
-    ] | None = None
+    unavailable_reason: (
+        Literal["missing_source", "schema_mismatch", "query_failed", "malformed_row"] | None
+    ) = None
 
 
 class CompanyDeskResponse(BaseModel):
@@ -595,18 +595,20 @@ def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjec
             period_made = _parse_say_do_date(row["period_made"])
             period_target = _parse_say_do_date(row["period_target"])
             evaluated_at = (
-                _parse_say_do_date(row["evaluated_at"])
-                if row["evaluated_at"] is not None
-                else None
+                _parse_say_do_date(row["evaluated_at"]) if row["evaluated_at"] is not None else None
             )
             target_value = float(row["target_value"])
             if not math.isfinite(target_value):
                 raise ValueError("target_value is non-finite")
-            if row["realized_value"] is not None and not math.isfinite(float(row["realized_value"])):
+            if row["realized_value"] is not None and not math.isfinite(
+                float(row["realized_value"])
+            ):
                 raise ValueError("realized_value is non-finite")
         except (TypeError, ValueError, OverflowError):
             return DeskSayDoProjection(status="unavailable", unavailable_reason="malformed_row")
-        parsed_rows.append((row, period_made, period_target, evaluated_at, period_made.strftime("%Y-%m")))
+        parsed_rows.append(
+            (row, period_made, period_target, evaluated_at, period_made.strftime("%Y-%m"))
+        )
 
     quarters: list[str] = []
     commitments: list[DeskSayDoCommitment] = []
@@ -620,7 +622,11 @@ def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjec
         period_made = period_made_dt.date().isoformat()
         period_target = period_target_dt.date().isoformat()
         evaluated_at = evaluated_at_dt.date().isoformat() if evaluated_at_dt else None
-        as_of = max(value for value in (as_of, evaluated_at, period_target, period_made) if value is not None)
+        as_of = max(
+            value
+            for value in (as_of, evaluated_at, period_target, period_made)
+            if value is not None
+        )
         outcome = _normalize_say_do_outcome(row["outcome"])
         commitments.append(
             DeskSayDoCommitment(

@@ -317,16 +317,90 @@ def test_company_desk_say_do_normalizes_known_outcomes_and_keeps_older_quarters(
     )
     rows = []
     for index in range(100):
-        rows.append((index + 1, "NU", "2026-03-31", "2026-06-30", index, "KPI", "<=", 5.0, "percent", "dense", 5.1, "missed", "2026-07-01"))
+        rows.append(
+            (
+                index + 1,
+                "NU",
+                "2026-03-31",
+                "2026-06-30",
+                index,
+                "KPI",
+                "<=",
+                5.0,
+                "percent",
+                "dense",
+                5.1,
+                "missed",
+                "2026-07-01",
+            )
+        )
     rows.extend(
         [
-            (101, "NU", "2025-12-31", "2026-03-31", 101, "KPI", "<=", 5.0, "percent", "met", 4.0, "met", "2026-01-01"),
-            (102, "NU", "2025-09-30", "2025-12-31", 102, "KPI", "<=", 5.0, "percent", "mixed", 5.0, "mixed", "2025-10-01"),
-            (103, "NU", "2025-06-30", "2025-09-30", 103, "KPI", "<=", 5.0, "percent", "partial", None, "partial", None),
-            (104, "NU", "2025-03-31", "2025-06-30", 104, "KPI", "<=", 5.0, "percent", "old", 4.9, "hit", "2025-04-01"),
+            (
+                101,
+                "NU",
+                "2025-12-31",
+                "2026-03-31",
+                101,
+                "KPI",
+                "<=",
+                5.0,
+                "percent",
+                "met",
+                4.0,
+                "met",
+                "2026-01-01",
+            ),
+            (
+                102,
+                "NU",
+                "2025-09-30",
+                "2025-12-31",
+                102,
+                "KPI",
+                "<=",
+                5.0,
+                "percent",
+                "mixed",
+                5.0,
+                "mixed",
+                "2025-10-01",
+            ),
+            (
+                103,
+                "NU",
+                "2025-06-30",
+                "2025-09-30",
+                103,
+                "KPI",
+                "<=",
+                5.0,
+                "percent",
+                "partial",
+                None,
+                "partial",
+                None,
+            ),
+            (
+                104,
+                "NU",
+                "2025-03-31",
+                "2025-06-30",
+                104,
+                "KPI",
+                "<=",
+                5.0,
+                "percent",
+                "old",
+                4.9,
+                "hit",
+                "2025-04-01",
+            ),
         ]
     )
-    conn.executemany("INSERT INTO management_commitments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany(
+        "INSERT INTO management_commitments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+    )
     conn.commit()
     desk = build_company_desk(work_os_app_repo, conn, "NU")
     conn.close()
