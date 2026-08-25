@@ -374,11 +374,10 @@ def test_happy_path_fires_alert_and_actions(
     assert evidence["no_material_shifts_detected"] is False
     assert len(evidence["shifts"]) == 2
 
-    # Default _diff_payload produces 2 shifts: 2 earnings_prep + 2 thesis_update + 1 bear_append = 5
+    # Default _diff_payload produces two machine-analysis prep reminders only.
     kinds = [a[2] for a in actions]
     assert kinds.count("earnings_prep_append") == 2
-    assert kinds.count("thesis_update") == 2
-    assert kinds.count("bear_append") == 1
+    assert set(kinds) == {"earnings_prep_append"}
 
     # Summary line on stdout reports 1 alert fired.
     captured = capsys.readouterr()
@@ -439,7 +438,7 @@ def test_dedup_second_run_persists_nothing(db_path: Path, monkeypatch: pytest.Mo
         conn.close()
 
     assert alert_count == 1, "dedup failed — duplicate alert persisted"
-    assert action_count == 5, "dedup failed — duplicate actions persisted"
+    assert action_count == 2, "dedup failed — duplicate actions persisted"
 
 
 # ---------------------------------------------------------------------------

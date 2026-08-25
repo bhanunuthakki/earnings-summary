@@ -218,6 +218,81 @@ def create_note(
             db_conn.close()
 
 
+def create_note_once(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    ticker: str | None,
+    kind: str,
+    body: str,
+    source: str,
+    source_ref: str,
+    anchor_type: str | None = None,
+    anchor_key: str | None = None,
+    context: dict[str, object] | None = None,
+    db_path: Path | str | None = None,
+) -> AnalystNoteRow:
+    """Create one source-keyed note, or return the identical existing note.
+
+    This is the retry-safe writer for pipelines whose downstream state change
+    can be retried after the note commits. Reusing a source key with different
+    semantic content fails loudly instead of silently changing durable memory.
+    """
+    if not source_ref.strip():
+        raise ValueError("source_ref must be non-empty")
+    _validate("kind", kind, NOTE_KINDS)
+    _validate("source", source, NOTE_SOURCES)
+    if not body.strip():
+        raise ValueError("note body must be non-empty")
+    normalized_ticker = ticker.upper() if ticker else None
+    conn = open_conn(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing_row = conn.execute(
+            "SELECT * FROM analyst_notes WHERE user_id=? AND source=? AND source_ref=?",
+            (user_id, source, source_ref),
+        ).fetchone()
+        if existing_row is not None:
+            existing = _row_to_dc(existing_row)
+            if (
+                existing.ticker != normalized_ticker
+                or existing.kind != kind
+                or existing.body != body
+                or existing.context != context
+            ):
+                raise ValueError(
+                    f"analyst note source_ref={source_ref!r} already exists with different content"
+                )
+            conn.commit()
+            return existing
+        row_id = _insert(
+            conn,
+            user_id=user_id,
+            ticker=normalized_ticker,
+            kind=kind,
+            status="open",
+            body=body,
+            anchor_type=anchor_type,
+            anchor_key=anchor_key,
+            fact_ref=None,
+            source=source,
+            source_ref=source_ref,
+            supersedes_id=None,
+            resolution_note=None,
+            context=context,
+            resolved_at=None,
+            decision_id=None,
+            position_entry_id=None,
+            link_auto_resolve=False,
+        )
+        conn.commit()
+        return _fetch_one(conn, row_id)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def get_note(
     note_id: int,
     *,

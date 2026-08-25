@@ -15,11 +15,9 @@ review in isolation from the expensive LLM diff pass:
   * **PR-N8 (this PR)** — flips ``_FEATURE_ENABLED``, implements
     ``build_alert`` via the Jinja2 prompt template + ``call_llm``
     + the artifact-store cache, and implements ``draft_actions``
-    that maps each LLM-flagged shift into one or more
-    :class:`QueuedActionDraft` rows (``earnings_prep_append`` for every
-    shift; ``thesis_update`` for high-confidence directional shifts;
-    ``bear_append`` for softer / dropped-topic shifts that touch a
-    registered Tier-1 KPI).
+    that maps each LLM-flagged shift into an ``earnings_prep_append``
+    :class:`QueuedActionDraft`. Machine-generated tone interpretations are
+    preparation evidence, not accepted thesis or bear-case history.
 
 "Landed locally" is keyed off ``documents.fetched_at`` rather than
 ``transcripts.call_date``: ``call_date`` is the day of the call;
@@ -118,25 +116,6 @@ _PROMPT_TEMPLATE_PATH = Path(__file__).parent / "_prompts" / "earnings_tone_diff
 # template body changes materially (re-using ``compute_input_sha256`` would be
 # too fragile — minor whitespace tweaks would invalidate the cache).
 _PROMPT_VERSION = prompt_version_for(_ARTIFACT_PURPOSE)
-
-# Direction values that warrant promoting a shift to a ``thesis_update``
-# action. Pure ``ambiguous``-typed shifts don't pass the bar — they go
-# only into ``earnings_prep_append`` so the user revisits next call.
-_DIRECTIONS_WARRANTING_THESIS_UPDATE: frozenset[str] = frozenset(
-    {"softer", "firmer", "new_topic", "dropped_topic"}
-)
-
-# Direction values that warrant appending the shift to the bear case,
-# IFF the shift names a registered Tier-1 KPI. The intuition: only
-# *adverse* tonal moves (softer guidance, a topic management dropped)
-# qualify as bear-case ammunition; a firmer / new positive topic is
-# upside, not downside.
-_DIRECTIONS_WARRANTING_BEAR_APPEND: frozenset[str] = frozenset({"softer", "dropped_topic"})
-
-# Confidence floor for promoting a shift to ``thesis_update``. Below
-# this, the shift is recorded only as ``earnings_prep_append`` so the
-# user re-evaluates next call rather than committing it to the ledger.
-_THESIS_UPDATE_CONFIDENCE_FLOOR = 0.6
 
 # Retry hint prepended to the user prompt on a second attempt when the
 # first LLM response failed to parse as JSON. call_llm has no separate
@@ -566,30 +545,11 @@ def _shift_direction(shift: dict[str, object]) -> str:
     return direction.strip() if isinstance(direction, str) else ""
 
 
-def _shift_confidence(shift: dict[str, object]) -> float:
-    """Read confidence as a float in [0, 1]. Returns 0.0 on miss / non-numeric."""
-    confidence = shift.get("confidence")
-    if isinstance(confidence, bool):  # bool is an int subclass; reject explicitly
-        return 0.0
-    if isinstance(confidence, (int, float)):
-        return float(confidence)
-    return 0.0
-
-
-def _shift_related_kpi(shift: dict[str, object]) -> str | None:
-    """Read ``related_thesis_kpi`` if non-empty / non-null, else None."""
-    kpi = shift.get("related_thesis_kpi")
-    return kpi.strip() if isinstance(kpi, str) and kpi.strip() else None
-
-
-def _draft_actions_for_shift(
-    shift: dict[str, object], memo_text: str | None
-) -> list[QueuedActionDraft]:
+def _draft_actions_for_shift(shift: dict[str, object]) -> list[QueuedActionDraft]:
     """Map one LLM-emitted shift into ``QueuedActionDraft`` rows.
 
-    Always emits an ``earnings_prep_append``; conditionally emits a
-    ``thesis_update`` (directional + confident enough) and a
-    ``bear_append`` (adverse + touches a registered Tier-1 KPI).
+    Emits an ``earnings_prep_append`` only. The LLM output is evidence for
+    owner review, not authority to mutate the accepted thesis or bear case.
     """
     topic = _shift_topic(shift)
     direction = _shift_direction(shift)
@@ -599,7 +559,7 @@ def _draft_actions_for_shift(
         # here is degraded-quality output, not a hard error.
         return []
 
-    out: list[QueuedActionDraft] = [
+    return [
         QueuedActionDraft(
             action_kind="earnings_prep_append",
             payload={
@@ -608,36 +568,6 @@ def _draft_actions_for_shift(
             },
         )
     ]
-
-    confidence = _shift_confidence(shift)
-    if (
-        direction in _DIRECTIONS_WARRANTING_THESIS_UPDATE
-        and confidence >= _THESIS_UPDATE_CONFIDENCE_FLOOR
-    ):
-        out.append(
-            QueuedActionDraft(
-                action_kind="thesis_update",
-                payload={
-                    "body": f"{topic} — {memo_text or ''}".strip(" —"),
-                    "source_shift_topic": topic,
-                    "confidence": confidence,
-                },
-            )
-        )
-
-    related_kpi = _shift_related_kpi(shift)
-    if direction in _DIRECTIONS_WARRANTING_BEAR_APPEND and related_kpi is not None:
-        out.append(
-            QueuedActionDraft(
-                action_kind="bear_append",
-                payload={
-                    "body": f"Material tone shift on {related_kpi}: {topic}",
-                    "source_shift_topic": topic,
-                    "related_kpi": related_kpi,
-                },
-            )
-        )
-    return out
 
 
 # --------------------------------------------------------------------------
@@ -916,11 +846,8 @@ class EarningsToneTrigger:
         """Derive queued-action drafts from an alert's shift list.
 
         Returns ``[]`` when the LLM flagged no material shifts. Otherwise
-        emits one ``earnings_prep_append`` per shift, plus a
-        ``thesis_update`` for high-confidence directional shifts and a
-        ``bear_append`` for adverse shifts touching a registered Tier-1
-        KPI. See the module-level direction / confidence constants for
-        the exact policy.
+        emits one ``earnings_prep_append`` per shift. Accepted thesis and
+        bear-case changes require a separate owner-authored decision.
         """
         _ = candidate
         try:
@@ -946,7 +873,7 @@ class EarningsToneTrigger:
         for entry in cast("Iterable[object]", shifts_raw):
             if not isinstance(entry, dict):
                 continue
-            out.extend(_draft_actions_for_shift(cast("dict[str, object]", entry), alert.memo_text))
+            out.extend(_draft_actions_for_shift(cast("dict[str, object]", entry)))
         return out
 
     # ------------------------------------------------------------------

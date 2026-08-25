@@ -527,6 +527,35 @@ def test_post_sizing_intent_appends_history(client: FlaskClient, tmp_path: Path)
     assert {r.intent_kind for r in rows} == {"conviction", "target_weight_pct"}
     assert all(r.narrative == "size up" for r in rows)
 
+    append_intent(
+        user_id="bhanu",
+        ticker="NU",
+        intent_kind="target_weight_pct",
+        intent_value=6.0,
+        narrative="legacy duplicate",
+        db_path=tmp_path / "data" / "portfolio.db",
+    )
+
+    replacement = client.post(
+        "/api/sizing-intents",
+        json={"ticker": "NU", "target_weight_pct": 5.5, "narrative": "new DCF ladder"},
+    )
+    assert replacement.status_code == 200
+    active = list_intents(user_id="bhanu", ticker="NU", db_path=tmp_path / "data" / "portfolio.db")
+    target = next(row for row in active if row.intent_kind == "target_weight_pct")
+    assert target.intent_value == 5.5
+    history = list_intents(
+        user_id="bhanu",
+        ticker="NU",
+        include_superseded=True,
+        db_path=tmp_path / "data" / "portfolio.db",
+    )
+    assert [row.intent_value for row in history if row.intent_kind == "target_weight_pct"] == [
+        5.5,
+        6.0,
+        6.5,
+    ]
+
 
 def test_post_sizing_intent_validates(client: FlaskClient) -> None:
     assert client.post("/api/sizing-intents", json={"conviction": 4}).status_code == 400

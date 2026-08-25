@@ -6,7 +6,9 @@ Layout:
     sizing   — position_sizing_intent: append-only history of target/max/note
                sizing declarations.
     ledger   — thesis_ledger_entries: append-only durable history of every
-               accepted thesis update / bear append / earnings-prep note.
+               accepted thesis update / bear append.
+    notes    — analyst_notes: lifecycle-aware open questions and watch items,
+               including alert-derived earnings follow-ups.
 
 All three modules share ``_db.open_conn`` for connection setup; that helper
 fails loudly when the DB or schema is missing rather than silently no-op'ing

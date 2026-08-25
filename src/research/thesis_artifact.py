@@ -1,12 +1,12 @@
 """Phase-1 Wave-3 thesis-edit artifact (MUTATING, behind the higher-bar gate).
 
-``user_state.ledger.append_entry`` is APPEND-ONLY by construction (no update or
-delete path), so a drafted thesis edit is held as an inert ``kind='thesis'``
-``research_proposal`` and only appended on approve -- history can never be
-clobbered. The apply registers behind the W3-1 gate (evidence + adversarial-
-survived + oracle). The oracle for an append-only edit is trivially satisfied
-(nothing numeric to validate), so the draft sets ``oracle_ok=True``; the real
-guard is the evidence doorway + the adversarial assessment.
+Drafted thesis edits are held as inert ``kind='thesis'`` research proposals.
+Approval appends genuine thesis changes to the immutable ledger; a next-print
+follow-up is instead stored as a lifecycle-aware open analyst question. The
+apply registers behind the W3-1 gate (evidence + adversarial-survived + oracle).
+The oracle for these append-only writes is trivially satisfied (nothing numeric
+to validate), so the draft sets ``oracle_ok=True``; the real guard is the
+evidence doorway + the adversarial assessment.
 
 Dependency-injected (``create_fn`` / ``get_fn`` / ``append_fn``) so the primitives
 are unit-testable without a DB.
@@ -22,6 +22,7 @@ from typing import Any, cast
 from research.apply import register_mutating_applier
 from research.proposals import create_proposal, get_proposal
 from user_state.ledger import append_entry
+from user_state.notes import create_note_once
 
 # A web-less structured caller (run.py's DI idiom): (prompt, *, purpose, required_keys) -> dict.
 StructCall = Callable[..., "dict[str, object]"]
@@ -82,8 +83,9 @@ def apply_thesis_proposal(
     db_path: Path | str | None = None,
     get_fn: Callable[..., Any] = get_proposal,
     append_fn: Callable[..., Any] | None = None,
+    note_fn: Callable[..., Any] | None = None,
 ) -> str:
-    """The GATED write: append the drafted entry via the append-only ledger.
+    """The GATED write: persist a thesis change or next-call open question.
 
     Reached only after the higher-bar gate clears (enforced in
     ``apply.apply_approved_proposal``). Raises ``ValueError`` for a non-thesis /
@@ -99,11 +101,30 @@ def apply_thesis_proposal(
     if not ticker:
         raise ValueError(f"thesis proposal {proposal_id} has no ticker")
     data = json.loads(artifact)
+    entry_kind = str(data.get("entry_kind") or "revision")
+    body = str(data.get("body") or getattr(prop, "body_md", ""))
+    if entry_kind == "earnings_prep_append":
+        note_creator = note_fn or create_note_once
+        note = note_creator(
+            ticker=ticker,
+            kind="question",
+            body=body,
+            source="advisor",
+            source_ref=f"research_proposal:{proposal_id}:earnings_prep",
+            anchor_type="ticker",
+            anchor_key=ticker,
+            context={
+                "research_proposal_id": proposal_id,
+                "purpose": "earnings_call_open_question",
+            },
+            db_path=db_path,
+        )
+        return f"open analyst question #{getattr(note, 'id', '?')} created for {ticker}"
     appender = append_fn or append_entry
     row = appender(
         ticker=ticker,
-        entry_kind=str(data.get("entry_kind") or "revision"),
-        body=str(data.get("body") or getattr(prop, "body_md", "")),
+        entry_kind=entry_kind,
+        body=body,
         db_path=db_path,
     )
     return f"thesis ledger entry #{getattr(row, 'id', '?')} appended for {ticker}"

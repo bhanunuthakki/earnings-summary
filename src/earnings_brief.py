@@ -3,8 +3,8 @@
 Owner ruling 2026-07-31: the D2 "nothing pre-generates" rule is relaxed for
 the PRE-earnings brief specifically. This module produces an LLM-written brief
 per (ticker, expected ER date), grounded in what the platform actually knows —
-the thesis anchors, tracked tier-1 KPIs, the owner's open watch items, what
-last quarter's signals queued for this call, the last call-tone diff, the
+the thesis anchors, tracked tier-1 KPIs, the owner's open watch items and
+questions, the last call-tone diff, the
 valuation stance, and retrieved KPI/transcript evidence — and persists it in
 ``llm_artifacts`` (purpose ``pre_earnings_brief``). The earnings-prep peek
 serves the persisted brief instantly and falls back to its deterministic
@@ -167,20 +167,9 @@ def watch_items_text(db_path: Path, t: str) -> str:
     except Exception:
         return ""
     kind_rank = {"watch": 0, "question": 1}
-    notes = sorted(notes, key=lambda n: kind_rank.get(n.kind, 9))[:8]
+    notes = [note for note in notes if note.kind in kind_rank]
+    notes = sorted(notes, key=lambda n: kind_rank[n.kind])[:8]
     return "\n".join(f"- [{n.kind}] {n.body.strip()}" for n in notes)
-
-
-def queued_notes_text(db_path: Path, t: str) -> str:
-    try:
-        from user_state.ledger import list_entries
-
-        entries = list_entries(
-            ticker=t, entry_kind="earnings_prep_append", limit=5, db_path=db_path
-        )
-    except Exception:
-        return ""
-    return "\n".join(f"- {e.body.strip()} (queued {str(e.created_at)[:10]})" for e in entries)
 
 
 def tone_text(db_path: Path, t: str) -> str:
@@ -299,7 +288,6 @@ def assemble_context(db_path: Path, repo_root: Path, t: str, *, today: date) -> 
             _section("Thesis, break rules & prior context (anchors)", anchor),
             _section("Tracked tier-1 KPIs — latest vs prior", kpis),
             _section("Your open watch items & questions", watch_items_text(db_path, t)),
-            _section("Queued from last quarter's signals", queued_notes_text(db_path, t)),
             _section("Last call's tone shifts", tone_text(db_path, t)),
             _section("Valuation stance", valuation),
             _section("Retrieved evidence", _evidence_text(db_path, repo_root, t)),
@@ -319,7 +307,7 @@ derived from the break rules and tracked KPIs below.
 latest value and the level that would pressure a break rule. Use only figures provided below; \
 never invent one.
 3. **What to listen for on the call** — the management answers the owner is owed: their open \
-watch items and questions, what last quarter's signals queued for this call, and whether last \
+watch items and questions, including alert-derived follow-ups, and whether last \
 call's tone shifts persisted.
 4. **Thesis pressure points** — where the thesis is most falsifiable this quarter and what \
 result would genuinely change the picture, in both directions.

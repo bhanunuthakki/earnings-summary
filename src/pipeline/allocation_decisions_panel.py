@@ -356,7 +356,6 @@ def build_sizing_audit_rows(
 _LEDGER_LABELS: dict[str, str] = {
     "thesis_update": "Thesis update",
     "bear_append": "Bear case",
-    "earnings_prep_append": "Earnings prep",
 }
 
 

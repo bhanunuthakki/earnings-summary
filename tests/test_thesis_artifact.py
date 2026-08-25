@@ -63,6 +63,29 @@ def test_apply_appends_the_entry() -> None:
     assert "55" in row
 
 
+def test_apply_routes_earnings_prep_to_open_question() -> None:
+    prop = SimpleNamespace(
+        kind="thesis",
+        ticker="NU",
+        body_md="x",
+        artifact_json=json.dumps(
+            {"entry_kind": "earnings_prep_append", "body": "Re-check NIM next quarter."}
+        ),
+    )
+    created: dict[str, object] = {}
+    receipt = apply_thesis_proposal(
+        9,
+        get_fn=lambda _pid, **_k: prop,
+        append_fn=lambda **_kw: pytest.fail("earnings prep must not write the thesis ledger"),
+        note_fn=lambda **kw: created.update(kw) or SimpleNamespace(id=77),
+    )
+
+    assert created["kind"] == "question"
+    assert created["body"] == "Re-check NIM next quarter."
+    assert created["source_ref"] == "research_proposal:9:earnings_prep"
+    assert "open analyst question #77" in receipt
+
+
 def test_apply_rejects_a_non_thesis_proposal() -> None:
     prop = SimpleNamespace(kind="memo", ticker="NU", artifact_json="{}")
     with pytest.raises(ValueError, match="not a thesis"):

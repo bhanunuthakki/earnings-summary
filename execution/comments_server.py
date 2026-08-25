@@ -4250,11 +4250,12 @@ def create_app(
         """Record a sizing-posture statement (master build P2.2). JSON body:
         {"ticker": "NU", "conviction": 4, "target_weight_pct": 6, "narrative": "..."}
         — at least one of conviction (1–5) / target_weight_pct (0–100). Each
-        provided kind appends its own ``position_sizing_intent`` row (append-only
-        history, never an update), sharing the optional narrative."""
+        provided kind appends its own ``position_sizing_intent`` row and
+        explicitly supersedes the current row of that kind. History remains
+        immutable and audit-readable; active views show only the replacement."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from user_state.sizing import append_intent
+        from user_state.sizing import append_intent, list_intents, supersede_intents
 
         body = cast("dict[str, object]", request.get_json(silent=True) or {})
         ticker = str(body.get("ticker") or "").strip().upper()
@@ -4282,17 +4283,35 @@ def create_app(
             to_write.append(("target_weight_pct", target_f))
         if not to_write:
             return ({"error": "provide conviction and/or target_weight_pct"}, 400)
-        created = [
-            append_intent(
-                user_id=user_id,
-                ticker=ticker,
-                intent_kind=kind,
-                intent_value=value_f,
-                narrative=narrative,
-                db_path=db_path,
-            ).id
-            for kind, value_f in to_write
-        ]
+        created: list[int] = []
+        for kind, value_f in to_write:
+            prior_ids = tuple(
+                row.id
+                for row in list_intents(user_id=user_id, ticker=ticker, db_path=db_path)
+                if row.intent_kind == kind
+            )
+            row = (
+                supersede_intents(
+                    user_id=user_id,
+                    ticker=ticker,
+                    intent_kind=kind,
+                    intent_value=value_f,
+                    narrative=narrative,
+                    supersedes_intent_ids=prior_ids,
+                    reason="Owner recorded a newer sizing posture through the sizing API.",
+                    db_path=db_path,
+                )
+                if prior_ids
+                else append_intent(
+                    user_id=user_id,
+                    ticker=ticker,
+                    intent_kind=kind,
+                    intent_value=value_f,
+                    narrative=narrative,
+                    db_path=db_path,
+                )
+            )
+            created.append(row.id)
         return {"ticker": ticker, "ok": True, "created_ids": created}
 
     @app.route("/api/sizing-intents/<ticker>/checkpoint", methods=["POST", "OPTIONS"])

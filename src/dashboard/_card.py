@@ -28,7 +28,7 @@ _ACTION_KIND_LABELS: dict[str, str] = {
     "thesis_update": "Thesis update",
     "bear_append": "Bear-case append",
     "sizing_update": "Sizing change",
-    "earnings_prep_append": "Earnings-prep note",
+    "earnings_prep_append": "Open question",
 }
 
 

@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for the redesigned 9-sheet DCF: the reader/projection/value engine
 (``src/dcf/redesign.py``) and the redesign refresh path in
 ``execution/refresh_dcf.py`` (rebuild-from-FMP with Dashboard edit-preservation).
@@ -25,6 +26,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 import pytest
@@ -1174,7 +1176,8 @@ def test_refresh_provenance_end_to_end(refresh_repo: Path, monkeypatch: pytest.M
 
     res2 = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
     assert res2["status"] == "ok", res2
-    sources = res2["assumption_provenance"]["sources"]
+    provenance = cast("dict[str, object]", res2["assumption_provenance"])
+    sources = cast("dict[str, int]", provenance["sources"])
     assert sources.get("user-edited", 0) >= 1
 
     data = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))
@@ -1632,7 +1635,7 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     # The edit landed on the live workbook (no rebuild) and lifts the value.
     edited = redesign.read_inputs(dest)
     assert edited is not None and edited.exit_multiple == pytest.approx(m0 + 3.0)
-    assert res["fair_value_per_share"] > float(npv0)
+    assert cast("float", res["fair_value_per_share"]) > float(npv0)
 
     # dcf_runs re-persisted; the prior market quote was carried forward.
     conn = sqlite3.connect(str(db))

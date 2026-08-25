@@ -14,6 +14,7 @@ import pytest
 from alerts import (
     ACTION_STATUS_APPLIED,
     ACTION_STATUS_CANCELLED,
+    ACTION_STATUS_PENDING,
     ALERT_STATUS_APPROVED,
     ALERT_STATUS_DISMISSED,
     ALERT_STATUS_PENDING,
@@ -24,6 +25,7 @@ from alerts import (
     queue_action,
 )
 from user_state.ledger import list_entries
+from user_state.notes import list_notes
 from user_state.sizing import list_intents
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -50,11 +52,16 @@ def cli() -> Any:
     return _load_cli()
 
 
-def _seed_alert(db_path: Path, ticker: str = "GOOG", signature: str = "sig-1") -> int:
+def _seed_alert(
+    db_path: Path,
+    ticker: str = "GOOG",
+    signature: str = "sig-1",
+    trigger_kind: str = "kpi_inflection",
+) -> int:
     """Seed one alert; return its id."""
     row = fire_alert(
         ticker=ticker,
-        trigger_kind="kpi_inflection",
+        trigger_kind=trigger_kind,
         fired_at=datetime.now(UTC),
         evidence_json='{"summary": "test"}',
         signature_sha=signature,
@@ -107,6 +114,52 @@ def test_approve_thesis_update_writes_ledger_entry(
     assert entry.source_alert_id == alert_id
 
 
+def test_material_news_action_cannot_write_future_ledger_entry(cli: Any, db_path: Path) -> None:
+    """The writer enforces the same rule used by the historical ledger projection."""
+    alert_id = _seed_alert(
+        db_path,
+        ticker="MSFT",
+        signature="sig-material-news",
+        trigger_kind="material_news",
+    )
+    qa = queue_action(
+        alert_id=alert_id,
+        action_kind="thesis_update",
+        payload={"body": "Incorporate development: headline"},
+        db_path=db_path,
+    )
+
+    with pytest.raises(ValueError, match=r"material_news.*not eligible"):
+        cli.approve_and_apply(qa.id, db_path=db_path)
+
+    assert get_action(qa.id, db_path=db_path).status == ACTION_STATUS_PENDING
+    assert list_entries(ticker="MSFT", db_path=db_path, include_ineligible=True) == []
+
+
+@pytest.mark.parametrize("action_kind", ["thesis_update", "bear_append"])
+def test_earnings_tone_cannot_write_machine_thesis_or_bear_case(
+    cli: Any, db_path: Path, action_kind: str
+) -> None:
+    alert_id = _seed_alert(
+        db_path,
+        ticker="NU",
+        signature=f"sig-earnings-tone-{action_kind}",
+        trigger_kind="earnings_tone",
+    )
+    qa = queue_action(
+        alert_id=alert_id,
+        action_kind=action_kind,
+        payload={"body": "Machine-generated interpretation"},
+        db_path=db_path,
+    )
+
+    with pytest.raises(ValueError, match=rf"earnings_tone.*{action_kind}.*not eligible"):
+        cli.approve_and_apply(qa.id, db_path=db_path)
+
+    assert get_action(qa.id, db_path=db_path).status == ACTION_STATUS_PENDING
+    assert list_entries(ticker="NU", db_path=db_path, include_ineligible=True) == []
+
+
 def test_approve_bear_append_writes_ledger_entry(
     cli: Any,
     db_path: Path,
@@ -138,7 +191,7 @@ def test_approve_bear_append_writes_ledger_entry(
     assert entries[0].entry_kind == "bear_append"
 
 
-def test_approve_earnings_prep_append_writes_ledger_entry(
+def test_approve_earnings_prep_append_writes_open_question_not_ledger(
     cli: Any,
     db_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -164,9 +217,17 @@ def test_approve_earnings_prep_append_writes_ledger_entry(
     rc = cli.main()
     assert rc == 0
 
-    entries = list_entries(ticker="NU", db_path=db_path)
-    assert len(entries) == 1
-    assert entries[0].entry_kind == "earnings_prep_append"
+    assert list_entries(ticker="NU", db_path=db_path, include_ineligible=True) == []
+    notes = list_notes(ticker="NU", kind="question", status="open", db_path=db_path)
+    assert len(notes) == 1
+    assert notes[0].body == "Ask about credit-loss trajectory"
+    assert notes[0].source == "alert"
+    assert notes[0].context == {
+        "queued_action_id": qa.id,
+        "source_alert_id": alert_id,
+        "trigger_kind": "kpi_inflection",
+        "purpose": "earnings_call_open_question",
+    }
 
 
 # ----------------------------------------------------------------------------
@@ -264,12 +325,14 @@ def test_approve_ledger_action_without_payload_ticker_uses_alert_ticker(
     refreshed = get_action(qa.id, db_path=db_path)
     assert refreshed.status == ACTION_STATUS_APPLIED
 
-    # Ledger entry written under the PARENT ALERT's ticker
-    entries = list_entries(ticker="NU", db_path=db_path)
-    assert len(entries) == 1
-    assert entries[0].entry_kind == "earnings_prep_append"
-    assert entries[0].body == "Probe risk-adjusted NIM seasonality next call"
-    assert entries[0].source_alert_id == alert_id
+    # Open question written under the PARENT ALERT's ticker; no decision-ledger row.
+    notes = list_notes(ticker="NU", kind="question", status="open", db_path=db_path)
+    assert len(notes) == 1
+    assert notes[0].body == "Probe risk-adjusted NIM seasonality next call"
+    assert notes[0].source_ref == f"queued_action:{qa.id}:earnings_prep"
+    retry = cli._write_earnings_question(qa, db_path)
+    assert retry.id == notes[0].id
+    assert list_entries(ticker="NU", db_path=db_path, include_ineligible=True) == []
 
 
 def test_approve_sizing_update_without_payload_ticker_uses_alert_ticker(

@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 
 _RECOVERY_REVISION = "0003_restore_baseline_defaults"
-_ACTIVE_HEAD = "0024_add_operations_attention_findings"
+_ACTIVE_HEAD = "0027_add_sizing_intent_supersessions"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
