@@ -81,6 +81,28 @@ def test_scheduled_refresh_context_uses_one_bounded_validated_process_snapshot(
     assert "$ancestry.Add([int]$next)" in script
 
 
+def test_scheduled_refresh_context_allows_cold_windows_com_probe(tmp_path: Path) -> None:
+    """A valid Scheduler proof gets the bounded five-second cold-start budget."""
+
+    observed_timeout: float | None = None
+
+    def cold_running_task(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal observed_timeout
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, float)
+        observed_timeout = timeout
+        if timeout < 5.0:
+            raise subprocess.TimeoutExpired(command, timeout)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    assert refresh.canonical_scheduler_task_is_running(
+        tmp_path,
+        windows=True,
+        run=cold_running_task,
+    )
+    assert observed_timeout == 5.0
+
+
 def test_tracker_server_argv_requires_explicit_existing_root_and_safe_loopback_url(
     tmp_path: Path,
 ) -> None:
