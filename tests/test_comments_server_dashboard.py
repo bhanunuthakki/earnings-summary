@@ -178,9 +178,9 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +3 surviving Generation 3 projections: portfolio risk matrix, aggregated
     # open loops, and pre-trade positioning simulation. Company Say/Do now rides
     # the request-scoped typed Company Desk response instead of a duplicate route.
-    # +1 bounded Evaluation Dialogues hydration route.
+    # +2 Evaluation routes: bounded Cockpit dialogues and the complete L2 surface.
     # +1 governed Operations attention lifecycle action route.
-    assert len(rules) == 173
+    assert len(rules) == 174
     assert "company_say_do_api" not in rules
     assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()
     assert rules["operations_attention_action"] == ("/api/operations/attention/<action_name>")
@@ -306,6 +306,7 @@ def test_dashboard_page_returns_shell(client: FlaskClient) -> None:
         "screen-cockpit",
         "screen-performance",
         "screen-workspace",
+        "screen-evaluation",
         "screen-brief-library",
         "screen-analytics-playground",
         "screen-audit-log",
@@ -410,6 +411,7 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
     assert payload["allocation"]["state"] == "available"
     assert [row["ticker"] for row in payload["companies"]] == ["NU"]
     assert payload["companies"][0]["current_weight_pct"] == 50.0
+    assert "dcf_url" in payload["companies"][0]
     assert "MELI" not in response.get_data(as_text=True)
 
 
@@ -421,6 +423,21 @@ def test_evaluation_dialogues_api_returns_read_only_bounded_projection(client: F
     assert payload["state"] in {"available", "partial", "unavailable"}
     assert isinstance(payload["items"], list)
     assert len(payload["items"]) <= 1
+
+
+def test_work_os_evaluation_api_returns_complete_versioned_projection(
+    client: FlaskClient,
+) -> None:
+    response = client.get("/api/work-os/evaluation")
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/json"
+    assert response.headers["Cache-Control"] == "no-store"
+    payload = response.get_json()
+    assert payload["schema_version"] == "evaluation_surface.v1"
+    assert payload["count"] == len(payload["items"])
+    assert {item["instrument_type"] for item in payload["items"]} <= {"company", "etf"}
+    assert "stock" not in response.get_data(as_text=True).lower()
 
 
 def test_work_os_portfolio_api_uses_governed_snapshot_only_after_tracker_failure(

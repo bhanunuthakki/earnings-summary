@@ -1,4 +1,4 @@
-"""Production renderer for the seven-screen Equity Work OS.
+"""Production renderer for the eight-screen Equity Work OS.
 
 The high-fidelity prototype is intentionally the single markup source of truth.
 This module applies the small production-only contract around it: live endpoint
@@ -73,6 +73,12 @@ SCREEN_SPECS: tuple[ScreenSpec, ...] = (
     ),
     ScreenSpec("screen-workspace", "nav-workspace", "Company Desk", "/api/panel/holding"),
     ScreenSpec(
+        "screen-evaluation",
+        "nav-evaluation",
+        "Evaluation",
+        "/api/work-os/evaluation",
+    ),
+    ScreenSpec(
         "screen-brief-library",
         "nav-brief-library",
         "Brief Library",
@@ -103,6 +109,8 @@ _LEGACY_HASHES: dict[str, str] = {
     "overview": "screen-cockpit",
     "companies": "screen-workspace",
     "holding": "screen-workspace",
+    "evaluation": "screen-evaluation",
+    "candidates": "screen-evaluation",
     "screen-full-brief": "screen-brief-library",
     "diet": "screen-workspace",
     "discovery": "screen-workspace",
@@ -193,6 +201,11 @@ _ALLOCATION_SECTION_RE = re.compile(
 )
 _COMPANY_DESK_SECTION_RE = re.compile(
     r'<section id="screen-workspace".*?</section>\s*'
+    r"(?=<!-- =+\s*EVALUATION COVERAGE DESTINATION)",
+    re.DOTALL,
+)
+_EVALUATION_SECTION_RE = re.compile(
+    r'<section id="screen-evaluation".*?</section>\s*'
     r"(?=<!-- =+\s*BRIEF LIBRARY PERSISTENT DESTINATION)",
     re.DOTALL,
 )
@@ -287,6 +300,52 @@ def _render_portfolio_cockpit_shell() -> str:
 """.strip()
 
 
+def _render_evaluation_shell() -> str:
+    """Render the complete mixed company/ETF evaluation destination."""
+
+    return """
+<section id="screen-evaluation" class="screen-view" data-layout="research-evaluation" role="region" aria-labelledby="workOsEvaluationSurfaceHeading">
+  <header class="research-toolbar k-card">
+    <div>
+      <div class="k-card-meta">Research Engine · Complete evaluation coverage</div>
+      <h1 class="k-card-title" id="workOsEvaluationSurfaceHeading">Evaluation</h1>
+      <p class="k-card-meta">Scan every company and ETF currently under evaluation, then open the appropriate governed research doorway.</p>
+    </div>
+    <div class="research-actions">
+      <span class="k-pill" id="workOsEvaluationSurfaceCount">Loading</span>
+      <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-refresh-evaluation>Refresh</button>
+    </div>
+  </header>
+  <section class="k-card work-os-section" aria-label="Evaluation coverage list">
+    <header class="k-section-head">
+      <div>
+        <div class="k-section-title" role="heading" aria-level="2">Coverage</div>
+        <div class="k-section-meta">Human-readable thesis, scores, portfolio fit, valuation, and verified research links. No internal identifiers or encoded payloads are shown.</div>
+      </div>
+    </header>
+    <div class="table-scroll">
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th>Company</th>
+            <th>Type</th>
+            <th>Thesis</th>
+            <th>Evaluation</th>
+            <th>Portfolio fit</th>
+            <th class="num">DCF upside</th>
+            <th>Research</th>
+          </tr>
+        </thead>
+        <tbody id="workOsEvaluationRows">
+          <tr><td colspan="7"><div class="k-well" role="status">Loading complete evaluation coverage…</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+""".strip()
+
+
 def _render_live_screen_shell(
     *,
     screen_id: str,
@@ -367,6 +426,7 @@ def _production_runtime(generated_at: datetime) -> str:
   }};
   let workOsPortfolioHydration = null;
   let workOsPortfolioLoading = null;
+  let workOsEvaluationSurfaceLoading = null;
   let workOsResearchCompanies = null;
   let workOsCompanyRequestSequence = 0;
   let workOsCompanyRequestController = null;
@@ -1985,11 +2045,14 @@ def _production_runtime(generated_at: datetime) -> str:
           ? '<button class="k-chip" type="button" data-peek-url="' + escapeWorkOsHtml(company.earnings_route) + '" data-peek-title="Earnings research — ' + escapeWorkOsHtml(company.ticker) + '">Earnings</button>'
           : '';
       const briefAction = company.report_url
-        ? '<button class="k-chip is-active" type="button" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Brief</button>'
+        ? '<a class="k-chip is-active" href="' + escapeWorkOsHtml(company.report_url) + '" data-work-os-full-brief="' + escapeWorkOsHtml(company.ticker) + '">Brief</a>'
+        : '';
+      const dcfAction = company.dcf_url
+        ? '<a class="k-chip" href="' + escapeWorkOsHtml(company.dcf_url) + '">DCF</a>'
         : '';
       return '<tr data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '"><td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(company.ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(company.name) + '</span></div></td>' +
         '<td class="num"><span class="k-pill">' + escapeWorkOsHtml(weight) + '</span></td><td class="num t-mono"><div>' + workOsIntegerMoney(company.price) + ' / <strong>' + workOsIntegerMoney(company.fair_value) + '</strong></div><a class="k-card-meta work-os-threshold-link" data-work-os-thresholds="' + escapeWorkOsHtml(company.ticker) + '" href="/advisor/sizing-intents/' + encodeURIComponent(company.ticker) + '">Open buy / hold / trim / sell ladder</a></td>' +
-        '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span><div class="k-card-meta">' + escapeWorkOsHtml(statusDetail) + '</div></td><td><div class="research-actions"><button class="k-chip" type="button" data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '">Company Desk</button>' + briefAction + readoutAction + '</div></td></tr>';
+        '<td><span class="' + workOsPillClass(status) + '">' + escapeWorkOsHtml(status) + '</span><div class="k-card-meta">' + escapeWorkOsHtml(statusDetail) + '</div></td><td><div class="research-actions"><a class="k-chip" href="/ticker/' + encodeURIComponent(company.ticker) + '" data-work-os-ticker="' + escapeWorkOsHtml(company.ticker) + '">Company Desk</a>' + dcfAction + briefAction + readoutAction + '</div></td></tr>';
     }}).join('') : '<tr><td colspan="5"><div class="k-well">No governed portfolio companies are available.</div></td></tr>';
   }}
 
@@ -2013,8 +2076,14 @@ def _production_runtime(generated_at: datetime) -> str:
     document.querySelectorAll('[data-work-os-ticker]').forEach(function (node) {{
       if (node.dataset.workOsTickerBound === 'true') return;
       node.dataset.workOsTickerBound = 'true';
-      node.addEventListener('click', function (event) {{
-        if (node.tagName === 'TR' && event.target instanceof Element && event.target.closest('button')) return;
+      node.addEventListener('click', async function (event) {{
+        if (node.tagName === 'TR' && event.target instanceof Element && event.target.closest('button, a')) return;
+        if (node.tagName === 'A') {{
+          event.preventDefault();
+          const opened = await switchCompanyWorkspace(node.dataset.workOsTicker);
+          if (!opened) window.location.assign(node.getAttribute('href'));
+          return;
+        }}
         switchCompanyWorkspace(node.dataset.workOsTicker);
       }});
     }});
@@ -2029,7 +2098,7 @@ def _production_runtime(generated_at: datetime) -> str:
       if (node.dataset.workOsBriefBound === 'true') return;
       node.dataset.workOsBriefBound = 'true';
       node.addEventListener('click', function (event) {{
-        event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief);
+        event.preventDefault(); event.stopPropagation(); openFullBriefCanvas(node.dataset.workOsFullBrief);
       }});
     }});
     document.querySelectorAll('[data-work-os-thresholds]').forEach(function (node) {{
@@ -2060,7 +2129,7 @@ def _production_runtime(generated_at: datetime) -> str:
         return '<article class="k-well work-os-action-card"><div class="work-os-action-row"><div class="work-os-action-copy">' +
           '<span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(action.ticker) + '</span><div><h3 class="k-card-row-title">' + escapeWorkOsHtml(action.headline) + '</h3>' +
           '<div class="k-card-meta">' + escapeWorkOsHtml(action.detail) + '</div>' + workOsActionEvidence(action) + workOsGovernedActionControls(action) + '</div></div>' +
-          '<button class="k-btn k-btn-primary k-btn-sm" type="button" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company</button></div></article>';
+          '<a class="k-btn k-btn-primary k-btn-sm" href="/ticker/' + encodeURIComponent(action.ticker) + '" data-work-os-ticker="' + escapeWorkOsHtml(action.ticker) + '">Open Company</a></div></article>';
       }}).join('') : '<div class="k-well">No material portfolio-company reviews are waiting.</div>';
     }}
     workOsRenderPortfolioRows(companies);
@@ -2079,7 +2148,7 @@ def _production_runtime(generated_at: datetime) -> str:
       if (count) count.textContent = String(items.length) + ' active';
       target.innerHTML = items.length ? items.map(function (item) {{
         const ticker = String(item.ticker || '').toUpperCase();
-        const instrument = item.instrument_type === 'etf' ? 'ETF' : item.instrument_type === 'stock' ? 'Stock' : 'Instrument unavailable';
+        const instrument = item.instrument_type === 'etf' ? 'ETF' : item.instrument_type === 'stock' ? 'Company' : 'Instrument unavailable';
         const sessionId = typeof item.ask_session_id === 'string' ? item.ask_session_id.trim() : '';
         const linked = item.ask_session_link_state === 'linked' && Boolean(sessionId);
         const readiness = String(item.workup_readiness || 'unavailable').replaceAll('_', ' ');
@@ -2098,6 +2167,97 @@ def _production_runtime(generated_at: datetime) -> str:
       target.innerHTML = '<div class="k-well" role="alert">Evaluation dialogues are temporarily unavailable. No prototype candidates are being shown.</div>';
     }}
   }}
+
+  function workOsHumanCopy(value, fallback) {{
+    const text = String(value || '').replace(/\\s+/g, ' ').trim();
+    if (!text) return fallback || 'Unavailable';
+    return text.replace(/\\b(?:sha256:)?[a-f0-9]{{40,}}\\b/gi, 'source reference');
+  }}
+
+  function workOsEvaluationMetric(value, why, partial, suffix) {{
+    const number = workOsFiniteNumber(value);
+    const rendered = number !== null
+      ? new Intl.NumberFormat('en-US', {{ maximumFractionDigits: 2 }}).format(number) + (suffix || '')
+      : 'Unavailable';
+    const partialPill = partial ? '<span class="k-pill k-pill-warn">Partial</span>' : '';
+    return '<div class="research-actions"><strong class="t-mono">' + escapeWorkOsHtml(rendered) + '</strong>' + partialPill + '</div>' +
+      '<div class="k-card-meta">' + escapeWorkOsHtml(workOsHumanCopy(why, 'No explanation available')) + '</div>';
+  }}
+
+  function workOsFiniteNumber(value) {{
+    if (value == null || String(value).trim() === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }}
+
+  function workOsEvaluationActions(item) {{
+    const actions = [];
+    const ticker = workOsNormalizeTicker(item.ticker);
+    if (item.instrument_type === 'company' && item.company_desk_url) {{
+      actions.push('<a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(item.company_desk_url) + '" data-work-os-evaluation-company="' + escapeWorkOsHtml(ticker) + '">Company Desk</a>');
+    }}
+    if (item.instrument_type === 'etf' && item.workup_url) {{
+      actions.push('<a class="k-btn k-btn-primary k-btn-sm" href="' + escapeWorkOsHtml(item.workup_url) + '" data-peek-url="' + escapeWorkOsHtml(item.workup_url) + '" data-peek-title="ETF workup — ' + escapeWorkOsHtml(ticker) + '">ETF workup</a>');
+    }}
+    if (item.dcf_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.dcf_url) + '">DCF</a>');
+    if (item.report_url) actions.push('<a class="k-chip" href="' + escapeWorkOsHtml(item.report_url) + '">Brief</a>');
+    return actions.length ? '<div class="research-actions">' + actions.join('') + '</div>' : '<span class="k-card-meta">No verified artifact available</span>';
+  }}
+
+  function workOsRenderEvaluationRows(payload) {{
+    const target = document.getElementById('workOsEvaluationRows');
+    const count = document.getElementById('workOsEvaluationSurfaceCount');
+    if (!target) return;
+    const items = payload && Array.isArray(payload.items) ? payload.items : [];
+    if (count) count.textContent = String(items.length) + ' under evaluation';
+    target.innerHTML = items.length ? items.map(function (item) {{
+      const ticker = workOsNormalizeTicker(item.ticker);
+      const type = item.instrument_type === 'etf' ? 'ETF' : 'Company';
+      const typeClass = item.instrument_type === 'etf' ? 'k-pill k-pill-warn' : 'k-pill';
+      const thesis = workOsHumanCopy(item.thesis_excerpt, 'No thesis excerpt is available yet.');
+      const thesisSource = item.source === 'micro_thesis' ? 'Holding thesis' : item.source === 'position_entry' ? 'Position entry' : 'Thesis unavailable';
+      const fitDetail = workOsEvaluationMetric(item.fit, item.fit_why, item.fit_partial, '');
+      const heldWeight = workOsFiniteNumber(item.held_weight_pct);
+      const held = heldWeight !== null ? '<div class="k-card-meta">Held weight ' + escapeWorkOsHtml(workOsPortfolioPercent(heldWeight)) + '</div>' : '';
+      const dcfUpside = workOsFiniteNumber(item.dcf_upside_pct);
+      const dcf = dcfUpside !== null ? workOsPercent(dcfUpside) : 'Unavailable';
+      return '<tr data-work-os-evaluation-row="' + escapeWorkOsHtml(ticker) + '">' +
+        '<td><div class="k-ticker"><span class="k-ticker-symbol t-mono">' + escapeWorkOsHtml(ticker) + '</span><span class="k-ticker-name">' + escapeWorkOsHtml(workOsHumanCopy(item.name, ticker)) + '</span></div></td>' +
+        '<td><span class="' + typeClass + '">' + type + '</span></td>' +
+        '<td><div>' + escapeWorkOsHtml(thesis) + '</div><div class="k-card-meta">' + escapeWorkOsHtml(thesisSource) + '</div></td>' +
+        '<td>' + workOsEvaluationMetric(item.score, item.score_why, item.score_partial, '') + '</td>' +
+        '<td>' + fitDetail + held + '</td>' +
+        '<td class="num t-mono">' + escapeWorkOsHtml(dcf) + '</td>' +
+        '<td>' + workOsEvaluationActions(item) + '</td></tr>';
+    }}).join('') : '<tr><td colspan="7"><div class="k-well">No companies or ETFs are currently under evaluation.</div></td></tr>';
+  }}
+  window.workOsRenderEvaluationRows = workOsRenderEvaluationRows;
+
+  async function workOsRenderEvaluationSurface() {{
+    const target = document.getElementById('workOsEvaluationRows');
+    const count = document.getElementById('workOsEvaluationSurfaceCount');
+    if (!target) return false;
+    if (workOsEvaluationSurfaceLoading) return workOsEvaluationSurfaceLoading;
+    target.setAttribute('aria-busy', 'true');
+    workOsEvaluationSurfaceLoading = (async function () {{
+      try {{
+        const response = await fetch('/api/work-os/evaluation', {{ headers: {{ Accept: 'application/json' }} }});
+        const payload = response.ok ? await response.json() : null;
+        if (!payload || payload.schema_version !== 'evaluation_surface.v1' || !Array.isArray(payload.items)) throw new Error('Invalid evaluation response');
+        workOsRenderEvaluationRows(payload);
+        return true;
+      }} catch (_error) {{
+        if (count) count.textContent = 'Unavailable';
+        target.innerHTML = '<tr><td colspan="7"><div class="k-well" role="alert">Evaluation coverage is temporarily unavailable. No prototype rows are being shown.</div></td></tr>';
+        return false;
+      }} finally {{
+        target.removeAttribute('aria-busy');
+        workOsEvaluationSurfaceLoading = null;
+      }}
+    }})();
+    return workOsEvaluationSurfaceLoading;
+  }}
+  window.workOsRenderEvaluationSurface = workOsRenderEvaluationSurface;
 
   function workOsOpenEvaluationDialogue(button) {{
     const sessionId = String(button.getAttribute('data-work-os-evaluation-session') || '').trim();
@@ -2133,9 +2293,19 @@ def _production_runtime(generated_at: datetime) -> str:
     if (safeTicker) workOsOpenPeekRoute('/api/peek/discovery-compare?tickers=' + encodeURIComponent(safeTicker), 'Compare — ' + safeTicker);
   }}
 
-  document.addEventListener('click', function (event) {{
-    const target = event.target instanceof Element ? event.target.closest('[data-work-os-portfolio-sort], [data-work-os-evaluation-dialogue], [data-work-os-evaluation-workup], [data-work-os-evaluation-compare]') : null;
+  document.addEventListener('click', async function (event) {{
+    const target = event.target instanceof Element ? event.target.closest('[data-work-os-portfolio-sort], [data-work-os-evaluation-dialogue], [data-work-os-evaluation-workup], [data-work-os-evaluation-compare], [data-work-os-evaluation-company], [data-work-os-refresh-evaluation]') : null;
     if (!target) return;
+    if (target.hasAttribute('data-work-os-refresh-evaluation')) {{ workOsRenderEvaluationSurface(); return; }}
+    if (target.hasAttribute('data-work-os-evaluation-company')) {{
+      const ticker = workOsNormalizeTicker(target.getAttribute('data-work-os-evaluation-company'));
+      if (ticker && typeof window.switchCompanyWorkspace === 'function') {{
+        event.preventDefault();
+        const opened = await window.switchCompanyWorkspace(ticker);
+        if (!opened) window.location.assign(target.getAttribute('href'));
+      }}
+      return;
+    }}
     if (target.hasAttribute('data-work-os-portfolio-sort')) {{ workOsSortPortfolioRows(target.getAttribute('data-work-os-portfolio-sort')); return; }}
     if (target.hasAttribute('data-work-os-evaluation-dialogue')) {{ workOsOpenEvaluationDialogue(target); return; }}
     if (target.hasAttribute('data-work-os-evaluation-workup')) {{ workOsOpenEvaluationWorkup(target); return; }}
@@ -2356,6 +2526,7 @@ def _production_runtime(generated_at: datetime) -> str:
       if (ticker) {{ window.switchCompanyWorkspace(ticker, {{ fromHistory: !!(options && options.fromHistory) }}); return; }}
     }}
     if (target === 'screen-brief-library') workOsRenderBriefLibrary();
+    if (target === 'screen-evaluation') workOsRenderEvaluationSurface();
     if (target === 'screen-analytics-playground' && !(options && options.companyContextReady)) {{
       const ticker = workOsCurrentCompanyTicker();
       if (ticker) {{ window.switchFactPlayground(ticker, {{ fromHistory: !!(options && options.fromHistory) }}); return; }}
@@ -2786,6 +2957,7 @@ def _add_production_contract(
     html = _ALLOCATION_SECTION_RE.sub("\n\n      ", html, count=1)
     html = _ALLOCATION_NAV_RE.sub("", html, count=1)
     html = _COMPANY_DESK_SECTION_RE.sub(render_company_desk_shell() + "\n\n      ", html, count=1)
+    html = _EVALUATION_SECTION_RE.sub(_render_evaluation_shell() + "\n\n      ", html, count=1)
     html = _BRIEF_LIBRARY_SECTION_RE.sub(render_brief_library_shell() + "\n\n      ", html, count=1)
     html = _FACT_PLAYGROUND_SECTION_RE.sub(
         render_fact_playground_shell() + "\n\n      ", html, count=1

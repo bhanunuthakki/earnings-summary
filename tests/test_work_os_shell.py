@@ -27,6 +27,7 @@ def test_work_os_has_the_unified_performance_risk_destination() -> None:
         "screen-cockpit",
         "screen-performance",
         "screen-workspace",
+        "screen-evaluation",
         "screen-brief-library",
         "screen-analytics-playground",
         "screen-audit-log",
@@ -96,6 +97,38 @@ def test_portfolio_copilot_home_composes_live_sortable_holdings_and_bounded_dial
         "function workOsBindPortfolioInteractions", 1
     )[0]
     assert "workOsBindPortfolioInteractions();" in sort_runtime
+    assert "href=\"/ticker/' + encodeURIComponent(company.ticker)" in html
+    assert "company.dcf_url" in html
+    assert "event.target.closest('button, a')" in html
+    assert "if (!opened) window.location.assign(node.getAttribute('href'));" in html
+
+
+def test_evaluation_is_a_complete_live_research_destination() -> None:
+    html = render_work_os_shell()
+    evaluation = _screen_fragment(html, "screen-evaluation")
+
+    assert "Evaluation" in evaluation
+    assert "Complete evaluation coverage" in evaluation
+    assert 'id="workOsEvaluationRows"' in evaluation
+    assert 'data-live-endpoint="/api/work-os/evaluation" id="screen-evaluation"' in html
+    for label in (
+        "Company",
+        "Type",
+        "Thesis",
+        "Evaluation",
+        "Portfolio fit",
+        "DCF upside",
+        "Research",
+    ):
+        assert f">{label}<" in evaluation
+    assert "workOsRenderEvaluationSurface" in html
+    assert "function workOsFiniteNumber(value)" in html
+    assert "if (value == null || String(value).trim() === '') return null;" in html
+    assert "fetch('/api/work-os/evaluation'" in html
+    assert "Company Desk" in html
+    assert "ETF workup" in html
+    assert "if (!opened) window.location.assign(target.getAttribute('href'));" in html
+    assert "No internal identifiers or encoded payloads are shown" in evaluation
 
 
 def test_work_os_shell_preserves_the_prototype_navigation_and_layers() -> None:
@@ -251,6 +284,7 @@ def test_work_os_shell_uses_live_backend_mounts_without_removing_old_endpoints()
         "screen-cockpit": "/api/panel/overview",
         "screen-performance": "/api/panel/performance_risk",
         "screen-workspace": "/api/panel/holding",
+        "screen-evaluation": "/api/work-os/evaluation",
         "screen-brief-library": "/api/work-os/briefs",
         "screen-analytics-playground": "/api/panel/explore",
         "screen-audit-log": "/api/panel/portfolio_record",
@@ -1236,7 +1270,7 @@ def test_home_and_library_surface_latest_earnings_readouts_before_full_briefs() 
     assert "data-work-os-readout" in html
     assert "Readout unavailable" not in _screen_fragment(html, "screen-cockpit")
     assert "node.tagName === 'TR'" in html
-    assert "event.target.closest('button')" in html
+    assert "event.target.closest('button, a')" in html
     assert 'id="briefKindFilter"' in html
     assert '<option value="earnings_readout">Earnings readouts</option>' in html
     assert "const hydratedReadouts = workOsPortfolioHydration" in html
