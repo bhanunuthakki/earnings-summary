@@ -9,7 +9,7 @@ import sys
 import time
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal, cast
@@ -24,6 +24,7 @@ RUNTIME_RECEIPT_SCHEMA_VERSION = "1"
 PORTFOLIO_TRACKER_RUNTIME_SURFACE_FIELD = "portfolio_tracker_runtime"
 LEASE_STALE_AFTER_SECONDS = 3_600.0
 LEASE_RELEASE_DEADLINE_SECONDS = 0.5
+HEALTH_RESPONSE_CLOCK_SKEW = timedelta(seconds=5)
 
 
 class RuntimeConfig(BaseModel):
@@ -58,7 +59,11 @@ def health_is_healthy(health: HealthV1 | None, *, now: datetime) -> bool:
         return False
     if health.generated_at.tzinfo is None or now.tzinfo is None:
         return False
-    return health.generated_at <= now
+    # ``now`` is captured immediately before the HTTP probe, while the local
+    # service stamps its response during that probe. Permit only the bounded
+    # request/response ordering window; larger future timestamps still fail
+    # closed as clock-incoherent.
+    return health.generated_at <= now + HEALTH_RESPONSE_CLOCK_SKEW
 
 
 def parse_tracker_bind_url(api_url: str) -> tuple[str, int] | None:
