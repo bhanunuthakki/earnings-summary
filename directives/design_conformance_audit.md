@@ -33,14 +33,21 @@ block at merge; this audit is the third — the semantic net for what a regex
      `.panel-head` / hairline / `.panel-foot`; a floating KPI strip instead of the
      gridline-gap pattern;
    - **reinvented outline chips / tags** the `kit-badge` regex can't catch (it
-     only fires on filled status pills).
+     only fires on filled status pills);
+   - **container economy** — nested cards, wells, rails, dividers, or backgrounds without a
+     distinct semantic/state/ownership boundary;
+   - **competing layout grammars** or unjustified visual differentiation between equivalent sections;
+   - **redundant hierarchy** — title/subtitle stacks that repeat meaning or several treatments for
+     one level of importance; and
+   - **decorative formatting** — bullets or indentation that do not represent a real list or
+     parent-child relationship.
 
 ## Method (what the scheduled run does)
 
 1. Read `directives/design_language.md` (the rulebook) + `src/ui/controls.py` +
    `src/ui/tokens.py` (the kit + values) — this is the gold-standard DNA.
 2. Review the dashboard / pipeline surfaces (`src/pipeline/*.py`,
-   `src/dashboard/*.py`) against that DNA for the five semantic drift classes
+   `src/dashboard/*.py`) against that DNA for the semantic drift classes
    above. **Do NOT** re-flag what the deterministic guards already enforce, and
    **do NOT** touch the workspace report (`src/report/**`) — its editorial type
    ramp is a sanctioned §1 exception.
@@ -50,9 +57,10 @@ block at merge; this audit is the third — the semantic net for what a regex
    rails using `--ok/--warn/--bad` for *status* are §2-correct; the `.src-chip`
    8.5px mark, `0.93em` inline mono, and the bespoke `.qbtn`/`.ic-btn`/
    `.twk-toggle-btn` controls are sanctioned).
-4. Write a dated report to `data/design_audit/<YYYY-MM-DD>.md` (gitignored). If
-   confirmed drift exists, either open a small PR composing the kit, or append a
-   `directives/data_fixes.md` entry — never auto-merge a visual change unreviewed.
+4. Write a dated report to `data/design_audit/<YYYY-MM-DD>.md` (gitignored) only for an explicit
+   run or this already registered monthly schedule. This audit is report-only: any remediation,
+   backlog or `directives/data_fixes.md` write, branch, or PR requires separate explicit
+   authorization.
 
 The thorough form is the multi-agent fleet used in the 2026-06-19 sweep
 (extract DNA → per-cluster review → adversarial verify → synthesize); a lighter
@@ -61,7 +69,7 @@ is a *report*, not a silent edit.
 
 ## Scheduling
 
-Registered as a monthly recurring agent (see `/schedule list`). To change cadence
-or pause: `/schedule` (cloud routine) or the machine's scheduled-tasks list. The
-deterministic guards (layers 1–2) are the real gate; this audit is the advisory
-catch for taste-level drift, so a missed month degrades gracefully.
+This runbook owns the already registered monthly cadence and the ignored report location. It may
+also be run explicitly. It never creates, changes, or implies a schedule; change or pause the
+existing registration through the owning scheduler. The deterministic guards (layers 1–2) are the
+real gate; this audit is the advisory semantic backstop, so a missed month degrades gracefully.
