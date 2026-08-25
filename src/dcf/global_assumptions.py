@@ -29,6 +29,7 @@ import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from db_paths import resolve_db_path
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -68,17 +69,53 @@ class GlobalDcfAssumptions:
         return asdict(self)
 
 
-def _read_stored(db_path: Path | str | None) -> dict[str, float]:
-    """Return {field: value} for the rows actually present in the table.
-    Empty dict when the DB / table is missing or unreadable (fails to seed
-    defaults at the caller)."""
+@dataclass(frozen=True, slots=True)
+class GlobalDcfAssumptionsLoad:
+    """One atomic effective load plus the rows/version that produced it."""
+
+    assumptions: GlobalDcfAssumptions
+    source_record: dict[str, object]
+
+
+StoredReadStatus = Literal[
+    "ok",
+    "missing_database",
+    "missing_schema",
+    "invalid_schema",
+    "read_failed",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredRowsRead:
+    rows: dict[str, tuple[float, str | None]]
+    status: StoredReadStatus
+    detail: str | None = None
+
+
+def _read_stored_rows(db_path: Path | str | None) -> _StoredRowsRead:
+    """Return exact stored values and their version timestamps."""
     path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
-        return {}
+        return _StoredRowsRead({}, "missing_database")
     try:
         conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
-            rows = conn.execute("SELECT field, value FROM global_dcf_assumptions").fetchall()
+            columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(global_dcf_assumptions)")
+            }
+            if not columns:
+                return _StoredRowsRead({}, "missing_schema")
+            required = {"field", "value", "updated_at"}
+            if not required.issubset(columns):
+                return _StoredRowsRead(
+                    {},
+                    "invalid_schema",
+                    f"missing columns: {sorted(required - columns)}",
+                )
+            rows = conn.execute(
+                "SELECT field, value, updated_at FROM global_dcf_assumptions"
+            ).fetchall()
         finally:
             conn.close()
     except sqlite3.Error as exc:
@@ -88,12 +125,23 @@ def _read_stored(db_path: Path | str | None) -> dict[str, float]:
                 "error": f"{type(exc).__name__}: {exc}",
             }
         )
-        return {}
-    out: dict[str, float] = {}
-    for field, value in rows:
+        return _StoredRowsRead({}, "read_failed", f"{type(exc).__name__}: {exc}")
+    out: dict[str, tuple[float, str | None]] = {}
+    for field, value, updated_at in rows:
         if field in KNOWN_FIELDS and value is not None:
-            out[str(field)] = float(value)
-    return out
+            out[str(field)] = (
+                float(value),
+                str(updated_at) if updated_at is not None else None,
+            )
+    return _StoredRowsRead(out, "ok")
+
+
+def _read_stored(db_path: Path | str | None) -> dict[str, float]:
+    """Return {field: value} for the rows actually present in the table.
+    Empty dict when the DB / table is missing or unreadable (fails to seed
+    defaults at the caller)."""
+    result = _read_stored_rows(db_path)
+    return {field: value for field, (value, _updated_at) in result.rows.items()}
 
 
 def get(field: str, *, db_path: Path | str | None = None) -> float | None:
@@ -119,6 +167,60 @@ def load(*, db_path: Path | str | None = None) -> GlobalDcfAssumptions:
         risk_free_rate=eff["risk_free_rate"],
         equity_risk_premium=eff["equity_risk_premium"],
         tax_rate=eff["tax_rate"],
+    )
+
+
+def load_with_provenance(*, db_path: Path | str | None = None) -> GlobalDcfAssumptionsLoad:
+    """Load effective globals with exact database/seed lineage in one read."""
+    read = _read_stored_rows(db_path)
+    stored = read.rows
+    effective = dict(SEED_DEFAULTS)
+    effective.update({field: value for field, (value, _updated_at) in stored.items()})
+    assumptions = GlobalDcfAssumptions(
+        risk_free_rate=effective["risk_free_rate"],
+        equity_risk_premium=effective["equity_risk_premium"],
+        tax_rate=effective["tax_rate"],
+    )
+    observed: list[datetime] = []
+    fields: list[dict[str, object]] = []
+    for field in sorted(KNOWN_FIELDS):
+        stored_row = stored.get(field)
+        updated_at = stored_row[1] if stored_row is not None else None
+        if updated_at:
+            try:
+                parsed = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                observed.append(
+                    parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+                )
+        fields.append(
+            {
+                "field": field,
+                "value": effective[field],
+                "source": "database" if stored_row is not None else "seed_default",
+                "updated_at": updated_at,
+            }
+        )
+    if read.status != "ok":
+        status = read.status
+    elif not stored:
+        status = "seed_default"
+    elif len(stored) == len(KNOWN_FIELDS):
+        status = "database"
+    else:
+        status = "mixed"
+    return GlobalDcfAssumptionsLoad(
+        assumptions=assumptions,
+        source_record={
+            "role": "global_dcf_assumptions",
+            "locator": "data/portfolio.db:global_dcf_assumptions",
+            "status": status,
+            "read_detail": read.detail,
+            "observed_at": max(observed).isoformat() if observed else None,
+            "fields": fields,
+        },
     )
 
 
