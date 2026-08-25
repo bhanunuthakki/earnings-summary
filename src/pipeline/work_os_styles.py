@@ -111,7 +111,7 @@ a.k-stat-cell[data-work-os-stat-key]:hover { color: var(--fg); background: var(-
 .company-desk-tracking-note { grid-column: 1 / -1; }
 .company-desk-summary-grid, .company-desk-exploration-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); align-items: start; }
 .research-tabs { display: flex; gap: var(--sp-1); overflow-x: auto; border-block-end: var(--bw-thin) solid var(--hairline); margin-block-end: var(--sp-3); }
-.research-tab { flex: 0 0 auto; border-radius: 0; }
+.research-tab { flex: 0 0 auto; }
 .research-tab[aria-selected="true"] { color: var(--accent); box-shadow: inset 0 calc(var(--bw-thin) * -2) 0 var(--accent); }
 @media (hover: none) { .company-picker-trigger { min-block-size: var(--touch-target-size); opacity: 1; transform: none; } }
 @media (max-width: 47.5rem) {
