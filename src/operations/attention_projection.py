@@ -38,6 +38,7 @@ _HEALTH_TONES: dict[AttentionHealth, AttentionTone] = {
     AttentionHealth.INVALID: "bad",
     AttentionHealth.UNAVAILABLE: "bad",
 }
+_MAX_PANEL_FINDINGS = 200
 
 
 class _SafeView(BaseModel):
@@ -263,7 +264,20 @@ def build_attention_panel_view(
                        acknowledged_at,acknowledged_until,snoozed_until,resolved_at,superseded_by_finding_id,
                        updated_at
                 FROM operations_attention_findings
-                """
+                WHERE lifecycle IN ('open', 'acknowledged', 'snoozed')
+                ORDER BY
+                    CASE
+                        WHEN lifecycle = 'open' THEN 0
+                        WHEN lifecycle = 'acknowledged' AND acknowledged_until <= ? THEN 0
+                        WHEN lifecycle = 'snoozed' AND snoozed_until <= ? THEN 0
+                        ELSE 1
+                    END,
+                    CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+                    updated_at DESC,
+                    finding_id
+                LIMIT ?
+                """,
+                (observed_at.isoformat(), observed_at.isoformat(), _MAX_PANEL_FINDINGS),
             ).fetchall()
         finally:
             conn.row_factory = original_factory

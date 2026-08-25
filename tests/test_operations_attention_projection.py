@@ -9,7 +9,13 @@ from pathlib import Path
 
 from operations.attention import EvidenceIdentity, EvidenceKind, FindingKind, derive_finding_id
 from operations.attention_projection import build_attention_panel_view
-from pipeline.operations_panel import OperationsPanelView, render_operations_panel
+from operations.registry import build_operations_registry
+from operations.snapshot import collect_operations_snapshot
+from pipeline.operations_panel import (
+    OperationsPanelView,
+    build_operations_panel_view,
+    render_operations_panel,
+)
 
 NOW = datetime(2026, 8, 24, 19, 0, tzinfo=UTC)
 
@@ -158,6 +164,25 @@ def test_attention_projection_handles_empty_and_unavailable_without_raw_database
     assert unavailable.message == "Attention findings are unavailable."
 
 
+def test_attention_projection_bounds_the_active_inbox(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "attention.db")
+    with sqlite3.connect(db_path) as conn:
+        for index in range(205):
+            timestamp = NOW - timedelta(seconds=index)
+            _insert(
+                conn,
+                fingerprint=f"{index:064x}",
+                opened_at=timestamp,
+                updated_at=timestamp,
+            )
+        view = build_attention_panel_view(conn, observed_at=NOW)
+
+    assert len(view.findings) == 200
+    assert view.findings[0].evidence_fingerprint_sha256 == f"{0:064x}"
+
+
 def test_attention_projection_fails_closed_on_posix_windows_unc_or_traversal_references(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
@@ -210,6 +235,18 @@ def test_attention_panel_renders_safe_action_controls_and_conflict_safe_client_c
         _insert(conn, fingerprint="a" * 64)
         attention = build_attention_panel_view(conn, observed_at=NOW)
 
+    registry = build_operations_registry(Path(__file__).resolve().parents[1])
+    with sqlite3.connect(":memory:") as conn:
+        snapshot = collect_operations_snapshot(
+            registry,
+            repo_root=tmp_path,
+            conn=conn,
+            observed_at=NOW,
+        )
+    baseline = build_operations_panel_view(registry, snapshot)
+    with_attention = build_operations_panel_view(registry, snapshot, attention=attention)
+    assert with_attention.attention_count == baseline.attention_count + 1
+
     html = render_operations_panel(
         OperationsPanelView(
             observed_label="Observed 2026-08-24 19:00 UTC",
@@ -231,9 +268,13 @@ def test_attention_panel_renders_safe_action_controls_and_conflict_safe_client_c
     assert "follow_up_scheduled" in html
     assert 'type="datetime-local"' in html
     assert 'role="status" aria-live="polite"' in html
+    assert 'role="group" aria-label="Available attention actions"' in html
+    assert 'aria-labelledby="attention-heading-0"' in html
+    assert "Resolve this healthy finding?" in html
+    assert "Read-only declared ownership" not in html
     assert "/api/operations/attention/" in html
     assert "operations-attention-" in html
-    assert "Action conflicted. Review the current finding before trying again." in html
+    assert "Action conflicted. Refreshing current finding…" in html
     assert "return refreshOperations()" in html
     assert "workOsMountHtml(mount, markup, '/api/panel/operations')" in html
     assert "operations.runtime.pair.latest.json" in html

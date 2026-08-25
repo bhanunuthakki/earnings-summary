@@ -884,6 +884,8 @@ def build_operations_panel_view(
     attention_count += snapshot.services.state == "invalid"
     if readme_status is None or readme_status.state in {"rejected", "invalid"}:
         attention_count += 1
+    if attention is not None and attention.state == "available":
+        attention_count += sum(finding.actionable for finding in attention.findings)
     gap_states = {"missing", "stale", "unavailable"}
     evidence_gap_keys: set[tuple[str, str]] = set()
     for domain, observation in (
@@ -975,7 +977,7 @@ def _attention(view: OperationsPanelView) -> str:
             for action in finding.actions
         )
         action_block = (
-            '<div class="ops-attention-actions" aria-label="Available attention actions">'
+            '<div class="ops-attention-actions" role="group" aria-label="Available attention actions">'
             f"{action_buttons}</div>"
             if action_buttons
             else '<div class="k-card-meta">No operator action is currently eligible.</div>'
@@ -1014,11 +1016,12 @@ def _attention(view: OperationsPanelView) -> str:
             )
         cards.append(
             f'<article class="k-well ops-attention-card" data-attention-card="true" '
+            f'aria-labelledby="attention-heading-{index}" '
             f'data-finding-id="{_html(finding.finding_id)}" '
             f'data-evidence-fingerprint="{_html(finding.evidence_fingerprint_sha256)}" '
             f'data-evidence-reference-sha256="{_html(finding.evidence_reference_sha256)}">'
             '<div class="k-toolbar"><div>'
-            f'<div class="k-card-row-title">{_html(finding.kind.replace("_", " ").title())}</div>'
+            f'<h2 class="k-card-title" id="attention-heading-{index}">{_html(finding.kind.replace("_", " ").title())}</h2>'
             f'<div class="k-card-meta">{_html(finding.owner)}</div></div>'
             f'<span class="k-pill {severity_class}">{_html(finding.severity.title())}</span></div>'
             '<div class="ops-attention-facts">'
@@ -1191,7 +1194,7 @@ def render_operations_panel(view: OperationsPanelView) -> str:
   {OPERATIONS_STYLE}
   <div class="k-toolbar">
     <div><h1 class="k-card-title" id="operations-title">Operations</h1>
-      <div class="k-card-meta">Read-only declared ownership, runtime receipts, and recovery evidence · {_html(view.observed_label)}</div></div>
+      <div class="k-card-meta">Declared ownership, runtime receipts, recovery evidence, and governed attention actions · {_html(view.observed_label)}</div></div>
     <span class="k-pill k-pill-warn">{view.attention_count} need attention</span>
   </div>
   <div class="operations-related" aria-label="Related Operations views">{related_views}</div>
@@ -1322,6 +1325,7 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     buttons.forEach((button) => button.addEventListener('click', () => {{
       const action = button.dataset.attentionAction;
       if (!action) return;
+      if (action === 'resolve' && !window.confirm('Resolve this healthy finding? This closes the current finding.')) return;
       const payload = attentionPayload(card, action);
       if (!payload) {{
         if (status) status.textContent = 'Choose a future expiry before this temporary action.';
@@ -1338,9 +1342,11 @@ def render_operations_panel(view: OperationsPanelView) -> str:
         .then((result) => {{
           const receipt = result.body && result.body.receipt;
           if (result.status === 409) {{
-            if (status) status.textContent = 'Action conflicted. Review the current finding before trying again.';
-            setBusy(false);
-            return;
+            if (status) status.textContent = 'Action conflicted. Refreshing current finding…';
+            return refreshOperations().catch(() => {{
+              if (status) status.textContent = 'Action conflicted; current finding refresh is unavailable.';
+              setBusy(false);
+            }});
           }}
           if (!receipt || (receipt.result_state !== 'applied' && receipt.result_state !== 'replayed')) {{
             if (status) status.textContent = 'Action was not applied.';
