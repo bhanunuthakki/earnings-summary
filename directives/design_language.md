@@ -126,11 +126,27 @@ required. Hover may enrich an action but cannot be its only doorway.
 - Responsive behavior, empty/loading/error states, and overlays must use
   registered recipes. They are not exceptions to the master boundary.
 
+### Compositional restraint
+
+The shared `frontend-quality` procedure owns the generic rubric. This project narrows it:
+
+- Use only the four visible roles needed by the hierarchy; sans remains prose/labels and mono
+  remains limited to the named financial, code, ticker, timestamp, and locator roles.
+- Start in normal flow and use registered family recipes. Every nested boxed region needs a named
+  semantic, state, interaction, or ownership boundary; flatten the rest.
+- Accent remains interaction/selection/focus/unread only, while status retains its separate
+  semantic role and non-color cue. Decorative left rails and ornamental variation are not recipes.
+- Equivalent sections share a registered composition grammar. Bullets and indentation represent
+  actual content structure, not texture; subtitles add information rather than repeat titles.
+- Before the composed guard, perform the page-level reduction pass: remove non-semantic
+  decoration, redundant containers, headings, subtitles, badges, dividers, and icons. A remaining
+  visual difference needs a typed master rationale and adversarial test under the extension protocol.
+
 Product behavior is owned elsewhere. Do not copy it into this directive:
 
-- navigation and destination hierarchy: `directives/navigation_ia.md`;
-- doorway, overlay, dismissal, and interaction laws:
-  `directives/interaction_paradigm_2026_06.md`;
+- navigation and destination hierarchy: executable routes and shell tests; `directives/navigation_ia.md`
+  is draft evidence only until owner approval;
+- doorway, overlay, dismissal, and interaction laws: `directives/interaction_contract.md`;
 - comments and chat: `directives/report_comments_and_chat.md`;
 - provenance behavior: `directives/data_provenance.md`;
 - operational controls: `directives/operations_governance_surface.md`;
