@@ -39,8 +39,8 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -59,6 +59,8 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
+from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
+from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort -- the workbook builds without a DB
@@ -151,6 +153,7 @@ class Assum:
     beta_credit: float = 1.55
     country_risk_premium: float = 0.0  # filled from dcf.country_risk at load when 0
     derive_capm: int = 1
+    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
 
 
 def _interp(near: float, term: float, t: int, n: int) -> float:
@@ -285,14 +288,71 @@ def mirror(s: Assum) -> Mirror:
     return m
 
 
+def reverse_valuation(s: Assum, m: Mirror) -> dict[str, object] | None:
+    """Market-implied MELI operating multiple and credit-equity bridge residual."""
+    if s.price <= 0 or m.vps <= 0:
+        return None
+    operating_exit_multiple = reverse_valuation_mod.solve_lever(
+        lever_id="implied_operating_exit_multiple",
+        label="Implied operating exit EBITDA multiple",
+        unit="turns",
+        base_value=s.op_exit_ebitda_mult,
+        method="monotonic_bisection",
+        price_at=lambda multiple: mirror(replace(s, op_exit_ebitda_mult=multiple)).vps,
+        target_price=s.price,
+        lower_bound=1.0,
+        upper_bound=75.0,
+    )
+    market_equity_value = s.price * s.shares
+    implied_credit_equity = market_equity_value - m.operating_ev - s.net_cash
+    credit_residual = reverse_valuation_mod.residual_lever(
+        lever_id="implied_credit_equity_value",
+        label="Market-implied credit equity value",
+        unit="usd_m",
+        base_value=m.credit_equity_value,
+        implied_value=implied_credit_equity,
+        note="Market equity less modeled operating EV and net non-operating cash.",
+    )
+    return reverse_valuation_mod.ReverseValuation(
+        archetype="meli_platform_sotp",
+        price=s.price,
+        base_value_per_share_usd=m.vps,
+        valuation_scope="equity",
+        levers=(operating_exit_multiple, credit_residual),
+    ).to_snapshot_dict()
+
+
+def _profile_price_metadata(ticker: str) -> tuple[datetime | None, str | None]:
+    """The existing cached-profile price policy, with auditable observation time."""
+    profile = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
+    if not profile.is_file():
+        return None, "assumption_seed"
+    try:
+        raw: Any = json.loads(profile.read_text(encoding="utf-8"))
+        item = raw[0] if isinstance(raw, list) and raw else raw
+        if not isinstance(item, dict) or not isinstance(item.get("price"), (int, float)):
+            return None, "fmp_profile_unusable"
+    except (OSError, ValueError, TypeError):
+        return None, "fmp_profile_unusable"
+    return datetime.fromtimestamp(profile.stat().st_mtime, tz=UTC), "fmp_profile"
+
+
 def load_assumptions(ticker: str) -> Assum:
     """Assum defaults overridden by data/bank_assumptions/<T>_sotp.json, then the
     editable global tax + (opt-in) CAPM-derived discount rates with the
     revenue-weighted Damodaran country risk premium."""
     s = Assum()
     db = REPO / "data" / "portfolio.db"
-    if global_dcf is not None:
-        s.tax = global_dcf.load(db_path=db).tax_rate
+    global_loaded = global_dcf.load_with_provenance(db_path=db) if global_dcf is not None else None
+    if global_loaded is not None:
+        s.global_assumption_source = global_loaded.source_record
+        s.tax = global_loaded.assumptions.tax_rate
+    else:
+        s.global_assumption_source = {
+            "role": "global_dcf_assumptions",
+            "status": "module_unavailable",
+            "observed_at": None,
+        }
     # Systematic country risk premium (revenue-weighted), filled when unset.
     if country_risk is not None and not s.country_risk_premium:
         s.country_risk_premium = country_risk.country_risk_premium(REPO, ticker)
@@ -307,12 +367,16 @@ def load_assumptions(ticker: str) -> Assum:
                 if hasattr(s, k) and isinstance(v, (int, float)):
                     setattr(s, k, v)
     # Opt-in: derive both discount rates from the editable global rf/ERP + CRP.
-    if global_dcf is not None and s.derive_capm:
-        s.wacc = global_dcf.capm_ke(
-            s.beta_op, country_risk_premium=s.country_risk_premium, db_path=db
+    if global_loaded is not None and s.derive_capm:
+        s.wacc = (
+            global_loaded.assumptions.risk_free_rate
+            + s.beta_op * global_loaded.assumptions.equity_risk_premium
+            + s.country_risk_premium
         )
-        s.credit_ke = global_dcf.capm_ke(
-            s.beta_credit, country_risk_premium=s.country_risk_premium, db_path=db
+        s.credit_ke = (
+            global_loaded.assumptions.risk_free_rate
+            + s.beta_credit * global_loaded.assumptions.equity_risk_premium
+            + s.country_risk_premium
         )
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
     if prof.exists():
@@ -768,6 +832,7 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
     if holdings is None:
         holdings = _load_holdings(T)
     mos: object = holdings.get("mos_bar") if holdings else None
+    live_price_at, live_price_source = _profile_price_metadata(T)
     snap_payload: dict[str, object] = {
         "model": "meli_platform_sotp",
         "value_per_share": m.vps,
@@ -781,10 +846,43 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         "credit_ke": s.credit_ke,
         "country_risk_premium": s.country_risk_premium,
         "workbook": str(DEST),
+        "assumption_provenance": {
+            "authority": f"data/bank_assumptions/{T}_sotp.json",
+            "workbook_capture": "unsupported",
+            "sync_status": "not_applicable",
+        },
     }
     if redesign_mod is not None:
         snap_payload["scenarios"] = scenarios_block(s, m, holdings)
+    reverse = reverse_valuation(s, m)
+    if reverse is not None:
+        snap_payload["reverse_valuation"] = reverse
     snap = json.dumps(snap_payload, indent=2)
+    provenance = build_file_provenance(
+        ticker=T,
+        repo_root=REPO,
+        workbook_path=DEST,
+        engine_version="meli_platform_sotp_v1",
+        effective_inputs=asdict(s),
+        assumption_snapshot=snap_payload,
+        live_price=s.price or None,
+        live_price_at=live_price_at,
+        live_price_source=live_price_source,
+        source_files=(
+            (REPO / "data" / "bank_assumptions" / f"{T}_sotp.json", "owner_assumptions"),
+            (REPO / "data" / "historical" / "fmp" / f"{T}_profile.json", "company_profile"),
+            (
+                REPO / "data" / "historical" / "fmp" / f"{T}_geo_segments_annual.json",
+                "geographic_segments",
+            ),
+            (
+                REPO / "data" / "historical" / "fmp" / f"{T}_geo_segments_quarterly.json",
+                "geographic_segments",
+            ),
+            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+        ),
+        source_records=(s.global_assumption_source,),
+    )
     row = persist_mod.DcfRunRow(
         ticker=T,
         valuation_date=date.today(),
@@ -795,12 +893,25 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         shares_outstanding=s.shares * 1e6,
         currency="USD",
         live_price=s.price or None,
-        live_price_at=None,
+        live_price_at=live_price_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (MELI sum-of-the-parts platform DCF)",
+        provenance=provenance,
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+        if not schema_supports_provenance(conn):
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "dcf_provenance_not_persisted",
+                        "ticker": T,
+                        "reason": "database schema lacks provenance columns",
+                    }
+                )
+                + "\n"
+            )
+            row = replace(row, provenance=None)
         persist_mod.upsert(conn, row)
     return True
 

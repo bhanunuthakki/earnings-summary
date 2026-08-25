@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 from collections import defaultdict
 from datetime import date
@@ -39,7 +40,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from compute.segment_cache import apply_overrides
 from dcf import analyst_segments as analyst_seg_mod
-from dcf import assumptions_doc, country_risk, fade_calibration, segment_coverage
+from dcf import (
+    assumptions_doc,
+    country_risk,
+    fade_calibration,
+    primary_fact_overlay,
+    segment_coverage,
+)
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -129,6 +136,73 @@ def load(stmt):
 
 
 inc, bal, cf = load("income_statement"), load("balance_sheet"), load("cash_flow")
+
+
+def _apply_primary_fact_overlay(
+    statement: primary_fact_overlay.Statement, records: object
+) -> tuple[object, dict[str, object]]:
+    """Overlay exact primary facts without making the FMP cache a write target."""
+    if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
+        detail = {
+            "status": "degraded",
+            "degraded_reason": "FMP statement payload is not a list of rows",
+            "applied": [],
+            "conflicts": [],
+            "rejected": [],
+        }
+        _emit_primary_fact_overlay(statement, detail)
+        return records, detail
+    db_path = REPO / "data" / "portfolio.db"
+    if not db_path.exists():
+        detail = {
+            "status": "degraded",
+            "degraded_reason": "portfolio database unavailable",
+            "applied": [],
+            "conflicts": [],
+            "rejected": [],
+        }
+        _emit_primary_fact_overlay(statement, detail)
+        return records, detail
+    try:
+        with connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
+            result = primary_fact_overlay.overlay_quarterly_records(
+                conn, ticker=T, statement=statement, records=records
+            )
+    except (OSError, sqlite3.Error) as error:
+        detail = {
+            "status": "degraded",
+            "degraded_reason": f"primary fact overlay unavailable: {error}",
+            "applied": [],
+            "conflicts": [],
+            "rejected": [],
+        }
+        _emit_primary_fact_overlay(statement, detail)
+        return records, detail
+    detail = result.to_provenance_dict()
+    _emit_primary_fact_overlay(statement, detail)
+    return result.records, detail
+
+
+def _emit_primary_fact_overlay(
+    statement: primary_fact_overlay.Statement, detail: dict[str, object]
+) -> None:
+    print(
+        json.dumps(
+            {"event": "dcf_primary_fact_overlay", "ticker": T, "statement": statement, **detail},
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+
+
+inc, PRIMARY_FACT_OVERLAY_INCOME = _apply_primary_fact_overlay("income", inc)
+bal, PRIMARY_FACT_OVERLAY_BALANCE = _apply_primary_fact_overlay("balance", bal)
+cf, PRIMARY_FACT_OVERLAY_CASH_FLOW = _apply_primary_fact_overlay("cash_flow", cf)
+PRIMARY_FACT_OVERLAY = {
+    "income": PRIMARY_FACT_OVERLAY_INCOME,
+    "balance": PRIMARY_FACT_OVERLAY_BALANCE,
+    "cash_flow": PRIMARY_FACT_OVERLAY_CASH_FLOW,
+}
 
 
 def _loadjson(name):

@@ -1,8 +1,9 @@
 """Thesis-ledger panel for the command-center shell.
 
 Surfaces ``thesis_ledger_entries`` — the append-only history of every accepted,
-alert-driven thesis edit (a thesis update, a bear-case append, an earnings-prep
-note). This is the populated decision history the user actually built via the
+alert-driven thesis edit (a thesis update or bear-case append). Open earnings
+questions live in ``analyst_notes`` and feed the earnings briefs. This is the
+decision history the user actually built via the
 alert -> queued-action -> approve loop; before this it reached the eye only
 through the ``/digest`` route, never as a discoverable command-center tab (the
 "Decisions" tab reads the separate, audit-only ``decisions`` table, which is
@@ -28,7 +29,6 @@ from user_state.ledger import ThesisLedgerEntryRow, list_recent_entries
 _KIND_LABELS: Mapping[str, str] = {
     "thesis_update": "Thesis update",
     "bear_append": "Bear case",
-    "earnings_prep_append": "Earnings prep",
     # PR6 (monthly_red_team.md Phase 2): the REFUTE reasoning for a per-name
     # red-team item lands here via redteam.response._refute.
     "red_team_refute": "Red Team refute",
@@ -54,8 +54,8 @@ def render_thesis_ledger_panel(db_path: Path, *, user_id: str) -> str:
         return (
             '<section class="panel"><h2>Thesis ledger</h2>'
             '<p class="muted">No accepted thesis changes yet. Approving a queued action from '
-            "an alert appends a durable entry here (a thesis update, bear-case append, or "
-            "earnings-prep note).</p></section>"
+            "an alert appends a durable entry here (a thesis update or bear-case append). "
+            "Open earnings questions live in analyst notes.</p></section>"
         )
     return "".join(
         [

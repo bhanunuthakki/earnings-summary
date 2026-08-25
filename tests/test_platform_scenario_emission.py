@@ -23,6 +23,8 @@ and NU (~25% of the book) invisible to tail stress / bear lint. These tests pin:
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import cast
@@ -119,6 +121,20 @@ def test_nu_exit_lever_maps_to_terminal_roe() -> None:
     assert s2.terminal_roe == base.terminal_roe - 0.07
 
 
+def test_nu_reverse_valuation_reprices_with_archetype_specific_levers() -> None:
+    s = nu.Assum()
+    snapshot = nu.reverse_valuation(s, nu.mirror(s))
+
+    assert snapshot is not None
+    assert snapshot["archetype"] == "platform_dcf"
+    assert snapshot["valuation_scope"] == "equity"
+    levers = cast("list[dict[str, object]]", snapshot["levers"])
+    assert [lever["id"] for lever in levers] == [
+        "implied_joint_customer_arpac_growth_shift",
+        "implied_terminal_roe",
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # MELI SOTP builder
 # --------------------------------------------------------------------------- #
@@ -158,6 +174,47 @@ def test_meli_lever_mapping_and_guardrails() -> None:
     assert s2.comm_g_near == base.comm_g_near - 0.075
     assert s2.credit_g_term < s2.credit_ke
     assert s2.credit_terminal_roe > s2.credit_g_term
+
+
+def test_meli_reverse_valuation_has_exit_multiple_and_credit_residual() -> None:
+    s = meli.Assum(derive_capm=0)
+    snapshot = meli.reverse_valuation(s, meli.mirror(s))
+
+    assert snapshot is not None
+    assert snapshot["archetype"] == "meli_platform_sotp"
+    levers = cast("list[dict[str, object]]", snapshot["levers"])
+    assert [lever["id"] for lever in levers] == [
+        "implied_operating_exit_multiple",
+        "implied_credit_equity_value",
+    ]
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    ("build_nu_platform_dcf.py", "build_holdco_sotp.py"),
+)
+def test_specialized_builder_imports_code_from_executing_checkout_with_external_data_root(
+    tmp_path: Path, script_name: str
+) -> None:
+    env = dict(os.environ)
+    env["DCF_REPO_ROOT"] = str(tmp_path / "external-data-root")
+    script = PROJECT_ROOT / "execution" / script_name
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import runpy,sys; runpy.run_path(sys.argv[1], run_name='external_root_import')",
+            str(script),
+        ],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
 
 
 # --------------------------------------------------------------------------- #

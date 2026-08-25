@@ -9,11 +9,13 @@ schema, not a hand-rolled approximation.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from user_state import ledger, registry, sizing
+from alerts import fire_alert
+from user_state import ledger, notes, registry, sizing
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
@@ -235,6 +237,189 @@ def test_sizing_list_intents_returns_newest_first(db_path: Path) -> None:
     assert [r.id for r in rows] == [b.id, a.id]
 
 
+def test_sizing_withdrawal_removes_intent_from_active_projection(db_path: Path) -> None:
+    draft = sizing.append_intent(
+        ticker="NU",
+        intent_kind="add_rung",
+        intent_value=10.32,
+        narrative="machine draft",
+        db_path=db_path,
+    )
+
+    withdrawal = sizing.withdraw_intent(
+        sizing_intent_id=draft.id,
+        reason="Owner rejected the sizing intent.",
+        db_path=db_path,
+    )
+    repeated = sizing.withdraw_intent(
+        sizing_intent_id=draft.id,
+        reason="Owner rejected the sizing intent.",
+        db_path=db_path,
+    )
+
+    assert withdrawal.id == repeated.id
+    assert sizing.list_intents(ticker="NU", db_path=db_path) == []
+    assert sizing.latest_intent(ticker="NU", intent_kind="add_rung", db_path=db_path) is None
+    assert [
+        row.id for row in sizing.list_intents(ticker="NU", include_withdrawn=True, db_path=db_path)
+    ] == [draft.id]
+
+
+def test_sizing_supersession_replaces_active_intent_without_erasing_history(db_path: Path) -> None:
+    prior = sizing.append_intent(
+        ticker="NVO",
+        intent_kind="target_weight_pct",
+        intent_value=15.0,
+        narrative="Prior valuation ladder.",
+        db_path=db_path,
+    )
+    current = sizing.supersede_intents(
+        user_id="bhanu",
+        ticker="NVO",
+        intent_kind="target_weight_pct",
+        intent_value=15.0,
+        narrative="Current valuation ladder.",
+        supersedes_intent_ids=(prior.id,),
+        reason="DCF-derived ladder refreshed.",
+        db_path=db_path,
+    )
+
+    assert [row.id for row in sizing.list_intents(ticker="NVO", db_path=db_path)] == [current.id]
+    assert (
+        sizing.latest_intent(ticker="NVO", intent_kind="target_weight_pct", db_path=db_path)
+        == current
+    )
+    assert [
+        row.id
+        for row in sizing.list_intents(ticker="NVO", include_superseded=True, db_path=db_path)
+    ] == [current.id, prior.id]
+
+
+def test_sizing_supersession_relation_rejects_cross_ticker_links(db_path: Path) -> None:
+    import sqlite3
+
+    old = sizing.append_intent(
+        ticker="MELI",
+        intent_kind="target_weight_pct",
+        intent_value=15.0,
+        db_path=db_path,
+    )
+    unrelated = sizing.append_intent(
+        ticker="NVO",
+        intent_kind="target_weight_pct",
+        intent_value=4.0,
+        db_path=db_path,
+    )
+
+    with (
+        sqlite3.connect(db_path) as conn,
+        pytest.raises(sqlite3.IntegrityError, match="share one owner and ticker"),
+    ):
+        conn.execute(
+            "INSERT INTO position_sizing_intent_supersessions("
+            "user_id,superseded_intent_id,superseding_intent_id,reason,created_at"
+            ") VALUES ('bhanu',?,?,?,'2026-08-25')",
+            (old.id, unrelated.id, "invalid cross-ticker link"),
+        )
+
+
+def test_migration_withdraws_rejected_nu_machine_draft(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    def seed_prior(db: Path) -> None:
+        import sqlite3
+
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                """
+                INSERT INTO position_sizing_intent(
+                    user_id,ticker,intent_kind,intent_value,narrative,created_at,updated_at
+                ) VALUES ('bhanu','NU','add_rung',10.32,?, '2026-07-12','2026-07-12')
+                """,
+                (
+                    "[draft, pending owner review] Add-rung (Monthly Red Team PR9, "
+                    "bull-side symmetry data pass 2026-07-12): add <$10.32",
+                ),
+            )
+
+    migrated = migrated_db(
+        tmp_path / "withdraw_rejected_nu.db",
+        upgrade_from="0024_add_operations_attention_findings",
+        before_upgrade=seed_prior,
+    )
+
+    assert sizing.list_intents(ticker="NU", db_path=migrated) == []
+    raw = sizing.list_intents(ticker="NU", include_withdrawn=True, db_path=migrated)
+    assert len(raw) == 1
+
+
+def test_migration_consolidates_earnings_prep_and_approves_current_meli_intent(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    def seed_prior(db: Path) -> None:
+        import sqlite3
+
+        with sqlite3.connect(db) as conn:
+            alert_id = conn.execute(
+                "INSERT INTO alerts(trigger_kind,ticker,fired_at,evidence_json,signature_sha,status) "
+                "VALUES ('earnings_tone','NU','2026-06-01','{}','legacy-tone','approved')"
+            ).lastrowid
+            conn.execute(
+                """
+                INSERT INTO thesis_ledger_entries(
+                    user_id,ticker,entry_kind,body,source_alert_id,created_at,accepted_at
+                ) VALUES ('bhanu','NU','earnings_prep_append',?,?,'2026-06-01','2026-06-01')
+                """,
+                ("Re-check risk-adjusted NIM next quarter.", alert_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO position_sizing_intent(
+                    user_id,ticker,intent_kind,intent_value,narrative,created_at,updated_at
+                ) VALUES ('bhanu','MELI','target_weight_pct',15.0,?,
+                          '2026-08-03','2026-08-03')
+                """,
+                ("Two-sided position band (owner-authored 2026-08-03; old DCF ladder)",),
+            )
+            conn.execute(
+                """
+                INSERT INTO position_sizing_intent(
+                    user_id,ticker,intent_kind,intent_value,narrative,created_at,updated_at
+                ) VALUES ('bhanu','MELI','add_rung',1389.16,?,
+                          '2026-07-12','2026-07-12')
+                """,
+                (
+                    "[RATIFIED by owner 2026-08-03; bound as the deep-add rung of the "
+                    "id=6 target_weight_pct band] old rung",
+                ),
+            )
+
+    migrated = migrated_db(
+        tmp_path / "consolidated_earnings_and_meli.db",
+        upgrade_from="0025_add_sizing_intent_withdrawals",
+        before_upgrade=seed_prior,
+    )
+
+    active_ledger = ledger.list_entries(ticker="NU", db_path=migrated)
+    assert active_ledger == []
+    raw_ledger = ledger.list_entries(ticker="NU", include_ineligible=True, db_path=migrated)
+    assert len(raw_ledger) == 1
+    prep_notes = notes.list_notes(ticker="NU", kind="question", status="open", db_path=migrated)
+    assert len(prep_notes) == 1
+    assert prep_notes[0].body == "Re-check risk-adjusted NIM next quarter."
+    assert prep_notes[0].context is not None
+    assert prep_notes[0].context["legacy_ledger_entry_id"] == raw_ledger[0].id
+
+    active_meli = sizing.list_intents(ticker="MELI", db_path=migrated)
+    assert len(active_meli) == 1
+    assert active_meli[0].intent_kind == "target_weight_pct"
+    assert active_meli[0].intent_value == 15.0
+    assert active_meli[0].created_at.date().isoformat() == "2026-08-25"
+    assert "Revalidate all valuation-derived price levels" in (active_meli[0].narrative or "")
+    historical_meli = sizing.list_intents(ticker="MELI", include_superseded=True, db_path=migrated)
+    assert len(historical_meli) == 3
+
+
 # ----------------------------------------------------------------------------
 # ledger
 # ----------------------------------------------------------------------------
@@ -329,3 +514,75 @@ def test_ledger_list_entries_respects_limit(db_path: Path) -> None:
         )
     truncated = ledger.list_entries(ticker="WIX", limit=2, db_path=db_path)
     assert len(truncated) == 2
+
+
+def test_ledger_projection_backtests_current_alert_source_rule(db_path: Path) -> None:
+    """Legacy ineligible writes remain auditable but are not active ledger history."""
+    material_news = fire_alert(
+        ticker="MSFT",
+        trigger_kind="material_news",
+        fired_at=datetime.fromisoformat("2026-07-31T06:00:00"),
+        evidence_json='{"headline":"Microsoft Stock Rises on Strong Earnings"}',
+        signature_sha="legacy-material-news",
+        db_path=db_path,
+    )
+    earnings_tone = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.fromisoformat("2026-06-01T06:00:00"),
+        evidence_json='{"topic":"NIM"}',
+        signature_sha="eligible-earnings-tone",
+        db_path=db_path,
+    )
+    news_entry = ledger.append_entry(
+        ticker="MSFT",
+        entry_kind="thesis_update",
+        body="Incorporate development: headline",
+        source_alert_id=material_news.id,
+        db_path=db_path,
+    )
+    machine_thesis_entry = ledger.append_entry(
+        ticker="NU",
+        entry_kind="thesis_update",
+        body="NIM evidence changed",
+        source_alert_id=earnings_tone.id,
+        db_path=db_path,
+    )
+    machine_bear_entry = ledger.append_entry(
+        ticker="NU",
+        entry_kind="bear_append",
+        body="NIM evidence weakened",
+        source_alert_id=earnings_tone.id,
+        db_path=db_path,
+    )
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.execute(
+            "INSERT INTO thesis_ledger_entries "
+            "(user_id,ticker,entry_kind,body,source_alert_id,created_at,accepted_at) "
+            "VALUES ('bhanu','NU','earnings_prep_append','Re-check NIM next quarter',"
+            "?,'2026-06-01','2026-06-01')",
+            (earnings_tone.id,),
+        )
+        earnings_prep_id = cursor.lastrowid
+        assert earnings_prep_id is not None
+    owner_entry = ledger.append_entry(
+        ticker="VDE",
+        entry_kind="thesis_update",
+        body="Owner thesis update",
+        db_path=db_path,
+    )
+
+    active = ledger.list_recent_entries(db_path=db_path)
+    assert [row.id for row in active] == [owner_entry.id]
+    assert ledger.list_entries(ticker="MSFT", db_path=db_path) == []
+
+    audit = ledger.list_recent_entries(db_path=db_path, include_ineligible=True)
+    assert {row.id for row in audit} == {
+        owner_entry.id,
+        earnings_prep_id,
+        machine_bear_entry.id,
+        machine_thesis_entry.id,
+        news_entry.id,
+    }

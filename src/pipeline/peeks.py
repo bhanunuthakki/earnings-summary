@@ -2055,9 +2055,8 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
 
     Sections, each best-effort (a missing table drops its block, never the
     memo): next-ER header with thesis status · the owner's open watch items /
-    questions (ask doorways) · prior-quarter prep notes from the thesis ledger
-    (``earnings_prep_append`` — what the drafter queued to watch on THIS call)
-    · the valuation stance (latest consolidated DCF). ``None`` (→ the route
+    questions (ask doorways, including alert-derived next-call prompts) · the
+    valuation stance (latest consolidated DCF). ``None`` (→ the route
     404s) only when the ticker isn't a tracked, non-archived name."""
     t = (ticker or "").strip().upper()
     if not t:
@@ -2090,7 +2089,6 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
     brief = _prep_brief_block(db_path, t, next_er.isoformat() if next_er else None)
     events = _prep_events_block(db_path, t)
     watch = _prep_watch_items(db_path, t)
-    ledger = _prep_ledger_notes(db_path, t)
 
     ask_q = (
         f"Prep me for {t}'s upcoming earnings call — synthesize what to listen for "
@@ -2103,7 +2101,7 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
         f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
     )
     return (
-        f'<div class="cc-prep">{header}{brief}{events}{watch}{ledger}{valuation}</div>{foot}'
+        f'<div class="cc-prep">{header}{brief}{events}{watch}{valuation}</div>{foot}'
         f"<style>{_PREP_CSS}</style>"
     )
 
@@ -2286,7 +2284,8 @@ def _prep_watch_items(db_path: Path, t: str, *, heading: str = "What you said to
     except Exception:
         return ""
     kind_rank = {"watch": 0, "question": 1}
-    notes = sorted(notes, key=lambda n: kind_rank.get(n.kind, 9))[:6]
+    notes = [note for note in notes if note.kind in kind_rank]
+    notes = sorted(notes, key=lambda n: kind_rank[n.kind])[:6]
     if not notes:
         return (
             f'<div class="prep-sec"><h4>{escape(heading)}</h4>'
@@ -2299,25 +2298,6 @@ def _prep_watch_items(db_path: Path, t: str, *, heading: str = "What you said to
         f'title="open in Ask"><span class="k-chip">{escape(n.kind)}</span> '
         f"{escape(n.body.strip())}</button></li>"
         for n in notes
-    )
-    return f'<div class="prep-sec"><h4>{escape(heading)}</h4><ul>{items}</ul></div>'
-
-
-def _prep_ledger_notes(db_path: Path, t: str, *, heading: str = "Queued from prior signals") -> str:
-    try:
-        from user_state.ledger import list_entries
-
-        entries = list_entries(
-            ticker=t, entry_kind="earnings_prep_append", limit=3, db_path=db_path
-        )
-    except Exception:
-        return ""
-    if not entries:
-        return ""
-    items = "".join(
-        f"<li>{escape(e.body.strip())} "
-        f'<span class="muted">({escape(str(e.created_at)[:10])})</span></li>'
-        for e in entries
     )
     return f'<div class="prep-sec"><h4>{escape(heading)}</h4><ul>{items}</ul></div>'
 
@@ -2383,8 +2363,7 @@ def render_earnings_readout_peek(
     (latest quarter + the 8-quarter base rate) · tier-1 KPI moves latest-vs-
     prior · the call-tone shift summary (``earnings_tone`` alert, when one
     fired) · the transcript doorway (``/source/<doc_id>``) · your open watch
-    items ("did they answer it?") · what last quarter's signals queued for
-    this call · the valuation stance — then the dedicated persisted-generation
+    items ("did they answer it?") · the valuation stance — then the dedicated persisted-generation
     doorway. Every block is best-effort (a missing table
     drops its block, never the memo); ``None`` (→ the route 404s) only when
     the ticker isn't a tracked, non-archived name."""
@@ -2445,7 +2424,6 @@ def render_earnings_readout_peek(
 
     tone = _readout_tone(db_path, t)
     watch = _prep_watch_items(db_path, t, heading="What you said to watch — did they answer it?")
-    ledger = _prep_ledger_notes(db_path, t, heading="Queued for this call last quarter")
 
     persisted = ""
     quarter = None
@@ -2495,7 +2473,7 @@ def render_earnings_readout_peek(
         f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
     )
     return (
-        f'<div class="cc-prep">{header}{persisted}{surprise}{kpis}{tone}{transcript}{watch}{ledger}'
+        f'<div class="cc-prep">{header}{persisted}{surprise}{kpis}{tone}{transcript}{watch}'
         f"{valuation}</div>{foot}<style>{_PREP_CSS}</style>"
     )
 

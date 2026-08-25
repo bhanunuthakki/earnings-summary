@@ -36,6 +36,17 @@ class PositionSizingIntentRow:
     updated_at: datetime
 
 
+@dataclass(slots=True)
+class PositionSizingIntentWithdrawalRow:
+    """One immutable owner withdrawal of a previously recorded sizing intent."""
+
+    id: int
+    user_id: str
+    sizing_intent_id: int
+    reason: str
+    created_at: datetime
+
+
 def append_intent(
     *,
     user_id: str = DEFAULT_USER_ID,
@@ -54,17 +65,14 @@ def append_intent(
     """
     conn = open_conn(db_path)
     try:
-        now = now_iso()
-        cur = conn.execute(
-            """
-            INSERT INTO position_sizing_intent(
-                user_id, ticker, intent_kind, intent_value, narrative,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (user_id, ticker, intent_kind, intent_value, narrative, now, now),
+        row_id = _insert_intent(
+            conn,
+            user_id=user_id,
+            ticker=ticker,
+            intent_kind=intent_kind,
+            intent_value=intent_value,
+            narrative=narrative,
         )
-        row_id = int(cur.lastrowid or 0)
         conn.commit()
         return _fetch_one(conn, row_id)
     finally:
@@ -74,11 +82,15 @@ def append_intent(
 def list_intents(
     user_id: str = DEFAULT_USER_ID,
     ticker: str | None = None,
+    include_withdrawn: bool = False,
+    include_superseded: bool = False,
     db_path: Path | str | None = None,
 ) -> list[PositionSizingIntentRow]:
     """Return sizing-intent rows newest first.
 
-    Filtered by ``user_id`` always, and by ``ticker`` when given.
+    Filtered by ``user_id`` always, and by ``ticker`` when given. Withdrawn
+    and superseded rows are absent from the active projection unless explicitly
+    requested for audit/history views.
     """
     conn = open_conn(db_path)
     try:
@@ -94,6 +106,13 @@ def list_intents(
                 "ORDER BY created_at DESC, id DESC",
                 (user_id, ticker),
             ).fetchall()
+        rows = _filter_inactive_rows(
+            conn,
+            rows,
+            user_id=user_id,
+            include_withdrawn=include_withdrawn,
+            include_superseded=include_superseded,
+        )
         return [_row_to_dc(r) for r in rows]
     finally:
         conn.close()
@@ -113,18 +132,208 @@ def latest_intent(
     """
     conn = open_conn(db_path)
     try:
-        row = conn.execute(
+        rows = conn.execute(
             """
             SELECT * FROM position_sizing_intent
             WHERE user_id = ? AND ticker = ? AND intent_kind = ?
             ORDER BY created_at DESC, id DESC
-            LIMIT 1
             """,
             (user_id, ticker, intent_kind),
-        ).fetchone()
-        return None if row is None else _row_to_dc(row)
+        ).fetchall()
+        active_rows = _filter_inactive_rows(
+            conn,
+            rows,
+            user_id=user_id,
+            include_withdrawn=False,
+            include_superseded=False,
+        )
+        return None if not active_rows else _row_to_dc(active_rows[0])
     finally:
         conn.close()
+
+
+def supersede_intents(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    ticker: str,
+    intent_kind: str,
+    supersedes_intent_ids: tuple[int, ...],
+    reason: str,
+    intent_value: float | None = None,
+    narrative: str | None = None,
+    db_path: Path | str | None = None,
+) -> PositionSizingIntentRow:
+    """Append a current intent and explicitly retire the rows it consolidates.
+
+    Old rows remain immutable and available through ``include_superseded``.
+    A prior row may be superseded only once, preventing competing current
+    histories from silently claiming the same evidence.
+    """
+    old_ids = tuple(dict.fromkeys(int(row_id) for row_id in supersedes_intent_ids))
+    if not old_ids:
+        raise ValueError("at least one superseded sizing intent is required")
+    clean_reason = reason.strip()
+    if not clean_reason:
+        raise ValueError("supersession reason is required")
+    normalized_ticker = ticker.upper()
+    conn = open_conn(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        claimed: list[int] = []
+        for old_id in old_ids:
+            row = conn.execute(
+                "SELECT id,user_id,ticker FROM position_sizing_intent WHERE id=?",
+                (old_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("one or more sizing intents to supersede do not exist")
+            if str(row["user_id"]) != user_id or str(row["ticker"]).upper() != normalized_ticker:
+                raise ValueError(
+                    "superseded sizing intents must belong to the same owner and ticker"
+                )
+            already = conn.execute(
+                "SELECT superseded_intent_id FROM position_sizing_intent_supersessions "
+                "WHERE user_id=? AND superseded_intent_id=?",
+                (user_id, old_id),
+            ).fetchone()
+            if already is not None:
+                claimed.append(int(already["superseded_intent_id"]))
+        if claimed:
+            raise ValueError(f"sizing intents already superseded: {claimed}")
+        current_id = _insert_intent(
+            conn,
+            user_id=user_id,
+            ticker=normalized_ticker,
+            intent_kind=intent_kind,
+            intent_value=intent_value,
+            narrative=narrative,
+        )
+        created_at = now_iso()
+        conn.executemany(
+            """
+            INSERT INTO position_sizing_intent_supersessions(
+                user_id,superseded_intent_id,superseding_intent_id,reason,created_at
+            ) VALUES (?,?,?,?,?)
+            """,
+            [(user_id, old_id, current_id, clean_reason, created_at) for old_id in old_ids],
+        )
+        conn.commit()
+        return _fetch_one(conn, current_id)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def withdraw_intent(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    sizing_intent_id: int,
+    reason: str,
+    db_path: Path | str | None = None,
+) -> PositionSizingIntentWithdrawalRow:
+    """Withdraw one intent from active projections without deleting its history.
+
+    The unique owner/intent key makes retries idempotent. A repeated request
+    returns the existing immutable withdrawal receipt.
+    """
+    clean_reason = reason.strip()
+    if not clean_reason:
+        raise ValueError("withdrawal reason is required")
+    conn = open_conn(db_path)
+    try:
+        intent = conn.execute(
+            "SELECT id FROM position_sizing_intent WHERE id=? AND user_id=?",
+            (int(sizing_intent_id), user_id),
+        ).fetchone()
+        if intent is None:
+            raise LookupError(
+                f"position_sizing_intent id={sizing_intent_id} not found for user {user_id!r}"
+            )
+        existing = conn.execute(
+            "SELECT * FROM position_sizing_intent_withdrawals "
+            "WHERE user_id=? AND sizing_intent_id=?",
+            (user_id, int(sizing_intent_id)),
+        ).fetchone()
+        if existing is not None:
+            return _withdrawal_row_to_dc(existing)
+        now = now_iso()
+        cur = conn.execute(
+            """
+            INSERT INTO position_sizing_intent_withdrawals(
+                user_id,sizing_intent_id,reason,created_at
+            ) VALUES (?,?,?,?)
+            """,
+            (user_id, int(sizing_intent_id), clean_reason, now),
+        )
+        withdrawal_id = int(cur.lastrowid or 0)
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM position_sizing_intent_withdrawals WHERE id=?",
+            (withdrawal_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"sizing-intent withdrawal id={withdrawal_id} missing after write")
+        return _withdrawal_row_to_dc(row)
+    finally:
+        conn.close()
+
+
+def _filter_inactive_rows(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    *,
+    user_id: str,
+    include_withdrawn: bool,
+    include_superseded: bool,
+) -> list[sqlite3.Row]:
+    inactive_ids: set[int] = set()
+    if not include_withdrawn and _table_exists(conn, "position_sizing_intent_withdrawals"):
+        withdrawn = conn.execute(
+            "SELECT sizing_intent_id FROM position_sizing_intent_withdrawals WHERE user_id=?",
+            (user_id,),
+        ).fetchall()
+        inactive_ids.update(int(row["sizing_intent_id"]) for row in withdrawn)
+    if not include_superseded and _table_exists(conn, "position_sizing_intent_supersessions"):
+        superseded = conn.execute(
+            "SELECT superseded_intent_id FROM position_sizing_intent_supersessions WHERE user_id=?",
+            (user_id,),
+        ).fetchall()
+        inactive_ids.update(int(row["superseded_intent_id"]) for row in superseded)
+    return [row for row in rows if int(row["id"]) not in inactive_ids]
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _insert_intent(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    ticker: str,
+    intent_kind: str,
+    intent_value: float | None,
+    narrative: str | None,
+) -> int:
+    now = now_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO position_sizing_intent(
+            user_id, ticker, intent_kind, intent_value, narrative,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, ticker.upper(), intent_kind, intent_value, narrative, now, now),
+    )
+    return int(cur.lastrowid or 0)
 
 
 def _fetch_one(conn: sqlite3.Connection, row_id: int) -> PositionSizingIntentRow:
@@ -145,4 +354,14 @@ def _row_to_dc(row: sqlite3.Row) -> PositionSizingIntentRow:
         narrative=(None if row["narrative"] is None else str(row["narrative"])),
         created_at=parse_dt(row["created_at"]),
         updated_at=parse_dt(row["updated_at"]),
+    )
+
+
+def _withdrawal_row_to_dc(row: sqlite3.Row) -> PositionSizingIntentWithdrawalRow:
+    return PositionSizingIntentWithdrawalRow(
+        id=int(row["id"]),
+        user_id=str(row["user_id"]),
+        sizing_intent_id=int(row["sizing_intent_id"]),
+        reason=str(row["reason"]),
+        created_at=parse_dt(row["created_at"]),
     )

@@ -1062,7 +1062,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/explore_panel.py": "fc1dd2e109d4f31a63e523c6f6ba3bc016b10b1faa443d32240e35fabed2fa8c",  # pragma: allowlist secret
         "pipeline/mobile_inbox_panel.py": "a79bb9271eb683af81c99be486b8bcc3487f601002b74437d39fb50b5dd631a3",  # pragma: allowlist secret
         "pipeline/model_eval_panel.py": "f4af1f25d2641ba46a64a043073730df7b11ef1e96f3b3ad4d71801e17c3e983",  # pragma: allowlist secret
-        "pipeline/peeks.py": "14c26a54b7381a925ecb47a4975282e17b68f6115dde3d3314f8bb25fa855bb9",  # pragma: allowlist secret
+        "pipeline/peeks.py": "02f325abd05b440ba3efcede16e7ee446036926b0edabae9bbd11a9a34021a4b",  # pragma: allowlist secret
         "pipeline/performance_risk_panel.py": "f4399458107940b948664fe2e664892e2390d0f100cc1ad6f300e5233e2dd831",  # pragma: allowlist secret
         "pipeline/portfolio_panel.py": "71d2e9b39601d9e97dd395b70a405c15f6575c71d32f512fc7c04b4d128a6060",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret

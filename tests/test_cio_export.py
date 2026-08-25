@@ -58,8 +58,14 @@ def test_export_populated_substrate(tmp_path: Path, db_path: Path) -> None:
     append_entry(
         ticker="NU",
         entry_kind="thesis_update",
-        body="Thesis: NIM under pressure",
+        body="Machine summary: NIM under pressure",
         source_alert_id=alert.id,
+        db_path=db_path,
+    )
+    append_entry(
+        ticker="NU",
+        entry_kind="thesis_update",
+        body="Owner thesis: NIM under pressure",
         db_path=db_path,
     )
 
@@ -75,4 +81,10 @@ def test_export_populated_substrate(tmp_path: Path, db_path: Path) -> None:
     assert any("watch NIM" in str(c) for c in actions_row)  # payload serialized in
 
     ledger_row = [c.value for c in wb["Thesis Ledger"][2]]
-    assert any("NIM under pressure" in str(c) for c in ledger_row)
+    assert any("Owner thesis: NIM under pressure" in str(c) for c in ledger_row)
+    assert wb["Thesis Ledger"].max_row == 2
+    assert not any(
+        "Machine summary: NIM under pressure" in str(cell.value)
+        for row in wb["Thesis Ledger"].iter_rows()
+        for cell in row
+    )

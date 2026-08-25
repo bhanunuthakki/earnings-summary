@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for the redesigned 9-sheet DCF: the reader/projection/value engine
 (``src/dcf/redesign.py``) and the redesign refresh path in
 ``execution/refresh_dcf.py`` (rebuild-from-FMP with Dashboard edit-preservation).
@@ -25,6 +26,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 import pytest
@@ -1174,7 +1176,8 @@ def test_refresh_provenance_end_to_end(refresh_repo: Path, monkeypatch: pytest.M
 
     res2 = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
     assert res2["status"] == "ok", res2
-    sources = res2["assumption_provenance"]["sources"]
+    provenance = cast("dict[str, object]", res2["assumption_provenance"])
+    sources = cast("dict[str, int]", provenance["sources"])
     assert sources.get("user-edited", 0) >= 1
 
     data = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))
@@ -1600,6 +1603,26 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     m0 = base_inp.exit_multiple
     conn = sqlite3.connect(str(db))
     npv0 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
+    primary_overlay = {
+        "status": "ok",
+        "statements": {
+            "income": {
+                "status": "ok",
+                "applied": [
+                    {
+                        "fact_id": 42,
+                        "source_url": "https://www.sec.gov/example",
+                        "as_of": "2026-08-20T12:00:00+00:00",
+                    }
+                ],
+            }
+        },
+    }
+    conn.execute(
+        "UPDATE dcf_runs SET provenance_json=? WHERE ticker='TESTCO'",
+        (json.dumps({"ticker": "TESTCO", "primary_fact_overlay": primary_overlay}),),
+    )
+    conn.commit()
     conn.close()
 
     payload = base_inp.to_dict()
@@ -1612,17 +1635,19 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     # The edit landed on the live workbook (no rebuild) and lifts the value.
     edited = redesign.read_inputs(dest)
     assert edited is not None and edited.exit_multiple == pytest.approx(m0 + 3.0)
-    assert res["fair_value_per_share"] > float(npv0)
+    assert cast("float", res["fair_value_per_share"]) > float(npv0)
 
     # dcf_runs re-persisted; the prior market quote was carried forward.
     conn = sqlite3.connect(str(db))
     row = conn.execute(
-        "SELECT npv_per_share, live_price FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT npv_per_share, live_price, provenance_json FROM dcf_runs WHERE ticker='TESTCO'"
     ).fetchone()
     conn.close()
     assert row is not None
     assert row[1] == pytest.approx(50.0)
     assert res["fair_value_per_share"] == pytest.approx(float(row[0]))
+    persisted_provenance = json.loads(str(row[2]))
+    assert persisted_provenance["primary_fact_overlay"] == primary_overlay
 
     # The override ledger records the edit; the Opus baseline is NOT overwritten.
     adata = json.loads(
@@ -1631,6 +1656,58 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     assert adata["opus_baseline"]["values"]["exit_multiple"] == pytest.approx(m0)
     assert adata["assumption_overrides"]["exit_multiple"]["opus_value"] == pytest.approx(m0)
     assert adata["redesign"]["exit_multiple"] == pytest.approx(m0 + 3.0)
+
+
+@pytest.mark.parametrize(
+    ("is_latest_column", "segment_column", "created_at_column"),
+    (
+        (False, False, False),
+        (False, False, True),
+        (False, True, False),
+        (False, True, True),
+        (True, False, False),
+        (True, False, True),
+        (True, True, False),
+        (True, True, True),
+    ),
+)
+def test_prior_primary_overlay_supports_only_explicit_static_schema_variants(
+    tmp_path: Path,
+    is_latest_column: bool,
+    segment_column: bool,
+    created_at_column: bool,
+) -> None:
+    db = tmp_path / "portfolio.db"
+    optional_columns: list[str] = []
+    optional_values: list[object] = []
+    if is_latest_column:
+        optional_columns.append("is_latest INTEGER")
+        optional_values.append(1)
+    if segment_column:
+        optional_columns.append("segment_name TEXT")
+        optional_values.append("")
+    if created_at_column:
+        optional_columns.append("created_at TEXT")
+        optional_values.append("2026-08-20T12:00:00+00:00")
+    schema_suffix = ", " + ", ".join(optional_columns) if optional_columns else ""
+    insert_columns = ["id", "ticker", "provenance_json"] + [
+        column.split()[0] for column in optional_columns
+    ]
+    placeholders = ", ".join("?" for _ in insert_columns)
+    overlay: dict[str, object] = {"status": "ok", "statements": {}}
+    payload = json.dumps({"ticker": "TESTCO", "primary_fact_overlay": overlay})
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE dcf_runs "
+            f"(id INTEGER PRIMARY KEY, ticker TEXT, provenance_json TEXT{schema_suffix})"
+        )
+        conn.execute(
+            f"INSERT INTO dcf_runs ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            (1, "TESTCO", payload, *optional_values),
+        )
+
+    assert refresh_dcf.prior_primary_fact_overlay(db, "testco") == overlay
 
 
 _KPI_SCHEMA = """
