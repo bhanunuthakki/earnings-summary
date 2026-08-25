@@ -558,15 +558,15 @@ def test_ledger_projection_backtests_current_alert_source_rule(db_path: Path) ->
     import sqlite3
 
     with sqlite3.connect(db_path) as conn:
-        earnings_prep_id = int(
-            conn.execute(
-                "INSERT INTO thesis_ledger_entries "
-                "(user_id,ticker,entry_kind,body,source_alert_id,created_at,accepted_at) "
-                "VALUES ('bhanu','NU','earnings_prep_append','Re-check NIM next quarter',"
-                "?,'2026-06-01','2026-06-01')",
-                (earnings_tone.id,),
-            ).lastrowid
+        cursor = conn.execute(
+            "INSERT INTO thesis_ledger_entries "
+            "(user_id,ticker,entry_kind,body,source_alert_id,created_at,accepted_at) "
+            "VALUES ('bhanu','NU','earnings_prep_append','Re-check NIM next quarter',"
+            "?,'2026-06-01','2026-06-01')",
+            (earnings_tone.id,),
         )
+        earnings_prep_id = cursor.lastrowid
+        assert earnings_prep_id is not None
     owner_entry = ledger.append_entry(
         ticker="VDE",
         entry_kind="thesis_update",

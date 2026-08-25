@@ -73,11 +73,22 @@ def test_apply_routes_earnings_prep_to_open_question() -> None:
         ),
     )
     created: dict[str, object] = {}
+
+    def get_proposal(_proposal_id: int, **_kwargs: object) -> SimpleNamespace:
+        return prop
+
+    def reject_ledger_append(**_kwargs: object) -> object:
+        pytest.fail("earnings prep must not write the thesis ledger")
+
+    def create_question(**kwargs: object) -> SimpleNamespace:
+        created.update(kwargs)
+        return SimpleNamespace(id=77)
+
     receipt = apply_thesis_proposal(
         9,
-        get_fn=lambda _pid, **_k: prop,
-        append_fn=lambda **_kw: pytest.fail("earnings prep must not write the thesis ledger"),
-        note_fn=lambda **kw: created.update(kw) or SimpleNamespace(id=77),
+        get_fn=get_proposal,
+        append_fn=reject_ledger_append,
+        note_fn=create_question,
     )
 
     assert created["kind"] == "question"
