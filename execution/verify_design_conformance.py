@@ -250,6 +250,16 @@ _ROUTE_CANARY_ROLE_CONTRACTS: dict[str, tuple[tuple[str, ...], bool]] = {
     "operations": (("container", "type", "help-footnote"), False),
     "full-brief": (("container", "control", "type", "help-footnote"), True),
 }
+_ROUTE_CANARY_SETTLED_SELECTORS: dict[str, str] = {
+    "cockpit": "#workOsActionQueue .work-os-action-card",
+    "performance": "#workOsPerformanceMount .performance-risk-panel",
+    "company-desk": "#deskCompanyName",
+    "evaluation": "#workOsEvaluationRows [data-work-os-evaluation-row]",
+    "brief-library": "#workOsBriefLibrary [data-artifact-id]",
+    "fact-metric-playground": "#workOsFactPlayground #vx-root",
+    "decision-audit": "#workOsAuditMount .portfolio-record-console",
+    "operations": "#workOsOperationsMount .operations-panel",
+}
 
 
 class _ClosedModel(BaseModel):
@@ -1217,16 +1227,6 @@ def _scan_route_canaries(
                                 "document.querySelectorAll('#workOsBriefReaderSections .work-os-reader-group-button').length === 6",
                                 timeout=5000,
                             )
-                        settled_selectors = {
-                            "cockpit": "#workOsActionQueue .work-os-action-card",
-                            "performance": "#workOsPerformanceMount .performance-risk-panel",
-                            "company-desk": "#deskCompanyName",
-                            "evaluation": "#workOsEvaluationBody [data-work-os-evaluation-ticker]",
-                            "brief-library": "#workOsBriefLibrary [data-artifact-id]",
-                            "fact-metric-playground": "#workOsFactPlayground #vx-root",
-                            "decision-audit": "#workOsAuditMount .portfolio-record-console",
-                            "operations": "#workOsOperationsMount .operations-panel",
-                        }
                         page.evaluate(
                             """
                             ({route, screenId}) => {
@@ -1272,7 +1272,7 @@ def _scan_route_canaries(
                             """,
                             {"route": route, "screenId": ROUTE_SCREEN_IDS[route]},
                         )
-                        settled_selector = settled_selectors.get(route)
+                        settled_selector = _ROUTE_CANARY_SETTLED_SELECTORS.get(route)
                         if settled_selector:
                             page.wait_for_selector(
                                 settled_selector,

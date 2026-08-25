@@ -266,6 +266,12 @@ def test_every_route_canary_has_a_role_contract() -> None:
     )
 
 
+def test_every_persistent_route_canary_has_a_production_settle_selector() -> None:
+    settled = design_conformance._ROUTE_CANARY_SETTLED_SELECTORS  # pyright: ignore[reportPrivateUsage]
+    assert set(settled) == set(ROUTE_SCREEN_IDS) - {"full-brief"}
+    assert settled["evaluation"] == "#workOsEvaluationRows [data-work-os-evaluation-row]"
+
+
 def test_performance_canary_contains_deterministic_index_benchmarking_without_driver_grid() -> None:
     from execution.design_route_canaries import canary_portfolio_fragment
 
