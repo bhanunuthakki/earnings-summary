@@ -138,8 +138,6 @@ def register_attention_routes(app: Flask, context: AttentionRouteContext) -> Non
             actor=context.owner_actor,
             db_path=context.db_path,
         )
-        if receipt.result_state is ActionResultState.APPLIED:
-            context.invalidate_operations_panel_cache()
         status = (
             200
             if receipt.result_state in {ActionResultState.APPLIED, ActionResultState.REPLAYED}
@@ -148,4 +146,8 @@ def register_attention_routes(app: Flask, context: AttentionRouteContext) -> Non
             or receipt.failure_code is ActionFailureCode.CONFLICT
             else 422
         )
+        if receipt.result_state is ActionResultState.APPLIED or status == 409:
+            # Conflicts mean the browser's finding is stale by definition.
+            # Invalidate the bounded fragment before the UI's targeted refresh.
+            context.invalidate_operations_panel_cache()
         return (_receipt_payload(receipt), status)

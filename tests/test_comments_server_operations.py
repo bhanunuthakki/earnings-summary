@@ -236,7 +236,8 @@ def test_operations_attention_action_preserves_replay_conflict_and_targeted_cach
     assert conflicted.get_json()["receipt"]["result_state"] == "conflict"
     assert rejected.status_code == 409
     assert rejected.get_json()["receipt"]["result_state"] == "rejected"
-    panel_cache.invalidate_prefix.assert_called_once_with("/api/panel/operations")
+    assert panel_cache.invalidate_prefix.call_count == 3
+    panel_cache.invalidate_prefix.assert_called_with("/api/panel/operations")
     panel_cache.clear.assert_not_called()
 
 

@@ -875,17 +875,24 @@ def build_operations_panel_view(
         ),
     )
     managed_service_labels = {f"Managed service · {service.name}" for service in registry.services}
-    attention_count = sum(task.attention for task in tasks) + sum(
+    runtime_attention_count = sum(task.attention for task in tasks) + sum(
         _actionable_evidence(row.evidence)
         for row in runtime_rows
         if row.label not in managed_service_labels or snapshot.services.state == "current"
     )
+    attention_count = runtime_attention_count
+    if attention is not None and attention.state == "available":
+        # Durable findings and legacy runtime observations can describe the
+        # same incident. De-duplicate those two representations without
+        # collapsing distinct Scheduler, service, or governance failures.
+        attention_count = max(
+            runtime_attention_count,
+            sum(finding.actionable for finding in attention.findings),
+        )
     attention_count += snapshot.scheduler.state == "invalid"
     attention_count += snapshot.services.state == "invalid"
     if readme_status is None or readme_status.state in {"rejected", "invalid"}:
         attention_count += 1
-    if attention is not None and attention.state == "available":
-        attention_count += sum(finding.actionable for finding in attention.findings)
     gap_states = {"missing", "stale", "unavailable"}
     evidence_gap_keys: set[tuple[str, str]] = set()
     for domain, observation in (
