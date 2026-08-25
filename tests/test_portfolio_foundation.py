@@ -38,6 +38,21 @@ def _health(*, stale: bool = False) -> HealthV1:
     )
 
 
+def test_tracker_health_allows_only_bounded_response_clock_skew() -> None:
+    from runtime.portfolio_tracker import health_is_healthy
+
+    observed_at = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    at_response_window_limit = _health().model_copy(
+        update={"generated_at": observed_at + timedelta(seconds=5)}
+    )
+    beyond_response_window_limit = _health().model_copy(
+        update={"generated_at": observed_at + timedelta(seconds=5, microseconds=1)}
+    )
+
+    assert health_is_healthy(at_response_window_limit, now=observed_at)
+    assert not health_is_healthy(beyond_response_window_limit, now=observed_at)
+
+
 def _positions(*, ticker: str = "MELI", duplicate_account: bool = False) -> PositionsV1Result:
     accounts = [
         {
