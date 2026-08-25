@@ -1199,12 +1199,12 @@ def _prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object]
             if "segment_name" in columns:
                 predicates.append("COALESCE(segment_name, '') = ''")
             order = "created_at DESC, id DESC" if "created_at" in columns else "id DESC"
-            row = conn.execute(
-                "SELECT provenance_json FROM dcf_runs WHERE "
-                + " AND ".join(predicates)
-                + f" ORDER BY {order} LIMIT 1",  # nosec B608 - identifiers are fixed above
-                (ticker,),
-            ).fetchone()
+            where_clause = " AND ".join(predicates)
+            query = (
+                f"SELECT provenance_json FROM dcf_runs WHERE {where_clause} "  # nosec B608 -- clauses and order are selected only from fixed literals above; ticker remains bound
+                f"ORDER BY {order} LIMIT 1"
+            )
+            row = conn.execute(query, (ticker,)).fetchone()
     except sqlite3.Error:
         return None
     if row is None or row[0] is None:

@@ -264,20 +264,20 @@ def _load_candidates(
 ) -> list[_FactCandidate]:
     fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     placeholders = ", ".join("?" for _ in mappings)
+    query = (
+        f"SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type, "  # nosec B608 -- relation is validated by canonical_fact_relation and interpolation adds qmark placeholders only
+        "fact.value, fact.currency, fact.unit, fact.source_doc_id, "
+        "fact.locator, document.source_quality_tier, document.source_url, "
+        "document.fetched_at, document.source_type "
+        f"FROM {fact_relation} AS fact "
+        "LEFT JOIN documents AS document ON document.id = fact.source_doc_id "
+        "AND UPPER(document.ticker) = UPPER(fact.ticker) "
+        "WHERE UPPER(fact.ticker) = UPPER(?) "
+        f"AND fact.line_item IN ({placeholders}) "
+        "ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC"
+    )
     rows = conn.execute(
-        f"""
-        SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
-               fact.value, fact.currency, fact.unit, fact.source_doc_id,
-               fact.locator, document.source_quality_tier, document.source_url,
-               document.fetched_at, document.source_type
-        FROM {fact_relation} AS fact
-        LEFT JOIN documents AS document
-          ON document.id = fact.source_doc_id
-         AND UPPER(document.ticker) = UPPER(fact.ticker)
-        WHERE UPPER(fact.ticker) = UPPER(?)
-          AND fact.line_item IN ({placeholders})
-        ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
-        """,
+        query,
         (ticker, *(mapping.line_item for mapping in mappings)),
     ).fetchall()
     return [_candidate_from_row(row) for row in rows]

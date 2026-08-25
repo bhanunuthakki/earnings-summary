@@ -214,17 +214,14 @@ def _latest_intents(
             "AND supersession.superseded_intent_id=position_sizing_intent.id)"
         )
     try:
-        rows = conn.execute(
-            f"""
-            SELECT id,user_id,ticker,intent_kind,intent_value,narrative,created_at,updated_at
-            FROM position_sizing_intent
-            WHERE user_id = ?
-            {withdrawal_exclusion}
-            {supersession_exclusion}
-            ORDER BY created_at DESC, id DESC
-            """,
-            (user_id,),
-        ).fetchall()
+        query = (
+            "SELECT id,user_id,ticker,intent_kind,intent_value,narrative,created_at,updated_at "
+            "FROM position_sizing_intent WHERE user_id = ? "
+            f"{withdrawal_exclusion} "  # nosec B608 -- exclusion clauses are fixed literals selected only by schema presence
+            f"{supersession_exclusion} "
+            "ORDER BY created_at DESC, id DESC"
+        )
+        rows = conn.execute(query, (user_id,)).fetchall()
     except sqlite3.OperationalError:
         return None
 

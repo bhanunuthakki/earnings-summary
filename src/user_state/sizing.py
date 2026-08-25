@@ -94,25 +94,25 @@ def list_intents(
     """
     conn = open_conn(db_path)
     try:
-        exclusion = _inactive_exclusion(
-            conn,
-            include_withdrawn=include_withdrawn,
-            include_superseded=include_superseded,
-        )
         if ticker is None:
             rows = conn.execute(
                 "SELECT * FROM position_sizing_intent WHERE user_id = ? "
-                f"{exclusion} "
                 "ORDER BY created_at DESC, id DESC",
                 (user_id,),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT * FROM position_sizing_intent WHERE user_id = ? AND ticker = ? "
-                f"{exclusion} "
                 "ORDER BY created_at DESC, id DESC",
                 (user_id, ticker),
             ).fetchall()
+        rows = _filter_inactive_rows(
+            conn,
+            rows,
+            user_id=user_id,
+            include_withdrawn=include_withdrawn,
+            include_superseded=include_superseded,
+        )
         return [_row_to_dc(r) for r in rows]
     finally:
         conn.close()
@@ -132,22 +132,22 @@ def latest_intent(
     """
     conn = open_conn(db_path)
     try:
-        exclusion = _inactive_exclusion(
+        rows = conn.execute(
+            """
+            SELECT * FROM position_sizing_intent
+            WHERE user_id = ? AND ticker = ? AND intent_kind = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (user_id, ticker, intent_kind),
+        ).fetchall()
+        active_rows = _filter_inactive_rows(
             conn,
+            rows,
+            user_id=user_id,
             include_withdrawn=False,
             include_superseded=False,
         )
-        row = conn.execute(
-            f"""
-            SELECT * FROM position_sizing_intent
-            WHERE user_id = ? AND ticker = ? AND intent_kind = ?
-            {exclusion}
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            """,
-            (user_id, ticker, intent_kind),
-        ).fetchone()
-        return None if row is None else _row_to_dc(row)
+        return None if not active_rows else _row_to_dc(active_rows[0])
     finally:
         conn.close()
 
@@ -179,25 +179,26 @@ def supersede_intents(
     conn = open_conn(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        placeholders = ",".join("?" for _ in old_ids)
-        rows = conn.execute(
-            f"SELECT id,user_id,ticker FROM position_sizing_intent WHERE id IN ({placeholders})",
-            old_ids,
-        ).fetchall()
-        if {int(row["id"]) for row in rows} != set(old_ids):
-            raise LookupError("one or more sizing intents to supersede do not exist")
-        if any(
-            str(row["user_id"]) != user_id or str(row["ticker"]).upper() != normalized_ticker
-            for row in rows
-        ):
-            raise ValueError("superseded sizing intents must belong to the same owner and ticker")
-        already = conn.execute(
-            f"SELECT superseded_intent_id FROM position_sizing_intent_supersessions "
-            f"WHERE user_id=? AND superseded_intent_id IN ({placeholders})",
-            (user_id, *old_ids),
-        ).fetchall()
-        if already:
-            claimed = sorted(int(row["superseded_intent_id"]) for row in already)
+        claimed: list[int] = []
+        for old_id in old_ids:
+            row = conn.execute(
+                "SELECT id,user_id,ticker FROM position_sizing_intent WHERE id=?",
+                (old_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("one or more sizing intents to supersede do not exist")
+            if str(row["user_id"]) != user_id or str(row["ticker"]).upper() != normalized_ticker:
+                raise ValueError(
+                    "superseded sizing intents must belong to the same owner and ticker"
+                )
+            already = conn.execute(
+                "SELECT superseded_intent_id FROM position_sizing_intent_supersessions "
+                "WHERE user_id=? AND superseded_intent_id=?",
+                (user_id, old_id),
+            ).fetchone()
+            if already is not None:
+                claimed.append(int(already["superseded_intent_id"]))
+        if claimed:
             raise ValueError(f"sizing intents already superseded: {claimed}")
         current_id = _insert_intent(
             conn,
@@ -279,26 +280,28 @@ def withdraw_intent(
         conn.close()
 
 
-def _inactive_exclusion(
+def _filter_inactive_rows(
     conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
     *,
+    user_id: str,
     include_withdrawn: bool,
     include_superseded: bool,
-) -> str:
-    fragments: list[str] = []
+) -> list[sqlite3.Row]:
+    inactive_ids: set[int] = set()
     if not include_withdrawn and _table_exists(conn, "position_sizing_intent_withdrawals"):
-        fragments.append(
-            "AND NOT EXISTS (SELECT 1 FROM position_sizing_intent_withdrawals AS withdrawal "
-            "WHERE withdrawal.user_id=position_sizing_intent.user_id "
-            "AND withdrawal.sizing_intent_id=position_sizing_intent.id)"
-        )
+        withdrawn = conn.execute(
+            "SELECT sizing_intent_id FROM position_sizing_intent_withdrawals WHERE user_id=?",
+            (user_id,),
+        ).fetchall()
+        inactive_ids.update(int(row["sizing_intent_id"]) for row in withdrawn)
     if not include_superseded and _table_exists(conn, "position_sizing_intent_supersessions"):
-        fragments.append(
-            "AND NOT EXISTS (SELECT 1 FROM position_sizing_intent_supersessions AS supersession "
-            "WHERE supersession.user_id=position_sizing_intent.user_id "
-            "AND supersession.superseded_intent_id=position_sizing_intent.id)"
-        )
-    return " ".join(fragments)
+        superseded = conn.execute(
+            "SELECT superseded_intent_id FROM position_sizing_intent_supersessions WHERE user_id=?",
+            (user_id,),
+        ).fetchall()
+        inactive_ids.update(int(row["superseded_intent_id"]) for row in superseded)
+    return [row for row in rows if int(row["id"]) not in inactive_ids]
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:

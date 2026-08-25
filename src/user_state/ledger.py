@@ -106,25 +106,24 @@ def list_entries(
             conn, include_ineligible=include_ineligible
         )
         if entry_kind is None:
+            query = (
+                "SELECT * FROM thesis_ledger_entries WHERE user_id = ? AND ticker = ? "
+                f"{exclusion_sql} "  # nosec B608 -- fragment is built only from fixed policy clauses; all policy values remain bound
+                "ORDER BY created_at DESC, id DESC LIMIT ?"
+            )
             rows = conn.execute(
-                f"""
-                SELECT * FROM thesis_ledger_entries
-                WHERE user_id = ? AND ticker = ?
-                {exclusion_sql}
-                ORDER BY created_at DESC, id DESC
-                LIMIT ?
-                """,
+                query,
                 (user_id, ticker, *exclusion_args, int(limit)),
             ).fetchall()
         else:
+            query = (
+                "SELECT * FROM thesis_ledger_entries "
+                "WHERE user_id = ? AND ticker = ? AND entry_kind = ? "
+                f"{exclusion_sql} "  # nosec B608 -- fragment is built only from fixed policy clauses; all policy values remain bound
+                "ORDER BY created_at DESC, id DESC LIMIT ?"
+            )
             rows = conn.execute(
-                f"""
-                SELECT * FROM thesis_ledger_entries
-                WHERE user_id = ? AND ticker = ? AND entry_kind = ?
-                {exclusion_sql}
-                ORDER BY created_at DESC, id DESC
-                LIMIT ?
-                """,
+                query,
                 (user_id, ticker, entry_kind, *exclusion_args, int(limit)),
             ).fetchall()
         return [_row_to_dc(r) for r in rows]
@@ -153,14 +152,13 @@ def list_recent_entries(
         exclusion_sql, exclusion_args = _historical_exclusion(
             db_conn, include_ineligible=include_ineligible
         )
+        query = (
+            "SELECT * FROM thesis_ledger_entries WHERE user_id = ? "
+            f"{exclusion_sql} "  # nosec B608 -- fragment is built only from fixed policy clauses; all policy values remain bound
+            "ORDER BY created_at DESC, id DESC LIMIT ?"
+        )
         rows = db_conn.execute(
-            f"""
-            SELECT * FROM thesis_ledger_entries
-            WHERE user_id = ?
-            {exclusion_sql}
-            ORDER BY created_at DESC, id DESC
-            LIMIT ?
-            """,
+            query,
             (user_id, *exclusion_args, int(limit)),
         ).fetchall()
         return [_row_to_dc(r) for r in rows]
@@ -204,13 +202,14 @@ def _historical_exclusion(
         )
         args.extend((trigger_kind, entry_kind))
     disallowed_sql = " OR ".join(disallowed_clauses)
-    fragments.append(
+    alert_exclusion = (
         "AND NOT EXISTS ("
         "SELECT 1 FROM alerts AS source_alert "
         "WHERE source_alert.id = thesis_ledger_entries.source_alert_id "
-        f"AND ({disallowed_sql})"
+        f"AND ({disallowed_sql})"  # nosec B608 -- disjunction shape comes only from fixed policy tuples; values remain bound
         ")"
     )
+    fragments.append(alert_exclusion)
     return "\n".join(fragments), tuple(args)
 
 
