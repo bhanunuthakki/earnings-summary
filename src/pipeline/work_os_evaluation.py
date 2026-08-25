@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -26,7 +27,10 @@ EvaluationInstrument = Literal["company", "etf"]
 ThesisSource = Literal["micro_thesis", "position_entry", "unavailable"]
 
 _EXCERPT_LIMIT = 320
+_EXPLANATION_LIMIT = 320
+_NAME_LIMIT = 160
 _EXCERPT_SUFFIX = "…"
+_MACHINE_REFERENCE_RE = re.compile(r"\b(?:sha256:)?[a-f0-9]{40,}\b", re.IGNORECASE)
 
 
 class WorkOsEvaluationItem(BaseModel):
@@ -35,18 +39,18 @@ class WorkOsEvaluationItem(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     ticker: str
-    name: str
+    name: str = Field(max_length=_NAME_LIMIT)
     instrument_type: EvaluationInstrument
     score: float | None = None
-    score_why: str | None = None
+    score_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT)
     score_partial: bool = False
     fit: float | None = None
-    fit_why: str | None = None
+    fit_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT)
     fit_partial: bool = False
     sharpe_delta_bps: float | None = None
     held_weight_pct: float | None = None
     dcf_upside_pct: float | None = None
-    thesis_excerpt: str | None = None
+    thesis_excerpt: str | None = Field(default=None, max_length=_EXCERPT_LIMIT)
     source: ThesisSource = "unavailable"
     company_desk_url: str | None = None
     workup_url: str | None = None
@@ -95,6 +99,8 @@ def _finite(value: float | None) -> float | None:
 def _dcf_upside_pct(row: CockpitRow) -> float | None:
     """Compute guarded fair-value upside from the DCF run's own price basis."""
 
+    if row.is_etf or row.dcf_unreviewed:
+        return None
     fair_value = _finite(row.fair_value)
     dcf_price = _finite(row.dcf_price)
     if fair_value is None or dcf_price is None or fair_value <= 0 or dcf_price <= 0:
@@ -103,14 +109,15 @@ def _dcf_upside_pct(row: CockpitRow) -> float | None:
     return _finite(upside)
 
 
-def _bounded_excerpt(value: str) -> str:
-    """Normalize and bound a human excerpt without splitting a word."""
+def _bounded_human_text(value: str, *, limit: int) -> str:
+    """Remove machine references and bound human copy without splitting a word."""
 
     normalized = " ".join(value.split())
-    if len(normalized) <= _EXCERPT_LIMIT:
+    normalized = _MACHINE_REFERENCE_RE.sub("source reference", normalized)
+    if len(normalized) <= limit:
         return normalized
 
-    budget = _EXCERPT_LIMIT - len(_EXCERPT_SUFFIX)
+    budget = limit - len(_EXCERPT_SUFFIX)
     candidate = normalized[:budget]
     boundary = candidate.rsplit(" ", 1)[0]
     if not boundary:
@@ -118,6 +125,16 @@ def _bounded_excerpt(value: str) -> str:
         # upper bound rather than leaking an arbitrarily long payload.
         boundary = candidate
     return boundary.rstrip() + _EXCERPT_SUFFIX
+
+
+def _bounded_optional(value: str | None, *, limit: int) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return _bounded_human_text(value, limit=limit)
+
+
+def _bounded_excerpt(value: str) -> str:
+    return _bounded_human_text(value, limit=_EXCERPT_LIMIT)
 
 
 def _micro_thesis(repo_root: Path, ticker: str) -> tuple[str | None, bool]:
@@ -257,13 +274,16 @@ def build_work_os_evaluation(
         items.append(
             WorkOsEvaluationItem(
                 ticker=ticker,
-                name=(row.name or ticker).strip() or ticker,
+                name=_bounded_human_text((row.name or ticker).strip() or ticker, limit=_NAME_LIMIT),
                 instrument_type=instrument_type,
                 score=_finite(row.attractiveness),
-                score_why=row.attractiveness_why,
+                score_why=_bounded_optional(
+                    row.attractiveness_why,
+                    limit=_EXPLANATION_LIMIT,
+                ),
                 score_partial=row.attractiveness_partial,
                 fit=_finite(row.fit),
-                fit_why=row.fit_why,
+                fit_why=_bounded_optional(row.fit_why, limit=_EXPLANATION_LIMIT),
                 fit_partial=row.fit_partial,
                 sharpe_delta_bps=_finite(row.sharpe_delta_bps),
                 held_weight_pct=held_weight_pct,

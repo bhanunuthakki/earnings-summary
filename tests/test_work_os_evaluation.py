@@ -32,6 +32,7 @@ def _row(
     held_weight: float | None = 0.025,
     fair_value: float | None = 120.0,
     dcf_price: float | None = 100.0,
+    dcf_unreviewed: bool = False,
 ) -> CockpitRow:
     return CockpitRow(
         base=DashboardRow(
@@ -46,6 +47,7 @@ def _row(
         name=name,
         fair_value=fair_value,
         dcf_price=dcf_price,
+        dcf_unreviewed=dcf_unreviewed,
         attractiveness=score,
         attractiveness_why=score_why,
         attractiveness_partial=score_partial,
@@ -121,6 +123,7 @@ def test_mixed_company_and_etf_preserve_input_order_and_user_doorways(
     assert payload.items[0].workup_url == "/api/peek/etf_workup?ticker=VDE"
     assert payload.items[0].company_desk_url is None
     assert payload.items[0].dcf_url is None
+    assert payload.items[0].dcf_upside_pct is None
     assert payload.items[0].report_url is None
     assert payload.items[1].instrument_type == "company"
     assert payload.items[1].company_desk_url == "/ticker/MELI"
@@ -260,3 +263,38 @@ def test_malformed_artifacts_and_missing_position_schema_degrade_without_connect
     assert "micro_thesis_unavailable" in payload.warnings
     assert "position_entries_unavailable" in payload.warnings
     assert "dcf_route_unavailable" in payload.warnings
+
+
+def test_unreviewed_dcf_and_large_machine_explanations_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    machine_ref = "a" * 64
+    oversized = f"Evidence {machine_ref} " + ("detail " * 20_000)
+
+    def empty_brief_builder(*args: object, **kwargs: object) -> BriefLibraryResponse:
+        return _brief_response()
+
+    monkeypatch.setattr(evaluation, "build_brief_library", empty_brief_builder)
+
+    item = evaluation.build_work_os_evaluation(
+        [
+            _row(
+                "MELI",
+                score_why=oversized,
+                fit_why=oversized,
+                dcf_unreviewed=True,
+            )
+        ],
+        tmp_path,
+        conn,
+    ).items[0]
+
+    assert item.dcf_upside_pct is None
+    assert item.score_why is not None
+    assert item.fit_why is not None
+    assert len(item.score_why) <= 320
+    assert len(item.fit_why) <= 320
+    assert machine_ref not in item.score_why
+    assert "source reference" in item.score_why
