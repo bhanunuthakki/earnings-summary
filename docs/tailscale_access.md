@@ -12,38 +12,48 @@ tailscale serve --bg http://127.0.0.1:7421
 tailscale serve status
 ```
 
+Treat the HTTPS URL printed by live `tailscale serve status` as canonical. Do
+not derive it from the Windows computer name, a cached Tailscale device name or
+IP, or the DNS name shown by `tailscale status`. If the host was renamed and
+Serve still prints the old name, repair the mapping before updating clients:
+
+```powershell
+tailscale serve reset
+tailscale serve --bg 7421
+tailscale serve status
+```
+
+Copy the resulting HTTPS origin exactly into
+`COMMENTS_SERVER_CORS_WHITELIST`, restart `es-dashboard`, and verify a local
+`127.0.0.1:7421` request plus a cross-machine request to that HTTPS URL.
+
 The dashboard service itself continues to start without `--tailscale`, so it is
 not reachable through the LAN or the machine's Tailnet IP directly. Tailscale
 Serve exposes the exact `https://<machine>.<tailnet>.ts.net` origin only inside
 the Tailnet and proxies it to loopback. Add that exact origin to
 `COMMENTS_SERVER_CORS_WHITELIST`; do not whitelist `*.ts.net`.
 
-## Direct Tailnet-IP mode
+## Supported access boundary
 
-For an interactive process without Tailscale Serve, start the server from the
-repository root:
-
-```powershell
-python execution/sqlite_bootstrap.py execution/comments_server.py --tailscale
-```
-
-The server asks the local Tailscale client for its IPv4 address and binds only
-to that explicit `100.64.0.0/10` address. Open `http://<tailscale-ip>:7421` from
-another device that your Tailnet policy permits.
+Direct Tailnet-IP binding is not a supported Mac-to-Windows topology. Do not
+start the persistent dashboard with `--tailscale` or direct another device to a
+raw `100.64.0.0/10` address. Keep the application on loopback and use the live
+Tailscale Serve HTTPS origin described above.
 
 Safety properties:
 
-- Without `--tailscale`, the server binds to `127.0.0.1`.
-- Wildcard and ordinary LAN binds are rejected.
-- Requests must come from loopback or a Tailscale address.
-- Browser origins are limited to loopback, Tailscale addresses, and the exact
-  configured private HTTPS origin. An unrelated `.ts.net` hostname is not
-  trusted merely because it shares the suffix.
-- Any permitted Tailnet device can read and mutate the single-user workspace;
-  use Tailscale ACLs or grants to restrict which devices can reach port 7421.
+- The persistent dashboard binds to `127.0.0.1`.
+- Wildcard, ordinary LAN, and direct Tailnet-IP listeners are not part of the
+  supported deployment.
+- Browser origins are limited to loopback and the exact configured private
+  HTTPS origin. An unrelated `.ts.net` hostname is not trusted merely because
+  it shares the suffix.
+- Any device permitted by the Tailnet policy to reach the Serve origin can read
+  and mutate the single-user workspace; use Tailscale ACLs or grants to scope
+  access.
 - Static `file://` reports use a local bearer capability for writes. The
   capability is stored under the gitignored `data/secrets/` directory.
 
-Both modes are intended for the owner's private Tailnet, not for public
+This topology is intended for the owner's private Tailnet, not for public
 exposure, Funnel, ordinary reverse proxies, subnet-router exposure, or
 shared-user hosting.
