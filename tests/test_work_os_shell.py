@@ -664,7 +664,8 @@ def test_l2_l3_shell_composes_semantic_mounts_and_canonical_split_rails() -> Non
         'id="workOsCompanyDeskHeading"><span id="companyPickerLabel">Company Desk</span></h1>'
         in html
     )
-    assert 'class="research-grid k-grid-split-rail-lg"' in html
+    assert 'class="research-screen company-desk-approved-grid"' in html
+    assert 'class="company-desk-summary-grid"' in html
     assert 'id="screen-brief-library"' in html
     assert 'aria-labelledby="workOsBriefLibraryHeading"' in html
     assert 'id="workOsBriefLibraryHeading">Brief Library</h2>' in html
@@ -879,7 +880,7 @@ def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> Non
 def test_company_desk_and_library_use_production_read_models_not_demo_facts() -> None:
     html = render_work_os_shell()
 
-    assert 'data-layout="decision-workbench"' in html
+    assert 'data-layout="company-desk-approved"' in html
     assert 'data-layout="report-library"' in html
     assert "/api/work-os/companies/" in html
     assert "workOsRenderBriefLibrary" in html
@@ -929,19 +930,16 @@ def test_company_desk_separates_current_thesis_risk_from_decision_conditions() -
     desk = _screen_fragment(html, "screen-workspace")
     desk_ids = re.findall(r'\bid="([^"]+)"', desk)
 
-    assert 'id="deskDecisionBand" data-units="8"' in html
-    assert 'id="deskDecisionRelationship"' in html
+    assert 'data-testid="decision-card"' in html
+    assert 'id="deskTrackingBands"' in html
     assert 'id="deskThesisStatus"' in html
-    assert 'id="deskThesisRiskHeading">Thesis risk</h2>' in html
-    assert 'id="deskKpiSummaryHeading">Tier-1 KPI summary</h2>' in html
+    assert 'id="deskSummaryThesisHeading">Why I own this company</h2>' in html
     assert 'id="deskConditions"' in html
-    assert ">Decision conditions</h2>" in html
+    assert ">Thesis contracts</button>" in html
     assert "desk.thesis_risk" in html
     assert "desk.kpi_summary" in html
     assert "thesisRisk.break_rules" in html
     assert "rule.provenance_ref" in html
-    assert "kpi.state" in html
-    assert "data-desk-kpi-evidence" in html
     assert "data-desk-thesis-rule" in html
     assert "sectionId: 'thesis'" in html
     assert "factRef: button.getAttribute('data-desk-kpi-evidence')" in html
@@ -1045,8 +1043,8 @@ def test_primary_work_os_cards_use_one_declared_composition_archetype() -> None:
     assert 'class="k-section-head"' in cockpit
     assert 'class="k-section-title"' in cockpit
     assert 'class="k-well work-os-action-card"' in html
-    assert 'class="k-card k-card-section k-desk-hero research-toolbar"' in company
-    assert 'class="desk-stats-strip"' in company
+    assert 'class="k-card k-card-section company-desk-topline"' in company
+    assert 'class="company-desk-facts"' in company
     assert company.count('class="k-card k-card-stack"><div class="stat-heading">') == 0
     assert 'class="company-picker-popover k-overlay k-card-stack"' in company
 
@@ -1105,14 +1103,15 @@ def test_company_desk_tabs_use_a_guarded_local_runtime() -> None:
     html = render_work_os_shell()
 
     assert 'onclick="switchDeskTab' not in html
-    assert "function workOsSwitchDeskTab(tab)" in html
-    assert "const workOsDeskTabs =" in html
-    assert "event.target.closest('[data-desk-tab]')" in html
+    assert "function workOsSwitchCompanyDeskSection(section, focus)" in html
+    assert "document.querySelectorAll('[data-company-desk-section]')" in html
+    assert "event.target.closest('[data-company-desk-section]')" in html
     assert "button.setAttribute('aria-selected', active ? 'true' : 'false')" in html
-    assert "panel.hidden = candidateId !== panelId" in html
+    assert "panel.hidden = panel.dataset.companyDeskPanel !== section" in html
     assert 'role="tablist"' in html
-    assert html.count('role="tab"') == 4
-    assert html.count('role="tabpanel"') == 4
+    assert html.count('role="tab"') == 2
+    assert html.count('role="tabpanel"') == 2
+    assert "ArrowLeft" in html and "ArrowRight" in html
 
 
 def test_cockpit_availability_does_not_use_missing_as_of_as_offline() -> None:

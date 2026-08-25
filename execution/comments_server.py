@@ -382,22 +382,12 @@ def _linked_gsheet(repo_root: Path, ticker: str) -> tuple[str | None, str | None
     or ``(None, None)`` when no ``dcf_defaults.gsheet_id`` is set in the holdings
     JSON. Shared by the ``/dcf/<T>`` redirect and the ``/api/dcf-sheet/<T>``
     endpoint so the two never diverge on how a Sheet link is resolved."""
-    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    if not path.exists():
+    from dcf.availability import resolve_dcf_route_artifact
+
+    artifact = resolve_dcf_route_artifact(repo_root, ticker)
+    if artifact is None or artifact.kind != "sheet":
         return None, None
-    try:
-        raw: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None, None
-    if not isinstance(raw, dict):
-        return None, None
-    dd = cast("dict[str, object]", raw).get("dcf_defaults")
-    if not isinstance(dd, dict):
-        return None, None
-    gid = cast("dict[str, object]", dd).get("gsheet_id")
-    if isinstance(gid, str) and gid:
-        return gid, f"https://docs.google.com/spreadsheets/d/{gid}/edit"
-    return None, None
+    return artifact.sheet_id, artifact.target
 
 
 def _dcf_recompute_payload(inp: dcf_redesign.RedesignInputs) -> dict[str, object]:
@@ -1833,16 +1823,6 @@ def create_app(
             risk_snapshot=read_latest_snapshot(db_path=db_path),
         )
         response = app.json.response(payload.model_dump(mode="json"))
-        response.headers["Cache-Control"] = "no-store"
-        return response
-
-    @app.route("/api/company/<ticker>/say-do", methods=["GET"])
-    def company_say_do_api(ticker: str):
-        """Generation 3 Company Desk Say/Do historical tracking endpoint."""
-        from get_company_say_do import load_company_say_do
-
-        data = load_company_say_do(db_path, ticker)
-        response = app.json.response(data.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response
 

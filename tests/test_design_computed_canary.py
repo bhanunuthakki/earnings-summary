@@ -716,7 +716,7 @@ def test_route_canary_rejects_freehand_visual_override(tmp_path: Path) -> None:
         (".k-card-head { align-items: center !important; }", "header alignment"),
         (".k-card { box-shadow: none !important; }", "box-shadow"),
         (
-            ".research-toolbar .k-card-title { transform: translateY(120px) !important; }",
+            ".company-desk-topline .k-card-title { transform: translateY(120px) !important; }",
             "upper title zone",
         ),
     ],
@@ -746,13 +746,9 @@ def test_route_canary_rejects_untyped_or_overflowing_card(tmp_path: Path) -> Non
     desktop = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
     desktop.write_text(
         desktop.read_text(encoding="utf-8").replace(
-            '<div class="research-screen" id="workOsCompanyDesk" aria-live="polite">\n'
-            "    <!-- Sticky Valuation & Identity Hero Bar -->\n"
-            '    <header class="k-card k-card-section k-desk-hero research-toolbar" '
-            'id="companyDeskHero">',
-            '<div class="research-screen" id="workOsCompanyDesk" aria-live="polite">\n'
-            "    <!-- Sticky Valuation & Identity Hero Bar -->\n"
-            '    <header class="k-card k-desk-hero research-toolbar" id="companyDeskHero">',
+            '<header class="k-card k-card-section company-desk-topline" '
+            'data-testid="company-topline">',
+            '<header class="k-card company-desk-topline" data-testid="company-topline">',
             1,
         ),
         encoding="utf-8",
@@ -786,7 +782,7 @@ def test_route_canary_rejects_nested_unregistered_boxed_card(tmp_path: Path) -> 
     root = _copy_route_fixtures(tmp_path)
     target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
     markup = target.read_text(encoding="utf-8")
-    anchor = '<h2 class="k-card-title" id="deskThesisRiskHeading">Thesis risk</h2>'
+    anchor = '<h2 class="k-card-title" id="deskSummaryThesisHeading">Why I own this company</h2>'
     assert anchor in markup
     markup = markup.replace(
         anchor,
@@ -844,10 +840,10 @@ def test_outer_card_cannot_borrow_nested_card_title(tmp_path: Path) -> None:
     target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
     target.write_text(
         target.read_text(encoding="utf-8").replace(
-            '<div class="research-grid k-grid-split-rail-lg">',
+            '<div class="company-desk-summary-grid">',
             '<section class="k-card k-card-section">'
             '<section class="k-card k-card-section"><h2 class="k-card-title">Nested only</h2></section>'
-            '</section><div class="research-grid k-grid-split-rail-lg">',
+            '</section><div class="company-desk-summary-grid">',
             1,
         ),
         encoding="utf-8",
@@ -889,9 +885,9 @@ def test_route_canary_rejects_unresolved_visible_loading_shell(tmp_path: Path) -
     target = root / "tests" / "fixtures" / "design_canaries" / "company-desk.desktop.html"
     target.write_text(
         target.read_text(encoding="utf-8").replace(
-            '<div class="research-grid k-grid-split-rail-lg">',
+            '<div class="company-desk-summary-grid">',
             '<p class="cc-loading" hx-get="/api/panel/never">Loading forever…</p>'
-            '<div class="research-grid k-grid-split-rail-lg">',
+            '<div class="company-desk-summary-grid">',
             1,
         ),
         encoding="utf-8",

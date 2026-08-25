@@ -1338,31 +1338,35 @@ def _production_runtime(generated_at: datetime) -> str:
     }}
   }});
 
-  const workOsDeskTabs = {{
-    thesis: 'deskTabThesis',
-    financials: 'deskTabFinancials',
-    transcripts: 'deskTabTranscripts',
-    notes: 'deskTabNotes'
-  }};
-
-  function workOsSwitchDeskTab(tab) {{
-    const panelId = workOsDeskTabs[tab];
-    if (!panelId) return false;
-    document.querySelectorAll('[data-desk-tab]').forEach(function (button) {{
-      const active = button.getAttribute('data-desk-tab') === tab;
-      button.classList.toggle('is-active', active);
+  function workOsSwitchCompanyDeskSection(section, focus) {{
+    const buttons = Array.from(document.querySelectorAll('[data-company-desk-section]'));
+    const panels = Array.from(document.querySelectorAll('[data-company-desk-panel]'));
+    if (!buttons.some(function (button) {{ return button.dataset.companyDeskSection === section; }})) return false;
+    buttons.forEach(function (button) {{
+      const active = button.dataset.companyDeskSection === section;
       button.setAttribute('aria-selected', active ? 'true' : 'false');
+      button.tabIndex = active ? 0 : -1;
+      if (active && focus) button.focus();
     }});
-    Object.values(workOsDeskTabs).forEach(function (candidateId) {{
-      const panel = document.getElementById(candidateId);
-      if (panel) panel.hidden = candidateId !== panelId;
-    }});
+    panels.forEach(function (panel) {{ panel.hidden = panel.dataset.companyDeskPanel !== section; }});
     return true;
   }}
 
   document.addEventListener('click', function (event) {{
-    const tab = event.target instanceof Element ? event.target.closest('[data-desk-tab]') : null;
-    if (tab) workOsSwitchDeskTab(tab.getAttribute('data-desk-tab'));
+    const tab = event.target instanceof Element ? event.target.closest('[data-company-desk-section]') : null;
+    if (tab) workOsSwitchCompanyDeskSection(tab.dataset.companyDeskSection, false);
+  }});
+  document.addEventListener('keydown', function (event) {{
+    const tab = event.target instanceof Element ? event.target.closest('[data-company-desk-section]') : null;
+    if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const buttons = Array.from(document.querySelectorAll('[data-company-desk-section]'));
+    let index = buttons.indexOf(tab);
+    if (index < 0) return;
+    event.preventDefault();
+    if (event.key === 'Home') index = 0;
+    else if (event.key === 'End') index = buttons.length - 1;
+    else index = (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    workOsSwitchCompanyDeskSection(buttons[index].dataset.companyDeskSection, true);
   }});
 
   async function workOsEnsureResearchCompanies() {{
@@ -1393,13 +1397,10 @@ def _production_runtime(generated_at: datetime) -> str:
       if (requestSequence !== workOsCompanyRequestSequence) return false;
       const company = workOsCompanyByTicker(normalized);
       if (!company) throw new Error('Unknown company ' + normalized);
-      const sayDoRequest = fetch('/api/company/' + encodeURIComponent(normalized) + '/say-do', {{ signal: controller.signal, headers: {{ Accept: 'application/json' }} }})
-        .then(function (candidate) {{ return candidate.ok ? candidate.json() : null; }})
-        .catch(function () {{ return null; }});
       const response = await fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk', {{ signal: controller.signal, headers: {{ Accept: 'application/json' }} }});
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const desk = await response.json();
-      const sayDo = await sayDoRequest;
+      const sayDo = desk.say_do || {{ status: 'unavailable', commitments: [], quarters: [] }};
       if (requestSequence !== workOsCompanyRequestSequence) return false;
       const identity = desk.company || {{}};
       const identityTicker = String(identity.ticker || normalized).toUpperCase();
@@ -1462,10 +1463,20 @@ def _production_runtime(generated_at: datetime) -> str:
       if (financials) financials.innerHTML = Number.isFinite(position.price) || Number.isFinite(position.fair_value)
         ? '<div class="k-well"><strong>Governed valuation snapshot</strong><div class="stat-subtext">Price: ' + escapeWorkOsHtml(Number.isFinite(position.price) ? workOsMoney(position.price, position.currency) : 'unavailable') + ' · Fair value: ' + escapeWorkOsHtml(Number.isFinite(position.fair_value) ? workOsMoney(position.fair_value, position.currency) : 'unavailable') + ' · Source: ' + escapeWorkOsHtml(valuationSource) + ' · Price as of ' + escapeWorkOsHtml(position.price_as_of || 'unavailable') + ' · Fair value as of ' + escapeWorkOsHtml(position.fair_value_as_of || 'unavailable') + '</div></div>'
         : '<div class="k-well">Governed valuation inputs are unavailable for this company.</div>';
-      const commitments = sayDo && Array.isArray(sayDo.commitments) ? sayDo.commitments : [];
+      const commitments = sayDo.status === 'available' && Array.isArray(sayDo.commitments) ? sayDo.commitments : [];
+      const sayDoNumber = function (value) {{
+        return Number.isFinite(value) ? Number(value).toLocaleString(undefined, {{ maximumFractionDigits: 2 }}) : 'not observed';
+      }};
       document.getElementById('deskSayDoTimeline').innerHTML = commitments.length ? commitments.map(function (commitment) {{
-        return '<div class="k-well"><strong>' + escapeWorkOsHtml(commitment.statement) + '</strong><div class="stat-subtext">' + escapeWorkOsHtml(commitment.status || 'evaluating') + ' · ' + escapeWorkOsHtml(commitment.source_ref || 'source unavailable') + ' · as of ' + escapeWorkOsHtml(commitment.as_of || sayDo.as_of || 'unavailable') + '</div></div>';
-      }}).join('') : '<div class="k-well">Say/Do history is unavailable or has no governed commitments.</div>';
+        const outcome = String(commitment.outcome || 'tracking');
+        const outcomeLabel = outcome === 'hit' ? 'MET' : outcome === 'beat' ? 'BEAT' : outcome === 'miss' ? 'MISS' : outcome === 'mixed' ? 'MIXED' : outcome === 'no_data' ? 'AWAITING DATA' : 'TRACKING';
+        const outcomeClass = outcome === 'hit' || outcome === 'beat' ? 'k-pill k-pill-ok' : outcome === 'miss' ? 'k-pill k-pill-bad' : 'k-pill k-pill-warn';
+        const target = escapeWorkOsHtml(String(commitment.kpi_name || 'Commitment')) + ' ' + escapeWorkOsHtml(String(commitment.comparator || '')) + ' ' + escapeWorkOsHtml(sayDoNumber(commitment.target_value)) + ' ' + escapeWorkOsHtml(String(commitment.unit || ''));
+        const actual = Number.isFinite(commitment.realized_value) ? ' · actual ' + escapeWorkOsHtml(sayDoNumber(commitment.realized_value)) + ' ' + escapeWorkOsHtml(String(commitment.unit || '')) : '';
+        return '<article class="k-well"><div class="research-row"><strong>' + escapeWorkOsHtml(String(commitment.narrative || commitment.kpi_name || 'Management commitment')) + '</strong><span class="' + outcomeClass + '">' + outcomeLabel + '</span></div><div class="stat-subtext">Said ' + escapeWorkOsHtml(String(commitment.period_made || 'date unavailable').slice(0, 10)) + ' · target ' + escapeWorkOsHtml(String(commitment.period_target || 'date unavailable').slice(0, 10)) + '</div><div class="stat-subtext">' + target + actual + '</div><div class="stat-subtext">Source ' + escapeWorkOsHtml(String(commitment.source_ref || 'unavailable')) + (commitment.evaluated_at ? ' · evaluated ' + escapeWorkOsHtml(String(commitment.evaluated_at).slice(0, 10)) : '') + '</div></article>';
+      }}).join('') : (sayDo.status === 'available'
+        ? '<div class="k-well">No management commitments are recorded for the latest four statement quarters.</div>'
+        : '<div class="k-well" role="alert">Say / Do history is unavailable because the canonical commitment ledger is ' + escapeWorkOsHtml(String(sayDo.unavailable_reason || 'unavailable').replaceAll('_', ' ')) + '.</div>');
       const transcripts = document.getElementById('deskTranscriptsQA');
       if (transcripts) transcripts.innerHTML = desk.latest_earnings_readout
         ? '<div class="k-well"><strong>' + escapeWorkOsHtml(desk.latest_earnings_readout.period_label || 'Latest earnings readout') + '</strong><div class="stat-subtext">Open the governed earnings artifact for sourced transcript evidence.</div></div>'
@@ -1481,6 +1492,62 @@ def _production_runtime(generated_at: datetime) -> str:
       if (briefButton) {{
         briefButton.disabled = !brief;
         briefButton.onclick = brief ? function () {{ openWorkOsBriefReader(brief); }} : null;
+      }}
+      const dcfLink = document.getElementById('workOsDcfLink');
+      if (dcfLink) {{
+        const dcfUrl = desk.position && desk.position.dcf_url ? String(desk.position.dcf_url) : '';
+        if (dcfUrl) dcfLink.setAttribute('href', dcfUrl);
+        else dcfLink.removeAttribute('href');
+        dcfLink.setAttribute('aria-disabled', dcfUrl ? 'false' : 'true');
+        dcfLink.tabIndex = dcfUrl ? 0 : -1;
+        dcfLink.onclick = dcfUrl ? null : function (event) {{ event.preventDefault(); }};
+      }}
+      const readout = desk.latest_earnings_readout || null;
+      const quarterLabel = document.getElementById('deskQuarterLabel');
+      if (quarterLabel) quarterLabel.textContent = readout && readout.period_label ? readout.period_label : 'Pending';
+      const q2Update = document.getElementById('deskQ2Update');
+      if (q2Update) {{
+        q2Update.innerHTML = readout
+          ? '<div class="k-well"><strong>' + escapeWorkOsHtml(readout.period_label || 'Latest earnings readout') + '</strong><div class="stat-subtext">Generated ' + escapeWorkOsHtml(readout.generated_at || 'date unavailable') + ' · governed artifact</div><button class="k-btn k-btn-quiet k-btn-sm" type="button" data-quarter-readout>Open earnings readout →</button></div>'
+          : '<div class="k-well">The governed quarterly readout is pending. No illustrative update is shown.</div>';
+        const readoutButton = q2Update.querySelector('[data-quarter-readout]');
+        if (readoutButton) readoutButton.addEventListener('click', function () {{
+          window.workOsOpenPeekRoute(readout.route, (readout.period_label || normalized) + ' earnings readout');
+        }});
+      }}
+      const recentUpdates = document.getElementById('deskRecentUpdates');
+      if (recentUpdates) {{
+        const updates = [];
+        if (readout) updates.push('<div class="k-well"><strong>' + escapeWorkOsHtml(readout.period_label || 'Latest earnings readout') + '</strong><div class="stat-subtext">Governed earnings artifact · ' + escapeWorkOsHtml(readout.generated_at || 'date unavailable') + '</div></div>');
+        if (brief) updates.push('<div class="k-well"><strong>Latest full brief</strong><div class="stat-subtext">' + escapeWorkOsHtml(brief.report_date || 'date unavailable') + ' · ' + escapeWorkOsHtml(brief.coverage_role || 'unknown') + ' coverage</div></div>');
+        recentUpdates.innerHTML = updates.length ? updates.join('') : '<div class="k-well">No governed recent update is available.</div>';
+      }}
+      const bands = desk.price_action_bands || {{ state: 'unavailable', reason_codes: ['price_action_band_source_unavailable'] }};
+      const trackingBands = document.getElementById('deskTrackingBands');
+      if (trackingBands) {{
+        const currency = bands.currency || position.currency || 'USD';
+        const bandMoney = function (value) {{ return Number.isFinite(value) ? workOsMoney(value, currency) : 'Not encoded'; }};
+        const reasonCodes = Array.isArray(bands.reason_codes) ? bands.reason_codes : [];
+        // The canonical projection does not yet carry a separate Buy rung;
+        // add_buy_below is an approach checkpoint and must not be relabeled.
+        const buyLabel = 'Not encoded';
+        const addLabel = Number.isFinite(bands.add_below) ? '< ' + bandMoney(bands.add_below) : 'Not encoded';
+        const holdLabel = Number.isFinite(bands.hold_low) && Number.isFinite(bands.hold_high)
+          ? bandMoney(bands.hold_low) + ' to ' + bandMoney(bands.hold_high)
+          : 'Not encoded';
+        const trimLabel = Number.isFinite(bands.trim_above) ? '> ' + bandMoney(bands.trim_above) : 'Not encoded';
+        const reason = reasonCodes.includes('price_action_bands_unencoded')
+          ? 'No checkpoint-ratified price ladder has been encoded.'
+          : (bands.is_actionable ? 'Checkpoint-ratified owner ladder.' : 'Price ladder is unavailable or incomplete.');
+        trackingBands.innerHTML = [
+          ['Buy', buyLabel, 'buy'], ['Add', addLabel, 'add'], ['Hold', holdLabel, 'hold'], ['Trim', trimLabel, 'trim']
+        ].map(function (item) {{ return '<div class="k-well tracking-band tracking-band-' + item[2] + '"><span class="stat-heading">' + item[0] + '</span><strong>' + escapeWorkOsHtml(item[1]) + '</strong></div>'; }}).join('')
+          + '<div class="stat-subtext company-desk-tracking-note">' + escapeWorkOsHtml(reason) + '</div>';
+      }}
+      const fullSayDo = document.getElementById('workOsOpenFullSayDo');
+      if (fullSayDo) {{
+        fullSayDo.disabled = !brief;
+        fullSayDo.onclick = brief ? function () {{ openWorkOsBriefReader(brief, {{ sectionId: 'saydo' }}); }} : null;
       }}
       const thesisRisk = desk.thesis_risk || {{ status: 'unavailable', unavailable_reason: 'missing' }};
       const thesisAvailable = thesisRisk.status === 'available';
