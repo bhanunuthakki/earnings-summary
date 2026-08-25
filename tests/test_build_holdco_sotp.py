@@ -18,8 +18,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -32,6 +31,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import build_holdco_sotp as h  # noqa: E402
+
+from dcf.persist import DcfRunRow  # noqa: E402
 
 
 @pytest.fixture
@@ -186,7 +187,11 @@ def test_bn_owner_json_is_not_mutated_when_dcf_persistence_does_not_succeed(
     path = _write_marks(tmp_repo, {"bws_mult": {"value": 12.0, "note": "keep me"}})
     before = path.read_text(encoding="utf-8")
     s = h.Sotp(bws_mult=14.0)
-    monkeypatch.setattr(h, "persist_dcf_run", lambda *_args, **_kwargs: False)
+
+    def fail_persist(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(h, "persist_dcf_run", fail_persist)
 
     persisted, sync_result = h._persist_then_sync_bn(s, *h.value(s), {"marks": {}})
 
@@ -203,15 +208,20 @@ def test_holdco_persistence_degrades_truthfully_on_legacy_schema_without_sync_co
     db_path.touch()
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE dcf_runs (id INTEGER PRIMARY KEY, ticker TEXT)")
-    captured: list[object] = []
+    captured: list[DcfRunRow] = []
 
-    @contextmanager
-    def fake_connect(*_args: object, **_kwargs: object) -> Iterator[sqlite3.Connection]:
-        yield conn
+    def fake_connect(
+        *_args: object, **_kwargs: object
+    ) -> AbstractContextManager[sqlite3.Connection]:
+        return nullcontext(conn)
+
+    def capture_upsert(_conn: sqlite3.Connection, row: DcfRunRow) -> bool:
+        captured.append(row)
+        return True
 
     monkeypatch.setattr(h, "connect_sqlite", fake_connect)
     assert h.persist_mod is not None
-    monkeypatch.setattr(h.persist_mod, "upsert", lambda _conn, row: captured.append(row))
+    monkeypatch.setattr(h.persist_mod, "upsert", capture_upsert)
 
     s = h.Sotp()
     eq, vps = h.value(s)
