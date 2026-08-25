@@ -9,14 +9,28 @@
 # check` runs exactly what is expected to be green.
 
 .DEFAULT_GOAL := help
-PY ?= python
+
+# Fail closed on the project interpreter. An explicit PYTHON_BIN wins; otherwise
+# use the checked-out virtual environment. Never fall through to an unrelated
+# system `python` whose dependency set may differ from the repository contract.
+ifneq ($(strip $(PYTHON_BIN)),)
+PY := $(PYTHON_BIN)
+else ifneq ($(wildcard .venv/bin/python3),)
+PY := .venv/bin/python3
+else ifneq ($(wildcard .venv/bin/python),)
+PY := .venv/bin/python
+else ifneq ($(wildcard .venv/Scripts/python.exe),)
+PY := .venv/Scripts/python.exe
+else
+$(error No project Python found; set PYTHON_BIN or create .venv)
+endif
 BASE ?= origin/main
 PYTEST_WORKERS ?= 2
 PYTEST_XDIST_ARGS := $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS) --dist=loadfile)
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
 CHANGED := $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
 
-.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-serial test-changed check check-fast ci-local
+.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test test-serial test-changed instruction-check check check-fast ci-local
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -49,14 +63,20 @@ typecheck-changed:  ## pyright strict on files changed vs BASE (the enforceable 
 	@if [ -n "$(CHANGED)" ]; then echo "$(CHANGED)" | xargs pyright; else echo "no changed .py files"; fi
 
 test:  ## Run the full test suite
-	pytest -q $(PYTEST_XDIST_ARGS)
+	$(PY) -m pytest -q $(PYTEST_XDIST_ARGS)
 
 test-serial:  ## Run the full suite in one process (lowest local RAM/CPU pressure)
-	pytest -q
+	$(PY) -m pytest -q
 
 test-changed:  ## Run pytest only on changed test files vs BASE
-	@changed_tests=$$(git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- 'tests/test_*.py' 'tests/**/test_*.py'); \
-	if [ -n "$$changed_tests" ]; then pytest -q $$changed_tests; else echo "no changed test files"; fi
+	@changed_tests=$$(git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- 'tests/test_*.py' 'tests/**/test_*.py' 'instruction_tests/test_*.py' 'instruction_tests/**/test_*.py'); \
+	if [ -n "$$changed_tests" ]; then $(PY) -m pytest -q $$changed_tests; else echo "no changed test files"; fi
+
+instruction-check:  ## Validate layered instructions without app fixtures or DB setup
+	$(PY) execution/validate_directive_manifest.py
+	$(PY) execution/validate_folder_contract.py
+	$(PY) -m pytest -q instruction_tests
+	.githooks/test_pre_push.sh
 
 check: format-changed lint-changed typecheck-changed test  ## Pre-push gate: your-lines format + your-files lint/types + tests
 
@@ -72,5 +92,3 @@ drill: manifest-check calendar-check check-fast  ## Reconstruction drill: invent
 
 ci-local:  ## Mirror CI locally (format-check on changed + full tests)
 	$(MAKE) lint-changed && $(MAKE) test
-
-

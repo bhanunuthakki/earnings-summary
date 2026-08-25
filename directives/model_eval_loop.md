@@ -1,152 +1,103 @@
-# Directive: model-downgrade eval loop
+# Model evaluation and promotion
 
-**Goal:** make per-purpose model selection a *measured, standing* thing instead of
-a hand-tuned `LLM_MODELS` pin. The loop continuously asks, for each purpose: **is
-a cheaper model at parity with the incumbent?** When one is, the purpose switches
-down and saves cost. "Cheaper" spans cheaper Claude tiers AND Gemini — Gemini is
-just one kind of cheaper candidate.
+**Class:** canonical. This file owns candidate qualification, promotion, regression
+reversion, and the evidence state connecting evaluation to production routing.
+`llm_evals.md` owns task-quality evidence, `cheapest_model_routing.md` owns economic
+ordering, and `llm_calls.md` owns live dispatch.
 
-Decision (2026-06-11, user): test cheaper models per purpose; *when a task reaches
-parity with a cheaper model, the switch happens*. Sampling = **scheduled batch**
-(no hook in the live `call_llm` path).
+## Outcome
 
-This builds directly on the eval-gated Gemini work (`directives/gemini_backend.md`)
-and reuses its brand-blind pairwise judge unchanged.
+A purpose changes runtime configuration only after a cheaper complete candidate clears
+the same task contract as the incumbent. Outage, missing coverage, judge failure, or
+ambiguous evidence yields HOLD; it never qualifies a candidate or silently preserves a
+stale pass.
 
----
+## Executable authority
 
-## 1. The core idea (and why the judge already supports it)
+- `src/llm/model_eval.py`: candidate runs, deterministic checks, judge aggregation,
+  and `SWITCH_DOWN` / `KEEP_INCUMBENT` / `HOLD` recommendations.
+- `src/llm/backend_judge.py`: brand-blind pairwise judgments.
+- `execution/run_model_eval_sweep.py`: scheduled/interactive evaluation sweep.
+- `execution/apply_model_switches.py`: the only automatic promotion/demotion writer.
+- `model_eval_verdicts`: append-only evidence and recommendation history.
+- `model_pin_overrides`: active production routing override and retained history.
+- `src/llm/resolver.py`: consumer of the active override.
 
-The pairwise judge (`src/llm/backend_judge.py`) is **brand-blind**: it scores
-"Response A" vs "Response B" and never learns which model wrote which. So
-"incumbent model vs cheaper candidate" is the *same* comparison as "Claude vs
-Gemini" — just relabeled. The engine puts the incumbent response in slot A and the
-candidate in slot B; `winner == "claude"` means incumbent won, `== "gemini"` means
-the candidate won. PROMOTE_CANDIDATE becomes **SWITCH_DOWN**.
+Provider and model IDs, candidate family, and cost ranks come from executable registries.
+They are inputs to evaluation, never evidence that a candidate is capable.
 
-So the only genuinely new primitives are:
-- **`src/llm/model_ladder.py`** — a cost-ranked registry (the definition of
-  "cheaper"). Cost basis is **real API list price** ($/MTok, output-weighted), NOT
-  $0-subscription — a flat-rate subscription makes every model look free, useless
-  for ranking. Cost authority: `directives/cheapest_model_routing.md` §2. Gemini's
-  `rate_limited` flag is still surfaced. `cheaper_candidates(incumbent)`.
-- **`src/llm/model_eval.py`** — `run_model` (family→backend dispatch, budget
-  bypassed, `scope="model_eval"`), `judge_case` (the slot mapping), `decide_switch`
-  (the conservative recommendation).
-- **`execution/eval_model_downgrade.py`** — driver: for a purpose, reuse the
-  incumbent's captured responses, run each cheaper candidate, dual-judge, decide.
+## Candidate contract
 
-## 2. Conservative switch rule (`decide_switch`)
+A candidate is the complete runtime configuration actually evaluated: model artifact or
+API ID, provider/serving adapter, quantization when applicable, structured-output mode,
+context settings, hardware/runtime for open-weight models, retry policy, and timeout.
+Changing any load-bearing element creates a new candidate Observation Version.
 
-A downgrade ships only when the cheaper model clearly holds up — the cost of a bad
-downgrade (worse production output, silently) outweighs the saving:
+Before spend, the sweep must prove:
 
-- `CANDIDATE_ERRORED` (checked FIRST, #723) when the candidate failed
-  operationally on ≥ 50% of attempted cases — an infrastructure verdict, not a
-  quality one. Excluded from switch/keep streaks by `apply_model_switches`,
-  which fires a date-keyed infra alert instead. Added after the 2026-06-28
-  sweep recorded every Gemini candidate at parity=0.0 / KEEP_INCUMBENT while
-  the Gemini CLI was erroring 60-100% of its runs.
-- `KEEP_INCUMBENT` if ANY judge has the incumbent winning a majority.
-- `SWITCH_DOWN` only if EVERY judge has the candidate at parity-or-better on
-  ≥ `parity_threshold` (default 0.8) of cases AND cross-judge agreement ≥ 0.6.
-- `HOLD` for mixed / judges-disagree.
-- `INSUFFICIENT_DATA` below `min_n` (default 4).
+1. the purpose and incumbent have representative cases and a task-specific rubric;
+2. the candidate satisfies the purpose CapabilityProfile;
+3. the candidate is economically eligible under `cheapest_model_routing.md`;
+4. prompts, source inputs, and deterministic grading contracts are versioned; and
+5. judge configuration is registered and independent of contestant labels.
 
-A candidate that *fails* a case (errors/timeout) counts as an incumbent win
-within the tallies — a model that can't reliably produce the output isn't
-switch-worthy — but once failures cross the 50% rate the whole verdict flips
-to `CANDIDATE_ERRORED` (the tallies are noise at that point). Gemini's
-`rate_limited` flag is surfaced so a high-volume purpose isn't switched onto a
-quota it would blow.
+## Evaluation sequence
 
-## 3. Sampling: scheduled batch (no live hook)
+1. Freeze the case set, prompt version, incumbent/candidate configurations, rubric,
+   deterministic gates, and cost registry fingerprint.
+2. Run both contestants on identical inputs. Parse/schema/business-invariant failures are
+   candidate errors, not low-quality prose to be averaged away.
+3. Apply deterministic gates before semantic judgment.
+4. Present surviving outputs brand-blind and position-balanced to registered judges.
+5. Persist attempted-case counts, candidate and judge error rates, agreement, parity,
+   latency, charged or estimated total runtime cost, and all evidence versions.
+6. Produce exactly one recommendation: `SWITCH_DOWN`, `KEEP_INCUMBENT`, or `HOLD`.
 
-The loop does NOT probabilistically tap live `call_llm`. Instead a scheduled job:
-1. picks a random sample of (purpose, ticker) pairs from the tracked universe;
-2. harvests their real prompts — `LLM_CAPTURE_DIR=… build_artifacts --enable-llm
-   --force-refresh` (capture is the env-gated sink from #421; `--force-refresh`
-   forces a real LLM call so the prompt is captured, not cache-hit);
-3. runs `eval_model_downgrade` per sampled purpose against the captured prompts;
-4. appends verdicts to the standing ledger (below).
+No completed cases, excessive candidate errors, excessive judge errors, incomplete
+coverage, or conflicting evidence is HOLD. Never convert infrastructure failure into a
+quality result.
 
-Run the eval phase with capture OFF so eval traffic never re-enters the corpus.
+## Promotion and reversion
 
-## 4. Phased PR plan
+`execution/apply_model_switches.py` owns activation thresholds and consecutive-evidence
+requirements. It may activate a `model_pin_overrides` row only from qualifying retained
+`SWITCH_DOWN` verdicts that share compatible evidence versions. It may deactivate the
+override after the configured retained `KEEP_INCUMBENT` regression evidence. HOLD never
+switches or reverts production.
 
-| PR | Scope | Status |
-|---|---|---|
-| **1** | Foundation: `model_ladder` + `model_eval` (engine, reuses the judge) + `eval_model_downgrade` CLI + tests + this directive. Advisory verdicts to `data/model_eval/`. | **DONE** |
-| **2** | Standing verdict ledger + scheduled cron: a `model_eval_verdicts` table (rolling per-(purpose, candidate) tally across runs), a `run_model_eval_sweep` job that samples purposes/tickers, harvests, evals, and accumulates; a weekly Scheduled-Task rung. | **DONE** — alembic 0084 `model_eval_verdicts` + `execution/run_weekly_model_eval.py` (#448/#450) |
-| **3** | Auto-switch with guardrails: a `model_pin_overrides` table (purpose→model, reversible) that `_model_for` consults BEFORE the code pin; the loop writes an override when a candidate clears a *high* bar (large min-n, both-judge agreement, margin), emits an alert, and **auto-demotes** (clears the override) if a later sweep regresses. Dashboard surface + manual override/lock. | **DONE** — `model_pin_overrides` + `src/llm/model_overrides.py` + auto-switch in `src/llm/cli.py::_model_for()` + `execution/apply_model_switches.py` (#443/#450) |
-| **4** | Dashboard surface + cost-savings rollup: an **Optimizer** panel (`src/pipeline/model_eval_panel.py`, in the System → Provenance console beside Evals) over `model_eval_verdicts` + `model_pin_overrides` + `llm_calls` — the anonymous-purpose alarm (purpose=NULL / unregistered rows > $1/30d), active overrides with realized-savings ("≈$X/mo saved by N downgrades" via `model_ladder.estimated_call_usd`), per-(purpose, candidate) verdict history with `CANDIDATE_ERRORED` as an infra flag (not a quality pill), and per-purpose 30d cost split prod-vs-eval-scope. | **DONE** — `model_eval_panel.py` + `/api/panel/model_eval` route; the golden anti-regression cases per downgraded purpose remain open (tracked in `platform_backlog.md` golden-set thickening). |
+The writer is single-owner and auditable. A prose edit, provider runbook, eval runner, or
+judge cannot directly change production routing. Manual activation/deactivation remains
+an explicit owner action and preserves history.
 
-**Why advisory-first (PR1) before auto (PR3):** you can't auto-switch without the
-measurement, and the measurement engine is unambiguous. Auto-switch flips
-production model selection from a sampling loop — it needs the override table
-(reversible, data not code), a high confidence bar, alerting, and auto-demote
-before it earns that authority. PR1 produces the evidence; a human still flips
-the pin (or PR3 lets the loop do it under guardrails).
+## Stage calibration
 
-## 5. Early findings (real, from the harvest that motivated this)
+- Exploration: a small smoke comparison may nominate a candidate but cannot promote it.
+- Recurring personal use: representative cases, deterministic failures, retained
+  pairwise evidence, cost/latency data, and tested degradation are required.
+- External/commercial use: ratified thresholds, calibrated judges, release monitoring,
+  rollback evidence, and statistically appropriate coverage are required.
 
-On `bear_case` (incumbent Sonnet, n=4 NU/MELI/NOW/BN), **Gemini-Pro lost 4/4**
-under both judges (REJECT) — analytical reasoning needs the incumbent. `viewspec_compile`
-(Haiku) showed Gemini at parity (PROMOTE_CANDIDATE, n=2). The point of the loop is
-exactly this purpose-dependence: it finds the cheapest model that holds *per
-purpose*, rather than one global choice.
+Increase sample and judge breadth because observed error, decision consequence, or
+uncertainty warrants it—not because a provider is new.
 
-## 6. 2026-07 attempt: Sonnet 5 / Haiku 4.5 registered, promotions blocked
+## Identity and failure policy
 
-`claude-sonnet-5` and `claude-haiku-4-5` were added to `src/llm/model_ladder.py`
-as eval candidates (current-generation replacements for the `DEFAULT_MODEL` /
-`FAST_CLASSIFIER_MODEL` pins, per the 2026-07-21 frontier price refresh — see
-`directives/cheapest_model_routing.md` §2a for full detail). Six `DEFAULT_MODEL`
-purposes had a sufficient captured corpus (`n >= 4`, merged across
-`data/llm_capture/*.jsonl`) to run `execution/eval_model_downgrade.py` against:
-`qa_topics`, `saydo_filter`, `company_description`, `recent_developments`,
-`bear_case`, `peer_selection`.
+- **Logical Idempotency Key:** `(purpose, incumbent configuration, candidate
+  configuration, evidence-set version, evaluation-policy version)`.
+- **Content Identity:** digests of case corpus, prompts, contestant outputs, rubric,
+  executable ladder, and judge configuration.
+- **Observation Version:** complete contestant/runtime coordinates plus all Content
+  Identities and the evidence cutoff.
+- **Attempt Identity:** evaluation `run_id` and call receipts for one sweep. Retries
+  receive new Attempt Identities.
 
-**Round 1** was aborted before any real candidate/judge comparison ran: the
-local `claude` CLI's OAuth session was expired (`api_error_status: 401`,
-confirmed identically for both the incumbent and candidate model ids — not
-model-specific, not quota exhaustion).
+Budget exhaustion, transport/setup error, parser/schema failure, missing judge evidence,
+or unverifiable cost is retained and surfaced. The result is HOLD unless deterministic
+evidence already proves the candidate fails, in which case it may be KEEP_INCUMBENT;
+neither path manufactures parity.
 
-**Round 2** (same day, after `claude auth login` restored the CLI session):
-confirmed the CLI worked with one cheap diagnostic call, then ran
-`recent_developments` (highest 30d spend, $35.04) for real —
-`claude-sonnet-5` vs `claude-sonnet-4-6`, `n=7`, dual judge (`claude`=Opus,
-`gemini`=Pro). Result: **`KEEP_INCUMBENT`** — cand 0 / inc 7 / tie 7, parity
-50%, agreement **0%**. The 0% agreement was NOT a quality signal: the
-`GEMINI_API_KEY` in `.env` is invalid (`400 API_KEY_INVALID`, confirmed
-independently via a direct `google.generativeai` call outside the harness,
-same error). Every Gemini-side judge call in the run failed operationally
-(`backend_judge_call_failed`), so `judge_agreement` — which requires >=2
-judges from distinct families to concur — was mechanically stuck at 0%,
-permanently below the 0.6 switch-conservative floor. `decide_switch` still
-did its job correctly (a broken second judge can only ever produce
-`KEEP_INCUMBENT`/`HOLD`, never a false `SWITCH_DOWN` — the Claude/Opus judge
-alone showed the incumbent winning a case, so `incumbent_majority` tripped),
-but **no verdict produced under this condition should be read as a genuine
-quality comparison** — it's a single-judge result wearing a dual-judge label.
+## Verification
 
-**Real cost of round 2** (verified via the `llm_calls` ledger, `run_id`
-`04ca2f7c9a0446cc98c0d9437a852ae8`): 35 calls, **$3.4575** — 7
-`claude-sonnet-5` candidate calls + 28 `claude-opus-4-8` judge calls (14 of
-which were the failed Gemini-side attempts, billed at the Opus label but
-routed to the broken Gemini backend). The remaining 5 eval-ready purposes
-(`bear_case`, `peer_selection`, `saydo_filter`, `company_description`,
-`qa_topics`) were **deliberately NOT run** — every one would hit the
-identical broken judge and cost another ~$2-4 each for a result that can
-never legally reach `SWITCH_DOWN`. This is an infra-broken stop (hard rule:
-don't promote on vibes, don't burn quota on a run that structurally can't
-produce a valid verdict), not a per-purpose transient-failure defer.
-
-No purpose was promoted; `LLM_MODELS` in `src/llm/cli.py` is unchanged.
-**Blocker for the next attempt: rotate `GEMINI_API_KEY` in `.env`** (get a
-new key at https://aistudio.google.com/app/apikey; the same key backs
-`src/llm/fallback.py`'s emergency path, so that's also silently degraded
-until it's rotated). Once a valid key is in place, re-run
-`execution/eval_model_downgrade.py` for all 6 purposes listed above — the
-merged capture corpus and the `--candidates claude-sonnet-5` command in
-cheapest_model_routing.md §2a are unchanged and ready to go.
+For a change to this loop, run the focused model-eval, backend-judge,
+apply-model-switches, resolver, and ledger tests. A live sweep is additional evidence,
+not a substitute for deterministic proof; if it is unavailable, report that explicitly.

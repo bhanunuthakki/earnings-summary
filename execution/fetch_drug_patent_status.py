@@ -14,8 +14,8 @@ search URL pre-filled. The directive (nvo_external_sources.md) is the binding
 contract; paid sources are explicitly out of scope.
 
 Outputs:
-  .tmp/nvo_patents/<molecule>_<run_date>.json  — list[PatentRecord]
-  .tmp/nvo_patents/<molecule>_<run_date>_summary.json — PatentFetchSummary
+  .tmp/nvo_patents/<molecule>/observations/<content_identity>.json — immutable observation
+  .tmp/nvo_patents/<molecule>/attempts/<attempt_identity>.json — attempt receipt
 Stdout: PatentFetchSummary as one line of JSON.
 Stderr: structured event logs (one JSON object per line).
 
@@ -28,10 +28,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
+import re
 import sys
 import time
+import uuid
 import zipfile
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -50,6 +53,7 @@ from models.patents import (  # noqa: E402
     FetchSource,
     Jurisdiction,
     PatentFetchSummary,
+    PatentObservation,
     PatentRecord,
 )
 
@@ -209,9 +213,9 @@ def _patents_for_applications(
     return out
 
 
-def fetch_us_orange_book(molecule: str) -> list[PatentRecord]:
+def fetch_us_orange_book(molecule: str, *, force_cache: bool = False) -> list[PatentRecord]:
     """Read Orange Book ZIP, find applications for molecule, list their patents."""
-    zip_path = ensure_orange_book_cache()
+    zip_path = ensure_orange_book_cache(force=force_cache)
     products_text = _read_zip_text(zip_path, "products.txt")
     patent_text = _read_zip_text(zip_path, "patent.txt")
 
@@ -329,22 +333,107 @@ def _manual_search_url(molecule: str, jurisdiction: Jurisdiction) -> tuple[str, 
     raise ValueError(f"No manual search URL for jurisdiction {jurisdiction}")
 
 
-def fetch_for_jurisdiction(molecule: str, jurisdiction: Jurisdiction) -> list[PatentRecord]:
+def fetch_for_jurisdiction(
+    molecule: str,
+    jurisdiction: Jurisdiction,
+    *,
+    force_cache: bool = False,
+) -> list[PatentRecord]:
     if jurisdiction is Jurisdiction.US:
-        return fetch_us_orange_book(molecule)
+        return fetch_us_orange_book(molecule, force_cache=force_cache)
     return [manual_check_record(molecule, jurisdiction)]
+
+
+def _safe_identity_segment(value: str, *, label: str) -> str:
+    normalized = value.strip().lower().replace(" ", "-")
+    if not normalized or re.fullmatch(r"[a-z0-9][a-z0-9._-]*", normalized) is None:
+        raise ValueError(
+            f"{label} must contain only letters, numbers, dots, underscores, or hyphens"
+        )
+    return normalized
+
+
+def _logical_idempotency_key(molecule: str, requested: list[Jurisdiction]) -> str:
+    scope = ",".join(sorted({jurisdiction.value for jurisdiction in requested}))
+    return f"patent-status:v1:{molecule}:{scope}"
+
+
+def _canonical_record_payload(record: PatentRecord) -> dict[str, Any]:
+    """Return source facts only; retrieval time belongs to the observation envelope."""
+    return record.model_dump(mode="json", exclude={"pulled_at"})
+
+
+def _content_identity(
+    molecule: str,
+    requested: list[Jurisdiction],
+    records: list[PatentRecord],
+) -> str:
+    canonical_records = sorted(
+        (_canonical_record_payload(record) for record in records),
+        key=lambda record: json.dumps(record, sort_keys=True, separators=(",", ":")),
+    )
+    payload = {
+        "molecule": molecule,
+        "jurisdictions_requested": sorted({jurisdiction.value for jurisdiction in requested}),
+        "records": canonical_records,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def write_outputs(
     molecule: str,
     requested: list[Jurisdiction],
     records: list[PatentRecord],
+    *,
+    attempt_identity: str,
+    observed_at: datetime | None = None,
 ) -> tuple[Path, PatentFetchSummary]:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    run_date = _now_utc().strftime("%Y-%m-%d")
-    out_path = OUT_DIR / f"{molecule}_{run_date}.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump([r.model_dump(mode="json") for r in records], f, indent=2)
+    molecule_segment = _safe_identity_segment(molecule, label="molecule")
+    attempt_segment = _safe_identity_segment(attempt_identity, label="attempt_identity")
+    requested = sorted(set(requested), key=lambda jurisdiction: jurisdiction.value)
+    observed_at = observed_at or _now_utc()
+    logical_key = _logical_idempotency_key(molecule_segment, requested)
+    content_identity = _content_identity(molecule_segment, requested, records)
+    digest = content_identity.removeprefix("sha256:")
+    observation_version = f"patent-observation:v1:{content_identity}"
+
+    molecule_dir = OUT_DIR / molecule_segment
+    observations_dir = molecule_dir / "observations"
+    attempts_dir = molecule_dir / "attempts"
+    observations_dir.mkdir(parents=True, exist_ok=True)
+    attempts_dir.mkdir(parents=True, exist_ok=True)
+    out_path = observations_dir / f"{digest}.json"
+
+    observation = PatentObservation(
+        logical_idempotency_key=logical_key,
+        content_identity=content_identity,
+        observation_version=observation_version,
+        observed_at=observed_at,
+        molecule=molecule_segment,
+        jurisdictions_requested=requested,
+        records=records,
+    )
+    disposition = "created"
+    try:
+        with open(out_path, "x", encoding="utf-8") as f:
+            json.dump(observation.model_dump(mode="json"), f, indent=2, sort_keys=True)
+            f.write("\n")
+    except FileExistsError:
+        persisted = PatentObservation.model_validate_json(out_path.read_text(encoding="utf-8"))
+        persisted_content_identity = _content_identity(
+            persisted.molecule,
+            persisted.jurisdictions_requested,
+            persisted.records,
+        )
+        if (
+            persisted.logical_idempotency_key != logical_key
+            or persisted.content_identity != content_identity
+            or persisted.observation_version != observation_version
+            or persisted_content_identity != content_identity
+        ):
+            raise RuntimeError(f"Observation identity collision at {out_path}") from None
+        disposition = "replayed"
 
     succeeded = sorted(
         {
@@ -361,17 +450,26 @@ def write_outputs(
         }
     )
     summary = PatentFetchSummary(
-        molecule=molecule,
+        logical_idempotency_key=logical_key,
+        attempt_identity=attempt_identity,
+        content_identity=content_identity,
+        observation_version=observation_version,
+        disposition=disposition,
+        molecule=molecule_segment,
         jurisdictions_requested=requested,
         jurisdictions_succeeded=succeeded,
         jurisdictions_manual_only=manual,
         record_count=len(records),
-        pulled_at=_now_utc(),
+        pulled_at=observed_at,
         output_file=str(out_path.relative_to(PROJECT_ROOT)),
     )
-    summary_path = OUT_DIR / f"{molecule}_{run_date}_summary.json"
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(summary.model_dump(mode="json"), f, indent=2)
+    summary_path = attempts_dir / f"{attempt_segment}.json"
+    try:
+        with open(summary_path, "x", encoding="utf-8") as f:
+            json.dump(summary.model_dump(mode="json"), f, indent=2, sort_keys=True)
+            f.write("\n")
+    except FileExistsError:
+        raise RuntimeError(f"Attempt Identity already exists: {attempt_identity}") from None
     return out_path, summary
 
 
@@ -401,24 +499,18 @@ def main() -> None:
         default=None,
         help="Comma-separated (US,EU,CN,IN,BR,CA). Defaults to all 6.",
     )
-    parser.add_argument("--force", action="store_true", help="Re-fetch even if today's file exists")
+    parser.add_argument(
+        "--force", action="store_true", help="Refresh cached source data before fetch"
+    )
     args = parser.parse_args()
 
     requested = parse_jurisdictions(args.jurisdictions)
-    run_date = _now_utc().strftime("%Y-%m-%d")
-    expected_out = OUT_DIR / f"{args.molecule}_{run_date}.json"
-    if expected_out.exists() and not args.force:
-        _log("idempotent_skip", molecule=args.molecule, output_file=str(expected_out))
-        existing_summary = OUT_DIR / f"{args.molecule}_{run_date}_summary.json"
-        if existing_summary.exists():
-            sys.stdout.write(existing_summary.read_text(encoding="utf-8"))
-            sys.stdout.write("\n")
-        return
+    attempt_identity = str(uuid.uuid4())
 
     all_records: list[PatentRecord] = []
     for j in requested:
         _log("jurisdiction_start", molecule=args.molecule, jurisdiction=j.value)
-        records = fetch_for_jurisdiction(args.molecule, j)
+        records = fetch_for_jurisdiction(args.molecule, j, force_cache=args.force)
         _log(
             "jurisdiction_done",
             molecule=args.molecule,
@@ -428,7 +520,12 @@ def main() -> None:
         all_records.extend(records)
         time.sleep(RATE_LIMIT_SECONDS)
 
-    _, summary = write_outputs(args.molecule, requested, all_records)
+    _, summary = write_outputs(
+        args.molecule,
+        requested,
+        all_records,
+        attempt_identity=attempt_identity,
+    )
     sys.stdout.write(json.dumps(summary.model_dump(mode="json")) + "\n")
 
 

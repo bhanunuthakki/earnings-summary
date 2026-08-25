@@ -37,6 +37,7 @@ from typing import Generic, Literal, TypeVar, cast
 from pydantic import TypeAdapter, ValidationError
 
 from llm.cli import call_llm
+from llm.resolver import CapabilityProfile, structured_capability_profile
 from log_redact import redact
 
 log = logging.getLogger(__name__)
@@ -148,6 +149,7 @@ def call_llm_structured(
     domain_guardrail: Callable[[object], tuple[bool, str]] | None = None,
     max_escalation_tier: int = 1,
     db_path: Path | str | None = None,
+    capability_profile: CapabilityProfile | None = None,
 ) -> T | object:
     """``call_llm`` + strict parse + P3 Cascade Router tier escalation, loud on failure.
 
@@ -156,6 +158,7 @@ def call_llm_structured(
     If repair fails and max_escalation_tier >= 1, escalates to higher tier model
     (e.g., Sonnet/Pro) to complete extraction.
     """
+    effective_profile = structured_capability_profile(capability_profile)
     raw = call_llm(
         prompt,
         purpose=purpose,
@@ -166,6 +169,7 @@ def call_llm_structured(
         backend=backend,
         timeout_seconds=timeout_seconds,
         db_path=db_path,
+        capability_profile=effective_profile,
     )
     try:
         parsed = parse_json_payload(raw, expect=expect, required_keys=required_keys)
@@ -197,6 +201,7 @@ def call_llm_structured(
         backend=backend,
         timeout_seconds=timeout_seconds,
         db_path=db_path,
+        capability_profile=effective_profile,
     )
     try:
         parsed = parse_json_payload(raw_retry, expect=expect, required_keys=required_keys)
@@ -212,7 +217,12 @@ def call_llm_structured(
         from llm.resolver import resolve_model_and_backend
 
         is_explicit_model = model is not None
-        primary_model, _ = resolve_model_and_backend(purpose=purpose, model=model)
+        primary_model, _ = resolve_model_and_backend(
+            purpose=purpose,
+            model=model,
+            capability_profile=effective_profile,
+            db_path=db_path,
+        )
 
         if max_escalation_tier >= 1 and not is_explicit_model and primary_model != DEFAULT_MODEL:
             log.warning(
@@ -236,6 +246,7 @@ def call_llm_structured(
                 run_id=run_id,
                 timeout_seconds=timeout_seconds,
                 db_path=db_path,
+                capability_profile=effective_profile,
             )
             try:
                 parsed_esc = parse_json_payload(
@@ -292,6 +303,7 @@ def call_llm_structured_with_raw(
     scope: str | None = None,
     run_id: str | None = None,
     db_path: Path | str | None = None,
+    capability_profile: CapabilityProfile | None = None,
 ) -> StructuredCallResult[T]:
     """Schema-decode with one governed repair while preserving exact exchange bytes.
 
@@ -300,6 +312,7 @@ def call_llm_structured_with_raw(
     erase the prompt-registry identity from the ledger.
     """
 
+    effective_profile = structured_capability_profile(capability_profile)
     current_prompt = prompt
     raw = call_llm(
         current_prompt,
@@ -308,6 +321,7 @@ def call_llm_structured_with_raw(
         scope=scope,
         run_id=run_id,
         db_path=db_path,
+        capability_profile=effective_profile,
     )
     try:
         payload = parse_json_payload(raw, expect="object")
@@ -334,6 +348,7 @@ def call_llm_structured_with_raw(
         scope=scope,
         run_id=run_id,
         db_path=db_path,
+        capability_profile=effective_profile,
     )
     try:
         payload = parse_json_payload(raw, expect="object")

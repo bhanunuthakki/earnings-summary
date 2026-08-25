@@ -45,9 +45,14 @@ User decision: stick to free search only. Paid sources are out of scope and will
 
 1. **`execution/fetch_drug_patent_status.py`** — single-purpose CLI:
    - Args: `--molecule semaglutide --jurisdictions US,EU,CN,IN,BR,CA`
-   - Pulls FDA Orange Book + EPO + WIPO + INPI + IPO + CIPO patent records
-   - Output: `.tmp/nvo_patents/<molecule>_<run_date>.json` validated against Pydantic model
-   - Refresh cadence: monthly (patents don't change daily); idempotency key `{molecule}_{jurisdiction}_{run_date}`
+   - Pulls FDA Orange Book records for the US and emits explicit manual-check
+     records for jurisdictions without a supported public adapter
+   - Immutable observations:
+     `.tmp/nvo_patents/<molecule>/observations/<content_sha256>.json`;
+     per-invocation receipts:
+     `.tmp/nvo_patents/<molecule>/attempts/<attempt_identity>.json`
+   - Refresh cadence: monthly (patents don't change daily); Logical Idempotency
+     Key `patent-status:v1:<normalized_molecule>:<sorted_jurisdiction_scope>`
    - Rate limit: 1 req/s per jurisdiction, max 60 req total per run
 
 2. **`execution/extract_nvo_patent_timeline.py`** — extract NVO's own patent expiry table from the latest annual report:
@@ -101,10 +106,22 @@ class MarketSignal(BaseModel):
     extracted_at: datetime
 ```
 
-## Idempotency & State
+## Identity and state
 
-- Idempotency key for patent fetches: `{molecule}_{jurisdiction}_{run_date}` (date, not datetime — daily granularity is more than sufficient for patent monitoring)
-- Idempotency key for transcript signals: `{ticker}_{period}_{signal_hash}` where signal_hash dedupes if the same transcript is re-extracted
+- **Logical Idempotency Key:** patent fetches use the stable operation-and-scope key
+  `patent-status:v1:<normalized_molecule>:<sorted_jurisdiction_scope>`; no wall-clock
+  value participates. Transcript-signal extraction uses
+  `{ticker}_{period}` plus the signal's stable semantic locator.
+- **Content Identity:** patent observations use SHA-256 of canonical source facts,
+  excluding retrieval timestamps, so a retry on another date recognizes unchanged
+  facts. A `signal_hash` is a derived Content Identity and duplicate guard, not the
+  logical key.
+- **Observation Version:** patent sources expose no durable version coordinate, so
+  the append-only observation version is `patent-observation:v1:<Content Identity>`;
+  changed same-day facts create a new immutable observation rather than overwriting
+  prior bytes. The observation envelope records fetched-at knowledge time separately.
+- **Attempt Identity:** unique fetch or extraction invocation and receipt; it changes
+  on retry even when the Logical Idempotency Key and Content Identity are unchanged.
 
 ## Failure Modes
 

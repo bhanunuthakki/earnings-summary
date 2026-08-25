@@ -52,7 +52,7 @@ the evaluation lane depends on them.
   back to this store when the FMP price-chart cache has nothing (FMP wins
   when both exist).
 
-## Cadence, idempotency, budget
+## Cadence, identity, and budget
 
 - **Onboard**: `execution/onboard_ticker.py` routes `instrument_type='etf'`
   to the published-data path (`run_etf_onboarding`) and **skips**
@@ -66,9 +66,14 @@ the evaluation lane depends on them.
   context — NOT in the default morning Stage 0f run: the workup payload's
   floats wiggle daily, so the sha gate re-bills most mornings and the ~60s
   LLM calls blow the stage's 180s pure-math budget (observed 2026-07-11).
-- **Idempotency key**: `etf_{ticker}_{rep_period_date}_{source}` — an
-  already-ingested N-PORT report is an explicit `already_done` skip;
-  `--force` overrides. Price fetch skips when the ticker already has closes.
+- **Logical Idempotency Key:** `etf_{ticker}_{rep_period_date}_{source}`. An
+  already-ingested N-PORT report is an explicit `already_done` skip; `--force`
+  requests reprocessing without changing the logical identity.
+- **Content Identity:** SHA-256 of the exact N-PORT, issuer, or price payload.
+- **Observation Version:** representative period/source filing identity plus
+  source-published and fetched-at times.
+- **Attempt Identity:** unique onboarding or refresh invocation and its receipt.
+  Price-fetch presence checks are repeat-safety guards, not identities.
 - **Rate limits**: SEC fair-access — declared UA with contact, ≥150 ms
   between requests (mirrors `discovery/thirteenf.py`); ≤ ~26 requests per
   ticker refresh (1 map + 1 submissions + ≤24 probes). Vanguard API: plain

@@ -12,9 +12,9 @@ INGEST → TRANSCRIBE → PARSE → VALIDATE → PERSIST → COMPUTE → SYNTHES
 
 Each stage:
 - Has typed inputs and outputs (Pydantic models in `src/models/`).
-- Writes one row per `(ticker, period_end)` to `stage_transitions` with start/end timestamps and status.
-- Idempotent: rerunning with the same inputs and a status of `ok` is a no-op (unless `--force`).
-- Resumable: a run that died mid-pipeline is restarted from the first `(ticker, period_end, stage)` where `status != ok`.
+- Writes one row per `(run_id, ticker, period_end, stage)` to `stage_transitions`; `run_id` is the Attempt Identity.
+- Is logically idempotent: rerunning the same Logical Idempotency Key at the same Observation Version is a no-op unless `--force`.
+- Is resumable: a failed Attempt Identity restarts from its first `(ticker, period_end, stage)` where `status != ok`.
 
 ## Per-stage contract
 
@@ -31,11 +31,19 @@ Each stage:
 
 The full enum lives in `src.models.runs.StageStatus`.
 
-## Idempotency
+## Identity and repeat safety
 
-Every run has a `run_id`: `{directive_name}_{ticker_scope}_{period_end}_{started_at_iso}`. Stage-level idempotency key: `(run_id, ticker, period_end, stage)`. Resumption queries `SELECT ... WHERE status != 'ok' ORDER BY stage_order` and proceeds from the first hit.
+- **Logical Idempotency Key:** `(directive_name, ticker_scope, period_end, stage)`;
+  this is the stable business effect used to prevent duplicate work.
+- **Attempt Identity:** `run_id = {directive_name}_{ticker_scope}_{period_end}_{started_at_iso}`;
+  this changes on every execution and owns logs, costs, and checkpoints.
+- **Observation Version:** the source-side version plus Content Identity described in
+  `directives/data_provenance.md`; changed source content may legitimately rerun the same
+  Logical Idempotency Key and append a new version.
 
-Per-source idempotency keys live in `directives/data_provenance.md` §4.
+Resumption queries one Attempt Identity and proceeds from its first non-`ok` stage.
+Cross-attempt skip logic compares the Logical Idempotency Key and required Observation Version,
+never the timestamp-bearing `run_id`.
 
 ## Failure-mode policy
 

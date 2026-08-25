@@ -1,5 +1,10 @@
 # Directive: meta-eval governance — the optimizer that steers itself
 
+**Class:** history. This is the retained implementation/design record for the
+optimizer program. Current authority is split across `llm_evals.md` (quality and
+failure evidence), `model_eval_loop.md` (promotion), `cheapest_model_routing.md`
+(economics), and executable registries.
+
 **Status: BUILT 2026-07-02 — owner reviewed §9 same day; decisions LOCKED in §10
 (which overrides any earlier recommendation it conflicts with); all six build
 phases merged same day (#749 #750 #751 #752 #753 #754). EXTENDED 2026-07-24/25

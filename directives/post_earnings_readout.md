@@ -45,12 +45,18 @@ the selected transcript document ID in `source_doc_ids`.
 - Evaluation: explicit owner request only; never included in a scheduled query.
 - The deterministic peek template is always free and does not call an LLM.
 
-## Idempotency key
+## Identity and repeat safety
 
-`{ticker}:post_earnings_readout:{period_end}:{prompt_version}:{input_sha256}`.
-The existing unique-current artifact index maintains one current row per ticker
-and quarter; changed inputs supersede within that quarter, and a new period end
-creates a distinct indexed artifact.
+- **Logical Idempotency Key:** `{ticker}:post_earnings_readout:{period_end}`.
+- **Content Identity:** `input_sha256` for canonicalized inputs and the persisted
+  artifact digest for generated output.
+- **Observation Version:** `{period_end}:{prompt_version}:{input_sha256}`; changed
+  inputs or prompt contract supersede the current version within that quarter.
+- **Attempt Identity:** unique governed LLM-call/run identity for logs, cost, and
+  retry attribution.
+
+The unique-current artifact index maintains one current row per ticker and quarter;
+a new period end creates a distinct logical artifact.
 
 ## Rate-limit and spend budget
 
