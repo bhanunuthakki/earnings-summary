@@ -12,7 +12,8 @@ records the cadence design and the hydration it unblocked.
 quarter-to-quarter, grounded in the thesis/bear-case anchors — re-calling the LLM on an
 unchanged thesis just burns spend for the same answer. Every other cache-worthy LLM seam
 in this codebase (`dcf.compute.peer_selection`) already solves this with an
-`inputs_sha256` cache-invalidation pattern: hash the inputs, skip the call on a hit.
+`inputs_sha256` cache-invalidation pattern: the digest is the Content Identity of
+the canonical inputs, and a hit skips the call.
 `set_scenario_priors.py` had no such gate — a naive cron re-run would call the LLM for
 all ~42 DCF-universe names every tick, forever, even for names whose thesis hasn't
 moved in months.
@@ -32,7 +33,11 @@ moved in months.
   - **Mismatch, or no prior on file yet** → proceeds exactly as the non-cadence path
     (LLM call, write, stamp the new hash).
   - An owner-set block (`set_by == "owner"`) is untouched either way — owner wins is
-    unconditional, cadence or not.
+  unconditional, cadence or not.
+
+The Logical Idempotency Key is `(ticker, scenario_prior)`; the current thesis/bear
+anchor and its `inputs_sha256` form the Observation Version; every governed call has
+a unique Attempt Identity. The input digest is never an Attempt Identity.
 
 ## Cron wiring
 

@@ -1,120 +1,74 @@
-# OpenRouter third backend (metered key, eval-gated, opt-in candidate pool)
+# OpenRouter adapter runbook
 
-**Purpose.** Widen the pareto optimizer's *cheap-candidate* axis. The Claude and
-Gemini backends give two providers; OpenRouter is a single OpenAI-compatible
-gateway to hundreds of models (DeepSeek, Qwen, Llama, Mistral, GLM, ...), many
-far cheaper and increasingly at-parity on the high-volume structured-classifier
-purposes. One integration reaches them all — contrast the bespoke Claude
-subprocess wrapper and the Gemini SDK backend, each a full provider integration.
+**Class:** runbook. This file owns OpenRouter setup, upstream identity controls,
+data-routing mechanics, and adapter failure diagnosis only. `llm_calls.md` owns live
+routing/fallback; `llm_evals.md`, `model_eval_loop.md`, and
+`cheapest_model_routing.md` own qualification, promotion, and economics.
 
-**Routing is model-first** (same as Gemini — see `directives/cheapest_model_routing.md`):
-`call_llm` resolves a purpose's model; if the resolved id is an OpenRouter
-family model (in `model_ladder.MODEL_LADDER`, or any `provider/model` slash slug),
-the call dispatches to `src/llm/openrouter_backend.py` via `family_of()`.
-`backend="openrouter"` forces it (the compare harness). The
-`OPENROUTER_BACKEND_ALLOWED_PURPOSES` symbol exists only for symmetry with the
-other backends' tests — it is dead code, ships empty, and never gates routing.
+## Executable authority
 
-## Setup (operator)
+- `src/llm/openrouter_backend.py`: HTTP adapter, key resolution, provider-routing
+  object, timeout, usage/cost mapping, and error classification.
+- `src/llm/cli.py` and `src/llm/resolver.py`: dispatch and fallback.
+- `src/llm/model_ladder.py`: registered family and candidate coordinates.
 
-1. Create a key at https://openrouter.ai/keys and top up credits.
-2. Put it in `.env` as `OPENROUTER_API_KEY=<key>`.
-3. Nothing bills it until a purpose is routed to an OpenRouter model or a call
-   forces `backend="openrouter"`. Without a key, an OpenRouter-routed call fails
-   fast with `LLMSetupError` (and, for a model-routed purpose, degrades to Claude
-   — so a missing key can never break the pipeline).
+Model/provider IDs and cost seeds are executable facts. A catalog listing or gateway
+model slug is not capability or quality evidence.
 
-## The model-identity guardrail (the eval-integrity requirement)
+## Setup
 
-OpenRouter can serve the *same* model id from different upstream providers at
-different quantizations/context limits. Left unpinned, a graded "candidate" is a
-moving target: grade DeepSeek-via-A@fp16 today, production later serves
-DeepSeek-via-B@fp8, and the parity verdict silently stops transferring. Every
-call therefore sends a `provider` routing object (`_provider_routing()`):
+1. Create and fund the operator account through the provider console.
+2. Store the credential as `OPENROUTER_API_KEY` in typed secret configuration. Never
+   place it in a URL, CLI argument, log, fixture, or directive.
+3. Select any required upstream and data-governance settings in the documented
+   environment fields, then run a forced smoke/eval call through the canonical facade.
+4. Verify the response, exact runtime coordinates, and attributable ledger row.
 
-| Field | Value | Why |
-|---|---|---|
-| `allow_fallbacks` | `false` | Never silently reroute to an unapproved provider; an outage surfaces as an honest error, not a silent identity swap. |
-| `require_parameters` | `true` | Only providers that honour every request param. |
-| `data_collection` | `"deny"` (default) | Keep prompts off providers that train on them. Relax with `OPENROUTER_DATA_COLLECTION=allow` for a wider/cheaper pool. |
-| `quantizations` | `["fp16","bf16","fp8","unknown"]` | A precision FLOOR — excludes aggressive int4/int8 quants whose quality drifts, so the same id doesn't grade differently across calls. |
-| `only` | *(empty)* | The strongest lever: a HARD upstream pin. Set `OPENROUTER_PROVIDER_ONLY=DeepInfra,Fireworks` to freeze the exact upstream for a rigorous graded eval. |
+Nothing bills this adapter until an explicitly resolved or forced call reaches it.
+Setup success does not authorize production routing.
 
-**Why this is sufficient for a transferable verdict:** eval-time and
-production-time calls both go through `call_openrouter` with the *same* routing
-config, so a parity verdict earned in the sweep holds in production by
-construction. For a maximally rigorous grade, pin `OPENROUTER_PROVIDER_ONLY`
-during the sweep and keep it pinned in production.
+## Stable candidate identity
+
+The gateway can serve one model slug through different upstreams or quantizations. The
+adapter therefore sends a provider-routing object on every call:
+
+- upstream fallback is disabled;
+- request-parameter support is required;
+- data collection defaults to deny;
+- a bounded quantization set is declared; and
+- `OPENROUTER_PROVIDER_ONLY` can hard-pin an upstream for evaluation/production parity.
+
+The complete candidate Observation Version includes model slug, upstream selection,
+quantization, context/runtime parameters, timeout, and data-routing configuration. If
+any load-bearing coordinate changes, prior parity evidence does not automatically carry
+forward.
+
+## Identity
+
+- **Logical Idempotency Key:** owned by the calling product directive.
+- **Content Identity:** prompt/input/output digests and captured response bytes.
+- **Observation Version:** the complete gateway/upstream/runtime coordinates plus
+  prompt/source versions and provider observation time.
+- **Attempt Identity:** `run_id` or unique call receipt for one request; retries change it.
 
 ## Failure policy
 
-Mirrors the Gemini backend. A model-routed OpenRouter call that fails
-**operationally** (429 rate-limit, 5xx, network, malformed body, empty content,
-bad-model 400) degrades to Claude so a model swap can never break the pipeline.
-**Hard stops propagate** per `is_hard_stop`: `LLMBudgetExceeded` (budget gate) and
-`LLMSetupError` — the latter raised by `_classify_openrouter_failure` on 401/403
-(bad/missing key) and 402 (out of credits), which are deterministic and
-operator-actionable. A **forced** `backend="openrouter"` call raises instead of
-switching — the caller asked for that backend's answer.
+- Missing/rejected key, permission denial, or exhausted credits: typed setup hard stop.
+- Budget denial: hard stop; never route around it here.
+- Rate limit, service/network failure, malformed body, unavailable model, or empty
+  content: typed operational failure with redacted evidence.
+- A forced `backend="openrouter"` comparison fails rather than silently switching
+  contestants. Model-routed operational fallback, when implemented, is governed and
+  attributed by `llm_calls.md`/`src/llm/cli.py`.
+- Gateway upstream fallback remains disabled because an unrecorded upstream change would
+  invalidate the evaluated candidate identity.
 
-## Cost + ledger
+## Data governance and verification
 
-Every call writes the standard `llm_calls` row: `model` is the `provider/model`
-slug (fallback_used NULL), token counts from the response `usage`, and
-`cost_estimate_usd` = **OpenRouter's REAL charged cost** (`usage.cost`, returned
-because the request sets `usage: {include: true}`) — more accurate than an
-estimate. The `model_ladder.py` seed prices for the OpenRouter entries are
-approximations used ONLY for pre-call *ranking* in the sweep; the ledger stays
-accurate regardless (verify/curate ladder prices against https://openrouter.ai/models).
+Prompts traverse both the gateway and selected upstream. Keep the deny-collection default
+unless a purpose-specific owner decision permits otherwise; re-review before any purpose
+can contain personal or commercially restricted data.
 
-## Testing a candidate (the opt-in path)
-
-OpenRouter candidates are **excluded from the automatic sweep by default** —
-`cheaper_candidates(incumbent, include_openrouter=False)` — so an untested third
-backend never silently floods every purpose. To grade one:
-
-```
-# Ad-hoc, through the existing brand-blind pairwise judge (Claude vs the candidate):
-python execution/compare_backends.py --purpose viewspec_compile \
-    --prompt-file p.txt --gemini-model deepseek/deepseek-chat   # (backend forced per-side)
-
-# Or opt a purpose into the model-eval sweep's candidate set
-# (cheaper_candidates(..., include_openrouter=True)), then grade as usual.
-```
-
-Promotion to production stays eval-gated: a purpose reaches OpenRouter only after
-the judges grade its output at parity, at which point you pin the OpenRouter id in
-`LLM_MODELS` / `model_pin_overrides` (model-first routing does the rest).
-
-## Data governance
-
-Prompts flow through OpenRouter's infrastructure and the chosen upstream. Owner
-stance (2026-07-02): fine for this platform's research prompts, provided **no SSN
-/ bank-account / PII-type data** is ever in a prompt — none is today. The
-`data_collection: "deny"` default additionally keeps prompts off providers that
-train on them. Revisit before routing any purpose whose prompt could contain
-personal data.
-
-## Candidate discovery is a free catalog fetch, not a benchmark score (owner directive 2026-08-06)
-
-`frontier.run_frontier_research` discovers new OpenRouter candidates by
-reading `https://openrouter.ai/api/v1/models` directly (a plain HTTP GET, no
-LLM call, no tokens) and keeping the cheapest not-yet-known models. It does
-NOT assign any capability score at discovery time — earlier revisions tried
-scoring candidates against the Artificial Analysis Intelligence Index (a
-general reasoning/coding composite, the wrong instrument for this
-finance-specific pipeline) first as fixed tiers, then as a continuous delta;
-both were retired. A freshly discovered candidate is capability-neutral
-(`promise = 0.5`) until this pipeline's own `model_eval_verdicts` — real
-judged output on real production purposes — says otherwise. The transport,
-provider-pinning, and eval-gating rules on this page are unchanged; only how
-new candidates ENTER the pool got cheaper and more honest about what it does
-and doesn't know. See `meta_eval_governance.md` §10.4.
-
-## Relationship to the meta-eval governance design
-
-This backend is the *transport* + the model-identity guardrails. WHICH purposes
-to test against WHICH cheap candidates, how to sample real prompts, per-query
-criteria, and automated prompt A/B testing are the **meta-eval governance**
-design — see `directives/meta_eval_governance.md`. This doc's opt-in candidate
-pool is the substrate that design drives.
+After adapter changes, run focused OpenRouter backend, resolver, ledger, capture,
+structured-output, provider-routing, and forced-backend tests. Live evidence is dated and
+supplemental; unavailable evidence yields HOLD, not inferred capability.

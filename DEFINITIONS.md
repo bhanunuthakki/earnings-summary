@@ -2,9 +2,45 @@
 
 **Scope:** project
 **Owner:** earnings-summary
-**Inherits:** C:\Users\Bhanu\.gemini\DEFINITIONS.md
+**Inherits:** the harness-loaded global `DEFINITIONS.md`; no host-specific path is authoritative.
 
-Canonical terminology for this project. Use these terms verbatim in code (variables, functions, types, columns), comments, commit messages, and PR descriptions. New domain terms must be added here before being used.
+Canonical terminology for this project. Use these terms verbatim at durable
+boundaries: code and schema identifiers, APIs, persisted state, canonical UI and
+instruction contracts, and shipped operational documentation. Exploration may use
+clearly marked provisional wording; define or reconcile a term here (or in the
+inherited global vocabulary) before it crosses one of those durable boundaries.
+
+## Logical Idempotency Key
+
+**Definition.** The stable business identity of the effect a directive intends to
+produce. Repeating an authorized operation with the same Logical Idempotency Key
+must not create a second logical deliverable or duplicate state transition.
+**Not to be confused with.** Content Identity, which identifies exact bytes;
+Observation Version, which distinguishes source states over time; or Attempt
+Identity, which identifies one execution and therefore changes on retry.
+
+## Content Identity
+
+**Definition.** A digest, normally SHA-256, of exact artifact bytes or canonicalized
+content. Equal Content Identity proves equal content, not equal business purpose or
+source observation time.
+**Not to be confused with.** A Logical Idempotency Key. Different bytes may be new
+versions of the same logical deliverable; identical bytes may be observed by
+different attempts.
+
+## Observation Version
+
+**Definition.** The append-only identity of what a source exposed at a particular
+source or knowledge time. A changed upstream payload creates a new Observation
+Version even when its Logical Idempotency Key is unchanged.
+**Not to be confused with.** Fetch time alone. Preserve the source timestamp or
+filing identity when available, the fetched-at knowledge time, and Content Identity.
+
+## Attempt Identity
+
+**Definition.** The unique identity of one execution attempt, including retries.
+Attempt Identity supports logs, checkpoints, cost attribution, and failure recovery;
+it must never be used as the Logical Idempotency Key because it changes on every run.
 
 ## Research Level
 

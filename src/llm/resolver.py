@@ -51,6 +51,12 @@ MODEL_CAPABILITIES: dict[str, CapabilityProfile] = {
     "claude-opus-4-8": CapabilityProfile(
         min_context_length=200_000, requires_vision=True, requires_structured_output=True
     ),
+    "claude-opus-4-7": CapabilityProfile(
+        min_context_length=200_000, requires_vision=True, requires_structured_output=True
+    ),
+    "claude-fable-5": CapabilityProfile(
+        min_context_length=200_000, requires_vision=True, requires_structured_output=True
+    ),
     # Gemini models
     "gemini-3.1-pro-preview": CapabilityProfile(
         min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
@@ -88,9 +94,9 @@ def model_has_capabilities(model_id: str, profile: CapabilityProfile) -> tuple[b
     """
     model_cap = MODEL_CAPABILITIES.get(model_id)
     if model_cap is None:
-        # Default assumption for unknown models: default to 32k context, vision=False
-        model_cap = CapabilityProfile(
-            min_context_length=32_000, requires_vision=False, requires_structured_output=True
+        return (
+            False,
+            f"model {model_id} has unregistered capability metadata",
         )
 
     if profile.min_context_length > model_cap.min_context_length:
@@ -104,6 +110,25 @@ def model_has_capabilities(model_id: str, profile: CapabilityProfile) -> tuple[b
         return (False, f"model {model_id} does not support structured output constraints")
 
     return (True, "OK")
+
+
+def require_model_capabilities(model_id: str, profile: CapabilityProfile) -> None:
+    """Fail closed unless ``model_id`` has registered evidence for ``profile``."""
+    ok, reason = model_has_capabilities(model_id, profile)
+    if not ok:
+        raise ValueError(f"Model resolution capability check failed: {reason}")
+
+
+def structured_capability_profile(
+    profile: CapabilityProfile | None = None,
+) -> CapabilityProfile:
+    """Preserve caller constraints while making structured output mandatory."""
+    profile = profile or CapabilityProfile()
+    return CapabilityProfile(
+        min_context_length=profile.min_context_length,
+        requires_vision=profile.requires_vision,
+        requires_structured_output=True,
+    )
 
 
 def is_forced_fallback_allowed() -> bool:
@@ -133,8 +158,9 @@ def resolve_model_and_backend(
       2. Family mapping of resolved model (`family_of(resolved_model)`).
       3. Defaults to "claude".
 
-    If `capability_profile` is supplied, validates that the resolved model meets
-    all constraints. Raises ValueError if constraints are violated.
+    Every resolved model must have registered capability metadata. The optional
+    profile adds call-specific hard constraints. Unknown models and violated
+    constraints raise ValueError before dispatch.
     """
     from llm.cli import DEFAULT_MODEL, LLM_MODELS
 
@@ -157,7 +183,9 @@ def resolve_model_and_backend(
         resolved_backend = backend
     else:
         fam = family_of(resolved_model)
-        if fam == GEMINI:
+        if resolved_model.startswith("gpt-"):
+            resolved_backend = "codex"
+        elif fam == GEMINI:
             resolved_backend = "gemini"
         elif fam == OPENROUTER:
             resolved_backend = "openrouter"
@@ -172,18 +200,18 @@ def resolve_model_and_backend(
         else:
             resolved_backend = "claude"
 
-    # 3. Validate Capability Profile if provided
-    if capability_profile is not None:
-        ok, reason = model_has_capabilities(resolved_model, capability_profile)
-        if not ok:
-            log.warning(
-                {
-                    "event": "llm_resolver_capability_mismatch",
-                    "purpose": purpose,
-                    "model": resolved_model,
-                    "reason": reason,
-                }
-            )
-            raise ValueError(f"Model resolution capability check failed: {reason}")
+    # 3. Validate registry membership and call-specific requirements.
+    effective_profile = capability_profile or CapabilityProfile()
+    ok, reason = model_has_capabilities(resolved_model, effective_profile)
+    if not ok:
+        log.warning(
+            {
+                "event": "llm_resolver_capability_mismatch",
+                "purpose": purpose,
+                "model": resolved_model,
+                "reason": reason,
+            }
+        )
+        raise ValueError(f"Model resolution capability check failed: {reason}")
 
     return resolved_model, resolved_backend

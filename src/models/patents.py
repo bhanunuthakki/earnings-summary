@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -59,9 +60,26 @@ class PatentRecord(BaseModel):
     notes: str | None = None
 
 
-class PatentFetchSummary(BaseModel):
-    """Run-summary written alongside each fetch."""
+class PatentObservation(BaseModel):
+    """Append-only source observation, addressed by its canonical content."""
 
+    logical_idempotency_key: str
+    content_identity: str
+    observation_version: str
+    observed_at: datetime
+    molecule: str
+    jurisdictions_requested: list[Jurisdiction]
+    records: list[PatentRecord]
+
+
+class PatentFetchSummary(BaseModel):
+    """Attempt receipt pointing at an immutable source observation."""
+
+    logical_idempotency_key: str
+    attempt_identity: str
+    content_identity: str
+    observation_version: str
+    disposition: Literal["created", "replayed"]
     molecule: str
     jurisdictions_requested: list[Jurisdiction]
     jurisdictions_succeeded: list[Jurisdiction]

@@ -8,14 +8,15 @@
 """
 src/llm/cli.py
 --------------
-Governed subscription-LLM routing + the public ``call_llm`` /
-``call_llm_with_web`` entry points + per-purpose budget enforcement.
+Governed LLM routing, the public ``call_llm`` / ``call_llm_with_web`` entry
+points, and per-purpose budget enforcement.
 
-Primary path: the isolated Codex membership transport. Purpose-resolved
-Haiku/Sonnet/Opus-class pins map to Luna/Terra/Sol respectively. Operational
-Codex failures fall back to the Claude subscription transport and are ledgered
-as such; ``LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude`` is the reversible rollback
-switch. Explicit provider-family model ids remain on their requested family.
+For normal purpose-resolved Claude-family pins, the primary path is the
+isolated Codex membership transport. Operational Codex failures fall back to
+the Claude subscription transport and are ledgered as such;
+``LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude`` is the reversible rollback switch.
+Registered explicit provider-family model IDs route to that provider. An
+explicitly forced backend fails rather than silently changing contestants.
 
 ``call_llm_with_web`` is Codex-first too: the same primary/backup order as
 ``call_llm``, with the Codex leg opting into the membership wrapper's
@@ -24,13 +25,10 @@ existing Claude WebSearch/WebFetch tool-call path on an OPERATIONAL Codex
 failure only — never as a routing preference (2026-08-03 owner ratification;
 see directives/llm_calls.md and procedures/llm-ops.TRANSPORTS.md).
 
-Second backend: ``src/llm/gemini_backend.py`` calls the Gemini Developer API
-directly (metered key) with the same call contract. ``call_llm`` routes a
-purpose there when its resolved model is a Gemini model id — model-first
-dispatch, see directives/cheapest_model_routing.md — or when a caller forces
-``backend="gemini"`` explicitly (the compare harness). A purpose only
-resolves to a Gemini model after the LLM-evals judges grade its output
-quality first; see directives/gemini_backend.md.
+Provider adapters implement the same call contract behind the canonical
+resolver. Purpose quality, capability, and economic qualification are governed
+by the eval and model-promotion contracts; adapter availability alone never
+qualifies a production route.
 
 Public API:
     DEFAULT_MODEL, FAST_CLASSIFIER_MODEL — canonical model ids.
@@ -65,7 +63,7 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from llm.capture import capture_exchange
 from llm.ledger import record_llm_call
@@ -78,6 +76,9 @@ from llm.transport import (
     record_quota_exhausted,
     retry_budget,
 )
+
+if TYPE_CHECKING:
+    from llm.resolver import CapabilityProfile
 
 # Backoff base for transient-class retries (llm.transport.retry_budget owns the
 # per-class attempt counts). attempt 1 → ~3s, attempt 2 → ~6s, + up to 1s jitter.
@@ -1212,12 +1213,13 @@ def _call_claude(
     allow_codex_fallback: bool = True,
     fallback_from_provider: str | None = None,
     fallback_from_transport: str | None = None,
+    capability_profile: CapabilityProfile | None = None,
 ) -> str:
     """
-    Single-shot LLM call. Tries the Claude Code CLI first. On any operational
-    failure — timeout, non-zero exit, empty output, malformed JSON envelope,
-    or the binary becoming unavailable mid-run — falls back to Gemini Flash if
-    ``GEMINI_API_KEY`` is available in the environment.
+    Single-shot Claude subscription transport call. Operational failures are
+    classified and ledgered. Quota exhaustion may use the configured Codex
+    subscription fallback and, only for an explicitly allowlisted purpose, the
+    budget-gated metered fallback implemented below.
 
     Setup errors (``claude`` binary missing on first call) raise
     ``LLMSetupError`` (a RuntimeError subclass) directly without invoking the
@@ -1238,6 +1240,10 @@ def _call_claude(
     per-purpose monthly cap is at/over with hard_block=True. Pass
     ``force_budget_bypass=True`` to skip the check (CLI escape hatch).
     """
+    from llm.resolver import CapabilityProfile, require_model_capabilities
+
+    effective_profile = capability_profile or CapabilityProfile()
+    require_model_capabilities(model, effective_profile)
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()  # setup errors propagate; do NOT route to fallback
     import llm_client  # late import — state lives on llm_client for test compat
@@ -1437,10 +1443,11 @@ def _call_claude(
                 blocked_until=last_info.retry_after,
             ) from last_error
         raise last_error
-    try:
-        from llm.codex_backend import call_codex_llm
+    from llm.codex_backend import call_codex_llm
 
-        codex_fallback_model = _codex_model_for(model)
+    codex_fallback_model = _codex_model_for(model)
+    require_model_capabilities(codex_fallback_model, effective_profile)
+    try:
         text = call_codex_llm(
             prompt,
             model=codex_fallback_model,
@@ -1480,6 +1487,7 @@ def _call_claude(
         from llm.openrouter_backend import call_openrouter, openrouter_model_for
 
         openrouter_fallback_model = openrouter_model_for(purpose)
+        require_model_capabilities(openrouter_fallback_model, effective_profile)
         text = call_openrouter(
             prompt,
             model=openrouter_fallback_model,
@@ -1522,10 +1530,11 @@ def call_llm(
     force_budget_bypass: bool = False,
     backend: str | None = None,
     db_path: Path | str | None = None,
+    capability_profile: CapabilityProfile | None = None,
 ) -> str:
     """Public single-shot LLM call. CANONICAL entry point for ALL LLM calls in
     this repo — including from `execution/` scripts, `src/report/sections/`, and
-    anywhere else that needs a Claude-then-Gemini-fallback round-trip.
+    anywhere else that needs a governed model/backend round-trip.
 
     Direct use of `google.genai`, the `anthropic` SDK, or any other
     provider client is forbidden outside this module's fallback wiring; route
@@ -1551,20 +1560,19 @@ def call_llm(
             for new code. Legacy ``None`` is normalized to the metered
             ``__default__`` purpose; the explicit `model` arg overrides model
             selection when both are passed.
-        model: Explicit model id — a Claude id, or a Gemini id when paired
-            with ``backend="gemini"``. If neither purpose nor model is set,
-            falls back to DEFAULT_MODEL with a warning log. An explicit
-            model with no explicit backend always runs Claude (the allowlist
-            only reroutes purpose-resolved calls).
+        model: Explicit registered model ID. With no explicit backend, its
+            registered provider family selects the adapter. If neither purpose
+            nor model is set, resolution falls back to DEFAULT_MODEL with a
+            warning log.
         timeout_seconds: Per-call timeout. None = the backend's default
             (DEFAULT_TIMEOUT_SECONDS / GEMINI_BACKEND_TIMEOUT_SECONDS).
         ticker: Optional ticker for ledger attribution. Set when the call is
             scoped to a single name; helps cost queries break out by ticker.
         scope: Optional analytical scope for the ledger (e.g. 'portfolio',
             'segment:cloud'). Free-form; aggregated in the spend report.
-        run_id: Optional grouping key — typically a uuid4 hex per logical
-            refresh (one build_artifacts invocation, one daily cron) so the
-            spend report can show "this run cost $X across N calls".
+        run_id: Optional Attempt Identity/grouping key for one execution so
+            logs and spend reports can attribute all calls in that attempt.
+            It must not be used as the caller's Logical Idempotency Key.
         force_budget_bypass: When True, skip the per-purpose budget check
             entirely. Use sparingly — CLI tools that need to force a refresh
             past a hard cap should pass this. Soft caps log+proceed anyway,
@@ -1580,6 +1588,9 @@ def call_llm(
             with no ``db.set_db_path`` bootstrap) would otherwise get its
             ledger row silently written to the wrong DB ("no such table:
             llm_calls"). None = current behavior (the process global).
+        capability_profile: Hard model requirements for context length, vision,
+            and structured output. Unknown model metadata and unmet requirements
+            fail before any provider transport or fallback is attempted.
     """
     if backend not in (None, "codex", "claude", "gemini", "openrouter"):
         raise ValueError(
@@ -1605,6 +1616,7 @@ def call_llm(
                 run_id=run_id,
                 force_budget_bypass=force_budget_bypass,
                 backend=backend,
+                capability_profile=capability_profile,
             )
 
     if purpose is None:
@@ -1645,13 +1657,20 @@ def call_llm(
     from llm.model_ladder import (
         family_of,
     )
-    from llm.resolver import resolve_model_and_backend
+    from llm.resolver import (
+        CapabilityProfile,
+        require_model_capabilities,
+        resolve_model_and_backend,
+    )
+
+    effective_profile = capability_profile or CapabilityProfile()
 
     # Model and backend resolution via canonical single-point resolver
     resolved_model, resolved_backend = resolve_model_and_backend(
         purpose=purpose,
         model=model,
         backend=backend,
+        capability_profile=effective_profile,
     )
 
     codex_fell_back = False
@@ -1667,6 +1686,7 @@ def call_llm(
             if resolved_model.startswith("gpt-")
             else _codex_model_for(resolved_model)
         )
+        require_model_capabilities(codex_model, effective_profile)
         try:
             text = call_codex_llm(
                 prompt,
@@ -1813,11 +1833,14 @@ def call_llm(
     # against non-Claude IDs in LLM_MODELS (post-promotion) by falling back to
     # DEFAULT_MODEL.
     _non_claude_families = (_GEMINI_FAMILY, _OPENROUTER_FAMILY)
-    if family_of(resolved_model) in _non_claude_families:
+    if family_of(resolved_model) in _non_claude_families or resolved_model.startswith("gpt-"):
         candidate = LLM_MODELS.get(purpose, DEFAULT_MODEL)
         resolved_model = (
-            candidate if family_of(candidate) not in _non_claude_families else DEFAULT_MODEL
+            candidate
+            if family_of(candidate) not in _non_claude_families and not candidate.startswith("gpt-")
+            else DEFAULT_MODEL
         )
+    require_model_capabilities(resolved_model, effective_profile)
 
     try:
         return _call_claude(
@@ -1833,6 +1856,7 @@ def call_llm(
             allow_codex_fallback=not codex_fell_back,
             fallback_from_provider=fallback_from_provider,
             fallback_from_transport=fallback_from_transport,
+            capability_profile=effective_profile,
         )
     except LLMQuotaExhausted:
         raise
@@ -2243,13 +2267,15 @@ def call_llm_with_web(
     force_budget_bypass: bool = False,
     max_budget_usd: float | None = None,
     require_grounding: bool = True,
+    capability_profile: CapabilityProfile | None = None,
 ) -> str:
     """Web-grounded LLM call — Codex-first, Claude WebSearch/WebFetch as the
     operational fallback.
 
-    Routing mirrors ``call_llm``: an explicit ``model`` argument is a forced
-    Claude request and bypasses Codex entirely (same "explicit model = forced
-    family" contract as the plain path). Otherwise, whenever
+    Routing mirrors ``call_llm``: an explicit registered provider-family model
+    selects that provider. This facade supports only the Codex and Claude web
+    transports, so other provider families fail before dispatch. For a normal
+    purpose-resolved Claude-family pin, whenever
     ``_primary_subscription_backend() == "codex"`` (the production default;
     ``LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude`` is the reversible rollback),
     the Codex membership wrapper runs FIRST with ``web_search="live"`` so it
@@ -2286,9 +2312,9 @@ def call_llm_with_web(
     than being served. Pass False only for a web purpose whose output
     legitimately carries no URL.
 
-    Model selection mirrors ``call_llm``: pass an explicit ``model`` to force
-    one, or leave it ``None`` (the default) to resolve from ``purpose`` via
-    ``LLM_MODELS`` / ``_model_for``; with neither set it falls back to
+    Model selection mirrors ``call_llm``: pass an explicit registered model or
+    leave it ``None`` (the default) to resolve from ``purpose`` via the canonical
+    resolver; with neither set it falls back to
     ``DEFAULT_MODEL`` with a warning. This historically hard-defaulted to
     ``DEFAULT_MODEL`` and ignored ``purpose`` — resolving from purpose lets
     web-enabled callers (e.g. the news structurer) be retuned centrally in
@@ -2297,8 +2323,23 @@ def call_llm_with_web(
     if purpose is None:
         purpose = "__default__"
         log.warning({"event": "llm_web_purpose_defaulted", "purpose": purpose})
-    explicit_model = model is not None
-    resolved_model = _model_for(purpose) if model is None else model
+    from llm.resolver import (
+        CapabilityProfile,
+        require_model_capabilities,
+        resolve_model_and_backend,
+    )
+
+    effective_profile = capability_profile or CapabilityProfile()
+    resolved_model, resolved_backend = resolve_model_and_backend(
+        purpose=purpose,
+        model=model,
+        capability_profile=effective_profile,
+    )
+    if resolved_backend not in {"codex", "claude"}:
+        raise ValueError(
+            "call_llm_with_web supports only the governed Codex/Claude web transports; "
+            f"resolved backend was {resolved_backend!r}"
+        )
     # Prompt-override auto-apply (§10 Q1) — web purposes are A/B-eligible even
     # though downgrade-ineligible. Same fail-open, production-scopes-only hook
     # as call_llm.
@@ -2323,7 +2364,7 @@ def call_llm_with_web(
     codex_fell_back = False
     fallback_from_provider: str | None = None
     fallback_from_transport: str | None = None
-    if not explicit_model and _primary_subscription_backend() == _PRIMARY_CODEX:
+    if resolved_backend == "codex":
         from llm.codex_backend import call_codex_llm
 
         codex_model = (
@@ -2331,6 +2372,7 @@ def call_llm_with_web(
             if resolved_model.startswith("gpt-")
             else _codex_model_for(resolved_model)
         )
+        require_model_capabilities(codex_model, effective_profile)
         try:
             text = call_codex_llm(
                 prompt,
@@ -2392,6 +2434,10 @@ def call_llm_with_web(
             codex_fell_back = True
             fallback_from_provider = "openai"
             fallback_from_transport = "subscription_cli"
+
+    if resolved_model.startswith("gpt-"):
+        resolved_model = DEFAULT_MODEL
+        require_model_capabilities(resolved_model, effective_profile)
 
     fallback_used = "claude" if fallback_from_provider is not None else None
     _verify_setup_once()
@@ -2578,5 +2624,7 @@ def call_llm_with_web(
             ticker=ticker,
             scope=scope,
             run_id=run_id,
+            force_budget_bypass=force_budget_bypass,
             allow_codex_fallback=not codex_fell_back,
+            capability_profile=effective_profile,
         )

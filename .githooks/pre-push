@@ -1,11 +1,35 @@
 #!/bin/sh
-# earnings-summary pre-push gate: mirror its diff-aware CI baseline.
+# earnings-summary pre-push gate: fail closed on its interpreter/tooling and
+# preserve the repository's diff-aware fast/full test paths.
 
-root=$(git rev-parse --show-toplevel) || exit 0
+root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 
 run() { printf '>> %s\n' "$*" >&2; "$@" || { printf 'PRE-PUSH FAILED at: %s\n' "$*" >&2; exit 1; }; }
-has() { command -v "$1" >/dev/null 2>&1; }
+
+resolve_python() {
+  if [ -n "${PYTHON_BIN:-}" ]; then
+    case "$PYTHON_BIN" in
+      */*) [ -x "$PYTHON_BIN" ] || { printf 'PRE-PUSH FAILED: PYTHON_BIN is not executable: %s\n' "$PYTHON_BIN" >&2; return 1; }; printf '%s\n' "$PYTHON_BIN" ;;
+      *) command -v "$PYTHON_BIN" 2>/dev/null || { printf 'PRE-PUSH FAILED: PYTHON_BIN is not on PATH: %s\n' "$PYTHON_BIN" >&2; return 1; } ;;
+    esac
+    return 0
+  fi
+  for candidate in .venv/bin/python3 .venv/bin/python .venv/Scripts/python.exe; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf 'PRE-PUSH FAILED: no project Python interpreter; set PYTHON_BIN or create .venv.\n' >&2
+  return 1
+}
+
+python_bin=$(resolve_python) || exit 1
+run "$python_bin" -m ruff --version
+run "$python_bin" -m pytest --version
+run "$python_bin" execution/validate_directive_manifest.py
+run "$python_bin" execution/validate_folder_contract.py
 
 base=$(git merge-base HEAD origin/main 2>/dev/null || git rev-parse HEAD~1 2>/dev/null || true)
 changed=""
@@ -14,32 +38,30 @@ if [ -n "$base" ]; then
     | grep -vE '^(alembic/versions/|scratch/)' || true)
 fi
 
-if has ruff && [ -n "$changed" ]; then
+if [ -n "$changed" ]; then
   case "$(uname -s 2>/dev/null || true)" in
     MINGW*|MSYS*)
-      # Git's CRLF checkout makes Ruff's unified diff report unchanged lines as
-      # rewrites. CI performs the authoritative LF-normalized changed-line gate.
       printf 'format gate: deferred to LF-normalized CI on Windows\n' >&2
       ;;
     *)
       # shellcheck disable=SC2086
-      run python execution/format_changed.py --base "$base" $changed
+      run "$python_bin" execution/format_changed.py --base "$base" $changed
       ;;
   esac
   status=0
   while IFS= read -r file; do
     [ -z "$file" ] && continue
-    head_n=$(ruff check "$file" --output-format=concise 2>/dev/null \
+    head_n=$("$python_bin" -m ruff check "$file" --output-format=concise 2>/dev/null \
       | grep -cE '^[^:]+:[0-9]+:[0-9]+:' || true)
     base_n=$(git show "$base:$file" 2>/dev/null \
-      | ruff check --stdin-filename "$file" --output-format=concise - 2>/dev/null \
+      | "$python_bin" -m ruff check --stdin-filename "$file" --output-format=concise - 2>/dev/null \
       | grep -cE '^[^:]+:[0-9]+:[0-9]+:' || true)
     head_n=${head_n:-0}
     base_n=${base_n:-0}
     if [ "$head_n" -gt "$base_n" ]; then
       printf 'PRE-PUSH FAILED: %s adds %s ruff violation(s) (%s -> %s)\n' \
         "$file" "$((head_n - base_n))" "$base_n" "$head_n" >&2
-      ruff check "$file" --output-format=concise >&2 || true
+      "$python_bin" -m ruff check "$file" --output-format=concise >&2 || true
       status=1
     fi
   done <<EOF
@@ -48,20 +70,21 @@ EOF
   [ "$status" -eq 0 ] || exit 1
 fi
 
-# The whole-repo strict Pyright comparison is a CI ratchet because the checkout
-# carries a reviewed legacy baseline. Full tests remain the local blocking gate,
-# or set FAST_PUSH=1 to execute tests on changed test files only.
-if has pytest; then
-  if [ "${FAST_PUSH:-0}" = "1" ]; then
-    changed_tests=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- 'tests/test_*.py' 'tests/**/test_*.py' 2>/dev/null || true)
-    if [ -n "$changed_tests" ]; then
-      run pytest -q $changed_tests
-    else
-      printf 'FAST_PUSH=1: no changed test files — skipping full pytest suite.\n' >&2
-    fi
+# The whole-repo strict Pyright comparison remains a CI ratchet because the
+# checkout carries a reviewed legacy baseline. Full tests are the local default;
+# FAST_PUSH=1 keeps the existing changed-test inner loop.
+if [ "${FAST_PUSH:-0}" = "1" ]; then
+  changed_tests=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- \
+    'tests/test_*.py' 'tests/**/test_*.py' 'instruction_tests/test_*.py' \
+    'instruction_tests/**/test_*.py' 2>/dev/null || true)
+  if [ -n "$changed_tests" ]; then
+    # shellcheck disable=SC2086
+    run "$python_bin" -m pytest -q $changed_tests
   else
-    run pytest -q
+    printf 'FAST_PUSH=1: no changed test files — skipping full pytest suite.\n' >&2
   fi
+else
+  run "$python_bin" -m pytest -q
 fi
 
 printf 'pre-push gate passed.\n' >&2

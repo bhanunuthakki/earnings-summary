@@ -25,9 +25,10 @@ tests, but is not an authorized production entry point.
 Rows deleted by the supported policies are first copied into
 `data/archive/portfolio_gc_archive.db`. The archive is **append-only and
 run-keyed** (2026-08-03 redesign): each table mirrors the live columns BY NAME
-plus `gc_run_id` (the archiving run's `run_at`; rowid-keyed tables also carry
-`gc_source_rowid`), with `UNIQUE(gc_run_id, key)` as the idempotency conflict
-target, logged per pass in `gc_manifest`.
+plus `gc_run_id` (the Attempt Identity, represented by the archiving attempt's
+`run_at`; rowid-keyed tables also carry `gc_source_rowid`).
+`UNIQUE(gc_run_id, key)` is an attempt-scoped duplicate guard, not a Logical
+Idempotency Key, and each pass is logged in `gc_manifest`.
 
 Why run-keyed, not one-copy-per-id: `financial_facts` has no AUTOINCREMENT,
 so SQLite recycles ids after a prune lowers `max(id)` — an id is not a stable
@@ -65,7 +66,7 @@ by `restore_drill.py` — a backup you have never restored is not a backup.
 without `gc_run_id` is preservation-only forensic evidence. `gc_restore`
 must not upgrade that artifact in place or bulk-reinsert it into
 `portfolio.db`; its scheduled drill verifies SQLite integrity, foreign-key
-health, content hash, and table inventory without mutation. Emergency
+health, Content Identity hash, and table inventory without mutation. Emergency
 `gc_restore --apply` remains available only for fully run-keyed archives.
 Future deep-history access must use the immutable, sealed read-only archive
 generation boundary below. This decision does not authorize facts-depth
@@ -165,8 +166,15 @@ dashboard looking healthy. Standing rules now built into the tool:
   not apply; DB write-lock contention does, hence the slot — and the in-tool
   protected-window guard + run lock above are the backstop if the schedule
   ever drifts.
-- Idempotency: a second run over the same DB is a no-op; idempotency key is
-  the DB state itself (row-level predicates), logged per run in `gc_manifest`.
+- **Logical Idempotency Key:** canonical database identity, enabled policy set and
+  policy version, and eligibility cutoff. A second apply over the same eligible
+  state is a no-op.
+- **Content Identity:** canonical payload hash for each archived row and the sealed
+  archive-generation digest where applicable.
+- **Observation Version:** schema revision, policy cutoff, and bounded source-state
+  snapshot observed for the run.
+- **Attempt Identity:** `gc_run_id`; every retry receives a new value and receipt in
+  `gc_manifest`.
 - Failure mode: halt loud (non-zero exit, JSON events on stderr). No retries.
 
 ## Immutable archive-generation boundary

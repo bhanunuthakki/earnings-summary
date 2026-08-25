@@ -1,6 +1,6 @@
 # earnings-summary — Repo Agent Instructions
 
-Loads on top of the global `AGENTS.md`. This file adds ONLY earnings-summary-specific guidance — the general code standards, type discipline, testing, PR conventions, branching, engineering bar, and per-session model-selection rule all live in the global `AGENTS.md` and are not repeated here.
+Loads on top of the global `AGENTS.md`. This file adds only earnings-summary facts and constraints. Cross-project safety, authority, and routing stay in the root contract; detailed global workflows live in routed procedures and load only when their trigger applies.
 
 **What this repo is.** A solo-built, pull-only, localhost equity-research platform. The business-logic library lives under `src/` (`llm`, `ui`, `compute`, `ask`, `signals`, `pipeline`, `report`, `dcf`, `models`); `execution/` holds thin single-purpose CLI entrypoints that import `src/` (data fetches, builds, the morning pipeline, and `execution/comments_server.py` — the Flask cockpit at http://127.0.0.1:7421). State lives in `data/portfolio.db` under alembic migrations; intermediate artifacts in `.tmp/`. It does run automated data pipelines (transcripts, financials, web scraping), and the layered discipline below applies to that work.
 
@@ -17,11 +17,11 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ### Layer 1: Directive (Intent & Parameters)
 
-- **Location**: `directives/` (Markdown files, one per task type)
-- **Function**: Defines goals, required inputs, authorized tools, expected outputs, schemas, constraints, and known edge cases (API limits, rate limits, fallback behavior)
-- **Rule**: Immutable baseline for a task. Do not modify without explicit user authorization.
-- **Each directive must specify**: target source, output schema, refresh cadence, idempotency key, rate-limit budget, failure-mode policy.
-- Operational discoveries become a proposed directive patch with evidence. Authorization to edit a directive and authorization to commit that edit are separate; do not infer either from permission to run the pipeline.
+- **Location and class authority**: `directives/directive_manifest.json` classifies every Markdown file. Only `canonical` entries own active policy or task contracts. A `runbook` executes a named canonical contract but does not redefine it. `draft` and `history` entries never govern current behavior.
+- **Function**: An executable canonical directive defines its goal, required inputs, authorized tools, expected outputs, schemas, constraints, and relevant edge cases. Its runbook may add provider or environment mechanics within that contract.
+- **Change control**: A canonical contract is the approved baseline for its scope. Do not change it without explicit user authorization; a runbook edit must remain consistent with its canonical owner.
+- **Applicable metadata**: Executable canonical directives and runbooks that authorize recurring, networked, or mutating work specify the relevant target source, output schema, refresh cadence, Logical Idempotency Key, rate-limit or cost budget, and failure-mode policy. Omit fields that do not apply instead of adding boilerplate. Use all four identity terms from `DEFINITIONS.md` wherever an operation persists or retries work; an Attempt Identity is never a Logical Idempotency Key.
+- Operational discoveries become a proposed canonical or runbook patch with evidence. Authorization to edit and authorization to commit are separate; do not infer either from permission to run the pipeline.
 
 ### Layer 2: Orchestration (Routing & Decision)
 
@@ -39,7 +39,7 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
   - Each script is a single-purpose CLI entrypoint with typed arguments (use `typer` or `argparse` with explicit types).
   - All inputs and outputs validated with Pydantic models. No `dict[str, Any]` flowing between scripts.
   - Outputs >2,000 lines or >100KB written to `.tmp/`, with only file paths and a summary returned to stdout.
-  - Scripts are idempotent: rerunning with the same inputs produces the same outputs (or a clear "already done" exit).
+  - Scripts are logically idempotent: rerunning the same Logical Idempotency Key produces no duplicate effect (or a clear "already done" exit). New source bytes remain a new Observation Version rather than being overwritten.
   - Scripts log structured events (one JSON line per event) to stderr. Never mix logs and data on stdout.
 
 ## Operating Principles
@@ -60,8 +60,8 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ### Directive Maintenance
 
-- Directives must be refined, not bloated. When you learn something new (an API quirk, a rate limit, a date format), propose a consolidated edit rather than appending a running diary.
-- Request permission before editing a directive, validate the resulting procedure, then request separate permission before committing it.
+- Canonical directives and runbooks must be refined, not bloated. When you learn something new (an API quirk, a rate limit, a date format), propose a consolidated edit to the correct manifest class rather than appending a running diary.
+- Request permission before editing a canonical contract, validate the resulting procedure, then request separate permission before committing it. Drafts and history remain explicitly non-governing.
 
 ### Operations & Governance Surface Impact
 
@@ -86,17 +86,17 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ### Directory Structure
 
-- `directives/` — version-controlled SOPs, one file per task type
-- `execution/` — deterministic Python tools, single-purpose CLIs
-- `.tmp/` — ephemeral state (raw scrape data, JSON dumps, pagination cursors, partial results). Gitignored.
-- `.cache/` — optional response cache. Gitignored.
-- `output/` or cloud destination — final deliverables
+`directives/folder_structure.md` owns the exact repository topology and its
+machine-checked contract. Invariants at this layer: source belongs in its registered
+source root, resumable intermediates belong in `.tmp/`, durable application state
+belongs under `data/`, and generated deliverables belong under `output/` or their
+declared external destination.
 
 ### State & Idempotency
 
-- Every pipeline run must have a deterministic idempotency key (e.g., `{source}_{ticker}_{period}_{run_date}`).
-- Before executing, check whether the deliverable for that key already exists. Skip with a logged "already done" if so, unless `--force` is passed.
-- Pagination state, partial scrapes, and multi-page reports check pointed in `.tmp/<task_id>/state.json` so resumption is exact.
+- Every pipeline operation declares a stable Logical Idempotency Key separately from its unique Attempt Identity.
+- Before executing, check whether the logical deliverable already exists at the required Observation Version. Skip with a logged "already done" if so, unless `--force` is passed.
+- Pagination state, partial scrapes, and multi-page reports are checkpointed in `.tmp/<run_id>/state.json`, where `run_id` is the Attempt Identity, so resumption is exact.
 
 ## Data Pipeline Specifics
 
@@ -125,6 +125,7 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 - UI work uses the shared `procedures/frontend-quality.md` with `directives/design_language.md`. This remains a solo, local-first product: material browser-grounded UX evidence is required now, while commercial or multi-tenant work is an explicit future transition through `/harden --full`, not present complexity.
 - Executable authority lives in `src/ui/tokens.py`, `src/ui/controls.py`, `src/ui/design_registry.py`, and `src/ui/conformance_scan.py`.
 - Consumers select registered controls and family recipes; they do not add local visual CSS, open-ended style APIs, or runtime style mutations. A new visual decision must enter the appropriate master with a typed contract and adversarial test.
+- `directives/design_language.md` owns same-project continuity: start from the nearest shipped sibling and its registered family, and require explicit evidence before creating a new visual family.
 - For material frontend work, render the affected primary task before and after changes, inspect applicable states and supported widths, and record any unavailable visual verification. Run `python scripts/check_design_sync.py` for every visual change. Report-renderer changes also require `GOLDEN_REGEN=1 python -m pytest tests/test_workspace_golden.py` and visual diff review.
 
 ## Testing, CI & Merge Velocity Discipline
@@ -140,16 +141,16 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ## Agent delegation and review — repo scope note
 
-Use [[root:Delegation & Subagent Calibration]] for agent delegation and [[root:Evidence governance]] plus the `judging` procedure for J0-J3 review rigor. The repository does not redefine either policy.
+Use [[root:Evidence and delegation]] plus `procedures/agent-operations.md` for delegation and `procedures/judging.md` for J0-J3 review rigor. The repository does not redefine either policy.
 
 Repo-specific scope: that rule governs **coding/session** model choice. The application's **in-app per-purpose LLM routing** is a separate concern, governed by `LLM_MODELS` in `src/llm/cli.py`, the model-downgrade eval loop (`directives/model_eval_loop.md`), and the cheapest-at-parity routing design (`directives/cheapest_model_routing.md`).
 
 ## LLM scheduling and quota — repo scope note
 
-The app's in-app LLM transport (`src/llm/cli.py` → subscription `claude` CLI) **shares one quota with every interactive Claude Code session on this machine**. Apply global `agent-operations.SCHEDULING.md` with these repo specifics (full detail: `directives/llm_quota_scheduling.md`):
+The app's in-app LLM path uses the Codex membership transport first with the Claude subscription fallback (`src/llm/cli.py`). Each pool shares quota with its corresponding interactive sessions on this machine. Apply global `agent-operations.SCHEDULING.md` with these repo specifics (full detail: `directives/llm_quota_scheduling.md`):
 
 - Protected windows (America/Los_Angeles): **04:00 morning pipeline** (LLM legs: stage 0b `decision_conditions_extract`, stage 0/1 news + `material_news_classification`), **03:00 on the 1st** (`refresh_scenario_priors`), **Sun ~10:30** (weekly eval rungs). Multi-agent bursts must not still be burning 03:00–05:00; segment waves ≥6–7h apart.
-- Every NEW scheduled job with an LLM leg follows the per-item degrade pattern (transient CLI failure → defer + tally + retry next run; hard stops loud) — reference: `attach_conditions` post-#814 — and registers its window in `directives/llm_quota_scheduling.md`.
+- Every new scheduled job with an LLM leg follows the shared per-item degrade pattern (transient CLI failure → defer + tally + retry next run; hard stops loud) and registers its window in `directives/llm_quota_scheduling.md`.
 
 ## Code-change specifics
 
