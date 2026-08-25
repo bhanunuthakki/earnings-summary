@@ -39,6 +39,8 @@ def _db() -> sqlite3.Connection:
             extracted_by TEXT,
             locator TEXT
         );
+        CREATE VIEW v_financial_facts_resolved_current AS
+            SELECT * FROM financial_facts;
         """
     )
     conn.execute(
@@ -166,6 +168,7 @@ def test_overlay_reads_only_the_canonical_resolved_fact_relation() -> None:
         """,
         ((20, 1_100_000), (21, 1_300_000)),
     )
+    conn.execute("DROP VIEW v_financial_facts_resolved_current")
     conn.execute(
         "CREATE VIEW v_financial_facts_resolved_current AS "
         "SELECT * FROM financial_facts WHERE id = 21"
@@ -177,6 +180,29 @@ def test_overlay_reads_only_the_canonical_resolved_fact_relation() -> None:
 
     assert result.records[0]["revenue"] == 1_300_000
     assert [item.fact_id for item in result.applied] == [21]
+
+
+def test_overlay_degrades_instead_of_reading_a_pre_cutover_legacy_table() -> None:
+    conn = _db()
+    conn.execute("DROP VIEW v_financial_facts_resolved_current")
+    conn.execute(
+        """
+        INSERT INTO financial_facts
+            (id, ticker, period_end, fiscal_period_type, line_item, value, currency, unit,
+             source_doc_id, extracted_by, locator)
+        VALUES (22, 'TEST', '2026-06-30', 'Q2', 'revenue', 1300000, 'USD', 'actual', 1,
+                'sec_xbrl', NULL)
+        """
+    )
+
+    result = overlay_quarterly_records(
+        conn, ticker="TEST", statement="income", records=[_income_row()]
+    )
+
+    assert result.records[0]["revenue"] == 1_000_000
+    assert result.applied == ()
+    assert result.degraded_reason is not None
+    assert "refusing a legacy read" in result.degraded_reason
 
 
 def test_exact_primary_cash_and_debt_bridge_fields_overlay_without_synthesis() -> None:

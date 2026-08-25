@@ -263,24 +263,29 @@ def _load_candidates(
     mappings: Sequence[FieldMapping],
 ) -> list[_FactCandidate]:
     fact_relation = canonical_fact_relation(conn, "financial_facts").sql
-    placeholders = ", ".join("?" for _ in mappings)
-    query = (
-        f"SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type, "  # nosec B608 -- relation is validated by canonical_fact_relation and interpolation adds qmark placeholders only
-        "fact.value, fact.currency, fact.unit, fact.source_doc_id, "
-        "fact.locator, document.source_quality_tier, document.source_url, "
-        "document.fetched_at, document.source_type "
-        f"FROM {fact_relation} AS fact "
-        "LEFT JOIN documents AS document ON document.id = fact.source_doc_id "
-        "AND UPPER(document.ticker) = UPPER(fact.ticker) "
-        "WHERE UPPER(fact.ticker) = UPPER(?) "
-        f"AND fact.line_item IN ({placeholders}) "
-        "ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC"
-    )
+    if fact_relation != "v_financial_facts_resolved_current":
+        raise RuntimeError(
+            "canonical financial-fact cutover is unavailable; refusing a legacy read"
+        )
+    query = """
+    SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
+           fact.value, fact.currency, fact.unit, fact.source_doc_id,
+           fact.locator, document.source_quality_tier, document.source_url,
+           document.fetched_at, document.source_type
+    FROM v_financial_facts_resolved_current AS fact
+    LEFT JOIN documents AS document
+      ON document.id = fact.source_doc_id
+     AND UPPER(document.ticker) = UPPER(fact.ticker)
+    WHERE UPPER(fact.ticker) = UPPER(?)
+    ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
+    """
     rows = conn.execute(
         query,
-        (ticker, *(mapping.line_item for mapping in mappings)),
+        (ticker,),
     ).fetchall()
-    return [_candidate_from_row(row) for row in rows]
+    requested_line_items = {mapping.line_item for mapping in mappings}
+    candidates = [_candidate_from_row(row) for row in rows]
+    return [candidate for candidate in candidates if candidate.line_item in requested_line_items]
 
 
 def _candidate_from_row(row: sqlite3.Row | tuple[object, ...]) -> _FactCandidate:
