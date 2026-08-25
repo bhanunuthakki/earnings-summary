@@ -61,6 +61,7 @@ import requests
 
 from llm import cli as llm_cli
 from llm.ledger import record_llm_call
+from llm.resolver import CapabilityProfile, require_model_capabilities
 
 log = logging.getLogger(__name__)
 
@@ -284,6 +285,7 @@ def call_openrouter(
     fallback_used: str | None = None,
     fallback_from_provider: str | None = None,
     fallback_from_transport: str | None = None,
+    capability_profile: CapabilityProfile | None = None,
 ) -> str:
     """Single-shot OpenRouter call. Same contract as ``llm.cli._call_claude`` /
     ``gemini_backend.call_gemini``: per-purpose budget gate up front, one
@@ -298,10 +300,12 @@ def call_openrouter(
       * RuntimeError / ValueError — operational failures (network, non-2xx,
         rate-limit, malformed body, empty content) the caller may degrade.
     """
+    resolved_model = model or openrouter_model_for(purpose)
+    effective_profile = capability_profile or CapabilityProfile()
+    require_model_capabilities(resolved_model, effective_profile)
     llm_cli._enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_openrouter_setup_once()  # setup errors propagate
     assert _openrouter_api_key is not None  # set by _verify_openrouter_setup_once
-    resolved_model = model or openrouter_model_for(purpose)
     resolved_timeout = timeout_seconds or OPENROUTER_BACKEND_TIMEOUT_SECONDS
     log.info(
         {

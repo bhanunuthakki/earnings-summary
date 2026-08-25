@@ -38,7 +38,7 @@ import llm_client
 from llm import cli
 
 
-def _good_cli_response(text: str = "ok") -> str:
+def _good_cli_response(text: str = "ok https://example.test") -> str:
     """Minimal `claude -p --output-format json` success envelope so neither path
     falls through to the Gemini fallback."""
     return json.dumps(

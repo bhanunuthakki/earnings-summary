@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter
 
-from llm import cli, structured
+from llm import cli, codex_backend, fallback, gemini_backend, ledger, openrouter_backend, structured
 from llm.resolver import MODEL_CAPABILITIES, CapabilityProfile, resolve_model_and_backend
 
 
@@ -17,6 +17,18 @@ def _fail_transport(*_args: object, **_kwargs: object) -> str:
 
 def _fail_setup() -> None:
     pytest.fail("setup/transport must not run")
+
+
+def _ignore_ledger_record(**_kwargs: object) -> None:
+    return None
+
+
+def _ignore_budget(
+    _purpose: str | None,
+    *,
+    force_budget_bypass: bool = False,
+) -> None:
+    del force_budget_bypass
 
 
 def test_unknown_model_fails_closed_even_for_plain_resolution() -> None:
@@ -54,6 +66,155 @@ def test_call_llm_with_web_rejects_unknown_model_before_transport(
 
     with pytest.raises(ValueError, match="unregistered capability metadata"):
         cli.call_llm_with_web("prompt", model="unregistered-model")
+
+
+@pytest.mark.parametrize(
+    ("provider_call", "model"),
+    [
+        (gemini_backend.call_gemini, "gemini-unregistered"),
+        (openrouter_backend.call_openrouter, "vendor/unregistered"),
+        (codex_backend.call_codex_llm, "gpt-unregistered"),
+    ],
+)
+def test_public_provider_facades_reject_unknown_model_before_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_call: Any,
+    model: str,
+) -> None:
+    monkeypatch.setattr(cli, "_enforce_budget_pre_call", _fail_transport)
+
+    with pytest.raises(ValueError, match="unregistered capability metadata"):
+        provider_call("prompt", model=model)
+
+
+@pytest.mark.parametrize(
+    ("provider_call", "model"),
+    [
+        (gemini_backend.call_gemini, "gemini-3-flash-preview"),
+        (openrouter_backend.call_openrouter, "deepseek/deepseek-chat"),
+        (codex_backend.call_codex_llm, "gpt-5.6-sol"),
+    ],
+)
+def test_public_provider_facades_enforce_explicit_requirements_before_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_call: Any,
+    model: str,
+) -> None:
+    monkeypatch.setattr(cli, "_enforce_budget_pre_call", _fail_transport)
+
+    with pytest.raises(ValueError, match="context length"):
+        provider_call(
+            "prompt",
+            model=model,
+            capability_profile=CapabilityProfile(min_context_length=2_000_000),
+        )
+
+
+def test_call_llm_with_web_propagates_profile_to_codex_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = CapabilityProfile(requires_vision=True)
+    seen: list[CapabilityProfile] = []
+
+    def fake_codex(_prompt: str, **kwargs: Any) -> str:
+        seen.append(kwargs["capability_profile"])
+        return "grounded answer https://example.test"
+
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
+    monkeypatch.setattr(cli, "_enforce_budget_pre_call", _ignore_budget)
+    monkeypatch.setattr(cli, "capture_exchange", _ignore_ledger_record)
+
+    result = cli.call_llm_with_web(
+        "prompt",
+        model="gpt-5.6-sol",
+        capability_profile=profile,
+    )
+
+    assert result == "grounded answer https://example.test"
+    assert seen == [profile]
+
+
+def test_call_llm_propagates_profile_to_openrouter_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = CapabilityProfile(requires_structured_output=True)
+    seen: list[CapabilityProfile] = []
+
+    def fake_openrouter(_prompt: str, **kwargs: Any) -> str:
+        seen.append(kwargs["capability_profile"])
+        return "answer"
+
+    monkeypatch.setattr(openrouter_backend, "call_openrouter", fake_openrouter)
+
+    result = cli.call_llm(
+        "prompt",
+        purpose="test",
+        model="deepseek/deepseek-chat",
+        capability_profile=profile,
+    )
+
+    assert result == "answer"
+    assert seen == [profile]
+
+
+def test_try_gemini_fallback_propagates_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = CapabilityProfile(requires_structured_output=True)
+    seen: list[CapabilityProfile] = []
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("LLM_FALLBACK_DISABLED", raising=False)
+
+    def fake_gemini(_prompt: str, **kwargs: Any) -> str:
+        seen.append(kwargs["capability_profile"])
+        return "answer"
+
+    monkeypatch.setattr(gemini_backend, "call_gemini", fake_gemini)
+
+    result = fallback.try_gemini_fallback(
+        "prompt",
+        RuntimeError("primary down"),
+        capability_profile=profile,
+    )
+
+    assert result == "answer"
+    assert seen == [profile]
+
+
+def test_logged_fallback_propagates_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = CapabilityProfile(requires_vision=True)
+    seen: list[CapabilityProfile] = []
+    monkeypatch.setattr(fallback, "fallback_available", lambda: True)
+    monkeypatch.setattr(ledger, "record_llm_call", _ignore_ledger_record)
+
+    def fake_fallback(
+        _prompt: str,
+        _error: Exception,
+        *,
+        capability_profile: CapabilityProfile | None = None,
+    ) -> str:
+        assert capability_profile is not None
+        seen.append(capability_profile)
+        return "answer"
+
+    monkeypatch.setattr(ledger, "try_gemini_fallback", fake_fallback)
+
+    result = ledger.fallback_call_logged(
+        "prompt",
+        RuntimeError("primary down"),
+        prompt_sha="abc",
+        purpose="test",
+        ticker=None,
+        scope=None,
+        run_id="attempt",
+        metered_fallback_authorized=True,
+        capability_profile=profile,
+    )
+
+    assert result == "answer"
+    assert seen == [profile]
 
 
 def test_structured_facade_forces_structured_capability_on_every_attempt(

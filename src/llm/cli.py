@@ -1458,6 +1458,7 @@ def _call_claude(
             fallback_used="codex",
             fallback_from_provider="anthropic",
             fallback_from_transport="subscription_cli",
+            capability_profile=effective_profile,
         )
         capture_exchange(
             prompt=prompt,
@@ -1499,6 +1500,7 @@ def _call_claude(
             fallback_used="openrouter",
             fallback_from_provider="openai",
             fallback_from_transport="subscription_cli",
+            capability_profile=effective_profile,
         )
         capture_exchange(
             prompt=prompt,
@@ -1696,6 +1698,7 @@ def call_llm(
                 ticker=ticker,
                 scope=scope,
                 run_id=run_id,
+                capability_profile=effective_profile,
             )
             capture_exchange(
                 prompt=prompt,
@@ -1752,6 +1755,7 @@ def call_llm(
                 scope=scope,
                 run_id=run_id,
                 force_budget_bypass=force_budget_bypass,
+                capability_profile=effective_profile,
             )
             capture_exchange(
                 prompt=prompt,
@@ -1795,6 +1799,7 @@ def call_llm(
                 scope=scope,
                 run_id=run_id,
                 force_budget_bypass=force_budget_bypass,
+                capability_profile=effective_profile,
             )
             capture_exchange(
                 prompt=prompt,
@@ -2281,10 +2286,11 @@ def call_llm_with_web(
     the Codex membership wrapper runs FIRST with ``web_search="live"`` so it
     can fetch fresh pages. An OPERATIONAL Codex failure — never a routing
     preference — falls through to this function's Claude WebSearch/WebFetch
-    path below, which itself falls through to plain ``_call_claude`` (no web
-    tools) on failure, with Codex re-entry disabled on that final hop (it
-    already failed once). A memo is always produced even when every
-    web-search transport is unavailable. 2026-08-03 owner ratification: see
+    path below. When ``require_grounding=True`` (the default), an unavailable
+    web transport or uncited response raises rather than degrading to plain
+    output. Callers that explicitly set ``require_grounding=False`` may retain
+    the legacy plain-output degradation, with Codex re-entry disabled on that
+    final hop. 2026-08-03 owner ratification: see
     directives/llm_calls.md and procedures/llm-ops.TRANSPORTS.md.
 
     Use for memo generation, fact-finding on recent news, anything where
@@ -2307,10 +2313,10 @@ def call_llm_with_web(
     invariant — for whichever call actually reaches the Claude leg.
 
     ``require_grounding`` (default True) enforces the groundedness gate on the
-    Codex leg: a web-grounded answer that cites no source did not search, so it
-    is treated as an operational failure and falls through to Claude rather
-    than being served. Pass False only for a web purpose whose output
-    legitimately carries no URL.
+    Codex and Claude web legs: a web-grounded answer that cites no source did
+    not prove grounding. An uncited Codex answer falls through to Claude web;
+    an uncited Claude-web answer raises. Pass False only for a web purpose whose
+    output legitimately carries no URL and may accept plain degradation.
 
     Model selection mirrors ``call_llm``: pass an explicit registered model or
     leave it ``None`` (the default) to resolve from ``purpose`` via the canonical
@@ -2387,6 +2393,7 @@ def call_llm_with_web(
                 scope=scope or "web",
                 run_id=run_id,
                 web_search="live",
+                capability_profile=effective_profile,
             )
             # GROUNDEDNESS GATE (measured defect, 2026-08-03). A web-grounded
             # answer that cites NOTHING did not actually search — and the
@@ -2534,6 +2541,8 @@ def call_llm_with_web(
             raise RuntimeError(
                 f"claude -p with web tools returned empty `result`. stderr: {result.stderr.strip()[:200]}"
             )
+        if require_grounding and "http" not in text:
+            raise RuntimeError("claude web answer cited no sources — grounding requirement not met")
         log.info({"event": "llm_web_call_done", "response_chars": len(text)})
         record_llm_call(
             started_at=started_at,
@@ -2599,10 +2608,19 @@ def call_llm_with_web(
             fallback_from_transport=fallback_from_transport,
         )
         if web_info.kind == "usage_limit":
-            # Engage the breaker here too — the plain-path fall-through below
-            # will then fail fast (typed) instead of spawning a second doomed
-            # subprocess against the same exhausted window.
+            # Engage the breaker here too. A grounding-required call raises
+            # below; an explicit non-grounded call's plain fallback then fails
+            # fast instead of spawning a second doomed subprocess.
             record_quota_exhausted(web_info)
+        if require_grounding:
+            log.warning(
+                {
+                    "event": "llm_web_call_grounding_unavailable",
+                    "kind": web_info.kind,
+                    "error": f"{type(web_err).__name__}: {web_info.detail[:200]}",
+                }
+            )
+            raise
         log.warning(
             {
                 "event": "llm_web_call_fallback_to_plain",

@@ -58,6 +58,7 @@ import httpx
 
 from llm import cli as llm_cli
 from llm.ledger import record_llm_call
+from llm.resolver import CapabilityProfile, require_model_capabilities
 
 # The import is LAZY (_ensure_genai), not module-level: this module loads with
 # the llm package (llm/__init__.py re-exports call_gemini), which every boot
@@ -402,6 +403,7 @@ def call_gemini(
     scope: str | None = None,
     run_id: str | None = None,
     force_budget_bypass: bool = False,
+    capability_profile: CapabilityProfile | None = None,
 ) -> str:
     """Single-shot Gemini Developer API call. Same contract as
     ``llm.cli._call_claude``: per-purpose budget gate up front, one
@@ -416,11 +418,13 @@ def call_gemini(
       * RuntimeError / ValueError / google.genai.errors.APIError —
         operational failures the caller may degrade or reroute.
     """
+    resolved_model = model or gemini_model_for(purpose)
+    effective_profile = capability_profile or CapabilityProfile()
+    require_model_capabilities(resolved_model, effective_profile)
     llm_cli._enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_gemini_setup_once()  # setup errors propagate
     assert _gemini_api_key is not None  # set by _verify_gemini_setup_once
     _ensure_genai()
-    resolved_model = model or gemini_model_for(purpose)
     resolved_timeout = timeout_seconds or GEMINI_BACKEND_TIMEOUT_SECONDS
     client = genai.Client(
         api_key=_gemini_api_key,
@@ -454,6 +458,19 @@ def call_gemini(
         _models: list[str] = [resolved_model]
         _annealed = False
         for _attempt, _try_model in enumerate(_models):
+            try:
+                require_model_capabilities(_try_model, effective_profile)
+            except ValueError:
+                if _attempt + 1 < len(_models):
+                    log.warning(
+                        {
+                            "event": "gemini_annealed_model_skipped_unregistered",
+                            "model": _try_model,
+                            "purpose": purpose,
+                        }
+                    )
+                    continue
+                raise
             started_at = datetime.now(UTC)
             t0 = time.monotonic()
             try:

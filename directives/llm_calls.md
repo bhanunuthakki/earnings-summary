@@ -77,7 +77,10 @@ no additional profile requirements.
 
 `call_llm_with_web` uses the same purpose resolution and Codex-first subscription order.
 Its live-grounding requirement is enforced by code; a response that lacks required
-source evidence is a failure, not a grounded answer.
+source evidence is a failure, not a grounded answer. With the default
+`require_grounding=True`, exhausted web transports raise and never return plain uncited
+output. Only an explicit `require_grounding=False` call may use the attributable legacy
+plain-output degradation.
 
 ## Structured output
 

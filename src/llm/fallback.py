@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 
+from llm.resolver import CapabilityProfile
 from log_redact import redact
 
 log = logging.getLogger(__name__)
@@ -86,7 +87,12 @@ def is_fallback_disabled() -> bool:
     return v in {"1", "true", "yes", "on"}
 
 
-def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
+def try_gemini_fallback(
+    prompt: str,
+    claude_error: Exception,
+    *,
+    capability_profile: CapabilityProfile | None = None,
+) -> str:
     """
     Last-resort Gemini call invoked when the primary subscription CLI fails operationally.
     Delegates to ``llm.gemini_backend.call_gemini`` using central model resolution.
@@ -117,7 +123,12 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     from llm.gemini_backend import call_gemini
     from llm.resolver import resolve_model_and_backend
 
-    model, _ = resolve_model_and_backend(purpose=None, model=GEMINI_FALLBACK_MODEL)
+    effective_profile = capability_profile or CapabilityProfile()
+    model, _ = resolve_model_and_backend(
+        purpose=None,
+        model=GEMINI_FALLBACK_MODEL,
+        capability_profile=effective_profile,
+    )
     log.warning(
         {
             "event": "primary_cli_failed_falling_back_to_gemini",
@@ -126,7 +137,12 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
         }
     )
     try:
-        return call_gemini(prompt, model=model, timeout_seconds=int(GEMINI_REQUEST_TIMEOUT_S))
+        return call_gemini(
+            prompt,
+            model=model,
+            timeout_seconds=int(GEMINI_REQUEST_TIMEOUT_S),
+            capability_profile=effective_profile,
+        )
     except Exception as gemini_err:
         raise RuntimeError(
             "Both LLMs failed: Primary CLI errored AND Gemini fallback call failed.\n"
