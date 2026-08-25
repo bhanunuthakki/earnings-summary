@@ -96,6 +96,23 @@ a.k-stat-cell[data-work-os-stat-key]:hover { color: var(--fg); background: var(-
 .research-row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3); }
 .research-library-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
 #screen-workspace .research-grid.k-grid-split-rail-lg { grid-template-columns: minmax(0, 1fr) var(--rail-lg); }
+.company-desk-approved-grid { max-inline-size: var(--main-max-width); inline-size: 100%; margin-inline: auto; }
+.company-desk-topline { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); overflow: visible; }
+.company-desk-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); flex-wrap: wrap; }
+.company-desk-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-column: 1 / -1; border-block-start: var(--bw-thin) solid var(--hairline); }
+.company-desk-facts .k-stat-cell + .k-stat-cell { border-inline-start: var(--bw-thin) solid var(--hairline); }
+.company-desk-decision-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); margin-block-end: var(--sp-3); }
+.company-desk-decision-grid > div { min-inline-size: 0; }
+.company-desk-tracking-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); }
+.tracking-band { display: flex; flex-direction: column; gap: var(--sp-1); min-inline-size: 0; border-block-start: calc(var(--bw-thin) * 2) solid var(--border); }
+.tracking-band-buy, .tracking-band-add { border-block-start-color: var(--ok); }
+.tracking-band-hold { border-block-start-color: var(--accent); }
+.tracking-band-trim { border-block-start-color: var(--warn); }
+.company-desk-tracking-note { grid-column: 1 / -1; }
+.company-desk-summary-grid, .company-desk-exploration-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); align-items: start; }
+.research-tabs { display: flex; gap: var(--sp-1); overflow-x: auto; border-block-end: var(--bw-thin) solid var(--hairline); margin-block-end: var(--sp-3); }
+.research-tab { flex: 0 0 auto; border-radius: 0; }
+.research-tab[aria-selected="true"] { color: var(--accent); box-shadow: inset 0 calc(var(--bw-thin) * -2) 0 var(--accent); }
 @media (hover: none) { .company-picker-trigger { min-block-size: var(--touch-target-size); opacity: 1; transform: none; } }
 @media (max-width: 47.5rem) {
   body { display: flex; min-width: 0; }
@@ -116,9 +133,13 @@ a.k-stat-cell[data-work-os-stat-key]:hover { color: var(--fg); background: var(-
   .work-os-action-row, .work-os-evaluation-thread { grid-template-columns:minmax(0, 1fr); align-items:stretch; }
   .k-action-row { flex-wrap: wrap; gap: var(--sp-2); }
   .screen-view [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
-  .research-decision-band, .research-grid, .research-library-grid, .work-os-reader-decision { grid-template-columns: 1fr; }
+  .research-decision-band, .research-grid, .research-library-grid, .work-os-reader-decision, .company-desk-topline, .company-desk-facts, .company-desk-decision-grid, .company-desk-tracking-grid, .company-desk-summary-grid, .company-desk-exploration-grid { grid-template-columns: 1fr; }
   .research-decision-band .k-stat-cell, .work-os-reader-decision .k-stat-cell { border-inline-start: 0; border-block-start: var(--bw-thin) solid var(--hairline); }
   .research-decision-band .k-stat-cell:first-child, .work-os-reader-decision .k-stat-cell:first-child { border-block-start: 0; }
+  .company-desk-actions { justify-content: flex-start; }
+  .company-desk-facts .k-stat-cell + .k-stat-cell { border-inline-start: 0; border-block-start: var(--bw-thin) solid var(--hairline); }
+  .company-desk-tracking-note { grid-column: auto; }
+  .research-tab { min-block-size: var(--touch-target-size); }
   #screen-workspace .k-grid-split-rail-lg, #screen-execution-queue .k-grid-split-rail { display: block; }
   #screen-brief-library .research-toolbar { align-items: stretch; }
   .research-toolbar { flex-direction: column; align-items: stretch; }

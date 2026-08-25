@@ -1836,16 +1836,6 @@ def create_app(
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.route("/api/company/<ticker>/say-do", methods=["GET"])
-    def company_say_do_api(ticker: str):
-        """Generation 3 Company Desk Say/Do historical tracking endpoint."""
-        from get_company_say_do import load_company_say_do
-
-        data = load_company_say_do(db_path, ticker)
-        response = app.json.response(data.model_dump(mode="json"))
-        response.headers["Cache-Control"] = "no-store"
-        return response
-
     @app.route("/api/portfolio/risk-matrix", methods=["GET"])
     def portfolio_risk_matrix_api():
         """Generation 3 Performance & Risk cross-asset correlation and factor exposure."""

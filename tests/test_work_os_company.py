@@ -191,7 +191,95 @@ def test_company_desk_is_a_narrow_governed_read_model(work_os_app_repo: Path) ->
     assert desk.open_questions[0].approval == "owner-authored"
     assert desk.question_store_status == "ok"
     assert desk.latest_brief is None
+    assert desk.position.dcf_url is None
+    assert desk.price_action_bands.state == "unavailable"
+    assert desk.price_action_bands.is_actionable is False
+    assert desk.say_do.status == "unavailable"
+    assert desk.say_do.unavailable_reason == "missing_source"
     assert "position_snapshot_unavailable" in desk.warnings
+
+
+def test_company_desk_projects_canonical_say_do_for_latest_four_statement_quarters(
+    work_os_app_repo: Path,
+) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE management_commitments (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT NOT NULL,
+            period_made TEXT NOT NULL,
+            transcript_segment_id INTEGER NOT NULL,
+            period_target TEXT NOT NULL,
+            kpi_name TEXT NOT NULL,
+            comparator TEXT NOT NULL,
+            target_value REAL NOT NULL,
+            unit TEXT NOT NULL,
+            narrative TEXT NOT NULL,
+            realized_value REAL,
+            outcome TEXT,
+            evaluated_at TEXT
+        );
+        """
+    )
+    conn.executemany(
+        "INSERT INTO management_commitments VALUES (?, 'NU', ?, ?, ?, 'NPL 90+', '<=', "
+        "5.6, 'percent', ?, ?, ?, ?)",
+        [
+            (
+                1,
+                "2025-03-31",
+                101,
+                "2025-06-30",
+                "Keep NPL below the guardrail.",
+                5.1,
+                "hit",
+                "2025-07-01",
+            ),
+            (
+                2,
+                "2025-06-30",
+                102,
+                "2025-09-30",
+                "Keep NPL below the guardrail.",
+                5.2,
+                "hit",
+                "2025-10-01",
+            ),
+            (
+                3,
+                "2025-09-30",
+                103,
+                "2025-12-31",
+                "Keep NPL below the guardrail.",
+                5.8,
+                "miss",
+                "2026-01-02",
+            ),
+            (4, "2025-12-31", 104, "2026-03-31", "Keep NPL below the guardrail.", None, None, None),
+            (
+                5,
+                "2026-03-31",
+                105,
+                "2026-06-30",
+                "Keep NPL below the guardrail.",
+                5.0,
+                "beat",
+                "2026-07-01",
+            ),
+        ],
+    )
+    try:
+        desk = build_company_desk(work_os_app_repo, conn, "NU")
+    finally:
+        conn.close()
+
+    assert desk.say_do.status == "available"
+    assert desk.say_do.quarters == ["2026-03", "2025-12", "2025-09", "2025-06"]
+    assert [item.id for item in desk.say_do.commitments] == [5, 4, 3, 2]
+    assert desk.say_do.commitments[0].outcome == "beat"
+    assert desk.say_do.commitments[0].source_ref == "transcript_segment:105"
 
 
 def test_company_desk_projects_only_fresh_canonical_thesis_evidence(
@@ -529,6 +617,7 @@ def test_company_desk_projects_live_tracker_position_without_losing_dcf(
     assert desk.position.price == pytest.approx(14.25)
     assert desk.position.fair_value == pytest.approx(18.50)
     assert desk.position.source == "latest_governed_dcf_run"
+    assert desk.position.dcf_url == "/dcf/NU"
 
 
 def test_company_desk_distinguishes_not_held_from_tracker_unavailable(
@@ -763,6 +852,7 @@ def test_company_desk_exposes_latest_governed_dcf_snapshot(
             assert desk.position.price_as_of is not None
             assert desk.position.fair_value_as_of == "2026-07-31"
             assert desk.position.source == "latest_governed_dcf_run"
+            assert desk.position.dcf_url == f"/dcf/{ticker}"
             assert "position_snapshot_unavailable" not in desk.warnings
     finally:
         conn.close()

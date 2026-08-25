@@ -13,8 +13,13 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from advisor.price_action_bands import (
+    PriceActionBandProjection,
+    resolve_price_action_bands,
+)
+from advisor.sizing_intent_review import load_sizing_intent_review_from_connection
 from calendar_clock import calendar_today
 from dcf.latest import latest_dcf_row
 from integrations.portfolio_tracker_client import LivePortfolio
@@ -70,6 +75,7 @@ class DeskPositionSnapshot(BaseModel):
     source: str | None = None
     price_as_of: str | None = None
     fair_value_as_of: str | None = None
+    dcf_url: str | None = None
 
 
 class DeskQuestion(BaseModel):
@@ -141,6 +147,39 @@ class KpiSummaryProjection(BaseModel):
     unavailable_reason: Literal["missing", "stale", "incomplete"] | None = None
 
 
+class DeskSayDoCommitment(BaseModel):
+    """One canonical management commitment with exact quarter and outcome evidence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+    period_made: str
+    period_target: str
+    kpi_name: str
+    comparator: str
+    target_value: float
+    unit: str
+    narrative: str
+    realized_value: float | None = None
+    outcome: Literal["hit", "miss", "beat", "no_data"] | None = None
+    evaluated_at: str | None = None
+    source_ref: str
+
+
+class DeskSayDoProjection(BaseModel):
+    """At most four statement quarters from the canonical commitment ledger."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["available", "unavailable"]
+    quarters: list[str] = Field(default_factory=lambda: list[str]())
+    commitments: list[DeskSayDoCommitment] = Field(
+        default_factory=lambda: list[DeskSayDoCommitment]()
+    )
+    as_of: str | None = None
+    unavailable_reason: Literal["missing_source", "schema_mismatch", "query_failed"] | None = None
+
+
 class CompanyDeskResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -158,8 +197,9 @@ class CompanyDeskResponse(BaseModel):
     earnings_doorway: EarningsDoorway
     thesis_risk: ThesisRiskProjection
     kpi_summary: KpiSummaryProjection
+    price_action_bands: PriceActionBandProjection
+    say_do: DeskSayDoProjection
     warnings: list[str]
-    say_do: dict[str, object] | None = None
 
 
 _PRE_EARNINGS_PURPOSE = "pre_earnings_brief"
@@ -453,6 +493,106 @@ def _position_snapshot(
         source="latest_governed_dcf_run" if dcf is not None else None,
         price_as_of=dcf.live_price_at if dcf is not None else None,
         fair_value_as_of=dcf.valuation_date if dcf is not None else None,
+        dcf_url=f"/dcf/{ticker}" if dcf is not None else None,
+    )
+
+
+def _price_action_bands(
+    conn: sqlite3.Connection,
+    ticker: str,
+) -> PriceActionBandProjection:
+    review = load_sizing_intent_review_from_connection(conn)
+    if not review.sizing_intent_source_available:
+        return resolve_price_action_bands(owner_ratified=None, source_available=False)
+    candidates = [entry for entry in review.entries if entry.intent.ticker.upper() == ticker]
+    if not candidates:
+        return resolve_price_action_bands(owner_ratified=None)
+    selected = max(
+        candidates,
+        key=lambda entry: (
+            entry.price_action_bands.is_actionable,
+            entry.intent.updated_at,
+            entry.intent.id,
+        ),
+    )
+    return selected.price_action_bands
+
+
+def _say_do_projection(conn: sqlite3.Connection, ticker: str) -> DeskSayDoProjection:
+    required = {
+        "id",
+        "ticker",
+        "period_made",
+        "period_target",
+        "transcript_segment_id",
+        "kpi_name",
+        "comparator",
+        "target_value",
+        "unit",
+        "narrative",
+        "realized_value",
+        "outcome",
+        "evaluated_at",
+    }
+    columns = _table_columns(conn, "management_commitments")
+    if not columns:
+        return DeskSayDoProjection(status="unavailable", unavailable_reason="missing_source")
+    if not required.issubset(columns):
+        return DeskSayDoProjection(status="unavailable", unavailable_reason="schema_mismatch")
+    try:
+        rows = conn.execute(
+            "SELECT id, period_made, period_target, transcript_segment_id, kpi_name, "
+            "comparator, target_value, unit, narrative, realized_value, outcome, evaluated_at "
+            "FROM management_commitments WHERE UPPER(ticker) = ? "
+            "ORDER BY period_made DESC, id DESC LIMIT 80",
+            (ticker,),
+        ).fetchall()
+    except sqlite3.Error:
+        return DeskSayDoProjection(status="unavailable", unavailable_reason="query_failed")
+
+    quarters: list[str] = []
+    commitments: list[DeskSayDoCommitment] = []
+    as_of: str | None = None
+    for row in rows:
+        period_made = str(row["period_made"])
+        quarter = period_made[:7]
+        if quarter not in quarters:
+            if len(quarters) == 4:
+                continue
+            quarters.append(quarter)
+        if quarter not in quarters:
+            continue
+        evaluated_at = str(row["evaluated_at"]) if row["evaluated_at"] else None
+        as_of = max(value for value in (as_of, evaluated_at, period_made) if value is not None)
+        raw_outcome = str(row["outcome"]) if row["outcome"] else None
+        outcome: Literal["hit", "miss", "beat", "no_data"] | None = (
+            cast("Literal['hit', 'miss', 'beat', 'no_data']", raw_outcome)
+            if raw_outcome in {"hit", "miss", "beat", "no_data"}
+            else None
+        )
+        commitments.append(
+            DeskSayDoCommitment(
+                id=int(row["id"]),
+                period_made=period_made,
+                period_target=str(row["period_target"]),
+                kpi_name=str(row["kpi_name"]),
+                comparator=str(row["comparator"]),
+                target_value=float(row["target_value"]),
+                unit=str(row["unit"]),
+                narrative=str(row["narrative"]),
+                realized_value=(
+                    float(row["realized_value"]) if row["realized_value"] is not None else None
+                ),
+                outcome=outcome,
+                evaluated_at=evaluated_at,
+                source_ref=f"transcript_segment:{int(row['transcript_segment_id'])}",
+            )
+        )
+    return DeskSayDoProjection(
+        status="available",
+        quarters=quarters,
+        commitments=commitments,
+        as_of=as_of,
     )
 
 
@@ -656,6 +796,8 @@ def build_company_desk(
     thesis_risk, kpi_summary, thesis_warnings = _thesis_projections(
         repo_root, conn, normalized, as_of=built_at
     )
+    price_action_bands = _price_action_bands(conn, normalized)
+    say_do = _say_do_projection(conn, normalized)
     warnings = [
         *decision_warnings,
         *question_warnings,
@@ -686,6 +828,8 @@ def build_company_desk(
         earnings_doorway=earnings_doorway,
         thesis_risk=thesis_risk,
         kpi_summary=kpi_summary,
+        price_action_bands=price_action_bands,
+        say_do=say_do,
         warnings=warnings,
     )
 

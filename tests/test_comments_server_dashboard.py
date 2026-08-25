@@ -175,13 +175,15 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # +2 governed alert lifecycle routes (action and evidence).
     # +1 governed portfolio policy write proxy.
     # +1 governed sizing-intent checkpoint route.
-    # +4 Generation 3 projections: company Say/Do, portfolio risk matrix,
-    # aggregated open loops, and pre-trade positioning simulation.
+    # +3 surviving Generation 3 projections: portfolio risk matrix, aggregated
+    # open loops, and pre-trade positioning simulation. Company Say/Do now rides
+    # the request-scoped typed Company Desk response instead of a duplicate route.
     # +1 bounded Evaluation Dialogues hydration route.
     # +1 governed Operations attention lifecycle action route.
-    assert len(rules) == 174
+    assert len(rules) == 173
+    assert not any("say-do" in rule for rule in rules.values())
+    assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()
     assert rules["operations_attention_action"] == ("/api/operations/attention/<action_name>")
-    assert rules["company_say_do_api"] == "/api/company/<ticker>/say-do"
     assert rules["portfolio_risk_matrix_api"] == "/api/portfolio/risk-matrix"
     assert rules["work_os_open_loops_api"] == "/api/work-os/open-loops"
     assert rules["positioning_simulate_api"] == "/api/positioning/simulate"

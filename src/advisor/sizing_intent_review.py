@@ -33,6 +33,7 @@ __all__ = [
     "SizingIntentReviewEntry",
     "load_sizing_intent_review",
     "load_sizing_intent_review_entry",
+    "load_sizing_intent_review_from_connection",
 ]
 
 
@@ -107,30 +108,40 @@ def load_sizing_intent_review(
         return SizingIntentReview(False, False, ())
 
     try:
-        intents = _latest_intents(conn, user_id=user_id)
-        if intents is None:
-            return SizingIntentReview(False, False, ())
-        links = _checkpoint_links(conn, intents)
-        if links is None:
-            return SizingIntentReview(
-                True,
-                False,
-                tuple(
-                    SizingIntentReviewEntry(
-                        intent=intent,
-                        checkpoint_linked=False,
-                        checkpoint_evidence_available=False,
-                    )
-                    for intent in intents
-                ),
-            )
-        return SizingIntentReview(
-            True,
-            True,
-            tuple(_review_entry(intent, links.get(intent.id)) for intent in intents),
-        )
+        return load_sizing_intent_review_from_connection(conn, user_id=user_id)
     finally:
         conn.close()
+
+
+def load_sizing_intent_review_from_connection(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+) -> SizingIntentReview:
+    """Project sizing evidence through an existing request-scoped connection."""
+
+    intents = _latest_intents(conn, user_id=user_id)
+    if intents is None:
+        return SizingIntentReview(False, False, ())
+    links = _checkpoint_links(conn, intents)
+    if links is None:
+        return SizingIntentReview(
+            True,
+            False,
+            tuple(
+                SizingIntentReviewEntry(
+                    intent=intent,
+                    checkpoint_linked=False,
+                    checkpoint_evidence_available=False,
+                )
+                for intent in intents
+            ),
+        )
+    return SizingIntentReview(
+        True,
+        True,
+        tuple(_review_entry(intent, links.get(intent.id)) for intent in intents),
+    )
 
 
 def load_sizing_intent_review_entry(
