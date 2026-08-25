@@ -2,100 +2,76 @@
 
 **Status:** canonical agent contract for the visual system.
 
-This directive explains how to make a visual decision. It does not duplicate the
-current emitter census, approved exceptions, geometry recipes, or debt ledger.
-Those inventories are executable and versioned in code.
+This directive governs visual decisions. Emitter, exception, geometry, and debt inventories live in code.
 
 ## Operating metadata
 
-- **Target:** every shipped component or emitter that changes what a user sees.
-- **Inputs:** product intent, content hierarchy, interaction state, and an existing
-  global or family master.
-- **Output:** markup that selects registered recipes, or a reviewed master/registry
-  extension with a regression test.
-- **Refresh cadence:** only when the decision model changes; inventory changes do
-  not require prose edits.
-- **Idempotency key:** the changed master or registered contract plus its test.
+- **Target:** every shipped component or emitter that changes rendered UI.
+- **Inputs/source:** task, hierarchy, interaction state, and the owning master.
+- **Output/schema:** registered markup, or a tested master/registry extension.
+- **Refresh:** only when the decision model changes, not when inventory changes.
+- **Idempotency key:** changed master or contract plus its test.
 - **Rate-limit budget:** none; verification is local and deterministic.
-- **Failure policy:** reject the visual change. Never bypass, quarantine, or widen
-  an approval merely to make a check green.
+- **Failure policy:** reject the change; never widen an approval to make a check green.
 
 ## 1. Authority boundary
 
-The system is the UI equivalent of a slide master. Visual decisions are closed:
-consumers select a registered recipe; they do not create a private one.
+Visual decisions are closed: consumers select a master recipe; they do not create one.
 
 | Concern | Executable authority |
 |---|---|
-| Color, type, spacing, radius, border, shadow, blur, motion, rails, indents | `src/ui/tokens.py` |
-| Global controls, shapes, grids, and composition recipes | `src/ui/controls.py` |
-| React mirrors of global tokens and controls | `scripts/gen_design_tokens.py`, `scripts/gen_design_controls.py` |
-| Family-specific layout masters and every typed approval/contract | `src/ui/design_registry.py` |
-| Static, dynamic, runtime, SVG, and React conformance detection | `src/ui/conformance_scan.py` |
-| Emitter census, reconciliation, debt status, and deterministic receipt | `execution/verify_design_conformance.py` |
-| One merge-facing composition check | `scripts/check_design_sync.py` |
+| Tokens and scales | `src/ui/tokens.py` |
+| Controls and composition | `src/ui/controls.py` |
+| React mirrors | `scripts/gen_design_tokens.py`, `scripts/gen_design_controls.py` |
+| Family masters and approvals | `src/ui/design_registry.py` |
+| Conformance detection | `src/ui/conformance_scan.py` |
+| Census, debt, and receipt | `execution/verify_design_conformance.py` |
+| Merge check | `scripts/check_design_sync.py` |
 
-`src/ui/design_registry.py` is the live inventory oracle. This file must never
-reproduce its paths, counts, digests, approvals, sanctions, quarantine, or debt.
-Generated CSS/TypeScript is a mirror, never an authority.
+`src/ui/design_registry.py` is the inventory oracle. Do not copy its paths, counts, approvals, or debt.
 
 ## 2. Consumer contract
 
-A governed surface may provide content, semantic HTML, data attributes, and
-nonvisual JavaScript hooks. Its visual experience must come from:
+A governed surface may provide content, semantic HTML, data attributes, and nonvisual hooks. UI comes from:
 
 1. the global tokens and controls;
 2. one registered family master for surface-specific arrangement; and
 3. an exact typed contract for any approved dynamic or runtime visual state.
 
-Consumers must not add local visual CSS, raw inline styles, runtime style
-mutation, arbitrary SVG presentation values, or open-ended `style` APIs. Preserve
-behavior hooks beside kit classes; do not style the hook itself.
+No local visual CSS, inline styles, runtime style mutation, arbitrary SVG presentation, or open-ended `style` APIs.
 
-If an ad-hoc request cannot be expressed by an existing recipe, reject it as a
-consumer edit. Either choose the nearest approved variant or extend the
-appropriate master first. Reuse across families belongs in global tokens or
-controls; family-only arrangement belongs in that family's registered master.
+If no recipe fits, choose the nearest variant or extend the owning master. Cross-family reuse is global.
 
 ## 3. Visual grammar
 
-These are semantic constraints. Literal values live only in executable masters.
+Literal values live only in executable masters.
 
 ### Typography
 
 - Use four visible roles: display, title, body, and meta.
 - Use the sans family for prose and labels.
-- Use mono only for financial values, tickers, timestamps, code, and source
-  locators. Mono is not a general accent face.
-- Weight and case communicate hierarchy; a consumer cannot invent another size,
-  line height, tracking, or font role.
+- Use mono only for financial values, tickers, timestamps, code, and source locators.
+- Weight and case communicate hierarchy; consumers cannot invent another type role.
 
 ### Color
 
-- Use semantic roles: ground/surface, primary/muted text, border, accent, and
-  status.
-- Accent marks interaction, selection, focus, or unread state. It is not
-  decoration.
+- Use semantic ground/surface, text, border, accent, and status roles.
+- Accent marks interaction, selection, focus, or unread state, never decoration.
 - Status colors communicate status only and must retain a non-color cue.
-- Raw colors, named colors, ad-hoc opacity, gradients, and consumer aliases are
-  prohibited outside registered masters or generated mirrors.
+- Raw colors, ad-hoc opacity, gradients, and consumer aliases are prohibited.
 
 ### Shape, depth, and motion
 
-- Shape comes from registered control and family recipes, including radius,
-  border, shadow, blur, and transform.
+- Shape comes from registered control and family recipes: radius, border, shadow, blur, and transform.
 - Use elevation only to explain layering or focus.
 - Motion uses the registered transition vocabulary and honors reduced-motion.
-- A different corner, shadow, animation, or overlay geometry is a master change,
-  not a local tweak.
+- Different corners, shadows, motion, or overlay geometry require a master change.
 
 ### Spacing, grids, and indents
 
 - Use the spacing ladder and registered grid, rail, and indent recipes.
-- Density is intentional: compact for operating controls, comfortable for
-  reading, and spacious only where hierarchy needs it.
-- Alignment follows content hierarchy. Do not repair a layout with one-off
-  offsets, widths, gaps, or breakpoints.
+- Density is compact for controls, comfortable for reading, and spacious only for hierarchy.
+- Follow content alignment; no one-off offsets, widths, gaps, or breakpoints.
 
 ## 4. Composition grammar
 
@@ -110,21 +86,16 @@ Use the canonical primitives rather than lookalikes:
 | Ticker plus company | `ticker_label()` |
 | Stored or model-generated prose | `ui.prose.render_prose()` |
 
-An on-scale token does not legitimize a hand-built button, badge, chip, field,
-table, drawer, card, or overlay. Compose the kit.
+An on-scale token does not legitimize a hand-built component. Compose the kit.
 
-Accessibility is part of the recipe: semantic elements, keyboard reachability,
-visible focus, labels, contrast, non-color state cues, and reduced motion are
-required. Hover may enrich an action but cannot be its only doorway.
+Recipes include semantics, keyboard access, focus, labels, contrast, non-color cues, and reduced motion.
 
 ## 5. Arrangement
 
-- Application surfaces optimize for decisions: one dominant operating band,
-  compact controls, explicit state, and progressive disclosure.
-- Research documents optimize for reading: clear hierarchy, restrained density,
-  traceable evidence, and no application chrome masquerading as content.
-- Responsive behavior, empty/loading/error states, and overlays must use
-  registered recipes. They are not exceptions to the master boundary.
+- Application surfaces optimize for decisions: one dominant operating band, compact controls,
+  explicit state, and progressive disclosure.
+- Research documents optimize for reading: clear hierarchy, restrained density, and traceable evidence.
+- Responsive behavior, empty/loading/error states, and overlays use registered recipes.
 
 ### Compositional restraint
 
@@ -144,17 +115,17 @@ The shared `frontend-quality` procedure owns the generic rubric. This project na
 
 Product behavior is owned elsewhere. Do not copy it into this directive:
 
-- navigation and destination hierarchy: executable routes and shell tests; `directives/navigation_ia.md`
-  is draft evidence only until owner approval;
+- navigation and destination hierarchy: `directives/navigation_ia.md`; executable routes and shell
+  tests remain authority, and the directive is draft evidence only until owner approval;
 - doorway, overlay, dismissal, and interaction laws: `directives/interaction_contract.md`;
+- broader interaction model: `directives/interaction_paradigm_2026_06.md`;
 - comments and chat: `directives/report_comments_and_chat.md`;
 - provenance behavior: `directives/data_provenance.md`;
 - operational controls: `directives/operations_governance_surface.md`;
 - discovery and ingestion policy: `directives/news_sources_plan.md` and
   `directives/ir_events_ingestion.md`.
 
-Those contracts may specify behavior, data, and state. They do not authorize a
-new visual recipe.
+Those contracts may specify behavior, data, and state. They do not authorize a new visual recipe.
 
 ## 6. Extension protocol
 
@@ -170,14 +141,11 @@ For a legitimate new visual need:
    master set, geometry, evidence mode, or approval changes.
 5. Regenerate mirrors and run the merge-facing check.
 
-Approvals are exact and typed. Permanent exemptions are limited to nonvisual
-policy infrastructure. Quarantine is temporary, owned, and shrink-only. Debt may
-shrink but may not grow. A request to broaden any of these requires explicit
-review; it is never an implementation shortcut.
+Approvals are exact and typed. Permanent exemptions are limited to nonvisual policy infrastructure.
+Quarantine is temporary, owned, and shrink-only; debt may shrink but not grow.
 
-Edit this directive only when an agent's decision rule changes. Do not add
-feature history, implementation diaries, generated tables, surface counts, or
-product specifications.
+Edit this directive only when an agent's decision rule changes. Do not add history, diaries,
+generated tables, surface counts, or product specifications.
 
 ## 7. Verification
 
@@ -194,13 +162,10 @@ python execution/verify_design_conformance.py --check --route-canaries
 python -m pytest tests/test_design_registry.py tests/test_design_conformance_canonical.py tests/test_design_sync.py tests/test_ui_controls.py -q
 ```
 
-The route-canary matrix uses production Work OS renders at both widths. Persistent
-routes equal the screen registry plus named transient readers; it waits for hydration,
-walks light/open-shadow DOM and checks every boxed surface for exact archetype, anatomy, type, spacing, shape, depth, alignment,
-viewport fit, and reduced motion. Missing evidence or a loading shell blocks.
+Route canaries use production renders at both widths, wait for hydration, walk light/open-shadow
+DOM, and check archetype, anatomy, type, spacing, shape, depth, alignment, fit, and reduced motion.
 
 Report-renderer changes require workspace golden regeneration and diff review;
 generated React changes require the design-system check/build.
 
-The scanner owns mechanical structure; UI tests own focus, dismissal, doorway
-reachability, and goldens; review owns hierarchy. A targeted test cannot override a red composed guard or receipt.
+Scanner, UI tests, and review own structure, behavior, and hierarchy respectively; red evidence blocks.
