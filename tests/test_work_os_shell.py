@@ -979,6 +979,8 @@ def test_company_desk_thesis_presentation_is_readable_and_human_labeled() -> Non
     )[0]
 
     assert "function workOsSplitThesisSentences" in html
+    assert "Intl.Segmenter" in html
+    assert "(?=[A-Z0-9])" in html
     assert 'class="stat-subtext"' in desk
     assert 'class="research-list"' in desk
     assert "function workOsFormatThesisNumber" in html
@@ -990,6 +992,9 @@ def test_company_desk_thesis_presentation_is_readable_and_human_labeled() -> Non
     assert "workOsFormatThesisNumber(rule.distance_to_threshold)" in desk
     assert "String(rule.latest_value)" not in desk
     assert "String(rule.distance_to_threshold)" not in desk
+    assert "attentionRules" in desk
+    assert "passingCount" in desk
+    assert "thesisStatus.textContent = presentation.label" in desk
 
 
 def test_earnings_peek_ignores_stale_requests_and_aborts_on_close() -> None:

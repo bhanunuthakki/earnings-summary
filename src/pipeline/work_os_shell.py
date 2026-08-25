@@ -984,7 +984,14 @@ def _production_runtime(generated_at: datetime) -> str:
   function workOsSplitThesisSentences(value) {{
     const text = String(value || '').replace(/\\s+/g, ' ').trim();
     if (!text) return [];
-    return text.match(/[^.!?]+(?:[.!?]+|$)/g) || [text];
+    if (typeof Intl.Segmenter === 'function') {{
+      return Array.from(new Intl.Segmenter('en', {{ granularity: 'sentence' }}).segment(text), function (part) {{
+        return String(part.segment || '').trim();
+      }}).filter(Boolean);
+    }}
+    return text.replace(/([.!?])\\s+(?=[A-Z0-9])/g, '$1\\n').split('\\n').map(function (sentence) {{
+      return sentence.trim();
+    }}).filter(Boolean);
   }}
 
   function workOsFormatThesisNumber(value) {{
@@ -1575,11 +1582,12 @@ def _production_runtime(generated_at: datetime) -> str:
       const thesisStatus = document.getElementById('deskThesisStatus');
       if (thesisStatus) {{
         const status = thesisAvailable ? String(thesisRisk.overall_breach_status || 'unavailable') : 'unavailable';
-        thesisStatus.textContent = status.toUpperCase();
+        const presentation = workOsThesisStatus(status);
+        thesisStatus.textContent = presentation.label;
         thesisStatus.className = 'k-pill';
-        thesisStatus.classList.toggle('k-pill-ok', status === 'ok');
-        thesisStatus.classList.toggle('k-pill-bad', status === 'breach');
-        thesisStatus.classList.toggle('k-pill-warn', status !== 'ok' && status !== 'breach');
+        thesisStatus.classList.toggle('k-pill-ok', presentation.label === 'PASS');
+        thesisStatus.classList.toggle('k-pill-bad', presentation.label === 'BREACH');
+        thesisStatus.classList.toggle('k-pill-warn', presentation.label !== 'PASS' && presentation.label !== 'BREACH');
       }}
       const thesisAsOf = document.getElementById('deskThesisAsOf');
       if (thesisAsOf) {{
@@ -1600,10 +1608,15 @@ def _production_runtime(generated_at: datetime) -> str:
                 ? '<ul class="research-list">' + thesisSentences.slice(1).map(function (sentence) {{ return '<li>' + escapeWorkOsHtml(sentence) + '</li>'; }}).join('') + '</ul>'
                 : '')
             : '';
-          const ruleList = breakRules.length
-            ? '<ul class="research-list">' + breakRules.map(function (rule) {{
+          const attentionRules = breakRules.filter(function (rule) {{ return workOsThesisStatus(rule.status).label !== 'PASS'; }});
+          const passingCount = breakRules.length - attentionRules.length;
+          const passingSummary = passingCount
+            ? '<div class="stat-subtext">' + passingCount + ' thesis contract' + (passingCount === 1 ? '' : 's') + ' passing.</div>'
+            : '';
+          const ruleList = attentionRules.length
+            ? passingSummary + '<ul class="research-list">' + attentionRules.map(function (rule) {{
                 const ruleStatus = workOsThesisStatus(rule.status);
-                const latest = Number.isFinite(rule.latest_value) ? workOsFormatThesisNumber(rule.latest_value) + (rule.unit ? ' ' + escapeWorkOsHtml(String(rule.unit)) : '') : 'unknown';
+                const latest = Number.isFinite(rule.latest_value) ? workOsFormatThesisNumber(rule.latest_value) + (rule.unit ? ' ' + String(rule.unit) : '') : 'unknown';
                 const threshold = workOsFormatThesisNumber(rule.threshold);
                 const distance = Number.isFinite(rule.distance_to_threshold) ? ' · distance ' + workOsFormatThesisNumber(rule.distance_to_threshold) : '';
                 const doorway = brief
@@ -1611,7 +1624,7 @@ def _production_runtime(generated_at: datetime) -> str:
                   : '';
                 return '<li><span class="' + ruleStatus.className + '">' + ruleStatus.label + '</span> · ' + escapeWorkOsHtml(String(rule.kpi_name || rule.rule_id || 'Break rule')) + ' · latest ' + escapeWorkOsHtml(latest) + ' vs ' + escapeWorkOsHtml(String(rule.comparator || '')) + ' ' + escapeWorkOsHtml(threshold) + distance + '<div class="stat-subtext">Source ' + escapeWorkOsHtml(String(rule.provenance_ref || 'unavailable')) + ' · ' + escapeWorkOsHtml(String(rule.latest_period || thesisRisk.evaluated_at || 'date unavailable')) + '</div>' + doorway + '</li>';
               }}).join('') + '</ul>'
-            : '<div class="stat-subtext">No evaluated canonical break rules are available.</div>';
+            : (passingSummary || '<div class="stat-subtext">No evaluated canonical break rules are available.</div>');
           const overallStatus = workOsThesisStatus(thesisRisk.overall_breach_status);
           thesisMount.innerHTML = '<div class="k-well"><span class="' + overallStatus.className + '">' + overallStatus.label + '</span><div class="stat-subtext">Report evaluation · as of ' + escapeWorkOsHtml(String(thesisRisk.evaluated_at || 'date unavailable')) + '</div>' + thesisCopy + ruleList + '</div>';
           thesisMount.querySelectorAll('[data-desk-thesis-rule]').forEach(function (button) {{
