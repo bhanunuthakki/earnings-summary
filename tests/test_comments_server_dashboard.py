@@ -412,6 +412,10 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
     assert [row["ticker"] for row in payload["companies"]] == ["NU"]
     assert payload["companies"][0]["current_weight_pct"] == 50.0
     assert "dcf_url" in payload["companies"][0]
+    assert payload["companies"][0]["price_action_bands"]["state"] == "unavailable"
+    assert (
+        payload["companies"][0]["price_action_bands"]["review_url"] == "/advisor/sizing-intents/NU"
+    )
     assert "MELI" not in response.get_data(as_text=True)
 
 

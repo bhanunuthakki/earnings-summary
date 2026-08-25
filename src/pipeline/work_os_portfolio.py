@@ -18,6 +18,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from advisor.price_action_bands import (
+    PriceActionBandProjection,
+    resolve_price_action_bands,
+)
+from advisor.sizing_intent_review import load_sizing_intent_review_from_connection
 from dcf.availability import resolve_dcf_route_artifact
 from integrations.portfolio_allocation import (
     PortfolioAllocationProjection,
@@ -29,6 +34,49 @@ from pipeline.research_cockpit import CockpitRow, PendingAlertRef
 from pipeline.work_os_briefs import build_brief_library
 from pipeline.work_os_earnings import EarningsReadoutSummary
 from portfolio_risk_snapshot_store import RiskSnapshot
+
+PriceActionBandState = Literal[
+    "ratified",
+    "draft",
+    "derived",
+    "partial",
+    "stale",
+    "unencoded",
+    "unavailable",
+]
+
+
+class WorkOsPortfolioPriceActionBands(BaseModel):
+    """Sanitized, human-facing price bands for one portfolio row.
+
+    Checkpoint digests, source IDs, and owner identifiers remain behind the
+    sizing-review doorway.  This DTO carries only the typed values needed to
+    make the row readable without exposing internal provenance payloads.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    state: PriceActionBandState
+    is_actionable: bool = False
+    add_below: float | None = Field(default=None, gt=0)
+    hold_low: float | None = Field(default=None, gt=0)
+    hold_high: float | None = Field(default=None, gt=0)
+    trim_above: float | None = Field(default=None, gt=0)
+    sell_above: float | None = Field(default=None, gt=0)
+    currency: str | None = None
+    as_of: str | None = None
+    review_url: str
+
+
+_PRICE_ACTION_STATE_PRIORITY: dict[PriceActionBandState, int] = {
+    "unavailable": 0,
+    "unencoded": 1,
+    "stale": 2,
+    "derived": 3,
+    "draft": 4,
+    "partial": 5,
+    "ratified": 6,
+}
 
 
 class WorkOsPortfolioCompany(BaseModel):
@@ -56,6 +104,7 @@ class WorkOsPortfolioCompany(BaseModel):
     dcf_url: str | None = None
     earnings_route: str | None = None
     earnings_label: str | None = None
+    price_action_bands: WorkOsPortfolioPriceActionBands
     latest_earnings_readout: EarningsReadoutSummary | None = None
 
 
@@ -198,13 +247,82 @@ def _live_by_ticker(live: LivePortfolio) -> dict[str, LivePosition]:
     }
 
 
+def _price_action_band_dto(
+    ticker: str,
+    projection: PriceActionBandProjection,
+) -> WorkOsPortfolioPriceActionBands:
+    as_of = projection.as_of.isoformat() if projection.as_of is not None else None
+    return WorkOsPortfolioPriceActionBands(
+        state=projection.state.value,
+        is_actionable=projection.is_actionable,
+        add_below=projection.add_below,
+        hold_low=projection.hold_low,
+        hold_high=projection.hold_high,
+        trim_above=projection.trim_above,
+        sell_above=projection.sell_above,
+        currency=projection.currency,
+        as_of=as_of,
+        review_url=f"/advisor/sizing-intents/{ticker}",
+    )
+
+
+def load_work_os_price_action_bands(
+    conn: sqlite3.Connection,
+    tickers: Sequence[str],
+) -> dict[str, WorkOsPortfolioPriceActionBands]:
+    """Load one sanitized sizing projection per ticker from ``conn``.
+
+    The caller owns the request-scoped connection.  A missing source is
+    unavailable; a present source with no entry is explicitly unencoded.
+    When multiple intent kinds exist, deterministic state priority preserves
+    the most human-useful ladder and then prefers the newest intent.
+    """
+
+    normalized_tickers = tuple(
+        dict.fromkeys(ticker.strip().upper() for ticker in tickers if ticker.strip())
+    )
+    try:
+        review = load_sizing_intent_review_from_connection(conn)
+    except (OSError, TypeError, ValueError, sqlite3.Error):
+        review = None
+
+    output: dict[str, WorkOsPortfolioPriceActionBands] = {}
+    for ticker in normalized_tickers:
+        if review is None or not review.sizing_intent_source_available:
+            projection = resolve_price_action_bands(owner_ratified=None, source_available=False)
+        else:
+            candidates = [
+                entry for entry in review.entries if entry.intent.ticker.strip().upper() == ticker
+            ]
+            if candidates:
+                selected = max(
+                    candidates,
+                    key=lambda entry: (
+                        _PRICE_ACTION_STATE_PRIORITY[entry.price_action_bands.state.value],
+                        entry.intent.updated_at,
+                        entry.intent.id,
+                    ),
+                )
+                projection = selected.price_action_bands
+            else:
+                projection = resolve_price_action_bands(owner_ratified=None)
+        output[ticker] = _price_action_band_dto(ticker, projection)
+    return output
+
+
 def _company(
     row: CockpitRow,
     live_position: LivePosition | None,
     latest_earnings_readout: EarningsReadoutSummary | None,
     research_links: WorkOsPortfolioResearchLinks | None,
+    price_action_bands: WorkOsPortfolioPriceActionBands | None,
 ) -> WorkOsPortfolioCompany:
     ticker = row.base.ticker.strip().upper()
+    if price_action_bands is None:
+        price_action_bands = _price_action_band_dto(
+            ticker,
+            resolve_price_action_bands(owner_ratified=None, source_available=False),
+        )
     if latest_earnings_readout is not None:
         earnings_route = latest_earnings_readout.route
         earnings_label = f"{latest_earnings_readout.period_label} readout →"
@@ -240,6 +358,7 @@ def _company(
         dcf_url=research_links.dcf_url if research_links is not None else None,
         earnings_route=earnings_route,
         earnings_label=earnings_label,
+        price_action_bands=price_action_bands,
         latest_earnings_readout=latest_earnings_readout,
     )
 
@@ -324,6 +443,7 @@ def build_work_os_portfolio(
     *,
     latest_readouts: Mapping[str, EarningsReadoutSummary] | None = None,
     research_links: Mapping[str, WorkOsPortfolioResearchLinks] | None = None,
+    price_action_bands: Mapping[str, WorkOsPortfolioPriceActionBands] | None = None,
     readout_warnings: Sequence[str] = (),
     offline_snapshot: OfflinePortfolioSnapshot | None = None,
     risk_snapshot: RiskSnapshot | None = None,
@@ -339,12 +459,14 @@ def build_work_os_portfolio(
     positions = _live_by_ticker(portfolio_source)
     readouts = latest_readouts or {}
     verified_links = research_links or {}
+    verified_price_action_bands = price_action_bands or {}
     companies = [
         _company(
             row,
             positions.get(row.base.ticker.strip().upper()),
             readouts.get(row.base.ticker.strip().upper()),
             verified_links.get(row.base.ticker.strip().upper()),
+            verified_price_action_bands.get(row.base.ticker.strip().upper()),
         )
         for row in rows
     ]

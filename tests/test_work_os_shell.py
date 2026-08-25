@@ -1323,7 +1323,8 @@ const exact = workOsActionEvidence({{
   lifecycle_state: 'pending', source_ref: 'alert:17', evidence_ref: 'sig-17'
 }});
 if (!exact.includes('data-work-os-action-evidence="exact"')) throw new Error('exact metadata missing');
-if (!exact.includes('alert:17') || !exact.includes('sig-17')) throw new Error('exact provenance missing');
+if (!exact.includes('Evidence-bound alert')) throw new Error('human evidence state missing');
+if (exact.includes('alert:17') || exact.includes('sig-17')) throw new Error('machine provenance leaked');
 if (!exact.includes('data-peek-url="/api/governed-alerts/17/evidence"')) throw new Error('exact evidence route missing');
 if (!exact.includes('Open alert evidence')) throw new Error('read-only doorway missing');
 
@@ -1357,6 +1358,18 @@ if (partial.includes('/api/governed-alerts/')) throw new Error('partial identity
     assert "/approve" not in action_runtime
     assert "/api/actions/" not in action_runtime
     assert "queued_actions" not in action_runtime
+
+
+def test_portfolio_rows_render_human_price_action_bands_inline() -> None:
+    html = render_work_os_shell()
+
+    assert "Open buy / hold / trim / sell ladder" not in html
+    assert "No checkpoint-ratified price ladder recorded" in html
+    assert "Review sizing evidence" in html
+    assert "Add/Buy ≤" in html
+    assert "Hold" in html
+    assert "Trim ≥" in html
+    assert "Sell ≥" in html
 
 
 def test_action_queue_governed_controls_are_closed_and_evidence_bound() -> None:
