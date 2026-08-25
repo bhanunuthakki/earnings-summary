@@ -122,9 +122,10 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ## UI / Front-end
 
-- UI work follows `directives/design_language.md`. Executable authority lives in `src/ui/tokens.py`, `src/ui/controls.py`, `src/ui/design_registry.py`, and `src/ui/conformance_scan.py`.
+- UI work uses the shared `procedures/frontend-quality.md` with `directives/design_language.md`. This remains a solo, local-first product: material browser-grounded UX evidence is required now, while commercial or multi-tenant work is an explicit future transition through `/harden --full`, not present complexity.
+- Executable authority lives in `src/ui/tokens.py`, `src/ui/controls.py`, `src/ui/design_registry.py`, and `src/ui/conformance_scan.py`.
 - Consumers select registered controls and family recipes; they do not add local visual CSS, open-ended style APIs, or runtime style mutations. A new visual decision must enter the appropriate master with a typed contract and adversarial test.
-- Run `python scripts/check_design_sync.py` for every visual change. Report-renderer changes also require `GOLDEN_REGEN=1 python -m pytest tests/test_workspace_golden.py` and visual diff review.
+- For material frontend work, render the affected primary task before and after changes, inspect applicable states and supported widths, and record any unavailable visual verification. Run `python scripts/check_design_sync.py` for every visual change. Report-renderer changes also require `GOLDEN_REGEN=1 python -m pytest tests/test_workspace_golden.py` and visual diff review.
 
 ## Testing, CI & Merge Velocity Discipline
 
@@ -162,5 +163,3 @@ Use the global `code-change` procedure for typing, testing, architecture review,
 - **Pre-Persist Fact Plausibility:** Bulk writes to `financial_facts` must route through `insert_with_restatement_detection` to execute pre-persist plausibility gates (`_validate_financial_fact_plausibility`) before committing.
 - **Resumable Multi-Stage Orchestration:** Multi-stage orchestrators (`execution/run_morning_pipeline.py`) track completed stage keys in `.tmp/morning_pipeline/state.json` (18h TTL) to enable exact resumption from the last successful stage on failure/retry.
 - **CI Delegation for Large Diffs:** Use `FAST_PUSH=1 git push` (or `git push --no-verify`) to delegate full matrix testing and LF-normalization checks to CI when pushing large file reorganizations or archived migration sweeps.
-
-
