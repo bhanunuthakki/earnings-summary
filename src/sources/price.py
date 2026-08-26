@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -81,7 +82,12 @@ def _try_yfinance(ticker: str) -> LivePrice | None:
                 if hasattr(fast, "get")
                 else None
             )
-            if isinstance(raw, (int, float)) and raw > 0:
+            if (
+                isinstance(raw, (int, float))
+                and not isinstance(raw, bool)
+                and math.isfinite(float(raw))
+                and raw > 0
+            ):
                 price = float(raw)
             raw_currency = getattr(fast, "currency", None)
             if raw_currency is None and hasattr(fast, "get"):
@@ -97,7 +103,12 @@ def _try_yfinance(ticker: str) -> LivePrice | None:
                 currency = raw_currency.strip().upper()
             for key in ("regularMarketPrice", "currentPrice", "previousClose"):
                 v = info.get(key)
-                if isinstance(v, (int, float)) and v > 0:
+                if (
+                    isinstance(v, (int, float))
+                    and not isinstance(v, bool)
+                    and math.isfinite(float(v))
+                    and v > 0
+                ):
                     price = float(v)
                     break
 
@@ -184,7 +195,12 @@ def _try_fmp_cache(repo_root: Path, ticker: str) -> LivePrice | None:
 
     raw_price = rec.get("price")
     raw_currency = rec.get("currency")
-    if not isinstance(raw_price, (int, float)) or raw_price <= 0:
+    if (
+        not isinstance(raw_price, (int, float))
+        or isinstance(raw_price, bool)
+        or not math.isfinite(float(raw_price))
+        or raw_price <= 0
+    ):
         log_call(
             source_name="fmp_cache",
             kind="live_price",

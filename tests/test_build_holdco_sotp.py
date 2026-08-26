@@ -38,8 +38,25 @@ from dcf.persist import DcfRunRow  # noqa: E402
 @pytest.fixture
 def tmp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the module at an empty repo root + workbook dest."""
+
+    def fallback_price(
+        _root: Path,
+        _ticker: str,
+        *,
+        fallback_price: float,
+        fallback_source_name: str,
+        fallback_source_path: str | None,
+    ) -> h.SpecializedPriceObservation:
+        return h.SpecializedPriceObservation(
+            price=fallback_price,
+            observed_at=None,
+            source_name=fallback_source_name,
+            source_path=fallback_source_path,
+        )
+
     monkeypatch.setattr(h, "REPO", tmp_path)
     monkeypatch.setattr(h, "DEST", tmp_path / "dcf" / "BN.xlsx")
+    monkeypatch.setattr(h, "resolve_specialized_price", fallback_price)
     return tmp_path
 
 
@@ -162,6 +179,7 @@ def test_bn_run_captures_owner_workbook_bytes_before_rebuild(
         _vps: float,
         _snapshot: dict[str, object],
         source_records: tuple[dict[str, object], ...] = (),
+        _price_observation: h.SpecializedPriceObservation | None = None,
     ) -> tuple[bool, h.SyncResult]:
         captured.extend(source_records)
         return False, h.SyncResult("test")
@@ -172,6 +190,47 @@ def test_bn_run_captures_owner_workbook_bytes_before_rebuild(
     assert len(captured) == 1
     assert captured[0]["role"] == "owner_workbook_inputs"
     assert captured[0]["influences_calculation"] is True
+
+
+def test_bn_run_threads_governed_price_into_workbook_and_persistence(
+    tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = h.SpecializedPriceObservation(
+        price=42.5,
+        observed_at=datetime(2026, 8, 26, 3, 28, tzinfo=UTC),
+        source_name="yfinance",
+        currency="USD",
+    )
+    captured: list[tuple[float, object]] = []
+
+    def governed_price(
+        _root: Path,
+        _ticker: str,
+        *,
+        fallback_price: float,
+        fallback_source_name: str,
+        fallback_source_path: str | None,
+    ) -> h.SpecializedPriceObservation:
+        del fallback_price, fallback_source_name, fallback_source_path
+        return observation
+
+    monkeypatch.setattr(h, "resolve_specialized_price", governed_price)
+
+    def fake_persist(
+        s: h.Sotp,
+        _eq: float,
+        _vps: float,
+        _snapshot: dict[str, object],
+        _source_records: tuple[dict[str, object], ...] = (),
+        price_observation: h.SpecializedPriceObservation | None = None,
+    ) -> tuple[bool, h.SyncResult]:
+        captured.append((s.price, price_observation))
+        return True, h.SyncResult("test")
+
+    monkeypatch.setattr(h, "_persist_then_sync_bn", fake_persist)
+
+    assert h._run_bn() == 0
+    assert captured == [(42.5, observation)]
 
 
 def test_price_is_never_captured(tmp_repo: Path) -> None:

@@ -1,0 +1,347 @@
+"""Typed, bounded evidence projection for one persisted DCF run.
+
+This is deliberately a read model, not a grader.  It exposes the exact latest
+top-level ``dcf_runs`` row and the receipts already persisted with that row so a
+human or judge can apply a rubric without inferring evidence from UI copy.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import sqlite3
+from datetime import date, datetime
+from typing import Literal, cast
+
+from pydantic import BaseModel, ConfigDict
+
+
+class DcfEvidenceChecks(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input_hash_valid: bool
+    workbook_hash_valid: bool
+    snapshot_status: Literal["valid", "missing", "invalid"]
+    provenance_status: Literal["valid", "missing", "invalid"]
+    source_count: int
+    scenario_receipt_present: bool
+    reverse_receipt_present: bool
+    primary_fact_overlay_status: str
+    equity_bridge_status: str
+    country_risk_authority: str | None
+    market_price_consistent: bool
+
+
+class DcfGradeEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["dcf_grade_evidence.v1"] = "dcf_grade_evidence.v1"
+    status: Literal["available", "missing", "invalid"]
+    ticker: str
+    missing_columns: tuple[str, ...] = ()
+    invalid_reason: str | None = None
+    run_id: int | None = None
+    created_at: str | None = None
+    valuation_date: str | None = None
+    engine_version: str | None = None
+    input_sha256: str | None = None
+    workbook_sha256: str | None = None
+    inputs_as_of: str | None = None
+    live_price: float | None = None
+    live_price_at: str | None = None
+    npv_per_share: float | None = None
+    over_under_pct: float | None = None
+    sanity_flag: str | None = None
+    assumption_snapshot: dict[str, object] | None = None
+    provenance: dict[str, object] | None = None
+    checks: DcfEvidenceChecks | None = None
+
+
+_REQUIRED_COLUMNS = frozenset(
+    {
+        "id",
+        "ticker",
+        "created_at",
+        "valuation_date",
+        "engine_version",
+        "input_sha256",
+        "workbook_sha256",
+        "inputs_as_of",
+        "live_price",
+        "live_price_at",
+        "npv_per_share",
+        "over_under_pct",
+        "sanity_flag",
+        "assumption_snapshot_json",
+        "provenance_json",
+        "is_latest",
+        "segment_name",
+    }
+)
+
+
+def _json_object(value: object) -> tuple[dict[str, object] | None, str]:
+    if not isinstance(value, str) or not value.strip():
+        return None, "missing"
+    try:
+        parsed: object = json.loads(value)
+    except json.JSONDecodeError:
+        return None, "invalid"
+    if not isinstance(parsed, dict):
+        return None, "invalid"
+    parsed_mapping = cast("dict[str, object]", parsed)
+    if not _json_numbers_are_finite(parsed_mapping):
+        return None, "invalid"
+    return parsed_mapping, "valid"
+
+
+def _json_numbers_are_finite(value: object) -> bool:
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return True
+    if isinstance(value, (int, float)):
+        return math.isfinite(float(value))
+    if isinstance(value, list):
+        return all(_json_numbers_are_finite(item) for item in cast("list[object]", value))
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        return all(
+            isinstance(key, str) and _json_numbers_are_finite(item) for key, item in mapping.items()
+        )
+    return False
+
+
+def _valid_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdefABCDEF" for character in value)
+    )
+
+
+def _optional_text(value: object) -> bool:
+    return value is None or isinstance(value, str)
+
+
+def _valid_iso_datetime(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_iso_date(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _nested_mapping(value: object, key: str) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    child = cast("dict[str, object]", value).get(key)
+    return cast("dict[str, object]", child) if isinstance(child, dict) else None
+
+
+def _status_from(detail: dict[str, object] | None, key: str, *, fallback: str) -> str:
+    block = _nested_mapping(detail, key)
+    status = block.get("status") if block is not None else None
+    return str(status) if isinstance(status, str) and status else fallback
+
+
+def _market_price_consistent(
+    provenance: dict[str, object] | None,
+    *,
+    live_price: float | None,
+    live_price_at: str | None,
+) -> bool:
+    market = _nested_mapping(provenance, "market_price")
+    if market is None:
+        return False
+    price = market.get("price")
+    observed_at = market.get("observed_at")
+    price_matches = (
+        live_price is None
+        if price is None
+        else isinstance(price, (int, float))
+        and not isinstance(price, bool)
+        and live_price is not None
+        and abs(float(price) - live_price) <= 1e-9
+    )
+    clock_matches = (live_price_at is None and observed_at is None) or (
+        isinstance(observed_at, str)
+        and live_price_at is not None
+        and observed_at.replace("Z", "+00:00") == live_price_at.replace("Z", "+00:00")
+    )
+    return price_matches and clock_matches
+
+
+def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEvidence:
+    """Read exactly one latest, consolidated row and fail closed on schema drift."""
+
+    normalized_ticker = ticker.upper()
+    try:
+        columns: set[str] = {str(row[1]) for row in conn.execute("PRAGMA table_info(dcf_runs)")}
+    except sqlite3.Error:
+        columns = set()
+    missing_columns = tuple(sorted(_REQUIRED_COLUMNS - columns))
+    if missing_columns:
+        return DcfGradeEvidence(
+            status="invalid",
+            ticker=normalized_ticker,
+            missing_columns=missing_columns,
+        )
+
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            """
+            SELECT id, ticker, created_at, valuation_date, engine_version,
+                   input_sha256, workbook_sha256, inputs_as_of,
+                   live_price, live_price_at, npv_per_share, over_under_pct,
+                   sanity_flag, assumption_snapshot_json, provenance_json
+            FROM dcf_runs
+            WHERE UPPER(ticker) = ?
+              AND COALESCE(is_latest, 1) = 1
+              AND COALESCE(segment_name, '') = ''
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_ticker,),
+        ).fetchone()
+    except sqlite3.Error:
+        return DcfGradeEvidence(
+            status="invalid",
+            ticker=normalized_ticker,
+            invalid_reason="row_query_failed",
+        )
+    if row is None:
+        return DcfGradeEvidence(status="missing", ticker=normalized_ticker)
+
+    snapshot, snapshot_status = _json_object(row["assumption_snapshot_json"])
+    provenance, provenance_status = _json_object(row["provenance_json"])
+    invalid_json = [
+        f"{field}_{status}"
+        for field, status in (
+            ("assumption_snapshot", snapshot_status),
+            ("provenance", provenance_status),
+        )
+        if status != "valid"
+    ]
+    if invalid_json:
+        return DcfGradeEvidence(
+            status="invalid",
+            ticker=normalized_ticker,
+            invalid_reason=",".join(invalid_json),
+        )
+    invalid_scalar = not isinstance(row["id"], int) or any(
+        row[field] is not None
+        and (
+            not isinstance(row[field], (int, float))
+            or isinstance(row[field], bool)
+            or not math.isfinite(float(row[field]))
+        )
+        for field in ("live_price", "npv_per_share", "over_under_pct")
+    )
+    raw_live_price = row["live_price"]
+    invalid_price = (
+        isinstance(raw_live_price, (int, float))
+        and not isinstance(raw_live_price, bool)
+        and raw_live_price <= 0
+    )
+    invalid_text = not isinstance(row["ticker"], str) or any(
+        not _optional_text(row[field])
+        for field in (
+            "engine_version",
+            "input_sha256",
+            "workbook_sha256",
+            "sanity_flag",
+        )
+    )
+    invalid_clock = (
+        not _valid_iso_datetime(row["created_at"])
+        or not _valid_iso_date(row["valuation_date"])
+        or not _valid_iso_datetime(row["inputs_as_of"])
+        or not _valid_iso_datetime(row["live_price_at"])
+    )
+    if invalid_scalar or invalid_price or invalid_text or invalid_clock:
+        return DcfGradeEvidence(
+            status="invalid",
+            ticker=normalized_ticker,
+            invalid_reason="row_decode_failed",
+        )
+    engine_version = str(row["engine_version"]) if row["engine_version"] is not None else None
+    specialized = engine_version is not None and engine_version != "redesign_fcff_v1"
+    scenarios = _nested_mapping(snapshot, "scenarios")
+    reverse = _nested_mapping(snapshot, "priced_in") or _nested_mapping(
+        snapshot, "reverse_valuation"
+    )
+    raw_sources = provenance.get("sources") if provenance is not None else None
+    sources = cast("list[object]", raw_sources) if isinstance(raw_sources, list) else []
+    country_risk = _nested_mapping(provenance, "country_risk_context")
+    country_authority = country_risk.get("authority") if country_risk is not None else None
+    live_price = float(row["live_price"]) if row["live_price"] is not None else None
+    live_price_at = str(row["live_price_at"]) if row["live_price_at"] is not None else None
+    checks = DcfEvidenceChecks(
+        input_hash_valid=_valid_sha256(row["input_sha256"]),
+        workbook_hash_valid=_valid_sha256(row["workbook_sha256"]),
+        snapshot_status=cast("Literal['valid', 'missing', 'invalid']", snapshot_status),
+        provenance_status=cast("Literal['valid', 'missing', 'invalid']", provenance_status),
+        source_count=len(sources),
+        scenario_receipt_present=scenarios is not None,
+        reverse_receipt_present=reverse is not None,
+        primary_fact_overlay_status=_status_from(
+            provenance,
+            "primary_fact_overlay",
+            fallback="not_applicable" if specialized else "missing",
+        ),
+        equity_bridge_status=_status_from(
+            provenance,
+            "equity_bridge_receipt",
+            fallback="not_applicable" if specialized else "missing",
+        ),
+        country_risk_authority=(
+            str(country_authority) if isinstance(country_authority, str) else None
+        ),
+        market_price_consistent=_market_price_consistent(
+            provenance,
+            live_price=live_price,
+            live_price_at=live_price_at,
+        ),
+    )
+    return DcfGradeEvidence(
+        status="available",
+        ticker=normalized_ticker,
+        run_id=int(row["id"]),
+        created_at=str(row["created_at"]) if row["created_at"] is not None else None,
+        valuation_date=(str(row["valuation_date"]) if row["valuation_date"] is not None else None),
+        engine_version=engine_version,
+        input_sha256=str(row["input_sha256"]) if row["input_sha256"] is not None else None,
+        workbook_sha256=(
+            str(row["workbook_sha256"]) if row["workbook_sha256"] is not None else None
+        ),
+        inputs_as_of=str(row["inputs_as_of"]) if row["inputs_as_of"] is not None else None,
+        live_price=live_price,
+        live_price_at=live_price_at,
+        npv_per_share=(float(row["npv_per_share"]) if row["npv_per_share"] is not None else None),
+        over_under_pct=(
+            float(row["over_under_pct"]) if row["over_under_pct"] is not None else None
+        ),
+        sanity_flag=str(row["sanity_flag"]) if row["sanity_flag"] is not None else None,
+        assumption_snapshot=snapshot,
+        provenance=provenance,
+        checks=checks,
+    )
+
+
+__all__ = ["DcfEvidenceChecks", "DcfGradeEvidence", "load_dcf_grade_evidence"]

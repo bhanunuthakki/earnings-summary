@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, cast
@@ -54,6 +54,12 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 sys.path.insert(0, str(REPO / "src"))
 
 
+from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
+from dcf.specialized_price import (  # noqa: E402
+    SpecializedPriceObservation,
+    price_seed_source_files,
+    resolve_specialized_price,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort -- the workbook builds without a DB
@@ -118,6 +124,9 @@ class Sotp:
     gaap_pretax: float = 525.9  # FY2025 income before taxes (reconciliation anchor)
     shares_m: float = 1281.0  # diluted shares
     price: float = 15.71
+    price_seed_source: str = field(default="model_seed", repr=False)
+    price_seed_path: str | None = field(default=None, repr=False)
+    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
 
 
 def seg_vals(s: Sotp) -> tuple[float, float, float]:
@@ -158,6 +167,8 @@ def _load(ticker: str) -> Sotp:
                 d = d[0] if d else {}
             if isinstance(d, dict) and d.get("price"):
                 s.price = float(d["price"])
+                s.price_seed_source = "fmp_profile"
+                s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     ov_path = REPO / "data" / "bank_assumptions" / f"{ticker}_sotp.json"
@@ -170,10 +181,34 @@ def _load(ticker: str) -> Sotp:
             for k, v in cast("dict[str, Any]", ov).items():
                 if hasattr(s, k) and isinstance(v, (int, float)):
                     setattr(s, k, v)
+                    if k == "price":
+                        s.price_seed_source = "owner_assumptions"
+                        s.price_seed_path = f"data/bank_assumptions/{ticker}_sotp.json"
     # Opt-in: derive ke from the global risk-free/ERP when the name asks for it
     # (after JSON overrides so beta / the flag can be tuned per name).
-    if global_dcf is not None and s.derive_ke_capm:
-        s.ke = global_dcf.capm_ke(s.beta, db_path=REPO / "data" / "portfolio.db")
+    global_loaded = (
+        global_dcf.load_with_provenance(db_path=REPO / "data" / "portfolio.db")
+        if global_dcf is not None
+        else None
+    )
+    if global_loaded is not None:
+        s.global_assumption_source = dict(global_loaded.source_record)
+        if s.derive_ke_capm:
+            s.ke = (
+                global_loaded.assumptions.risk_free_rate
+                + s.beta * global_loaded.assumptions.equity_risk_premium
+            )
+    else:
+        s.global_assumption_source = {
+            "role": "global_dcf_assumptions",
+            "status": "module_unavailable",
+            "observed_at": None,
+        }
+    global_fields_effective = bool(s.derive_ke_capm and global_loaded is not None)
+    s.global_assumption_source["effective_fields"] = (
+        ["risk_free_rate", "equity_risk_premium"] if global_fields_effective else []
+    )
+    s.global_assumption_source["influences_calculation"] = global_fields_effective
     return s
 
 
@@ -447,7 +482,12 @@ def build(s: Sotp, dest: Path) -> None:
     wb.save(dest)
 
 
-def persist_dcf_run(s: Sotp, eq: float, vps: float) -> bool:
+def persist_dcf_run(
+    s: Sotp,
+    eq: float,
+    vps: float,
+    price_observation: SpecializedPriceObservation | None = None,
+) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. No-op without the DB / persist module."""
     db = REPO / "data" / "portfolio.db"
@@ -461,26 +501,52 @@ def persist_dcf_run(s: Sotp, eq: float, vps: float) -> bool:
         except (OSError, json.JSONDecodeError):
             mos = None
     lend, fs, tech = seg_vals(s)
-    snap = json.dumps(
-        {
-            "model": "fintech_sotp",
-            "value_per_share_usd": vps,
-            "sotp_equity_m": eq,
-            "lending_value_m": lend,
-            "financial_services_value_m": fs,
-            "technology_platform_value_m": tech,
-            "corporate_drag_m": -corp_drag(s),
-            "multiples": {"lending": s.lending_mult, "fs": s.fs_mult, "tech": s.tech_mult},
-            "corp_dcf": {
-                "y0": s.corp_cost,
-                "growth": s.corp_growth,
-                "years": s.corp_years,
-                "terminal_mult": s.corp_terminal_mult,
-                "ke": s.ke,
-            },
-            "workbook": str(DEST),
+    snap_payload: dict[str, object] = {
+        "model": "fintech_sotp",
+        "value_per_share_usd": vps,
+        "sotp_equity_m": eq,
+        "lending_value_m": lend,
+        "financial_services_value_m": fs,
+        "technology_platform_value_m": tech,
+        "corporate_drag_m": -corp_drag(s),
+        "multiples": {"lending": s.lending_mult, "fs": s.fs_mult, "tech": s.tech_mult},
+        "corp_dcf": {
+            "y0": s.corp_cost,
+            "growth": s.corp_growth,
+            "years": s.corp_years,
+            "terminal_mult": s.corp_terminal_mult,
+            "ke": s.ke,
         },
-        indent=2,
+        "workbook": str(DEST),
+    }
+    snap = json.dumps(snap_payload, indent=2)
+    observed_at = price_observation.observed_at if price_observation is not None else None
+    price_source = (
+        price_observation.source_name if price_observation is not None else "assumption_seed"
+    )
+    provenance = build_file_provenance(
+        ticker=T,
+        repo_root=REPO,
+        workbook_path=DEST,
+        engine_version="fintech_sotp_v1",
+        effective_inputs=asdict(s),
+        assumption_snapshot=snap_payload,
+        live_price=s.price or None,
+        live_price_at=observed_at,
+        live_price_source=price_source,
+        source_files=(
+            (
+                REPO / "data" / "bank_assumptions" / f"{T}_sotp.json",
+                "owner_assumptions",
+            ),
+            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+            *(
+                price_seed_source_files(REPO, price_observation)
+                if price_observation is not None
+                else ()
+            ),
+        ),
+        source_records=((s.global_assumption_source,) if s.global_assumption_source else ()),
     )
     row = persist_mod.DcfRunRow(
         ticker=T,
@@ -492,21 +558,32 @@ def persist_dcf_run(s: Sotp, eq: float, vps: float) -> bool:
         shares_outstanding=s.shares_m * 1e6,
         currency="USD",
         live_price=s.price or None,
-        live_price_at=None,
+        live_price_at=observed_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (fintech SOTP)",
+        provenance=provenance,
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+        if not schema_supports_provenance(conn):
+            row = replace(row, provenance=None)
         persist_mod.upsert(conn, row)
     return True
 
 
 def main() -> int:
     s = _load(T)
+    price_observation = resolve_specialized_price(
+        REPO,
+        T,
+        fallback_price=s.price,
+        fallback_source_name=s.price_seed_source,
+        fallback_source_path=s.price_seed_path,
+    )
+    s.price = price_observation.price
     eq, vps = value(s)
     build(s, DEST)
-    persisted = persist_dcf_run(s, eq, vps)
+    persisted = persist_dcf_run(s, eq, vps, price_observation)
     lend, fs, tech = seg_vals(s)
     drag = corp_drag(s)
     up = (vps / s.price - 1) if s.price else 0.0

@@ -72,6 +72,11 @@ from dcf.provenance import (  # noqa: E402
     build_file_source_record,
     schema_supports_provenance,
 )
+from dcf.specialized_price import (  # noqa: E402
+    SpecializedPriceObservation,
+    price_seed_source_files,
+    resolve_specialized_price,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort — the workbook builds without a DB
@@ -150,6 +155,8 @@ class Sotp:
     shares_m: float = 2371.0  # diluted, incl. exchangeables (Q1'26 LTM DE $5.5B / $2.32)
     price: float = 44.61
     plan_value: float = 68.0  # management's plan value/share (Sep-2025 Investor Day)
+    price_seed_source: str = dataclasses.field(default="model_seed", repr=False)
+    price_seed_path: str | None = dataclasses.field(default=None, repr=False)
 
 
 def _am(s: Sotp) -> float:
@@ -216,21 +223,6 @@ def reverse_valuation(s: Sotp, eq: float, vps: float) -> dict[str, object] | Non
     ).to_snapshot_dict()
 
 
-def _profile_price_metadata(ticker: str) -> tuple[datetime | None, str | None]:
-    """The existing cached-profile price policy, with auditable observation time."""
-    profile = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
-    if not profile.is_file():
-        return None, "assumption_seed"
-    try:
-        raw: object = json.loads(profile.read_text(encoding="utf-8"))
-        item = raw[0] if isinstance(raw, list) and raw else raw
-        if not isinstance(item, dict) or not isinstance(item.get("price"), (int, float)):
-            return None, "fmp_profile_unusable"
-    except (OSError, ValueError, TypeError):
-        return None, "fmp_profile_unusable"
-    return datetime.fromtimestamp(profile.stat().st_mtime, tz=UTC), "fmp_profile"
-
-
 def persist_dcf_run(
     eq: float,
     vps: float,
@@ -239,6 +231,8 @@ def persist_dcf_run(
     snapshot: dict[str, object],
     sync_result: SyncResult | None = None,
     source_records: tuple[dict[str, object], ...] = (),
+    price_observation: SpecializedPriceObservation | None = None,
+    calculation_source_files: tuple[tuple[Path, str], ...] | None = None,
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. Shape-agnostic (BN or BRK). No-op without the DB / persist module."""
@@ -252,7 +246,10 @@ def persist_dcf_run(
             mos = json.loads(holdings.read_text(encoding="utf-8")).get("mos_bar")
         except (OSError, json.JSONDecodeError):
             mos = None
-    live_price_at, live_price_source = _profile_price_metadata(T)
+    observed_at = price_observation.observed_at if price_observation is not None else None
+    price_source = (
+        price_observation.source_name if price_observation is not None else "assumption_seed"
+    )
     snapshot_payload = {**snapshot, "workbook": str(DEST)}
     provenance = build_file_provenance(
         ticker=T,
@@ -264,12 +261,20 @@ def persist_dcf_run(
         ),
         assumption_snapshot=snapshot_payload,
         live_price=price or None,
-        live_price_at=live_price_at,
-        live_price_source=live_price_source,
+        live_price_at=observed_at,
+        live_price_source=price_source,
         source_files=(
-            (REPO / "data" / "dcf_assumptions" / f"{T}.json", "owner_assumptions"),
-            (REPO / "data" / "historical" / "fmp" / f"{T}_profile.json", "company_profile"),
-            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+            calculation_source_files
+            if calculation_source_files is not None
+            else (
+                (REPO / "data" / "dcf_assumptions" / f"{T}.json", "owner_assumptions"),
+                (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+                *(
+                    price_seed_source_files(REPO, price_observation)
+                    if price_observation is not None
+                    else ()
+                ),
+            )
         ),
         source_records=source_records,
     )
@@ -283,7 +288,7 @@ def persist_dcf_run(
         shares_outstanding=eq * 1e9 / vps,  # back out shares from equity/value-per-share
         currency="USD",
         live_price=price or None,
-        live_price_at=live_price_at,
+        live_price_at=observed_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=json.dumps(snapshot_payload, indent=2),
         notes=f"workbook={DEST.name} ({snapshot.get('model', 'holdco SOTP')})",
@@ -326,6 +331,7 @@ def _persist_then_sync_bn(
     vps: float,
     snapshot: dict[str, object],
     source_records: tuple[dict[str, object], ...] = (),
+    price_observation: SpecializedPriceObservation | None = None,
 ) -> tuple[bool, SyncResult]:
     """Persist effective marks before mutating their owner-authority JSON."""
     pending = SyncResult("pending")
@@ -334,7 +340,16 @@ def _persist_then_sync_bn(
         "workbook_capture": "supported",
         "sync_status": pending.status,
     }
-    persisted = persist_dcf_run(eq, vps, s.price, s.ke, snapshot, pending, source_records)
+    persisted = persist_dcf_run(
+        eq,
+        vps,
+        s.price,
+        s.ke,
+        snapshot,
+        pending,
+        source_records,
+        price_observation,
+    )
     if not persisted:
         return False, SyncResult("not_attempted: DCF run was not persisted")
 
@@ -342,7 +357,16 @@ def _persist_then_sync_bn(
     assumption_provenance = snapshot.get("assumption_provenance")
     if isinstance(assumption_provenance, dict):
         assumption_provenance["sync_status"] = sync_result.status
-    recorded = persist_dcf_run(eq, vps, s.price, s.ke, snapshot, sync_result, source_records)
+    recorded = persist_dcf_run(
+        eq,
+        vps,
+        s.price,
+        s.ke,
+        snapshot,
+        sync_result,
+        source_records,
+        price_observation,
+    )
     return recorded, sync_result
 
 
@@ -357,6 +381,14 @@ def _run_bn() -> int:
         else None
     )
     s, notes = _load(T)
+    price_observation = resolve_specialized_price(
+        REPO,
+        T,
+        fallback_price=s.price,
+        fallback_source_name=s.price_seed_source,
+        fallback_source_path=s.price_seed_path,
+    )
+    s.price = price_observation.price
     eq, vps = value(s)
     # scenarios — S6 convention: base = the calibrated marks (feeds dcf_runs);
     # bull = no haircuts (full accrued carry + full IFRS private/RE marks);
@@ -392,6 +424,7 @@ def _run_bn() -> int:
         vps,
         snap,
         (prior_workbook_input,) if prior_workbook_input is not None else (),
+        price_observation,
     )
     # reverse-solve: what the market implies for carry + private RE at the price
     implied_eq = s.price * s.shares_m / 1000.0
@@ -557,6 +590,9 @@ def _load(ticker: str) -> tuple[Sotp, dict[str, str]]:
     for key, v in values.items():
         if key in fields:
             setattr(s, key, v)
+            if key == "price":
+                s.price_seed_source = "owner_assumptions"
+                s.price_seed_path = f"data/dcf_assumptions/{ticker}.json"
     for key, v in _capture_bn_inputs(DEST).items():
         setattr(s, key, v)
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
@@ -567,6 +603,8 @@ def _load(ticker: str) -> tuple[Sotp, dict[str, str]]:
                 d = d[0] if d else {}
             if isinstance(d, dict) and d.get("price"):
                 s.price = float(d["price"])
+                s.price_seed_source = "fmp_profile"
+                s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     return s, notes
@@ -783,6 +821,8 @@ class BrkSotp:
     corp: float = 0.0  # net corporate adjustments (parent debt is small; sub debt is non-recourse)
     shares_m: float = 2160.0  # B-equivalent shares
     price: float = 488.30
+    price_seed_source: str = dataclasses.field(default="model_seed", repr=False)
+    price_seed_path: str | None = dataclasses.field(default=None, repr=False)
 
 
 def _brk_value(s: BrkSotp) -> tuple[float, float]:
@@ -819,6 +859,8 @@ def _brk_load() -> BrkSotp:
             prof = prof[0] if prof else {}
         if isinstance(prof, dict) and prof.get("price"):
             s.price = float(prof["price"])
+            s.price_seed_source = "fmp_profile"
+            s.price_seed_path = f"data/historical/fmp/{T}_profile.json"
     except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
         pass
     return s
@@ -926,6 +968,14 @@ def _brk_build(s: BrkSotp, dest: Path) -> None:
 
 def _run_brk() -> int:
     s = _brk_load()
+    price_observation = resolve_specialized_price(
+        REPO,
+        T,
+        fallback_price=s.price,
+        fallback_source_name=s.price_seed_source,
+        fallback_source_path=s.price_seed_path,
+    )
+    s.price = price_observation.price
     eq, vps = _brk_value(s)
     _brk_build(s, DEST)
     investments = s.eq_bonds + s.cash_tbills
@@ -941,7 +991,26 @@ def _run_brk() -> int:
         "value_per_share_usd": vps,
         "global_assumptions": _global_assumptions_note(),
     }
-    persisted = persist_dcf_run(eq, vps, s.price, 1.0 / s.op_mult, snap)
+    persisted = persist_dcf_run(
+        eq,
+        vps,
+        s.price,
+        1.0 / s.op_mult,
+        snap,
+        price_observation=price_observation,
+        calculation_source_files=(
+            (
+                REPO / "data" / "historical" / "fmp" / f"{T}_balance_sheet_annual.json",
+                "balance_sheet",
+            ),
+            (
+                REPO / "data" / "historical" / "fmp" / f"{T}_income_statement_annual.json",
+                "income_statement",
+            ),
+            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+            *price_seed_source_files(REPO, price_observation),
+        ),
+    )
     print(
         f"RESULT\t{T}\tSOTP/sh=${vps:.2f}\tprice=${s.price:.2f}\tupside={vps / s.price - 1:+.0%}"
         f"\tdcf_runs={'ok' if persisted else 'skip'}\t-> {DEST}"

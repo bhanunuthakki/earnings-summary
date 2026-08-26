@@ -20,23 +20,21 @@ import build_bank_dcf as bank  # noqa: E402
 
 
 def _actuals(**kw: float) -> bank.Actuals:
-    base: dict[str, float] = dict(
-        book=10000.0,
-        ea=22700.0,
-        nii=3859.0,
-        fees=2000.0,
-        opex=1500.0,
-        credit_cost=1000.0,
-        pretax=3359.0,
-        tax_rate=0.25,
-        ni=2519.0,
-        equity=4000.0,
-        equity_prior=3500.0,
-        shares=1000.0,
-        price=10.0,
+    return bank.Actuals(
+        book=kw.get("book", 10000.0),
+        ea=kw.get("ea", 22700.0),
+        nii=kw.get("nii", 3859.0),
+        fees=kw.get("fees", 2000.0),
+        opex=kw.get("opex", 1500.0),
+        credit_cost=kw.get("credit_cost", 1000.0),
+        pretax=kw.get("pretax", 3359.0),
+        tax_rate=kw.get("tax_rate", 0.25),
+        ni=kw.get("ni", 2519.0),
+        equity=kw.get("equity", 4000.0),
+        equity_prior=kw.get("equity_prior", 3500.0),
+        shares=kw.get("shares", 1000.0),
+        price=kw.get("price", 10.0),
     )
-    base.update(kw)
-    return bank.Actuals(**base)
 
 
 def test_value_equals_textbook_residual_income() -> None:

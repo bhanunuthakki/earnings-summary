@@ -5,17 +5,21 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
-from flask import Blueprint, Flask, abort, request
+from flask import Blueprint, Flask, abort, g, request
 
 import ticker_validation
 from dcf import redesign as dcf_redesign
+from dcf.grade_evidence import load_dcf_grade_evidence
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +103,25 @@ def create_dcf_blueprint(context: DcfRouteContext) -> Blueprint:
     recompute_payload = context.recompute_payload
     blueprint = Blueprint("dcf", __name__)
 
+    def get_read_db() -> sqlite3.Connection:
+        """Reuse one read-only connection for the lifetime of this request."""
+        if "request_read_db" not in g:
+            conn = connect_sqlite(
+                db_path,
+                role=SQLiteConnectionRole.READ_ONLY,
+                schema_preflight=True,
+            )
+            conn.row_factory = sqlite3.Row
+            g.request_read_db = conn
+        return g.request_read_db
+
+    @blueprint.teardown_request
+    def close_request_db(_exception: BaseException | None = None) -> None:
+        db_conn = g.pop("request_read_db", None)
+        if db_conn is not None:
+            with suppress(Exception):
+                db_conn.close()
+
     @blueprint.route("/api/dcf-sheet/<ticker>", methods=["GET"])
     def dcf_sheet_link(ticker: str):
         t = ticker.upper()
@@ -116,8 +139,17 @@ def create_dcf_blueprint(context: DcfRouteContext) -> Blueprint:
         except dcf_redesign.RedesignError as exc:
             return ({"error": str(exc)}, 422)
         if inp is None:
-            abort(404)
+            return ({"error": "DCF inputs not found"}, 404)
         return {"ticker": t, "inputs": inp.to_dict()}
+
+    @blueprint.route("/api/dcf/evidence/<ticker>", methods=["GET"])
+    def dcf_grade_evidence(ticker: str):
+        try:
+            validated = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
+        payload = load_dcf_grade_evidence(get_read_db(), validated)
+        return payload.model_dump(mode="json")
 
     @blueprint.route("/api/dcf/recompute", methods=["POST", "OPTIONS"])
     def dcf_recompute():
