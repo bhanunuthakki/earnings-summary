@@ -96,6 +96,7 @@ def test_apply_reconstructs_and_upserts_via_persist(monkeypatch) -> None:
         4, get_fn=lambda _pid, **_k: prop, persist_fn=lambda row, **_k: persisted.append(row)
     )
     assert persisted and persisted[0]["ticker"] == "NU"
+    assert isinstance(note, str)
     assert "22.10" in note and "live" in note
 
 

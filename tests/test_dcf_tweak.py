@@ -196,7 +196,7 @@ def db_path(tmp_path: Path) -> Iterator[Path]:
         dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
 
 
-def test_tweak_recompute_flows_through_apply_to_a_real_dcf_runs(db_path: Path) -> None:
+def test_tweak_without_verified_bridge_cannot_publish_to_dcf_runs(db_path: Path) -> None:
     tweaked = apply_to_inputs(_BASE, DRIVER_FIELDS_BY_KEY["near_op_margin"], 0.25)
     rv = redesign.value(tweaked)
     assert rv.value_per_share_usd > 0  # the fixture must be valuable for the draft to persist
@@ -209,18 +209,15 @@ def test_tweak_recompute_flows_through_apply_to_a_real_dcf_runs(db_path: Path) -
 
     pid = draft_dcf_proposal(ticker="NU", proposed_row=row, db_path=db_path)
     assert pid is not None
-    note = apply_dcf_proposal(pid, db_path=db_path)  # direct applier + real _default_persist
-    assert "live" in note
+    result = apply_dcf_proposal(pid, db_path=db_path)
+    assert not isinstance(result, str)
+    assert result.applied is False
+    assert "candidate_equity_bridge_unverified" in result.message
 
     with sqlite3.connect(str(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         stored = conn.execute("SELECT * FROM dcf_runs WHERE ticker='NU'").fetchone()
-    assert stored is not None
-    assert stored["npv_per_share"] == pytest.approx(rv.value_per_share_usd)
-    assert stored["npv"] == pytest.approx(rv.operating_value_usd_m)
-    assert stored["shares_outstanding"] == pytest.approx(rv.diluted_shares_m * 1_000_000.0)
-    # over_under derived at the chokepoint from live vs the RECOMPUTED fair value.
-    assert stored["over_under_pct"] == pytest.approx(0.0, abs=1e-6)
+    assert stored is None
 
 
 # --------------------------------------------------------------------------- #

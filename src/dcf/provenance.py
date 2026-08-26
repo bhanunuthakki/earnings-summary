@@ -9,6 +9,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
+
+EquityDirectValuationArchetype = Literal[
+    "bank_excess_return",
+    "holdco_sotp",
+    "fintech_sotp",
+    "platform_sotp",
+    "platform_fcfe",
+]
 
 
 @dataclass(frozen=True)
@@ -85,6 +94,7 @@ def build_file_provenance(
     source_files: Sequence[tuple[Path, str]],
     source_records: Sequence[Mapping[str, object]] = (),
     workbook_locator_path: Path | None = None,
+    equity_direct_archetype: EquityDirectValuationArchetype | None = None,
 ) -> DcfInputProvenance:
     """Build durable file-based lineage without treating the mutable DB as input.
 
@@ -153,6 +163,15 @@ def build_file_provenance(
         "observed_at": normalized_live_at.isoformat() if normalized_live_at else None,
         "source": live_price_source,
     }
+    equity_bridge_receipt: dict[str, object] | None = None
+    if equity_direct_archetype is not None:
+        equity_bridge_receipt = {
+            "schema_version": "dcf_equity_bridge_receipt.v3",
+            "status": "not_applicable",
+            "reason_code": "equity_direct_valuation",
+            "valuation_scope": "equity",
+            "valuation_archetype": equity_direct_archetype,
+        }
     canonical = {
         "engine_version": engine_version,
         "ticker": ticker.upper(),
@@ -161,6 +180,7 @@ def build_file_provenance(
         "market_price": market_price,
         "sources": input_sources,
         "workbook_sha256": workbook_sha256,
+        "equity_bridge_receipt": equity_bridge_receipt,
     }
     encoded = json.dumps(
         canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
@@ -175,6 +195,11 @@ def build_file_provenance(
             "sources": sources,
             "market_price": market_price,
             "inputs_as_of_status": "observed" if observed_times else "unavailable",
+            **(
+                {"equity_bridge_receipt": equity_bridge_receipt}
+                if equity_bridge_receipt is not None
+                else {}
+            ),
         },
     )
 

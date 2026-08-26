@@ -55,6 +55,12 @@ _LINE_ITEM_SPEC: list[tuple[str, str, Unit]] = [
     ("totalStockholdersEquity", "total_stockholders_equity", Unit.ACTUAL),
     ("totalEquity", "total_equity", Unit.ACTUAL),
     ("totalDebt", "total_debt", Unit.ACTUAL),
+    ("financeLeaseLiability", "finance_lease_liability", Unit.ACTUAL),
+    ("financeLeaseLiabilityCurrent", "finance_lease_liability_current", Unit.ACTUAL),
+    ("financeLeaseLiabilityNoncurrent", "finance_lease_liability_non_current", Unit.ACTUAL),
+    ("operatingLeaseLiability", "operating_lease_liability", Unit.ACTUAL),
+    ("operatingLeaseLiabilityCurrent", "operating_lease_liability_current", Unit.ACTUAL),
+    ("operatingLeaseLiabilityNoncurrent", "operating_lease_liability_non_current", Unit.ACTUAL),
     ("netDebt", "net_debt", Unit.ACTUAL),
 ]
 

@@ -827,6 +827,7 @@ def persist_dcf_run(
             ),
         ),
         source_records=(s.global_assumption_source,),
+        equity_direct_archetype="platform_fcfe",
     )
     row = persist_mod.DcfRunRow(
         ticker=T,

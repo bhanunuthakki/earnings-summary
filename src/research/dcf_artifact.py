@@ -1,16 +1,18 @@
-"""Phase-1 Wave-3 DCF dry-run artifact (MUTATING, behind the higher-bar gate).
+"""Phase-1 Wave-3 DCF dry-run artifact (MUTATING, behind two gates).
 
 A DCF fair value is fixed between fundamentals updates, so a "what-if" assumption
 tweak is recomputed UPSTREAM by the DCF engine (that recompute IS the oracle) and
 the resulting ``DcfRunRow`` is held as an inert ``kind='dcf'`` research_proposal --
-NEVER upserted into the live ``dcf_runs`` survivor row until approve. On approve,
-behind the W3-1 gate, the proposed row is reconstructed and upserted (INSERT OR
-REPLACE on ticker, the intended live mutation).
+NEVER upserted into the live ``dcf_runs`` survivor row until approve. Approval
+clears only the editorial higher bar. The shared DCF persistence chokepoint then
+requires a fresh verified equity-bridge receipt (or an exact, typed equity-direct
+not-applicable receipt) before the proposal may replace the current run.
 
 ``oracle_ok`` is set at draft time iff the proposed ``npv_per_share`` is a valid
-positive fair value (the #291 no-fair-value guard); the gate additionally requires
-the evidence doorway + adversarial survival. The apply re-checks the fair value
-before writing, so a corrupted payload can never upsert a non-positive fair value.
+positive fair value (the #291 no-fair-value guard); the editorial gate additionally
+requires the evidence doorway + adversarial survival. The apply re-checks the fair
+value before writing, and the financial-evidence gate fails closed because the
+legacy proposal artifact does not yet carry a reproducible input/provenance bundle.
 
 Dependency-injected (``create_fn`` / ``get_fn`` / ``persist_fn``) so the primitives
 are unit-testable without the DCF engine or a DB.
@@ -24,7 +26,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from research.apply import register_mutating_applier
+from research.apply import MutationApplyResult, register_mutating_applier
 from research.proposals import create_proposal, get_proposal
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -170,7 +172,7 @@ def apply_dcf_proposal(
     db_path: Path | str | None = None,
     get_fn: Callable[..., Any] = get_proposal,
     persist_fn: Callable[..., None] | None = None,
-) -> str:
+) -> str | MutationApplyResult:
     """The GATED write: reconstruct the proposed DcfRunRow and upsert it live.
 
     Reached only after the higher-bar gate clears. Re-checks the fair value (oracle)
@@ -195,7 +197,25 @@ def apply_dcf_proposal(
             f"dcf proposal {proposal_id} has no valid fair value (oracle re-check failed)"
         )
     saver = persist_fn or _default_persist
-    saver(row_dict, db_path=db_path)
+    try:
+        saver(row_dict, db_path=db_path)
+    except Exception as exc:
+        # The DCF chokepoint owns financial publication policy. Convert its
+        # typed denial into an operator-visible HOLD rather than letting an
+        # approved proposal surface as an opaque server failure. Other errors
+        # remain loud: only this deterministic governance decision is handled.
+        from dcf.persist import DcfPromotionBlocked
+
+        if not isinstance(exc, DcfPromotionBlocked):
+            raise
+        return MutationApplyResult(
+            message=(
+                "blocked (DCF financial evidence): "
+                f"{exc.decision.reason or 'promotion denied'}; "
+                "refresh the model with a verified equity-bridge receipt before applying"
+            ),
+            applied=False,
+        )
     return f"DCF for {row_dict.get('ticker')} updated -> ${npv:,.2f}/sh (live)"
 
 

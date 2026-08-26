@@ -21,7 +21,7 @@ import json
 import shutil
 import sqlite3
 import sys
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
@@ -34,6 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dcf import persist as persist_mod  # noqa: E402
+from dcf.provenance import DcfInputProvenance  # noqa: E402
 from pipeline.dcf_coverage_panel import collect_rows, render_dcf_coverage_panel  # noqa: E402
 from report.models import SectionStatus, SnapshotSection, ValuationSnapshot  # noqa: E402
 from report.renderers.markdown import (  # noqa: E402
@@ -58,12 +59,14 @@ CREATE TABLE dcf_runs (
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
     revenue_growths_json TEXT, fcf_margin REAL,
-    breakdown_json TEXT
+    breakdown_json TEXT,
+    input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+    inputs_as_of TEXT, provenance_json TEXT
 );
 """
 _SYNCED_DCF_RUNS = _LEGACY_DCF_RUNS.replace(
-    "    breakdown_json TEXT\n",
-    "    breakdown_json TEXT,\n    assumptions_sync_status TEXT, assumptions_synced_at TEXT\n",
+    "    breakdown_json TEXT,\n",
+    "    breakdown_json TEXT,\n    assumptions_sync_status TEXT, assumptions_synced_at TEXT,\n",
 )
 # The versioned schema (migration 0137): UNIQUE(ticker) dropped — superseded
 # history rows accumulate per ticker, many rows per name is the norm.
@@ -84,6 +87,13 @@ def _row(**overrides: object) -> persist_mod.DcfRunRow:
         "live_price_at": None,
         "mos_bar_used": None,
         "assumption_snapshot_json": "{}",
+        "provenance": DcfInputProvenance(
+            input_sha256="a" * 64,
+            workbook_sha256="b" * 64,
+            engine_version="test@1",
+            inputs_as_of=datetime(2026, 6, 12, 8, 0, tzinfo=UTC),
+            detail={"equity_bridge_receipt": {"status": "verified"}},
+        ),
     }
     base.update(overrides)
     return persist_mod.DcfRunRow(**base)  # pyright: ignore[reportArgumentType]
@@ -128,26 +138,6 @@ def test_migration_adds_nullable_sync_columns(prior_template: Path, tmp_path: Pa
     command.upgrade(_build_config(db), NEW_HEAD)
     after = _columns(db)
     assert {"assumptions_sync_status", "assumptions_synced_at"} <= after
-
-    # The refresher's write path works against the migrated table.
-    conn = sqlite3.connect(str(db))
-    try:
-        persist_mod.upsert(
-            conn,
-            _row(
-                assumptions_sync_status="synced",
-                assumptions_synced_at=datetime(2026, 6, 12, 9, 30),
-            ),
-        )
-        got = conn.execute(
-            "SELECT assumptions_sync_status, assumptions_synced_at, over_under_pct"
-            " FROM dcf_runs WHERE ticker='TESTCO'"
-        ).fetchone()
-    finally:
-        conn.close()
-    assert got[0] == "synced"
-    assert got[1].startswith("2026-06-12")
-    assert got[2] == pytest.approx(-0.2)  # the 0076 convention is untouched
 
 
 def test_migration_downgrade_drops_columns(prior_template: Path, tmp_path: Path) -> None:

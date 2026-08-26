@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +35,71 @@ SHEETS = [
     "Sensitivity",
     "Monte Carlo",
 ]
+
+
+def _write_primary_bridge_facts(
+    repo: Path, ticker: str, latest: dict[str, object], *, currency: str
+) -> None:
+    conn = sqlite3.connect(repo / "data" / "portfolio.db")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
+            fetched_at TEXT NOT NULL, source_url TEXT, source_quality_tier TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS financial_facts (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, period_end TEXT NOT NULL,
+            fiscal_period_type TEXT NOT NULL, line_item TEXT NOT NULL, value NUMERIC NOT NULL,
+            currency TEXT, unit TEXT NOT NULL, source_doc_id INTEGER NOT NULL, locator TEXT
+        );
+        CREATE VIEW IF NOT EXISTS v_financial_facts_resolved_current AS
+            SELECT * FROM financial_facts;
+        """
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO documents VALUES (1, ?, 'sec_xbrl', "
+        "'2026-01-15T00:00:00+00:00', 'https://www.sec.gov/example', 'sec_official')",
+        (ticker,),
+    )
+    conn.executemany(
+        "INSERT OR REPLACE INTO financial_facts "
+        "(id,ticker,period_end,fiscal_period_type,line_item,value,currency,unit,source_doc_id,locator) "
+        "VALUES (?,?,?,?,?,?,?,?,1,NULL)",
+        [
+            (
+                1,
+                ticker,
+                latest["date"],
+                latest["period"],
+                "cash_and_short_term_investments",
+                latest["cashAndShortTermInvestments"],
+                currency,
+                "actual",
+            ),
+            (
+                2,
+                ticker,
+                latest["date"],
+                latest["period"],
+                "total_debt",
+                latest["totalDebt"],
+                currency,
+                "actual",
+            ),
+            (
+                3,
+                ticker,
+                latest["date"],
+                latest["period"],
+                "finance_lease_liability",
+                latest.get("financeLeaseLiability", 0),
+                currency,
+                "actual",
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
 
 
 def _write_fixture(repo: Path, ticker: str) -> None:
@@ -65,6 +131,8 @@ def _write_fixture(repo: Path, ticker: str) -> None:
                 {
                     "fiscalYear": year,
                     "period": q,
+                    "reportedCurrency": "USD",
+                    "date": f"{year}-03-31",
                     "cashAndShortTermInvestments": rev * 0.30 * 1e6,
                     "totalCurrentAssets": rev * 0.60 * 1e6,
                     "propertyPlantEquipmentNet": rev * 0.50 * 1e6,
@@ -72,6 +140,7 @@ def _write_fixture(repo: Path, ticker: str) -> None:
                     "totalCurrentLiabilities": rev * 0.30 * 1e6,
                     "longTermDebt": rev * 0.20 * 1e6,
                     "totalDebt": rev * 0.20 * 1e6,
+                    "financeLeaseLiability": 0,
                     "totalStockholdersEquity": rev * 0.80 * 1e6,
                 }
             )
@@ -119,6 +188,12 @@ def _write_fixture(repo: Path, ticker: str) -> None:
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
+    _write_primary_bridge_facts(
+        repo,
+        ticker,
+        cast("dict[str, object]", bal[-1]),
+        currency="USD",
+    )
 
 
 def test_builder_produces_valid_nine_sheet_workbook(tmp_path: Path) -> None:
@@ -162,17 +237,21 @@ def test_builder_produces_valid_nine_sheet_workbook(tmp_path: Path) -> None:
             )
 
 
-def test_builder_preserves_complete_cash_and_debt_component_sums(tmp_path: Path) -> None:
+def test_builder_uses_exact_primary_debt_when_normalized_aggregate_is_missing(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     _write_fixture(repo, "TESTCO")
     balance_path = repo / "data/historical/fmp/TESTCO_balance_sheet_quarterly.json"
     balance = json.loads(balance_path.read_text(encoding="utf-8"))
+    expected_debt = balance[-1]["totalDebt"]
     for row in balance:
         cash = row.pop("cashAndShortTermInvestments")
         row["cashAndCashEquivalents"] = cash - 7_000_000
         row["shortTermInvestments"] = 7_000_000
         row.pop("totalDebt")
-        row["shortTermDebt"] = 0
+        row["longTermDebt"] = expected_debt + 17_000_000
+        row["shortTermDebt"] = 9_000_000
     balance_path.write_text(json.dumps(balance), encoding="utf-8")
 
     proc = _run_builder(repo, "TESTCO", tmp_path / "TESTCO.xlsx")
@@ -197,7 +276,8 @@ def test_builder_preserves_complete_cash_and_debt_component_sums(tmp_path: Path)
     assert inputs.cash_m == pytest.approx(
         (latest["cashAndCashEquivalents"] + latest["shortTermInvestments"]) / 1e6
     )
-    assert inputs.total_debt_m == pytest.approx(
+    assert inputs.total_debt_m == pytest.approx(expected_debt / 1e6)
+    assert inputs.total_debt_m != pytest.approx(
         (latest["longTermDebt"] + latest["shortTermDebt"]) / 1e6
     )
 
@@ -210,12 +290,16 @@ def test_builder_fails_loudly_on_partial_debt_or_missing_shares(tmp_path: Path) 
     for row in balance:
         row.pop("totalDebt")
     balance_path.write_text(json.dumps(balance), encoding="utf-8")
+    conn = sqlite3.connect(repo / "data" / "portfolio.db")
+    conn.execute("DELETE FROM financial_facts WHERE line_item='total_debt'")
+    conn.commit()
+    conn.close()
 
     partial = _run_builder(repo, "TESTCO", tmp_path / "partial.xlsx")
 
     assert partial.returncode != 0
     assert '"event": "dcf_equity_bridge_unavailable"' in partial.stderr
-    assert '"total_debt"' in partial.stderr
+    assert '"verified_interest_bearing_debt_only"' in partial.stderr
 
     shares_repo = tmp_path / "missing-shares"
     _write_fixture(shares_repo, "TESTCO")
@@ -229,6 +313,26 @@ def test_builder_fails_loudly_on_partial_debt_or_missing_shares(tmp_path: Path) 
 
     assert missing_shares.returncode != 0
     assert '"positive_diluted_shares"' in missing_shares.stderr
+
+
+def test_builder_preserves_existing_workbook_when_primary_cash_is_missing(tmp_path: Path) -> None:
+    repo = tmp_path / "missing-primary-cash"
+    _write_fixture(repo, "TESTCO")
+    conn = sqlite3.connect(repo / "data" / "portfolio.db")
+    conn.execute("DELETE FROM financial_facts WHERE line_item='cash_and_short_term_investments'")
+    conn.commit()
+    conn.close()
+    destination = tmp_path / "existing.xlsx"
+    sentinel = b"existing-workbook-must-survive"
+    destination.write_bytes(sentinel)
+
+    result = _run_builder(repo, "TESTCO", destination)
+
+    assert result.returncode != 0
+    assert '"event": "dcf_equity_bridge_unavailable"' in result.stderr
+    assert '"cash_and_short_term_investments"' in result.stderr
+    assert not result.stdout.startswith("RESULT\t")
+    assert destination.read_bytes() == sentinel
 
 
 # --------------------------------------------------------------------------- #
@@ -257,6 +361,8 @@ def _statement_rows(
     bal: dict[str, object] = {
         "fiscalYear": year,
         "period": q,
+        "reportedCurrency": "USD",
+        "date": f"{year}-03-31",
         "cashAndShortTermInvestments": rev * 0.30 * 1e6,
         "totalCurrentAssets": rev * 0.60 * 1e6,
         "propertyPlantEquipmentNet": rev * 0.50 * 1e6,
@@ -264,6 +370,7 @@ def _statement_rows(
         "totalCurrentLiabilities": rev * 0.30 * 1e6,
         "longTermDebt": rev * 0.20 * 1e6,
         "totalDebt": rev * 0.20 * 1e6,
+        "financeLeaseLiability": 0,
         "totalStockholdersEquity": rev * 0.80 * 1e6,
     }
     cf: dict[str, object] = {
@@ -338,6 +445,7 @@ def _write_quarters(
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
+    _write_primary_bridge_facts(repo, ticker, bal[-1], currency="USD")
 
 
 def _run_builder(repo: Path, ticker: str, dest: Path) -> subprocess.CompletedProcess[str]:

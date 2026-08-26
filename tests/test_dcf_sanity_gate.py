@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -36,6 +36,7 @@ from dcf.persist import (
     derive_sanity_flag,
     upsert,
 )
+from dcf.provenance import DcfInputProvenance
 from synthesis.lenses._shared import load_dcf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -84,6 +85,13 @@ def _row(ticker: str, *, npv_per_share: float, live_price: float | None) -> DcfR
         live_price_at=None,
         mos_bar_used=None,
         assumption_snapshot_json=json.dumps({"fx_to_usd": 1.0}),
+        provenance=DcfInputProvenance(
+            input_sha256="a" * 64,
+            workbook_sha256="b" * 64,
+            engine_version="test@1",
+            inputs_as_of=datetime(2026, 7, 19, 8, 0, tzinfo=UTC),
+            detail={"equity_bridge_receipt": {"status": "verified"}},
+        ),
     )
 
 
@@ -138,6 +146,8 @@ def test_upsert_still_works_on_a_pre_0182_schema(tmp_path: Path) -> None:
                 live_price REAL, live_price_at TEXT, over_under_pct REAL,
                 mos_bar_used REAL, assumption_snapshot_json TEXT,
                 revenue_growths_json TEXT, fcf_margin REAL, segment_name TEXT,
+                input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+                inputs_as_of TEXT, provenance_json TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """

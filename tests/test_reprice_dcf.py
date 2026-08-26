@@ -38,6 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dcf import persist  # noqa: E402
+from dcf.provenance import DcfInputProvenance  # noqa: E402
 from dcf.reprice import PriceReader, reprice_runs  # noqa: E402
 from sources.price import LivePrice  # noqa: E402
 
@@ -55,6 +56,8 @@ CREATE TABLE dcf_runs (
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
     revenue_growths_json TEXT, fcf_margin REAL,
+    input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+    inputs_as_of TEXT, provenance_json TEXT,
     created_at TEXT,
     CONSTRAINT ck_dcf_runs_over_under_ratio CHECK (
         over_under_pct IS NULL
@@ -66,6 +69,19 @@ CREATE TABLE dcf_runs (
 """
 
 _FRESH_AT = datetime(2026, 6, 13, 13, 30, tzinfo=UTC)
+
+
+def _verified_provenance(ticker: str) -> DcfInputProvenance:
+    return DcfInputProvenance(
+        input_sha256="a" * 64,
+        workbook_sha256="b" * 64,
+        engine_version="test@1",
+        inputs_as_of=datetime(2026, 5, 1, 8, 0, tzinfo=UTC),
+        detail={
+            "ticker": ticker,
+            "equity_bridge_receipt": {"status": "verified"},
+        },
+    )
 
 
 def _conn() -> sqlite3.Connection:
@@ -99,6 +115,7 @@ def _seed(
             live_price_at=datetime(2026, 5, 1, 9, 0, tzinfo=UTC),
             mos_bar_used=None,
             assumption_snapshot_json='{"format": "redesign"}',
+            provenance=_verified_provenance(ticker),
         ),
     )
 
@@ -268,6 +285,8 @@ CREATE TABLE dcf_runs (
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
     revenue_growths_json TEXT, fcf_margin REAL,
+    input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+    inputs_as_of TEXT, provenance_json TEXT,
     created_at TEXT,
     is_latest INTEGER NOT NULL DEFAULT 1,
     superseded_at TEXT, superseded_by_id INTEGER,

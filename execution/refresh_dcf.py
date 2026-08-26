@@ -358,7 +358,7 @@ def equity_bridge_context_from_builder(
         payload = cast("dict[str, object]", payload_raw)
         if payload.get("event") != "dcf_equity_bridge_context":
             continue
-        if payload.get("schema_version") != "dcf_equity_bridge_context.v1":
+        if payload.get("schema_version") != "dcf_equity_bridge_context.v2":
             continue
         receipt_ticker = payload.get("ticker")
         if not isinstance(receipt_ticker, str) or receipt_ticker.upper() != expected_ticker.upper():
@@ -1637,7 +1637,7 @@ def prior_equity_bridge_context(db_path: Path, ticker: str) -> dict[str, object]
     if not isinstance(context, dict):
         return None
     typed_context = cast("dict[str, object]", context)
-    if typed_context.get("schema_version") != "dcf_equity_bridge_context.v1":
+    if typed_context.get("schema_version") != "dcf_equity_bridge_context.v2":
         return None
     recorded_ticker = typed_context.get("ticker")
     if not isinstance(recorded_ticker, str) or recorded_ticker.upper() != ticker.upper():

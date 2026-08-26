@@ -522,11 +522,15 @@ def test_builder_receipt_rejects_ticker_mismatch_and_duplicate_statement() -> No
 def test_equity_bridge_context_requires_one_matching_builder_receipt() -> None:
     context_line = (
         '{"event":"dcf_equity_bridge_context",'
-        '"schema_version":"dcf_equity_bridge_context.v1",'
+        '"schema_version":"dcf_equity_bridge_context.v2",'
         '"ticker":"TEST","period_end":"2026-06-30",'
         '"fiscal_period_type":"Q2","reporting_currency":"USD",'
         '"cash_m":200.0,"total_debt_m":100.0,"diluted_shares_m":10.0,'
-        '"cash_basis":"reported_aggregate","total_debt_basis":"reported_aggregate"}'
+        '"cash_basis":"reported_aggregate","total_debt_basis":"reported_aggregate",'
+        '"debt_scope":"interest_bearing_debt_only",'
+        '"debt_calculation":"debt_and_capital_lease_obligations - finance_lease_liability",'
+        '"debt_operations":[{"field":"totalDebt","sign":1},{"field":"financeLeaseLiability","sign":-1}],'
+        '"debt_component_lineage":[{"fmp_field":"totalDebt","operation_sign":1}]}'
     )
 
     context = equity_bridge_context_from_builder(context_line, expected_ticker="test")
@@ -659,7 +663,7 @@ def test_primary_fact_as_of_participates_in_dcf_inputs_as_of(tmp_path: Path) -> 
         mos_bar=None,
         primary_fact_overlay=overlay,
         equity_bridge_receipt={
-            "schema_version": "dcf_equity_bridge_receipt.v2",
+            "schema_version": "dcf_equity_bridge_receipt.v3",
             "status": "verified",
         },
     )
@@ -667,7 +671,7 @@ def test_primary_fact_as_of_participates_in_dcf_inputs_as_of(tmp_path: Path) -> 
     assert provenance.inputs_as_of == primary_as_of
     assert provenance.detail is not None
     assert provenance.detail["equity_bridge_receipt"] == {
-        "schema_version": "dcf_equity_bridge_receipt.v2",
+        "schema_version": "dcf_equity_bridge_receipt.v3",
         "status": "verified",
     }
 
