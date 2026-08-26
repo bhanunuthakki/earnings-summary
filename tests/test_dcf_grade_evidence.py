@@ -213,7 +213,7 @@ def test_oversized_projection_keeps_checks_and_equity_bridge_receipt() -> None:
         "irrelevant_payload": {"noise": "z" * 200_000},
     }
     bridge: dict[str, object] = {
-        "schema_version": "dcf_equity_bridge_receipt.v2",
+        "schema_version": "dcf_equity_bridge_receipt.v3",
         "ticker": "META",
         "status": "verified",
         "arithmetic_status": "verified",

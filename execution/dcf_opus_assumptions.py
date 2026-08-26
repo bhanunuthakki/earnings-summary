@@ -258,6 +258,11 @@ def main() -> int:
     if not isinstance(existing_raw, dict):
         raise ValueError(f"{cache_path} must contain a JSON object")
     existing = cast("dict[str, object]", existing_raw)
+    prior_redesign = existing.get("redesign")
+    if isinstance(prior_redesign, dict) and "dcf_debt_scope" in prior_redesign:
+        # Deterministic owner/governance input: the LLM schema neither selects
+        # nor rewrites the liability perimeter used by the equity bridge.
+        data["dcf_debt_scope"] = prior_redesign["dcf_debt_scope"]
     existing["redesign"] = data
     existing.setdefault("narrative", result.narrative)
 

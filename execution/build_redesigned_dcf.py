@@ -26,6 +26,7 @@ import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -560,6 +561,10 @@ except Exception:
 _opus = (
     json.loads(cache.read_text(encoding="utf-8")).get("redesign") if cache.exists() else None
 ) or {}
+_debt_scope_raw = _opus.get("dcf_debt_scope", "interest_bearing_debt_only")
+if _debt_scope_raw not in {"interest_bearing_debt_only", "debt_and_lease_obligations"}:
+    raise RuntimeError(f"invalid redesign.dcf_debt_scope for {T}: {_debt_scope_raw!r}")
+DCF_DEBT_SCOPE = cast("equity_bridge.DebtScope", _debt_scope_raw)
 # The immutable Opus baseline (seeded once for passes predating provenance
 # tracking) — feeds the Cover "Assumptions by" line and the Assumptions sheet.
 _baseline = assumptions_doc.ensure_opus_baseline(cache)
@@ -632,12 +637,28 @@ _cash_resolution = equity_bridge.resolve_complete_aggregate(
 # and near-maturity paper land in shortTermDebt (e.g. LITE FQ3'26: $3,251M of $3,314M
 # total debt sat in short-term), so longTermDebt-only massively understates net debt
 # and overstates equity value. Fall back to the LT+ST sum if totalDebt is absent.
-_debt_resolution = equity_bridge.resolve_complete_aggregate(
+_bridge_period_end_raw = _bal_latest.get("date")
+_bridge_currency_raw = _bal_latest.get("reportedCurrency")
+_bridge_period_end = _bridge_period_end_raw if isinstance(_bridge_period_end_raw, str) else None
+_bridge_currency = _bridge_currency_raw if isinstance(_bridge_currency_raw, str) else None
+_verified_debt_resolution = (
+    equity_bridge.resolve_primary_debt_scope(
+        _bal_latest,
+        scope=DCF_DEBT_SCOPE,
+        overlay={"statements": PRIMARY_FACT_OVERLAY},
+        period_end=_bridge_period_end,
+        fiscal_period_type=latest[1],
+        currency=_bridge_currency,
+    )
+    if _bridge_period_end is not None and _bridge_currency is not None
+    else None
+)
+_fallback_debt_resolution = equity_bridge.resolve_complete_aggregate(
     _bal_latest,
     aggregate_field="totalDebt",
     component_fields=("longTermDebt", "shortTermDebt"),
 )
-if _cash_resolution is None or _debt_resolution is None:
+if _cash_resolution is None or _fallback_debt_resolution is None:
     print(
         json.dumps(
             {
@@ -648,7 +669,7 @@ if _cash_resolution is None or _debt_resolution is None:
                     name
                     for name, resolution in (
                         ("cash_and_short_term_investments", _cash_resolution),
-                        ("total_debt", _debt_resolution),
+                        ("total_debt", _fallback_debt_resolution),
                     )
                     if resolution is None
                 ],
@@ -659,7 +680,11 @@ if _cash_resolution is None or _debt_resolution is None:
     )
     raise RuntimeError("latest balance sheet lacks a complete DCF equity bridge")
 cash_now = _cash_resolution.value / 1e6
-debt_now = _debt_resolution.value / 1e6
+debt_now = (
+    _verified_debt_resolution.value
+    if _verified_debt_resolution is not None
+    else _fallback_debt_resolution.value
+) / 1e6
 shares_now = m(inc_i[latest].get("weightedAverageShsOutDil"))
 if shares_now is None or shares_now <= 0:
     print(
@@ -675,27 +700,54 @@ if shares_now is None or shares_now <= 0:
         file=sys.stderr,
     )
     raise RuntimeError("latest income statement lacks positive diluted shares")
-_bridge_period_end = inc_i[latest].get("date")
-_bridge_currency = inc_i[latest].get("reportedCurrency")
-print(
-    json.dumps(
-        {
-            "event": "dcf_equity_bridge_context",
-            "schema_version": "dcf_equity_bridge_context.v1",
-            "ticker": T,
-            "period_end": _bridge_period_end if isinstance(_bridge_period_end, str) else None,
-            "fiscal_period_type": latest[1],
-            "reporting_currency": _bridge_currency if isinstance(_bridge_currency, str) else None,
-            "cash_m": cash_now,
-            "total_debt_m": debt_now,
-            "diluted_shares_m": shares_now,
-            "cash_basis": _cash_resolution.basis,
-            "total_debt_basis": _debt_resolution.basis,
-        },
-        sort_keys=True,
-    ),
-    file=sys.stderr,
-)
+if _verified_debt_resolution is None:
+    print(
+        json.dumps(
+            {
+                "event": "dcf_equity_bridge_unavailable",
+                "ticker": T,
+                "period": f"{latest[1]} {latest[0]}",
+                "missing": [f"verified_{DCF_DEBT_SCOPE}"],
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+else:
+    _debt_component_lineage = [
+        {**dict(lineage), "operation_sign": sign}
+        for lineage, (_field, sign) in zip(
+            _verified_debt_resolution.component_lineage,
+            _verified_debt_resolution.operations,
+            strict=True,
+        )
+    ]
+    print(
+        json.dumps(
+            {
+                "event": "dcf_equity_bridge_context",
+                "schema_version": "dcf_equity_bridge_context.v2",
+                "ticker": T,
+                "period_end": _bridge_period_end,
+                "fiscal_period_type": latest[1],
+                "reporting_currency": _bridge_currency,
+                "cash_m": cash_now,
+                "total_debt_m": debt_now,
+                "diluted_shares_m": shares_now,
+                "cash_basis": _cash_resolution.basis,
+                "total_debt_basis": _verified_debt_resolution.debt_basis,
+                "debt_scope": _verified_debt_resolution.scope,
+                "debt_calculation": _verified_debt_resolution.calculation,
+                "debt_operations": [
+                    {"field": field, "sign": sign}
+                    for field, sign in _verified_debt_resolution.operations
+                ],
+                "debt_component_lineage": _debt_component_lineage,
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
 beta = BETA
 ke = RF + beta * ERP + CRP
 mktcap = price * shares_now

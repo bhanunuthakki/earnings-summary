@@ -323,6 +323,29 @@ def test_dcf_assumptions_use_structured_schema_and_exact_segments(
     assert module._call_dcf_assumptions() == expected
 
 
+def test_dcf_assumptions_cannot_rewrite_owner_debt_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_dcf_module(tmp_path, monkeypatch)
+    cache = tmp_path / "data" / "dcf_assumptions" / "TEST.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(
+        json.dumps(
+            {
+                "redesign": {"dcf_debt_scope": "debt_and_lease_obligations"},
+                "narrative": "existing",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "_call_dcf_assumptions", _valid_dcf_payload)
+
+    assert module.main() == 0
+
+    updated = json.loads(cache.read_text(encoding="utf-8"))
+    assert updated["redesign"]["dcf_debt_scope"] == "debt_and_lease_obligations"
+
+
 def test_empty_pressure_evidence_renders_gap_without_empty_section(tmp_path: Path) -> None:
     diligence = tmp_path / "micro_thesis" / "diligence" / "NU.md"
     diligence.parent.mkdir(parents=True)

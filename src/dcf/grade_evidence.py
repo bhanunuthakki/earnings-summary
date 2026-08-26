@@ -280,6 +280,8 @@ _BOUNDED_PRIORITY_KEYS: dict[str, tuple[str, ...]] = {
         "bridge_context",
         "cash_lineage",
         "total_debt_lineage",
+        "debt_scope",
+        "debt_component_lineage",
         "reasons",
     ),
     "market_price": ("price", "observed_at", "source"),
@@ -368,9 +370,10 @@ def _bounded_equity_bridge(
     """Project a bridge with reserved space for both conclusion lineages."""
     special_budgets = {
         "bridge_context": max(2, max_bytes * 18 // 100),
-        "cash_lineage": max(2, max_bytes * 32 // 100),
-        "total_debt_lineage": max(2, max_bytes * 32 // 100),
-        "reasons": max(2, max_bytes * 8 // 100),
+        "cash_lineage": max(2, max_bytes * 26 // 100),
+        "total_debt_lineage": max(2, max_bytes * 26 // 100),
+        "debt_component_lineage": max(2, max_bytes * 20 // 100),
+        "reasons": max(2, max_bytes * 6 // 100),
     }
     core_keys = tuple(
         key for key in _BOUNDED_PRIORITY_KEYS["equity_bridge_receipt"] if key not in special_budgets

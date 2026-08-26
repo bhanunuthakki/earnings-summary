@@ -91,6 +91,12 @@ class FmpBalanceSheetRecord(BaseModel):
     totalStockholdersEquity: int | float | None = None
     totalEquity: int | float | None = None
     totalDebt: int | float | None = None
+    financeLeaseLiability: int | float | None = None
+    financeLeaseLiabilityCurrent: int | float | None = None
+    financeLeaseLiabilityNoncurrent: int | float | None = None
+    operatingLeaseLiability: int | float | None = None
+    operatingLeaseLiabilityCurrent: int | float | None = None
+    operatingLeaseLiabilityNoncurrent: int | float | None = None
     netDebt: int | float | None = None
 
 

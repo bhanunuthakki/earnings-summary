@@ -465,6 +465,22 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
         "operating_lease_liability_non_current",
         ("us-gaap", "OperatingLeaseLiabilityNoncurrent"),
     ),
+    # Finance leases are deliberately retained separately from debt.  A DCF
+    # equity bridge can then state whether it subtracts only interest-bearing
+    # borrowings or borrowings plus every lease liability; it must never infer
+    # a missing finance-lease fact to be zero.
+    _ladder(
+        "finance_lease_liability",
+        ("us-gaap", "FinanceLeaseLiability"),
+    ),
+    _ladder(
+        "finance_lease_liability_current",
+        ("us-gaap", "FinanceLeaseLiabilityCurrent"),
+    ),
+    _ladder(
+        "finance_lease_liability_non_current",
+        ("us-gaap", "FinanceLeaseLiabilityNoncurrent"),
+    ),
     _ladder(
         "deferred_revenue_non_current",
         ("us-gaap", "ContractWithCustomerLiabilityNoncurrent"),

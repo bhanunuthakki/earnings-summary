@@ -1713,7 +1713,7 @@ def test_prior_primary_overlay_supports_only_explicit_static_schema_variants(
     placeholders = ", ".join("?" for _ in insert_columns)
     overlay: dict[str, object] = {"status": "ok", "statements": {}}
     bridge_context: dict[str, object] = {
-        "schema_version": "dcf_equity_bridge_context.v1",
+        "schema_version": "dcf_equity_bridge_context.v2",
         "ticker": "TESTCO",
         "period_end": "2026-06-30",
         "fiscal_period_type": "Q2",
@@ -1723,6 +1723,13 @@ def test_prior_primary_overlay_supports_only_explicit_static_schema_variants(
         "diluted_shares_m": 10.0,
         "cash_basis": "reported_aggregate",
         "total_debt_basis": "reported_aggregate",
+        "debt_scope": "interest_bearing_debt_only",
+        "debt_calculation": ("debt_and_capital_lease_obligations - finance_lease_liability"),
+        "debt_operations": [
+            {"field": "totalDebt", "sign": 1},
+            {"field": "financeLeaseLiability", "sign": -1},
+        ],
+        "debt_component_lineage": [],
     }
     country_context: dict[str, object] = {
         "schema_version": "dcf_country_risk_context.v1",
@@ -1736,7 +1743,7 @@ def test_prior_primary_overlay_supports_only_explicit_static_schema_variants(
             "ticker": "TESTCO",
             "primary_fact_overlay": overlay,
             "equity_bridge_receipt": {
-                "schema_version": "dcf_equity_bridge_receipt.v2",
+                "schema_version": "dcf_equity_bridge_receipt.v3",
                 "bridge_context": bridge_context,
             },
             "country_risk_context": country_context,
