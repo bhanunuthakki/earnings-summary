@@ -161,6 +161,22 @@ WORK_OS_COPILOT_JS = r"""
     return node.innerHTML;
   }
 
+  function normalizedScopeItems(value) {
+    var kinds = ['company', 'thesis_contract', 'open_question', 'brief_artifact'];
+    var seen = {};
+    return (Array.isArray(value) ? value : []).filter(function (item) {
+      if (!item || typeof item !== 'object' || !kinds.includes(item.kind)) return false;
+      item.stable_id = String(item.stable_id || '').trim();
+      item.label = String(item.label || '').replace(/[\r\n]+/g, ' ').trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$/.test(item.stable_id) ||
+          !item.label || item.label.length > 256 || seen[item.stable_id]) return false;
+      seen[item.stable_id] = true;
+      return true;
+    }).slice(0, 100).map(function (item) {
+      return {kind: item.kind, stable_id: item.stable_id, label: item.label};
+    });
+  }
+
   function setCopilotDockState(nextState) {
     var states = {
       idle: {label: 'Open Copilot'},
@@ -334,11 +350,7 @@ WORK_OS_COPILOT_JS = r"""
   }
 
   function renderNewChatEmptyState() {
-    var suggestions = [
-      'What changed since the last review?',
-      'Show the latest governed KPIs.',
-      'Stress-test the current thesis.'
-    ];
+    var suggestions = suggestionsForPendingContext();
     thread.innerHTML = '';
     var well = document.createElement('div');
     well.className = 'k-well';
@@ -360,6 +372,35 @@ WORK_OS_COPILOT_JS = r"""
     });
     thread.appendChild(well);
     thread.appendChild(row);
+  }
+
+  function suggestionsForPendingContext() {
+    var kind = String(pendingContext.context_kind || '');
+    if (kind === 'thesis-contracts') return [
+      'Which attached thesis contract is closest to breach?',
+      'What evidence changed the attached contract statuses?',
+      'Stress-test the attached contract thresholds.'
+    ];
+    if (kind === 'open-questions') return [
+      'Answer the attached open questions from governed evidence.',
+      'Which attached question is most decision-relevant?',
+      'What evidence is still missing for these questions?'
+    ];
+    if (kind === 'full-brief') return [
+      'What changed since this brief was published?',
+      'Challenge the attached brief using newer evidence.',
+      'Trace the brief claims to their strongest sources.'
+    ];
+    if (kind === 'company') return [
+      'What changed for this company since the last review?',
+      'Show the latest governed KPIs for this company.',
+      'Stress-test the current company thesis.'
+    ];
+    return [
+      'What changed since the last review?',
+      'Show the latest governed KPIs.',
+      'Stress-test the current thesis.'
+    ];
   }
 
   function renderStoredTurn(turn) {
@@ -1134,6 +1175,23 @@ WORK_OS_COPILOT_JS = r"""
       chip.textContent = value;
       contextNode.appendChild(chip);
     });
+    normalizedScopeItems(pendingContext.scope_items).forEach(function (item) {
+      var button = document.createElement('button');
+      button.className = 'k-chip k-chip-btn k-chip-mono';
+      button.type = 'button';
+      button.textContent = item.label + ' x';
+      button.setAttribute('aria-label', 'Remove context ' + item.label);
+      button.addEventListener('click', function () { removePendingScopeItem(item.stable_id); });
+      contextNode.appendChild(button);
+    });
+  }
+
+  function removePendingScopeItem(stableId) {
+    pendingContext.scope_items = normalizedScopeItems(pendingContext.scope_items).filter(function (item) {
+      return item.stable_id !== stableId;
+    });
+    renderCopilotContext();
+    if (!currentSessionId && !busy) renderNewChatEmptyState();
   }
 
   function submitCopilotQuestion(query) {
@@ -1170,7 +1228,8 @@ WORK_OS_COPILOT_JS = r"""
         research_context: {
           screen_id: String(window.location.hash || '').replace(/^#/, '') || 'screen-cockpit',
           fact_ref: pendingContext.fact_ref || null,
-          source_ref: pendingContext.source_ref || null
+          source_ref: pendingContext.source_ref || null,
+          scope_items: normalizedScopeItems(pendingContext.scope_items)
         }
       })
     }).then(function (response) {
@@ -1214,13 +1273,24 @@ WORK_OS_COPILOT_JS = r"""
     if (!['stock', 'etf'].includes(supplied.evaluation_instrument_type)) {
       delete pendingContext.evaluation_instrument_type;
     }
+    pendingContext.scope_items = normalizedScopeItems(supplied.scope_items);
+    pendingContext.context_kind = String(supplied.context_kind || '').trim();
     if (pendingContext.company_ticker) {
       pendingContext.company_ticker = String(pendingContext.company_ticker).toUpperCase();
       companySelect.value = pendingContext.company_ticker;
     }
     var detached = detachIncompatibleCopilotSession(pendingContext.company_ticker);
+    if (!detached && currentSessionId && pendingContext.scope_items.length) {
+      startNewCopilotSession();
+      pendingContext = Object.assign({}, supplied, {
+        scope_items: normalizedScopeItems(supplied.scope_items),
+        context_kind: String(supplied.context_kind || '').trim()
+      });
+      detached = true;
+    }
     if (detached) input.value = '';
     if (pendingContext.prompt) input.value = pendingContext.prompt;
+    if (!currentSessionId && !busy) renderNewChatEmptyState();
     renderCopilotContext();
     copilotOverlay.open();
   }

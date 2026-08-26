@@ -59,6 +59,12 @@ CoverageRoleAtCreation = Literal[
 LifecycleAtCreation = Literal["active", "archived", "unknown"]
 ContextCategory = Literal["general", "research", "governed_fact", "thesis", "kpi"]
 EvaluationInstrumentType = Literal["stock", "etf"]
+ResearchScopeKind = Literal[
+    "company",
+    "thesis_contract",
+    "open_question",
+    "brief_artifact",
+]
 ExchangeStatus = Literal["pending", "completed", "failed"]
 BeginDisposition = Literal["started", "pending", "replayed"]
 
@@ -159,6 +165,24 @@ class SessionExchangeArtifactV1(BaseModel):
     artifacts: ExchangeArtifactsV1
 
 
+class ResearchScopeItemV1(BaseModel):
+    """One removable, stable research item attached to an Ask request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    kind: ResearchScopeKind
+    stable_id: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9:._-]*$",
+    )
+    label: str = Field(min_length=1, max_length=256, pattern=r"^[^\r\n]+$")
+
+
+def _empty_research_scope_items() -> list[ResearchScopeItemV1]:
+    return []
+
+
 class ResearchContextV1(BaseModel):
     """Bounded per-request research coordinates, separate from session history."""
 
@@ -171,6 +195,10 @@ class ResearchContextV1(BaseModel):
     capability_id: str | None = Field(default=None, min_length=1, max_length=128)
     card_key: str | None = Field(default=None, min_length=1, max_length=128)
     source_ids: list[_ArtifactLink] = Field(default_factory=list, max_length=100)
+    scope_items: list[ResearchScopeItemV1] = Field(
+        default_factory=_empty_research_scope_items,
+        max_length=100,
+    )
 
     @field_validator("fact_ref")
     @classmethod
@@ -193,6 +221,14 @@ class ResearchContextV1(BaseModel):
             raise ValueError("source_ids entries must use the canonical source:<id> form")
         if len(set(value)) != len(value):
             raise ValueError("source_ids entries must be unique")
+        return value
+
+    @field_validator("scope_items")
+    @classmethod
+    def _validate_scope_items(cls, value: list[ResearchScopeItemV1]) -> list[ResearchScopeItemV1]:
+        identities = [item.stable_id for item in value]
+        if len(set(identities)) != len(identities):
+            raise ValueError("scope_items stable_id values must be unique")
         return value
 
     @model_validator(mode="after")

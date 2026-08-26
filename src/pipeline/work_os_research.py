@@ -20,8 +20,8 @@ def render_brief_reader_shell() -> str:
       <div class="k-card-meta" id="workOsBriefReaderMeta">Persisted governed artifact</div>
     </div>
     <div class="work-os-reader-actions">
-      <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="brief-comments">Discuss comments</button>
-      <button class="k-btn k-btn-primary k-btn-sm" type="button" data-research-chat="full-brief">Ask about this brief</button>
+      <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="brief-comments" data-copilot-scope="full-brief">Discuss comments</button>
+      <button class="k-btn k-btn-primary k-btn-sm" type="button" data-research-chat="full-brief" data-copilot-scope="full-brief">Ask about this brief</button>
       <button class="k-btn k-btn-quiet k-btn-sm" id="workOsBriefReaderClose" type="button"
               aria-label="Close full research brief">Close</button>
     </div>
@@ -71,6 +71,8 @@ def render_company_desk_shell() -> str:
         </div>
       </div>
       <div class="company-desk-actions">
+        <button class="k-btn k-btn-quiet k-btn-sm" id="workOsAskCompany" type="button"
+                data-research-chat="company" data-copilot-scope="company" disabled>Ask about company</button>
         <a class="k-btn k-btn-quiet k-btn-sm" id="workOsDcfLink" aria-disabled="true" tabindex="-1">DCF model ↗</a>
         <span id="workOsEarningsDoorway"><span class="k-card-meta">Earnings artifact unavailable</span></span>
         <button class="k-btn k-btn-primary k-btn-sm" id="workOsFullBriefButton" type="button" disabled>Read full brief →</button>
@@ -110,7 +112,7 @@ def render_company_desk_shell() -> str:
       <div class="company-desk-exploration-grid">
         <div><h3 class="k-well-title">Recent relevant updates</h3><div class="research-list" id="deskRecentUpdates"><div class="k-well">No governed update is available.</div></div></div>
         <div>
-          <div class="research-row"><h3 class="k-well-title">Open questions</h3><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsManageResearchItems">Manage items</button></div>
+          <div class="research-row"><h3 class="k-well-title">Open questions</h3><div class="research-actions"><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsAskQuestions" data-research-chat="open-questions" data-copilot-scope="open-questions" disabled>Ask these questions</button><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsManageResearchItems">Manage items</button></div></div>
           <form class="research-question-capture" id="deskQuestionCapture">
             <label class="k-card-meta" for="deskQuestionInput">Add an owner question</label>
             <div class="research-actions"><input id="deskQuestionInput" maxlength="2000" required placeholder="What should we track?" autocomplete="off"><button class="k-btn k-btn-primary k-btn-sm" type="submit">Track question</button></div>
@@ -122,7 +124,7 @@ def render_company_desk_shell() -> str:
     </section>
 
     <section class="k-card k-card-section" data-testid="contracts-card" aria-labelledby="deskContractsHeading">
-      <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title" id="deskContractsHeading">Thesis contracts &amp; management follow-through</h2><p class="k-card-meta">Governed conditions and quarter-indexed Say / Do history</p></div></header>
+      <header class="k-card-head"><div class="k-card-heading"><h2 class="k-card-title" id="deskContractsHeading">Thesis contracts &amp; management follow-through</h2><p class="k-card-meta">Governed conditions and quarter-indexed Say / Do history</p></div><button class="k-btn k-btn-quiet k-btn-sm" type="button" id="workOsAskContracts" data-research-chat="thesis-contracts" data-copilot-scope="thesis-contracts" disabled>Stress-test contracts</button></header>
       <div class="research-tabs" role="tablist" aria-label="Thesis contracts and Say Do">
         <button class="research-tab k-btn k-btn-quiet" id="deskContractsTab" type="button" role="tab" aria-selected="true" aria-controls="deskContractsPanel" tabindex="0" data-company-desk-section="contracts">Thesis contracts</button>
         <button class="research-tab k-btn k-btn-quiet" id="deskSayDoTab" type="button" role="tab" aria-selected="false" aria-controls="deskSayDoPanel" tabindex="-1" data-company-desk-section="saydo">Say / Do · 4 quarters</button>

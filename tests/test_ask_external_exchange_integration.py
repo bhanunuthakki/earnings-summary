@@ -19,6 +19,7 @@ from ask.engine import AskTurn, respond_turn
 from ask.exchange_store import (
     ExchangeArtifactsV1,
     ResearchContextV1,
+    ResearchScopeItemV1,
     SessionContextV1,
     begin_exchange,
     get_exchange,
@@ -353,6 +354,46 @@ def test_canonical_fact_refs_reach_retrieval_and_malformed_refs_reject(fact_ref:
         )
         == "Question"
     )
+
+
+def test_contextual_scope_items_are_typed_unique_and_reach_retrieval() -> None:
+    context = ResearchContextV1(
+        scope_items=[
+            ResearchScopeItemV1(
+                kind="thesis_contract",
+                stable_id="decision:42:condition:0",
+                label="Revenue growth above 20%",
+            ),
+            ResearchScopeItemV1(
+                kind="open_question",
+                stable_id="analyst_note:17",
+                label="Will take-rate expansion persist?",
+            ),
+        ]
+    )
+    turn = AskTurn(text="Stress-test these items", research_context=context.model_dump(mode="json"))
+
+    assert ask_engine._retrieval_text("Stress-test these items", turn) == (
+        "Stress-test these items\n"
+        "Scoped context:\n"
+        "- thesis contract [decision:42:condition:0]: Revenue growth above 20%\n"
+        "- open question [analyst_note:17]: Will take-rate expansion persist?"
+    )
+    with pytest.raises(ValidationError):
+        ResearchContextV1(
+            scope_items=[
+                ResearchScopeItemV1(
+                    kind="open_question",
+                    stable_id="analyst_note:17",
+                    label="First",
+                ),
+                ResearchScopeItemV1(
+                    kind="open_question",
+                    stable_id="analyst_note:17",
+                    label="Duplicate",
+                ),
+            ]
+        )
 
 
 def test_external_command_and_data_routes_leave_turn_persistence_to_exchange(
