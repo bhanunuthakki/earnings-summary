@@ -15,6 +15,8 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
+MAX_SERIALIZED_EVIDENCE_BYTES = 100_000
+
 
 class DcfEvidenceChecks(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -159,6 +161,94 @@ def _status_from(detail: dict[str, object] | None, key: str, *, fallback: str) -
     return str(status) if isinstance(status, str) and status else fallback
 
 
+def _project_primary_fact_overlay(value: object) -> dict[str, object] | None:
+    """Keep status/counts only; historical fact rows belong to the source ledger."""
+    if not isinstance(value, dict):
+        return None
+    overlay = cast("dict[str, object]", value)
+    projected: dict[str, object] = {}
+    for key in ("status", "degraded_reason", "reasons"):
+        if key in overlay:
+            projected[key] = overlay[key]
+    statements = overlay.get("statements")
+    if isinstance(statements, dict):
+        statement_summary: dict[str, object] = {}
+        for name, raw in cast("dict[str, object]", statements).items():
+            if not isinstance(raw, dict):
+                continue
+            item = cast("dict[str, object]", raw)
+            summary: dict[str, object] = {}
+            for key in ("status", "degraded_reason"):
+                if key in item:
+                    summary[key] = item[key]
+            for key in ("applied", "conflicts", "rejected"):
+                entries = item.get(key)
+                if isinstance(entries, list):
+                    summary[f"{key}_count"] = len(cast("list[object]", entries))
+            statement_summary[name] = summary
+        projected["statements"] = statement_summary
+    return projected
+
+
+def _project_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
+    """Retain model assumptions and receipts, excluding historical overlays."""
+    return {
+        key: value
+        for key, value in snapshot.items()
+        if key not in {"primary_fact_overlay", "historical_primary_fact_overlay"}
+    }
+
+
+def _project_provenance(provenance: dict[str, object]) -> dict[str, object]:
+    """Bound provenance to conclusion-driving receipts and source digests."""
+    projected: dict[str, object] = {}
+    for key in ("ticker", "inputs_as_of_status", "market_price", "country_risk_context"):
+        if key in provenance:
+            projected[key] = provenance[key]
+
+    raw_sources = provenance.get("sources")
+    if isinstance(raw_sources, list):
+        sources: list[dict[str, object]] = []
+        for raw in cast("list[object]", raw_sources):
+            if not isinstance(raw, dict):
+                continue
+            source = cast("dict[str, object]", raw)
+            summary = {
+                key: source[key]
+                for key in (
+                    "role",
+                    "path",
+                    "locator",
+                    "url",
+                    "sha256",
+                    "bytes",
+                    "observed_at",
+                    "influences_calculation",
+                )
+                if key in source
+            }
+            sources.append(summary)
+        projected["sources"] = sources
+
+    bridge = provenance.get("equity_bridge_receipt")
+    if isinstance(bridge, dict):
+        # The receipt's component lineage is conclusion-driving. It is bounded
+        # already by the receipt schema and deliberately excludes the overlay.
+        projected["equity_bridge_receipt"] = bridge
+    overlay = _project_primary_fact_overlay(provenance.get("primary_fact_overlay"))
+    if overlay is not None:
+        projected["primary_fact_overlay"] = overlay
+    return projected
+
+
+def _serialized_size(value: object) -> int:
+    return len(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    )
+
+
 def _market_price_consistent(
     provenance: dict[str, object] | None,
     *,
@@ -244,6 +334,7 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
             ticker=normalized_ticker,
             invalid_reason=",".join(invalid_json),
         )
+    assert snapshot is not None and provenance is not None
     invalid_scalar = not isinstance(row["id"], int) or any(
         row[field] is not None
         and (
@@ -286,7 +377,7 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
     reverse = _nested_mapping(snapshot, "priced_in") or _nested_mapping(
         snapshot, "reverse_valuation"
     )
-    raw_sources = provenance.get("sources") if provenance is not None else None
+    raw_sources = provenance.get("sources")
     sources = cast("list[object]", raw_sources) if isinstance(raw_sources, list) else []
     country_risk = _nested_mapping(provenance, "country_risk_context")
     country_authority = country_risk.get("authority") if country_risk is not None else None
@@ -319,7 +410,7 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
             live_price_at=live_price_at,
         ),
     )
-    return DcfGradeEvidence(
+    evidence = DcfGradeEvidence(
         status="available",
         ticker=normalized_ticker,
         run_id=int(row["id"]),
@@ -338,10 +429,24 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
             float(row["over_under_pct"]) if row["over_under_pct"] is not None else None
         ),
         sanity_flag=str(row["sanity_flag"]) if row["sanity_flag"] is not None else None,
-        assumption_snapshot=snapshot,
-        provenance=provenance,
+        assumption_snapshot=_project_snapshot(snapshot),
+        provenance=_project_provenance(provenance),
         checks=checks,
     )
+    if _serialized_size(cast("object", evidence.model_dump(mode="json"))) > (
+        MAX_SERIALIZED_EVIDENCE_BYTES
+    ):
+        return DcfGradeEvidence(
+            status="invalid",
+            ticker=normalized_ticker,
+            invalid_reason="evidence_too_large",
+        )
+    return evidence
 
 
-__all__ = ["DcfEvidenceChecks", "DcfGradeEvidence", "load_dcf_grade_evidence"]
+__all__ = [
+    "MAX_SERIALIZED_EVIDENCE_BYTES",
+    "DcfEvidenceChecks",
+    "DcfGradeEvidence",
+    "load_dcf_grade_evidence",
+]

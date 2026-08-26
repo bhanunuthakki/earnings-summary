@@ -42,6 +42,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -651,7 +652,9 @@ def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
     ``dcf_runs`` itself, so this just drives it env-style like the FCFF builder."""
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
+    _unlink(tmp)
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_BANK_BUILDER)],
         env=env,
@@ -663,8 +666,10 @@ def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
     if line is None:
+        _unlink(tmp)
         reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
         return {"ticker": t, "status": "failed", "format": "bank", "reason": reason}
+    os.replace(tmp, dest)
     return {"ticker": t, "status": "ok", "format": "bank", "workbook": str(dest), "result": line}
 
 
@@ -674,7 +679,9 @@ def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
     ``dcf_runs`` itself, like the bank/FCFF builders."""
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
+    _unlink(tmp)
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_HOLDCO_BUILDER)],
         env=env,
@@ -686,8 +693,10 @@ def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
     if line is None:
+        _unlink(tmp)
         reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
         return {"ticker": t, "status": "failed", "format": "holdco_sotp", "reason": reason}
+    os.replace(tmp, dest)
     return {
         "ticker": t,
         "status": "ok",
@@ -706,7 +715,9 @@ def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     itself, like the bank/holdco/FCFF builders."""
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
+    _unlink(tmp)
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_FINTECH_BUILDER)],
         env=env,
@@ -718,8 +729,10 @@ def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
     if line is None:
+        _unlink(tmp)
         reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
         return {"ticker": t, "status": "failed", "format": "fintech_sotp", "reason": reason}
+    os.replace(tmp, dest)
     return {
         "ticker": t,
         "status": "ok",
@@ -738,7 +751,9 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
     ``dcf_runs`` itself, like the bank/holdco/fintech/FCFF builders."""
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
+    _unlink(tmp)
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_PLATFORM_BUILDER)],
         env=env,
@@ -750,8 +765,10 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
     if line is None:
+        _unlink(tmp)
         reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
         return {"ticker": t, "status": "failed", "format": "platform_dcf", "reason": reason}
+    os.replace(tmp, dest)
     return {
         "ticker": t,
         "status": "ok",
@@ -772,7 +789,9 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     builders."""
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
-    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
+    _unlink(tmp)
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(tmp))
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_MELI_SOTP_BUILDER)],
         env=env,
@@ -784,8 +803,10 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     )
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
     if line is None:
+        _unlink(tmp)
         reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
         return {"ticker": t, "status": "failed", "format": "meli_platform_sotp", "reason": reason}
+    os.replace(tmp, dest)
     return {
         "ticker": t,
         "status": "ok",
@@ -829,6 +850,71 @@ def _run_builder(
 def _unlink(path: Path) -> None:
     with contextlib.suppress(OSError):
         path.unlink()
+
+
+def _stage_assumptions(path: Path) -> Path:
+    """Copy an existing assumptions mirror so provenance writes are reversible."""
+    staged = path.with_name(f"{path.stem}.rebuild{path.suffix}")
+    _unlink(staged)
+    if not path.exists():
+        # The caller may let sync create this file only after the promotion
+        # gate clears; never point a preflight provenance write at the live path.
+        return staged
+    try:
+        shutil.copy2(path, staged)
+    except OSError:
+        _unlink(staged)
+        raise
+    return staged
+
+
+def _swap_staged(path: Path, staged: Path) -> Path | None:
+    """Swap one staged file and return a rollback backup, if one existed."""
+    if not staged.is_file():
+        return None
+    backup = path.with_name(f"{path.stem}.rollback.{os.getpid()}{path.suffix}")
+    if backup.exists():
+        raise OSError(f"rollback path already exists: {backup}")
+    had_original = path.is_file()
+    if had_original:
+        os.replace(path, backup)
+    try:
+        os.replace(staged, path)
+    except Exception:
+        if had_original and backup.is_file():
+            os.replace(backup, path)
+        raise
+    return backup if had_original else None
+
+
+def _restore_swap(path: Path, backup: Path | None) -> None:
+    """Restore a file after a post-swap persistence failure."""
+    if backup is None:
+        _unlink(path)
+        return
+    _unlink(path)
+    if backup.is_file():
+        os.replace(backup, path)
+
+
+def _blocked_promotion_result(
+    ticker: str,
+    decision: persist_mod.DcfPromotionDecision,
+    *,
+    workbook: Path | None = None,
+) -> dict[str, object]:
+    """Return candidate evidence without implying a durable/current write."""
+    result: dict[str, object] = {
+        "ticker": ticker.upper(),
+        "status": "blocked",
+        "reason": decision.reason,
+        "promotion": decision.as_dict(),
+        "candidate_evidence": dict(decision.candidate_evidence),
+        "dcf_run_persisted": False,
+    }
+    if workbook is not None:
+        result["workbook"] = str(workbook)
+    return result
 
 
 def _scenario_prior_snapshot(
@@ -1142,6 +1228,8 @@ def _refresh_redesign(
     # Build to a sibling temp file so a build failure never corrupts the user's
     # existing workbook; only a clean build is swapped into place.
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
+    assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
+    staged_assumptions = _stage_assumptions(assumptions_path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         proc = _run_builder(
@@ -1162,6 +1250,7 @@ def _refresh_redesign(
     )
     if result_line is not None and result_line.startswith("SKIP"):
         _unlink(tmp)
+        _unlink(staged_assumptions)
         # Surface the builder's own reason (SKIP\t<T>\t<reason>\t<detail>). This
         # branch only fires for data-insufficiency SKIPs — true dcf_applicable=false
         # names return earlier via `_dcf_not_applicable`, before the builder runs.
@@ -1174,6 +1263,7 @@ def _refresh_redesign(
         }
     if result_line is None or proc.returncode != 0 or not tmp.exists():
         _unlink(tmp)
+        _unlink(staged_assumptions)
         tail = (proc.stderr.strip().splitlines() or [""])[-1][:200]
         return {"ticker": ticker, "status": "failed", "reason": f"builder: {tail or 'no RESULT'}"}
 
@@ -1187,9 +1277,11 @@ def _refresh_redesign(
         rv = redesign_mod.value(inp) if inp is not None else None
     except redesign_mod.RedesignError as e:
         _unlink(tmp)
+        _unlink(staged_assumptions)
         return {"ticker": ticker, "status": "failed", "reason": str(e)}
     if inp is None or rv is None:
         _unlink(tmp)
+        _unlink(staged_assumptions)
         return {"ticker": ticker, "status": "failed", "reason": "rebuilt workbook not redesign"}
 
     # Rewrite the Python-computed static cells (Dashboard scenario fair values +
@@ -1201,35 +1293,29 @@ def _refresh_redesign(
     # override ledger against the Opus baseline, rewrite the Assumptions sheet
     # + yellow-cell comments. A corrupt assumptions JSON must not block the
     # valuation refresh, but it surfaces in the result + stderr, never silently.
-    assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
     provenance: dict[str, object]
     try:
         provenance = {
             "status": "ok",
             "sources": assumptions_doc.write_provenance(
-                tmp, inp, assumptions_path, ticker=ticker, update_ledger=True
+                tmp,
+                inp,
+                staged_assumptions,
+                ticker=ticker,
+                update_ledger=True,
             ),
         }
     except assumptions_doc.ProvenanceError as e:
         provenance = {"status": "error", "detail": str(e)}
         sys.stderr.write(f"WARNING: assumption provenance for {ticker} failed: {e}\n")
 
-    os.replace(tmp, dest)
-
-    # Mirror the now-deployed assumptions back to the from-scratch default so a
-    # build_all_redesigned_dcf can't silently revert user edits (single source of
-    # truth). A failure must not block the valuation refresh (the edits are
-    # already safe in the workbook + dcf_runs) but it is LOUD: persisted onto
-    # the dcf_runs row, surfaced in the result, and warned to stderr.
-    sync = sync_assumptions_json(repo_root, ticker, inp)
-    if sync.status == "failed":
-        sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
-
     mos_bar = holdings.get("mos_bar") if holdings else None
     mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
 
     fx_reason = _unconverted_fx_reason(repo_root, ticker, rv.fx_to_usd)
     if fx_reason is not None:
+        _unlink(tmp)
+        _unlink(staged_assumptions)
         sys.stderr.write(f"WARNING: {ticker}: {fx_reason}\n")
         return {"ticker": ticker, "status": "failed", "reason": fx_reason}
 
@@ -1263,7 +1349,7 @@ def _refresh_redesign(
     input_provenance = build_dcf_provenance(
         ticker=ticker,
         repo_root=repo_root,
-        workbook_path=dest,
+        workbook_path=tmp,
         input_payload=inp.to_dict(),
         assumption_snapshot_json=assumption_snapshot,
         live_price=live.price if live else None,
@@ -1289,12 +1375,51 @@ def _refresh_redesign(
         mos_bar_used=mos_bar_f,
         assumption_snapshot_json=assumption_snapshot,
         notes=f"workbook={dest.name} (redesigned)",
-        assumptions_sync_status=sync.as_status_text(),
-        assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
+        assumptions_sync_status=None,
+        assumptions_synced_at=None,
         provenance=input_provenance,
     )
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        persisted = persist_mod.upsert(conn, row)
+        # Hold the writer lock across the read-only preflight and the final
+        # upsert so a competing refresh cannot change the current run between
+        # the decision and persistence.
+        conn.execute("BEGIN IMMEDIATE")
+        decision = persist_mod.check_promotion(conn, row)
+        if not decision.allowed:
+            _unlink(tmp)
+            _unlink(staged_assumptions)
+            return _blocked_promotion_result(ticker, decision, workbook=dest)
+        # The preflight is read-only. Swap both artifacts only after it clears;
+        # the persistence chokepoint repeats the same gate before committing.
+        workbook_backup: Path | None = None
+        assumptions_backup: Path | None = None
+        workbook_swapped = False
+        assumptions_swapped = False
+        try:
+            workbook_backup = _swap_staged(dest, tmp)
+            workbook_swapped = True
+            assumptions_backup = _swap_staged(assumptions_path, staged_assumptions)
+            assumptions_swapped = True
+            sync = sync_assumptions_json(repo_root, ticker, inp)
+            if sync.status == "failed":
+                sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
+            row = dataclasses.replace(
+                row,
+                assumptions_sync_status=sync.as_status_text(),
+                assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
+            )
+            persisted = persist_mod.upsert(conn, row)
+        except Exception:
+            if assumptions_swapped:
+                _restore_swap(assumptions_path, assumptions_backup)
+            if workbook_swapped:
+                _restore_swap(dest, workbook_backup)
+            raise
+        finally:
+            if assumptions_backup is not None:
+                _unlink(assumptions_backup)
+            if workbook_backup is not None:
+                _unlink(workbook_backup)
 
     return {
         "ticker": ticker,
@@ -1568,37 +1693,51 @@ def apply_edits(
     if not redesign_mod.is_redesign_format(dest):
         return {"ticker": ticker, "status": "failed", "reason": "no redesigned workbook to edit"}
 
+    # Keep the live workbook and assumptions mirror untouched until the typed
+    # promotion gate clears the fully computed candidate.
+    staged_dest = dest.with_name(f"{dest.stem}.edit.xlsx")
+    _unlink(staged_dest)
+    try:
+        shutil.copy2(dest, staged_dest)
+    except OSError as e:
+        return {"ticker": ticker, "status": "failed", "reason": f"stage workbook failed: {e}"}
+    assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
+    staged_assumptions = _stage_assumptions(assumptions_path)
+
     # Write the edited input cells onto the live workbook (no FMP rebuild, no
     # price change), then re-read: WACC re-derives from the saved CAPM drivers.
     redesign_mod.inject_dashboard(
-        dest, redesign_mod.capture_from_inputs(inp_edited), current_price=None
+        staged_dest, redesign_mod.capture_from_inputs(inp_edited), current_price=None
     )
     try:
-        inp = redesign_mod.read_inputs(dest)
+        inp = redesign_mod.read_inputs(staged_dest)
         rv = redesign_mod.value(inp) if inp is not None else None
     except redesign_mod.RedesignError as e:
+        _unlink(staged_dest)
+        _unlink(staged_assumptions)
         return {"ticker": ticker, "status": "failed", "reason": str(e)}
     if inp is None or rv is None:
+        _unlink(staged_dest)
+        _unlink(staged_assumptions)
         return {"ticker": ticker, "status": "failed", "reason": "workbook not redesign after edit"}
 
-    scenarios = redesign_mod.write_computed_outputs(dest, inp)
+    scenarios = redesign_mod.write_computed_outputs(staged_dest, inp)
 
-    assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
     provenance: dict[str, object]
     try:
         provenance = {
             "status": "ok",
             "sources": assumptions_doc.write_provenance(
-                dest, inp, assumptions_path, ticker=ticker, update_ledger=True
+                staged_dest,
+                inp,
+                staged_assumptions,
+                ticker=ticker,
+                update_ledger=True,
             ),
         }
     except assumptions_doc.ProvenanceError as e:
         provenance = {"status": "error", "detail": str(e)}
         sys.stderr.write(f"WARNING: assumption provenance for {ticker} failed: {e}\n")
-
-    sync = sync_assumptions_json(repo_root, ticker, inp)
-    if sync.status == "failed":
-        sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
 
     holdings = _load_holdings(repo_root, ticker)
     mos_bar = holdings.get("mos_bar") if holdings else None
@@ -1609,6 +1748,8 @@ def apply_edits(
 
     fx_reason = _unconverted_fx_reason(repo_root, ticker, rv.fx_to_usd)
     if fx_reason is not None:
+        _unlink(staged_dest)
+        _unlink(staged_assumptions)
         sys.stderr.write(f"WARNING: {ticker}: {fx_reason}\n")
         return {"ticker": ticker, "status": "failed", "reason": fx_reason}
 
@@ -1646,7 +1787,7 @@ def apply_edits(
     input_provenance = build_dcf_provenance(
         ticker=ticker,
         repo_root=repo_root,
-        workbook_path=dest,
+        workbook_path=staged_dest,
         input_payload=inp.to_dict(),
         assumption_snapshot_json=assumption_snapshot,
         live_price=live_price,
@@ -1672,12 +1813,46 @@ def apply_edits(
         mos_bar_used=mos_bar_f,
         assumption_snapshot_json=assumption_snapshot,
         notes=f"workbook={dest.name} (redesigned; in-app edit)",
-        assumptions_sync_status=sync.as_status_text(),
-        assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
+        assumptions_sync_status=None,
+        assumptions_synced_at=None,
         provenance=input_provenance,
     )
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        persisted = persist_mod.upsert(conn, row)
+        conn.execute("BEGIN IMMEDIATE")
+        decision = persist_mod.check_promotion(conn, row)
+        if not decision.allowed:
+            _unlink(staged_dest)
+            _unlink(staged_assumptions)
+            return _blocked_promotion_result(ticker, decision, workbook=dest)
+        workbook_backup = None
+        assumptions_backup = None
+        workbook_swapped = False
+        assumptions_swapped = False
+        try:
+            workbook_backup = _swap_staged(dest, staged_dest)
+            workbook_swapped = True
+            assumptions_backup = _swap_staged(assumptions_path, staged_assumptions)
+            assumptions_swapped = True
+            sync = sync_assumptions_json(repo_root, ticker, inp)
+            if sync.status == "failed":
+                sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
+            row = dataclasses.replace(
+                row,
+                assumptions_sync_status=sync.as_status_text(),
+                assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
+            )
+            persisted = persist_mod.upsert(conn, row)
+        except Exception:
+            if assumptions_swapped:
+                _restore_swap(assumptions_path, assumptions_backup)
+            if workbook_swapped:
+                _restore_swap(dest, workbook_backup)
+            raise
+        finally:
+            if assumptions_backup is not None:
+                _unlink(assumptions_backup)
+            if workbook_backup is not None:
+                _unlink(workbook_backup)
 
     return {
         "ticker": ticker,

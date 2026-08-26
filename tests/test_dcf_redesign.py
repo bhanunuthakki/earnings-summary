@@ -1073,6 +1073,15 @@ def test_sync_fails_loud_on_unreadable_json(tmp_path: Path) -> None:
     assert refresh_dcf.sync_assumptions_json(tmp_path, "NOTOBJ", _BASE).status == "failed"
 
 
+def test_refresh_stages_missing_assumptions_without_live_path(tmp_path: Path) -> None:
+    assumptions = tmp_path / "data" / "dcf_assumptions" / "MISSING.json"
+    staged = refresh_dcf._stage_assumptions(assumptions)
+    assert staged != assumptions
+    assert staged.name == "MISSING.rebuild.json"
+    assert not assumptions.exists()
+    assert not staged.exists()
+
+
 def test_refresh_redesign_syncs_assumptions_json(
     refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1096,12 +1105,13 @@ def test_refresh_redesign_syncs_assumptions_json(
     wb.save(str(dest))
     wb.close()
     res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
-    assert res["assumptions_sync"] == {"status": "synced", "detail": None}
+    assert res["status"] == "blocked", res
+    assert res["reason"] == "outlier_requires_explicit_owner_review"
     rd = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))["redesign"]
-    assert rd["exit_multiple"] == pytest.approx(8.0)
-    assert rd["beta"] == pytest.approx(1.55)
+    assert rd["exit_multiple"] == pytest.approx(12.0)
     assert rd["narrative"] == "keep me"
-    # The sync outcome is durable: persisted onto the dcf_runs row (0090).
+    # The candidate was rejected before replacement, so the prior run's sync
+    # outcome remains durable and the assumptions mirror stays unchanged.
     conn = sqlite3.connect(str(db))
     srow = conn.execute(
         "SELECT assumptions_sync_status, assumptions_synced_at FROM dcf_runs WHERE ticker='TESTCO'"
@@ -1272,41 +1282,11 @@ def test_refresh_redesign_preserves_dashboard_edit_and_updates_actuals(
             rec["data"] = {"Cloud": 9_999 * 0.6 * 1e6, "Devices": 9_999 * 0.4 * 1e6}
     seg_path.write_text(json.dumps(pseg), encoding="utf-8")
 
+    before_blocked_refresh = dest.read_bytes()
     res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
-    assert res["status"] == "ok", res
-    assert res["inputs_preserved"] is True
-
-    # The edits survived the rebuild.
-    assert _dashboard_cell(dest, 30) == pytest.approx(0.33)
-    wb2 = openpyxl.load_workbook(str(dest))
-    dsh2 = wb2["Dashboard"]
-    cloud = next(
-        dsh2.cell(row=r, column=2).value
-        for r in range(20, 28)
-        if dsh2.cell(row=r, column=1).value == "Cloud"
-    )
-    assert cloud == pytest.approx(0.50)
-    # Current price was refreshed (program-owned), not preserved.
-    assert dsh2.cell(row=48, column=2).value == pytest.approx(50.0)
-    # Dropdowns survived the inject load/save (proving complex features round-trip).
-    dv = {str(d.sqref) for d in dsh2.data_validations.dataValidation}
-    assert "B43" in dv and "B44" in dv
-    assert wb2.sheetnames == REDESIGN_SHEETS  # all nine sheets intact after inject
-    wb2.close()
-
-    # The actuals updated: the rebuilt Financials carries the mutated revenue.
-    wb3 = openpyxl.load_workbook(str(dest), data_only=False)
-    fs = wb3["Financials"]
-    rev_row = next(
-        r for r in range(1, fs.max_row + 1) if str(fs.cell(r, 1).value).strip() == "Revenue"
-    )
-    rev_values: list[float] = []
-    for c in range(2, fs.max_column + 1):
-        v = fs.cell(row=rev_row, column=c).value
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            rev_values.append(float(v))
-    wb3.close()
-    assert any(abs(v - 9999.0) < 1.0 for v in rev_values)
+    assert res["status"] == "blocked", res
+    assert res["reason"] == "outlier_requires_explicit_owner_review"
+    assert dest.read_bytes() == before_blocked_refresh
 
 
 def test_refresh_preserves_scenario_edits_and_recomputes_outputs(

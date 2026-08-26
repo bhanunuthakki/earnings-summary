@@ -31,6 +31,7 @@ from alembic.config import Config
 from alembic import command
 from dcf.persist import (
     SANITY_OVER_UNDER_LIMIT,
+    DcfPromotionBlocked,
     DcfRunRow,
     derive_sanity_flag,
     upsert,
@@ -108,11 +109,9 @@ def test_flag_outlier_past_the_limit_both_directions() -> None:
 def test_upsert_stamps_outlier_on_extreme_over_under(db_path: Path) -> None:
     # fair 10, live 25 -> over_under = +1.5, well past 0.6
     with sqlite3.connect(str(db_path)) as conn:
-        upsert(conn, _row("TSM", npv_per_share=10.0, live_price=25.0))
-        flag = conn.execute(
-            "SELECT sanity_flag FROM dcf_runs WHERE ticker='TSM' AND is_latest=1"
-        ).fetchone()[0]
-    assert flag == "outlier"
+        with pytest.raises(DcfPromotionBlocked, match="owner_review"):
+            upsert(conn, _row("TSM", npv_per_share=10.0, live_price=25.0))
+        assert conn.execute("SELECT COUNT(*) FROM dcf_runs WHERE ticker='TSM'").fetchone()[0] == 0
 
 
 def test_upsert_leaves_flag_null_within_bounds(db_path: Path) -> None:
@@ -126,7 +125,7 @@ def test_upsert_leaves_flag_null_within_bounds(db_path: Path) -> None:
 
 
 def test_upsert_still_works_on_a_pre_0182_schema(tmp_path: Path) -> None:
-    """No sanity_flag column -> the write must not mention it (old data dirs)."""
+    """No sanity_flag column still cannot promote an unreviewed outlier."""
     db_file = tmp_path / "old.db"
     with sqlite3.connect(str(db_file)) as conn:
         conn.execute(
@@ -144,9 +143,10 @@ def test_upsert_still_works_on_a_pre_0182_schema(tmp_path: Path) -> None:
             """
         )
         conn.execute("CREATE UNIQUE INDEX uq_dcf_runs_ticker ON dcf_runs(ticker)")
-        upsert(conn, _row("WIX", npv_per_share=10.0, live_price=25.0))
-        got = conn.execute("SELECT over_under_pct FROM dcf_runs WHERE ticker='WIX'").fetchone()
-    assert got is not None and got[0] == pytest.approx(1.5)
+        with pytest.raises(DcfPromotionBlocked, match="owner_review"):
+            upsert(conn, _row("WIX", npv_per_share=10.0, live_price=25.0))
+        got = conn.execute("SELECT COUNT(*) FROM dcf_runs WHERE ticker='WIX'").fetchone()
+    assert got is not None and got[0] == 0
 
 
 # -------------------------------------------------------------------------- load_dcf
@@ -154,7 +154,8 @@ def test_upsert_still_works_on_a_pre_0182_schema(tmp_path: Path) -> None:
 
 def test_load_dcf_withholds_numbers_of_a_flagged_run(db_path: Path, tmp_path: Path) -> None:
     with sqlite3.connect(str(db_path)) as conn:
-        upsert(conn, _row("TSM", npv_per_share=10.0, live_price=25.0))
+        upsert(conn, _row("TSM", npv_per_share=10.0, live_price=12.0))
+        conn.execute("UPDATE dcf_runs SET sanity_flag='outlier' WHERE ticker='TSM'")
     out = load_dcf("TSM", tmp_path)
     assert out is not None
     assert out["sanity_flag"] == "outlier"

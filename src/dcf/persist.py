@@ -31,7 +31,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import cast
+from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
 from dcf import valuation
@@ -72,6 +72,42 @@ class DcfRunRow:
     assumptions_sync_status: str | None = None
     assumptions_synced_at: datetime | None = None
     provenance: DcfInputProvenance | None = None
+
+
+PromotionStatus = Literal["verified", "unverified", "not_applicable", "missing"]
+
+
+@dataclass(frozen=True)
+class DcfPromotionDecision:
+    """Typed, deterministic decision about replacing the current DCF run."""
+
+    allowed: bool
+    reason: str | None
+    candidate_bridge_status: PromotionStatus
+    current_bridge_status: PromotionStatus
+    candidate_sanity_flag: str | None
+    candidate_evidence: dict[str, object]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "allowed": self.allowed,
+            "reason": self.reason,
+            "candidate_bridge_status": self.candidate_bridge_status,
+            "current_bridge_status": self.current_bridge_status,
+            "candidate_sanity_flag": self.candidate_sanity_flag,
+            "candidate_evidence": dict(self.candidate_evidence),
+        }
+
+
+class DcfPromotionBlockedError(RuntimeError):
+    """A candidate was retained as evidence but denied current promotion."""
+
+    def __init__(self, decision: DcfPromotionDecision) -> None:
+        self.decision = decision
+        super().__init__(decision.reason or "DCF promotion blocked")
+
+
+DcfPromotionBlocked = DcfPromotionBlockedError
 
 
 def derive_over_under(live_price: float | None, npv_per_share: float) -> float | None:
@@ -300,6 +336,123 @@ def _same_current_version(
     return tuple(current) == expected
 
 
+_BRIDGE_STRENGTH: dict[PromotionStatus, int] = {
+    "missing": 0,
+    "not_applicable": 0,
+    "unverified": 1,
+    "verified": 2,
+}
+
+
+def _bridge_status(value: object) -> PromotionStatus:
+    if value in {"verified", "unverified"}:
+        return cast("PromotionStatus", value)
+    return "missing"
+
+
+def _receipt_status(provenance_json: object) -> PromotionStatus:
+    if not isinstance(provenance_json, str) or not provenance_json.strip():
+        return "missing"
+    try:
+        raw: object = json.loads(provenance_json)
+    except json.JSONDecodeError:
+        return "missing"
+    if not isinstance(raw, dict):
+        return "missing"
+    receipt = cast("dict[str, object]", raw).get("equity_bridge_receipt")
+    if not isinstance(receipt, dict):
+        return "missing"
+    return _bridge_status(cast("dict[str, object]", receipt).get("status"))
+
+
+def _current_promotion_state(
+    conn: sqlite3.Connection, ticker: str
+) -> tuple[PromotionStatus, str | None] | None:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(dcf_runs)")}
+    if "ticker" not in columns:
+        return None
+    latest = " AND COALESCE(is_latest, 1) = 1" if "is_latest" in columns else ""
+    segment = " AND COALESCE(segment_name, '') = ''" if "segment_name" in columns else ""
+    sanity = "sanity_flag" if "sanity_flag" in columns else "NULL AS sanity_flag"
+    try:
+        current = conn.execute(
+            f"SELECT provenance_json, {sanity} FROM dcf_runs "
+            "WHERE UPPER(ticker) = UPPER(?)" + latest + segment + " ORDER BY id DESC LIMIT 1",
+            (ticker.upper(),),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if current is None:
+        return None
+    raw_flag = current[1]
+    return _receipt_status(current[0]), (str(raw_flag) if isinstance(raw_flag, str) else None)
+
+
+def promotion_decision(
+    conn: sqlite3.Connection, row: DcfRunRow
+) -> DcfPromotionDecision:
+    """Evaluate whether ``row`` may become the current run.
+
+    Outliers require an explicit owner-review contract. No such contract is
+    inferred here: the existing DCF refresh/apply paths provide none, so the
+    candidate is denied and returned to the caller as evidence. A candidate
+    with a weaker equity-bridge receipt also cannot replace a stronger current
+    receipt. This function is read-only and safe to run before file replacement.
+    """
+    candidate_status = (
+        _receipt_status(row.provenance.as_json()) if row.provenance is not None else "missing"
+    )
+    candidate_sanity = derive_sanity_flag(derive_over_under(row.live_price, row.npv_per_share))
+    current_state = _current_promotion_state(conn, row.ticker)
+    current_status = current_state[0] if current_state is not None else "missing"
+    evidence: dict[str, object] = {
+        "ticker": row.ticker.upper(),
+        "engine_version": (
+            row.provenance.engine_version if row.provenance is not None else None
+        ),
+        "input_sha256": row.provenance.input_sha256 if row.provenance is not None else None,
+        "workbook_sha256": (
+            row.provenance.workbook_sha256 if row.provenance is not None else None
+        ),
+        "inputs_as_of": (
+            row.provenance.inputs_as_of_iso() if row.provenance is not None else None
+        ),
+        "equity_bridge_status": candidate_status,
+        "sanity_flag": candidate_sanity,
+    }
+    if candidate_sanity == "outlier":
+        return DcfPromotionDecision(
+            allowed=False,
+            reason="outlier_requires_explicit_owner_review",
+            candidate_bridge_status=candidate_status,
+            current_bridge_status=current_status,
+            candidate_sanity_flag=candidate_sanity,
+            candidate_evidence=evidence,
+        )
+    if current_state is not None and _BRIDGE_STRENGTH[candidate_status] < _BRIDGE_STRENGTH[current_status]:
+        return DcfPromotionDecision(
+            allowed=False,
+            reason="candidate_equity_bridge_weaker_than_current",
+            candidate_bridge_status=candidate_status,
+            current_bridge_status=current_status,
+            candidate_sanity_flag=candidate_sanity,
+            candidate_evidence=evidence,
+        )
+    return DcfPromotionDecision(
+        allowed=True,
+        reason=None,
+        candidate_bridge_status=candidate_status,
+        current_bridge_status=current_status,
+        candidate_sanity_flag=candidate_sanity,
+        candidate_evidence=evidence,
+    )
+
+
+def check_promotion(conn: sqlite3.Connection, row: DcfRunRow) -> DcfPromotionDecision:
+    """Public read-only preflight used before swapping files or mirrors."""
+    return promotion_decision(conn, row)
+
+
 def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
     """Persist a new dcf_runs version for ``row.ticker``.
 
@@ -417,6 +570,10 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
         and _same_current_version(conn, row, params)
     ):
         return False
+
+    decision = promotion_decision(conn, row)
+    if not decision.allowed:
+        raise DcfPromotionBlockedError(decision)
 
     conn.execute("SAVEPOINT dcf_run_upsert")
     try:

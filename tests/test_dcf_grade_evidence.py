@@ -7,7 +7,7 @@ import sqlite3
 
 import pytest
 
-from dcf.grade_evidence import load_dcf_grade_evidence
+from dcf.grade_evidence import MAX_SERIALIZED_EVIDENCE_BYTES, load_dcf_grade_evidence
 
 
 def _schema(conn: sqlite3.Connection) -> None:
@@ -74,6 +74,59 @@ def test_generic_receipts_are_projected_without_regrading_them() -> None:
     assert evidence.checks.primary_fact_overlay_status == "ok"
     assert evidence.checks.equity_bridge_status == "verified"
     assert evidence.checks.market_price_consistent is True
+
+
+def test_projection_excludes_primary_fact_history_and_stays_below_bound() -> None:
+    conn = sqlite3.connect(":memory:")
+    _schema(conn)
+    observed_at = "2026-08-26T03:32:46+00:00"
+    overlay = {
+        "status": "ok",
+        "statements": {
+            "balance": {
+                "status": "ok",
+                "applied": [
+                    {"fmp_field": "totalDebt", "period_end": "2026-06-30"}
+                    for _ in range(5_000)
+                ],
+            }
+        },
+    }
+    snapshot = {"scenarios": {"bull": {}, "base": {}, "bear": {}}, "priced_in": {}}
+    provenance = {
+        "ticker": "META",
+        "sources": [{"role": "income_statement", "sha256": "a" * 64}],
+        "market_price": {"price": 90.0, "observed_at": observed_at, "source": "yfinance"},
+        "primary_fact_overlay": overlay,
+        "equity_bridge_receipt": {"status": "verified", "cash_lineage": {"fact_id": 1}},
+        "country_risk_context": {"authority": "systematic_default_zero"},
+    }
+    conn.execute(
+        "INSERT INTO dcf_runs VALUES (1,'META','2026-08-26T03:33:00','2026-08-26',"
+        "'redesign_fcff_v1',?,?,?,90.0,?,427.77,0.3326,NULL,?,?,1,NULL)",
+        (
+            "a" * 64,
+            "b" * 64,
+            observed_at,
+            observed_at,
+            json.dumps(snapshot),
+            json.dumps(provenance),
+        ),
+    )
+
+    evidence = load_dcf_grade_evidence(conn, "META")
+
+    assert evidence.status == "available"
+    assert evidence.provenance is not None
+    overlay_projection = evidence.provenance["primary_fact_overlay"]
+    assert isinstance(overlay_projection, dict)
+    balance = overlay_projection["statements"]["balance"]
+    assert isinstance(balance, dict) and balance["applied_count"] == 5_000
+    assert not any(isinstance(value, list) for value in overlay_projection.values())
+    assert evidence.checks is not None and evidence.checks.source_count == 1
+    assert len(json.dumps(evidence.model_dump(mode="json"), separators=(",", ":"))) <= (
+        MAX_SERIALIZED_EVIDENCE_BYTES
+    )
 
 
 def test_specialized_receipts_mark_fcff_only_checks_not_applicable() -> None:

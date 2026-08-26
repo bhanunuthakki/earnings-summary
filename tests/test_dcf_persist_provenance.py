@@ -11,7 +11,7 @@ from typing import cast
 
 import pytest
 
-from dcf.persist import DcfRunRow, upsert
+from dcf.persist import DcfPromotionBlocked, DcfRunRow, upsert
 from dcf.provenance import (
     DcfInputProvenance,
     build_file_provenance,
@@ -152,6 +152,50 @@ def test_exact_provenance_retry_is_a_noop() -> None:
             "2026-07-28T12:00:00+00:00",
         ),
     ]
+
+
+def _bridge_row(row: DcfRunRow, status: str) -> DcfRunRow:
+    assert row.provenance is not None
+    detail = dict(row.provenance.detail or {})
+    detail["equity_bridge_receipt"] = {"status": status}
+    return dataclasses.replace(row, provenance=dataclasses.replace(row.provenance, detail=detail))
+
+
+def test_weaker_bridge_candidate_cannot_replace_verified_current() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    current = _bridge_row(_row(), "verified")
+    assert upsert(conn, current) is True
+    candidate = _bridge_row(dataclasses.replace(_row(), npv_per_share=101.0), "unverified")
+
+    with pytest.raises(DcfPromotionBlocked) as blocked:
+        upsert(conn, candidate)
+
+    assert blocked.value.decision.reason == "candidate_equity_bridge_weaker_than_current"
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 1
+    assert conn.execute("SELECT npv_per_share FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 100.0
+
+
+def test_outlier_candidate_is_blocked_with_deterministic_evidence() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    candidate = dataclasses.replace(_row(), live_price=200.0)
+
+    with pytest.raises(DcfPromotionBlocked) as blocked:
+        upsert(conn, candidate)
+
+    decision = blocked.value.decision
+    assert decision.reason == "outlier_requires_explicit_owner_review"
+    assert decision.candidate_evidence == {
+        "ticker": "META",
+        "engine_version": "redesign_fcff_v1",
+        "input_sha256": "a" * 64,
+        "workbook_sha256": "b" * 64,
+        "inputs_as_of": "2026-07-28T12:00:00+00:00",
+        "equity_bridge_status": "missing",
+        "sanity_flag": "outlier",
+    }
+    assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
 
 
 def test_reused_hash_cannot_hide_a_changed_calculation() -> None:
