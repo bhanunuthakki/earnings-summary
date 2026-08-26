@@ -29,7 +29,7 @@ import json
 import os
 import sqlite3
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, cast
@@ -47,6 +47,12 @@ FMP = REPO / "data" / "historical" / "fmp"
 sys.path.insert(0, str(REPO / "src"))
 
 
+from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
+from dcf.specialized_price import (  # noqa: E402
+    SpecializedPriceObservation,
+    price_seed_source_files,
+    resolve_specialized_price,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort — the workbook builds without a DB
@@ -104,6 +110,8 @@ class Actuals:
     equity_prior: float
     shares: float  # diluted shares, M
     price: float
+    price_seed_source: str = field(default="model_seed", repr=False)
+    price_seed_path: str | None = field(default=None, repr=False)
 
 
 def load_actuals(ticker: str, s: Assum, override: dict[str, Any] | None = None) -> Actuals:
@@ -144,6 +152,17 @@ def load_actuals(ticker: str, s: Assum, override: dict[str, Any] | None = None) 
     credit_cost = pick("credit_cost", (nii + fees) - opex - pretax)  # plug to pretax
     tax_paid = i0["incomeTaxExpense"] / m
     tax_rate = pick("tax_rate", (tax_paid / pretax) if pretax else 0.25)
+    raw_override_price = ov.get("price")
+    raw_profile_price = prof.get("price") if isinstance(prof, dict) else None
+    if isinstance(raw_override_price, (int, float)) and not isinstance(raw_override_price, bool):
+        price_seed_source = "owner_assumptions"
+        price_seed_path = f"data/bank_assumptions/{ticker}.json"
+    elif isinstance(raw_profile_price, (int, float)) and not isinstance(raw_profile_price, bool):
+        price_seed_source = "fmp_profile"
+        price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
+    else:
+        price_seed_source = "missing_price_seed"
+        price_seed_path = None
     return Actuals(
         book=book,
         ea=ea,
@@ -158,6 +177,8 @@ def load_actuals(ticker: str, s: Assum, override: dict[str, Any] | None = None) 
         equity_prior=pick("equity_prior", b1["totalStockholdersEquity"] / m),
         shares=pick("shares", i0["weightedAverageShsOutDil"] / m),
         price=pick("price", float(prof.get("price") or 0.0)),
+        price_seed_source=price_seed_source,
+        price_seed_path=price_seed_path,
     )
 
 
@@ -269,6 +290,7 @@ class Assum:
     # to the traded ADR price.
     fx_to_usd: float = 1.0
     adr_ratio: float = 1.0
+    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
 
     @property
     def ke(self) -> float:
@@ -897,11 +919,25 @@ def load_assumptions(ticker: str) -> tuple[Assum, dict[str, Any]]:
     # wins for any field the name pins explicitly (HDB pins all three; NU pins
     # erp/tax to preserve its pre-global values). Degrades to the Assum literals
     # when the store is unavailable, so the workbook still builds bare.
-    if global_dcf is not None:
-        _g = global_dcf.load(db_path=REPO / "data" / "portfolio.db")
-        s.rf, s.erp, s.tax = _g.risk_free_rate, _g.equity_risk_premium, _g.tax_rate
+    global_loaded = (
+        global_dcf.load_with_provenance(db_path=REPO / "data" / "portfolio.db")
+        if global_dcf is not None
+        else None
+    )
+    if global_loaded is not None:
+        s.rf = global_loaded.assumptions.risk_free_rate
+        s.erp = global_loaded.assumptions.equity_risk_premium
+        s.tax = global_loaded.assumptions.tax_rate
+        s.global_assumption_source = dict(global_loaded.source_record)
+    else:
+        s.global_assumption_source = {
+            "role": "global_dcf_assumptions",
+            "status": "module_unavailable",
+            "observed_at": None,
+        }
     actuals_ov: dict[str, Any] = {}
     p = REPO / "data" / "bank_assumptions" / f"{ticker}.json"
+    overridden_globals: set[str] = set()
     if p.exists():
         try:
             ov: Any = json.loads(p.read_text(encoding="utf-8"))
@@ -912,13 +948,23 @@ def load_assumptions(ticker: str) -> tuple[Assum, dict[str, Any]]:
             for k, v in ovd.items():
                 if hasattr(s, k) and isinstance(v, (int, float)):
                     setattr(s, k, v)
+                    if k in {"rf", "erp", "tax"}:
+                        overridden_globals.add(k)
             raw_act = ovd.get("actuals")
             if isinstance(raw_act, dict):
                 actuals_ov = cast("dict[str, Any]", raw_act)
+    effective_globals = sorted({"rf", "erp", "tax"} - overridden_globals)
+    s.global_assumption_source["effective_fields"] = effective_globals
+    s.global_assumption_source["influences_calculation"] = bool(effective_globals)
     return s, actuals_ov
 
 
-def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
+def persist_dcf_run(
+    a: Actuals,
+    s: Assum,
+    m: Mirror,
+    price_observation: SpecializedPriceObservation | None = None,
+) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     bank model's value/share. No-op without the DB / persist module."""
     db = REPO / "data" / "portfolio.db"
@@ -931,22 +977,47 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
     npv_usd = m.value * s.fx_to_usd
     shares_traded = a.shares / s.adr_ratio if s.adr_ratio else a.shares
     mos = load_breaks(T).get("mos_bar")
-    snap = json.dumps(
-        {
-            "model": "bank_excess_return",
-            "ke": s.ke,
-            "roe_terminal": m.roe_term,
-            "value_per_share_usd": m.vps_usd,
-            "value_per_share_reporting": m.vps,
-            "fx_to_usd": s.fx_to_usd,
-            "adr_ratio": s.adr_ratio,
-            "pv_excess_m": m.pv_excess,
-            "pv_terminal_m": m.pv_tv,
-            "book_equity_m": a.equity,
-            "value_equity_reporting_m": m.value,
-            "workbook": str(DEST),
-        },
-        indent=2,
+    snap_payload: dict[str, object] = {
+        "model": "bank_excess_return",
+        "ke": s.ke,
+        "roe_terminal": m.roe_term,
+        "value_per_share_usd": m.vps_usd,
+        "value_per_share_reporting": m.vps,
+        "fx_to_usd": s.fx_to_usd,
+        "adr_ratio": s.adr_ratio,
+        "pv_excess_m": m.pv_excess,
+        "pv_terminal_m": m.pv_tv,
+        "book_equity_m": a.equity,
+        "value_equity_reporting_m": m.value,
+        "workbook": str(DEST),
+    }
+    snap = json.dumps(snap_payload, indent=2)
+    observed_at = price_observation.observed_at if price_observation is not None else None
+    price_source = (
+        price_observation.source_name if price_observation is not None else "assumption_seed"
+    )
+    provenance = build_file_provenance(
+        ticker=T,
+        repo_root=REPO,
+        workbook_path=DEST,
+        engine_version="bank_excess_return_v1",
+        effective_inputs={"actuals": asdict(a), "assumptions": asdict(s)},
+        assumption_snapshot=snap_payload,
+        live_price=a.price or None,
+        live_price_at=observed_at,
+        live_price_source=price_source,
+        source_files=(
+            (FMP / f"{T}_income_statement_annual.json", "income_statement"),
+            (FMP / f"{T}_balance_sheet_annual.json", "balance_sheet"),
+            (REPO / "data" / "bank_assumptions" / f"{T}.json", "owner_assumptions"),
+            (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+            *(
+                price_seed_source_files(REPO, price_observation)
+                if price_observation is not None
+                else ()
+            ),
+        ),
+        source_records=((s.global_assumption_source,) if s.global_assumption_source else ()),
     )
     row = persist_mod.DcfRunRow(
         ticker=T,
@@ -958,12 +1029,15 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
         shares_outstanding=shares_traded * 1e6,
         currency="USD",
         live_price=a.price or None,
-        live_price_at=None,
+        live_price_at=observed_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (bank credit model)",
+        provenance=provenance,
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+        if not schema_supports_provenance(conn):
+            row = replace(row, provenance=None)
         persist_mod.upsert(conn, row)
     return True
 
@@ -971,11 +1045,19 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
 def main() -> int:
     s, actuals_ov = load_assumptions(T)
     a = load_actuals(T, s, actuals_ov)
+    price_observation = resolve_specialized_price(
+        REPO,
+        T,
+        fallback_price=a.price,
+        fallback_source_name=a.price_seed_source,
+        fallback_source_path=a.price_seed_path,
+    )
+    a.price = price_observation.price
     kpis = load_kpis(T)
     holdings = load_breaks(T)
     m = mirror(a, s)
     build(a, s, m, DEST, kpis=kpis, holdings=holdings)
-    persisted = persist_dcf_run(a, s, m)
+    persisted = persist_dcf_run(a, s, m, price_observation)
     up = (m.vps_usd / a.price - 1) if a.price else 0.0
     fx_note = (
         ""

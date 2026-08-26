@@ -123,6 +123,127 @@ def test_inputs_404_when_no_workbook(client: FlaskClient) -> None:
     assert client.get("/api/dcf/inputs/NU").status_code == 404
 
 
+def test_evidence_route_fails_closed_on_incomplete_schema(client: FlaskClient) -> None:
+    resp = client.get("/api/dcf/evidence/NU")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["schema_version"] == "dcf_grade_evidence.v1"
+    assert body["status"] == "invalid"
+    assert "provenance_json" in body["missing_columns"]
+
+
+def test_evidence_route_rejects_invalid_ticker(client: FlaskClient) -> None:
+    assert client.get("/api/dcf/evidence/NU%2Fbad").status_code in {400, 404}
+
+
+def test_evidence_route_rejects_malformed_required_json(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = sqlite3.connect(data_dir / "portfolio.db")
+    conn.execute(
+        """
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY, ticker TEXT, created_at TEXT,
+            valuation_date TEXT, engine_version TEXT, input_sha256 TEXT,
+            workbook_sha256 TEXT, inputs_as_of TEXT, live_price REAL,
+            live_price_at TEXT, npv_per_share REAL, over_under_pct REAL,
+            sanity_flag TEXT, assumption_snapshot_json TEXT,
+            provenance_json TEXT, is_latest INTEGER, segment_name TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO dcf_runs VALUES (1,'NU','2026-08-26','2026-08-26',"
+        "'nu_platform_fcfe_v1',?,?,NULL,10.0,NULL,12.0,-0.2,NULL,?,?,1,NULL)",
+        ("a" * 64, "b" * 64, "{bad", "{bad"),
+    )
+    conn.commit()
+    conn.close()
+    malformed_client = comments_server.create_app(tmp_path).test_client()
+
+    resp = malformed_client.get("/api/dcf/evidence/NU")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "invalid"
+    assert resp.get_json()["invalid_reason"] == ("assumption_snapshot_invalid,provenance_invalid")
+
+
+def test_evidence_route_rejects_blob_and_invalid_clock_row_drift(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = sqlite3.connect(data_dir / "portfolio.db")
+    conn.execute(
+        """
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY, ticker TEXT, created_at TEXT,
+            valuation_date TEXT, engine_version TEXT, input_sha256 TEXT,
+            workbook_sha256 TEXT, inputs_as_of TEXT, live_price REAL,
+            live_price_at TEXT, npv_per_share REAL, over_under_pct REAL,
+            sanity_flag TEXT, assumption_snapshot_json TEXT,
+            provenance_json TEXT, is_latest INTEGER, segment_name TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO dcf_runs VALUES (1,'NU',?,'not-a-date','nu_platform_fcfe_v1',"
+        "?,?,NULL,10.0,NULL,12.0,-0.2,NULL,?,?,1,NULL)",
+        (
+            sqlite3.Binary(b"bad"),
+            "a" * 64,
+            "b" * 64,
+            '{"scenarios":{},"reverse_valuation":{}}',
+            '{"sources":[]}',
+        ),
+    )
+    conn.commit()
+    conn.close()
+    drift_client = comments_server.create_app(tmp_path).test_client()
+
+    resp = drift_client.get("/api/dcf/evidence/NU")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "invalid"
+    assert resp.get_json()["invalid_reason"] == "row_decode_failed"
+
+
+def test_evidence_route_rejects_nonfinite_financial_value(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = sqlite3.connect(data_dir / "portfolio.db")
+    conn.execute(
+        """
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY, ticker TEXT, created_at TEXT,
+            valuation_date TEXT, engine_version TEXT, input_sha256 TEXT,
+            workbook_sha256 TEXT, inputs_as_of TEXT, live_price REAL,
+            live_price_at TEXT, npv_per_share REAL, over_under_pct REAL,
+            sanity_flag TEXT, assumption_snapshot_json TEXT,
+            provenance_json TEXT, is_latest INTEGER, segment_name TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO dcf_runs VALUES (1,'NU','2026-08-26','2026-08-26',"
+        "'nu_platform_fcfe_v1',?,?,NULL,?,NULL,12.0,-0.2,NULL,?,?,1,NULL)",
+        (
+            "a" * 64,
+            "b" * 64,
+            float("inf"),
+            '{"scenarios":{},"reverse_valuation":{}}',
+            '{"sources":[]}',
+        ),
+    )
+    conn.commit()
+    conn.close()
+    invalid_client = comments_server.create_app(tmp_path).test_client()
+
+    resp = invalid_client.get("/api/dcf/evidence/NU")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "invalid"
+    assert resp.get_json()["invalid_reason"] == "row_decode_failed"
+
+
 def test_save_requires_ticker_and_inputs(client: FlaskClient) -> None:
     assert client.post("/api/dcf/save", json={"inputs": _BASE.to_dict()}).status_code == 400
     assert client.post("/api/dcf/save", json={"ticker": "NU"}).status_code == 400

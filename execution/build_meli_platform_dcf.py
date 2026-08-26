@@ -40,7 +40,7 @@ import json
 import os
 import sys
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
@@ -61,6 +61,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
 from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
+from dcf.specialized_price import (  # noqa: E402
+    SpecializedPriceObservation,
+    price_seed_source_files,
+    resolve_specialized_price,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort -- the workbook builds without a DB
@@ -155,6 +160,8 @@ class Assum:
     derive_capm: int = 1
     global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
     country_risk_source: dict[str, object] = field(default_factory=dict, repr=False)
+    price_seed_source: str = field(default="model_seed", repr=False)
+    price_seed_path: str | None = field(default=None, repr=False)
 
 
 def _interp(near: float, term: float, t: int, n: int) -> float:
@@ -323,21 +330,6 @@ def reverse_valuation(s: Assum, m: Mirror) -> dict[str, object] | None:
     ).to_snapshot_dict()
 
 
-def _profile_price_metadata(ticker: str) -> tuple[datetime | None, str | None]:
-    """The existing cached-profile price policy, with auditable observation time."""
-    profile = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
-    if not profile.is_file():
-        return None, "assumption_seed"
-    try:
-        raw: Any = json.loads(profile.read_text(encoding="utf-8"))
-        item = raw[0] if isinstance(raw, list) and raw else raw
-        if not isinstance(item, dict) or not isinstance(item.get("price"), (int, float)):
-            return None, "fmp_profile_unusable"
-    except (OSError, ValueError, TypeError):
-        return None, "fmp_profile_unusable"
-    return datetime.fromtimestamp(profile.stat().st_mtime, tz=UTC), "fmp_profile"
-
-
 def load_assumptions(ticker: str) -> Assum:
     """Assum defaults overridden by data/bank_assumptions/<T>_sotp.json, then the
     editable global tax + (opt-in) CAPM-derived discount rates with the
@@ -369,6 +361,9 @@ def load_assumptions(ticker: str) -> Assum:
                     and isinstance(v, (int, float))
                 ):
                     setattr(s, k, v)
+                    if k == "price":
+                        s.price_seed_source = "owner_assumptions"
+                        s.price_seed_path = f"data/bank_assumptions/{ticker}_sotp.json"
                     if k == "country_risk_premium":
                         country_risk_overridden = True
     # Systematic country risk premium (revenue-weighted), filled only when the
@@ -399,6 +394,8 @@ def load_assumptions(ticker: str) -> Assum:
                 d = d[0] if d else {}
             if isinstance(d, dict) and d.get("price"):
                 s.price = float(d["price"])
+                s.price_seed_source = "fmp_profile"
+                s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     return s
@@ -832,7 +829,12 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     wb.save(dest)
 
 
-def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = None) -> bool:
+def persist_dcf_run(
+    s: Assum,
+    m: Mirror,
+    holdings: dict[str, object] | None = None,
+    price_observation: SpecializedPriceObservation | None = None,
+) -> bool:
     """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
     loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
     now passes the SAME dict ``build()``'s Scenario sheet used, so a mid-run
@@ -845,7 +847,10 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
     if holdings is None:
         holdings = _load_holdings(T)
     mos: object = holdings.get("mos_bar") if holdings else None
-    live_price_at, live_price_source = _profile_price_metadata(T)
+    observed_at = price_observation.observed_at if price_observation is not None else None
+    price_source = (
+        price_observation.source_name if price_observation is not None else "assumption_seed"
+    )
     snap_payload: dict[str, object] = {
         "model": "meli_platform_sotp",
         "value_per_share": m.vps,
@@ -879,12 +884,16 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         effective_inputs=asdict(s),
         assumption_snapshot=snap_payload,
         live_price=s.price or None,
-        live_price_at=live_price_at,
-        live_price_source=live_price_source,
+        live_price_at=observed_at,
+        live_price_source=price_source,
         source_files=(
             (REPO / "data" / "bank_assumptions" / f"{T}_sotp.json", "owner_assumptions"),
-            (REPO / "data" / "historical" / "fmp" / f"{T}_profile.json", "company_profile"),
             (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
+            *(
+                price_seed_source_files(REPO, price_observation)
+                if price_observation is not None
+                else ()
+            ),
         ),
         source_records=tuple(
             record for record in (s.global_assumption_source, s.country_risk_source) if record
@@ -900,7 +909,7 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         shares_outstanding=s.shares * 1e6,
         currency="USD",
         live_price=s.price or None,
-        live_price_at=live_price_at,
+        live_price_at=observed_at,
         mos_bar_used=float(mos) if isinstance(mos, (int, float)) else None,
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (MELI sum-of-the-parts platform DCF)",
@@ -925,6 +934,14 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
 
 def main() -> int:
     s = load_assumptions(T)
+    price_observation = resolve_specialized_price(
+        REPO,
+        T,
+        fallback_price=s.price,
+        fallback_source_name=s.price_seed_source,
+        fallback_source_path=s.price_seed_path,
+    )
+    s.price = price_observation.price
     m = mirror(s)
     # Loaded once and threaded through both the Scenario sheet (build) and the
     # persisted snapshot (persist_dcf_run) — PR10: one holdings read, one bear,
@@ -932,7 +949,9 @@ def main() -> int:
     holdings = _load_holdings(T)
     build(s, m, DEST, holdings)
     persisted = (
-        persist_dcf_run(s, m, holdings) if os.environ.get("DCF_PERSIST", "1") == "1" else False
+        persist_dcf_run(s, m, holdings, price_observation)
+        if os.environ.get("DCF_PERSIST", "1") == "1"
+        else False
     )
     up = (m.vps / s.price - 1) if s.price else 0.0
     print(
