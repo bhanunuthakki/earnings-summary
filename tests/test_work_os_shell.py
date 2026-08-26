@@ -562,10 +562,13 @@ def test_work_os_full_page_detail_reuses_known_content_routes_and_source_fragmen
     assert "workOsDecodeDetailOrigin(params.get('work_os_detail_origin'))" in html
 
 
-def test_work_os_shell_has_one_search_ask_entry_and_accessible_transients() -> None:
+def test_work_os_shell_has_one_generic_copilot_launcher_and_accessible_transients() -> None:
     html = render_work_os_shell()
-    assert html.count("Search / Ask") == 1
-    assert 'aria-label="Search or ask"' in html
+    assert "Search / Ask" not in html
+    assert 'aria-label="Search or ask"' not in html
+    assert html.count('id="workOsCopilotLauncher"') == 1
+    chrome = html.split("<main", 1)[0]
+    assert 'id="screen-workspace"' not in chrome
     assert 'role="dialog"' in html
     assert 'aria-modal="true"' in html
     assert html.count('aria-hidden="true"') >= 2
@@ -575,6 +578,20 @@ def test_work_os_shell_has_one_search_ask_entry_and_accessible_transients() -> N
     assert "cc-overlay-scrim" in html
     assert "prefers-reduced-motion" in html
     assert "focus()" in html
+
+
+def test_company_desk_and_brief_reader_emit_distinct_copilot_scope_actions() -> None:
+    html = render_work_os_shell()
+
+    assert 'data-copilot-scope="company"' in html
+    assert 'data-copilot-scope="open-questions"' in html
+    assert 'data-copilot-scope="thesis-contracts"' in html
+    assert 'data-copilot-scope="full-brief"' in html
+    assert "function workOsCopilotScopeItems(trigger, readerScoped)" in html
+    assert "condition.stable_id" in html
+    assert "question.stable_id" in html
+    assert "workOsReaderContext.artifact_id" in html
+    assert "scope_items: workOsCopilotScopeItems(trigger, readerScoped)" in html
 
 
 def test_work_os_search_and_command_k_open_the_one_copilot_workspace() -> None:
@@ -1569,7 +1586,10 @@ def test_company_context_routes_desk_to_playground_and_global_copilot() -> None:
     assert "'?fragment=work-os&tickers=' + encodeURIComponent(ticker)" in playground
     assert "window.workOsOpenGlobalCopilot = function ()" in html
     assert "company_ticker: workOsCurrentCompanyTicker()" in html
-    assert 'onclick="workOsOpenGlobalCopilot()"' in html
+    assert (
+        "if (typeof window.workOsOpenGlobalCopilot === 'function') window.workOsOpenGlobalCopilot();"
+        in html
+    )
 
 
 def test_company_context_accessors_preserve_default_and_url_override_tickers() -> None:
