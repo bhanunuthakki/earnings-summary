@@ -3,9 +3,10 @@
 The generic workbook builder predates the long-form fact store and consumes the
 cached FMP quarterly JSON shape.  This module is a deliberately narrow bridge:
 it overlays only exact-period, primary-document facts that have an unambiguous
-semantic mapping to an existing FMP field.  It never writes the database,
-creates a durable projection, derives debt, or substitutes a mismatched
-currency/unit/period.
+semantic mapping to an existing FMP field.  It may derive only the two explicit
+bridge aggregates registered below when every required same-period component is
+present.  It never writes the database, creates a durable projection, accepts a
+partial aggregate, or substitutes a mismatched currency/unit/period.
 """
 
 from __future__ import annotations
@@ -31,6 +32,69 @@ class FieldMapping:
     currency_required: bool = True
 
 
+ResolutionIdentifierStatus = Literal["available", "unavailable_in_canonical_relation"]
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentLineage:
+    """The canonical fact and document inputs to a derived aggregate."""
+
+    line_item: str
+    period_end: str
+    fiscal_period_type: str
+    fact_id: int
+    primary_value: float
+    currency: str | None
+    unit: str | None
+    source_doc_id: int
+    source_tier: str
+    source_type: str | None
+    source_url: str | None
+    as_of: str
+    locator: str | None
+    reported_observation_id: str | None
+    reported_observation_id_status: ResolutionIdentifierStatus
+    resolution_id: str | None
+    resolution_id_status: ResolutionIdentifierStatus
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "line_item": self.line_item,
+            "period_end": self.period_end,
+            "fiscal_period_type": self.fiscal_period_type,
+            "fact_id": self.fact_id,
+            "primary_value": self.primary_value,
+            "currency": self.currency,
+            "unit": self.unit,
+            "source_doc_id": self.source_doc_id,
+            "source_tier": self.source_tier,
+            "source_type": self.source_type,
+            "source_url": self.source_url,
+            "as_of": self.as_of,
+            "locator": self.locator,
+            "reported_observation_id": self.reported_observation_id,
+            "reported_observation_id_status": self.reported_observation_id_status,
+            "resolution_id": self.resolution_id,
+            "resolution_id_status": self.resolution_id_status,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AggregateDerivation:
+    """Deterministic formula and full canonical inputs for one aggregate."""
+
+    formula: str
+    version: str
+    components: tuple[ComponentLineage, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "formula": self.formula,
+            "version": self.version,
+            "components": [component.to_dict() for component in self.components],
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class FieldLineage:
     line_item: str
@@ -46,6 +110,13 @@ class FieldLineage:
     locator: str | None
     fmp_value: float | None
     primary_value: float
+    currency: str | None
+    unit: str | None
+    reported_observation_id: str | None
+    reported_observation_id_status: ResolutionIdentifierStatus
+    resolution_id: str | None
+    resolution_id_status: ResolutionIdentifierStatus
+    derivation: AggregateDerivation | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -62,6 +133,13 @@ class FieldLineage:
             "locator": self.locator,
             "fmp_value": self.fmp_value,
             "primary_value": self.primary_value,
+            "currency": self.currency,
+            "unit": self.unit,
+            "reported_observation_id": self.reported_observation_id,
+            "reported_observation_id_status": self.reported_observation_id_status,
+            "resolution_id": self.resolution_id,
+            "resolution_id_status": self.resolution_id_status,
+            "derivation": self.derivation.to_dict() if self.derivation is not None else None,
         }
 
 
@@ -76,6 +154,7 @@ class OverlayFinding:
     fact_id: int | None = None
     fmp_value: float | None = None
     primary_value: float | None = None
+    derivation: AggregateDerivation | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -88,6 +167,7 @@ class OverlayFinding:
             "fact_id": self.fact_id,
             "fmp_value": self.fmp_value,
             "primary_value": self.primary_value,
+            "derivation": self.derivation.to_dict() if self.derivation is not None else None,
         }
 
 
@@ -153,6 +233,77 @@ _PRIMARY_TIERS: Final[frozenset[str]] = frozenset({"sec_official"})
 
 
 @dataclass(frozen=True, slots=True)
+class _AggregateMapping:
+    line_item: str
+    component_line_items: tuple[str, str]
+    formula: str
+
+
+_DERIVED_AGGREGATES: Final[tuple[_AggregateMapping, ...]] = (
+    _AggregateMapping(
+        "cash_and_short_term_investments",
+        ("cash_and_equivalents", "short_term_investments"),
+        "cash_and_equivalents + short_term_investments",
+    ),
+    _AggregateMapping(
+        "total_debt",
+        ("long_term_debt", "short_term_debt"),
+        "long_term_debt + short_term_debt",
+    ),
+)
+_DERIVATION_VERSION: Final[str] = "primary_fact_aggregate_v1"
+
+_CANDIDATE_QUERY_BASE: Final[str] = """
+    FROM v_financial_facts_resolved_current AS fact
+    LEFT JOIN documents AS document
+      ON document.id = fact.source_doc_id
+     AND UPPER(document.ticker) = UPPER(fact.ticker)
+    WHERE UPPER(fact.ticker) = UPPER(?)
+    ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
+"""
+_CANDIDATE_QUERY_WITH_BOTH_RESOLUTION_IDS: Final[str] = (
+    """
+    SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
+           fact.value, fact.currency, fact.unit, fact.source_doc_id,
+           fact.locator, document.source_quality_tier, document.source_url,
+           document.fetched_at, document.source_type,
+           fact.reported_observation_id, fact.resolution_id
+"""
+    + _CANDIDATE_QUERY_BASE
+)
+_CANDIDATE_QUERY_WITH_REPORTED_OBSERVATION_ID: Final[str] = (
+    """
+    SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
+           fact.value, fact.currency, fact.unit, fact.source_doc_id,
+           fact.locator, document.source_quality_tier, document.source_url,
+           document.fetched_at, document.source_type,
+           fact.reported_observation_id, NULL
+"""
+    + _CANDIDATE_QUERY_BASE
+)
+_CANDIDATE_QUERY_WITH_RESOLUTION_ID: Final[str] = (
+    """
+    SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
+           fact.value, fact.currency, fact.unit, fact.source_doc_id,
+           fact.locator, document.source_quality_tier, document.source_url,
+           document.fetched_at, document.source_type,
+           NULL, fact.resolution_id
+"""
+    + _CANDIDATE_QUERY_BASE
+)
+_CANDIDATE_QUERY_WITHOUT_RESOLUTION_IDS: Final[str] = (
+    """
+    SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
+           fact.value, fact.currency, fact.unit, fact.source_doc_id,
+           fact.locator, document.source_quality_tier, document.source_url,
+           document.fetched_at, document.source_type,
+           NULL, NULL
+"""
+    + _CANDIDATE_QUERY_BASE
+)
+
+
+@dataclass(frozen=True, slots=True)
 class _FactCandidate:
     fact_id: int
     line_item: str
@@ -167,6 +318,10 @@ class _FactCandidate:
     source_url: str | None
     fetched_at: str | None
     locator: str | None
+    reported_observation_id: str | None
+    reported_observation_id_status: ResolutionIdentifierStatus
+    resolution_id: str | None
+    resolution_id_status: ResolutionIdentifierStatus
 
 
 def overlay_quarterly_records(
@@ -197,12 +352,14 @@ def overlay_quarterly_records(
     applied: list[FieldLineage] = []
     conflicts: list[OverlayFinding] = []
     rejected: list[OverlayFinding] = []
+    mapping_by_line_item = {mapping.line_item: mapping for mapping in mappings}
     for record in copied:
         period_end = _date_value(record.get("date"))
         fiscal_period = _text_value(record.get("period"))
         reported_currency = _text_value(record.get("reportedCurrency"))
         if period_end is None or fiscal_period is None:
             continue
+        selected_by_line_item: dict[str, _FactCandidate] = {}
         for mapping in mappings:
             matches = by_period_line.get((period_end, mapping.line_item), [])
             selected = _select_candidate(
@@ -214,27 +371,17 @@ def overlay_quarterly_records(
             )
             if selected is None:
                 continue
+            selected_by_line_item[mapping.line_item] = selected
             primary_value = selected.value
-            if (
-                primary_value is None
-                or selected.source_doc_id is None
-                or selected.source_tier is None
-            ):
+            if primary_value is None or not _has_complete_document_lineage(selected):
                 continue
             prior_value = _numeric_value(record.get(mapping.fmp_field))
             record[mapping.fmp_field] = primary_value
-            lineage = FieldLineage(
-                line_item=mapping.line_item,
-                fmp_field=mapping.fmp_field,
+            lineage = _field_lineage(
+                selected,
+                mapping=mapping,
                 period_end=period_end,
-                fiscal_period_type=fiscal_period,
-                source_doc_id=selected.source_doc_id,
-                source_tier=selected.source_tier,
-                source_type=selected.source_type,
-                source_url=selected.source_url,
-                as_of=selected.fetched_at or period_end,
-                fact_id=selected.fact_id,
-                locator=selected.locator,
+                fiscal_period=fiscal_period,
                 fmp_value=prior_value,
                 primary_value=primary_value,
             )
@@ -253,6 +400,63 @@ def overlay_quarterly_records(
                         primary_value=primary_value,
                     )
                 )
+        for aggregate in _DERIVED_AGGREGATES:
+            # An eligible disclosed aggregate is authoritative, even when the
+            # components happen to be complete and add to a different number.
+            if aggregate.line_item in selected_by_line_item:
+                continue
+            mapping = mapping_by_line_item.get(aggregate.line_item)
+            if mapping is None:
+                continue
+            components = tuple(
+                selected_by_line_item.get(line_item) for line_item in aggregate.component_line_items
+            )
+            if any(component is None for component in components):
+                continue
+            selected_components = cast("tuple[_FactCandidate, _FactCandidate]", components)
+            if not all(
+                _has_complete_document_lineage(component) for component in selected_components
+            ):
+                continue
+            component_values = tuple(component.value for component in selected_components)
+            if any(value is None for value in component_values):
+                continue
+            primary_value = sum(cast("tuple[float, float]", component_values))
+            prior_value = _numeric_value(record.get(mapping.fmp_field))
+            record[mapping.fmp_field] = primary_value
+            derivation = AggregateDerivation(
+                formula=aggregate.formula,
+                version=_DERIVATION_VERSION,
+                components=tuple(
+                    _component_lineage(component) for component in selected_components
+                ),
+            )
+            applied.append(
+                _field_lineage(
+                    selected_components[0],
+                    mapping=mapping,
+                    period_end=period_end,
+                    fiscal_period=fiscal_period,
+                    fmp_value=prior_value,
+                    primary_value=primary_value,
+                    derivation=derivation,
+                )
+            )
+            if prior_value is not None and prior_value != primary_value:
+                conflicts.append(
+                    OverlayFinding(
+                        line_item=mapping.line_item,
+                        fmp_field=mapping.fmp_field,
+                        period_end=period_end,
+                        fiscal_period_type=fiscal_period,
+                        reason="value_conflict",
+                        source_doc_id=selected_components[0].source_doc_id,
+                        fact_id=selected_components[0].fact_id,
+                        fmp_value=prior_value,
+                        primary_value=primary_value,
+                        derivation=derivation,
+                    )
+                )
     return OverlayResult(copied, tuple(applied), tuple(conflicts), tuple(rejected))
 
 
@@ -267,28 +471,48 @@ def _load_candidates(
         raise RuntimeError(
             "canonical financial-fact cutover is unavailable; refusing a legacy read"
         )
-    query = """
-    SELECT fact.id, fact.line_item, fact.period_end, fact.fiscal_period_type,
-           fact.value, fact.currency, fact.unit, fact.source_doc_id,
-           fact.locator, document.source_quality_tier, document.source_url,
-           document.fetched_at, document.source_type
-    FROM v_financial_facts_resolved_current AS fact
-    LEFT JOIN documents AS document
-      ON document.id = fact.source_doc_id
-     AND UPPER(document.ticker) = UPPER(fact.ticker)
-    WHERE UPPER(fact.ticker) = UPPER(?)
-    ORDER BY fact.period_end, fact.line_item, document.fetched_at DESC, fact.id DESC
-    """
+    view_columns = {
+        str(column[0]).lower()
+        for column in conn.execute(
+            "SELECT * FROM v_financial_facts_resolved_current LIMIT 0"
+        ).description
+    }
+    has_reported_observation_id = "reported_observation_id" in view_columns
+    has_resolution_id = "resolution_id" in view_columns
+    if has_reported_observation_id and has_resolution_id:
+        query = _CANDIDATE_QUERY_WITH_BOTH_RESOLUTION_IDS
+    elif has_reported_observation_id:
+        query = _CANDIDATE_QUERY_WITH_REPORTED_OBSERVATION_ID
+    elif has_resolution_id:
+        query = _CANDIDATE_QUERY_WITH_RESOLUTION_ID
+    else:
+        query = _CANDIDATE_QUERY_WITHOUT_RESOLUTION_IDS
     rows = conn.execute(
         query,
         (ticker,),
     ).fetchall()
     requested_line_items = {mapping.line_item for mapping in mappings}
-    candidates = [_candidate_from_row(row) for row in rows]
+    candidates = [
+        _candidate_from_row(
+            row,
+            reported_observation_id_status=(
+                "available" if has_reported_observation_id else "unavailable_in_canonical_relation"
+            ),
+            resolution_id_status=(
+                "available" if has_resolution_id else "unavailable_in_canonical_relation"
+            ),
+        )
+        for row in rows
+    ]
     return [candidate for candidate in candidates if candidate.line_item in requested_line_items]
 
 
-def _candidate_from_row(row: sqlite3.Row | tuple[object, ...]) -> _FactCandidate:
+def _candidate_from_row(
+    row: sqlite3.Row | tuple[object, ...],
+    *,
+    reported_observation_id_status: ResolutionIdentifierStatus,
+    resolution_id_status: ResolutionIdentifierStatus,
+) -> _FactCandidate:
     values = cast("Sequence[object]", row)
     fact_id = _int_value(values[0])
     if fact_id is None:
@@ -307,6 +531,79 @@ def _candidate_from_row(row: sqlite3.Row | tuple[object, ...]) -> _FactCandidate
         source_url=_text_value(values[10]),
         fetched_at=_text_value(values[11]),
         source_type=_text_value(values[12]),
+        reported_observation_id=_text_value(values[13]),
+        reported_observation_id_status=reported_observation_id_status,
+        resolution_id=_text_value(values[14]),
+        resolution_id_status=resolution_id_status,
+    )
+
+
+def _has_complete_document_lineage(candidate: _FactCandidate) -> bool:
+    return candidate.source_doc_id is not None and candidate.source_tier is not None
+
+
+def _component_lineage(candidate: _FactCandidate) -> ComponentLineage:
+    primary_value = candidate.value
+    source_doc_id = candidate.source_doc_id
+    source_tier = candidate.source_tier
+    if primary_value is None or source_doc_id is None or source_tier is None:
+        raise ValueError("aggregate components require complete canonical document lineage")
+    return ComponentLineage(
+        line_item=candidate.line_item,
+        period_end=candidate.period_end,
+        fiscal_period_type=candidate.fiscal_period_type,
+        fact_id=candidate.fact_id,
+        primary_value=primary_value,
+        currency=candidate.currency,
+        unit=candidate.unit,
+        source_doc_id=source_doc_id,
+        source_tier=source_tier,
+        source_type=candidate.source_type,
+        source_url=candidate.source_url,
+        as_of=candidate.fetched_at or candidate.period_end,
+        locator=candidate.locator,
+        reported_observation_id=candidate.reported_observation_id,
+        reported_observation_id_status=candidate.reported_observation_id_status,
+        resolution_id=candidate.resolution_id,
+        resolution_id_status=candidate.resolution_id_status,
+    )
+
+
+def _field_lineage(
+    candidate: _FactCandidate,
+    *,
+    mapping: FieldMapping,
+    period_end: str,
+    fiscal_period: str,
+    fmp_value: float | None,
+    primary_value: float,
+    derivation: AggregateDerivation | None = None,
+) -> FieldLineage:
+    source_doc_id = candidate.source_doc_id
+    source_tier = candidate.source_tier
+    if source_doc_id is None or source_tier is None:
+        raise ValueError("applied overlay facts require complete canonical document lineage")
+    return FieldLineage(
+        line_item=mapping.line_item,
+        fmp_field=mapping.fmp_field,
+        period_end=period_end,
+        fiscal_period_type=fiscal_period,
+        source_doc_id=source_doc_id,
+        source_tier=source_tier,
+        source_type=candidate.source_type,
+        source_url=candidate.source_url,
+        as_of=candidate.fetched_at or period_end,
+        fact_id=candidate.fact_id,
+        locator=candidate.locator,
+        fmp_value=fmp_value,
+        primary_value=primary_value,
+        currency=candidate.currency,
+        unit=candidate.unit,
+        reported_observation_id=candidate.reported_observation_id,
+        reported_observation_id_status=candidate.reported_observation_id_status,
+        resolution_id=candidate.resolution_id,
+        resolution_id_status=candidate.resolution_id_status,
+        derivation=derivation,
     )
 
 

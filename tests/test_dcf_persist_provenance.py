@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 import sqlite3
 from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from dcf.persist import DcfRunRow, upsert
-from dcf.provenance import DcfInputProvenance
+from dcf.provenance import (
+    DcfInputProvenance,
+    build_file_provenance,
+    build_file_source_record,
+)
 
 _SCHEMA = """
 CREATE TABLE dcf_runs (
@@ -283,3 +290,71 @@ def test_input_ledger_constraint_failure_preserves_the_current_run() -> None:
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1
     assert conn.execute("SELECT npv FROM dcf_runs WHERE is_latest=1").fetchone()[0] == 1_000.0
     assert conn.execute("SELECT COUNT(*) FROM dcf_run_inputs").fetchone()[0] == 2
+
+
+def test_generated_workbook_does_not_fake_the_input_cutoff(tmp_path: Path) -> None:
+    source = tmp_path / "assumptions.json"
+    workbook = tmp_path / "model.xlsx"
+    source.write_text('{"growth":0.1}', encoding="utf-8")
+    workbook.write_bytes(b"generated workbook")
+    source_time = datetime(2026, 1, 2, 12, 0, tzinfo=UTC)
+    workbook_time = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+    os.utime(source, (source_time.timestamp(), source_time.timestamp()))
+    os.utime(workbook, (workbook_time.timestamp(), workbook_time.timestamp()))
+
+    provenance = build_file_provenance(
+        ticker="META",
+        repo_root=tmp_path,
+        workbook_path=workbook,
+        engine_version="test@1",
+        effective_inputs={"growth": 0.1},
+        assumption_snapshot={"growth": 0.1},
+        live_price=None,
+        live_price_at=None,
+        live_price_source=None,
+        source_files=((source, "owner_assumptions"),),
+    )
+
+    assert provenance.inputs_as_of == source_time
+    assert provenance.detail is not None
+    sources = provenance.detail["sources"]
+    assert isinstance(sources, list)
+    typed_sources = cast("list[dict[str, object]]", sources)
+    by_role = {item["role"]: item for item in typed_sources}
+    assert by_role["owner_assumptions"]["influences_calculation"] is True
+    assert by_role["calculation_workbook"]["influences_calculation"] is False
+
+
+def test_pre_overwrite_workbook_input_receipt_retains_the_exact_old_bytes(
+    tmp_path: Path,
+) -> None:
+    workbook = tmp_path / "BN.xlsx"
+    workbook.write_bytes(b"owner-edited yellow cells")
+    source_time = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    os.utime(workbook, (source_time.timestamp(), source_time.timestamp()))
+    receipt = build_file_source_record(workbook, role="owner_workbook_inputs", repo_root=tmp_path)
+    assert receipt is not None
+
+    workbook.write_bytes(b"new generated workbook")
+    provenance = build_file_provenance(
+        ticker="BN",
+        repo_root=tmp_path,
+        workbook_path=workbook,
+        engine_version="holdco_sotp_v1",
+        effective_inputs={"mark": 12.0},
+        assumption_snapshot={"mark": 12.0},
+        live_price=None,
+        live_price_at=None,
+        live_price_source=None,
+        source_files=(),
+        source_records=(receipt,),
+    )
+
+    assert provenance.inputs_as_of == source_time
+    assert provenance.workbook_sha256 != receipt["sha256"]
+    assert provenance.detail is not None
+    sources = provenance.detail["sources"]
+    assert isinstance(sources, list)
+    typed_sources = cast("list[dict[str, object]]", sources)
+    owner_input = next(item for item in typed_sources if item["role"] == "owner_workbook_inputs")
+    assert owner_input["sha256"] == receipt["sha256"]

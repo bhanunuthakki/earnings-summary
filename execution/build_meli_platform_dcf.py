@@ -154,6 +154,7 @@ class Assum:
     country_risk_premium: float = 0.0  # filled from dcf.country_risk at load when 0
     derive_capm: int = 1
     global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
+    country_risk_source: dict[str, object] = field(default_factory=dict, repr=False)
 
 
 def _interp(near: float, term: float, t: int, n: int) -> float:
@@ -353,10 +354,8 @@ def load_assumptions(ticker: str) -> Assum:
             "status": "module_unavailable",
             "observed_at": None,
         }
-    # Systematic country risk premium (revenue-weighted), filled when unset.
-    if country_risk is not None and not s.country_risk_premium:
-        s.country_risk_premium = country_risk.country_risk_premium(REPO, ticker)
     p = REPO / "data" / "bank_assumptions" / f"{ticker}_sotp.json"
+    country_risk_overridden = False
     if p.exists():
         try:
             ov: Any = json.loads(p.read_text(encoding="utf-8"))
@@ -364,8 +363,22 @@ def load_assumptions(ticker: str) -> Assum:
             ov = {}
         if isinstance(ov, dict):
             for k, v in cast("dict[str, Any]", ov).items():
-                if hasattr(s, k) and isinstance(v, (int, float)):
+                if (
+                    k not in {"global_assumption_source", "country_risk_source"}
+                    and hasattr(s, k)
+                    and isinstance(v, (int, float))
+                ):
                     setattr(s, k, v)
+                    if k == "country_risk_premium":
+                        country_risk_overridden = True
+    # Systematic country risk premium (revenue-weighted), filled only when the
+    # owner did not explicitly set it. This makes an override a true authority
+    # boundary: no geographic file is read or claimed as a model input.
+    if country_risk is not None and not country_risk_overridden and not s.country_risk_premium:
+        country_observation = country_risk.country_risk_observation(REPO, ticker)
+        s.country_risk_premium = country_observation.premium
+        if country_observation.source_record is not None:
+            s.country_risk_source = country_observation.source_record
     # Opt-in: derive both discount rates from the editable global rf/ERP + CRP.
     if global_loaded is not None and s.derive_capm:
         s.wacc = (
@@ -871,17 +884,11 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         source_files=(
             (REPO / "data" / "bank_assumptions" / f"{T}_sotp.json", "owner_assumptions"),
             (REPO / "data" / "historical" / "fmp" / f"{T}_profile.json", "company_profile"),
-            (
-                REPO / "data" / "historical" / "fmp" / f"{T}_geo_segments_annual.json",
-                "geographic_segments",
-            ),
-            (
-                REPO / "data" / "historical" / "fmp" / f"{T}_geo_segments_quarterly.json",
-                "geographic_segments",
-            ),
             (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
         ),
-        source_records=(s.global_assumption_source,),
+        source_records=tuple(
+            record for record in (s.global_assumption_source, s.country_risk_source) if record
+        ),
     )
     row = persist_mod.DcfRunRow(
         ticker=T,

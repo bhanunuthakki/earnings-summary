@@ -37,7 +37,11 @@ def _sha256_file(path: Path) -> str:
 
 
 def _source_record(
-    path: Path, *, role: str, repo_root: Path
+    path: Path,
+    *,
+    role: str,
+    repo_root: Path,
+    influences_calculation: bool = True,
 ) -> tuple[dict[str, object], datetime] | None:
     """A hashed source record for a file actually used by a specialized builder."""
     if not path.is_file():
@@ -55,9 +59,16 @@ def _source_record(
             "sha256": _sha256_file(path),
             "bytes": stat.st_size,
             "observed_at": observed_at.isoformat(),
+            "influences_calculation": influences_calculation,
         },
         observed_at,
     )
+
+
+def build_file_source_record(path: Path, *, role: str, repo_root: Path) -> dict[str, object] | None:
+    """Capture an immutable receipt before a mutable file input is overwritten."""
+    captured = _source_record(path, role=role, repo_root=repo_root)
+    return None if captured is None else captured[0]
 
 
 def build_file_provenance(
@@ -91,7 +102,10 @@ def build_file_provenance(
             observed_times.append(observed_at)
     for source_record in source_records:
         detail = dict(source_record)
+        detail.setdefault("influences_calculation", True)
         sources.append(detail)
+        if detail["influences_calculation"] is False:
+            continue
         raw_observed_at = detail.get("observed_at")
         if not isinstance(raw_observed_at, str) or not raw_observed_at:
             continue
@@ -103,10 +117,15 @@ def build_file_provenance(
             parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
         )
 
-    input_sources = list(sources)
+    input_sources = [
+        source for source in sources if source.get("influences_calculation") is not False
+    ]
 
     workbook_record = _source_record(
-        workbook_path, role="calculation_workbook", repo_root=repo_root
+        workbook_path,
+        role="calculation_workbook",
+        repo_root=repo_root,
+        influences_calculation=False,
     )
     workbook_sha256: str | None = None
     if workbook_record is not None:

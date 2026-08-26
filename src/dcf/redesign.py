@@ -97,6 +97,7 @@ _DB_TG = 46
 # row between Terminal growth (46) and Current price (48), so no other Dashboard
 # address shifts. Optional: a pre-CRP workbook with no row 47 reads back as 0.0.
 _DB_CRP = 47
+COUNTRY_RISK_PREMIUM_ROW = _DB_CRP
 _DB_PRICE = 48
 # Growth-fade curvature (per-name, calibrated to consensus by the builder) at the
 # free row 49. Optional: a pre-curvature workbook reads back as the default 2.0.

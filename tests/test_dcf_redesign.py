@@ -396,6 +396,7 @@ def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool
                     "totalAssets": rev * 1.50 * 1e6,
                     "totalCurrentLiabilities": rev * 0.30 * 1e6,
                     "longTermDebt": rev * 0.20 * 1e6,
+                    "totalDebt": rev * 0.20 * 1e6,
                     "totalStockholdersEquity": rev * 0.80 * 1e6,
                 }
             )
@@ -493,6 +494,7 @@ def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
                     "totalAssets": rev * 1.50 * 1e6,
                     "totalCurrentLiabilities": rev * 0.30 * 1e6,
                     "longTermDebt": rev * 0.20 * 1e6,
+                    "totalDebt": rev * 0.20 * 1e6,
                     "totalStockholdersEquity": rev * 0.80 * 1e6,
                 }
             )
@@ -1618,15 +1620,39 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
             }
         },
     }
+    prior_country_context = {
+        "schema_version": "dcf_country_risk_context.v1",
+        "ticker": "TESTCO",
+        "premium": base_inp.country_risk_premium,
+        "authority": "systematic_geo",
+        "source_record": {
+            "role": "geographic_revenue",
+            "path": "data/historical/fmp/TESTCO_geo_segments_annual.json",
+            "sha256": "a" * 64,
+            "bytes": 123,
+            "observed_at": "2026-08-20T12:00:00+00:00",
+            "influences_calculation": True,
+            "selection": "annual_latest_fiscal_year",
+        },
+    }
     conn.execute(
         "UPDATE dcf_runs SET provenance_json=? WHERE ticker='TESTCO'",
-        (json.dumps({"ticker": "TESTCO", "primary_fact_overlay": primary_overlay}),),
+        (
+            json.dumps(
+                {
+                    "ticker": "TESTCO",
+                    "primary_fact_overlay": primary_overlay,
+                    "country_risk_context": prior_country_context,
+                }
+            ),
+        ),
     )
     conn.commit()
     conn.close()
 
     payload = base_inp.to_dict()
     payload["exit_multiple"] = m0 + 3.0  # a clean ledger-tracked scalar
+    payload["country_risk_premium"] = base_inp.country_risk_premium + 0.01
     res = refresh_dcf.apply_edits(
         "TESTCO", refresh_repo, db, redesign.RedesignInputs.from_dict(payload)
     )
@@ -1648,6 +1674,17 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     assert res["fair_value_per_share"] == pytest.approx(float(row[0]))
     persisted_provenance = json.loads(str(row[2]))
     assert persisted_provenance["primary_fact_overlay"] == primary_overlay
+    persisted_country = persisted_provenance["country_risk_context"]
+    assert persisted_country == {
+        "schema_version": "dcf_country_risk_context.v1",
+        "ticker": "TESTCO",
+        "premium": pytest.approx(base_inp.country_risk_premium + 0.01),
+        "authority": "owner_override",
+        "source_record": None,
+    }
+    assert all(
+        source.get("role") != "geographic_revenue" for source in persisted_provenance["sources"]
+    )
 
     # The override ledger records the edit; the Opus baseline is NOT overwritten.
     adata = json.loads(
@@ -1695,7 +1732,36 @@ def test_prior_primary_overlay_supports_only_explicit_static_schema_variants(
     ]
     placeholders = ", ".join("?" for _ in insert_columns)
     overlay: dict[str, object] = {"status": "ok", "statements": {}}
-    payload = json.dumps({"ticker": "TESTCO", "primary_fact_overlay": overlay})
+    bridge_context: dict[str, object] = {
+        "schema_version": "dcf_equity_bridge_context.v1",
+        "ticker": "TESTCO",
+        "period_end": "2026-06-30",
+        "fiscal_period_type": "Q2",
+        "reporting_currency": "USD",
+        "cash_m": 200.0,
+        "total_debt_m": 100.0,
+        "diluted_shares_m": 10.0,
+        "cash_basis": "reported_aggregate",
+        "total_debt_basis": "reported_aggregate",
+    }
+    country_context: dict[str, object] = {
+        "schema_version": "dcf_country_risk_context.v1",
+        "ticker": "TESTCO",
+        "premium": 0.0,
+        "authority": "owner_override",
+        "source_record": None,
+    }
+    payload = json.dumps(
+        {
+            "ticker": "TESTCO",
+            "primary_fact_overlay": overlay,
+            "equity_bridge_receipt": {
+                "schema_version": "dcf_equity_bridge_receipt.v2",
+                "bridge_context": bridge_context,
+            },
+            "country_risk_context": country_context,
+        }
+    )
 
     with sqlite3.connect(db) as conn:
         conn.execute(
@@ -1708,6 +1774,8 @@ def test_prior_primary_overlay_supports_only_explicit_static_schema_variants(
         )
 
     assert refresh_dcf.prior_primary_fact_overlay(db, "testco") == overlay
+    assert refresh_dcf.prior_equity_bridge_context(db, "testco") == bridge_context
+    assert refresh_dcf.prior_country_risk_context(db, "testco") == country_context
 
 
 _KPI_SCHEMA = """

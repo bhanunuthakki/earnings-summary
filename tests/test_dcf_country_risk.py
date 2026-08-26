@@ -126,6 +126,13 @@ def test_country_risk_premium_reads_annual_geo_cache(tmp_path: Path) -> None:
         )
     )
     assert crp > 0.025
+    observation = country_risk.country_risk_observation(tmp_path, "MELI")
+    assert observation.source_record is not None
+    assert observation.source_record["path"] == (
+        "data/historical/fmp/MELI_geo_segments_annual.json"
+    )
+    assert observation.source_record["selection"] == "annual_latest_fiscal_year"
+    assert observation.source_record["influences_calculation"] is True
 
 
 def test_country_risk_premium_no_cache_is_zero(tmp_path: Path) -> None:
@@ -133,6 +140,12 @@ def test_country_risk_premium_no_cache_is_zero(tmp_path: Path) -> None:
 
 
 def test_country_risk_premium_falls_back_to_quarterly_ttm(tmp_path: Path) -> None:
+    _write_geo(
+        tmp_path,
+        "QTR",
+        [{"fiscalYear": 2025, "period": "FY", "data": {}}],
+        annual=True,
+    )
     _write_geo(
         tmp_path,
         "QTR",
@@ -145,6 +158,12 @@ def test_country_risk_premium_falls_back_to_quarterly_ttm(tmp_path: Path) -> Non
     assert country_risk.country_risk_premium(tmp_path, "QTR") == pytest.approx(
         country_risk.COUNTRY_CRP["Brazil"]
     )
+    observation = country_risk.country_risk_observation(tmp_path, "QTR")
+    assert observation.source_record is not None
+    assert observation.source_record["path"] == (
+        "data/historical/fmp/QTR_geo_segments_quarterly.json"
+    )
+    assert observation.source_record["selection"] == "quarterly_latest_four"
 
 
 def test_country_risk_premium_survives_malformed_cache(tmp_path: Path) -> None:

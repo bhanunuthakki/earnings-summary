@@ -23,11 +23,19 @@ from urllib.parse import unquote, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from models.documents import SourceType
 from provenance.observation_resolution import (
     ObservationDimension,
     ObservationResolutionLedger,
     ReportedObservation,
     ResolutionRevision,
+)
+from provenance.source_regime import (
+    EvidenceAuthority,
+    SourceDomain,
+    SourceRegime,
+    classification_for_source_type,
+    contract_for,
 )
 
 log = logging.getLogger(__name__)
@@ -38,7 +46,7 @@ SelectionMode: TypeAlias = Literal["resolved_view", "legacy_pre_cutover"]
 DocumentFactAdmissionStatus: TypeAlias = Literal["inserted", "idempotent_replay", "empty"]
 
 _TABLES: tuple[FactTable, ...] = ("financial_facts", "kpi_facts")
-_POLICY_VERSION = "investor-grade-fact-resolution@1"
+_POLICY_VERSION = "investor-grade-fact-resolution@2"
 _MATERIAL_RELATIVE_DELTA = Decimal("0.01")
 _COMPANYFACTS_PATH = re.compile(r"^facts\.([^.]+)\.([^.]+)\.units\.([^\[]+)\[([0-9]+)\]$")
 _TIER_RANK = {
@@ -47,6 +55,11 @@ _TIER_RANK = {
     "llm_extracted": 20,
     "yfinance_fallback": 10,
     "s1_provisional": 0,
+}
+_AUTHORITY_PRECEDENCE = contract_for(SourceRegime.COMBINED).precedence(SourceDomain.REPORTED_FACT)
+_AUTHORITY_RANK = {
+    authority: len(_AUTHORITY_PRECEDENCE) - index
+    for index, authority in enumerate(_AUTHORITY_PRECEDENCE)
 }
 DOCUMENT_FACT_REHYDRATION_SQL: Final = (
     "SELECT fact.id, fact.ticker, link.fact_row_id "
@@ -322,6 +335,7 @@ class _Candidate:
     period_end: datetime
     fiscal_period_type: str
     source_tier: str
+    source_type: str
     source_effective_at: datetime
     available_at: datetime
 
@@ -463,7 +477,7 @@ def resolve_fact_logical_key(
     knowledge_cutoff: datetime,
     recorded_at: datetime,
 ) -> FactResolutionResult:
-    """Resolve all current candidates available at the cutoff under policy v1."""
+    """Resolve all current candidates available at the cutoff under policy v2."""
 
     candidates = _load_complete_candidates(conn, logical_key, knowledge_cutoff)
     if not candidates:
@@ -473,6 +487,7 @@ def resolve_fact_logical_key(
         candidates,
         key=lambda candidate: (
             _TIER_RANK.get(candidate.source_tier, -1),
+            _candidate_authority_rank(candidate),
             _utc_instant(candidate.source_effective_at),
             candidate.fact_row_id,
             candidate.fact_revision,
@@ -481,12 +496,22 @@ def resolve_fact_logical_key(
     )
     material_dissent = _has_material_dissent(candidates) or not all(checks.values())
     top_rank = max(_TIER_RANK.get(candidate.source_tier, -1) for candidate in candidates)
-    top_candidates = tuple(
+    top_tier_candidates = tuple(
         candidate
         for candidate in candidates
         if _TIER_RANK.get(candidate.source_tier, -1) == top_rank
     )
-    unresolved = not all(checks.values()) or _has_material_dissent(top_candidates)
+    top_authority_rank = max(
+        _candidate_authority_rank(candidate) for candidate in top_tier_candidates
+    )
+    top_candidates = tuple(
+        candidate
+        for candidate in top_tier_candidates
+        if _candidate_authority_rank(candidate) == top_authority_rank
+    )
+    top_authority_dissent = _has_any_value_dissent(top_candidates)
+    material_dissent = material_dissent or top_authority_dissent
+    unresolved = not all(checks.values()) or top_authority_dissent
     status: ResolutionStatus = "unresolved_material" if unresolved else "resolved"
     candidate_ids = tuple(sorted(candidate.observation_id for candidate in candidates))
     candidate_digest = hashlib.sha256("\0".join(candidate_ids).encode()).hexdigest()
@@ -1070,7 +1095,7 @@ def _load_complete_candidates(
         "observation.numeric_value, observation.currency, observation.unit, "
         "observation.period_start, observation.period_end, observation.fiscal_period_type, "
         "link.source_tier, COALESCE(document.filing_date, document.fetched_at), "
-        "observation.available_at "
+        "observation.available_at, document.source_type "
         "FROM fact_observation_revisions AS link "
         "JOIN reported_observations AS observation USING (observation_id) "
         "JOIN documents AS document ON document.id = link.source_document_id "
@@ -1101,6 +1126,7 @@ def _load_complete_candidates(
                 period_end=_datetime(row[8], field="period_end"),
                 fiscal_period_type=_required_text(row[9], "fiscal_period_type"),
                 source_tier=_required_text(row[10], "source_tier"),
+                source_type=_required_text(row[13], "source_type"),
                 source_effective_at=_datetime(row[11], field="source_effective_at"),
                 available_at=_datetime(row[12], field="available_at"),
             )
@@ -1123,9 +1149,11 @@ def _candidate_checks(candidates: tuple[_Candidate, ...]) -> dict[str, bool]:
         for candidate in candidates
     }
     tiers_known = all(candidate.source_tier in _TIER_RANK for candidate in candidates)
+    authorities_known = all(_candidate_authority_rank(candidate) >= 0 for candidate in candidates)
     tables = {candidate.fact_table for candidate in candidates}
     return {
         "candidate_set_nonempty": bool(candidates),
+        "source_authorities_known": authorities_known,
         "currency_consistent": len(currencies) == 1,
         "fact_kind_consistent": len(tables) == 1,
         "period_consistent": len(periods) == 1,
@@ -1146,6 +1174,23 @@ def _has_material_dissent(candidates: tuple[_Candidate, ...]) -> bool:
     if denominator == 0:
         return True
     return abs(maximum - minimum) / denominator > _MATERIAL_RELATIVE_DELTA
+
+
+def _has_any_value_dissent(candidates: tuple[_Candidate, ...]) -> bool:
+    return len({candidate.numeric_value for candidate in candidates}) > 1
+
+
+def _candidate_authority(candidate: _Candidate) -> EvidenceAuthority | None:
+    try:
+        source_type = SourceType(candidate.source_type)
+    except ValueError:
+        return None
+    return classification_for_source_type(source_type).authority
+
+
+def _candidate_authority_rank(candidate: _Candidate) -> int:
+    authority = _candidate_authority(candidate)
+    return -1 if authority is None else _AUTHORITY_RANK.get(authority, -1)
 
 
 def _current_resolution(conn: sqlite3.Connection, logical_key: str) -> sqlite3.Row | None:
