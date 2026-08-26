@@ -180,7 +180,9 @@ def test_extracted_routes_preserve_endpoint_contract(client):
     # the request-scoped typed Company Desk response instead of a duplicate route.
     # +2 Evaluation routes: bounded Cockpit dialogues and the complete L2 surface.
     # +1 governed Operations attention lifecycle action route.
-    assert len(rules) == 174
+    # +1 bounded read-only DCF grade-evidence projection.
+    assert len(rules) == 175
+    assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
     assert "company_say_do_api" not in rules
     assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()
     assert rules["operations_attention_action"] == ("/api/operations/attention/<action_name>")
