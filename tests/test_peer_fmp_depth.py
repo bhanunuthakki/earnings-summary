@@ -53,6 +53,7 @@ def test_index_member_depths_match_consumer_needs() -> None:
     assert _extra(jobs, "income_statement_quarterly")["limit"] == 9
     assert _extra(jobs, "key_metrics_quarterly")["limit"] == 4
     assert _extra(jobs, "balance_sheet_quarterly")["limit"] == 1
+    assert _extra(jobs, "analyst_estimates_annual")["limit"] == 3
     # Market cap is windowed to ~140 calendar days (~90 trading rows).
     mc = _extra(jobs, "historical_market_cap")
     assert mc["from"] == sfd.PEER_MARKET_CAP_FROM
@@ -88,6 +89,7 @@ def test_truncator_tables_match_allowlist() -> None:
         "income_statement_quarterly",
         "key_metrics_quarterly",
         "balance_sheet_quarterly",
+        "analyst_estimates_annual",
     ):
         allow = sfd.PEER_ENDPOINT_ALLOWLIST[suffix]
         assert allow is not None

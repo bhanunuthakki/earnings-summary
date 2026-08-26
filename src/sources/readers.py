@@ -178,7 +178,10 @@ class ProviderNeutralDataReader:
             all_estimates = self.adapter.parse_estimates(
                 content,
                 ticker=ticker_clean,
-                observed_at=datetime.now(UTC),
+                # The cache file is the local observation boundary.  Preserve
+                # its recorded write time instead of pretending every read is
+                # a fresh consensus observation.
+                observed_at=datetime.fromtimestamp(found_file.stat().st_mtime, UTC),
                 currency_packet=currency_packet,
             )
             if metric:

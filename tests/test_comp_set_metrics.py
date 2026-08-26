@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -114,6 +115,35 @@ def _seed_member(
         )
 
 
+def _seed_forward_estimate(
+    tmp_path: Path,
+    ticker: str,
+    *,
+    net_income: float,
+    observed_on: date = AS_OF,
+    target_period_end: str = "2026-12-31",
+) -> None:
+    _write(
+        tmp_path,
+        ticker,
+        "analyst_estimates_annual",
+        [
+            {
+                "symbol": ticker,
+                "date": target_period_end,
+                "netIncomeAvg": net_income,
+                "netIncomeLow": net_income * 0.9,
+                "netIncomeHigh": net_income * 1.1,
+            }
+        ],
+    )
+    estimate_path = (
+        tmp_path / "data" / "historical" / "fmp" / f"{ticker}_analyst_estimates_annual.json"
+    )
+    stamp = datetime.combine(observed_on, datetime.min.time(), tzinfo=UTC).timestamp()
+    os.utime(estimate_path, (stamp, stamp))
+
+
 # ---------------------------------------------------------------------------
 # load_member_snapshot
 # ---------------------------------------------------------------------------
@@ -170,6 +200,43 @@ def test_snapshot_p_tbv_subtracts_goodwill_and_intangibles(tmp_path: Path) -> No
     assert snap.tangible_book == 5e8 - 1e8 - 5e7
 
 
+def test_snapshot_projects_dated_forward_net_income_without_ttm_fallback(tmp_path: Path) -> None:
+    _seed_member(tmp_path, "FWD", market_cap=1e9, net_incomes=[1e8] * 8)
+    _seed_forward_estimate(tmp_path, "FWD", net_income=5e7)
+    snap = load_member_snapshot(tmp_path, "FWD", AS_OF)
+    assert snap.forward_net_income == 5e7
+    assert snap.forward_estimate_provider == "fmp"
+    assert snap.forward_estimate_observed_on == AS_OF
+    assert snap.forward_period_end == date(2026, 12, 31)
+    assert snap.forward_estimate_unavailable_reason is None
+
+
+def test_snapshot_marks_stale_and_negative_forward_estimates_unavailable(tmp_path: Path) -> None:
+    _seed_member(tmp_path, "STALE", market_cap=1e9, net_incomes=[1e8] * 8)
+    _seed_forward_estimate(
+        tmp_path,
+        "STALE",
+        net_income=5e7,
+        observed_on=AS_OF - timedelta(days=211),
+    )
+    stale = load_member_snapshot(tmp_path, "STALE", AS_OF)
+    assert stale.forward_net_income is None
+    assert stale.forward_estimate_unavailable_reason == "stale_estimate"
+
+    _seed_member(tmp_path, "LOSS", market_cap=1e9, net_incomes=[1e8] * 8)
+    _seed_forward_estimate(tmp_path, "LOSS", net_income=-5e7)
+    loss = load_member_snapshot(tmp_path, "LOSS", AS_OF)
+    assert loss.forward_net_income is None
+    assert loss.forward_estimate_unavailable_reason == "negative_forward_earnings"
+
+
+def test_snapshot_marks_missing_forward_estimate_explicitly_unavailable(tmp_path: Path) -> None:
+    _seed_member(tmp_path, "NOEST", market_cap=1e9, net_incomes=[1e8] * 8)
+    snap = load_member_snapshot(tmp_path, "NOEST", AS_OF)
+    assert snap.forward_net_income is None
+    assert snap.forward_estimate_unavailable_reason == "estimate_cache_missing"
+
+
 # ---------------------------------------------------------------------------
 # compute_comparable_set_metrics
 # ---------------------------------------------------------------------------
@@ -192,6 +259,27 @@ def test_pe_median_excludes_lossmaking_but_aggregate_includes(tmp_path: Path) ->
     # Sum mcap = 2e9, sum earnings = 1e8 + -1e8 = 0 -> undefined denominator
     assert pe_agg.value is None
     assert pe_agg.method_flags.get("aggregate_pe_undefined_negative_denominator") is True
+
+
+def test_pe_ntm_preserves_partial_coverage_and_unavailable_reasons(tmp_path: Path) -> None:
+    for ticker, earnings in (("A", 5e7), ("B", 1e8)):
+        _seed_member(tmp_path, ticker, market_cap=1e9, net_incomes=[1e8] * 8)
+        _seed_forward_estimate(tmp_path, ticker, net_income=earnings)
+    _seed_member(tmp_path, "MISSING", market_cap=1e9, net_incomes=[1e8] * 8)
+
+    rows = compute_comparable_set_metrics(
+        tmp_path, _members(["A", "B", "MISSING"]), "operating", AS_OF
+    )
+    median = next(r for r in rows if r.metric == "pe_ntm" and r.stat_type == "median")
+    aggregate = next(r for r in rows if r.metric == "pe_ntm" and r.stat_type == "aggregate")
+    assert median.value == 15.0
+    assert median.n_valid == 2
+    assert median.coverage_pct == 2 / 3
+    assert median.method_flags["period_basis"] == "closest_forward_fiscal_year"
+    assert median.method_flags["currency"] == "USD"
+    assert median.method_flags["unit"] == "x"
+    assert median.method_flags["unavailable_reasons"] == {"estimate_cache_missing": 1}
+    assert aggregate.value == 2e9 / 1.5e8
 
 
 def test_ev_ebitda_only_for_operating_class(tmp_path: Path) -> None:

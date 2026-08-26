@@ -288,12 +288,34 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
         body.write("</tbody></table></div>")
 
 
-def _fmt_metric_value(line: CompSetMetricLine, value: float | None) -> str:
+_FORWARD_UNAVAILABLE_LABELS: dict[str, str] = {
+    "estimate_cache_missing": "estimate cache missing",
+    "estimate_source_invalid": "estimate source invalid",
+    "no_forward_fiscal_period": "no forward fiscal period",
+    "estimate_observed_after_as_of": "estimate observed after as-of date",
+    "stale_estimate": "estimate is stale",
+    "currency_mismatch": "estimate/market-cap currency mismatch",
+    "negative_forward_earnings": "forward earnings are non-positive",
+    "market_cap_unavailable": "market cap unavailable",
+}
+
+
+def _fmt_metric_value(
+    line: CompSetMetricLine,
+    value: float | None,
+    *,
+    unavailable_reason: str | None = None,
+) -> str:
     """Render one metric's number per its display kind (§11 card): a bare
     multiple ("15.2x") or a percentage. ``fcf_yield_ttm`` is a raw FMP
     fraction (scale by 100); ``rev_yoy`` is already percent-scaled by the
     compute layer (compute.comp_set_metrics.load_member_snapshot)."""
     if value is None:
+        if line.metric == "pe_ntm":
+            reason = _FORWARD_UNAVAILABLE_LABELS.get(
+                unavailable_reason or "", unavailable_reason or "insufficient valid coverage"
+            )
+            return f'<span class="muted">Unavailable: {_esc(reason)}</span>'
         return '<span class="muted">—</span>'
     if line.is_pct:
         pct = value * 100.0 if line.metric == "fcf_yield_ttm" else value
@@ -310,13 +332,36 @@ def _comp_set_metric_row(line: CompSetMetricLine) -> str:
     row_cls = ' class="muted"' if line.secondary else ""
     coverage_tone = " k-chip-warn" if line.coverage_pct_median < 0.5 else ""
     no_flags = '<span class="muted">—</span>'
+    label_html = _esc(line.label)
+    if line.metric == "pe_ntm":
+        source_bits = [
+            f'<span class="k-chip k-chip-mono">{_esc(line.provider.upper())}</span>'
+            if line.provider
+            else '<span class="k-chip k-chip-mono k-chip-warn">SOURCE UNAVAILABLE</span>',
+            '<span class="k-chip k-chip-mono">FY1 PROXY</span>',
+        ]
+        if line.estimate_observed_min is not None:
+            observed = line.estimate_observed_min.isoformat()
+            if line.estimate_observed_max not in (None, line.estimate_observed_min):
+                observed += f" to {line.estimate_observed_max.isoformat()}"
+            source_bits.append(f'<span class="k-chip k-chip-mono">OBS {_esc(observed)}</span>')
+        if line.currency:
+            source_bits.append(f'<span class="k-chip k-chip-mono">{_esc(line.currency)}</span>')
+        label_html += "<br>" + " ".join(source_bits)
+    scope_reason = (
+        ", ".join(
+            f"{count} {_FORWARD_UNAVAILABLE_LABELS.get(reason, reason)}"
+            for reason, count in line.unavailable_reasons
+        )
+        or None
+    )
     return (
         f"<tr{row_cls}>"
-        f"<td>{_esc(line.label)}</td>"
-        f'<td class="num">{_fmt_metric_value(line, line.subject_value)}</td>'
-        f'<td class="num">{_fmt_metric_value(line, line.median_value)} '
+        f"<td>{label_html}</td>"
+        f'<td class="num">{_fmt_metric_value(line, line.subject_value, unavailable_reason=line.subject_unavailable_reason)}</td>'
+        f'<td class="num">{_fmt_metric_value(line, line.median_value, unavailable_reason=scope_reason)} '
         f'<span class="k-chip k-chip-mono{coverage_tone}">{line.n_valid_median}/{line.n_members}</span></td>'
-        f'<td class="num">{_fmt_metric_value(line, line.aggregate_value)}</td>'
+        f'<td class="num">{_fmt_metric_value(line, line.aggregate_value, unavailable_reason=scope_reason)}</td>'
         f"<td>{flag_chips or no_flags}</td>"
         "</tr>"
     )
@@ -374,6 +419,41 @@ def _comp_set_context_panel(body: StringIO, section: CompSetContextSection) -> N
             "doc) — not yet computed for REIT-class comp sets.</div>"
         )
     else:
+        forward_line = next(
+            (line for line in section.primary_metrics if line.metric == "pe_ntm"), None
+        )
+        if forward_line is not None:
+            subject = _fmt_metric_value(
+                forward_line,
+                forward_line.subject_value,
+                unavailable_reason=forward_line.subject_unavailable_reason,
+            )
+            peer_reason = (
+                ", ".join(
+                    f"{count} {_FORWARD_UNAVAILABLE_LABELS.get(reason, reason)}"
+                    for reason, count in forward_line.unavailable_reasons
+                )
+                or None
+            )
+            peer = _fmt_metric_value(
+                forward_line,
+                forward_line.median_value,
+                unavailable_reason=peer_reason,
+            )
+            observed = (
+                forward_line.estimate_observed_max.isoformat()
+                if forward_line.estimate_observed_max is not None
+                else "unavailable"
+            )
+            body.write(
+                '<div class="comp-set-benchmark-row">'
+                '<span class="k-well k-well-accent"><strong>Forward P/E</strong> '
+                f"Subject {subject} · governed-peer median {peer} "
+                f"({forward_line.n_valid_median}/{forward_line.n_members}) · "
+                f"{_esc((forward_line.provider or 'source unavailable').upper())} · "
+                f"observed {_esc(observed)} · {_esc(forward_line.currency or 'currency unavailable')}"
+                "</span></div>"
+            )
         body.write(
             '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
             "<th>Metric</th>"
@@ -397,10 +477,19 @@ def _comp_set_context_panel(body: StringIO, section: CompSetContextSection) -> N
             continue
         tone = " k-chip-warn" if scope.stale else ""
         pe = f"{scope.pe_ttm_median:.1f}x" if scope.pe_ttm_median is not None else "—"
+        if scope.pe_ntm_median is not None:
+            pe_ntm = f"{scope.pe_ntm_median:.1f}x"
+        else:
+            why = ", ".join(
+                f"{count} {_FORWARD_UNAVAILABLE_LABELS.get(reason, reason)}"
+                for reason, count in scope.pe_ntm_unavailable_reasons
+            )
+            pe_ntm = f"Unavailable{': ' + why if why else ''}"
         as_of_txt = scope.as_of_date.isoformat() if scope.as_of_date is not None else "—"
         body.write(
             f'<span class="k-well"><strong>{_esc(label)}</strong> {_esc(scope.scope_key)}: '
-            f"P/E {pe} · {scope.n_members} names · {as_of_txt}"
+            f"P/E NTM {_esc(pe_ntm)} ({scope.pe_ntm_n_valid}/{scope.n_members}) · "
+            f"P/E TTM {pe} · {scope.n_members} names · {as_of_txt}"
             f'<span class="k-chip{tone}">{"STALE" if scope.stale else "CURRENT"}</span></span>'
         )
     if section.benchmark_etf or section.benchmark_sector_etf:
@@ -421,23 +510,48 @@ def _comp_set_context_panel(body: StringIO, section: CompSetContextSection) -> N
     # Step C: market-cap-only LLM-suggested peers) are visibly tagged, never
     # silently mixed into the contributing count.
     if section.members:
+        ordered_members = sorted(
+            section.members, key=lambda member: (member.context_only, member.ticker)
+        )
+        governed = [member for member in ordered_members if not member.context_only]
+        visible_governed = governed[:8]
+        body.write('<div class="comp-set-benchmark-row">')
+        body.write('<span class="k-well"><strong>Governed peers</strong> ')
         body.write(
+            " · ".join(
+                ticker_label(member.ticker, member.name, href=f"/reports/{member.ticker}")
+                for member in visible_governed
+            )
+        )
+        if len(governed) > len(visible_governed):
+            body.write(
+                f' <span class="k-chip">+{len(governed) - len(visible_governed)} more</span>'
+            )
+        body.write("</span></div>")
+        body.write(
+            f'<details class="k-prov-drawer" data-persist="sector-context-{_esc(section.ticker)}">'
+            f"<summary>Full comparable universe ({len(ordered_members)})</summary>"
+            '<div class="k-toolbar"><label>Filter universe '
+            '<input type="search" data-comp-roster-filter '
+            'placeholder="Ticker, company, or basis" autocomplete="off"></label></div>'
             '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
             "<th>Member</th><th>Basis</th><th>Contributes</th>"
             "</tr></thead><tbody>"
         )
-        for m in section.members:
+        for m in ordered_members:
             reason = _MEMBERSHIP_LABEL.get(m.membership_reason, m.membership_reason)
+            member_search = f"{m.ticker} {m.name or ''} {reason}".lower()
             contributes = (
                 '<span class="k-chip k-chip-mono">context only</span>'
                 if m.context_only
                 else '<span class="k-chip k-chip-mono k-chip-ok">yes</span>'
             )
             body.write(
-                f"<tr><td>{ticker_label(m.ticker, m.name, href=f'/reports/{m.ticker}')}</td>"
+                f'<tr data-comp-member-search="{_esc(member_search)}">'
+                f"<td>{ticker_label(m.ticker, m.name, href=f'/reports/{m.ticker}')}</td>"
                 f"<td>{_esc(reason)}</td><td>{contributes}</td></tr>"
             )
-        body.write("</tbody></table></div>")
+        body.write("</tbody></table></div></details>")
 
     body.write("</div>")
 

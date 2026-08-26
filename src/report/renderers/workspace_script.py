@@ -172,6 +172,22 @@ JS = r"""
     });
   });
 
+  // ---- Sector Context full-universe filter -------------------------------
+  // The decision summary stays compact; the native disclosure retains the
+  // complete, server-sorted universe and this local filter only toggles the
+  // HTML hidden attribute. No network request or runtime styling is needed.
+  document.querySelectorAll('[data-comp-roster-filter]').forEach(function (input) {
+    input.addEventListener('input', function () {
+      var query = (input.value || '').trim().toLowerCase();
+      var disclosure = input.closest('details');
+      if (!disclosure) return;
+      disclosure.querySelectorAll('[data-comp-member-search]').forEach(function (row) {
+        var haystack = row.getAttribute('data-comp-member-search') || '';
+        row.hidden = !!query && haystack.indexOf(query) === -1;
+      });
+    });
+  });
+
   // ---- Keyboard shortcuts: j/k panels · / filter · ? help · Esc -----------
   function inField(el) {
     return (
