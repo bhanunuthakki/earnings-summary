@@ -174,7 +174,7 @@ def test_populated_set_returns_full_section(tmp_path: Path) -> None:
     )
     _insert_scope_row(conn, "comparable_set", set_id, AS_OF, "pe_ttm", "median", 18.4, 1, 1)
     _insert_scope_row(conn, "comparable_set", set_id, AS_OF, "pe_ttm", "aggregate", 19.1, 1, 1)
-    forward_flags = {
+    forward_flags: dict[str, object] = {
         "estimate_provider": "fmp",
         "period_basis": "closest_forward_fiscal_year",
         "estimate_observed_min": AS_OF.isoformat(),
