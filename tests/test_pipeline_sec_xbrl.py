@@ -5,27 +5,64 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal, Protocol, cast
 
 import pytest
 
 from models.facts import FiscalPeriodType
+from pipeline import sec_xbrl as sec_xbrl_module
 from pipeline.sec_xbrl import (
     CIK_MAP,
     NO_SEC_FILERS,
     TAG_LADDERS,
     CompanyFactsAccessionRecord,
-    _infer_fye_month,
-    _modal_currency,
-    _period_span_months,
-    _resolve_fiscal_period_type,
-    _same_doc_pick_key,
     enumerate_companyfacts_accessions,
     insert_facts_from_companyfacts,
     upsert_accession_documents,
     upsert_companyfacts_snapshot_document,
+)
+
+
+class _FiscalPeriodResolver(Protocol):
+    def __call__(
+        self,
+        *,
+        fp: str | None,
+        start_date: str | None,
+        end_date: str | None,
+        fye_month: int = 12,
+    ) -> FiscalPeriodType | None: ...
+
+
+class _SameDocumentPickKey(Protocol):
+    def __call__(
+        self, entry: Mapping[str, object], signed_value: Decimal
+    ) -> tuple[str, int, str, str, str]: ...
+
+
+_infer_fye_month = cast(
+    "Callable[[dict[str, object]], int]",
+    getattr(sec_xbrl_module, "_infer_fye_month"),
+)
+_modal_currency = cast(
+    "Callable[[dict[str, object], Literal['monetary', 'per_share', 'shares']], str | None]",
+    getattr(sec_xbrl_module, "_modal_currency"),
+)
+_period_span_months = cast(
+    "Callable[[str | None, str | None], int | None]",
+    getattr(sec_xbrl_module, "_period_span_months"),
+)
+_resolve_fiscal_period_type = cast(
+    "_FiscalPeriodResolver",
+    getattr(sec_xbrl_module, "_resolve_fiscal_period_type"),
+)
+_same_doc_pick_key = cast(
+    "_SameDocumentPickKey",
+    getattr(sec_xbrl_module, "_same_doc_pick_key"),
 )
 
 TEST_ACCESSION = "0000000001-22-000001"
@@ -161,7 +198,7 @@ def test_resolve_period_returns_q4_for_balance_sheet_at_dec31() -> None:
 
 def test_enumerate_accessions_dedupes() -> None:
     """Same accession appearing in multiple tag entries gets a single record."""
-    payload = {
+    payload: dict[str, object] = {
         "facts": {
             "us-gaap": {
                 "Revenues": {
@@ -364,7 +401,7 @@ def test_legacy_accession_resolver_never_manufactures_missing_filing_documents(
 def test_insert_facts_skips_ytd_aggregations(conn: sqlite3.Connection) -> None:
     """Mixed payload: Q3 standalone (3 month) + 9M YTD; only Q3 gets inserted."""
     accn_to_doc = _register_snapshot(conn, ticker="X", accessions=(TEST_ACCESSION,))
-    payload = {
+    payload: dict[str, object] = {
         "facts": {
             "us-gaap": {
                 "Revenues": {
@@ -477,6 +514,9 @@ _FMP_LINE_ITEMS = {
     "other_non_cash_items",
     "net_cash_from_operating",
     "operating_cash_flow",
+    "operating_lease_liability",
+    "operating_lease_liability_current",
+    "operating_lease_liability_non_current",
     "investments_in_ppe",
     "acquisitions_net",
     "purchases_of_investments",
@@ -518,6 +558,76 @@ def test_outflow_ladders_carry_negative_sign() -> None:
         assert by_item[item].sign == -1, item
     for item in ("stock_based_compensation", "income_taxes_paid", "interest_paid", "revenue"):
         assert by_item[item].sign == 1, item
+
+
+def test_debt_ladders_require_complete_lease_inclusive_aggregates() -> None:
+    """Debt bridge facts must match FMP's aggregate semantics without partial sums."""
+    by_item = {ladder.line_item: ladder for ladder in TAG_LADDERS}
+
+    assert by_item["short_term_debt"].rungs == (("us-gaap", "DebtCurrent"),)
+    assert by_item["long_term_debt"].rungs[0] == (
+        "us-gaap",
+        "LongTermDebtAndCapitalLeaseObligations",
+    )
+    assert by_item["total_debt"].rungs == (("us-gaap", "DebtAndCapitalLeaseObligations"),)
+
+    # These are only pieces of current debt. Treating any one as the aggregate
+    # would silently omit other borrowings or lease obligations.
+    short_term_tags = {tag for _, tag in by_item["short_term_debt"].rungs}
+    assert "LongTermDebtCurrent" not in short_term_tags
+    assert "ShortTermBorrowings" not in short_term_tags
+
+    assert by_item["operating_lease_liability"].rungs == (("us-gaap", "OperatingLeaseLiability"),)
+    assert by_item["operating_lease_liability_current"].rungs == (
+        ("us-gaap", "OperatingLeaseLiabilityCurrent"),
+    )
+    assert by_item["operating_lease_liability_non_current"].rungs == (
+        ("us-gaap", "OperatingLeaseLiabilityNoncurrent"),
+    )
+
+
+def test_debt_aggregate_tags_land_on_canonical_bridge_fields(
+    conn: sqlite3.Connection,
+) -> None:
+    accn_to_doc = _register_accession(conn)
+
+    def _instant(val: int) -> dict[str, object]:
+        entry = _q_entry(val)
+        del entry["start"]
+        return entry
+
+    payload: dict[str, object] = {
+        "facts": {
+            "us-gaap": {
+                "DebtCurrent": {"units": {"USD": [_instant(120)]}},
+                "LongTermDebtAndCapitalLeaseObligations": {"units": {"USD": [_instant(880)]}},
+                "DebtAndCapitalLeaseObligations": {"units": {"USD": [_instant(1_000)]}},
+                "OperatingLeaseLiability": {"units": {"USD": [_instant(100)]}},
+                "OperatingLeaseLiabilityCurrent": {"units": {"USD": [_instant(20)]}},
+                "OperatingLeaseLiabilityNoncurrent": {"units": {"USD": [_instant(80)]}},
+            }
+        }
+    }
+
+    inserted = insert_facts_from_companyfacts(
+        conn, ticker="X", payload=payload, accession_to_doc_id=accn_to_doc
+    )
+
+    rows = {
+        row["line_item"]: int(row["value"])
+        for row in conn.execute(
+            "SELECT line_item, value FROM financial_facts WHERE fiscal_period_type='Q3'"
+        ).fetchall()
+    }
+    assert inserted == 6
+    assert rows == {
+        "short_term_debt": 120,
+        "long_term_debt": 880,
+        "total_debt": 1_000,
+        "operating_lease_liability": 100,
+        "operating_lease_liability_current": 20,
+        "operating_lease_liability_non_current": 80,
+    }
 
 
 def _payload_one_tag(

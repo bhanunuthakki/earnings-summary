@@ -426,10 +426,44 @@ TAG_LADDERS: tuple[LineItemLadder, ...] = (
         ("ifrs-full", "CurrentLiabilities"),
     ),
     _ladder(
+        # DebtCurrent is the complete current debt-and-lease aggregate. Do not
+        # substitute LongTermDebtCurrent or ShortTermBorrowings here: each is
+        # only one component and would make a partial bridge look complete.
+        "short_term_debt",
+        ("us-gaap", "DebtCurrent"),
+    ),
+    _ladder(
         "long_term_debt",
+        # Prefer the lease-inclusive aggregate because FMP's longTermDebt feeds
+        # its lease-inclusive totalDebt bridge. Lease-exclusive debt remains a
+        # useful lower-rung source when the issuer omits the aggregate, but it
+        # cannot by itself verify total debt.
+        ("us-gaap", "LongTermDebtAndCapitalLeaseObligations"),
         ("us-gaap", "LongTermDebtNoncurrent"),
         ("us-gaap", "LongTermDebt"),
         ("ifrs-full", "LongtermBorrowings"),
+    ),
+    _ladder(
+        # This taxonomy concept is explicitly the complete short-term plus
+        # long-term debt and lease obligation. It is the only single-tag US
+        # GAAP total accepted here; component-only tags remain fail-closed.
+        "total_debt",
+        ("us-gaap", "DebtAndCapitalLeaseObligations"),
+    ),
+    _ladder(
+        # Preserve the aggregate and its mutually exclusive current/noncurrent
+        # components. A consumer selects one representation and must never add
+        # the aggregate to its parts.
+        "operating_lease_liability",
+        ("us-gaap", "OperatingLeaseLiability"),
+    ),
+    _ladder(
+        "operating_lease_liability_current",
+        ("us-gaap", "OperatingLeaseLiabilityCurrent"),
+    ),
+    _ladder(
+        "operating_lease_liability_non_current",
+        ("us-gaap", "OperatingLeaseLiabilityNoncurrent"),
     ),
     _ladder(
         "deferred_revenue_non_current",
