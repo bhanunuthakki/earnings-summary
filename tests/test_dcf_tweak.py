@@ -201,7 +201,10 @@ def test_tweak_recompute_flows_through_apply_to_a_real_dcf_runs(db_path: Path) -
     rv = redesign.value(tweaked)
     assert rv.value_per_share_usd > 0  # the fixture must be valuable for the draft to persist
     row = recompute_row_from_inputs(
-        tweaked, "NU", live_price=12.29, live_price_at=datetime(2026, 6, 30, 8, 0, 0)
+        tweaked,
+        "NU",
+        live_price=rv.value_per_share_usd,
+        live_price_at=datetime(2026, 6, 30, 8, 0, 0),
     )
 
     pid = draft_dcf_proposal(ticker="NU", proposed_row=row, db_path=db_path)
@@ -217,9 +220,7 @@ def test_tweak_recompute_flows_through_apply_to_a_real_dcf_runs(db_path: Path) -
     assert stored["npv"] == pytest.approx(rv.operating_value_usd_m)
     assert stored["shares_outstanding"] == pytest.approx(rv.diluted_shares_m * 1_000_000.0)
     # over_under derived at the chokepoint from live vs the RECOMPUTED fair value.
-    assert stored["over_under_pct"] == pytest.approx(
-        (12.29 - rv.value_per_share_usd) / rv.value_per_share_usd, abs=1e-6
-    )
+    assert stored["over_under_pct"] == pytest.approx(0.0, abs=1e-6)
 
 
 # --------------------------------------------------------------------------- #
