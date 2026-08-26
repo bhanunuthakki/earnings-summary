@@ -54,6 +54,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dcf import assumptions_doc  # noqa: E402
+from dcf import equity_bridge as equity_bridge_mod  # noqa: E402
 from dcf import live_price as live_price_mod  # noqa: E402
 from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
@@ -173,6 +174,8 @@ def build_dcf_provenance(
     live_price_source: str | None,
     mos_bar: float | None,
     primary_fact_overlay: Mapping[str, object] | None = None,
+    equity_bridge_receipt: Mapping[str, object] | None = None,
+    country_risk_context: Mapping[str, object] | None = None,
 ) -> DcfInputProvenance:
     """Build reproducible lineage for the effective DCF input set."""
     ticker = ticker.upper()
@@ -201,6 +204,23 @@ def build_dcf_provenance(
             detail, observed_at = source
             sources.append(detail)
             observed_times.append(observed_at)
+
+    country_source = (
+        country_risk_context.get("source_record") if country_risk_context is not None else None
+    )
+    if _valid_builder_source_record(country_source):
+        source_detail = dict(cast("Mapping[str, object]", country_source))
+        sources.append(source_detail)
+        raw_observed_at = source_detail.get("observed_at")
+        if isinstance(raw_observed_at, str):
+            try:
+                parsed = datetime.fromisoformat(raw_observed_at.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+            else:
+                observed_times.append(
+                    parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+                )
 
     workbook_sha256 = _sha256_file(workbook_path)
     workbook_source = _source_file(
@@ -235,6 +255,10 @@ def build_dcf_provenance(
         "mos_bar": mos_bar,
         "workbook_sha256": workbook_sha256,
         "primary_fact_overlay": dict(primary_fact_overlay) if primary_fact_overlay else None,
+        "equity_bridge_receipt": (dict(equity_bridge_receipt) if equity_bridge_receipt else None),
+        "country_risk_context": (
+            dict(country_risk_context) if country_risk_context is not None else None
+        ),
     }
     canonical = json.dumps(
         canonical_inputs,
@@ -253,6 +277,12 @@ def build_dcf_provenance(
             "market_price": market_price,
             "sources": sources,
             "primary_fact_overlay": dict(primary_fact_overlay) if primary_fact_overlay else None,
+            "equity_bridge_receipt": (
+                dict(equity_bridge_receipt) if equity_bridge_receipt else None
+            ),
+            "country_risk_context": (
+                dict(country_risk_context) if country_risk_context is not None else None
+            ),
             "ticker": ticker,
             "inputs_as_of_status": "observed" if observed_times else "unavailable",
         },
@@ -310,6 +340,108 @@ def primary_fact_overlay_from_builder(
         "statements": statements,
         "reasons": sorted(reasons),
     }
+
+
+def equity_bridge_context_from_builder(
+    stderr: str, *, expected_ticker: str
+) -> dict[str, object] | None:
+    """Return the builder's one exact model-input bridge context, or fail closed."""
+    matches: list[dict[str, object]] = []
+    for line in stderr.splitlines():
+        try:
+            payload_raw: object = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload_raw, dict):
+            continue
+        payload = cast("dict[str, object]", payload_raw)
+        if payload.get("event") != "dcf_equity_bridge_context":
+            continue
+        if payload.get("schema_version") != "dcf_equity_bridge_context.v1":
+            continue
+        receipt_ticker = payload.get("ticker")
+        if not isinstance(receipt_ticker, str) or receipt_ticker.upper() != expected_ticker.upper():
+            continue
+        matches.append({key: value for key, value in payload.items() if key != "event"})
+    return matches[0] if len(matches) == 1 else None
+
+
+def country_risk_context_from_builder(
+    stderr: str, *, expected_ticker: str
+) -> dict[str, object] | None:
+    """Return one structurally valid country-risk context, or fail closed."""
+    matches: list[dict[str, object]] = []
+    for line in stderr.splitlines():
+        try:
+            payload_raw: object = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload_raw, dict):
+            continue
+        payload = cast("dict[str, object]", payload_raw)
+        if payload.get("event") != "dcf_country_risk_context":
+            continue
+        if payload.get("schema_version") != "dcf_country_risk_context.v1":
+            continue
+        receipt_ticker = payload.get("ticker")
+        if not isinstance(receipt_ticker, str) or receipt_ticker.upper() != expected_ticker.upper():
+            continue
+        authority = payload.get("authority")
+        premium = payload.get("premium")
+        source_record = payload.get("source_record")
+        if authority not in {
+            "owner_override",
+            "preserved_dashboard_override",
+            "systematic_default_zero",
+            "systematic_geo",
+        }:
+            continue
+        if isinstance(premium, bool) or not isinstance(premium, (int, float)):
+            continue
+        if source_record is not None and not _valid_builder_source_record(source_record):
+            continue
+        if (
+            authority in {"owner_override", "preserved_dashboard_override"}
+            and source_record is not None
+        ):
+            continue
+        if authority == "systematic_geo" and source_record is None:
+            continue
+        if authority == "systematic_default_zero" and (
+            source_record is not None or float(premium) != 0.0
+        ):
+            continue
+        matches.append({key: value for key, value in payload.items() if key != "event"})
+    return matches[0] if len(matches) == 1 else None
+
+
+def _valid_builder_source_record(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    source = cast("Mapping[str, object]", value)
+    path = source.get("path")
+    digest = source.get("sha256")
+    byte_size = source.get("bytes")
+    observed_at = source.get("observed_at")
+    if not isinstance(observed_at, str):
+        return False
+    try:
+        datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (
+        source.get("role") == "geographic_revenue"
+        and isinstance(path, str)
+        and bool(path.strip())
+        and isinstance(digest, str)
+        and len(digest) == 64
+        and all(character in "0123456789abcdefABCDEF" for character in digest)
+        and isinstance(byte_size, int)
+        and not isinstance(byte_size, bool)
+        and byte_size >= 0
+        and source.get("influences_calculation") is True
+        and source.get("selection") in {"annual_latest_fiscal_year", "quarterly_latest_four"}
+    )
 
 
 def main() -> int:
@@ -663,7 +795,13 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     }
 
 
-def _run_builder(ticker: str, repo_root: Path, dest: Path) -> subprocess.CompletedProcess[str]:
+def _run_builder(
+    ticker: str,
+    repo_root: Path,
+    dest: Path,
+    *,
+    country_risk_override: float | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Run the redesigned-DCF builder for one ticker, writing to `dest`.
 
     Env-driven exactly like `build_all_redesigned_dcf.py`: the builder rebuilds
@@ -675,6 +813,8 @@ def _run_builder(ticker: str, repo_root: Path, dest: Path) -> subprocess.Complet
         DCF_REPO_ROOT=str(repo_root),
         DCF_DEST=str(dest),
     )
+    if country_risk_override is not None:
+        env["DCF_COUNTRY_RISK_OVERRIDE"] = str(country_risk_override)
     return subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_BUILDER_SCRIPT)],
         env=env,
@@ -1004,7 +1144,16 @@ def _refresh_redesign(
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        proc = _run_builder(ticker, repo_root, tmp)
+        proc = _run_builder(
+            ticker,
+            repo_root,
+            tmp,
+            country_risk_override=(
+                captured.scalars.get(redesign_mod.COUNTRY_RISK_PREMIUM_ROW)
+                if captured is not None
+                else None
+            ),
+        )
     except OSError as e:
         return {"ticker": ticker, "status": "failed", "reason": f"builder spawn failed: {e}"}
 
@@ -1029,6 +1178,8 @@ def _refresh_redesign(
         return {"ticker": ticker, "status": "failed", "reason": f"builder: {tail or 'no RESULT'}"}
 
     primary_fact_overlay = primary_fact_overlay_from_builder(proc.stderr, expected_ticker=ticker)
+    equity_bridge_context = equity_bridge_context_from_builder(proc.stderr, expected_ticker=ticker)
+    country_risk_context = country_risk_context_from_builder(proc.stderr, expected_ticker=ticker)
     redesign_mod.inject_dashboard(tmp, captured, current_price=live.price if live else None)
 
     try:
@@ -1097,6 +1248,18 @@ def _refresh_redesign(
         scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
         holdings=holdings,
     )
+    equity_bridge_receipt = equity_bridge_mod.build_equity_bridge_receipt(
+        ticker=ticker,
+        operating_value_usd_m=rv.operating_value_usd_m,
+        cash_m=rv.cash_m,
+        total_debt_m=rv.total_debt_m,
+        diluted_shares_m=rv.diluted_shares_m,
+        fx_to_usd=rv.fx_to_usd,
+        value_per_share_usd=fair_value,
+        reporting_currency=_reported_currency(repo_root, ticker),
+        primary_fact_overlay=primary_fact_overlay,
+        bridge_context=equity_bridge_context,
+    )
     input_provenance = build_dcf_provenance(
         ticker=ticker,
         repo_root=repo_root,
@@ -1108,6 +1271,8 @@ def _refresh_redesign(
         live_price_source=getattr(live, "source_name", None) if live else None,
         mos_bar=mos_bar_f,
         primary_fact_overlay=primary_fact_overlay,
+        equity_bridge_receipt=equity_bridge_receipt.to_dict(),
+        country_risk_context=country_risk_context,
     )
 
     row = persist_mod.DcfRunRow(
@@ -1153,6 +1318,8 @@ def _refresh_redesign(
         "input_sha256": input_provenance.input_sha256,
         "primary_fact_overlay_status": primary_fact_overlay.get("status"),
         "primary_fact_overlay_reasons": primary_fact_overlay.get("reasons", []),
+        "equity_bridge_status": equity_bridge_receipt.status,
+        "equity_bridge_reasons": list(equity_bridge_receipt.reasons),
     }
 
 
@@ -1184,8 +1351,8 @@ def _prior_live_price(db_path: Path, ticker: str) -> tuple[float | None, datetim
     return price, at
 
 
-def prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object] | None:
-    """Recover validated primary lineage from the current generic DCF run."""
+def _prior_dcf_provenance_detail(db_path: Path, ticker: str) -> dict[str, object] | None:
+    """Recover the ticker-matched current generic DCF provenance envelope."""
     if not db_path.exists():
         return None
     try:
@@ -1267,6 +1434,14 @@ def prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object] 
     recorded_ticker = detail.get("ticker")
     if not isinstance(recorded_ticker, str) or recorded_ticker.upper() != ticker.upper():
         return None
+    return dict(detail)
+
+
+def prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object] | None:
+    """Recover validated primary lineage from the current generic DCF run."""
+    detail = _prior_dcf_provenance_detail(db_path, ticker)
+    if detail is None:
+        return None
     overlay_raw = detail.get("primary_fact_overlay")
     if not isinstance(overlay_raw, dict):
         return None
@@ -1277,6 +1452,92 @@ def prior_primary_fact_overlay(db_path: Path, ticker: str) -> dict[str, object] 
     if statements is not None and not isinstance(statements, dict):
         return None
     return dict(overlay)
+
+
+def prior_equity_bridge_context(db_path: Path, ticker: str) -> dict[str, object] | None:
+    """Recover the exact model-input context from the prior bridge receipt."""
+    detail = _prior_dcf_provenance_detail(db_path, ticker)
+    if detail is None:
+        return None
+    receipt = detail.get("equity_bridge_receipt")
+    if not isinstance(receipt, dict):
+        return None
+    context = cast("dict[str, object]", receipt).get("bridge_context")
+    if not isinstance(context, dict):
+        return None
+    typed_context = cast("dict[str, object]", context)
+    if typed_context.get("schema_version") != "dcf_equity_bridge_context.v1":
+        return None
+    recorded_ticker = typed_context.get("ticker")
+    if not isinstance(recorded_ticker, str) or recorded_ticker.upper() != ticker.upper():
+        return None
+    return dict(typed_context)
+
+
+def prior_country_risk_context(db_path: Path, ticker: str) -> dict[str, object] | None:
+    """Recover the country-risk authority and exact geo receipt for edits."""
+    detail = _prior_dcf_provenance_detail(db_path, ticker)
+    if detail is None:
+        return None
+    context = detail.get("country_risk_context")
+    if not isinstance(context, dict):
+        return None
+    typed_context = cast("dict[str, object]", context)
+    if typed_context.get("schema_version") != "dcf_country_risk_context.v1":
+        return None
+    recorded_ticker = typed_context.get("ticker")
+    if not isinstance(recorded_ticker, str) or recorded_ticker.upper() != ticker.upper():
+        return None
+    authority = typed_context.get("authority")
+    source_record = typed_context.get("source_record")
+    if authority not in {
+        "owner_override",
+        "preserved_dashboard_override",
+        "systematic_default_zero",
+        "systematic_geo",
+    }:
+        return None
+    if source_record is not None and not _valid_builder_source_record(source_record):
+        return None
+    if (
+        authority in {"owner_override", "preserved_dashboard_override"}
+        and source_record is not None
+    ):
+        return None
+    premium = typed_context.get("premium")
+    if isinstance(premium, bool) or not isinstance(premium, (int, float)):
+        return None
+    if authority == "systematic_geo" and source_record is None:
+        return None
+    if authority == "systematic_default_zero" and (
+        source_record is not None or float(premium) != 0.0
+    ):
+        return None
+    return dict(typed_context)
+
+
+def country_risk_context_for_edit(
+    prior_context: Mapping[str, object] | None,
+    *,
+    ticker: str,
+    effective_premium: float,
+) -> dict[str, object]:
+    """Retain exact systematic lineage only while the saved CRP is unchanged."""
+    prior_premium = prior_context.get("premium") if prior_context is not None else None
+    if (
+        prior_context is not None
+        and not isinstance(prior_premium, bool)
+        and isinstance(prior_premium, (int, float))
+        and float(prior_premium) == effective_premium
+    ):
+        return dict(prior_context)
+    return {
+        "schema_version": "dcf_country_risk_context.v1",
+        "ticker": ticker.upper(),
+        "premium": effective_premium,
+        "authority": "owner_override",
+        "source_record": None,
+    }
 
 
 def apply_edits(
@@ -1362,6 +1623,26 @@ def apply_edits(
         scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
         holdings=holdings,
     )
+    prior_overlay = prior_primary_fact_overlay(db_path, ticker)
+    prior_bridge_context = prior_equity_bridge_context(db_path, ticker)
+    prior_country_context = prior_country_risk_context(db_path, ticker)
+    effective_country_context = country_risk_context_for_edit(
+        prior_country_context,
+        ticker=ticker,
+        effective_premium=inp.country_risk_premium,
+    )
+    equity_bridge_receipt = equity_bridge_mod.build_equity_bridge_receipt(
+        ticker=ticker,
+        operating_value_usd_m=rv.operating_value_usd_m,
+        cash_m=rv.cash_m,
+        total_debt_m=rv.total_debt_m,
+        diluted_shares_m=rv.diluted_shares_m,
+        fx_to_usd=rv.fx_to_usd,
+        value_per_share_usd=fair_value,
+        reporting_currency=_reported_currency(repo_root, ticker),
+        primary_fact_overlay=prior_overlay,
+        bridge_context=prior_bridge_context,
+    )
     input_provenance = build_dcf_provenance(
         ticker=ticker,
         repo_root=repo_root,
@@ -1372,7 +1653,9 @@ def apply_edits(
         live_price_at=prior_price_at,
         live_price_source="prior_dcf_run",
         mos_bar=mos_bar_f,
-        primary_fact_overlay=prior_primary_fact_overlay(db_path, ticker),
+        primary_fact_overlay=prior_overlay,
+        equity_bridge_receipt=equity_bridge_receipt.to_dict(),
+        country_risk_context=effective_country_context,
     )
 
     row = persist_mod.DcfRunRow(

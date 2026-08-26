@@ -146,6 +146,34 @@ def test_workbook_edit_survives_rebuild(tmp_repo: Path) -> None:
     assert s2.bws_mult == 14.5  # workbook edit beats the JSON's 12.0
 
 
+def test_bn_run_captures_owner_workbook_bytes_before_rebuild(
+    tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = h.Sotp()
+    h.build(s, h.DEST)
+    wb = openpyxl.load_workbook(h.DEST)
+    wb["Dashboard"].cell(row=h._SOTP_ROW["bws_mult"], column=2, value=14.5)
+    wb.save(h.DEST)
+    captured: list[dict[str, object]] = []
+
+    def fake_persist(
+        _s: h.Sotp,
+        _eq: float,
+        _vps: float,
+        _snapshot: dict[str, object],
+        source_records: tuple[dict[str, object], ...] = (),
+    ) -> tuple[bool, h.SyncResult]:
+        captured.extend(source_records)
+        return False, h.SyncResult("test")
+
+    monkeypatch.setattr(h, "_persist_then_sync_bn", fake_persist)
+
+    assert h._run_bn() == 0
+    assert len(captured) == 1
+    assert captured[0]["role"] == "owner_workbook_inputs"
+    assert captured[0]["influences_calculation"] is True
+
+
 def test_price_is_never_captured(tmp_repo: Path) -> None:
     s = h.Sotp()
     h.build(s, h.DEST)

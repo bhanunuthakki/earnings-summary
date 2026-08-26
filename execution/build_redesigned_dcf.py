@@ -43,6 +43,7 @@ from dcf import analyst_segments as analyst_seg_mod
 from dcf import (
     assumptions_doc,
     country_risk,
+    equity_bridge,
     fade_calibration,
     primary_fact_overlay,
     segment_coverage,
@@ -576,7 +577,43 @@ KD = float(_opus.get("cost_of_debt", 0.045))
 # exactly where it was; a LatAm/EM name carries the sovereign-risk layer the US
 # ERP omits. A per-name override in the block wins (so a hand-set value survives a
 # rebuild); else the systematic revenue-weighted value.
-CRP = float(_opus.get("country_risk_premium", country_risk.country_risk_premium(REPO, T)))
+_preserved_crp = os.environ.get("DCF_COUNTRY_RISK_OVERRIDE")
+if _preserved_crp is not None:
+    CRP = float(_preserved_crp)
+    _country_risk_context = {
+        "event": "dcf_country_risk_context",
+        "schema_version": "dcf_country_risk_context.v1",
+        "ticker": T,
+        "premium": CRP,
+        "authority": "preserved_dashboard_override",
+        "source_record": None,
+    }
+elif "country_risk_premium" in _opus:
+    CRP = float(_opus["country_risk_premium"])
+    _country_risk_context = {
+        "event": "dcf_country_risk_context",
+        "schema_version": "dcf_country_risk_context.v1",
+        "ticker": T,
+        "premium": CRP,
+        "authority": "owner_override",
+        "source_record": None,
+    }
+else:
+    _country_risk_observation = country_risk.country_risk_observation(REPO, T)
+    CRP = _country_risk_observation.premium
+    _country_risk_context = {
+        "event": "dcf_country_risk_context",
+        "schema_version": "dcf_country_risk_context.v1",
+        "ticker": T,
+        "premium": CRP,
+        "authority": (
+            "systematic_geo"
+            if _country_risk_observation.source_record is not None
+            else "systematic_default_zero"
+        ),
+        "source_record": _country_risk_observation.source_record,
+    }
+print(json.dumps(_country_risk_context, sort_keys=True), file=sys.stderr)
 
 # ----------------------------------------------------------------------------- Monte Carlo
 # A reduced-form model (single revenue CAGR, linear margin ramp) calibrated so the
@@ -585,18 +622,80 @@ CRP = float(_opus.get("country_risk_premium", country_risk.country_risk_premium(
 import numpy as np  # noqa: E402
 
 latest = keys[-1]
-cash_now = m(bal_i[latest].get("cashAndShortTermInvestments")) or 0.0
+_bal_latest = bal_i[latest]
+_cash_resolution = equity_bridge.resolve_complete_aggregate(
+    _bal_latest,
+    aggregate_field="cashAndShortTermInvestments",
+    component_fields=("cashAndCashEquivalents", "shortTermInvestments"),
+)
 # Use TOTAL debt (long- + short-term), not longTermDebt alone: convertible notes
 # and near-maturity paper land in shortTermDebt (e.g. LITE FQ3'26: $3,251M of $3,314M
 # total debt sat in short-term), so longTermDebt-only massively understates net debt
 # and overstates equity value. Fall back to the LT+ST sum if totalDebt is absent.
-_bal_latest = bal_i[latest]
-debt_now = (
-    m(_bal_latest.get("totalDebt"))
-    or ((m(_bal_latest.get("longTermDebt")) or 0.0) + (m(_bal_latest.get("shortTermDebt")) or 0.0))
-    or 0.0
+_debt_resolution = equity_bridge.resolve_complete_aggregate(
+    _bal_latest,
+    aggregate_field="totalDebt",
+    component_fields=("longTermDebt", "shortTermDebt"),
 )
-shares_now = m(inc_i[latest].get("weightedAverageShsOutDil")) or 1.0
+if _cash_resolution is None or _debt_resolution is None:
+    print(
+        json.dumps(
+            {
+                "event": "dcf_equity_bridge_unavailable",
+                "ticker": T,
+                "period": f"{latest[1]} {latest[0]}",
+                "missing": [
+                    name
+                    for name, resolution in (
+                        ("cash_and_short_term_investments", _cash_resolution),
+                        ("total_debt", _debt_resolution),
+                    )
+                    if resolution is None
+                ],
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+    raise RuntimeError("latest balance sheet lacks a complete DCF equity bridge")
+cash_now = _cash_resolution.value / 1e6
+debt_now = _debt_resolution.value / 1e6
+shares_now = m(inc_i[latest].get("weightedAverageShsOutDil"))
+if shares_now is None or shares_now <= 0:
+    print(
+        json.dumps(
+            {
+                "event": "dcf_equity_bridge_unavailable",
+                "ticker": T,
+                "period": f"{latest[1]} {latest[0]}",
+                "missing": ["positive_diluted_shares"],
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+    raise RuntimeError("latest income statement lacks positive diluted shares")
+_bridge_period_end = inc_i[latest].get("date")
+_bridge_currency = inc_i[latest].get("reportedCurrency")
+print(
+    json.dumps(
+        {
+            "event": "dcf_equity_bridge_context",
+            "schema_version": "dcf_equity_bridge_context.v1",
+            "ticker": T,
+            "period_end": _bridge_period_end if isinstance(_bridge_period_end, str) else None,
+            "fiscal_period_type": latest[1],
+            "reporting_currency": _bridge_currency if isinstance(_bridge_currency, str) else None,
+            "cash_m": cash_now,
+            "total_debt_m": debt_now,
+            "diluted_shares_m": shares_now,
+            "cash_basis": _cash_resolution.basis,
+            "total_debt_basis": _debt_resolution.basis,
+        },
+        sort_keys=True,
+    ),
+    file=sys.stderr,
+)
 beta = BETA
 ke = RF + beta * ERP + CRP
 mktcap = price * shares_now
@@ -1086,25 +1185,25 @@ frow += 1
 
 
 def _bs_getter(field: str):
-    """Per-quarter balance-sheet cell getter. For ``totalDebt`` it mirrors the
-    ``debt_now`` fallback (totalDebt → longTermDebt + shortTermDebt) so the
-    Financials 'Total Debt' row the reader values off stays consistent with the
-    Monte-Carlo path even when FMP omits the aggregate ``totalDebt`` field.
-    Returns None only when every debt component is absent (blank stays blank)."""
-    if field != "totalDebt":
+    """Keep workbook cash/debt rows identical to the bridge used by the builder."""
+    aggregate_components = {
+        "cashAndShortTermInvestments": ("cashAndCashEquivalents", "shortTermInvestments"),
+        "totalDebt": ("longTermDebt", "shortTermDebt"),
+    }
+    component_fields = aggregate_components.get(field)
+    if component_fields is None:
         return lambda i, k, f=field: m(bal_i.get(k, {}).get(f))
 
-    def _debt(i, k):
+    def _aggregate(i, k):
         b = bal_i.get(k, {})
-        td = m(b.get("totalDebt"))
-        if td is not None:
-            return td
-        lt, st = m(b.get("longTermDebt")), m(b.get("shortTermDebt"))
-        if lt is None and st is None:
-            return None
-        return (lt or 0.0) + (st or 0.0)
+        resolved = equity_bridge.resolve_complete_aggregate(
+            b,
+            aggregate_field=field,
+            component_fields=component_fields,
+        )
+        return m(resolved.value) if resolved is not None else None
 
-    return _debt
+    return _aggregate
 
 
 for lab, fld in [

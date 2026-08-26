@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import cast
 
 from dcf.primary_fact_overlay import overlay_quarterly_records
-from execution.refresh_dcf import build_dcf_provenance, primary_fact_overlay_from_builder
+from execution.refresh_dcf import (
+    build_dcf_provenance,
+    country_risk_context_from_builder,
+    equity_bridge_context_from_builder,
+    primary_fact_overlay_from_builder,
+)
 
 
 def _db() -> sqlite3.Connection:
@@ -82,11 +87,15 @@ def test_exact_primary_fact_replaces_only_mapped_fmp_field_and_records_lineage()
     )
 
     assert result.records[0]["revenue"] == 1_200_000
-    assert result.records[0]["totalDebt"] == 900_000  # debt is never synthesized by this overlay
+    assert result.records[0]["totalDebt"] == 900_000  # income overlays never touch balance fields
     assert len(result.applied) == 1
     assert result.applied[0].fmp_field == "revenue"
     assert result.applied[0].source_doc_id == 1
     assert result.applied[0].as_of == "2026-08-20T12:00:00+00:00"
+    assert result.applied[0].currency == "USD"
+    assert result.applied[0].unit == "actual"
+    assert result.applied[0].reported_observation_id_status == "unavailable_in_canonical_relation"
+    assert result.applied[0].resolution_id_status == "unavailable_in_canonical_relation"
     assert result.conflicts[0].reason == "value_conflict"
 
 
@@ -238,6 +247,236 @@ def test_exact_primary_cash_and_debt_bridge_fields_overlay_without_synthesis() -
     }
 
 
+def test_complete_primary_cash_components_derive_the_aggregate_with_lineage() -> None:
+    conn = _db()
+    conn.executemany(
+        """
+        INSERT INTO financial_facts
+            (id, ticker, period_end, fiscal_period_type, line_item, value, currency, unit,
+             source_doc_id, extracted_by, locator)
+        VALUES (?, 'TEST', '2026-06-30', 'Q2', ?, ?, 'USD', 'actual', 1,
+                'sec_xbrl', ?)
+        """,
+        (
+            (40, "cash_and_equivalents", 700_000, "cash-locator"),
+            (41, "short_term_investments", 300_000, "investments-locator"),
+        ),
+    )
+    row = {
+        "date": "2026-06-30",
+        "period": "Q2",
+        "reportedCurrency": "USD",
+        "cashAndShortTermInvestments": 900_000,
+    }
+
+    result = overlay_quarterly_records(conn, ticker="TEST", statement="balance", records=[row])
+
+    assert result.records[0]["cashAndShortTermInvestments"] == 1_000_000
+    aggregate = next(
+        item for item in result.applied if item.line_item == "cash_and_short_term_investments"
+    )
+    assert aggregate.derivation is not None
+    assert aggregate.derivation.formula == "cash_and_equivalents + short_term_investments"
+    assert aggregate.derivation.version == "primary_fact_aggregate_v1"
+    assert [
+        (item.line_item, item.fact_id, item.locator) for item in aggregate.derivation.components
+    ] == [
+        ("cash_and_equivalents", 40, "cash-locator"),
+        ("short_term_investments", 41, "investments-locator"),
+    ]
+    assert aggregate.derivation.components[0].source_url == "https://www.sec.gov/example"
+    assert aggregate.derivation.components[1].as_of == "2026-08-20T12:00:00+00:00"
+    provenance = result.to_provenance_dict()
+    applied = cast("list[dict[str, object]]", provenance["applied"])
+    derived = next(
+        item for item in applied if item["line_item"] == "cash_and_short_term_investments"
+    )
+    assert (
+        cast("dict[str, object]", derived["derivation"])["version"] == "primary_fact_aggregate_v1"
+    )
+    assert result.conflicts[-1].line_item == "cash_and_short_term_investments"
+    assert result.conflicts[-1].primary_value == 1_000_000
+    assert result.conflicts[-1].derivation == aggregate.derivation
+
+
+def test_complete_primary_debt_components_preserve_zero_values_in_aggregate() -> None:
+    conn = _db()
+    conn.executemany(
+        """
+        INSERT INTO financial_facts
+            (id, ticker, period_end, fiscal_period_type, line_item, value, currency, unit,
+             source_doc_id, extracted_by, locator)
+        VALUES (?, 'TEST', '2026-06-30', 'Q2', ?, ?, 'USD', 'actual', 1,
+                'sec_xbrl', NULL)
+        """,
+        ((50, "long_term_debt", 500_000), (51, "short_term_debt", 0)),
+    )
+    row = {
+        "date": "2026-06-30",
+        "period": "Q2",
+        "reportedCurrency": "USD",
+        "totalDebt": 900_000,
+    }
+
+    result = overlay_quarterly_records(conn, ticker="TEST", statement="balance", records=[row])
+
+    assert result.records[0]["totalDebt"] == 500_000
+    aggregate = next(item for item in result.applied if item.line_item == "total_debt")
+    assert aggregate.primary_value == 500_000
+    assert aggregate.derivation is not None
+    assert aggregate.derivation.components[1].primary_value == 0
+
+
+def test_aggregate_component_lineage_handles_all_canonical_resolution_id_variants() -> None:
+    for has_reported_observation_id, has_resolution_id in (
+        (False, False),
+        (True, False),
+        (False, True),
+        (True, True),
+    ):
+        conn = _db()
+        if has_reported_observation_id:
+            conn.execute("ALTER TABLE financial_facts ADD COLUMN reported_observation_id TEXT")
+        if has_resolution_id:
+            conn.execute("ALTER TABLE financial_facts ADD COLUMN resolution_id TEXT")
+        conn.executemany(
+            """
+            INSERT INTO financial_facts
+                (id, ticker, period_end, fiscal_period_type, line_item, value, currency, unit,
+                 source_doc_id, extracted_by, locator)
+            VALUES (?, 'TEST', '2026-06-30', 'Q2', ?, ?, 'USD', 'actual', 1,
+                    'sec_xbrl', NULL)
+            """,
+            (
+                (55, "long_term_debt", 500_000),
+                (56, "short_term_debt", 100_000),
+            ),
+        )
+        if has_reported_observation_id:
+            conn.execute(
+                "UPDATE financial_facts SET reported_observation_id = 'observation:' || id "
+                "WHERE id IN (55, 56)"
+            )
+        if has_resolution_id:
+            conn.execute(
+                "UPDATE financial_facts SET resolution_id = 'resolution:' || id "
+                "WHERE id IN (55, 56)"
+            )
+
+        result = overlay_quarterly_records(
+            conn,
+            ticker="TEST",
+            statement="balance",
+            records=[
+                {
+                    "date": "2026-06-30",
+                    "period": "Q2",
+                    "reportedCurrency": "USD",
+                    "totalDebt": 900_000,
+                }
+            ],
+        )
+
+        aggregate = next(item for item in result.applied if item.line_item == "total_debt")
+        assert aggregate.derivation is not None
+        assert [
+            (component.reported_observation_id, component.resolution_id)
+            for component in aggregate.derivation.components
+        ] == [
+            (
+                "observation:55" if has_reported_observation_id else None,
+                "resolution:55" if has_resolution_id else None,
+            ),
+            (
+                "observation:56" if has_reported_observation_id else None,
+                "resolution:56" if has_resolution_id else None,
+            ),
+        ]
+        assert [
+            (component.reported_observation_id_status, component.resolution_id_status)
+            for component in aggregate.derivation.components
+        ] == [
+            (
+                "available" if has_reported_observation_id else "unavailable_in_canonical_relation",
+                "available" if has_resolution_id else "unavailable_in_canonical_relation",
+            ),
+            (
+                "available" if has_reported_observation_id else "unavailable_in_canonical_relation",
+                "available" if has_resolution_id else "unavailable_in_canonical_relation",
+            ),
+        ]
+
+
+def test_aggregate_is_not_derived_when_a_primary_component_is_missing_or_ineligible() -> None:
+    conn = _db()
+    conn.execute(
+        """
+        INSERT INTO financial_facts
+            (id, ticker, period_end, fiscal_period_type, line_item, value, currency, unit,
+             source_doc_id, extracted_by, locator)
+        VALUES (60, 'TEST', '2026-06-30', 'Q2', 'cash_and_equivalents', 700000, 'USD',
+                'actual', 1, 'sec_xbrl', NULL)
+        """
+    )
+    row = {
+        "date": "2026-06-30",
+        "period": "Q2",
+        "reportedCurrency": "USD",
+        "cashAndShortTermInvestments": 900_000,
+    }
+
+    missing = overlay_quarterly_records(conn, ticker="TEST", statement="balance", records=[row])
+
+    assert missing.records[0]["cashAndShortTermInvestments"] == 900_000
+    assert all(item.line_item != "cash_and_short_term_investments" for item in missing.applied)
+
+    conn.execute(
+        """
+        INSERT INTO financial_facts
+            (id, ticker, period_end, fiscal_period_type, line_item, value, currency, unit,
+             source_doc_id, extracted_by, locator)
+        VALUES (61, 'TEST', '2026-06-30', 'Q2', 'short_term_investments', 300000, 'EUR',
+                'actual', 1, 'sec_xbrl', NULL)
+        """
+    )
+    mismatched = overlay_quarterly_records(conn, ticker="TEST", statement="balance", records=[row])
+
+    assert mismatched.records[0]["cashAndShortTermInvestments"] == 900_000
+    assert all(item.line_item != "cash_and_short_term_investments" for item in mismatched.applied)
+    assert any(item.reason == "currency_mismatch" for item in mismatched.rejected)
+
+
+def test_exact_primary_aggregate_takes_precedence_over_complete_components() -> None:
+    conn = _db()
+    conn.executemany(
+        """
+        INSERT INTO financial_facts
+            (id, ticker, period_end, fiscal_period_type, line_item, value, currency, unit,
+             source_doc_id, extracted_by, locator)
+        VALUES (?, 'TEST', '2026-06-30', 'Q2', ?, ?, 'USD', 'actual', 1,
+                'sec_xbrl', NULL)
+        """,
+        (
+            (70, "total_debt", 600_000),
+            (71, "long_term_debt", 500_000),
+            (72, "short_term_debt", 200_000),
+        ),
+    )
+    row = {
+        "date": "2026-06-30",
+        "period": "Q2",
+        "reportedCurrency": "USD",
+        "totalDebt": 900_000,
+    }
+
+    result = overlay_quarterly_records(conn, ticker="TEST", statement="balance", records=[row])
+
+    assert result.records[0]["totalDebt"] == 600_000
+    aggregate = next(item for item in result.applied if item.line_item == "total_debt")
+    assert aggregate.derivation is None
+    assert result.conflicts[-1].primary_value == 600_000
+
+
 def test_builder_receipt_preserves_primary_source_and_as_of_for_refresh_provenance() -> None:
     receipt = """{"event":"dcf_primary_fact_overlay","ticker":"TEST","statement":"income","status":"ok","applied":[{"fmp_field":"revenue","source_url":"https://www.sec.gov/example","as_of":"2026-08-20T12:00:00+00:00"}],"conflicts":[],"rejected":[]}"""
     detail = primary_fact_overlay_from_builder(receipt)
@@ -280,6 +519,120 @@ def test_builder_receipt_rejects_ticker_mismatch_and_duplicate_statement() -> No
     assert "duplicate_statement_receipt" in reasons
 
 
+def test_equity_bridge_context_requires_one_matching_builder_receipt() -> None:
+    context_line = (
+        '{"event":"dcf_equity_bridge_context",'
+        '"schema_version":"dcf_equity_bridge_context.v1",'
+        '"ticker":"TEST","period_end":"2026-06-30",'
+        '"fiscal_period_type":"Q2","reporting_currency":"USD",'
+        '"cash_m":200.0,"total_debt_m":100.0,"diluted_shares_m":10.0,'
+        '"cash_basis":"reported_aggregate","total_debt_basis":"reported_aggregate"}'
+    )
+
+    context = equity_bridge_context_from_builder(context_line, expected_ticker="test")
+
+    assert context is not None
+    assert context["ticker"] == "TEST"
+    assert context["period_end"] == "2026-06-30"
+    assert "event" not in context
+    assert (
+        equity_bridge_context_from_builder(
+            f"{context_line}\n{context_line}", expected_ticker="TEST"
+        )
+        is None
+    )
+    assert equity_bridge_context_from_builder(context_line, expected_ticker="OTHER") is None
+
+
+def test_country_risk_context_requires_one_matching_valid_builder_receipt() -> None:
+    context_line = (
+        '{"event":"dcf_country_risk_context",'
+        '"schema_version":"dcf_country_risk_context.v1",'
+        '"ticker":"TEST","premium":0.03,"authority":"systematic_geo",'
+        '"source_record":{"role":"geographic_revenue",'
+        '"path":"data/historical/fmp/TEST_geo_segments_annual.json",'
+        '"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        '"bytes":123,"observed_at":"2026-08-20T12:00:00+00:00",'
+        '"influences_calculation":true,"selection":"annual_latest_fiscal_year"}}'
+    )
+
+    context = country_risk_context_from_builder(context_line, expected_ticker="test")
+
+    assert context is not None
+    assert context["authority"] == "systematic_geo"
+    assert (
+        country_risk_context_from_builder(f"{context_line}\n{context_line}", expected_ticker="TEST")
+        is None
+    )
+    assert country_risk_context_from_builder(context_line, expected_ticker="OTHER") is None
+    preserved_line = (
+        '{"event":"dcf_country_risk_context",'
+        '"schema_version":"dcf_country_risk_context.v1",'
+        '"ticker":"TEST","premium":0.0123,'
+        '"authority":"preserved_dashboard_override","source_record":null}'
+    )
+    preserved = country_risk_context_from_builder(preserved_line, expected_ticker="TEST")
+    assert preserved is not None
+    assert preserved["authority"] == "preserved_dashboard_override"
+    assert preserved["source_record"] is None
+    invalid_source_less = (
+        '{"event":"dcf_country_risk_context",'
+        '"schema_version":"dcf_country_risk_context.v1",'
+        '"ticker":"TEST","premium":0.03,'
+        '"authority":"systematic_geo","source_record":null}'
+    )
+    assert country_risk_context_from_builder(invalid_source_less, expected_ticker="TEST") is None
+    default_zero_line = (
+        '{"event":"dcf_country_risk_context",'
+        '"schema_version":"dcf_country_risk_context.v1",'
+        '"ticker":"TEST","premium":0.0,'
+        '"authority":"systematic_default_zero","source_record":null}'
+    )
+    default_zero = country_risk_context_from_builder(default_zero_line, expected_ticker="TEST")
+    assert default_zero is not None
+    assert default_zero["authority"] == "systematic_default_zero"
+
+
+def test_country_risk_source_participates_in_dcf_provenance(tmp_path: Path) -> None:
+    workbook = tmp_path / "TEST.xlsx"
+    workbook.write_bytes(b"workbook")
+    observed_at = "2026-08-20T12:00:00+00:00"
+    context: dict[str, object] = {
+        "schema_version": "dcf_country_risk_context.v1",
+        "ticker": "TEST",
+        "premium": 0.03,
+        "authority": "systematic_geo",
+        "source_record": {
+            "role": "geographic_revenue",
+            "path": "data/historical/fmp/TEST_geo_segments_annual.json",
+            "sha256": "a" * 64,
+            "bytes": 123,
+            "observed_at": observed_at,
+            "influences_calculation": True,
+            "selection": "annual_latest_fiscal_year",
+        },
+    }
+
+    provenance = build_dcf_provenance(
+        ticker="TEST",
+        repo_root=tmp_path,
+        workbook_path=workbook,
+        input_payload={},
+        assumption_snapshot_json="{}",
+        live_price=None,
+        live_price_at=None,
+        live_price_source=None,
+        mos_bar=None,
+        country_risk_context=context,
+    )
+
+    assert provenance.inputs_as_of == datetime.fromisoformat(observed_at)
+    assert provenance.detail is not None
+    assert provenance.detail["country_risk_context"] == context
+    sources = cast("list[dict[str, object]]", provenance.detail["sources"])
+    assert any(source.get("role") == "geographic_revenue" for source in sources)
+
+
 def test_primary_fact_as_of_participates_in_dcf_inputs_as_of(tmp_path: Path) -> None:
     workbook = tmp_path / "TEST.xlsx"
     workbook.write_bytes(b"workbook")
@@ -305,9 +658,18 @@ def test_primary_fact_as_of_participates_in_dcf_inputs_as_of(tmp_path: Path) -> 
         live_price_source=None,
         mos_bar=None,
         primary_fact_overlay=overlay,
+        equity_bridge_receipt={
+            "schema_version": "dcf_equity_bridge_receipt.v2",
+            "status": "verified",
+        },
     )
 
     assert provenance.inputs_as_of == primary_as_of
+    assert provenance.detail is not None
+    assert provenance.detail["equity_bridge_receipt"] == {
+        "schema_version": "dcf_equity_bridge_receipt.v2",
+        "status": "verified",
+    }
 
 
 def test_generated_fcff_workbook_does_not_fake_current_input_observation(tmp_path: Path) -> None:

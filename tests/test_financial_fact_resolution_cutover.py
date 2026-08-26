@@ -131,6 +131,7 @@ def _seed_document(
     document_id: int,
     source_tier: str,
     value_suffix: str,
+    source_type: str | None = None,
     source_clock: datetime = STAMP,
     document_period_start: datetime | None = datetime(2026, 4, 1),
     document_period_end: datetime | None = datetime(2026, 6, 30),
@@ -146,7 +147,7 @@ def _seed_document(
         "VALUES (?, 'ACME', ?, 'sec_10q', ?, ?, ?, ?, ?, 'ok', 42, ?, ?, ?, ?)",
         (
             document_id,
-            "sec_xbrl" if source_tier == "sec_official" else "fmp",
+            source_type or ("sec_xbrl" if source_tier == "sec_official" else "fmp"),
             document_period_start,
             document_period_end,
             f"data/document-{document_id}.json",
@@ -343,6 +344,85 @@ def test_resolution_preserves_complete_candidates_and_selects_higher_source_tier
             "SELECT id, source_doc_id FROM v_financial_facts_resolved_current"
         ).fetchall()
         assert [tuple(row) for row in selected] == [(sec_fact_id, 2)]
+    finally:
+        conn.close()
+
+
+def test_resolution_prefers_issuer_over_vendor_within_the_same_source_tier(
+    tmp_path: Path,
+) -> None:
+    _, conn = _database(tmp_path)
+    try:
+        _seed_document(
+            conn,
+            document_id=1,
+            source_tier="fmp_normalized",
+            source_type="ir_doc",
+            value_suffix="issuer release",
+        )
+        _seed_document(
+            conn,
+            document_id=2,
+            source_tier="fmp_normalized",
+            source_type="fmp",
+            value_suffix="newer vendor normalization",
+            source_clock=datetime(2026, 7, 28, 12, 0, 0),
+        )
+        issuer_fact_id = _insert_financial_fact(conn, document_id=1, value="100")
+        _insert_financial_fact(conn, document_id=2, value="100.5")
+        logical_key = str(
+            conn.execute("SELECT logical_key FROM fact_observation_revisions LIMIT 1").fetchone()[0]
+        )
+
+        result = resolve_fact_logical_key(
+            conn,
+            logical_key=logical_key,
+            knowledge_cutoff=datetime(2026, 7, 29, 12, 0, 0),
+            recorded_at=datetime(2026, 7, 29, 12, 0, 0),
+        )
+
+        assert result.resolution_status == "resolved"
+        selected = conn.execute(
+            "SELECT id, source_doc_id FROM v_financial_facts_resolved_current"
+        ).fetchall()
+        assert [tuple(row) for row in selected] == [(issuer_fact_id, 1)]
+    finally:
+        conn.close()
+
+
+def test_resolution_fails_closed_on_any_top_authority_value_dissent(tmp_path: Path) -> None:
+    _, conn = _database(tmp_path)
+    try:
+        _seed_document(
+            conn,
+            document_id=1,
+            source_tier="fmp_normalized",
+            source_type="ir_doc",
+            value_suffix="issuer release one",
+        )
+        _seed_document(
+            conn,
+            document_id=2,
+            source_tier="fmp_normalized",
+            source_type="ir_doc",
+            value_suffix="issuer release two",
+        )
+        _insert_financial_fact(conn, document_id=1, value="100")
+        _insert_financial_fact(conn, document_id=2, value="100.5")
+        logical_key = str(
+            conn.execute("SELECT logical_key FROM fact_observation_revisions LIMIT 1").fetchone()[0]
+        )
+
+        result = resolve_fact_logical_key(
+            conn, logical_key=logical_key, knowledge_cutoff=STAMP, recorded_at=STAMP
+        )
+
+        assert result.resolution_status == "unresolved_material"
+        assert result.material_dissent is True
+        assert (
+            conn.execute("SELECT COUNT(*) FROM v_financial_facts_resolved_current").fetchone()[0]
+            == 0
+        )
     finally:
         conn.close()
 

@@ -13,8 +13,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import openpyxl
+import pytest
+
+from dcf import redesign
 
 BUILDER = Path(__file__).resolve().parents[1] / "execution" / "build_redesigned_dcf.py"
 SHEETS = [
@@ -67,6 +71,7 @@ def _write_fixture(repo: Path, ticker: str) -> None:
                     "totalAssets": rev * 1.50 * 1e6,
                     "totalCurrentLiabilities": rev * 0.30 * 1e6,
                     "longTermDebt": rev * 0.20 * 1e6,
+                    "totalDebt": rev * 0.20 * 1e6,
                     "totalStockholdersEquity": rev * 0.80 * 1e6,
                 }
             )
@@ -157,6 +162,75 @@ def test_builder_produces_valid_nine_sheet_workbook(tmp_path: Path) -> None:
             )
 
 
+def test_builder_preserves_complete_cash_and_debt_component_sums(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture(repo, "TESTCO")
+    balance_path = repo / "data/historical/fmp/TESTCO_balance_sheet_quarterly.json"
+    balance = json.loads(balance_path.read_text(encoding="utf-8"))
+    for row in balance:
+        cash = row.pop("cashAndShortTermInvestments")
+        row["cashAndCashEquivalents"] = cash - 7_000_000
+        row["shortTermInvestments"] = 7_000_000
+        row.pop("totalDebt")
+        row["shortTermDebt"] = 0
+    balance_path.write_text(json.dumps(balance), encoding="utf-8")
+
+    proc = _run_builder(repo, "TESTCO", tmp_path / "TESTCO.xlsx")
+
+    assert proc.returncode == 0, proc.stderr
+    country_events: list[dict[str, object]] = []
+    for line in proc.stderr.splitlines():
+        if not line.startswith("{"):
+            continue
+        payload_raw: object = json.loads(line)
+        if not isinstance(payload_raw, dict):
+            continue
+        payload = cast("dict[str, object]", payload_raw)
+        if payload.get("event") == "dcf_country_risk_context":
+            country_events.append(payload)
+    assert len(country_events) == 1
+    assert country_events[0]["authority"] == "systematic_default_zero"
+    assert country_events[0]["source_record"] is None
+    inputs = redesign.read_inputs(tmp_path / "TESTCO.xlsx")
+    assert inputs is not None
+    latest = balance[-1]
+    assert inputs.cash_m == pytest.approx(
+        (latest["cashAndCashEquivalents"] + latest["shortTermInvestments"]) / 1e6
+    )
+    assert inputs.total_debt_m == pytest.approx(
+        (latest["longTermDebt"] + latest["shortTermDebt"]) / 1e6
+    )
+
+
+def test_builder_fails_loudly_on_partial_debt_or_missing_shares(tmp_path: Path) -> None:
+    repo = tmp_path / "partial-debt"
+    _write_fixture(repo, "TESTCO")
+    balance_path = repo / "data/historical/fmp/TESTCO_balance_sheet_quarterly.json"
+    balance = json.loads(balance_path.read_text(encoding="utf-8"))
+    for row in balance:
+        row.pop("totalDebt")
+    balance_path.write_text(json.dumps(balance), encoding="utf-8")
+
+    partial = _run_builder(repo, "TESTCO", tmp_path / "partial.xlsx")
+
+    assert partial.returncode != 0
+    assert '"event": "dcf_equity_bridge_unavailable"' in partial.stderr
+    assert '"total_debt"' in partial.stderr
+
+    shares_repo = tmp_path / "missing-shares"
+    _write_fixture(shares_repo, "TESTCO")
+    income_path = shares_repo / "data/historical/fmp/TESTCO_income_statement_quarterly.json"
+    income = json.loads(income_path.read_text(encoding="utf-8"))
+    for row in income:
+        row.pop("weightedAverageShsOutDil")
+    income_path.write_text(json.dumps(income), encoding="utf-8")
+
+    missing_shares = _run_builder(shares_repo, "TESTCO", tmp_path / "shares.xlsx")
+
+    assert missing_shares.returncode != 0
+    assert '"positive_diluted_shares"' in missing_shares.stderr
+
+
 # --------------------------------------------------------------------------- #
 # graceful degradation: short histories (clean SKIP) + base-year segment gaps
 # (single-seg fallback) instead of crashing on out-of-range/zero-denominator data
@@ -189,6 +263,7 @@ def _statement_rows(
         "totalAssets": rev * 1.50 * 1e6,
         "totalCurrentLiabilities": rev * 0.30 * 1e6,
         "longTermDebt": rev * 0.20 * 1e6,
+        "totalDebt": rev * 0.20 * 1e6,
         "totalStockholdersEquity": rev * 0.80 * 1e6,
     }
     cf: dict[str, object] = {

@@ -28,11 +28,26 @@ left exactly where it was.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class CountryRiskObservation:
+    """Computed premium plus the exact geo bytes that influenced it."""
+
+    premium: float
+    source_record: dict[str, object] | None
+    geo_revenue: dict[str, float]
+
 
 # Damodaran equity country risk premiums (decimal), the premium ABOVE the
 # mature-market ERP. Mature markets (US, Canada, Germany, UK, etc.) sit at 0.0
@@ -135,7 +150,7 @@ def weighted_crp(geo_revenue: dict[str, float]) -> float:
     """
     attributable: list[tuple[float, float]] = []  # (revenue, crp)
     for label, rev in geo_revenue.items():
-        if not isinstance(rev, (int, float)) or rev <= 0:
+        if rev <= 0:
             continue
         crp = crp_for_country(label)
         if crp is None:
@@ -147,7 +162,50 @@ def weighted_crp(geo_revenue: dict[str, float]) -> float:
     return sum(rev * crp for rev, crp in attributable) / total
 
 
-def _latest_geo_revenue(repo_root: Path, ticker: str) -> dict[str, float]:
+def _geo_source_record(
+    path: Path, *, repo_root: Path, selection: str
+) -> tuple[list[dict[str, object]], dict[str, object]] | None:
+    """Read and hash one candidate file from the same opened byte stream."""
+    if not path.is_file():
+        return None
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read()
+            stat = os.fstat(handle.fileno())
+        decoded: object = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(decoded, list):
+        return None
+    decoded_items = cast("list[object]", decoded)
+    records = [cast("dict[str, object]", item) for item in decoded_items if isinstance(item, dict)]
+    try:
+        locator = str(path.relative_to(repo_root))
+    except ValueError:
+        locator = str(path)
+    return records, {
+        "role": "geographic_revenue",
+        "path": locator.replace("\\", "/"),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "bytes": len(raw),
+        "observed_at": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
+        "influences_calculation": True,
+        "selection": selection,
+    }
+
+
+def _geo_values(record: dict[str, object]) -> dict[str, float]:
+    data = record.get("data")
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(key): float(value)
+        for key, value in cast("dict[object, object]", data).items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+
+
+def _latest_geo_observation(repo_root: Path, ticker: str) -> CountryRiskObservation:
     """Latest geographic revenue mix for a ticker from the FMP geo-segment cache.
 
     Prefers the annual file's most recent fiscal year; falls back to summing the
@@ -156,37 +214,51 @@ def _latest_geo_revenue(repo_root: Path, ticker: str) -> dict[str, float]:
     """
     fmp = repo_root / "data" / "historical" / "fmp"
 
-    def _records(name: str) -> list[dict[str, object]]:
-        p = fmp / name
-        if not p.exists():
-            return []
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return []
-        return data if isinstance(data, list) else []
+    annual = _geo_source_record(
+        fmp / f"{ticker}_geo_segments_annual.json",
+        repo_root=repo_root,
+        selection="annual_latest_fiscal_year",
+    )
+    if annual is not None and annual[0]:
+        latest = max(annual[0], key=lambda record: str(record.get("fiscalYear", "")))
+        geo = _geo_values(latest)
+        if geo:
+            return CountryRiskObservation(weighted_crp(geo), annual[1], geo)
 
-    annual = _records(f"{ticker}_geo_segments_annual.json")
-    if annual:
-        latest = max(annual, key=lambda r: str(r.get("fiscalYear", "")))
-        data = latest.get("data")
-        if isinstance(data, dict):
-            return {str(k): float(v) for k, v in data.items() if isinstance(v, (int, float))}
-
-    quarterly = _records(f"{ticker}_geo_segments_quarterly.json")
-    if quarterly:
+    quarterly = _geo_source_record(
+        fmp / f"{ticker}_geo_segments_quarterly.json",
+        repo_root=repo_root,
+        selection="quarterly_latest_four",
+    )
+    if quarterly is not None and quarterly[0]:
         ordered = sorted(
-            quarterly, key=lambda r: (str(r.get("fiscalYear", "")), str(r.get("period", "")))
+            quarterly[0],
+            key=lambda record: (
+                str(record.get("fiscalYear", "")),
+                str(record.get("period", "")),
+            ),
         )
         agg: dict[str, float] = {}
         for rec in ordered[-4:]:
-            data = rec.get("data")
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    if isinstance(v, (int, float)):
-                        agg[str(k)] = agg.get(str(k), 0.0) + float(v)
-        return agg
-    return {}
+            for key, value in _geo_values(rec).items():
+                agg[key] = agg.get(key, 0.0) + value
+        if agg:
+            return CountryRiskObservation(weighted_crp(agg), quarterly[1], agg)
+    return CountryRiskObservation(0.0, None, {})
+
+
+def _latest_geo_revenue(repo_root: Path, ticker: str) -> dict[str, float]:
+    """Compatibility helper for callers that need the selected revenue mix only."""
+    return _latest_geo_observation(repo_root, ticker).geo_revenue
+
+
+def country_risk_observation(repo_root: Path, ticker: str) -> CountryRiskObservation:
+    """Return CRP and a same-byte-stream receipt for its selected geo source."""
+    try:
+        return _latest_geo_observation(Path(repo_root), ticker)
+    except Exception as exc:  # never let a CRP lookup break a build
+        log.debug({"event": "country_risk_premium_failed", "ticker": ticker, "error": str(exc)})
+        return CountryRiskObservation(0.0, None, {})
 
 
 def country_risk_premium(repo_root: Path, ticker: str) -> float:
@@ -197,8 +269,7 @@ def country_risk_premium(repo_root: Path, ticker: str) -> float:
     DCF build never fails because the geo cache was missing or malformed.
     """
     try:
-        geo = _latest_geo_revenue(Path(repo_root), ticker)
-    except Exception as exc:  # never let a CRP lookup break a build
+        return country_risk_observation(repo_root, ticker).premium
+    except Exception as exc:  # pragma: no cover - compatibility defense
         log.debug({"event": "country_risk_premium_failed", "ticker": ticker, "error": str(exc)})
         return 0.0
-    return weighted_crp(geo)

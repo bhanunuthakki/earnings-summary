@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for the MELI sum-of-the-parts platform DCF
 (``execution/build_meli_platform_dcf.py``): the value-of-record mirror — the SOTP
 identity, the convex growth fade, the credit-book capital charge — plus the
@@ -122,3 +123,81 @@ def test_refresh_routes_meli_to_sotp_builder(tmp_path: Path) -> None:
     )
     model, _suggestion = refresh_dcf._valuation_model(tmp_path, "MELI")
     assert model == "meli_platform_sotp"
+
+
+def _write_geo(
+    repo: Path, *, annual: list[dict[str, object]], quarterly: list[dict[str, object]]
+) -> None:
+    fmp = repo / "data" / "historical" / "fmp"
+    fmp.mkdir(parents=True, exist_ok=True)
+    (fmp / "MELI_geo_segments_annual.json").write_text(json.dumps(annual), encoding="utf-8")
+    (fmp / "MELI_geo_segments_quarterly.json").write_text(json.dumps(quarterly), encoding="utf-8")
+
+
+def test_load_assumptions_records_only_the_selected_annual_geo_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_geo(
+        tmp_path,
+        annual=[{"fiscalYear": 2025, "period": "FY", "data": {"Brazil": 100.0}}],
+        quarterly=[{"fiscalYear": 2026, "period": "Q1", "data": {"Argentina": 100.0}}],
+    )
+    monkeypatch.setattr(meli, "REPO", tmp_path)
+
+    assumptions = meli.load_assumptions("MELI")
+
+    assert assumptions.country_risk_premium == pytest.approx(
+        meli.country_risk.COUNTRY_CRP["Brazil"]
+    )
+    assert assumptions.country_risk_source["path"] == (
+        "data/historical/fmp/MELI_geo_segments_annual.json"
+    )
+    assert assumptions.country_risk_source["selection"] == "annual_latest_fiscal_year"
+
+
+def test_load_assumptions_records_quarterly_when_annual_is_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_geo(
+        tmp_path,
+        annual=[{"fiscalYear": 2025, "period": "FY", "data": {}}],
+        quarterly=[
+            {"fiscalYear": 2026, "period": quarter, "data": {"Mexico": 25.0}}
+            for quarter in ("Q1", "Q2", "Q3", "Q4")
+        ],
+    )
+    monkeypatch.setattr(meli, "REPO", tmp_path)
+
+    assumptions = meli.load_assumptions("MELI")
+
+    assert assumptions.country_risk_premium == pytest.approx(
+        meli.country_risk.COUNTRY_CRP["Mexico"]
+    )
+    assert assumptions.country_risk_source["path"] == (
+        "data/historical/fmp/MELI_geo_segments_quarterly.json"
+    )
+    assert assumptions.country_risk_source["selection"] == "quarterly_latest_four"
+
+
+def test_owner_country_risk_override_reads_and_records_no_geo_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = tmp_path / "data" / "bank_assumptions" / "MELI_sotp.json"
+    owner.parent.mkdir(parents=True)
+    owner.write_text(json.dumps({"country_risk_premium": 0.0123}), encoding="utf-8")
+    _write_geo(
+        tmp_path,
+        annual=[{"fiscalYear": 2025, "period": "FY", "data": {"Argentina": 100.0}}],
+        quarterly=[],
+    )
+    monkeypatch.setattr(meli, "REPO", tmp_path)
+
+    def _unexpected_geo_read(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("owner CRP override must prevent any geo read")
+
+    monkeypatch.setattr(meli.country_risk, "country_risk_observation", _unexpected_geo_read)
+
+    assumptions = meli.load_assumptions("MELI")
+
+    assert assumptions.country_risk_premium == pytest.approx(0.0123)
+    assert assumptions.country_risk_source == {}

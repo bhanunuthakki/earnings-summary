@@ -67,7 +67,11 @@ sys.path.insert(0, str(CODE_ROOT / "src"))
 
 
 from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
-from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
+from dcf.provenance import (  # noqa: E402
+    build_file_provenance,
+    build_file_source_record,
+    schema_supports_provenance,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort — the workbook builds without a DB
@@ -234,6 +238,7 @@ def persist_dcf_run(
     ke: float,
     snapshot: dict[str, object],
     sync_result: SyncResult | None = None,
+    source_records: tuple[dict[str, object], ...] = (),
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. Shape-agnostic (BN or BRK). No-op without the DB / persist module."""
@@ -266,6 +271,7 @@ def persist_dcf_run(
             (REPO / "data" / "historical" / "fmp" / f"{T}_profile.json", "company_profile"),
             (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
         ),
+        source_records=source_records,
     )
     row = persist_mod.DcfRunRow(
         ticker=T,
@@ -319,6 +325,7 @@ def _persist_then_sync_bn(
     eq: float,
     vps: float,
     snapshot: dict[str, object],
+    source_records: tuple[dict[str, object], ...] = (),
 ) -> tuple[bool, SyncResult]:
     """Persist effective marks before mutating their owner-authority JSON."""
     pending = SyncResult("pending")
@@ -327,7 +334,7 @@ def _persist_then_sync_bn(
         "workbook_capture": "supported",
         "sync_status": pending.status,
     }
-    persisted = persist_dcf_run(eq, vps, s.price, s.ke, snapshot, pending)
+    persisted = persist_dcf_run(eq, vps, s.price, s.ke, snapshot, pending, source_records)
     if not persisted:
         return False, SyncResult("not_attempted: DCF run was not persisted")
 
@@ -335,11 +342,20 @@ def _persist_then_sync_bn(
     assumption_provenance = snapshot.get("assumption_provenance")
     if isinstance(assumption_provenance, dict):
         assumption_provenance["sync_status"] = sync_result.status
-    recorded = persist_dcf_run(eq, vps, s.price, s.ke, snapshot, sync_result)
+    recorded = persist_dcf_run(eq, vps, s.price, s.ke, snapshot, sync_result, source_records)
     return recorded, sync_result
 
 
 def _run_bn() -> int:
+    prior_workbook_input = (
+        build_file_source_record(
+            DEST,
+            role="owner_workbook_inputs",
+            repo_root=REPO,
+        )
+        if _capture_bn_inputs(DEST)
+        else None
+    )
     s, notes = _load(T)
     eq, vps = value(s)
     # scenarios — S6 convention: base = the calibrated marks (feeds dcf_runs);
@@ -370,7 +386,13 @@ def _run_bn() -> int:
     reverse = reverse_valuation(s, eq, vps)
     if reverse is not None:
         snap["reverse_valuation"] = reverse
-    persisted, sync_result = _persist_then_sync_bn(s, eq, vps, snap)
+    persisted, sync_result = _persist_then_sync_bn(
+        s,
+        eq,
+        vps,
+        snap,
+        (prior_workbook_input,) if prior_workbook_input is not None else (),
+    )
     # reverse-solve: what the market implies for carry + private RE at the price
     implied_eq = s.price * s.shares_m / 1000.0
     floor = _am(s) + _bws(s) + s.ic_listed - _corp(s)  # AM + BWS + listed only − corp
