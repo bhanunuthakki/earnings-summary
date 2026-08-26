@@ -1027,6 +1027,7 @@ def persist_dcf_run(
             ),
         ),
         source_records=((s.global_assumption_source,) if s.global_assumption_source else ()),
+        equity_direct_archetype="bank_excess_return",
     )
     row = persist_mod.DcfRunRow(
         ticker=T,

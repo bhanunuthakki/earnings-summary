@@ -1,4 +1,4 @@
-"""Phase-1 Wave-3 integration: the DCF apply against a REAL ``dcf_runs`` table.
+"""DCF proposal publication against a REAL ``dcf_runs`` table.
 
 ``test_dcf_artifact.py`` validates the risky ``dict -> DcfRunRow`` reconstruction
 by a round-trip and exercises the upsert through an INJECTED persist spy -- it
@@ -6,24 +6,11 @@ deliberately never touches a real ``dcf_runs`` so no unit test can corrupt live
 valuations. That left one path unexercised end-to-end: the DEFAULT
 ``_default_persist`` -> ``dcf.persist.upsert`` live write.
 
-This closes that gap once, in an isolated temp DB built to the real production
-schema (``init_db()`` + ``alembic upgrade head``, so the migration-0076
-over_under CHECK and the ``uq_dcf_runs_ticker`` key are the real ones and
-migration 0126's ``artifact_json`` column exists). It drives
-``apply_dcf_proposal`` with ALL DEFAULTS (real ``get_proposal`` + real
-``_default_persist``) and asserts:
-
-  - a row actually lands in ``dcf_runs`` with the reconstructed fields;
-  - ``over_under_pct`` is DERIVED at the persist chokepoint as the decimal ratio
-    (live - fair)/fair -- NOT the #368 percent-upside bug -- which the real
-    post-0076 CHECK simultaneously enforces (a mis-mapped reconstruct would trip
-    it);
-  - the whole approve -> higher-bar gate -> registered applier -> live write
-    chain works via ``apply_approved_proposal`` and, crucially, that an UNMET
-    gate writes NOTHING;
-  - a repeat write VERSIONS instead of overwriting (migration 0137): the prior
-    row is superseded (is_latest=0, back-linked) and the new row is the single
-    is_latest=1 current — readers see the second value win, history survives.
+The legacy proposal payload carries valuation outputs but no reproducible DCF
+input/provenance bundle. Editorial approval therefore cannot promote it: the
+shared persistence chokepoint returns an explicit financial-evidence HOLD and
+leaves the live table untouched. These tests pin that fail-closed behavior on an
+isolated database at the real production schema.
 """
 
 from __future__ import annotations
@@ -139,14 +126,6 @@ def _make_dcf_proposal(
     )
 
 
-def _stored(db_path: Path, ticker: str) -> sqlite3.Row:
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM dcf_runs WHERE ticker = ?", (ticker,)).fetchone()
-    assert row is not None, f"no dcf_runs row for {ticker}"
-    return row
-
-
 def _count(db_path: Path, ticker: str) -> int:
     with sqlite3.connect(str(db_path)) as conn:
         return int(
@@ -154,53 +133,37 @@ def _count(db_path: Path, ticker: str) -> int:
         )
 
 
-def test_apply_dcf_proposal_writes_a_real_dcf_runs_row(db_path: Path) -> None:
-    """``apply_dcf_proposal`` with ALL DEFAULTS drives ``_reconstruct_row`` ->
-    ``dcf.persist.upsert`` against the real table -- the path no unit test hit."""
+def test_direct_apply_without_verified_bridge_returns_hold(db_path: Path) -> None:
     pid = _make_dcf_proposal(db_path, gate_clearing=False)
-    note = apply_dcf_proposal(pid, db_path=db_path)  # default get_fn + default _default_persist
+    result = apply_dcf_proposal(pid, db_path=db_path)
 
-    assert "22.10" in note and "live" in note
-    row = _stored(db_path, "NU")
-    assert row["npv_per_share"] == pytest.approx(22.10)
-    assert row["horizon_years"] == 10
-    assert row["wacc"] == pytest.approx(0.11)
-    assert row["currency"] == "USD"
-    # the ISO date/datetime strings survived the reconstruct round-trip.
-    assert row["valuation_date"] == "2026-06-30"
-    assert str(row["live_price_at"]).startswith("2026-06-30T08:00:00")
+    assert not isinstance(result, str)
+    assert result.applied is False
+    assert "blocked (DCF financial evidence)" in result.message
+    assert "candidate_equity_bridge_unverified" in result.message
+    assert _count(db_path, "NU") == 0
 
 
-def test_live_write_derives_over_under_at_the_chokepoint(db_path: Path) -> None:
-    """The stored ``over_under_pct`` is the derived decimal ratio (live-fair)/fair,
-    NOT the #368 percent-upside bug -- proving the reconstruct fed the persist
-    chokepoint, whose value the real post-0076 CHECK simultaneously accepts."""
+def test_blocked_apply_does_not_partially_persist_derived_fields(db_path: Path) -> None:
     pid = _make_dcf_proposal(db_path, gate_clearing=False)
-    apply_dcf_proposal(pid, db_path=db_path)
-    ou = _stored(db_path, "NU")["over_under_pct"]
-    assert ou == pytest.approx((12.29 - 22.10) / 22.10, abs=1e-6)
-    assert ou < 0 and abs(ou) < 1.0  # negative, decimal-scale -- under fair value
+    result = apply_dcf_proposal(pid, db_path=db_path)
+    assert not isinstance(result, str) and result.applied is False
+    assert _count(db_path, "NU") == 0
 
 
-def test_live_write_with_no_live_price_stores_null_over_under(db_path: Path) -> None:
-    """A row with no live price reconstructs and upserts with a NULL
-    ``over_under_pct`` (the #291/derive_over_under guard) -- no CHECK violation."""
+def test_missing_live_price_does_not_bypass_financial_evidence_gate(db_path: Path) -> None:
     pid = _make_dcf_proposal(db_path, gate_clearing=False, row=_proposed_row(live_price=None))
-    apply_dcf_proposal(pid, db_path=db_path)
-    row = _stored(db_path, "NU")
-    assert row["over_under_pct"] is None
-    assert row["npv_per_share"] == pytest.approx(22.10)
+    result = apply_dcf_proposal(pid, db_path=db_path)
+    assert not isinstance(result, str) and result.applied is False
+    assert _count(db_path, "NU") == 0
 
 
-def test_full_approve_gate_to_live_write(db_path: Path) -> None:
-    """``apply_approved_proposal``: a gate-clearing dcf proposal flows approve ->
-    higher bar -> registered applier -> live ``dcf_runs`` write, end-to-end with
-    all defaults (no injection)."""
+def test_editorially_approved_proposal_still_requires_financial_evidence(db_path: Path) -> None:
     pid = _make_dcf_proposal(db_path, gate_clearing=True)
     note = apply_approved_proposal(pid, db_path=db_path)
-    assert "blocked" not in note
-    assert "NU" in note
-    assert _stored(db_path, "NU")["npv_per_share"] == pytest.approx(22.10)
+    assert "blocked (DCF financial evidence)" in note
+    assert "candidate_equity_bridge_unverified" in note
+    assert _count(db_path, "NU") == 0
 
 
 def test_uncleared_gate_writes_nothing_to_dcf_runs(db_path: Path) -> None:
@@ -213,24 +176,12 @@ def test_uncleared_gate_writes_nothing_to_dcf_runs(db_path: Path) -> None:
     assert _count(db_path, "NU") == 0
 
 
-def test_live_write_supersedes_the_prior_version(db_path: Path) -> None:
-    """Two applies for the same ticker version instead of overwriting (migration
-    0137 supersede-and-insert): the first row survives as is_latest=0 with a
-    superseded_at stamp and a back-link to its successor; the second row is the
-    single is_latest=1 current, so latest-first readers see the new value win."""
+def test_repeated_unverified_proposals_never_create_versions(db_path: Path) -> None:
     pid1 = _make_dcf_proposal(db_path, gate_clearing=False, row=_proposed_row(npv_per_share=22.10))
-    apply_dcf_proposal(pid1, db_path=db_path)
+    first = apply_dcf_proposal(pid1, db_path=db_path)
     pid2 = _make_dcf_proposal(db_path, gate_clearing=False, row=_proposed_row(npv_per_share=25.50))
-    apply_dcf_proposal(pid2, db_path=db_path)
+    second = apply_dcf_proposal(pid2, db_path=db_path)
 
-    assert _count(db_path, "NU") == 2  # history preserved, never overwritten
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        latest = conn.execute("SELECT * FROM dcf_runs WHERE ticker='NU' AND is_latest=1").fetchall()
-        assert len(latest) == 1  # the 0137 partial unique index holds
-        assert latest[0]["npv_per_share"] == pytest.approx(25.50)
-        old = conn.execute("SELECT * FROM dcf_runs WHERE ticker='NU' AND is_latest=0").fetchone()
-        assert old is not None
-        assert old["npv_per_share"] == pytest.approx(22.10)
-        assert old["superseded_at"] is not None
-        assert old["superseded_by_id"] == latest[0]["id"]
+    assert not isinstance(first, str) and first.applied is False
+    assert not isinstance(second, str) and second.applied is False
+    assert _count(db_path, "NU") == 0

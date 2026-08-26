@@ -27,7 +27,7 @@ from __future__ import annotations
 import dataclasses
 import sqlite3
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -42,6 +42,7 @@ import build_holdco_sotp as holdco  # noqa: E402
 import build_nu_platform_dcf as platform_dcf  # noqa: E402
 
 from dcf import persist  # noqa: E402
+from dcf.provenance import DcfInputProvenance  # noqa: E402
 
 # Mirrors the production table post-0076: the named CHECK is the migration's
 # _RATIO_CHECK verbatim, so the raw-insert test below exercises the same
@@ -57,6 +58,8 @@ CREATE TABLE dcf_runs (
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
     revenue_growths_json TEXT, fcf_margin REAL,
+    input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+    inputs_as_of TEXT, provenance_json TEXT,
     CONSTRAINT ck_dcf_runs_over_under_ratio CHECK (
         over_under_pct IS NULL
         OR live_price IS NULL OR npv_per_share IS NULL
@@ -119,6 +122,13 @@ def _row(live_price: float | None = 10.0, npv_per_share: float = 20.0) -> persis
         live_price_at=None,
         mos_bar_used=None,
         assumption_snapshot_json="{}",
+        provenance=DcfInputProvenance(
+            input_sha256="a" * 64,
+            workbook_sha256="b" * 64,
+            engine_version="test@1",
+            inputs_as_of=datetime(2026, 6, 10, 8, 0, tzinfo=UTC),
+            detail={"equity_bridge_receipt": {"status": "verified"}},
+        ),
     )
 
 

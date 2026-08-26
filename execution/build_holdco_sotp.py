@@ -290,6 +290,7 @@ def persist_dcf_run(
             )
         ),
         source_records=source_records,
+        equity_direct_archetype="holdco_sotp",
     )
     row = persist_mod.DcfRunRow(
         ticker=T,

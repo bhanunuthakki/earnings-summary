@@ -344,10 +344,27 @@ _BRIDGE_STRENGTH: dict[PromotionStatus, int] = {
     "verified": 2,
 }
 
+_EQUITY_DIRECT_ARCHETYPES = {
+    "bank_excess_return",
+    "holdco_sotp",
+    "fintech_sotp",
+    "platform_sotp",
+    "platform_fcfe",
+}
 
-def _bridge_status(value: object) -> PromotionStatus:
+
+def _bridge_status(value: object, receipt: dict[str, object]) -> PromotionStatus:
     if value in {"verified", "unverified"}:
         return cast("PromotionStatus", value)
+    if value == "not_applicable":
+        if (
+            receipt.get("schema_version") == "dcf_equity_bridge_receipt.v3"
+            and receipt.get("reason_code") == "equity_direct_valuation"
+            and receipt.get("valuation_scope") == "equity"
+            and receipt.get("valuation_archetype") in _EQUITY_DIRECT_ARCHETYPES
+        ):
+            return "not_applicable"
+        return "unverified"
     return "missing"
 
 
@@ -363,7 +380,8 @@ def _receipt_status(provenance_json: object) -> PromotionStatus:
     receipt = cast("dict[str, object]", raw).get("equity_bridge_receipt")
     if not isinstance(receipt, dict):
         return "missing"
-    return _bridge_status(cast("dict[str, object]", receipt).get("status"))
+    typed_receipt = cast("dict[str, object]", receipt)
+    return _bridge_status(typed_receipt.get("status"), typed_receipt)
 
 
 def _current_promotion_state(
@@ -425,7 +443,7 @@ def promotion_decision(conn: sqlite3.Connection, row: DcfRunRow) -> DcfPromotion
         "equity_bridge_status": candidate_status,
         "sanity_flag": candidate_sanity,
     }
-    if candidate_status != "verified":
+    if candidate_status not in {"verified", "not_applicable"}:
         return DcfPromotionDecision(
             allowed=False,
             reason="candidate_equity_bridge_unverified",

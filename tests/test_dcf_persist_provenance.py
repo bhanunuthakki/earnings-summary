@@ -242,6 +242,53 @@ def test_unverified_bridge_candidate_cannot_be_first_promotion(status: str) -> N
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
 
 
+def test_equity_direct_archetype_uses_explicit_not_applicable_receipt(tmp_path: Path) -> None:
+    workbook = tmp_path / "bank.xlsx"
+    workbook.write_bytes(b"equity-direct model")
+    provenance = build_file_provenance(
+        ticker="META",
+        repo_root=tmp_path,
+        workbook_path=workbook,
+        engine_version="bank_excess_return_v1",
+        effective_inputs={},
+        assumption_snapshot={},
+        live_price=None,
+        live_price_at=None,
+        live_price_source=None,
+        source_files=(),
+        equity_direct_archetype="bank_excess_return",
+    )
+    assert provenance.detail is not None
+    assert provenance.detail["equity_bridge_receipt"] == {
+        "schema_version": "dcf_equity_bridge_receipt.v3",
+        "status": "not_applicable",
+        "reason_code": "equity_direct_valuation",
+        "valuation_scope": "equity",
+        "valuation_archetype": "bank_excess_return",
+    }
+
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    assert upsert(conn, dataclasses.replace(_row(), provenance=provenance)) is True
+
+
+def test_not_applicable_status_without_typed_archetype_contract_is_blocked() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_SCHEMA)
+    candidate = _row()
+    assert candidate.provenance is not None
+    malformed = dataclasses.replace(
+        candidate.provenance,
+        detail={"equity_bridge_receipt": {"status": "not_applicable"}},
+    )
+
+    with pytest.raises(DcfPromotionBlocked) as blocked:
+        upsert(conn, dataclasses.replace(candidate, provenance=malformed))
+
+    assert blocked.value.decision.reason == "candidate_equity_bridge_unverified"
+    assert blocked.value.decision.candidate_bridge_status == "unverified"
+
+
 def test_outlier_candidate_is_blocked_with_deterministic_evidence() -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)

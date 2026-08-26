@@ -907,6 +907,7 @@ def persist_dcf_run(
         source_records=tuple(
             record for record in (s.global_assumption_source, s.country_risk_source) if record
         ),
+        equity_direct_archetype="platform_sotp",
     )
     row = persist_mod.DcfRunRow(
         ticker=T,

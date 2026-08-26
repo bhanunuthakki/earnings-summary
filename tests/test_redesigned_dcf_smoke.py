@@ -188,7 +188,12 @@ def _write_fixture(repo: Path, ticker: str) -> None:
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
-    _write_primary_bridge_facts(repo, ticker, bal[-1], currency="USD")
+    _write_primary_bridge_facts(
+        repo,
+        ticker,
+        cast("dict[str, object]", bal[-1]),
+        currency="USD",
+    )
 
 
 def test_builder_produces_valid_nine_sheet_workbook(tmp_path: Path) -> None:
